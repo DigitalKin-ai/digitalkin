@@ -1,0 +1,25 @@
+version: "3"
+
+tasks:
+  venv:
+    desc: "Install project venv"
+    cmds:
+      - uv venv --python 3.10
+      # - source .venv/bin/activate
+
+  install-deps:
+    desc: "Install project dependencies from pyproject.toml"
+    cmds:
+      - uv pip compile pyproject.toml
+
+  linter:
+    desc: "run linter on the project"
+    cmds:
+      - |
+        uv run ruff format . && uv run ruff check --select I --fix . && uv run ruff check . --fix
+
+  init-project:
+    desc: "Init project: install venv and dependencies"
+    deps:
+      - venv
+      - install-deps
