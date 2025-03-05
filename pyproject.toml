@@ -1,0 +1,142 @@
+[build-system]
+requires = [
+    "setuptools >= 75.8.2",
+    "wheel",
+]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "digitalkin"
+version = "0.0.1"
+description = "SDK to build kin used in DigitalKin"
+readme = "README.md"
+requires-python = "==3.10.*"
+license = {file = "LICENSE"}
+
+keywords = [
+    "digitalkin",
+    "kin",
+    "agent",
+    "gprc",
+    "sdk",
+]
+
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Topic :: Software Development :: Libraries",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3 :: Only",
+    "License :: Other/Proprietary License",
+]
+
+dependencies = [
+    "digitalkin-proto",
+    "pydantic>=2.10.6",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.4",
+    "typos>=1.29.9",
+    "ruff>=0.9.7",
+    "mypy>=1.15.0",
+    "pyright>=1.1.394",
+    "pre-commit>=4.1.0",
+    "bump2version>=1.0.1",
+    "build>=1.2.2",
+    "twine>=6.1.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/DigitalKin-ai/digitalkin"
+Documentation = "https://github.com/DigitalKin-ai/digitalkin"
+Issues = "https://github.com/DigitalKin-ai/digitalkin/issues"
+
+[[project.authors]]
+name = "DigitalKin.ai"
+email = "contact@digitalkin.ai"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+
+[tool.uv]
+
+
+[tool.ruff]
+src = ["src"]
+target-version = "py310"
+line-length = 120
+indent-width = 4
+show-fixes = true
+unsafe-fixes = true
+
+exclude = [
+    ".bzr",
+    ".direnv",
+    ".eggs",
+    ".git",
+    ".git-rewrite",
+    ".hg",
+    ".mypy_cache",
+    ".nox",
+    ".pants.d",
+    ".pytype",
+    ".ruff_cache",
+    ".svn",
+    ".tox",
+    ".venv",
+    "__pypackages__",
+    "_build",
+    "buck-out",
+    "build",
+    "dist",
+    "node_modules",
+    "venv",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "I",   # isort
+    "D",   # pydocstyle
+    "UP",  # pyupgrade
+    "N",   # flake8-naming
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "SIM", # flake8-simplify
+    "ERA", # eradicate
+    "RUF", # Ruff-specific rules
+    "W",
+    "S",
+]
+fixable = ["ALL"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "auto"
+docstring-code-format = true
+skip-magic-trailing-comma = false
+
+[tool.pyright]
+include = ["src"]
+exclude = ["**/.venv", "**/__pycache__"]
+
+[tool.pytest.ini_options]
+pythonpath = "src"
+testpaths = ["tests"]
+python_files = "test_*.py"

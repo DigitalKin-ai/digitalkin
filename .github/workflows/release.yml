@@ -1,0 +1,70 @@
+name: Publish Package
+
+on:
+  release:
+    types: [created]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      id-token: write  # for trusted publishing
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.10"
+
+    - name: Install UV
+      run: |
+        curl -LsSf https://astral.sh/uv/install.sh | sh
+        echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+    - name: Install Go Task
+      uses: arduino/setup-task@v1
+
+    - name: Install buf
+      uses: bufbuild/buf-setup-action@v1
+
+    - name: Install protoc
+      uses: arduino/setup-protoc@v2
+      with:
+        version: "25.1"
+
+    - name: Install dependencies
+      run: |
+        uv pip install -e . --system
+        uv pip install pytest build twine --system
+
+    - name: Run tests
+      run: pytest
+
+    - name: Build package
+      run: task build-package
+
+    - name: Publish to Test PyPI
+      uses: pypa/gh-action-pypi-publish@release/v1
+      with:
+        repository-url: https://test.pypi.org/legacy/
+        skip-existing: true
+        password: ${{ secrets.TEST_PYPI_API_TOKEN }}
+
+    - name: Wait for Test PyPI to process the package
+      run: sleep 60
+
+    - name: Verify Test PyPI package
+      run: |
+        python -m pip install --index-url https://test.pypi.org/simple/ --no-deps digitalkin_proto
+        python -c "import digitalkin_proto; print(digitalkin_proto.__version__)"
+
+    - name: Publish to PyPI
+      uses: pypa/gh-action-pypi-publish@release/v1
+      with:
+        password: ${{ secrets.PYPI_API_TOKEN }}
