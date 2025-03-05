@@ -1,3 +1,7 @@
+exclude: |
+  (?x)^(
+      .gitignore
+  )$
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v4.5.0
@@ -7,10 +11,6 @@ repos:
       - id: check-yaml
       - id: check-added-large-files
       - id: check-toml
-    exclude: |
-      (?x)^(
-          .gitignore
-      )$
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.9.9
@@ -24,3 +24,19 @@ repos:
     hooks:
       - id: mypy
         additional_dependencies: [types-protobuf]
+
+  # Add pytest as a local hook
+  - repo: local
+    hooks:
+      - id: pytest
+        name: pytest
+        entry: pytest
+        language: system
+        pass_filenames: false
+        always_run: true
+        # Run with verbose output, fail on first error
+        args: ["-xvs", "tests/"]
+        # Optional: add --cov to get coverage report
+        # args: ["-xvs", "--cov=digitalkin", "--cov-report=term-missing", "tests/"]
+        # You can make this hook only run when Python files change
+        types: [python]

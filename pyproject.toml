@@ -37,12 +37,16 @@ classifiers = [
 
 dependencies = [
     "digitalkin-proto",
+    "grpcio-health-checking>=1.70.0",
+    "grpcio-reflection>=1.70.0",
     "pydantic>=2.10.6",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8.3.4",
+    "pytest-asyncio>=0.25.3",
+    "pytest-cov>=6.0.0",
     "typos>=1.29.9",
     "ruff>=0.9.7",
     "mypy>=1.15.0",
@@ -51,6 +55,7 @@ dev = [
     "bump2version>=1.0.1",
     "build>=1.2.2",
     "twine>=6.1.0",
+    "cryptography>=44.0.2",
 ]
 
 [project.urls]
@@ -113,7 +118,11 @@ exclude = [
     "archetype_module.py",
     "tool_module.py",
     "trigger_module.py",
-    "start_grpc_server.py"
+    "start_grpc_server.py",
+    "generate_certificates.py",
+    "test_*.py",
+    "tests/*",
+    "examples/*"
 ]
 
 [tool.ruff.lint]
@@ -184,5 +193,9 @@ exclude = ["**/.venv", "**/__pycache__"]
 
 [tool.pytest.ini_options]
 pythonpath = "src"
+addopts = "--cov=digitalkin --cov-report=term-missing --asyncio-mode=auto"
 testpaths = ["tests"]
 python_files = "test_*.py"
+python_classes = "Test*"
+python_functions = "test_*"
+asyncio_mode = "auto"
