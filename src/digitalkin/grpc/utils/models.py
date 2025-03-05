@@ -43,7 +43,8 @@ class ServerCredentials(BaseModel):
             ValueError: If the path does not exist
         """
         if v is not None and not v.exists():
-            raise ValueError(f"File not found: {v}")
+            msg = f"File not found: {v}"
+            raise ValueError(msg)
         return v
 
 
@@ -74,7 +75,8 @@ class ServerConfig(BaseModel):
             ValueError: If credentials are missing in secure mode
         """
         if values.get("security") == SecurityMode.SECURE and v is None:
-            raise ValueError("Credentials must be provided when using secure mode")
+            msg = "Credentials must be provided when using secure mode"
+            raise ValueError(msg)
         return v
 
     @property

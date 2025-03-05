@@ -4,6 +4,7 @@ import abc
 import asyncio
 import logging
 from concurrent import futures
+from pathlib import Path
 from typing import Any, cast
 
 import grpc
@@ -27,7 +28,7 @@ class BaseServer(abc.ABC):
         _servicers: List of registered servicers.
     """
 
-    def __init__(self, config: ServerConfig):
+    def __init__(self, config: ServerConfig) -> None:
         """Initialize the base gRPC server.
 
         Args:
@@ -70,20 +71,18 @@ class BaseServer(abc.ABC):
             ValueError: If credentials are not configured correctly.
         """
         if not self.config.credentials:
-            raise ValueError("Credentials must be provided for secure server")
+            msg = "Credentials must be provided for secure server"
+            raise ValueError(msg)
 
         # Read key and certificate files
-        with open(self.config.credentials.server_key_path, "rb") as key_file:
-            private_key = key_file.read()
+        private_key = Path(self.config.credentials.server_key_path, "rb").read_bytes()
 
-        with open(self.config.credentials.server_cert_path, "rb") as cert_file:
-            certificate_chain = cert_file.read()
+        certificate_chain = Path(self.config.credentials.server_cert_path, "rb").read_bytes()
 
         # Read root certificate if provided
         root_certificates = None
         if self.config.credentials.root_cert_path:
-            with open(self.config.credentials.root_cert_path, "rb") as root_cert_file:
-                root_certificates = root_cert_file.read()
+            root_certificates = Path(self.config.credentials.root_cert_path, "rb").read_bytes()
 
         # Create server credentials
         server_credentials = grpc.ssl_server_credentials(
@@ -94,13 +93,13 @@ class BaseServer(abc.ABC):
 
         # Add secure port to server
         if self.config.mode == ServerMode.ASYNC:
-            async_server = cast(grpc_aio.Server, server)
+            async_server = cast("grpc_aio.Server", server)
             async_server.add_secure_port(self.config.address, server_credentials)
         else:
-            sync_server = cast(grpc.Server, server)
+            sync_server = cast("grpc.Server", server)
             sync_server.add_secure_port(self.config.address, server_credentials)
 
-        logger.info(f"Added secure port {self.config.address}")
+        logger.info("Added secure port %s", self.config.address)
 
     def _add_insecure_port(self, server: grpc.Server | grpc_aio.Server) -> None:
         """Add an insecure port to the server.
@@ -109,13 +108,13 @@ class BaseServer(abc.ABC):
             server: The gRPC server to add the port to.
         """
         if self.config.mode == ServerMode.ASYNC:
-            async_server = cast(grpc_aio.Server, server)
+            async_server = cast("grpc_aio.Server", server)
             async_server.add_insecure_port(self.config.address)
         else:
-            sync_server = cast(grpc.Server, server)
+            sync_server = cast("grpc.Server", server)
             sync_server.add_insecure_port(self.config.address)
 
-        logger.info(f"Added insecure port {self.config.address}")
+        logger.info("Added insecure port %s", self.config.address)
 
     @abc.abstractmethod
     def _register_servicers(self) -> None:
@@ -127,7 +126,6 @@ class BaseServer(abc.ABC):
         Raises:
             RuntimeError: If the server is not created before calling this method.
         """
-        pass
 
     def start(self) -> None:
         """Start the gRPC server.
@@ -139,12 +137,12 @@ class BaseServer(abc.ABC):
         self._register_servicers()
 
         # Start the server
-        logger.info(f"Starting gRPC server on {self.config.address}")
+        logger.info("Starting gRPC server on %s", self.config.address)
         try:
             self.server.start()
-            logger.info(f"✅ gRPC server started on {self.config.address}")
-        except Exception as e:
-            logger.error(f"❎ Error starting server: {e}")
+            logger.info("✅ gRPC server started on %s", self.config.address)
+        except Exception:
+            logger.exception("❎ Error starting server")
 
     def stop(self, grace: float | None = None) -> None:
         """Stop the gRPC server.
@@ -159,7 +157,7 @@ class BaseServer(abc.ABC):
         logger.info("Stopping gRPC server...")
         if self.config.mode == ServerMode.ASYNC:
             # For async server, we need to use an async approach to stop
-            async_server = cast(grpc_aio.Server, self.server)
+            async_server = cast("grpc_aio.Server", self.server)
 
             async def _stop_async_server() -> None:
                 await async_server.stop(grace=grace)
@@ -171,11 +169,11 @@ class BaseServer(abc.ABC):
                     loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(loop)
                 loop.run_until_complete(_stop_async_server())
-            except Exception as e:
-                logger.error(f"❎ Error stopping async server: {e}")
+            except Exception:
+                logger.exception("❎ Error stopping async server")
         else:
             # For sync server, we can just call stop
-            sync_server = cast(grpc.Server, self.server)
+            sync_server = cast("grpc.Server", self.server)
             sync_server.stop(grace=grace)
 
         logger.info("✅ gRPC server stopped")
@@ -193,12 +191,12 @@ class BaseServer(abc.ABC):
 
         if self.config.mode == ServerMode.SYNC:
             # For sync server
-            sync_server = cast(grpc.Server, self.server)
+            sync_server = cast("grpc.Server", self.server)
             sync_server.wait_for_termination()
         else:
             # For async server, the caller should use await_termination instead
             logger.warning(
-                "Called wait_for_termination on async server. Use await_termination instead for async servers."
+                "Called wait_for_termination on async server. Use await_termination instead for async servers.",
             )
 
     async def await_termination(self) -> None:
@@ -208,7 +206,7 @@ class BaseServer(abc.ABC):
         """
         if self.config.mode == ServerMode.SYNC:
             logger.warning(
-                "Called await_termination on sync server. Use wait_for_termination instead for sync servers."
+                "Called await_termination on sync server. Use wait_for_termination instead for sync servers.",
             )
             return
 
@@ -217,5 +215,5 @@ class BaseServer(abc.ABC):
             return
 
         # For async server
-        async_server = cast(grpc_aio.Server, self.server)
+        async_server = cast("grpc_aio.Server", self.server)
         await async_server.wait_for_termination()
