@@ -53,7 +53,8 @@ class AsyncInsecureServer(BaseServer):
     def _register_servicers(self) -> None:
         """Register servicers with the gRPC server."""
         if self.server is None:
-            raise RuntimeError("Server must be created before registering servicers")
+            msg = "Server must be created before registering servicers"
+            raise RuntimeError(msg)
 
         # Create and register the servicer
         servicer = AsyncGreeterImpl()
@@ -65,7 +66,7 @@ class AsyncInsecureServer(BaseServer):
         logger.info("Registered Async Greeter servicer")
 
 
-async def main_async():
+async def main_async() -> int:
     """Run the asynchronous insecure server."""
     server = None
     try:
@@ -112,7 +113,7 @@ def main():
         logger.info("Server stopped by keyboard interrupt")
         return 0  # Clean exit
     except Exception as e:
-        logger.error(f"Fatal error: {e}")
+        logger.exception(f"Fatal error: {e}")
         return 1
 
 

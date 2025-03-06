@@ -27,11 +27,12 @@
     ]
 
     dependencies = [
-        "digitalkin-proto>=0.0.5",
+        "datamodel-code-generator>=0.28.4",
+        "digitalkin-proto>=0.0.8",
         "grpcio-health-checking>=1.71.0",
         "grpcio-reflection>=1.71.0",
         "pydantic>=2.10.6",
-]
+    ]
 
     [project.optional-dependencies]
         dev = [
@@ -39,7 +40,7 @@
             "pytest-asyncio>=0.25.3",
             "pytest-cov>=6.0.0",
             "typos>=1.30.2",
-            "ruff>=0.9.10",
+            "ruff>=0.11.0",
             "mypy>=1.15.0",
             "pyright>=1.1.394",
             "pre-commit>=4.1.0",
@@ -50,6 +51,7 @@
             "grpcio-testing>=1.71.0",
             "grpcio-status>=1.71.0",
         ]
+        examples = [ "openai>=1.66.3" ]
 
     [project.urls]
         Homepage      = "https://github.com/DigitalKin-ai/digitalkin"
@@ -100,13 +102,9 @@
         "node_modules",
         "venv",
         "module_server.py",
-        "module_servicer.py",
         "factory.py",
-        "_base_module.py",
-        "archetype_module.py",
         "tool_module.py",
         "trigger_module.py",
-        "start_grpc_server.py",
         "generate_certificates.py",
         "test_*.py",
         "tests/*",
@@ -161,6 +159,7 @@
         ignore = [
             "COM812", # Disable because of formatter incompatibility
             "DOC502", # Allow extraneous-exception in docstring
+            "S105",   # Hardcoded-password
         ]
 
         fixable = [ "ALL" ]

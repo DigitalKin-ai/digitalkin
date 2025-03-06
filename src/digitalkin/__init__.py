@@ -4,14 +4,15 @@ This package implements the DigitalKin agentic mesh standards.
 """
 
 from digitalkin.__version__ import __version__
+from digitalkin.models import Module, StrategyConfig
 
 # Import key components to make them available at the package level
-from digitalkin.modules.archetype_module import ArchetypeModule
-from digitalkin.modules.tool_module import ToolModule
-from digitalkin.modules.trigger_module import TriggerModule
+from digitalkin.modules import ArchetypeModule, ToolModule, TriggerModule
 
 __all__ = [
     "ArchetypeModule",
+    "Module",
+    "StrategyConfig",
     "ToolModule",
     "TriggerModule",
     "__version__",

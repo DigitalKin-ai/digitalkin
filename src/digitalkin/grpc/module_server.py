@@ -1,15 +1,22 @@
 """Module gRPC server implementation for DigitalKin."""
 
 import logging
+import uuid
 
 import grpc
-from digitalkin_proto.digitalkin.module.v1 import module_service_pb2_grpc
-from digitalkin_proto.digitalkin.module_registry.v1 import module_registry_service_pb2, module_registry_service_pb2_grpc
 
 from digitalkin.grpc._base_server import BaseServer
 from digitalkin.grpc.module_servicer import ModuleServicer
+from digitalkin.grpc.utils.exceptions import ServerError
 from digitalkin.grpc.utils.models import ModuleServerConfig, SecurityMode
 from digitalkin.modules._base_module import BaseModule
+
+from digitalkin_proto.digitalkin.module.v2 import module_service_pb2_grpc
+from digitalkin_proto.digitalkin.module_registry.v2 import (
+    metadata_pb2,
+    module_registry_service_pb2_grpc,
+    registration_pb2,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -28,40 +35,60 @@ class ModuleServer(BaseServer):
 
     def __init__(
         self,
-        module: BaseModule,
+        module_class: type[BaseModule],
         config: ModuleServerConfig,
-    ):
+    ) -> None:
         """Initialize the module server.
 
         Args:
-            module: The module instance to be served.
+            module_class: The module instance to be served.
             config: Server configuration including registry address if auto-registration is desired.
         """
         super().__init__(config)
-        self.module = module
+        self.module_class = module_class
         self.config = config
         self.module_servicer: ModuleServicer | None = None
 
     def _register_servicers(self) -> None:
-        """Register the module servicer with the gRPC server."""
-        if self.server is None:
-            raise RuntimeError("Server must be created before registering servicers")
+        """Register the module servicer with the gRPC server.
 
-        logger.info(f"Registering module servicer for {self.module.metadata['name']}")
-        self.module_servicer = ModuleServicer(self.module)
+        Raises:
+            RuntimeError: No registered server
+        """
+        if self.server is None:
+            msg = "Server must be created before registering servicers"
+            raise RuntimeError(msg)
+
+        logger.info("Registering module servicer for %s", self.module_class.__name__)
+        self.module_servicer = ModuleServicer(self.module_class)
         module_service_pb2_grpc.add_ModuleServiceServicer_to_server(self.module_servicer, self.server)
         self._servicers.append(self.module_servicer)
 
     def start(self) -> None:
         """Start the module server and register with the registry if configured."""
+        logger.critical(self.config)
         super().start()
 
+        logger.critical(self.config)
         # If a registry address is provided, register the module
         if self.config.registry_address:
             try:
                 self._register_with_registry()
-            except Exception as e:
-                logger.error(f"Failed to register with registry: {e}")
+            except Exception:
+                logger.exception("Failed to register with registry")
+
+    async def start_async(self) -> None:
+        """Start the module server and register with the registry if configured."""
+        logger.critical(self.config)
+        await super().start_async()
+
+        logger.critical(self.config)
+        # If a registry address is provided, register the module
+        if self.config.registry_address:
+            try:
+                self._register_with_registry()
+            except Exception:
+                logger.exception("Failed to register with registry")
 
     def stop(self, grace: float | None = None) -> None:
         """Stop the module server and deregister from the registry if needed."""
@@ -69,8 +96,8 @@ class ModuleServer(BaseServer):
         if self.config.registry_address:
             try:
                 self._deregister_from_registry()
-            except Exception as e:
-                logger.error(f"Failed to deregister from registry: {e}")
+            except ServerError:
+                logger.exception("Failed to deregister from registry")
 
         super().stop(grace)
 
@@ -78,80 +105,80 @@ class ModuleServer(BaseServer):
         """Register this module with the registry server.
 
         Raises:
-            grpc.RpcError: If communication with the registry server fails.
+            ServerError: If communication with the registry server fails.
         """
-        logger.info(f"Registering module with registry at {self.config.registry_address}")
+        logger.info("Registering module with registry at %s", self.config.registry_address)
 
         # Create appropriate channel based on security mode
         channel = self._create_registry_channel()
 
-        try:
-            with channel:
-                # Create a stub (client)
-                stub = module_registry_service_pb2_grpc.ModuleRegistryServiceStub(channel)
+        with channel:
+            # Create a stub (client)
+            stub = module_registry_service_pb2_grpc.ModuleRegistryServiceStub(channel)
 
-                # Determine module type
-                module_type = self._determine_module_type()
+            # Determine module type
+            module_type = self._determine_module_type()
 
-                # Prepare capabilities list
-                capabilities = self._get_module_capabilities()
+            metadata = metadata_pb2.Metadata(
+                name=self.module_class.metadata["name"],
+                tags=[metadata_pb2.Tag(tag=tag) for tag in self.module_class.metadata["tags"]],
+                description=self.module_class.metadata["description"],
+            )
 
-                # Create registration request
-                request = module_registry_service_pb2.RegisterRequest(
-                    module_info={
-                        "module_id": self.module.metadata["module_id"],
-                        "name": self.module.metadata["name"],
-                        "description": self.module.metadata["description"],
-                        "version": self.module.metadata["version"],
-                        "type": module_type,
-                        "tags": self.module.metadata["tags"],
-                        "capabilities": capabilities,
-                    },
-                    address=self.config.address,
-                )
+            self.module_class.metadata["module_id"] = f"{self.module_class.metadata['name']}:{uuid.uuid4()}"
+            # Create registration request
+            request = registration_pb2.RegisterRequest(
+                module_id=self.module_class.metadata["module_id"],
+                version=self.module_class.metadata["version"],
+                module_type=module_type,
+                address=self.config.address,
+                metadata=metadata,
+            )
 
+            try:
                 # Call the register method
+                logger.warning("send request to registry")
                 response = stub.RegisterModule(request)
+                logger.warning("recive response from request to registry: {response=}")
 
                 if response.success:
-                    logger.info(f"Module registered successfully: {response.message}")
+                    logger.info("Module registered successfully")
                 else:
-                    logger.error(f"Module registration failed: {response.error_message}")
-        except grpc.RpcError as e:
-            logger.error(f"RPC error during registration: {e.details() if hasattr(e, 'details') else str(e)}")
-            raise
+                    logger.error("Module registration failed")
+            except grpc.RpcError:
+                logger.exception("RPC error during registration: {e.details}")
+                raise ServerError
 
     def _deregister_from_registry(self) -> None:
         """Deregister this module from the registry server.
 
         Raises:
-            grpc.RpcError: If communication with the registry server fails.
+            ServerError: If communication with the registry server fails.
         """
-        logger.info(f"Deregistering module from registry at {self.config.registry_address}")
+        logger.info("Deregistering module from registry at %s", self.config.registry_address)
 
         # Create appropriate channel based on security mode
         channel = self._create_registry_channel()
 
+        with channel:
+            # Create a stub (client)
+            stub = module_registry_service_pb2_grpc.ModuleRegistryServiceStub(channel)
+
+            # Create deregistration request
+            request = registration_pb2.DeregisterRequest(
+                module_id=self.module_class.metadata["module_id"],
+            )
         try:
-            with channel:
-                # Create a stub (client)
-                stub = module_registry_service_pb2_grpc.ModuleRegistryServiceStub(channel)
+            # Call the deregister method
+            response = stub.DeregisterModule(request)
 
-                # Create deregistration request
-                request = module_registry_service_pb2.DeregisterRequest(
-                    module_id=self.module.metadata["module_id"],
-                )
-
-                # Call the deregister method
-                response = stub.DeregisterModule(request)
-
-                if response.success:
-                    logger.info(f"Module deregistered successfully: {response.message}")
-                else:
-                    logger.error(f"Module deregistration failed: {response.error_message}")
-        except grpc.RpcError as e:
-            logger.error(f"RPC error during deregistration: {e.details() if hasattr(e, 'details') else str(e)}")
-            raise
+            if response.success:
+                logger.info("Module deregistered successfull")
+            else:
+                logger.error("Module deregistration failed")
+        except grpc.RpcError:
+            logger.exception("RPC error during deregistration")
+            raise ServerError
 
     def _create_registry_channel(self) -> grpc.Channel:
         """Create an appropriate channel to the registry server.
@@ -164,21 +191,21 @@ class ModuleServer(BaseServer):
         """
         if self.config.security == SecurityMode.SECURE and self.config.credentials:
             # Secure channel
-            with open(self.config.credentials.server_cert_path, "rb") as cert_file:
+            """TODO: use Path(self.config.credentials.server_cert_path).read_bytes()"""
+            with open(self.config.credentials.server_cert_path, "rb") as cert_file:  # noqa: FURB101
                 certificate_chain = cert_file.read()
 
             root_certificates = None
             if self.config.credentials.root_cert_path:
-                with open(self.config.credentials.root_cert_path, "rb") as root_cert_file:
+                with open(self.config.credentials.root_cert_path, "rb") as root_cert_file:  # noqa: FURB101
                     root_certificates = root_cert_file.read()
 
             # Create channel credentials
             channel_credentials = grpc.ssl_channel_credentials(root_certificates=root_certificates or certificate_chain)
 
             return grpc.secure_channel(self.config.registry_address, channel_credentials)
-        else:
-            # Insecure channel
-            return grpc.insecure_channel(self.config.registry_address)
+        # Insecure channel
+        return grpc.insecure_channel(self.config.registry_address)
 
     def _determine_module_type(self) -> str:
         """Determine the module type based on its class.
@@ -187,7 +214,7 @@ class ModuleServer(BaseServer):
             A string representing the module type.
         """
         module_type = "UNKNOWN"
-        class_name = self.module.__class__.__name__
+        class_name = self.module_class.__name__
 
         if class_name == "ToolModule":
             module_type = "TOOL"
@@ -197,13 +224,3 @@ class ModuleServer(BaseServer):
             module_type = "KIN"
 
         return module_type
-
-    def _get_module_capabilities(self) -> list[str]:
-        """Get the capabilities of the module.
-
-        Returns:
-            A list of capability strings.
-        """
-        if hasattr(self.module, "capabilities"):
-            return self.module.capabilities
-        return []

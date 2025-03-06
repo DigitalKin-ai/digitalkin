@@ -27,7 +27,7 @@ tasks:
   setup-pre-commit:
     desc: "Install pre-commit hooks"
     cmds:
-      - pre-commit install
+      - uv run pre-commit install
 
   build-package:
     desc: "Build the PyPI package (runs your build script)"
