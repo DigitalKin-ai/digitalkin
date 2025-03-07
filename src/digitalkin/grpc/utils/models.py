@@ -4,7 +4,9 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ValidationInfo, field_validator
+
+from digitalkin.grpc.utils.exceptions import ConfigurationError, SecurityError
 
 
 class ServerMode(str, Enum):
@@ -22,11 +24,26 @@ class SecurityMode(str, Enum):
 
 
 class ServerCredentials(BaseModel):
-    """Model for server credentials in secure mode."""
+    """Model for server credentials in secure mode.
+
+    Attributes:
+        server_key_path: Path to the server private key
+        server_cert_path: Path to the server certificate
+        root_cert_path: Optional path to the root certificate
+    """
 
     server_key_path: Path = Field(..., description="Path to the server private key")
     server_cert_path: Path = Field(..., description="Path to the server certificate")
     root_cert_path: Path | None = Field(None, description="Path to the root certificate")
+
+    # Enable __slots__ for memory efficiency
+    model_config = {
+        "extra": "forbid",
+        "arbitrary_types_allowed": True,
+        "validate_assignment": True,
+        "use_enum_values": True,
+        "frozen": True,  # Make immutable
+    }
 
     @field_validator("server_key_path", "server_cert_path", "root_cert_path")
     @classmethod
@@ -40,16 +57,27 @@ class ServerCredentials(BaseModel):
             The validated path
 
         Raises:
-            ValueError: If the path does not exist
+            SecurityError: If the path does not exist
         """
         if v is not None and not v.exists():
             msg = f"File not found: {v}"
-            raise ValueError(msg)
+            raise SecurityError(msg)
         return v
 
 
 class ServerConfig(BaseModel):
-    """Base configuration for gRPC servers."""
+    """Base configuration for gRPC servers.
+
+    Attributes:
+        host: Host address to bind the server to
+        port: Port to listen on
+        max_workers: Maximum number of workers for sync mode
+        mode: Server operation mode (sync/async)
+        security: Security mode (secure/insecure)
+        credentials: Server credentials for secure mode
+        server_options: Additional server options
+        enable_reflection: Enable reflection for the server
+    """
 
     host: str = Field("0.0.0.0", description="Host address to bind the server to")  # noqa: S104
     port: int = Field(50051, description="Port to listen on")
@@ -58,25 +86,57 @@ class ServerConfig(BaseModel):
     security: SecurityMode = Field(SecurityMode.INSECURE, description="Security mode (secure/insecure)")
     credentials: ServerCredentials | None = Field(None, description="Server credentials for secure mode")
     server_options: list[tuple[str, Any]] = Field(default_factory=list, description="Additional server options")
+    enable_reflection: bool = Field(default=True, description="Enable reflection for the server")
+    enable_health_check: bool = Field(default=True, description="Enable health check service")
+
+    # Enable __slots__ for memory efficiency
+    model_config = {
+        "extra": "forbid",
+        "arbitrary_types_allowed": True,
+        "validate_assignment": True,
+        "use_enum_values": True,
+    }
 
     @field_validator("credentials")
     @classmethod
-    def validate_credentials(cls, v: ServerCredentials | None, values: dict[str, Any]) -> ServerCredentials | None:
+    def validate_credentials(cls, v: ServerCredentials | None, info: ValidationInfo) -> ServerCredentials | None:
         """Validate that credentials are provided when in secure mode.
 
         Args:
             v: The credentials value
-            values: All other field values
+            info: ValidationInfo containing other field values
 
         Returns:
             The validated credentials
 
         Raises:
-            ValueError: If credentials are missing in secure mode
+            ConfigurationError: If credentials are missing in secure mode
         """
-        if values.get("security") == SecurityMode.SECURE and v is None:
+        # Access security mode from the info.data dictionary
+        security = info.data.get("security")
+
+        if security == SecurityMode.SECURE and v is None:
             msg = "Credentials must be provided when using secure mode"
-            raise ValueError(msg)
+            raise ConfigurationError(msg)
+        return v
+
+    @field_validator("port")
+    @classmethod
+    def validate_port(cls, v: int) -> int:
+        """Validate that the port is in a valid range.
+
+        Args:
+            v: Port number to validate
+
+        Returns:
+            The validated port number
+
+        Raises:
+            ConfigurationError: If port is outside valid range
+        """
+        if not 0 < v < 65536:  # noqa: PLR2004
+            msg = f"Port must be between 1 and 65535, got {v}"
+            raise ConfigurationError(msg)
         return v
 
     @property
@@ -90,12 +150,20 @@ class ServerConfig(BaseModel):
 
 
 class ModuleServerConfig(ServerConfig):
-    """Configuration for Module gRPC server."""
+    """Configuration for Module gRPC server.
+
+    Attributes:
+        registry_address: Address of the registry server
+    """
 
     registry_address: str | None = Field(None, description="Address of the registry server")
 
 
 class RegistryServerConfig(ServerConfig):
-    """Configuration for Registry gRPC server."""
+    """Configuration for Registry gRPC server.
+
+    Attributes:
+        database_url: Database URL for registry data storage
+    """
 
     database_url: str | None = Field(None, description="Database URL for registry data storage")
