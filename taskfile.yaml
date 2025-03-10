@@ -11,13 +11,13 @@ tasks:
     cmds:
       - uv pip compile pyproject.toml -o requirements.txt
       - |
-          if [ -n "$VIRTUAL_ENV" ] || [ -d ".venv" -a -f ".venv/bin/activate" ]; then
-            echo "Installing in virtual environment"
-            uv pip install -e .
-          else
-            echo "Installing in system Python"
-            uv pip install -e . --system
-          fi
+        if [ -n "$VIRTUAL_ENV" ] || [ -d ".venv" -a -f ".venv/bin/activate" ]; then
+          echo "Installing in virtual environment"
+          uv pip install -e .
+        else
+          echo "Installing in system Python"
+          uv pip install -e . --system
+        fi
 
   dev-deps:
     desc: "Install development dependencies"
@@ -65,7 +65,7 @@ tasks:
     desc: "run linter on the project"
     cmds:
       - |
-          uv run ruff format . && uv run ruff check --select I --fix . && uv run ruff check . --fix
+        uv run ruff format . && uv run ruff check --select I --fix . && uv run ruff check . --fix
 
   clean:
     desc: "Remove build artifacts and cache directories"

@@ -13,7 +13,7 @@ from digitalkin.grpc.utils.models import (
 )
 
 
-def test_server_mode_enum():
+def test_server_mode_enum() -> None:
     """Test the ServerMode enum."""
     # Check SYNC value
     if ServerMode.SYNC != "sync":
@@ -31,7 +31,7 @@ def test_server_mode_enum():
         pytest.fail(f"Expected ServerMode enum to have members {expected_members}, got {actual_members}")
 
 
-def test_security_mode_enum():
+def test_security_mode_enum() -> None:
     """Test the SecurityMode enum."""
     # Check SECURE value
     if SecurityMode.SECURE != "secure":
@@ -49,7 +49,7 @@ def test_security_mode_enum():
         pytest.fail(f"Expected SecurityMode enum to have members {expected_members}, got {actual_members}")
 
 
-def test_server_credentials_validation(tmp_path):
+def test_server_credentials_validation(tmp_path) -> None:
     """Test validation of ServerCredentials."""
     # Create test certificate files
     server_key = tmp_path / "server.key"
@@ -90,7 +90,7 @@ def test_server_credentials_validation(tmp_path):
         pytest.fail(f"Expected root_cert_path to be None, got {creds_no_ca.root_cert_path}")
 
 
-def test_server_credentials_validation_errors(tmp_path):
+def test_server_credentials_validation_errors(tmp_path) -> None:
     """Test validation errors in ServerCredentials."""
     # Create only one of the files
     server_key = tmp_path / "server.key"
@@ -104,7 +104,7 @@ def test_server_credentials_validation_errors(tmp_path):
         )
 
 
-def test_server_config_defaults():
+def test_server_config_defaults() -> None:
     """Test default values for ServerConfig."""
     config = ServerConfig()
 
@@ -145,7 +145,7 @@ def test_server_config_defaults():
         pytest.fail(f"Expected default enable_health_check to be True, got {config.enable_health_check}")
 
 
-def test_server_config_custom():
+def test_server_config_custom() -> None:
     """Test custom values for ServerConfig."""
     expected_options = [("grpc.max_receive_message_length", 10 * 1024 * 1024)]
 
@@ -193,7 +193,7 @@ def test_server_config_custom():
         pytest.fail(f"Expected enable_health_check to be False, got {config.enable_health_check}")
 
 
-def test_server_config_secure_without_credentials():
+def test_server_config_secure_without_credentials() -> None:
     """Test error when secure mode is specified without credentials."""
     # When creating a ServerConfig with secure mode but no credentials,
     # it should raise ConfigurationError
@@ -204,7 +204,7 @@ def test_server_config_secure_without_credentials():
         )
 
 
-def test_server_config_secure_with_credentials(dummy_certs):
+def test_server_config_secure_with_credentials(dummy_certs) -> None:
     """Test that secure mode with proper credentials is valid."""
     credentials = ServerCredentials(**dummy_certs)
 
@@ -221,7 +221,7 @@ def test_server_config_secure_with_credentials(dummy_certs):
         pytest.fail(f"Expected credentials to match input, got {config.credentials}")
 
 
-def test_server_config_insecure_with_credentials(dummy_certs):
+def test_server_config_insecure_with_credentials(dummy_certs) -> None:
     """Test that insecure mode can have credentials (though not required)."""
     credentials = ServerCredentials(**dummy_certs)
 
@@ -238,7 +238,7 @@ def test_server_config_insecure_with_credentials(dummy_certs):
         pytest.fail(f"Expected credentials to match input, got {config.credentials}")
 
 
-def test_server_config_insecure_without_credentials():
+def test_server_config_insecure_without_credentials() -> None:
     """Test that insecure mode without credentials is valid."""
     # This should not raise an exception
     config = ServerConfig(
@@ -253,7 +253,7 @@ def test_server_config_insecure_without_credentials():
         pytest.fail(f"Expected credentials to be None, got {config.credentials}")
 
 
-def test_server_config_port_validation():
+def test_server_config_port_validation() -> None:
     """Test port validation in ServerConfig."""
     # Valid ports
     try:
@@ -270,7 +270,7 @@ def test_server_config_port_validation():
         ServerConfig(port=65536)
 
 
-def test_server_config_address():
+def test_server_config_address() -> None:
     """Test the address property of ServerConfig."""
     config = ServerConfig(host="localhost", port=8000)
     expected_address = "localhost:8000"
@@ -279,7 +279,7 @@ def test_server_config_address():
         pytest.fail(f"Expected address to be '{expected_address}', got '{config.address}'")
 
 
-def test_module_server_config():
+def test_module_server_config() -> None:
     """Test ModuleServerConfig specific properties."""
     config = ModuleServerConfig(registry_address="localhost:50051")
     expected_registry_address = "localhost:50051"
@@ -288,7 +288,7 @@ def test_module_server_config():
         pytest.fail(f"Expected registry_address to be '{expected_registry_address}', got '{config.registry_address}'")
 
 
-def test_registry_server_config():
+def test_registry_server_config() -> None:
     """Test RegistryServerConfig specific properties."""
     config = RegistryServerConfig(database_url="sqlite:///registry.db")
     expected_database_url = "sqlite:///registry.db"
