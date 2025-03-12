@@ -2,7 +2,9 @@
 
 import logging
 
+import grpc_testing
 import pytest
+from _pytest.fixtures import SubRequest
 
 # Configure logging for tests
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -60,7 +62,12 @@ def dummy_certs(tmp_path):
 @pytest.fixture
 def server_config_sync_secure(dummy_certs):
     """Create a sync secure server configuration."""
-    from digitalkin.grpc.utils.models import SecurityMode, ServerConfig, ServerCredentials, ServerMode
+    from digitalkin.grpc.utils.models import (
+        SecurityMode,
+        ServerConfig,
+        ServerCredentials,
+        ServerMode,
+    )
 
     credentials = ServerCredentials(**dummy_certs)
 
@@ -76,7 +83,12 @@ def server_config_sync_secure(dummy_certs):
 @pytest.fixture
 def server_config_async_secure(dummy_certs):
     """Create an async secure server configuration."""
-    from digitalkin.grpc.utils.models import SecurityMode, ServerConfig, ServerCredentials, ServerMode
+    from digitalkin.grpc.utils.models import (
+        SecurityMode,
+        ServerConfig,
+        ServerCredentials,
+        ServerMode,
+    )
 
     credentials = ServerCredentials(**dummy_certs)
 
@@ -87,3 +99,38 @@ def server_config_async_secure(dummy_certs):
         security=SecurityMode.SECURE,
         credentials=credentials,
     )
+
+
+@pytest.fixture(scope="module")
+def grpc_test_server(request: SubRequest) -> grpc_testing.Server:
+    """Generate a Test Server with associated servicers.
+
+    Creates a gRPC testing server from service instances defined in the test module.
+    The test module must define two variables:
+      - service_instance: An instance of the service to be tested
+      - service_name: The service descriptor from the generated protobuf
+
+    Args:
+        request: The pytest request object containing module information.
+
+    Raises:
+        RuntimeError: If service_instance or service_name is not defined in the test module.
+
+    Returns:
+        grpc_testing.Server: Instance of gRPC testing server with the associated service.
+    """
+    # Get the service instance from the test module
+    service_instance = getattr(request.module, "service_instance", None)
+    if service_instance is None:
+        msg = "Test module must define a variable `service_instance`"
+        raise RuntimeError(msg)
+
+    # Get the service descriptor from the test module
+    service_name = getattr(request.module, "service_name", None)
+    if service_name is None:
+        msg = "Test module must define a variable `service_name`"
+        raise RuntimeError(msg)
+
+    # Create and return the gRPC testing server
+    servicers = {service_name: service_instance}
+    return grpc_testing.server_from_dictionary(servicers, grpc_testing.strict_real_time())
