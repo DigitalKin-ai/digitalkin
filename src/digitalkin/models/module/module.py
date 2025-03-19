@@ -4,20 +4,16 @@ from enum import Enum, auto
 
 from pydantic import BaseModel
 
-from digitalkin.services import (
-    StorageStrategy,
-)
-
 
 class ModuleStatus(Enum):
-    """États possibles d'un module."""
+    """Possible module's state."""
 
-    CREATED = auto()  # Module créé mais pas encore démarré
-    STARTING = auto()  # Module en cours de démarrage
-    RUNNING = auto()  # Module en cours d'exécution
-    STOPPING = auto()  # Module en cours d'arrêt
-    STOPPED = auto()  # Module arrêté normalement
-    FAILED = auto()  # Module arrêté suite à une erreur
+    CREATED = auto()  # Module created but not started
+    STARTING = auto()  # Module is starting
+    RUNNING = auto()  # Module do run
+    STOPPING = auto()  # Module is stopping
+    STOPPED = auto()  # Module stop successfuly
+    FAILED = auto()  # Module stopped due to internal error
     NOT_FOUND = auto()
 
 
@@ -33,18 +29,3 @@ class Module(BaseModel):
     type: str
     version: str
     description: str
-
-
-class StrategyConfig(BaseModel):
-    """Module config model."""
-
-    storage_strategy: StorageStrategy
-    """
-    cost_strategy: CostStrategy
-    snapshot_strategy: SnapshotStrategy
-    registry_strategy: RegistryStrategy
-    filesystem_strategy: FilesystemStrategy
-    agent_strategy: AgentStrategy
-    identity_strategy: IdentityStrategy
-    """
-    model_config = {"arbitrary_types_allowed": True}

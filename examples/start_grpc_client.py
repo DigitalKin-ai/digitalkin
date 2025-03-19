@@ -241,7 +241,6 @@ async def run_client_text_transform() -> None:
                         output = output_class(**output_dict)
 
                         logger.info("Received transformation %s: '%s'", output.iteration, output.transformed_text)
-
                 logger.info("Module execution completed successfully")
 
             except grpc.RpcError:
@@ -311,6 +310,6 @@ async def run_client_llm() -> None:
 
 if __name__ == "__main__":
     fn = run_client_text_transform
-    if len(sys.argv) > 1 and sys.argv[1] == "llm":
+    if len(sys.argv) > 1 and "llm" in sys.argv:
         fn = run_client_llm
     asyncio.run(fn())

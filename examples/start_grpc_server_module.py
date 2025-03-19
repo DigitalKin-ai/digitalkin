@@ -53,33 +53,38 @@ async def serve_module() -> int:
             registry_address="[::]:50052",  # Address of the registry server
         )
 
-        if len(sys.argv) > 1 and sys.argv[1] == "llm":
+        if len(sys.argv) > 1 and "llm" in sys.argv:
             module_server = ModuleServer(OpenAIToolModule, config=module_config)
-            module_server.module_class.storage.create({
-                "table": "setups",
-                "insert": dict(
-                    OpenAIToolSetup(
-                        openai_key="XXX",
-                        model_name="gpt-4o-mini",
-                        prepa_prompt="You are an python specialist focused on the aync module and process optimization.",
-                    )
-                ),
-            })
+            await module_server.start_async()
+
+            module_server.module_class.storage.create(
+                table="setups",
+                data={
+                    "insert": dict(
+                        OpenAIToolSetup(
+                            openai_key="XXX",
+                            model_name="gpt-4o-mini",
+                            prepa_prompt="You are an python specialist focused on the aync module and process optimization.",
+                        )
+                    ),
+                },
+            )
         else:
             # Create the module server with our custom module
             module_server = ModuleServer(TextTransformModule, config=module_config)
-            module_server.module_class.storage.create({
-                "table": "setups",
-                "insert": dict(TextTransformSetup(shift_amount=2, uppercase=True)),
-            })
+            await module_server.start_async()
+            module_server.module_class.storage.create(
+                table="setups",
+                data={
+                    "insert": dict(TextTransformSetup(shift_amount=2, uppercase=True)),
+                },
+            )
 
         # Start the server asynchronously
-        await module_server.start_async()
         logger.info("Module server started on port 50051. Press Ctrl+C to stop.")
 
         # Keep the server running until interrupted
         await module_server.await_termination()
-
     except KeyboardInterrupt:
         logger.info("Server stopping due to keyboard interrupt...")
         return 0
@@ -89,6 +94,7 @@ async def serve_module() -> int:
     finally:
         # Clean up server resources
         if module_server is not None and module_server.server is not None:
+            logger.warning("db: %s", module_server.module_class.storage.get_all())
             logger.info("Stopping module server...")
             await module_server.stop_async()
             logger.info("Module server stopped.")

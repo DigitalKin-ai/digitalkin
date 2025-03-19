@@ -19,21 +19,21 @@ class StorageStrategy(ABC):
         """Close connection to the database."""
 
     @abstractmethod
-    def create(self, data: dict[str, Any]) -> str:
+    def create(self, table: str, data: dict[str, Any]) -> str:
         """Create a new record in the database."""
 
     @abstractmethod
-    def get(self, data: dict[str, Any]) -> list[dict[str, Any]]:
+    def get(self, table: str, data: dict[str, Any]) -> list[dict[str, Any]]:
         """Get records from the database."""
 
     @abstractmethod
-    def update(self, data: dict[str, Any]) -> int:
+    def update(self, table: str, data: dict[str, Any]) -> int:
         """Update records in the database."""
 
     @abstractmethod
-    def delete(self, data: dict[str, Any]) -> int:
+    def delete(self, table: str, data: dict[str, Any]) -> int:
         """Delete records from the database."""
 
     @abstractmethod
-    def get_all(self) -> list[dict[str, Any]]:
+    def get_all(self) -> dict[str, list[dict[str, Any]]]:
         """Get all records from the database."""

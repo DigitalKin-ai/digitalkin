@@ -2,22 +2,58 @@
 
 import asyncio
 import uuid
+from argparse import ArgumentParser, Namespace
 from collections.abc import Callable
 from typing import Any
 
 from digitalkin.logger import logger
 from digitalkin.models import ModuleStatus
 from digitalkin.modules._base_module import BaseModule
+from digitalkin.utils.arg_parser import ArgParser, DevelopmentModeMappingAction
 
 
-class JobManager:
+class JobManager(ArgParser):
     """Background module manager."""
+
+    args: Namespace
+
+    def _add_parser_args(self, parser: ArgumentParser) -> None:
+        class_mapping = {
+            "local": self.module_class.local_services,
+            "development": self.module_class.dev_services,
+        }
+
+        super()._add_parser_args(parser)
+        parser.add_argument(
+            "-d",
+            "--dev-mode",
+            env_var="SERVICE_PROVIDER",
+            class_mapping=class_mapping,
+            choices=class_mapping.keys(),
+            default="local",
+            action=DevelopmentModeMappingAction,
+            dest="service_providers",
+            help="Define Module Service configurations for endpoints",
+        )
 
     def __init__(self, module_class: type[BaseModule]) -> None:
         """Initialize the job manager."""
         self.module_class = module_class
         self.modules: dict[str, BaseModule] = {}
         self._lock = asyncio.Lock()
+        super().__init__()
+
+        explicit_fields = {
+            name: self.args.service_providers.__dict__[name]
+            for name in self.args.service_providers.__class_vars__
+            if name in self.args.service_providers.__dict__
+        }
+
+        # services are now available as class vars.
+        # init the services provided allowing cold start during module creation
+        for service_name in explicit_fields:
+            service_type = getattr(self.args.service_providers, service_name)
+            setattr(self.module_class, service_name, service_type)
 
     async def create_job(  # noqa: D417
         self,
@@ -27,7 +63,7 @@ class JobManager:
         *args: tuple,
         **kwargs: dict,
     ) -> tuple[str, BaseModule]:
-        """Démarre un nouveau module en arrière-plan.
+        """Start new module job in background (asyncio).
 
         Args:
             module_class: Classe du module à instancier
