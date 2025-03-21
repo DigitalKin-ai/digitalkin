@@ -42,8 +42,8 @@ class DefaultStorage(StorageStrategy):
         """
         if table not in self.storage:
             self.storage[table] = []
-        self.storage[table].append(data["insert"])
-        logger.info("CREATE %s:%s succesfull", table, data["insert"])
+        self.storage[table].append(data["data"])
+        logger.info("CREATE %s:%s succesfull", table, data["data"])
         return f"{len(self.storage[table]) - 1}"
 
     def get(self, table: str, data: dict[str, Any]) -> list[dict[str, Any]]:

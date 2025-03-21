@@ -20,7 +20,7 @@ import sys
 from os.path import dirname
 
 from digitalkin.grpc.module_server import ModuleServer
-from digitalkin.grpc.utils.models import ModuleServerConfig, SecurityMode, ServerMode
+from digitalkin.grpc.utils.models import ModuleServerConfig, SecurityMode, ServerConfig, ServerMode
 
 sys.path.append(dirname(__file__))
 from modules.minimal_llm_module import OpenAIToolModule, OpenAIToolSetup
@@ -57,10 +57,23 @@ async def serve_module() -> int:
             module_server = ModuleServer(OpenAIToolModule, config=module_config)
             await module_server.start_async()
 
+            module_server.module_class.storage.__post_init__(  # type: ignore
+                ServerConfig(
+                    host="[::]",
+                    port=50151,
+                    mode=ServerMode.ASYNC,
+                    security=SecurityMode.INSECURE,
+                    max_workers=10,
+                    credentials=None,
+                )
+            )
+
             module_server.module_class.storage.create(
-                table="setups",
+                table="monitor",
                 data={
-                    "insert": dict(
+                    "mission_id": "mission_id:test_mission_id",
+                    "name": "monitor",
+                    "data": dict(
                         OpenAIToolSetup(
                             openai_key="XXX",
                             model_name="gpt-4o-mini",
@@ -73,10 +86,24 @@ async def serve_module() -> int:
             # Create the module server with our custom module
             module_server = ModuleServer(TextTransformModule, config=module_config)
             await module_server.start_async()
+
+            module_server.module_class.storage.__post_init__(  # type: ignore
+                ServerConfig(
+                    host="[::]",
+                    port=50151,
+                    mode=ServerMode.ASYNC,
+                    security=SecurityMode.INSECURE,
+                    max_workers=10,
+                    credentials=None,
+                )
+            )
+
             module_server.module_class.storage.create(
-                table="setups",
+                table="monitor",
                 data={
-                    "insert": dict(TextTransformSetup(shift_amount=2, uppercase=True)),
+                    "mission_id": "mission_id:test_mission_id",
+                    "name": "monitor",
+                    "data": dict(TextTransformSetup(shift_amount=2, uppercase=True)),
                 },
             )
 

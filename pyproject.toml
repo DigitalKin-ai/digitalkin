@@ -108,6 +108,7 @@
         "test_*.py",
         "tests/*",
         "examples/*",
+        "grpc_storage.py",
     ]
 
     [tool.ruff.lint]

@@ -10,7 +10,6 @@ from digitalkin.services.filesystem.filesystem_strategy import FilesystemStrateg
 from digitalkin.services.identity.identity_strategy import IdentityStrategy
 from digitalkin.services.registry.registry_strategy import RegistryStrategy
 from digitalkin.services.snapshot.snapshot_strategy import SnapshotStrategy
-from digitalkin.services.storage.default_storage import DefaultStorage
 from digitalkin.services.storage.storage_strategy import StorageStrategy
 
 
@@ -26,19 +25,3 @@ class ServiceProvider(BaseModel):
     identity: ClassVar[IdentityStrategy]
 
     model_config = {"arbitrary_types_allowed": True}
-
-
-class DefaultServiceProvider(ServiceProvider):
-    """Service Instance used as default service in a Module.
-
-    Currently only allow the default (local) database service.
-    """
-
-    storage = DefaultStorage()
-
-
-class DevelopmentServiceProvider(ServiceProvider):
-    """Service Instance used as a development service in a Module.
-
-    Not implemented
-    """
