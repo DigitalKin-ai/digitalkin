@@ -8,7 +8,7 @@ from typing import Any, ClassVar
 from pydantic import BaseModel
 
 from digitalkin.modules._base_module import BaseModule
-from digitalkin.services.storage.default_storage import DefaultStorage
+from digitalkin.services.service_provider import DefaultServiceProvider
 
 # Configure logging with clear formatting
 logging.basicConfig(
@@ -52,7 +52,8 @@ class TextTransformModule(BaseModule[TextTransformInput, TextTransformOutput, Te
     output_format = TextTransformOutput
     setup_format = TextTransformSetup
 
-    storage = DefaultStorage()
+    local_services = DefaultServiceProvider
+    dev_services = DefaultServiceProvider
 
     # Define module metadata for discovery
     metadata: ClassVar[dict[str, Any]] = {
@@ -71,6 +72,19 @@ class TextTransformModule(BaseModule[TextTransformInput, TextTransformOutput, Te
         # Define what capabilities this module provides
         self.capabilities = ["text-processing", "streaming", "transformation"]
         logger.info(f"Module {self.metadata['name']} initialized with capabilities: {self.capabilities}")
+        self.db_id = int(
+            self.storage.create(
+                table="monitor",
+                data={
+                    "insert": {
+                        "module": self.metadata["name"],
+                        "user": f"xxxx+{self.job_id}",
+                        "consumption": 0,
+                        "ended": False,
+                    }
+                },
+            )
+        )
 
     async def run(
         self,
@@ -111,11 +125,20 @@ class TextTransformModule(BaseModule[TextTransformInput, TextTransformOutput, Te
 
             logger.info(f"Sending transformation {i + 1}/{transform_count}: '{transformed}'")
 
+            monitor_obj = self.storage.get(
+                table="monitor",
+                data={"keys": [self.db_id]},
+            )[0]
+            monitor_obj["consumption"] += 1
+            self.storage.update(
+                table="monitor",
+                data={
+                    "update_id": self.db_id,
+                    "update_value": monitor_obj,
+                },
+            )
             # Send results through callback and wait for acknowledgment
             await callback(job_id=self.job_id, output_data=output_data.model_dump())
-
-            # Add a small delay between iterations to simulate processing time
-            await asyncio.sleep(0.5)
 
             # Update the text for the next iteration (each transformation builds on the previous)
             text = transformed
@@ -129,4 +152,12 @@ class TextTransformModule(BaseModule[TextTransformInput, TextTransformOutput, Te
         Use it to close connections, free resources, etc.
         """
         logger.info(f"Cleaning up module {self.metadata['name']}")
-        # Release any resources here if needed
+        monitor_obj = self.storage.get(table="monitor", data={"keys": [self.db_id]})[0]
+        monitor_obj["ended"] = True
+        self.storage.update(
+            table="monitor",
+            data={
+                "update_id": self.db_id,
+                "update_value": monitor_obj,
+            },
+        )

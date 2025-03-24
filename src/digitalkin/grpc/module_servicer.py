@@ -32,7 +32,11 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer):
     """
 
     def __init__(self, module_class: type[BaseModule]) -> None:
-        """."""
+        """Initialize the module servicer.
+
+        Args:
+            module_class: The module type to serve.
+        """
         super().__init__()
         self.queue: asyncio.Queue = asyncio.Queue()
         self.module_class = module_class
@@ -60,13 +64,15 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer):
         logger.info("StartModule called for module: '%s'", self.module_class.__name__)
         # Process the module input
         input_data = dict(request.input.items())
-        setup_data = self.module_class.storage.get({
-            "table": "setups",
-            "keys": [
-                # remove prefix 'setups:'
-                request.setup_id[7:],
-            ],
-        })[0]
+        setup_data = self.module_class.storage.get(
+            table="setups",
+            data={
+                "keys": [
+                    # remove prefix 'setups:'
+                    request.setup_id[7:],
+                ],
+            },
+        )[0]
 
         # setup_id should be use to request a precise setup from the module
         # Create a job for this execution

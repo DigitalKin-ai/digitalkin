@@ -9,6 +9,7 @@ import openai
 from pydantic import BaseModel
 
 from digitalkin.modules._base_module import BaseModule
+from digitalkin.services.service_provider import DefaultServiceProvider
 from digitalkin.services.storage.default_storage import DefaultStorage
 
 # Configure logging with clear formatting
@@ -49,7 +50,11 @@ class OpenAIToolModule(BaseModule[OpenAIToolInput, OpenAIToolOutput, OpenAIToolS
     setup_format = OpenAIToolSetup
 
     openai_client: openai.OpenAI
-    storage = DefaultStorage()
+
+    # should be pre-defined in the Tool/Kin/Trigger Module
+    # It can be then custom here
+    local_services = DefaultServiceProvider
+    dev_services = DefaultServiceProvider
 
     # Define module metadata for discovery
     metadata: ClassVar[dict[str, Any]] = {
@@ -65,7 +70,6 @@ class OpenAIToolModule(BaseModule[OpenAIToolInput, OpenAIToolOutput, OpenAIToolS
         This method is called when the module is loaded by the server.
         Use it to set up module-specific resources or configurations.
         """
-        # TODO: use the setup to init it
         self.openai_client = openai.OpenAI(api_key=setup_data["openai_key"])
         # Define what capabilities this module provides
         self.capabilities = ["text-processing", "streaming", "transformation"]

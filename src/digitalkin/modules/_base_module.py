@@ -11,6 +11,7 @@ from pydantic import BaseModel
 
 from digitalkin.logger import logger
 from digitalkin.models.module import ModuleStatus
+from digitalkin.services.service_provider import ServiceProvider
 from digitalkin.services.storage.storage_strategy import StorageStrategy
 
 InputModelT = TypeVar("InputModelT", bound=BaseModel)
@@ -26,26 +27,19 @@ class BaseModule(ABC, Generic[InputModelT, OutputModelT, SetupModelT]):
     setup_format: type[SetupModelT]
     metadata: ClassVar[dict[str, Any]]
 
+    local_services: type[ServiceProvider]
+    dev_services: type[ServiceProvider]
+
     storage: StorageStrategy
 
     def __init__(
         self,
         job_id: str,
-        # strategy_config: StrategyConfig,
         name: str | None = None,
     ) -> None:
         """Initialize the module."""
         self.job_id: str = job_id
         self.name = name or self.__class__.__name__
-        """
-        self.storage: StorageStrategy = strategy_config.storage_strategy
-        self.cost: CostStrategy = strategy_config.cost_strategy
-        self.snapshot: SnapshotStrategy = strategy_config.snapshot_strategy
-        self.registry: RegistryStrategy = strategy_config.registry_strategy
-        self.filesystem: FilesystemStrategy = strategy_config.filesystem_strategy
-        self.agent: AgentStrategy = strategy_config.agent_strategy
-        self.identity: IdentityStrategy = strategy_config.identity_strategy
-        """
         self._status = ModuleStatus.CREATED
         self._task: asyncio.Task | None = None
 
