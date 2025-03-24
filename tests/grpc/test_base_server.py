@@ -1,5 +1,5 @@
 """Tests for the BaseServer implementation."""
-
+import sys
 from typing import NoReturn
 from unittest import mock
 
@@ -158,38 +158,33 @@ def test_register_servicer_failure(server_config_sync_insecure) -> None:
 # Reflection tests
 def test_add_reflection(server_config_sync_insecure) -> None:
     """Test adding reflection service to the server."""
-    server = MockServer(server_config_sync_insecure)
+    # First, clear any existing imports of the module
+    if 'grpc_reflection.v1alpha.reflection' in sys.modules:
+        del sys.modules['grpc_reflection.v1alpha.reflection']
 
-    # Create a mock server
-    mock_grpc_server = mock.MagicMock(spec=grpc.Server)
-    server.server = mock_grpc_server
+    # Create a mock module with the required attributes
+    mock_reflection = mock.MagicMock()
+    mock_reflection.SERVICE_NAME = "grpc.reflection.v1alpha.ServerReflection"
 
-    # Add a service name
-    server._service_names = ["my.test.Service"]
+    # Directly patch the module in sys.modules
+    with mock.patch.dict('sys.modules', {'grpc_reflection.v1alpha.reflection': mock_reflection}):
+        # Create the server
+        server = MockServer(server_config_sync_insecure)
 
-    # Mock the reflection module import
-    with mock.patch("importlib.import_module") as mock_import:
-        # Create mock reflection module
-        mock_reflection = mock.MagicMock()
-        mock_reflection.SERVICE_NAME = "grpc.reflection.v1alpha.ServerReflection"
+        # Create a mock server
+        mock_grpc_server = mock.MagicMock(spec=grpc.Server)
+        server.server = mock_grpc_server
 
-        # Setup import to return our mock
-        def side_effect(name, *args, **kwargs):
-            if name == "grpc_reflection.v1alpha.reflection":
-                return mock_reflection
-            return mock.DEFAULT
+        # Add a service name
+        server._service_names = ["my.test.Service"]
 
-        mock_import.side_effect = side_effect
+        # Call add_reflection
+        server._add_reflection()
 
-        # Patch the "import" statement in the code
-        with mock.patch.dict("sys.modules", {"grpc_reflection.v1alpha.reflection": mock_reflection}):
-            # Call add_reflection
-            server._add_reflection()
-
-            # Verify reflection was enabled
-            mock_reflection.enable_server_reflection.assert_called_once_with(
-                ["my.test.Service", "grpc.reflection.v1alpha.ServerReflection"], mock_grpc_server
-            )
+        # Verify the function was called
+        mock_reflection.enable_server_reflection.assert_called_once_with(
+            ["my.test.Service", "grpc.reflection.v1alpha.ServerReflection"], mock_grpc_server
+        )
 
 
 def test_add_reflection_import_error(server_config_sync_insecure) -> None:
