@@ -291,7 +291,7 @@ class RegistryServicer(module_registry_service_pb2_grpc.ModuleRegistryServiceSer
 
         # Start with all modules
         results = list(self.registered_modules.values())
-
+        logger.info("%s", list(results))
         # Filter by name if specified
         if request.name:
             logger.info("\tname %s", request.name)

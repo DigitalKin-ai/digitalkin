@@ -16,7 +16,7 @@ from digitalkin.modules._base_module import BaseModule
 
 
 def create_module_server(
-    module: BaseModule,
+    module: type[BaseModule],
     host: str = "0.0.0.0",  # noqa: S104
     port: int = 50051,
     max_workers: int = 10,

@@ -1,4 +1,4 @@
-"""This module contains the classes for the different types of modules."""
+"""Module package for DigitalKin."""
 
 from .archetype_module import ArchetypeModule
 from .tool_module import ToolModule

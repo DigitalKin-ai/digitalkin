@@ -49,7 +49,8 @@ class SyncInsecureServer(BaseServer):
     def _register_servicers(self) -> None:
         """Register servicers with the gRPC server."""
         if self.server is None:
-            raise RuntimeError("Server must be created before registering servicers")
+            msg = "Server must be created before registering servicers"
+            raise RuntimeError(msg)
 
         # Create and register the servicer
         servicer = SyncGreeterServicer()
@@ -61,7 +62,7 @@ class SyncInsecureServer(BaseServer):
         logger.info("Registered Greeter servicer")
 
 
-def main():
+def main() -> int:
     """Run the synchronous insecure server."""
     try:
         # Create server configuration

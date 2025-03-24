@@ -2,17 +2,13 @@
 
 from abc import ABC
 
-from ._base_module import BaseModule
+from digitalkin.modules._base_module import BaseModule
 
 
 class ArchetypeModule(BaseModule, ABC):
     """ArchetypeModule extends BaseModule to implement specific module types."""
 
-    def __init__(self, metadata):
+    def __init__(self, name: str | None = None) -> None:
         """Initialize the module with the given metadata."""
-        super().__init__(metadata)
+        super().__init__(self.job_id, name=name)
         self.capabilities = ["archetype"]
-
-    def execute(self, input_data):
-        """Execute the module with the given input data."""
-        raise NotImplementedError

@@ -49,7 +49,8 @@ class SyncSecureServer(BaseServer):
     def _register_servicers(self) -> None:
         """Register servicers with the gRPC server."""
         if self.server is None:
-            raise RuntimeError("Server must be created before registering servicers")
+            msg = "Server must be created before registering servicers"
+            raise RuntimeError(msg)
 
         # Create and register the servicer
         servicer = SyncGreeterServicer()
@@ -61,12 +62,11 @@ class SyncSecureServer(BaseServer):
         logger.info("Registered Greeter servicer")
 
 
-def main():
+def main() -> int:
     """Run the synchronous secure server."""
     try:
         # Path to certificate files
         cert_dir = Path(__file__).parent.parent.parent / "certs"
-        print(cert_dir / "server.key")
         # Check if certificates exist
         if not cert_dir.exists() or not (cert_dir / "server.key").exists():
             logger.error("Certificate files not found. Please generate them first.")

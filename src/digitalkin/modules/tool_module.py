@@ -12,7 +12,3 @@ class ToolModule(BaseModule, ABC):
         """Initialize the module with the given metadata."""
         super().__init__(metadata)
         self.capabilities = ["tool"]
-
-    def execute(self, input_data):
-        """Execute the module with the given input data."""
-        raise NotImplementedError
