@@ -62,7 +62,7 @@ class TextTransformModule(BaseModule[TextTransformInput, TextTransformOutput, Te
         "tags": ["text", "transformation", "encryption", "streaming"],
     }
 
-    async def initialize(self) -> None:
+    async def initialize(self, setup_data: dict[str, Any]) -> None:
         """Initialize the module capabilities.
 
         This method is called when the module is loaded by the server.

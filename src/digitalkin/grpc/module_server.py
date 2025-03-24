@@ -11,7 +11,7 @@ from digitalkin.grpc.utils.exceptions import ServerError
 from digitalkin.grpc.utils.models import ModuleServerConfig, SecurityMode
 from digitalkin.modules._base_module import BaseModule
 
-from digitalkin_proto.digitalkin.module.v2 import module_service_pb2_grpc
+from digitalkin_proto.digitalkin.module.v2 import module_service_pb2, module_service_pb2_grpc
 from digitalkin_proto.digitalkin.module_registry.v2 import (
     metadata_pb2,
     module_registry_service_pb2_grpc,
@@ -61,8 +61,12 @@ class ModuleServer(BaseServer):
 
         logger.info("Registering module servicer for %s", self.module_class.__name__)
         self.module_servicer = ModuleServicer(self.module_class)
-        module_service_pb2_grpc.add_ModuleServiceServicer_to_server(self.module_servicer, self.server)
-        self._servicers.append(self.module_servicer)
+        self.register_servicer(
+            self.module_servicer,
+            module_service_pb2_grpc.add_ModuleServiceServicer_to_server,
+            service_descriptor=module_service_pb2.DESCRIPTOR,
+        )
+        logger.info("Registered Async Greeter servicer")
 
     def start(self) -> None:
         """Start the module server and register with the registry if configured."""
