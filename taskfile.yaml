@@ -1,5 +1,10 @@
 version: "3"
 
+vars:
+  # could use env var
+  PACKAGE_NAME: "digitalkin"
+  PACKAGE_DIR: "src/{{.PACKAGE_NAME}}"
+
 tasks:
   venv:
     desc: "Install project venv"
@@ -59,7 +64,8 @@ tasks:
   test-package:
     desc: "Test if the PyPI package is well published"
     cmds:
-      - uv run --with {{.PACKAGE_NAME}} --no-project -- python -c \"import {{.PACKAGE_NAME}}\"
+      - task: build-package
+      - uv run --with {{.PACKAGE_NAME}} --no-project -- python -c 'import {{.PACKAGE_NAME}}; print({{.PACKAGE_NAME}}.__version__)'
 
   run-tests:
     desc: "Run pytest tests"
