@@ -77,7 +77,7 @@ jobs:
 
         - name: Verify Test PyPI package
           run: |
-            python -m pip install --index-url https://test.pypi.org/simple/ --no-deps digitalkin
+            python -m pip install --index-url https://test.pypi.org/simple/ digitalkin
             python -c "import digitalkin; print(digitalkin.__version__)"
 
   publish-pypi:
