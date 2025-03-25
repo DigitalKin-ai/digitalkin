@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field, PrivateAttr
 
 from digitalkin.services.agent import AgentStrategy, DefaultAgent
 from digitalkin.services.cost import CostStrategy, DefaultCost
-from digitalkin.services.filesystem import DefaultFilesystem, FilesystemStrategy
+from digitalkin.services.filesystem import DefaultFilesystem, FilesystemStrategy, GrpcFilesystem
 from digitalkin.services.identity import DefaultIdentity, IdentityStrategy
 from digitalkin.services.registry import DefaultRegistry, RegistryStrategy
 from digitalkin.services.services_models import ServicesMode, ServicesStrategy
@@ -42,7 +42,7 @@ class ServicesConfig(BaseModel):
     )
     _config__registry: dict[str, Any | None] = PrivateAttr(default_factory=dict)
     _filesystem: ServicesStrategy[FilesystemStrategy] = PrivateAttr(
-        default_factory=lambda: ServicesStrategy(local=DefaultFilesystem, remote=DefaultFilesystem)
+        default_factory=lambda: ServicesStrategy(local=DefaultFilesystem, remote=GrpcFilesystem)
     )
     _config_filesystem: dict[str, Any | None] = PrivateAttr(default_factory=dict)
     _agent: ServicesStrategy[AgentStrategy] = PrivateAttr(
