@@ -1,0 +1,113 @@
+name: Publish Package
+
+on:
+  release:
+    types: [created]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install UV
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - name: Install Go Task
+        uses: arduino/setup-task@v2
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install buf
+        uses: bufbuild/buf-setup-action@v1
+        with:
+          github_token: ${{ github.token }}
+
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "25.1"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install dependencies
+        run: |
+          uv pip install -e . --system
+          uv pip install pytest build twine --system
+
+      - name: Generate Python code from protobuf
+        run: task gen-proto
+
+      - name: Run tests
+        run: pytest
+
+      - name: Build package
+        run: task build-package
+
+      - name: Upload dist artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          retention-days: 1
+
+  publish-test-pypi:
+      needs: build
+      runs-on: ubuntu-latest
+      environment: testpypi
+      permissions:
+        contents: read
+        id-token: write # pour trusted publishing
+
+      steps:
+        - name: Download dist artifacts
+          uses: actions/download-artifact@v4
+          with:
+            name: dist
+            path: dist/
+
+        - name: Publish to Test PyPI
+          uses: pypa/gh-action-pypi-publish@release/v1
+          with:
+            repository-url: https://test.pypi.org/legacy/
+            skip-existing: true
+
+        - name: Set up Python
+          uses: actions/setup-python@v5
+          with:
+            python-version: "3.10"
+
+        - name: Wait for Test PyPI to process the package
+          run: sleep 60
+
+        - name: Verify Test PyPI package
+          run: |
+            python -m pip install --index-url https://test.pypi.org/simple/ --no-deps digitalkin
+            python -c "import digitalkin; print(digitalkin.__version__)"
+
+  publish-pypi:
+    needs: [build, publish-test-pypi]
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      contents: read
+      id-token: write # pour trusted publishing
+
+    steps:
+      - name: Download dist artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1

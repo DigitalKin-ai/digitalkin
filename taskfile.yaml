@@ -1,0 +1,107 @@
+version: "3"
+
+tasks:
+  venv:
+    desc: "Install project venv"
+    cmds:
+      - uv venv --python 3.10
+
+  install-deps:
+    desc: "Install project dependencies from pyproject.toml"
+    cmds:
+      - uv pip compile pyproject.toml -o requirements.txt
+      - |
+          if [ -n "$VIRTUAL_ENV" ] || [ -d ".venv" -a -f ".venv/bin/activate" ]; then
+            echo "Installing in virtual environment"
+            uv pip install -e .
+          else
+            echo "Installing in system Python"
+            uv pip install -e . --system
+          fi
+
+  dev-deps:
+    desc: "Install development dependencies"
+    cmds:
+      - uv pip install -e ".[dev]"
+
+  examples-deps:
+    desc: "Install examples dependencies"
+    cmds:
+      - uv pip install -e ".[examples]"
+
+  setup-pre-commit:
+    desc: "Install pre-commit hooks"
+    cmds:
+      - uv run pre-commit install
+
+  build-package:
+    desc: "Build the PyPI package (runs your build script)"
+    cmds:
+      - uv build
+
+  generate-certificates:
+    desc: "Generate certificates"
+    # You can customize the certificate generation with various options:
+    # python generate_certificates.py --output-dir ./my-certs --key-size 4096 --dns-names localhost myserver.example.com --ip-addresses 127.0.0.1 192.168.1.100
+    cmds:
+      - uv run python scripts/generate_certificates.py
+
+  publish-package-test:
+    desc: "Publish the package to the PyPI's test env"
+    cmds:
+      - uv publish --repository-url https://test.pypi.org/legacy/
+
+  publish-package:
+    desc: "Publish the package to PyPI"
+    cmds:
+      - uv publish
+
+  test-package:
+    desc: "Test if the PyPI package is well published"
+    cmds:
+      - uv run --with {{.PACKAGE_NAME}} --no-project -- python -c \"import {{.PACKAGE_NAME}}\"
+
+  run-tests:
+    desc: "Run pytest tests"
+    cmds:
+      - pytest --cov=digitalkin
+
+  linter:
+    desc: "run linter on the project"
+    cmds:
+      - |
+          uv run ruff format . && uv run ruff check --select I --fix . && uv run ruff check . --fix
+
+  clean:
+    desc: "Remove build artifacts and cache directories"
+    cmds:
+      - rm -rf dist src/{{.PACKAGE_NAME}}.egg-info
+      - find . -type d -name "__pycache__" -exec rm -rf {} +
+      - find . -type d -name "*.egg-info" -exec rm -rf {} +
+
+  clean-all:
+    desc: "Deep clean venv and dist"
+    cmds:
+      - task: clean
+      # Clean up virtual environment
+      - rm -rf .venv
+      - rm -rf dist
+
+  test-publish:
+    desc: "push and test the package in a test env"
+    cmds:
+      - task: publish-package-test
+      - task: test-package
+
+  bump-version:
+    desc: "Bump package version (type: major, minor, or patch)"
+    cmds:
+      - bump2version {{.CLI_ARGS}}
+
+  setup-dev:
+    desc: "Setup development environment"
+    cmds:
+      - task: venv
+      - task: install-deps
+      - task: dev-deps
+      - task: setup-pre-commit
