@@ -28,21 +28,10 @@ jobs:
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install buf
-        uses: bufbuild/buf-setup-action@v1
-        with:
-          github_token: ${{ github.token }}
-
-      - name: Install protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          version: "25.1"
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Install dependencies
         run: |
           uv pip install -e . --system
-          uv pip install pytest build twine --system
+          uv pip install pytest grpcio-testing build twine --system
 
       - name: Run tests
         run: pytest
