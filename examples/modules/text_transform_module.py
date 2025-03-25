@@ -1,6 +1,5 @@
 """Simple module example transforming a text."""
 
-import asyncio
 import logging
 from collections.abc import Callable
 from typing import Any, ClassVar
@@ -8,7 +7,8 @@ from typing import Any, ClassVar
 from pydantic import BaseModel
 
 from digitalkin.modules._base_module import BaseModule
-from digitalkin.services.service_provider import DefaultServiceProvider
+from digitalkin.services.default_service import DefaultServiceProvider
+from digitalkin.services.development_service import DevelopmentServiceProvider
 
 # Configure logging with clear formatting
 logging.basicConfig(
@@ -53,7 +53,7 @@ class TextTransformModule(BaseModule[TextTransformInput, TextTransformOutput, Te
     setup_format = TextTransformSetup
 
     local_services = DefaultServiceProvider
-    dev_services = DefaultServiceProvider
+    dev_services = DevelopmentServiceProvider
 
     # Define module metadata for discovery
     metadata: ClassVar[dict[str, Any]] = {
@@ -72,16 +72,19 @@ class TextTransformModule(BaseModule[TextTransformInput, TextTransformOutput, Te
         # Define what capabilities this module provides
         self.capabilities = ["text-processing", "streaming", "transformation"]
         logger.info(f"Module {self.metadata['name']} initialized with capabilities: {self.capabilities}")
+
         self.db_id = int(
             self.storage.create(
                 table="monitor",
                 data={
-                    "insert": {
+                    "mission_id": "mission_id:test_mission_id",
+                    "name": "monitor",
+                    "data": {
                         "module": self.metadata["name"],
                         "user": f"xxxx+{self.job_id}",
                         "consumption": 0,
                         "ended": False,
-                    }
+                    },
                 },
             )
         )

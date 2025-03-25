@@ -111,8 +111,10 @@ class DevelopmentModeMappingAction(Action):
         **kwargs: dict[str, Any],
     ) -> None:
         """."""
-        if env_var and env_var in os.environ:
-            default = class_mapping.get(os.environ[env_var], default)  # type: ignore
+        default = class_mapping.get(os.environ.get(env_var, default), None)  # type: ignore
+        if default is None:
+            logger.error("Invalid default value: %s, for the Service Provider in the module", default)
+
         if required and default:
             required = False
         self.class_mapping = class_mapping

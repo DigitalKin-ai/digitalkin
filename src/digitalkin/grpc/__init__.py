@@ -1,4 +1,4 @@
-"""This package contains the gRPC server and client implementations.
+r"""This package contains the gRPC server and client implementations.
 
 ```shell
 digitalkin/grpc/
@@ -16,7 +16,8 @@ digitalkin/grpc/
     ├── __init__.py
     └── server_utils.py   # Common server utilities
 ```
-"""
+
+/!\ Circular import based on this:
 
 from ._base_server import BaseServer
 from .module_servicer import ModuleServicer
@@ -27,3 +28,4 @@ __all__ = [
     "ModuleServicer",
     "RegistryServicer",
 ]
+"""

@@ -141,16 +141,19 @@ class ModuleServer(BaseServer):
 
             try:
                 # Call the register method
-                logger.warning("send request to registry")
+                logger.info(
+                    "Request sent to registry for module: %s:%s",
+                    self.module_class.metadata["name"],
+                    self.module_class.metadata["module_id"],
+                )
                 response = stub.RegisterModule(request)
-                logger.warning("recive response from request to registry: {response=}")
 
                 if response.success:
                     logger.info("Module registered successfully")
                 else:
                     logger.error("Module registration failed")
             except grpc.RpcError:
-                logger.exception("RPC error during registration: {e.details}")
+                logger.exception("RPC error during registration:")
                 raise ServerError
 
     def _deregister_from_registry(self) -> None:

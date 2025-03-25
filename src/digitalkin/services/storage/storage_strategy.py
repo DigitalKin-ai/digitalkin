@@ -10,6 +10,9 @@ class StorageStrategy(ABC):
     def __init__(self) -> None:
         """Initialize the storage strategy."""
 
+    def __post_init__(self, *args, **kwargs) -> None:  # noqa: ANN002, ANN003
+        """Initialize the storage strategy."""
+
     @abstractmethod
     def connect(self) -> bool:
         """Establish connection to the database."""

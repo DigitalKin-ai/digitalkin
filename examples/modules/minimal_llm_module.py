@@ -9,8 +9,8 @@ import openai
 from pydantic import BaseModel
 
 from digitalkin.modules._base_module import BaseModule
-from digitalkin.services.service_provider import DefaultServiceProvider
-from digitalkin.services.storage.default_storage import DefaultStorage
+from digitalkin.services.default_service import DefaultServiceProvider
+from digitalkin.services.development_service import DevelopmentServiceProvider
 
 # Configure logging with clear formatting
 logging.basicConfig(
@@ -54,7 +54,7 @@ class OpenAIToolModule(BaseModule[OpenAIToolInput, OpenAIToolOutput, OpenAIToolS
     # should be pre-defined in the Tool/Kin/Trigger Module
     # It can be then custom here
     local_services = DefaultServiceProvider
-    dev_services = DefaultServiceProvider
+    dev_services = DevelopmentServiceProvider
 
     # Define module metadata for discovery
     metadata: ClassVar[dict[str, Any]] = {
