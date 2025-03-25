@@ -31,7 +31,7 @@ repos:
     hooks:
       - id: pytest
         name: pytest
-        entry: pytest
+        entry: uv run pytest
         language: system
         pass_filenames: false
         always_run: true
@@ -41,3 +41,4 @@ repos:
         # args: ["-xvs", "--cov=digitalkin", "--cov-report=term-missing", "tests/"]
         # You can make this hook only run when Python files change
         types: [python]
+        exclude: \.bumpversion\.cfg
