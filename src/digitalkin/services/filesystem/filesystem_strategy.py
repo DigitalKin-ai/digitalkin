@@ -3,12 +3,11 @@
 from abc import ABC, abstractmethod
 from typing import Any
 
+from digitalkin.services.base_strategy import BaseStrategy
 
-class FilesystemStrategy(ABC):
+
+class FilesystemStrategy(BaseStrategy, ABC):
     """Abstract base class for file system strategies."""
-
-    def __init__(self) -> None:
-        """Initialize the file system strategy."""
 
     @abstractmethod
     def create(self, data: dict[str, Any]) -> str:

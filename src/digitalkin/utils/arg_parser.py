@@ -7,6 +7,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from digitalkin.services.service_provider import ServiceProvider
+from digitalkin.services.services_models import ServicesMode
 
 logging.getLogger().setLevel(logging.INFO)
 logger = logging.getLogger(__name__)
@@ -105,19 +106,15 @@ class DevelopmentModeMappingAction(Action):
     def __init__(
         self,
         env_var: str,
-        class_mapping: dict[str, ServiceProvider],
         required: bool = True,  # noqa: FBT001, FBT002
         default: str | None = None,
         **kwargs: dict[str, Any],
     ) -> None:
         """."""
-        default = class_mapping.get(os.environ.get(env_var, default), None)  # type: ignore
-        if default is None:
-            logger.error("Invalid default value: %s, for the Service Provider in the module", default)
+        default = ServicesMode(os.environ.get(env_var, default))
 
         if required and default:
             required = False
-        self.class_mapping = class_mapping
         super().__init__(default=default, required=required, **kwargs)  # type: ignore
 
     def __call__(
@@ -131,6 +128,5 @@ class DevelopmentModeMappingAction(Action):
         if values not in self.class_mapping:
             logger.error("Invalid mode: %s, dest: %s not set!", values, self.dest)
             parser.error(f"Invalid mode: {values}")
-
-        values = self.class_mapping[values]  # type: ignore
-        setattr(namespace, self.dest, values)
+        mode = ServicesMode(values)
+        setattr(namespace, self.dest, mode)

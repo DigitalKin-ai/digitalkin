@@ -3,9 +3,9 @@
 from pathlib import Path
 from typing import Any
 
-from digitalkin.grpc.module_server import ModuleServer
-from digitalkin.grpc.registry_server import RegistryServer
-from digitalkin.grpc.utils.models import (
+from digitalkin.grpc_servers.module_server import ModuleServer
+from digitalkin.grpc_servers.registry_server import RegistryServer
+from digitalkin.grpc_servers.utils.models import (
     ModuleServerConfig,
     RegistryServerConfig,
     SecurityMode,

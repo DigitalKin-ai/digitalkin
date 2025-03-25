@@ -7,7 +7,7 @@ from digitalkin_proto.digitalkin.module_registry.v2 import (
     registration_pb2,
 )
 
-from digitalkin.grpc.registry_servicer import RegistryModule
+from digitalkin.grpc_servers.registry_servicer import RegistryModule
 
 
 class MockModuleRegistryServicer(module_registry_service_pb2_grpc.ModuleRegistryServiceServicer):

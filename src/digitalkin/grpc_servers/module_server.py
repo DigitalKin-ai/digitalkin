@@ -5,10 +5,10 @@ import uuid
 
 import grpc
 
-from digitalkin.grpc._base_server import BaseServer
-from digitalkin.grpc.module_servicer import ModuleServicer
-from digitalkin.grpc.utils.exceptions import ServerError
-from digitalkin.grpc.utils.models import ModuleServerConfig, SecurityMode
+from digitalkin.grpc_servers._base_server import BaseServer
+from digitalkin.grpc_servers.module_servicer import ModuleServicer
+from digitalkin.grpc_servers.utils.exceptions import ServerError
+from digitalkin.grpc_servers.utils.models import ModuleServerConfig, SecurityMode
 from digitalkin.modules._base_module import BaseModule
 
 from digitalkin_proto.digitalkin.module.v2 import module_service_pb2, module_service_pb2_grpc

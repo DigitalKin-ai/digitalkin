@@ -14,6 +14,7 @@ from digitalkin_proto.digitalkin.module.v2 import (
 )
 from google.protobuf import json_format, struct_pb2
 
+from digitalkin.grpc_servers.utils.exceptions import ServicerError
 from digitalkin.models.module.module import ModuleStatus
 from digitalkin.modules._base_module import BaseModule
 from digitalkin.modules.job_manager import JobManager
@@ -60,25 +61,24 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer):
 
         Yields:
             Responses during module execution.
+
+        Raises:
+            ServicerError: the necessary query didn't work.
         """
         logger.info("StartModule called for module: '%s'", self.module_class.__name__)
         # Process the module input
         input_data = dict(request.input.items())
-        setup_data = self.module_class.storage.get(
-            table="setups",
-            data={
-                "keys": [
-                    # remove prefix 'setups:'
-                    request.setup_id[7:],
-                ],
-            },
-        )[0]
+
+        setup_data: dict = {}
+        if not setup_data:
+            msg = "No setup data returned."
+            raise ServicerError(msg)
 
         # setup_id should be use to request a precise setup from the module
         # Create a job for this execution
         job_id, module = await self.job_manager.create_job(
             input_data,
-            setup_data,
+            setup_data[0].model_dump(),
             callback=self.add_to_queue,
         )
 
