@@ -44,9 +44,6 @@ jobs:
           uv pip install -e . --system
           uv pip install pytest build twine --system
 
-      - name: Generate Python code from protobuf
-        run: task gen-proto
-
       - name: Run tests
         run: pytest
 
