@@ -35,17 +35,17 @@ class StorageStrategy(ABC):
         """Initialize the storage strategy."""
 
     @abstractmethod
-    def create(self, data: dict[str, Any]) -> str:
+    def create(self, storage_dict: dict[str, Any]) -> str:
         """Create a new record in the database."""
 
     @abstractmethod
-    def get(self, data: dict[str, Any]) -> list[Any]:
+    def get(self, storage_dict: dict[str, Any]) -> list[StorageData]:
         """Get records from the database."""
 
     @abstractmethod
-    def update(self, data: dict[str, Any]) -> int:
+    def update(self, storage_dict: dict[str, Any]) -> int:
         """Update records in the database."""
 
     @abstractmethod
-    def delete(self, data: dict[str, Any]) -> int:
+    def delete(self, storage_dict: dict[str, Any]) -> int:
         """Delete records from the database."""

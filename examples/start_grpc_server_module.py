@@ -15,6 +15,7 @@ Requirements:
 """
 
 import asyncio
+import datetime
 import logging
 import sys
 from os.path import dirname
@@ -25,6 +26,8 @@ from digitalkin.grpc.utils.models import ModuleServerConfig, SecurityMode, Serve
 sys.path.append(dirname(__file__))
 from modules.minimal_llm_module import OpenAIToolModule, OpenAIToolSetup
 from modules.text_transform_module import TextTransformModule, TextTransformSetup
+
+from digitalkin.services.storage.storage_strategy import DataType, StorageData
 
 # Configure logging with clear formatting
 logging.basicConfig(
@@ -69,16 +72,21 @@ async def serve_module() -> int:
             )
 
             module_server.module_class.storage.create(
-                data={
-                    "table":"monitor",
-                    "mission_id": "missions:1",
-                    "name": "monitor",
-                    "data": dict(
-                        OpenAIToolSetup(
-                            openai_key="XXX",
-                            model_name="gpt-4o-mini",
-                            prepa_prompt="You are an python specialist focused on the aync module and process optimization.",
-                        )
+                storage_dict={
+                    "table": "setups",
+                    "data": StorageData(
+                        mission_id="missions:1",
+                        name="setups",
+                        timestamp=datetime.datetime.now(datetime.timezone.utc),
+                        type=DataType.VIEW,
+                        data=dict(
+                            OpenAIToolSetup(
+                                openai_key="XXX",
+                                model_name="gpt-4o-mini",
+                                prepa_prompt="You are an python specialist focused "
+                                "on the aync module and process optimization.",
+                            )
+                        ),
                     ),
                 },
             )
@@ -99,11 +107,15 @@ async def serve_module() -> int:
             )
 
             module_server.module_class.storage.create(
-                data={
-                    "table":"monitor",
-                    "mission_id": "missions:1",
-                    "name": "monitor",
-                    "data": dict(TextTransformSetup(shift_amount=2, uppercase=True)),
+                storage_dict={
+                    "table": "setups",
+                    "data": StorageData(
+                        mission_id="missions:1",
+                        name="setups",
+                        timestamp=datetime.datetime.now(datetime.timezone.utc),
+                        type=DataType.VIEW,
+                        data=dict(TextTransformSetup(shift_amount=2, uppercase=True)),
+                    ),
                 },
             )
 

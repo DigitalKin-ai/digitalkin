@@ -4,6 +4,8 @@ import logging
 from typing import Any
 
 from digitalkin_proto.digitalkin.cost.v1 import cost_pb2, cost_service_pb2_grpc
+from google.protobuf import json_format
+from pydantic import ValidationError
 
 from digitalkin.grpc.utils.grpc_client_wrapper import GrpcClientWrapper
 from digitalkin.grpc.utils.models import ServerConfig
@@ -24,70 +26,58 @@ class GrpcCost(CostStrategy, GrpcClientWrapper):
         self.stub = cost_service_pb2_grpc.CostServiceStub(channel)
         logger.info("Channel client 'Cost' initialized succesfully")
 
-    def add_cost(self, data: dict[str, Any]) -> str:
+    def add_cost(self, cost_dict: dict[str, Any]) -> str:
         """Create a new record in the cost database.
+
+        Required arguments:
+            data: Object representation of CostData
 
         Returns:
             str: The ID of the new record
         """
-        # validate the incoming data
-        cost = CostData(**data)
+        try:
+            valid_data = CostData.model_validate(cost_dict["data"])  # Revalidates instance
+        except ValidationError:
+            logger.exception("Validation failed for model StorageData")
+            return ""
+        except KeyError:
+            logger.exception("Missing mandatory 'data' in dict.")
+            return ""
 
-        request = cost_pb2.AddCostRequest(**cost)
+        request = cost_pb2.AddCostRequest(**valid_data.model_dump())
         return self.exec_grpc_query("AddCost", request)
 
-    def _get_costs_by_name(self, data: dict[str, Any]) -> list[CostData]:
-        request = cost_pb2.GetCostsByNameRequest(mission_id=data["mission_id"], name=data["name"])
+    def _get_costs_by_name(self, cost_dict: dict[str, Any]) -> list[CostData]:
+        request = cost_pb2.GetCostsByNameRequest(
+            mission_id=cost_dict["mission_id"],
+            name=cost_dict["name"],
+        )
         response = self.exec_grpc_query("GetCostsByName", request)
-        return [
-            CostData(
-                cost=data.cost,
-                mission_id=data.mission_id,
-                name=data.name,
-                type=data.type,
-                unit=data.unit,
-            )
-            for data in response.costs
-        ]
+        return [CostData(**json_format.MessageToDict(cost)) for cost in response.costs]
 
-    def _get_costs_by_mission(self, data: dict[str, Any]) -> list[CostData]:
-        request = cost_pb2.GetCostsByMissionRequest(mission_id=data["mission_id"])
+    def _get_costs_by_mission(self, cost_dict: dict[str, Any]) -> list[CostData]:
+        request = cost_pb2.GetCostsByMissionRequest(mission_id=cost_dict["mission_id"])
         response = self.exec_grpc_query("GetCostsByMission", request)
-        return [
-            CostData(
-                cost=data.cost,
-                mission_id=data.mission_id,
-                name=data.name,
-                type=data.type,
-                unit=data.unit,
-            )
-            for data in response.costs
-        ]
+        return [CostData(**json_format.MessageToDict(cost)) for cost in response.costs]
 
-    def _get_costs_by_type(self, data: dict[str, Any]) -> list[CostData]:
-        request = cost_pb2.GetCostsByTypeRequest(mission_id=data["mission_id"], type=data["type"])
+    def _get_costs_by_type(self, cost_dict: dict[str, Any]) -> list[CostData]:
+        request = cost_pb2.GetCostsByTypeRequest(
+            mission_id=cost_dict["mission_id"],
+            type=cost_dict["type"],
+        )
         response = self.exec_grpc_query("GetCostsBytype", request)
-        return [
-            CostData(
-                cost=data.cost,
-                mission_id=data.mission_id,
-                name=data.name,
-                type=data.type,
-                unit=data.unit,
-            )
-            for data in response.costs
-        ]
+        return [CostData(**json_format.MessageToDict(cost)) for cost in response.costs]
 
-    def get(self, data: dict[str, Any]) -> list[CostData]:
+    def get(self, cost_dict: dict[str, Any]) -> list[CostData]:
         """Get records from the database.
 
         Returns:
             list[CostData]: The list of records
         """
-        if "mission_id" not in data:
+        if "mission_id" not in cost_dict:
             return []
-        if "name" in data:
-            return self._get_costs_by_name(data)
-        if "type" in data:
-            return self._get_costs_by_type(data)
-        return self._get_costs_by_mission(data)
+        if "name" in cost_dict:
+            return self._get_costs_by_name(cost_dict)
+        if "type" in cost_dict:
+            return self._get_costs_by_type(cost_dict)
+        return self._get_costs_by_mission(cost_dict)

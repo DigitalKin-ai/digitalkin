@@ -39,9 +39,9 @@ class CostStrategy(ABC):
         """Allow post init configuration."""
 
     @abstractmethod
-    def add_cost(self, data: dict[str, Any]) -> str:
+    def add_cost(self, cost_dict: dict[str, Any]) -> str:
         """Register a new cost."""
 
     @abstractmethod
-    def get(self, data: dict[str, Any]) -> list[CostData]:
+    def get(self, cost_dict: dict[str, Any]) -> list[CostData]:
         """Get a cost."""

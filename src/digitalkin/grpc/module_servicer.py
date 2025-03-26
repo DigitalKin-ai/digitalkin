@@ -69,17 +69,12 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer):
         # Process the module input
         input_data = dict(request.input.items())
         setup_data = self.module_class.storage.get(
-            data={
+            storage_dict={
                 "table": "setups",
+                "mission_id": "mission_id:test_mission_id",
                 "name": request.setup_id,
-                # Not implemeted yet
-                # hard coded, need to be updated with the one queried
-                "mission_id": "missions:1",
-                "keys": [
-                    # remove prefix 'setups:'
-                    request.setup_id[7:],
-                ],
-            },
+                "keys": [request.setup_id[7:]],
+            }
         )
         if not setup_data:
             msg = "No setup data returned."
@@ -89,7 +84,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer):
         # Create a job for this execution
         job_id, module = await self.job_manager.create_job(
             input_data,
-            setup_data[0],
+            setup_data[0].model_dump(),
             callback=self.add_to_queue,
         )
 

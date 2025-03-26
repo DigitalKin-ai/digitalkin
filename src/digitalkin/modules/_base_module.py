@@ -11,26 +11,40 @@ from pydantic import BaseModel
 
 from digitalkin.logger import logger
 from digitalkin.models.module import ModuleStatus
+from digitalkin.services.agent.agent_strategy import AgentStrategy
+from digitalkin.services.cost.cost_strategy import CostStrategy
+from digitalkin.services.filesystem.filesystem_strategy import FilesystemStrategy
+from digitalkin.services.identity.identity_strategy import IdentityStrategy
+from digitalkin.services.registry.registry_strategy import RegistryStrategy
 from digitalkin.services.service_provider import ServiceProvider
+from digitalkin.services.snapshot.snapshot_strategy import SnapshotStrategy
 from digitalkin.services.storage.storage_strategy import StorageStrategy
 
 InputModelT = TypeVar("InputModelT", bound=BaseModel)
 OutputModelT = TypeVar("OutputModelT", bound=BaseModel)
 SetupModelT = TypeVar("SetupModelT", bound=BaseModel)
+SecretModelT = TypeVar("SecretModelT", bound=BaseModel)
 
 
-class BaseModule(ABC, Generic[InputModelT, OutputModelT, SetupModelT]):
+class BaseModule(ABC, Generic[InputModelT, OutputModelT, SetupModelT, SecretModelT]):
     """BaseModule is the abstract base for all modules in the DigitalKin SDK."""
 
     input_format: type[InputModelT]
     output_format: type[OutputModelT]
     setup_format: type[SetupModelT]
+    secret_format: type[SecretModelT]
     metadata: ClassVar[dict[str, Any]]
 
     local_services: type[ServiceProvider]
     dev_services: type[ServiceProvider]
 
     storage: StorageStrategy
+    cost: CostStrategy
+    snapshot: SnapshotStrategy
+    registry: RegistryStrategy
+    filesystem: FilesystemStrategy
+    agent: AgentStrategy
+    identity: IdentityStrategy
 
     def __init__(
         self,
@@ -51,6 +65,23 @@ class BaseModule(ABC, Generic[InputModelT, OutputModelT, SetupModelT]):
             The module status
         """
         return self._status
+
+    @classmethod
+    def get_secret_format(cls, llm_format: bool) -> str:  # noqa: FBT001
+        """Get the JSON schema of the secret format model.
+
+        Raises:
+            NotImplementedError: If the `secret_format` is not defined.
+
+        Returns:
+            The JSON schema of the secret format as a string.
+        """
+        if cls.output_format is not None:
+            if llm_format:
+                return json.dumps(cls.secret_format, indent=2)
+            return json.dumps(cls.secret_format.model_json_schema(), indent=2)
+        msg = f"{cls.__name__}' class does not define a 'secret_format'."
+        raise NotImplementedError(msg)
 
     @classmethod
     def get_input_format(cls, llm_format: bool) -> str:  # noqa: FBT001

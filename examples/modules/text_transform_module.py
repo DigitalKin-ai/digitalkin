@@ -1,5 +1,6 @@
 """Simple module example transforming a text."""
 
+import datetime
 import logging
 from collections.abc import Callable
 from typing import Any, ClassVar
@@ -9,6 +10,7 @@ from pydantic import BaseModel
 from digitalkin.modules._base_module import BaseModule
 from digitalkin.services.default_service import DefaultServiceProvider
 from digitalkin.services.development_service import DevelopmentServiceProvider
+from digitalkin.services.storage.storage_strategy import DataType, StorageData
 
 # Configure logging with clear formatting
 logging.basicConfig(
@@ -40,7 +42,7 @@ class TextTransformSetup(BaseModel):
     uppercase: bool = False  # Whether to convert to uppercase
 
 
-class TextTransformModule(BaseModule[TextTransformInput, TextTransformOutput, TextTransformSetup]):
+class TextTransformModule(BaseModule[TextTransformInput, TextTransformOutput, TextTransformSetup, BaseModel]):
     """A text transformation module that demonstrates streaming capabilities.
 
     This module takes text input and performs multiple transformations on it,
@@ -73,21 +75,22 @@ class TextTransformModule(BaseModule[TextTransformInput, TextTransformOutput, Te
         self.capabilities = ["text-processing", "streaming", "transformation"]
         logger.info(f"Module {self.metadata['name']} initialized with capabilities: {self.capabilities}")
 
-        self.db_id = int(
-            self.storage.create(
-
-                data={
-                    "table":"monitor",
-                    "mission_id": "missions:1",
-                    "name": "monitor",
-                    "data": {
+        self.db_id = self.storage.create(
+            storage_dict={
+                "table": "monitor",
+                "data": StorageData(
+                    mission_id="missions:1",
+                    name="monitor",
+                    timestamp=datetime.datetime.now(datetime.timezone.utc),
+                    type=DataType.VIEW,
+                    data={
                         "module": self.metadata["name"],
                         "user": f"xxxx+{self.job_id}",
                         "consumption": 0,
                         "ended": False,
                     },
-                },
-            )
+                ),
+            }
         )
 
     async def run(
@@ -110,8 +113,8 @@ class TextTransformModule(BaseModule[TextTransformInput, TextTransformOutput, Te
         # Extract parameters from input and setup
         text = input_data["text"]
         transform_count = int(input_data["transform_count"])
-        shift_amount = int(setup_data["shift_amount"])
-        uppercase = setup_data["uppercase"]
+        shift_amount = int(setup_data["data"]["shift_amount"])
+        uppercase = setup_data["data"]["uppercase"]
 
         logger.info(f"Running job {self.job_id} with text: '{text}', iterations: {transform_count}")
 
@@ -130,18 +133,15 @@ class TextTransformModule(BaseModule[TextTransformInput, TextTransformOutput, Te
             logger.info(f"Sending transformation {i + 1}/{transform_count}: '{transformed}'")
 
             monitor_obj = self.storage.get(
-                data={
-                "table": "monitor",
-                "keys": [self.db_id]},
+                storage_dict={
+                    "table": "monitor",
+                    "mission_id": "mission_id:test_mission_id",
+                    "keys": [int(self.db_id)],
+                }
             )[0]
-            monitor_obj["consumption"] += 1
-            self.storage.update(
-                data={
-                    "table":"monitor",
-                    "update_id": self.db_id,
-                    "update_value": monitor_obj,
-                },
-            )
+            monitor_obj.data["consumption"] += 1
+            self.db_id = self.storage.create(storage_dict={"table": "monitor", "data": monitor_obj})
+
             # Send results through callback and wait for acknowledgment
             await callback(job_id=self.job_id, output_data=output_data.model_dump())
 
@@ -157,12 +157,12 @@ class TextTransformModule(BaseModule[TextTransformInput, TextTransformOutput, Te
         Use it to close connections, free resources, etc.
         """
         logger.info(f"Cleaning up module {self.metadata['name']}")
-        monitor_obj = self.storage.get(data={"keys": [self.db_id]})[0]
-        monitor_obj["ended"] = True
-        self.storage.update(
-            data={
-                "table":"monitor",
-                "update_id": self.db_id,
-                "update_value": monitor_obj,
-            },
-        )
+        monitor_obj = self.storage.get(
+            storage_dict={
+                "table": "monitor",
+                "mission_id": "mission_id:test_mission_id",
+                "keys": [int(self.db_id)],
+            }
+        )[0]
+        monitor_obj.data["ended"] = True
+        self.db_id = self.storage.create(storage_dict={"table": "monitor", "data": monitor_obj})

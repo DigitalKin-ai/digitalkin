@@ -38,10 +38,10 @@ class OpenAIToolSetup(BaseModel):
 
     openai_key: str
     model_name: str
-    prepa_prompt: str
+    dev_prompt: str
 
 
-class OpenAIToolModule(BaseModule[OpenAIToolInput, OpenAIToolOutput, OpenAIToolSetup]):
+class OpenAIToolModule(BaseModule[OpenAIToolInput, OpenAIToolOutput, OpenAIToolSetup, BaseModel]):
     """A openAI endpoint tool module module."""
 
     # Define the schema formats for the module
@@ -70,7 +70,7 @@ class OpenAIToolModule(BaseModule[OpenAIToolInput, OpenAIToolOutput, OpenAIToolS
         This method is called when the module is loaded by the server.
         Use it to set up module-specific resources or configurations.
         """
-        self.openai_client = openai.OpenAI(api_key=setup_data["openai_key"])
+        self.openai_client = openai.OpenAI(api_key=setup_data["data"]["openai_key"])
         # Define what capabilities this module provides
         self.capabilities = ["text-processing", "streaming", "transformation"]
         logger.info(f"Module {self.metadata['name']} initialized with capabilities: {self.capabilities}")
@@ -89,14 +89,14 @@ class OpenAIToolModule(BaseModule[OpenAIToolInput, OpenAIToolOutput, OpenAIToolS
             callback: Function to send output data back to the client
         """
         logger.info(
-            f"Running job {self.job_id} with prompt: '{input_data['prompt']}' on model: {setup_data['model_name']}"
+            f"Running job {self.job_id} with prompt: '{input_data['prompt']}' on model: {setup_data['data']['model_name']}"
         )
         # tract parameters from input and setup
         try:
             response = self.openai_client.responses.create(
-                model=setup_data["model_name"],
+                model=setup_data["data"]["model_name"],
                 tools=[{"type": "web_search_preview"}],
-                instructions=setup_data["prepa_prompt"],
+                instructions=setup_data["data"]["dev_prompt"],
                 input=input_data["prompt"],
             )
             if not response.output_text:
@@ -107,11 +107,11 @@ class OpenAIToolModule(BaseModule[OpenAIToolInput, OpenAIToolOutput, OpenAIToolS
 
         except openai.AuthenticationError as _:
             message = "Authentication Error, OPENAI auth token was never set."
-            logging.exception(message)
+            logger.exception(message)
             output_data = {"error": {"code": grpc.StatusCode.UNAUTHENTICATED, "error_message": message}}
         except openai.APIConnectionError as _:
             message = "API Error, please try again."
-            logging.exception(message)
+            logger.exception(message)
             output_data = {"error": {"code": grpc.StatusCode.UNAVAILABLE, "error_message": message}}
 
         # Send results through callback and wait for acknowledgment

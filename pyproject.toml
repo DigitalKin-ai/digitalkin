@@ -42,7 +42,7 @@
             "typos>=1.30.3",
             "ruff>=0.11.2",
             "mypy>=1.15.0",
-            "pyright>=1.1.397",
+            "pyright>=1.1.398",
             "pre-commit>=4.2.0",
             "bump2version>=1.0.1",
             "build>=1.2.2",
@@ -108,7 +108,7 @@
         "test_*.py",
         "tests/*",
         "examples/*",
-        "grpc_storage.py",
+        # "grpc_storage.py",
     ]
 
     [tool.ruff.lint]

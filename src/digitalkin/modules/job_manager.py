@@ -60,8 +60,7 @@ class JobManager(ArgParser):
         input_data: dict[str, Any],
         setup_data: dict[str, Any],
         callback: Callable,
-        *args: tuple,
-        **kwargs: dict,
+        name: str | None = None,
     ) -> tuple[str, BaseModule]:
         """Start new module job in background (asyncio).
 
@@ -76,7 +75,7 @@ class JobManager(ArgParser):
         job_id = str(uuid.uuid4())
         """TODO: check uniqueness of the job_id"""
         # Création et démarrage du module
-        module = self.module_class(job_id, *args, **kwargs)  # type: ignore
+        module = self.module_class(job_id, name=name)
         self.modules[job_id] = module
         try:
             await module.start(input_data, setup_data, callback)

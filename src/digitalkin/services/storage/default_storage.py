@@ -3,7 +3,9 @@
 import logging
 from typing import Any
 
-from .storage_strategy import StorageStrategy
+from pydantic import ValidationError
+
+from .storage_strategy import StorageData, StorageStrategy
 
 logger = logging.getLogger(__name__)
 
@@ -11,57 +13,63 @@ logger = logging.getLogger(__name__)
 class DefaultStorage(StorageStrategy):
     """This class implements the default storage strategy."""
 
-    storage: dict[str, list[dict[str, Any]]]
+    storage: dict[str, list[StorageData]]
 
     def __init__(self) -> None:
         """Initialize the default storage strategy."""
         super().__init__()
-        self.storage = {"setups": []}
+        self.storage = {}
 
-    def create(self, data: dict[str, Any]) -> str:
+    def create(self, storage_dict: dict[str, Any]) -> str:
         """Create a new record in the database.
 
         Returns:
             str: The ID of the new record
         """
-        if data["table"] not in self.storage:
-            self.storage[data["table"]] = []
-        self.storage[data["table"]].append(data["data"])
-        logger.info("CREATE %s:%s succesfull", data["table"], data["data"])
-        return f"{len(self.storage[data['table']]) - 1}"
+        try:
+            valid_data = StorageData.model_validate(storage_dict["data"])  # Revalidates instance
+        except ValidationError:
+            logger.exception("Validation failed for model StorageData")
+            return ""
 
-    def get(self, data: dict[str, Any]) -> list[dict[str, Any]]:
+        if storage_dict["table"] not in self.storage:
+            self.storage[storage_dict["table"]] = []
+        self.storage[storage_dict["table"]].append(valid_data)
+        logger.info("CREATE %s:%s succesfull", storage_dict["table"], valid_data)
+        return f"{len(self.storage[storage_dict['table']]) - 1}"
+
+    def get(self, storage_dict: dict[str, Any]) -> list[StorageData]:
         """Get records from the database.
 
         Returns:
-            list[dict[str, Any]]: The list of records
+            list[StorageData]: The list of records
         """
-        logger.info("GET table = %s: keys = %s", data["table"], data["keys"])
-        if data["table"] not in self.storage:
-            logger.info("GET table = %s: TABLE DOESN'T EXIST", data["table"])
+        logger.info("GET table = %s: keys = %s", storage_dict["table"], storage_dict["keys"])
+        if storage_dict["table"] not in self.storage:
+            logger.info("GET table = %s: TABLE DOESN'T EXIST", storage_dict["table"])
             return []
-        return [self.storage[data["table"]][int(key)] for key in data["keys"]]
+        return [self.storage[storage_dict["table"]][int(key)] for key in storage_dict["keys"]]
 
-    def update(self, data: dict[str, Any]) -> int:
+    def update(self, storage_dict: dict[str, Any]) -> int:
         """Update records in the database.
 
         Returns:
             int: The number of records updated
         """
-        if data["table"] not in self.storage:
-            logger.info("UPDATE table = %s: TABLE DOESN'T EXIST", data["table"])
+        if storage_dict["table"] not in self.storage:
+            logger.info("UPDATE table = %s: TABLE DOESN'T EXIST", storage_dict["table"])
             return 0
-        self.storage[data["table"]][data["update_id"]] = data["update_value"]
+        self.storage[storage_dict["table"]][storage_dict["update_id"]] = storage_dict["update_value"]
         return 1
 
-    def delete(self, data: dict[str, Any]) -> int:
+    def delete(self, storage_dict: dict[str, Any]) -> int:
         """Delete records from the database.
 
         Returns:
             int: The number of records deleted
         """
-        if data["table"] not in self.storage:
-            logger.info("UPDATE table = %s: TABLE DOESN'T EXIST", data["table"])
+        if storage_dict["table"] not in self.storage:
+            logger.info("UPDATE table = %s: TABLE DOESN'T EXIST", storage_dict["table"])
             return 0
-        del self.storage[data["table"]][data["delete_id"]]
+        del self.storage[storage_dict["table"]][storage_dict["delete_id"]]
         return 1
