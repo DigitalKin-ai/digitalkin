@@ -75,9 +75,10 @@ class TextTransformModule(BaseModule[TextTransformInput, TextTransformOutput, Te
 
         self.db_id = int(
             self.storage.create(
-                table="monitor",
+
                 data={
-                    "mission_id": "mission_id:test_mission_id",
+                    "table":"monitor",
+                    "mission_id": "missions:1",
                     "name": "monitor",
                     "data": {
                         "module": self.metadata["name"],
@@ -129,13 +130,14 @@ class TextTransformModule(BaseModule[TextTransformInput, TextTransformOutput, Te
             logger.info(f"Sending transformation {i + 1}/{transform_count}: '{transformed}'")
 
             monitor_obj = self.storage.get(
-                table="monitor",
-                data={"keys": [self.db_id]},
+                data={
+                "table": "monitor",
+                "keys": [self.db_id]},
             )[0]
             monitor_obj["consumption"] += 1
             self.storage.update(
-                table="monitor",
                 data={
+                    "table":"monitor",
                     "update_id": self.db_id,
                     "update_value": monitor_obj,
                 },
@@ -155,11 +157,11 @@ class TextTransformModule(BaseModule[TextTransformInput, TextTransformOutput, Te
         Use it to close connections, free resources, etc.
         """
         logger.info(f"Cleaning up module {self.metadata['name']}")
-        monitor_obj = self.storage.get(table="monitor", data={"keys": [self.db_id]})[0]
+        monitor_obj = self.storage.get(data={"keys": [self.db_id]})[0]
         monitor_obj["ended"] = True
         self.storage.update(
-            table="monitor",
             data={
+                "table":"monitor",
                 "update_id": self.db_id,
                 "update_value": monitor_obj,
             },

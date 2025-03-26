@@ -69,9 +69,9 @@ async def serve_module() -> int:
             )
 
             module_server.module_class.storage.create(
-                table="monitor",
                 data={
-                    "mission_id": "mission_id:test_mission_id",
+                    "table":"monitor",
+                    "mission_id": "missions:1",
                     "name": "monitor",
                     "data": dict(
                         OpenAIToolSetup(
@@ -99,9 +99,9 @@ async def serve_module() -> int:
             )
 
             module_server.module_class.storage.create(
-                table="monitor",
                 data={
-                    "mission_id": "mission_id:test_mission_id",
+                    "table":"monitor",
+                    "mission_id": "missions:1",
                     "name": "monitor",
                     "data": dict(TextTransformSetup(shift_amount=2, uppercase=True)),
                 },
@@ -121,7 +121,6 @@ async def serve_module() -> int:
     finally:
         # Clean up server resources
         if module_server is not None and module_server.server is not None:
-            logger.warning("db: %s", module_server.module_class.storage.get_all())
             logger.info("Stopping module server...")
             await module_server.stop_async()
             logger.info("Module server stopped.")

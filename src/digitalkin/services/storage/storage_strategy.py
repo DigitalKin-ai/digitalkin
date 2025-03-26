@@ -1,7 +1,28 @@
 """This module contains the abstract base class for storage strategies."""
 
+import datetime
 from abc import ABC, abstractmethod
+from enum import Enum, auto
 from typing import Any
+
+from pydantic import BaseModel
+
+
+class DataType(Enum):
+    """."""
+
+    OUTPUT = auto()
+    VIEW = auto()
+
+
+class StorageData(BaseModel):
+    """."""
+
+    data: dict[str, Any]
+    mission_id: str
+    name: str
+    timestamp: datetime.datetime
+    type: DataType
 
 
 class StorageStrategy(ABC):
@@ -14,29 +35,17 @@ class StorageStrategy(ABC):
         """Initialize the storage strategy."""
 
     @abstractmethod
-    def connect(self) -> bool:
-        """Establish connection to the database."""
-
-    @abstractmethod
-    def disconnect(self) -> bool:
-        """Close connection to the database."""
-
-    @abstractmethod
-    def create(self, table: str, data: dict[str, Any]) -> str:
+    def create(self, data: dict[str, Any]) -> str:
         """Create a new record in the database."""
 
     @abstractmethod
-    def get(self, table: str, data: dict[str, Any]) -> list[dict[str, Any]]:
+    def get(self, data: dict[str, Any]) -> list[Any]:
         """Get records from the database."""
 
     @abstractmethod
-    def update(self, table: str, data: dict[str, Any]) -> int:
+    def update(self, data: dict[str, Any]) -> int:
         """Update records in the database."""
 
     @abstractmethod
-    def delete(self, table: str, data: dict[str, Any]) -> int:
+    def delete(self, data: dict[str, Any]) -> int:
         """Delete records from the database."""
-
-    @abstractmethod
-    def get_all(self) -> dict[str, list[dict[str, Any]]]:
-        """Get all records from the database."""
