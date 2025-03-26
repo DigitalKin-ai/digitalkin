@@ -167,7 +167,9 @@ def _create_server_config(
     # Add credentials if secure mode
     if security == "secure":
         if not server_key_path or not server_cert_path:
-            raise ValueError("Server key and certificate paths are required for secure mode")
+            raise ValueError(
+                "Server key and certificate paths are required for secure mode"
+            )
 
         config_params["credentials"] = ServerCredentials(
             server_key_path=Path(server_key_path),

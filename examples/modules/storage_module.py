@@ -3,9 +3,9 @@
 import asyncio
 import datetime
 from collections.abc import Callable
-from logging import config
 from typing import Any
 
+from digitalkin.services.setup.setup_strategy import SetupData
 from pydantic import BaseModel, Field
 
 from digitalkin.logger import logger
@@ -75,20 +75,20 @@ class ExampleModule(BaseModule[ExampleInput, ExampleOutput, ExampleSetup, Exampl
         super().__init__(job_id, mission_id)
 
 
-    async def initialize(self, setup_data: dict[str, Any]) -> None:
+    async def initialize(self, setup_data: SetupData) -> None:
         """Initialize the module.
 
         Args:
             setup_data: Setup data for the module
         """
         logger.info("Initializing ExampleModule with setup data: %s", setup_data)
-        self.setup = self.setup_format.model_validate(setup_data)
+        self.setup = self.setup_format.model_validate(setup_data.current_setup_version.content)
         logger.info("Initialization complete, using processing mode: [%s]", self.setup.processing_mode)
 
     async def run(
         self,
         input_data: dict[str, Any],
-        setup_data: dict[str, Any],
+        setup_data: SetupData,
         callback: Callable,
     ) -> None:
         """Run the module.

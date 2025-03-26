@@ -17,6 +17,7 @@ from digitalkin.services.filesystem.filesystem_strategy import FilesystemStrateg
 from digitalkin.services.identity.identity_strategy import IdentityStrategy
 from digitalkin.services.registry.registry_strategy import RegistryStrategy
 from digitalkin.services.services_config import ServicesConfig, ServicesStrategy
+from digitalkin.services.setup.setup_strategy import SetupData
 from digitalkin.services.snapshot.snapshot_strategy import SnapshotStrategy
 from digitalkin.services.storage.storage_strategy import StorageStrategy
 
@@ -43,13 +44,19 @@ class BaseModule(ABC, Generic[InputModelT, OutputModelT, SetupModelT, SecretMode
     services_config: ServicesConfig
 
     # services list
-    storage: StorageStrategy
-    cost: CostStrategy
-    snapshot: SnapshotStrategy
-    registry: RegistryStrategy
-    filesystem: FilesystemStrategy
     agent: AgentStrategy
+    cost: CostStrategy
+    filesystem: FilesystemStrategy
     identity: IdentityStrategy
+    registry: RegistryStrategy
+    snapshot: SnapshotStrategy
+    storage: StorageStrategy
+
+    def _init_strategies(self) -> None:
+        """Initialize the services configuration."""
+        for service_name in self.services_config.valid_strategy_names():
+            service = self.services_config.init_strategy(service_name, self.mission_id)
+            setattr(self, service_name, service)
 
     def _init_strategies(self) -> None:
         """Initialize the services configuration."""
@@ -65,7 +72,6 @@ class BaseModule(ABC, Generic[InputModelT, OutputModelT, SetupModelT, SecretMode
         """Initialize the module."""
         self.job_id: str = job_id
         self.mission_id: str = mission_id
-        self.name = self.name or self.__class__.__name__
         self._status = ModuleStatus.CREATED
         self._task: asyncio.Task | None = None
         # Initialize services configuration
@@ -149,7 +155,7 @@ class BaseModule(ABC, Generic[InputModelT, OutputModelT, SetupModelT, SecretMode
         raise NotImplementedError(msg)
 
     @abstractmethod
-    async def initialize(self, setup_data: dict[str, Any]) -> None:
+    async def initialize(self, setup_data: SetupData) -> None:
         """Initialize the module."""
         raise NotImplementedError
 
@@ -157,7 +163,7 @@ class BaseModule(ABC, Generic[InputModelT, OutputModelT, SetupModelT, SecretMode
     async def run(
         self,
         input_data: dict[str, Any],
-        setup_data: dict[str, Any],
+        setup_data: SetupData,
         callback: Callable,
     ) -> None:
         """Run the module."""
@@ -171,7 +177,7 @@ class BaseModule(ABC, Generic[InputModelT, OutputModelT, SetupModelT, SecretMode
     async def _run_lifecycle(
         self,
         input_data: dict[str, Any],
-        setup_data: dict[str, Any],
+        setup_data: SetupData,
         callback: Callable,
     ) -> None:
         """Run the module lifecycle.
@@ -193,7 +199,7 @@ class BaseModule(ABC, Generic[InputModelT, OutputModelT, SetupModelT, SecretMode
     async def start(
         self,
         input_data: dict[str, Any],
-        setup_data: dict[str, Any],
+        setup_data: SetupData,
         callback: Callable,
     ) -> None:
         """Start the module."""

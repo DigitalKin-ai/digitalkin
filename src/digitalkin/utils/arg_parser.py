@@ -6,7 +6,6 @@ from argparse import Action, ArgumentParser, Namespace, _HelpAction, _SubParsers
 from collections.abc import Sequence
 from typing import Any
 
-from digitalkin.services.service_provider import ServiceProvider
 from digitalkin.services.services_models import ServicesMode
 
 logging.getLogger().setLevel(logging.INFO)
@@ -100,9 +99,6 @@ class ArgParser:
 class DevelopmentModeMappingAction(Action):
     """."""
 
-    default: ServiceProvider | None
-    class_mapping: dict[str, ServiceProvider]
-
     def __init__(
         self,
         env_var: str,
@@ -119,14 +115,11 @@ class DevelopmentModeMappingAction(Action):
 
     def __call__(
         self,
-        parser: ArgumentParser,
+        parser: ArgumentParser,  # noqa: ARG002
         namespace: Namespace,
         values: str | Sequence[Any] | None,
         option_string: str | None = None,  # noqa: ARG002
     ) -> None:
         """Set the attribute to the corresponding class."""
-        if values not in self.class_mapping:
-            logger.error("Invalid mode: %s, dest: %s not set!", values, self.dest)
-            parser.error(f"Invalid mode: {values}")
         mode = ServicesMode(values)
         setattr(namespace, self.dest, mode)

@@ -18,6 +18,10 @@ from digitalkin.grpc_servers.utils.exceptions import ServicerError
 from digitalkin.models.module.module import ModuleStatus
 from digitalkin.modules._base_module import BaseModule
 from digitalkin.modules.job_manager import JobManager
+from digitalkin.services.services_models import ServicesMode
+from digitalkin.services.setup.default_setup import DefaultSetup
+from digitalkin.services.setup.grpc_setup import GrpcSetup
+from digitalkin.services.setup.setup_strategy import SetupStrategy
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +36,8 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer):
         active_jobs: Dictionary tracking active module jobs.
     """
 
+    setup: SetupStrategy
+
     def __init__(self, module_class: type[BaseModule]) -> None:
         """Initialize the module servicer.
 
@@ -42,6 +48,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer):
         self.queue: asyncio.Queue = asyncio.Queue()
         self.module_class = module_class
         self.job_manager = JobManager(module_class)
+        self.setup = GrpcSetup() if self.job_manager.args.services_mode == ServicesMode.REMOTE else DefaultSetup()
 
     async def add_to_queue(self, job_id: str, output_data: dict[str, Any]) -> None:
         """Callback used to add the output data to the queue of messages."""
@@ -68,8 +75,13 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer):
         logger.info("StartModule called for module: '%s'", self.module_class.__name__)
         # Process the module input
         input_data = dict(request.input.items())
+        setup_data = self.setup.get_setup(
+            setup_dict={
+                "setup_id": request.setup_id,
+                "mission_id": "mission_id:test_mission_id",
+            }
+        )
 
-        setup_data: dict = {}
         if not setup_data:
             msg = "No setup data returned."
             raise ServicerError(msg)
@@ -78,15 +90,15 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer):
         # Create a job for this execution
         job_id, module = await self.job_manager.create_job(
             input_data,
-            setup_data[0].model_dump(),
+            setup_data,
             callback=self.add_to_queue,
         )
 
         while module.status == ModuleStatus.RUNNING or not self.queue.empty():
             output_data = await self.queue.get()
-            if output_data.get("error", None) is not None:
-                context.set_code(output_data["error"]["code"])
-                context.set_details(output_data["error"]["error_message"])
+            if output_data[job_id].get("error", None) is not None:
+                context.set_code(output_data[job_id]["error"]["code"])
+                context.set_details(output_data[job_id]["error"]["error_message"])
                 yield lifecycle_pb2.StartModuleResponse(success=False)
                 return
             else:

@@ -37,6 +37,9 @@ class CostStrategy(BaseStrategy, ABC):
     def add_cost(self, cost_dict: dict[str, Any]) -> str:
         """Register a new cost."""
 
+    def __post_init__(self, *args, **kwargs) -> None:  # noqa: ANN002, ANN003
+        """Allow post init configuration."""
+
     @abstractmethod
     def get(self, cost_dict: dict[str, Any]) -> list[CostData]:
         """Get a cost."""

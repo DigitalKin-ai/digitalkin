@@ -11,6 +11,7 @@ from digitalkin.models import ModuleStatus
 from digitalkin.modules._base_module import BaseModule
 from digitalkin.services.services_config import ServicesConfig
 from digitalkin.services.services_models import ServicesMode
+from digitalkin.services.setup.setup_strategy import SetupData
 from digitalkin.utils.arg_parser import ArgParser, DevelopmentModeMappingAction
 
 
@@ -49,7 +50,7 @@ class JobManager(ArgParser):
     async def create_job(  # noqa: D417
         self,
         input_data: dict[str, Any],
-        setup_data: dict[str, Any],
+        setup_data: SetupData,
         callback: Callable,
     ) -> tuple[str, BaseModule]:
         """Start new module job in background (asyncio).

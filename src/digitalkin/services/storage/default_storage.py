@@ -15,7 +15,12 @@ class DefaultStorage(StorageStrategy):
 
     storage: dict[str, StorageRecord]
 
-    def __init__(self, mission_id: str, config: dict[str, type[BaseModel]]) -> None:
+    def __init__(
+        self,
+        mission_id: str,
+        config: dict[str, type[BaseModel]],
+        **kwargs,  # noqa: ANN003, ARG002
+    ) -> None:
         """Initialize the storage."""
         super().__init__(mission_id=mission_id, config=config)
         self.storage = {}
