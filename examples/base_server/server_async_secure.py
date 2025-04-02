@@ -10,9 +10,17 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
 from digitalkin.grpc_servers._base_server import BaseServer
-from digitalkin.grpc_servers.utils.models import SecurityMode, ServerConfig, ServerCredentials, ServerMode
+from digitalkin.grpc_servers.utils.models import (
+    SecurityMode,
+    ServerConfig,
+    ServerCredentials,
+    ServerMode,
+)
 from examples.base_server.mock.mock_pb2 import DESCRIPTOR, HelloReply  # type: ignore
-from examples.base_server.mock.mock_pb2_grpc import Greeter, add_GreeterServicer_to_server
+from examples.base_server.mock.mock_pb2_grpc import (
+    Greeter,
+    add_GreeterServicer_to_server,
+)
 
 # Configure logging
 logging.basicConfig(
@@ -75,7 +83,9 @@ async def main_async() -> int:
         # Check if certificates exist
         if not cert_dir.exists() or not (cert_dir / "server.key").exists():
             logger.error("Certificate files not found. Please generate them first.")
-            logger.info("Run the generate_certificates.py script to create certificates.")
+            logger.info(
+                "Run the generate_certificates.py script to create certificates."
+            )
             return 1
 
         # Create server configuration with security credentials

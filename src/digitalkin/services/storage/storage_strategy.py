@@ -61,7 +61,12 @@ class StorageStrategy(BaseStrategy, ABC):
             The ID of the created record
         """
 
-    def store(self, name: str, data: dict[str, Any], data_type: DataType = DataType.OUTPUT) -> str:
+    def store(
+        self,
+        name: str,
+        data: dict[str, Any],
+        data_type: DataType = DataType.OUTPUT,
+    ) -> str:
         """Store a new record in the storage.
 
         Args:
@@ -169,7 +174,12 @@ class StorageStrategy(BaseStrategy, ABC):
             msg = f"Data validation failed for key '{name}': {e!s}"
             raise ValueError(msg) from e
 
-    def _create_storage_record(self, name: str, validated_data: BaseModel, data_type: DataType) -> StorageRecord:
+    def _create_storage_record(
+        self,
+        name: str,
+        validated_data: BaseModel,
+        data_type: DataType,
+    ) -> StorageRecord:
         """Create a storage record with metadata.
 
         Args:

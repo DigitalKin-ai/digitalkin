@@ -17,7 +17,13 @@ logger = logging.getLogger(__name__)
 class GrpcStorage(StorageStrategy, GrpcClientWrapper):
     """This class implements the default storage strategy."""
 
-    def __init__(self, mission_id: str, config: dict[str, type[BaseModel]], serveur_config: ServerConfig) -> None:
+    def __init__(
+        self,
+        mission_id: str,
+        config: dict[str, type[BaseModel]],
+        serveur_config: ServerConfig,
+        **kwargs,  # noqa: ANN003, ARG002
+    ) -> None:
         """Initialize the storage."""
         super().__init__(mission_id=mission_id, config=config)
 

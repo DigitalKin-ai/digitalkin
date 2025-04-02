@@ -55,7 +55,7 @@ class GrpcCost(CostStrategy, GrpcClientWrapper):
             str: The ID of the new record
         """
         try:
-            valid_data = CostData.model_validate(cost_dict["data"])  # Revalidates instance
+            valid_data = CostData.model_validate(cost_dict["data"])
         except ValidationError:
             logger.exception("Validation failed for model StorageData")
             return ""

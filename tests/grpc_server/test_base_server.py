@@ -1,4 +1,5 @@
 """Tests for the BaseServer implementation."""
+
 import sys
 from typing import NoReturn
 from unittest import mock
@@ -35,7 +36,9 @@ def test_base_server_init(server_config_sync_insecure) -> None:
     server = MockServer(server_config_sync_insecure)
 
     if server.config != server_config_sync_insecure:
-        pytest.fail(f"Expected config to be {server_config_sync_insecure}, got {server.config}")
+        pytest.fail(
+            f"Expected config to be {server_config_sync_insecure}, got {server.config}"
+        )
 
     if server.server is not None:
         pytest.fail(f"Expected server to be None, got {server.server}")
@@ -44,10 +47,14 @@ def test_base_server_init(server_config_sync_insecure) -> None:
         pytest.fail(f"Expected _servicers to be empty list, got {server._servicers}")
 
     if server._service_names != []:
-        pytest.fail(f"Expected _service_names to be empty list, got {server._service_names}")
+        pytest.fail(
+            f"Expected _service_names to be empty list, got {server._service_names}"
+        )
 
     if server._health_servicer is not None:
-        pytest.fail(f"Expected _health_servicer to be None, got {server._health_servicer}")
+        pytest.fail(
+            f"Expected _health_servicer to be None, got {server._health_servicer}"
+        )
 
 
 # Servicer registration tests
@@ -85,7 +92,9 @@ def test_register_servicer(server_config_sync_insecure) -> None:
     mock_add_fn.assert_called_once_with(mock_servicer, mock_grpc_server)
 
     if server._servicers != [mock_servicer]:
-        pytest.fail(f"Expected _servicers to be [{mock_servicer}], got {server._servicers}")
+        pytest.fail(
+            f"Expected _servicers to be [{mock_servicer}], got {server._servicers}"
+        )
 
 
 def test_register_servicer_with_explicit_names(server_config_sync_insecure) -> None:
@@ -105,7 +114,9 @@ def test_register_servicer_with_explicit_names(server_config_sync_insecure) -> N
 
     # Verify the service name was added
     if "my.test.Service" not in server._service_names:
-        pytest.fail(f"Expected 'my.test.Service' to be in _service_names, got {server._service_names}")
+        pytest.fail(
+            f"Expected 'my.test.Service' to be in _service_names, got {server._service_names}"
+        )
 
 
 def test_register_servicer_with_descriptor(server_config_sync_insecure) -> None:
@@ -131,7 +142,9 @@ def test_register_servicer_with_descriptor(server_config_sync_insecure) -> None:
 
     # Verify the service name was added from the descriptor
     if "my.test.DescriptorService" not in server._service_names:
-        pytest.fail(f"Expected 'my.test.DescriptorService' to be in _service_names, got {server._service_names}")
+        pytest.fail(
+            f"Expected 'my.test.DescriptorService' to be in _service_names, got {server._service_names}"
+        )
 
 
 def test_register_servicer_failure(server_config_sync_insecure) -> None:
@@ -159,15 +172,17 @@ def test_register_servicer_failure(server_config_sync_insecure) -> None:
 def test_add_reflection(server_config_sync_insecure) -> None:
     """Test adding reflection service to the server."""
     # First, clear any existing imports of the module
-    if 'grpc_reflection.v1alpha.reflection' in sys.modules:
-        del sys.modules['grpc_reflection.v1alpha.reflection']
+    if "grpc_reflection.v1alpha.reflection" in sys.modules:
+        del sys.modules["grpc_reflection.v1alpha.reflection"]
 
     # Create a mock module with the required attributes
     mock_reflection = mock.MagicMock()
     mock_reflection.SERVICE_NAME = "grpc.reflection.v1alpha.ServerReflection"
 
     # Directly patch the module in sys.modules
-    with mock.patch.dict('sys.modules', {'grpc_reflection.v1alpha.reflection': mock_reflection}):
+    with mock.patch.dict(
+        "sys.modules", {"grpc_reflection.v1alpha.reflection": mock_reflection}
+    ):
         # Create the server
         server = MockServer(server_config_sync_insecure)
 
@@ -183,7 +198,8 @@ def test_add_reflection(server_config_sync_insecure) -> None:
 
         # Verify the function was called
         mock_reflection.enable_server_reflection.assert_called_once_with(
-            ["my.test.Service", "grpc.reflection.v1alpha.ServerReflection"], mock_grpc_server
+            ["my.test.Service", "grpc.reflection.v1alpha.ServerReflection"],
+            mock_grpc_server,
         )
 
 
@@ -199,7 +215,10 @@ def test_add_reflection_import_error(server_config_sync_insecure) -> None:
     server._service_names = ["my.test.Service"]
 
     # Mock the import to raise ImportError
-    with mock.patch("importlib.import_module", side_effect=ImportError("No module named 'grpc_reflection'")):
+    with mock.patch(
+        "importlib.import_module",
+        side_effect=ImportError("No module named 'grpc_reflection'"),
+    ):
         # Call add_reflection - should not raise exception
         server._add_reflection()
 
@@ -216,12 +235,16 @@ def test_create_server_sync(server_config_sync_insecure) -> None:
         result = server._create_server()
 
         # Verify server was created with correct parameters
-        mock_executor.assert_called_once_with(max_workers=server_config_sync_insecure.max_workers)
+        mock_executor.assert_called_once_with(
+            max_workers=server_config_sync_insecure.max_workers
+        )
         mock_server.assert_called_once()
 
         # Verify result is the mock server
         if result != mock_server.return_value:
-            pytest.fail(f"Expected result to be {mock_server.return_value}, got {result}")
+            pytest.fail(
+                f"Expected result to be {mock_server.return_value}, got {result}"
+            )
 
 
 def test_create_server_async(server_config_async_insecure) -> None:
@@ -232,11 +255,15 @@ def test_create_server_async(server_config_async_insecure) -> None:
         result = server._create_server()
 
         # Verify server was created with correct parameters
-        mock_server.assert_called_once_with(options=server_config_async_insecure.server_options)
+        mock_server.assert_called_once_with(
+            options=server_config_async_insecure.server_options
+        )
 
         # Verify result is the mock server
         if result != mock_server.return_value:
-            pytest.fail(f"Expected result to be {mock_server.return_value}, got {result}")
+            pytest.fail(
+                f"Expected result to be {mock_server.return_value}, got {result}"
+            )
 
 
 # Port configuration tests
@@ -248,7 +275,9 @@ def test_add_insecure_port_sync(server_config_sync_insecure) -> None:
     server._add_insecure_port(mock_grpc_server)
 
     # Verify add_insecure_port was called
-    mock_grpc_server.add_insecure_port.assert_called_once_with(server_config_sync_insecure.address)
+    mock_grpc_server.add_insecure_port.assert_called_once_with(
+        server_config_sync_insecure.address
+    )
 
 
 def test_add_insecure_port_async(server_config_async_insecure) -> None:
@@ -259,7 +288,9 @@ def test_add_insecure_port_async(server_config_async_insecure) -> None:
     server._add_insecure_port(mock_grpc_server)
 
     # Verify add_insecure_port was called
-    mock_grpc_server.add_insecure_port.assert_called_once_with(server_config_async_insecure.address)
+    mock_grpc_server.add_insecure_port.assert_called_once_with(
+        server_config_async_insecure.address
+    )
 
 
 @mock.patch("digitalkin.grpc_servers._base_server.grpc.ssl_server_credentials")
@@ -276,7 +307,9 @@ def test_add_secure_port_sync(mock_ssl_creds, server_config_sync_secure) -> None
         server._add_secure_port(mock_grpc_server)
 
     # Verify add_secure_port was called
-    mock_grpc_server.add_secure_port.assert_called_once_with(server_config_sync_secure.address, "mock_credentials")
+    mock_grpc_server.add_secure_port.assert_called_once_with(
+        server_config_sync_secure.address, "mock_credentials"
+    )
 
 
 def test_add_secure_port_no_credentials(server_config_sync_insecure) -> None:
@@ -318,7 +351,9 @@ def test_start_sync(server_config_sync_insecure) -> None:
 
         # Verify server was set
         if server.server != mock_grpc_server:
-            pytest.fail(f"Expected server.server to be {mock_grpc_server}, got {server.server}")
+            pytest.fail(
+                f"Expected server.server to be {mock_grpc_server}, got {server.server}"
+            )
 
 
 def test_start_error(server_config_sync_insecure) -> None:
@@ -381,7 +416,9 @@ async def test_start_async_server(server_config_async_insecure) -> None:
 
         # Verify server was set
         if server.server != mock_grpc_server:
-            pytest.fail(f"Expected server.server to be {mock_grpc_server}, got {server.server}")
+            pytest.fail(
+                f"Expected server.server to be {mock_grpc_server}, got {server.server}"
+            )
 
 
 # Server stop tests
@@ -507,17 +544,21 @@ def test_add_health_service_alternative(server_config_sync_insecure) -> None:
 
     # Check that at least one service name was added (the health service)
     if not len(server._service_names) > 1:
-        pytest.fail(f"Expected _service_names to have more than one entry, got {server._service_names}")
+        pytest.fail(
+            f"Expected _service_names to have more than one entry, got {server._service_names}"
+        )
 
     if not any("health" in name.lower() for name in server._service_names):
-        pytest.fail(f"Expected _service_names to contain a health service, got {server._service_names}")
+        pytest.fail(
+            f"Expected _service_names to contain a health service, got {server._service_names}"
+        )
 
 
 def test_base_server_register_servicers_is_abstract() -> None:
     """Test that _register_servicers is an abstract method that must be implemented."""
     from digitalkin.grpc_servers.utils.models import ServerConfig
 
-    config = ServerConfig() # type: ignore
+    config = ServerConfig()  # type: ignore
 
     # Create a class that doesn't implement _register_servicers
     class BadServer(BaseServer):
@@ -525,14 +566,18 @@ def test_base_server_register_servicers_is_abstract() -> None:
 
     # Attempting to instantiate BadServer should raise TypeError
     try:
-        BadServer(config) # type: ignore
-        pytest.fail("Expected TypeError when creating class without implementing _register_servicers")
+        BadServer(config)  # type: ignore
+        pytest.fail(
+            "Expected TypeError when creating class without implementing _register_servicers"
+        )
     except TypeError:
         # This is expected - abstract method must be implemented
         pass
 
 
-def test_register_servicers_checks_server_existence(server_config_sync_insecure) -> None:
+def test_register_servicers_checks_server_existence(
+    server_config_sync_insecure,
+) -> None:
     """Test that a good implementation of _register_servicers checks for server existence."""
     # MockServer already implements the check
     server = MockServer(server_config_sync_insecure)
@@ -541,7 +586,9 @@ def test_register_servicers_checks_server_existence(server_config_sync_insecure)
     server.server = None
 
     # Calling _register_servicers should raise ServicerError
-    with pytest.raises(ServicerError, match="Server must be created before registering servicers"):
+    with pytest.raises(
+        ServicerError, match="Server must be created before registering servicers"
+    ):
         server._register_servicers()
 
 
