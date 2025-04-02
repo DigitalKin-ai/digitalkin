@@ -2,8 +2,10 @@
 
 from abc import ABC, abstractmethod
 
+from digitalkin.services.base_strategy import BaseStrategy
 
-class IdentityStrategy(ABC):
+
+class IdentityStrategy(BaseStrategy, ABC):
     """IdentityStrategy is the abstract base class for all identity strategies."""
 
     @abstractmethod

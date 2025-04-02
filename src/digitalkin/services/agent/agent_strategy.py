@@ -2,14 +2,11 @@
 
 from abc import ABC, abstractmethod
 
+from digitalkin.services.base_strategy import BaseStrategy
 
-class AgentStrategy(ABC):
+
+class AgentStrategy(BaseStrategy, ABC):
     """Abstract base class for agent strategies."""
-
-    @abstractmethod
-    def __init__(self) -> None:
-        """Initialize the agent strategy."""
-        raise NotImplementedError
 
     @abstractmethod
     def start(self) -> None:

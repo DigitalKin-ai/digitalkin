@@ -9,6 +9,8 @@ from typing import Any
 from digitalkin.logger import logger
 from digitalkin.models import ModuleStatus
 from digitalkin.modules._base_module import BaseModule
+from digitalkin.services.services_config import ServicesConfig
+from digitalkin.services.services_models import ServicesMode
 from digitalkin.utils.arg_parser import ArgParser, DevelopmentModeMappingAction
 
 
@@ -18,21 +20,15 @@ class JobManager(ArgParser):
     args: Namespace
 
     def _add_parser_args(self, parser: ArgumentParser) -> None:
-        class_mapping = {
-            "local": self.module_class.local_services,
-            "development": self.module_class.dev_services,
-        }
-
         super()._add_parser_args(parser)
         parser.add_argument(
             "-d",
             "--dev-mode",
-            env_var="SERVICE_PROVIDER",
-            class_mapping=class_mapping,
-            choices=class_mapping.keys(),
+            env_var="SERVICE_MODE",
+            choices=ServicesMode.__members__,
             default="local",
             action=DevelopmentModeMappingAction,
-            dest="service_providers",
+            dest="services_mode",
             help="Define Module Service configurations for endpoints",
         )
 
@@ -43,25 +39,18 @@ class JobManager(ArgParser):
         self._lock = asyncio.Lock()
         super().__init__()
 
-        explicit_fields = {
-            name: self.args.service_providers.__dict__[name]
-            for name in self.args.service_providers.__class_vars__
-            if name in self.args.service_providers.__dict__
-        }
-
-        # services are now available as class vars.
-        # init the services provided allowing cold start during module creation
-        for service_name in explicit_fields:
-            service_type = getattr(self.args.service_providers, service_name)
-            setattr(self.module_class, service_name, service_type)
+        services_config = ServicesConfig(
+            services_config_strategies=self.module_class.services_config_strategies,
+            services_config_params=self.module_class.services_config_params,
+            mode=self.args.services_mode,
+        )
+        setattr(self.module_class, "services_config", services_config)
 
     async def create_job(  # noqa: D417
         self,
         input_data: dict[str, Any],
         setup_data: dict[str, Any],
         callback: Callable,
-        *args: tuple,
-        **kwargs: dict,
     ) -> tuple[str, BaseModule]:
         """Start new module job in background (asyncio).
 
@@ -74,9 +63,10 @@ class JobManager(ArgParser):
             str: job_id of the module entity
         """
         job_id = str(uuid.uuid4())
+        mission_id = str(uuid.uuid4())
         """TODO: check uniqueness of the job_id"""
         # Création et démarrage du module
-        module = self.module_class(job_id, *args, **kwargs)  # type: ignore
+        module = self.module_class(job_id, mission_id=mission_id)
         self.modules[job_id] = module
         try:
             await module.start(input_data, setup_data, callback)

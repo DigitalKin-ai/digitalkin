@@ -18,7 +18,7 @@ from digitalkin_proto.digitalkin.module_registry.v2 import (
     status_pb2,
 )
 
-from digitalkin.grpc.registry_servicer import Metadata, ModuleStatus, RegistryModule, RegistryServicer
+from digitalkin.grpc_servers.registry_servicer import Metadata, ModuleStatus, RegistryModule, RegistryServicer
 
 # Create service instance and get service descriptor for tests
 alphabet = string.ascii_letters + string.digits

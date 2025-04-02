@@ -7,8 +7,8 @@ import grpc
 import pytest
 from grpc import aio as grpc_aio
 
-from digitalkin.grpc._base_server import BaseServer
-from digitalkin.grpc.utils.exceptions import (
+from digitalkin.grpc_servers._base_server import BaseServer
+from digitalkin.grpc_servers.utils.exceptions import (
     SecurityError,
     ServerStateError,
     ServicerError,
@@ -210,8 +210,8 @@ def test_create_server_sync(server_config_sync_insecure) -> None:
     server = MockServer(server_config_sync_insecure)
 
     with (
-        mock.patch("digitalkin.grpc._base_server.grpc.server") as mock_server,
-        mock.patch("digitalkin.grpc._base_server.futures.ThreadPoolExecutor") as mock_executor,
+        mock.patch("digitalkin.grpc_servers._base_server.grpc.server") as mock_server,
+        mock.patch("digitalkin.grpc_servers._base_server.futures.ThreadPoolExecutor") as mock_executor,
     ):
         result = server._create_server()
 
@@ -228,7 +228,7 @@ def test_create_server_async(server_config_async_insecure) -> None:
     """Test creating an asynchronous server."""
     server = MockServer(server_config_async_insecure)
 
-    with mock.patch("digitalkin.grpc._base_server.grpc_aio.server") as mock_server:
+    with mock.patch("digitalkin.grpc_servers._base_server.grpc_aio.server") as mock_server:
         result = server._create_server()
 
         # Verify server was created with correct parameters
@@ -262,7 +262,7 @@ def test_add_insecure_port_async(server_config_async_insecure) -> None:
     mock_grpc_server.add_insecure_port.assert_called_once_with(server_config_async_insecure.address)
 
 
-@mock.patch("digitalkin.grpc._base_server.grpc.ssl_server_credentials")
+@mock.patch("digitalkin.grpc_servers._base_server.grpc.ssl_server_credentials")
 def test_add_secure_port_sync(mock_ssl_creds, server_config_sync_secure) -> None:
     """Test adding a secure port to a sync server."""
     server = MockServer(server_config_sync_secure)
@@ -515,7 +515,7 @@ def test_add_health_service_alternative(server_config_sync_insecure) -> None:
 
 def test_base_server_register_servicers_is_abstract() -> None:
     """Test that _register_servicers is an abstract method that must be implemented."""
-    from digitalkin.grpc.utils.models import ServerConfig
+    from digitalkin.grpc_servers.utils.models import ServerConfig
 
     config = ServerConfig() # type: ignore
 

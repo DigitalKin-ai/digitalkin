@@ -4,9 +4,9 @@ import logging
 
 from digitalkin_proto.digitalkin.module_registry.v2 import module_registry_service_pb2_grpc
 
-from digitalkin.grpc._base_server import BaseServer
-from digitalkin.grpc.registry_servicer import RegistryModule, RegistryServicer
-from digitalkin.grpc.utils.models import RegistryServerConfig
+from digitalkin.grpc_servers._base_server import BaseServer
+from digitalkin.grpc_servers.registry_servicer import RegistryModule, RegistryServicer
+from digitalkin.grpc_servers.utils.models import RegistryServerConfig
 
 logger = logging.getLogger(__name__)
 

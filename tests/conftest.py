@@ -16,7 +16,7 @@ logging.getLogger("grpc").setLevel(logging.WARNING)
 @pytest.fixture
 def server_config_sync_insecure():
     """Create a sync insecure server configuration."""
-    from digitalkin.grpc.utils.models import SecurityMode, ServerConfig, ServerMode
+    from digitalkin.grpc_servers.utils.models import SecurityMode, ServerConfig, ServerMode
 
     return ServerConfig(
         host="localhost",
@@ -29,7 +29,7 @@ def server_config_sync_insecure():
 @pytest.fixture
 def server_config_async_insecure():
     """Create an async insecure server configuration."""
-    from digitalkin.grpc.utils.models import SecurityMode, ServerConfig, ServerMode
+    from digitalkin.grpc_servers.utils.models import SecurityMode, ServerConfig, ServerMode
 
     return ServerConfig(
         host="localhost",
@@ -62,7 +62,7 @@ def dummy_certs(tmp_path):
 @pytest.fixture
 def server_config_sync_secure(dummy_certs):
     """Create a sync secure server configuration."""
-    from digitalkin.grpc.utils.models import (
+    from digitalkin.grpc_servers.utils.models import (
         SecurityMode,
         ServerConfig,
         ServerCredentials,
@@ -83,7 +83,7 @@ def server_config_sync_secure(dummy_certs):
 @pytest.fixture
 def server_config_async_secure(dummy_certs):
     """Create an async secure server configuration."""
-    from digitalkin.grpc.utils.models import (
+    from digitalkin.grpc_servers.utils.models import (
         SecurityMode,
         ServerConfig,
         ServerCredentials,
