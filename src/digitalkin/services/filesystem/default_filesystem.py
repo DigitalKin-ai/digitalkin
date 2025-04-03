@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from .filesystem_strategy import FilesystemStrategy
+from digitalkin.services.filesystem.filesystem_strategy import FilesystemStrategy
 
 
 class DefaultFilesystem(FilesystemStrategy):

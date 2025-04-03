@@ -3,7 +3,7 @@
 import logging
 from typing import Any
 
-from .cost_strategy import CostData, CostStrategy
+from digitalkin.services.cost.cost_strategy import CostData, CostStrategy
 
 logger = logging.getLogger(__name__)
 

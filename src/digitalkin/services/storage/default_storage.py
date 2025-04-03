@@ -5,7 +5,7 @@ import logging
 
 from pydantic import BaseModel
 
-from .storage_strategy import StorageRecord, StorageStrategy
+from digitalkin.services.storage.storage_strategy import StorageRecord, StorageStrategy
 
 logger = logging.getLogger(__name__)
 
