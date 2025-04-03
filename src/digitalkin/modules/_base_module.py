@@ -58,12 +58,6 @@ class BaseModule(ABC, Generic[InputModelT, OutputModelT, SetupModelT, SecretMode
             service = self.services_config.init_strategy(service_name, self.mission_id)
             setattr(self, service_name, service)
 
-    def _init_strategies(self) -> None:
-        """Initialize the services configuration."""
-        for service_name in self.services_config.valid_strategy_names():
-            service = self.services_config.init_strategy(service_name, self.mission_id)
-            setattr(self, service_name, service)
-
     def __init__(
         self,
         job_id: str,

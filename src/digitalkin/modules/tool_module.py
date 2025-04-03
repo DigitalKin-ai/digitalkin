@@ -2,13 +2,8 @@
 
 from abc import ABC
 
-from ._base_module import BaseModule
+from digitalkin.modules._base_module import BaseModule, InputModelT, OutputModelT, SecretModelT, SetupModelT
 
 
-class ToolModule(BaseModule, ABC):
+class ToolModule(BaseModule[InputModelT, OutputModelT, SetupModelT, SecretModelT], ABC):
     """ToolModule extends BaseModule to implement specific module types."""
-
-    def __init__(self, metadata):
-        """Initialize the module with the given metadata."""
-        super().__init__(metadata)
-        self.capabilities = ["tool"]
