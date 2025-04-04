@@ -1,6 +1,6 @@
 """Default registry."""
 
-from .registry_strategy import RegistryStrategy
+from digitalkin.services.registry.registry_strategy import RegistryStrategy
 
 
 class DefaultRegistry(RegistryStrategy):

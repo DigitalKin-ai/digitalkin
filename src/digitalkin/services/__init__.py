@@ -1,12 +1,12 @@
 """This package contains the abstract base class for all services."""
 
-from .agent import AgentStrategy, DefaultAgent
-from .cost import CostStrategy, DefaultCost
-from .filesystem import DefaultFilesystem, FilesystemStrategy
-from .identity import DefaultIdentity, IdentityStrategy
-from .registry import DefaultRegistry, RegistryStrategy
-from .snapshot import DefaultSnapshot, SnapshotStrategy
-from .storage import DefaultStorage, StorageStrategy
+from digitalkin.services.agent import AgentStrategy, DefaultAgent
+from digitalkin.services.cost import CostStrategy, DefaultCost
+from digitalkin.services.filesystem import DefaultFilesystem, FilesystemStrategy
+from digitalkin.services.identity import DefaultIdentity, IdentityStrategy
+from digitalkin.services.registry import DefaultRegistry, RegistryStrategy
+from digitalkin.services.snapshot import DefaultSnapshot, SnapshotStrategy
+from digitalkin.services.storage import DefaultStorage, StorageStrategy
 
 __all__ = [
     "AgentStrategy",

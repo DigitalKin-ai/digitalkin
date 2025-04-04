@@ -1,6 +1,6 @@
 """Default agent implementation for the agent service."""
 
-from .agent_strategy import AgentStrategy
+from digitalkin.services.agent.agent_strategy import AgentStrategy
 
 
 class DefaultAgent(AgentStrategy):
