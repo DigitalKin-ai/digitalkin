@@ -54,7 +54,7 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
                 name=record.name,
                 data_type=record.data_type.name,
             )
-            return self.exec_grpc_query("StoreData", request)
+            return self.exec_grpc_query("StoreRecord", request)
         except Exception:
             msg = f"Error while storing record {record.name}"
             logger.exception(msg)
@@ -70,8 +70,8 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
             request = data_pb2.ReadRecordRequest(mission_id=self.mission_id, name=name)
             response: data_pb2.ReadRecordResponse = self.exec_grpc_query("ReadRecord", request)
             return StorageRecord(**json_format.MessageToDict(response.stored_data))
-        except Exception as e:
-            msg = f"Error while reading record {name}: {e}"
+        except Exception:
+            msg = f"Error while reading record {name}"
             logger.exception(msg)
             return None
 
@@ -89,8 +89,8 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
             request = data_pb2.ModifyRecordRequest(data=data_struct, mission_id=self.mission_id, name=name)
             response: data_pb2.ModifyRecordResponse = self.exec_grpc_query("ModifyRecord", request)
             return StorageRecord(**json_format.MessageToDict(response.stored_data))
-        except Exception as e:
-            msg = f"Error while modifing record {name}: {e}"
+        except Exception:
+            msg = f"Error while modifing record {name}"
             logger.exception(msg)
             return None
 
@@ -105,9 +105,9 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
                 mission_id=self.mission_id,
                 name=name,
             )
-            self.exec_grpc_query("DeleteData", request)
-        except Exception as e:
-            msg = f"Error while removin record {name}: {e}"
+            self.exec_grpc_query("RemoveRecord", request)
+        except Exception:
+            msg = f"Error while removin record {name}"
             logger.exception(msg)
             return False
         return True
