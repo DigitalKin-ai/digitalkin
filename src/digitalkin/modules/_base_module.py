@@ -5,26 +5,18 @@ import contextlib
 import json
 from abc import ABC, abstractmethod
 from collections.abc import Callable
-from typing import Any, ClassVar, Generic, TypeVar
-
-from pydantic import BaseModel
+from typing import Any, ClassVar, Generic
 
 from digitalkin.logger import logger
-from digitalkin.models.module import ModuleStatus
+from digitalkin.models.module import InputModelT, ModuleStatus, OutputModelT, SecretModelT, SetupModelT
 from digitalkin.services.agent.agent_strategy import AgentStrategy
 from digitalkin.services.cost.cost_strategy import CostStrategy
 from digitalkin.services.filesystem.filesystem_strategy import FilesystemStrategy
 from digitalkin.services.identity.identity_strategy import IdentityStrategy
 from digitalkin.services.registry.registry_strategy import RegistryStrategy
 from digitalkin.services.services_config import ServicesConfig, ServicesStrategy
-from digitalkin.services.setup.setup_strategy import SetupData
 from digitalkin.services.snapshot.snapshot_strategy import SnapshotStrategy
 from digitalkin.services.storage.storage_strategy import StorageStrategy
-
-InputModelT = TypeVar("InputModelT", bound=BaseModel)
-OutputModelT = TypeVar("OutputModelT", bound=BaseModel)
-SetupModelT = TypeVar("SetupModelT", bound=BaseModel)
-SecretModelT = TypeVar("SecretModelT", bound=BaseModel)
 
 
 class BaseModule(ABC, Generic[InputModelT, OutputModelT, SetupModelT, SecretModelT]):
@@ -149,15 +141,15 @@ class BaseModule(ABC, Generic[InputModelT, OutputModelT, SetupModelT, SecretMode
         raise NotImplementedError(msg)
 
     @abstractmethod
-    async def initialize(self, setup_data: SetupData) -> None:
+    async def initialize(self, setup_data: SetupModelT) -> None:
         """Initialize the module."""
         raise NotImplementedError
 
     @abstractmethod
     async def run(
         self,
-        input_data: dict[str, Any],
-        setup_data: SetupData,
+        input_data: InputModelT,
+        setup_data: SetupModelT,
         callback: Callable,
     ) -> None:
         """Run the module."""
@@ -170,8 +162,8 @@ class BaseModule(ABC, Generic[InputModelT, OutputModelT, SetupModelT, SecretMode
 
     async def _run_lifecycle(
         self,
-        input_data: dict[str, Any],
-        setup_data: SetupData,
+        input_data: InputModelT,
+        setup_data: SetupModelT,
         callback: Callable,
     ) -> None:
         """Run the module lifecycle.
@@ -192,8 +184,8 @@ class BaseModule(ABC, Generic[InputModelT, OutputModelT, SetupModelT, SecretMode
 
     async def start(
         self,
-        input_data: dict[str, Any],
-        setup_data: SetupData,
+        input_data: InputModelT,
+        setup_data: SetupModelT,
         callback: Callable,
     ) -> None:
         """Start the module."""

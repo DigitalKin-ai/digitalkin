@@ -74,17 +74,20 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer):
         """
         logger.info("StartModule called for module: '%s'", self.module_class.__name__)
         # Process the module input
-        input_data = dict(request.input.items())
-        setup_data = self.setup.get_setup(
+        # TODO: Check failure of input data format
+        input_data = self.module_class.input_format(**dict(request.input.items()))
+        setup_data_class = self.setup.get_setup(
             setup_dict={
                 "setup_id": request.setup_id,
-                "mission_id": "mission_id:test_mission_id",
+                "mission_id": "missions:test_demo",
             }
         )
 
-        if not setup_data:
+        if not setup_data_class:
             msg = "No setup data returned."
             raise ServicerError(msg)
+        # TODO: Check failure of setup data format
+        setup_data = self.module_class.setup_format(**setup_data_class.current_setup_version.content)
 
         # setup_id should be use to request a precise setup from the module
         # Create a job for this execution
