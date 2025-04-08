@@ -3,7 +3,8 @@
 import datetime
 import json
 import logging
-import os
+import tempfile
+from pathlib import Path
 
 from pydantic import BaseModel
 
@@ -25,46 +26,46 @@ class DefaultStorage(StorageStrategy):
         Returns:
             A dictionary containing the loaded storage records
         """
-        if not os.path.exists(self.storage_file_path):
+        file_path = Path(self.storage_file_path)
+        if not file_path.exists():
             return {}
 
         try:
             records = {}
-            with open(self.storage_file_path, encoding="utf-8") as file:
-                file_content = json.load(file)
+            file_content = json.loads(file_path.read_text(encoding="utf-8"))
 
-                for key, record_dict in file_content.items():
-                    # Get the stored record data
-                    name = record_dict.get("name", "")
-                    model_class = self.config.get(name)
+            for key, record_dict in file_content.items():
+                # Get the stored record data
+                name = record_dict.get("name", "")
+                model_class = self.config.get(name)
 
-                    if not model_class:
-                        logger.warning("No model found for record %s", name)
-                        continue
+                if not model_class:
+                    logger.warning("No model found for record %s", name)
+                    continue
 
-                    # Create a model instance from the stored data
-                    data_dict = record_dict.get("data", {})
-                    try:
-                        data_model = model_class.model_validate(data_dict)
-                    except Exception:
-                        logger.exception("Failed to validate data for record %s", name)
-                        continue
+                # Create a model instance from the stored data
+                data_dict = record_dict.get("data", {})
+                try:
+                    data_model = model_class.model_validate(data_dict)
+                except Exception:
+                    logger.exception("Failed to validate data for record %s", name)
+                    continue
 
-                    # Create a StorageRecord object
-                    record = StorageRecord(
-                        mission_id=record_dict.get("mission_id", ""),
-                        name=name,
-                        data=data_model,
-                        data_type=DataType[record_dict.get("data_type", "OUTPUT")],
-                    )
+                # Create a StorageRecord object
+                record = StorageRecord(
+                    mission_id=record_dict.get("mission_id", ""),
+                    name=name,
+                    data=data_model,
+                    data_type=DataType[record_dict.get("data_type", "OUTPUT")],
+                )
 
-                    # Set dates if they exist
-                    if "creation_date" in record_dict:
-                        record.creation_date = datetime.datetime.fromisoformat(record_dict["creation_date"])
-                    if "update_date" in record_dict:
-                        record.update_date = datetime.datetime.fromisoformat(record_dict["update_date"])
+                # Set dates if they exist
+                if "creation_date" in record_dict:
+                    record.creation_date = datetime.datetime.fromisoformat(record_dict["creation_date"])
+                if "update_date" in record_dict:
+                    record.update_date = datetime.datetime.fromisoformat(record_dict["update_date"])
 
-                    records[key] = record
+                records[key] = record
         except json.JSONDecodeError:
             logger.exception("Error decoding JSON from file")
             return {}
@@ -78,10 +79,9 @@ class DefaultStorage(StorageStrategy):
 
     def _save_to_file(self) -> None:
         """Save storage data to the file using a safe write pattern."""
-        # Create directory if it doesn't exist
-        directory = os.path.dirname(self.storage_file_path)
-        if directory and not os.path.exists(directory):
-            os.makedirs(directory)
+        # Usage of pathlib for file operations
+        file_path = Path(self.storage_file_path)
+        file_path.parent.mkdir(parents=True, exist_ok=True)
 
         try:
             # Convert storage to a serializable format
@@ -102,18 +102,20 @@ class DefaultStorage(StorageStrategy):
 
                 serializable_data[key] = record_dict
 
-            # Use atomic write pattern to prevent corruption
-            # Write to a temporary file first, then rename
-            temp_path = f"{self.storage_file_path}.tmp"
-            with open(temp_path, "w", encoding="utf-8") as file:
-                json.dump(serializable_data, file, indent=2)
+            # usage of NamedTemporaryFile for atomic writes
+            with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", dir=str(file_path.parent), delete=False, suffix=".tmp"
+            ) as temp_file:
+                json.dump(serializable_data, temp_file, indent=2)
+                temp_path = temp_file.name
 
-            # On Windows, we need to remove the destination file first
-            if os.path.exists(self.storage_file_path):
-                os.remove(self.storage_file_path)
+            # Creation of a backup if the file already exists
+            if file_path.exists():
+                backup_path = f"{self.storage_file_path}.bak"
+                file_path.replace(backup_path)
 
-            # Rename the temp file to the actual file (atomic operation)
-            os.rename(temp_path, self.storage_file_path)
+            # Remplacement du fichier (opération atomique) avec pathlib
+            Path(temp_path).replace(str(file_path))
 
         except PermissionError:
             logger.exception("Permission denied when saving to file")
@@ -207,10 +209,10 @@ class DefaultStorage(StorageStrategy):
         self,
         mission_id: str,
         config: dict[str, type[BaseModel]],
-        storage_file_path: str = "local_storage.json",
+        storage_file_path: str = "local_storage",
         **kwargs,  # noqa: ANN003, ARG002
     ) -> None:
         """Initialize the storage."""
         super().__init__(mission_id=mission_id, config=config)
-        self.storage_file_path = f"{self.mission_id}_{storage_file_path}"
+        self.storage_file_path = f"{self.mission_id}_{storage_file_path}.json"
         self.storage = self._load_from_file()
