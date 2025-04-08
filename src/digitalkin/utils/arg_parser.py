@@ -120,6 +120,16 @@ class DevelopmentModeMappingAction(Action):
         values: str | Sequence[Any] | None,
         option_string: str | None = None,  # noqa: ARG002
     ) -> None:
-        """Set the attribute to the corresponding class."""
+        """Set the attribute to the corresponding class.
+
+        Raises:
+            TypeError: if the value is not a string.
+        """
+        # Check if the value is a string and convert it to lowercase
+        if isinstance(values, str):
+            values = values.lower()
+        else:
+            msg = "values must be a string"
+            raise TypeError(msg)
         mode = ServicesMode(values)
         setattr(namespace, self.dest, mode)
