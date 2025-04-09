@@ -2,21 +2,25 @@
 
 import datetime
 from abc import ABC, abstractmethod
-from enum import Enum, auto
-from typing import Any
+from enum import Enum
+from typing import Any, Literal, TypeGuard
 
 from pydantic import BaseModel, Field
 
 from digitalkin.services.base_strategy import BaseStrategy
 
 
+class StorageServiceError(Exception):
+    """Base exception for Setup service errors."""
+
+
 class DataType(Enum):
     """Enum defining the types of data that can be stored."""
 
-    OUTPUT = auto()
-    VIEW = auto()
-    LOGS = auto()
-    OTHER = auto()
+    OUTPUT = "OUTPUT"
+    VIEW = "VIEW"
+    LOGS = "LOGS"
+    OTHER = "OTHER"
 
 
 class StorageRecord(BaseModel):
@@ -50,8 +54,12 @@ class StorageStrategy(BaseStrategy, ABC):
         # Schema configuration mapping keys to model classes
         self.config: dict[str, type[BaseModel]] = config
 
+    @staticmethod
+    def _is_valid_data_type_name(value: str) -> TypeGuard[str]:
+        return value in DataType.__members__
+
     @abstractmethod
-    def _store(self, record: StorageRecord) -> str:
+    def _store(self, record: StorageRecord) -> StorageRecord:
         """Store a new record in the storage.
 
         Args:
@@ -65,8 +73,8 @@ class StorageStrategy(BaseStrategy, ABC):
         self,
         name: str,
         data: dict[str, Any],
-        data_type: DataType = DataType.OUTPUT,
-    ) -> str:
+        data_type: Literal["OUTPUT", "VIEW", "LOGS", "OTHER"] = "OUTPUT",
+    ) -> StorageRecord:
         """Store a new record in the storage.
 
         Args:
@@ -76,9 +84,16 @@ class StorageStrategy(BaseStrategy, ABC):
 
         Returns:
             The ID of the created record
+
+        Raises:
+            ValueError: If the data type is invalid or if validation fails
         """
+        if not self._is_valid_data_type_name(data_type):
+            msg = f"Invalid data type '{data_type}'. Must be one of {list(DataType.__members__.keys())}"
+            raise ValueError(msg)
+        data_type_enum = DataType[data_type]
         validated_data = self._validate_data(name, {**data, "mission_id": self.mission_id})
-        record = self._create_storage_record(name, validated_data, data_type)
+        record = self._create_storage_record(name, validated_data, data_type_enum)
         return self._store(record)
 
     @abstractmethod

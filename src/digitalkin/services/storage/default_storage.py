@@ -124,7 +124,7 @@ class DefaultStorage(StorageStrategy):
         except Exception:
             logger.exception("Unexpected error saving storage")
 
-    def _store(self, record: StorageRecord) -> str:
+    def _store(self, record: StorageRecord) -> StorageRecord:
         """Store a new record in the database and persist to file.
 
         Args:
@@ -148,7 +148,7 @@ class DefaultStorage(StorageStrategy):
         self._save_to_file()
 
         logger.info("CREATE %s:%s successful", name, record)
-        return name
+        return self.storage[name]
 
     def _read(self, name: str) -> StorageRecord | None:
         """Get records from the database.
