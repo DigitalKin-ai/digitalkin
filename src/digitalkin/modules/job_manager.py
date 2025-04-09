@@ -8,10 +8,10 @@ from typing import Any
 
 from digitalkin.logger import logger
 from digitalkin.models import ModuleStatus
+from digitalkin.models.module import InputModelT, SetupModelT
 from digitalkin.modules._base_module import BaseModule
 from digitalkin.services.services_config import ServicesConfig
 from digitalkin.services.services_models import ServicesMode
-from digitalkin.services.setup.setup_strategy import SetupData
 from digitalkin.utils.arg_parser import ArgParser, DevelopmentModeMappingAction
 
 
@@ -49,8 +49,8 @@ class JobManager(ArgParser):
 
     async def create_job(  # noqa: D417
         self,
-        input_data: dict[str, Any],
-        setup_data: SetupData,
+        input_data: InputModelT,
+        setup_data: SetupModelT,
         callback: Callable,
     ) -> tuple[str, BaseModule]:
         """Start new module job in background (asyncio).
@@ -64,7 +64,7 @@ class JobManager(ArgParser):
             str: job_id of the module entity
         """
         job_id = str(uuid.uuid4())
-        mission_id = str(uuid.uuid4())
+        mission_id = "missions:test_demo"
         """TODO: check uniqueness of the job_id"""
         # Création et démarrage du module
         module = self.module_class(job_id, mission_id=mission_id)

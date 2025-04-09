@@ -2,7 +2,8 @@
 
 from abc import ABC
 
-from digitalkin.modules._base_module import BaseModule, InputModelT, OutputModelT, SecretModelT, SetupModelT
+from digitalkin.models.module import InputModelT, OutputModelT, SecretModelT, SetupModelT
+from digitalkin.modules._base_module import BaseModule
 
 
 class ArchetypeModule(BaseModule[InputModelT, OutputModelT, SetupModelT, SecretModelT], ABC):
