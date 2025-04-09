@@ -84,7 +84,7 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
             request = setup_pb2.CreateSetupRequest(
                 name=valid_data.name,
                 organisation_id=valid_data.organisation_id,
-                owner=valid_data.owner,
+                owner_id=valid_data.owner_id,
                 module_id=valid_data.module_id,
                 current_setup_version=setup_pb2.SetupVersion(**valid_data.current_setup_version.model_dump()),
             )
@@ -115,7 +115,8 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
                 version=setup_dict.get("version", ""),
             )
             response = self.exec_grpc_query("GetSetup", request)
-            return SetupData(**json_format.MessageToDict(response.setup))
+            response_data = json_format.MessageToDict(response, preserving_proto_field_name=True)
+            return SetupData(**response_data["setup"])
 
     def update_setup(self, setup_dict: dict[str, Any]) -> bool:
         """Update an existing setup.
@@ -141,7 +142,7 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
 
             request = setup_pb2.UpdateSetupRequest(
                 name=valid_data.name,
-                owner=valid_data.owner or "",
+                owner_id=valid_data.owner_id or "",
                 current_setup_version=current_setup_version,
             )
             response = self.exec_grpc_query("UpdateSetup", request)
@@ -191,14 +192,14 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
             content_struct = Struct()
             content_struct.update(valid_data.content)
             request = setup_pb2.CreateSetupVersionRequest(
-                name=valid_data.name,
+                setup_id=valid_data.setup_id,
                 version=valid_data.version,
                 content=content_struct,
             )
             logger.info(
                 "Setup Version '%s' for setup '%s' query sent successfully",
                 valid_data.version,
-                valid_data.name,
+                valid_data.setup_id,
             )
             return self.exec_grpc_query("CreateSetupVersion", request)
 
@@ -206,22 +207,22 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
         """Retrieve a setup version by its unique identifier.
 
         Args:
-            setup_version_dict: Dictionary with the setup version 'name'.
+            setup_version_dict: Dictionary with the setup version 'setup_version_id'.
 
         Returns:
             dict[str, Any]: Setup version details.
 
         Raises:
-            ValidationError: If the setup version name is missing.
+            ValidationError: If the setup version id is missing.
             ServerError: If gRPC operation fails.
             SetupServiceError: For any unexpected internal error.
         """
         with self._handle_grpc_errors("Get Setup Version"):
-            name = setup_version_dict.get("name")
-            if not name:
-                msg = "Setup version name is required"
+            setup_version_id = setup_version_dict.get("setup_version_id")
+            if not setup_version_id:
+                msg = "Setup version id is required"
                 raise ValidationError(msg)
-            request = setup_pb2.GetSetupVersionRequest(name=name)
+            request = setup_pb2.GetSetupVersionRequest(setup_version_id=setup_version_id)
             response = self.exec_grpc_query("GetSetupVersion", request)
             return SetupVersionData(**json_format.MessageToDict(response.setup_version))
 
@@ -237,10 +238,14 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
         Raises:
             ServerError: If gRPC operation fails.
             SetupServiceError: For any unexpected internal error.
+            ValidationError: If both name and version are not provided.
         """
         with self._handle_grpc_errors("Search Setup Versions"):
+            if "name" not in setup_version_dict and "version" not in setup_version_dict:
+                msg = "Either name or version must be provided"
+                raise ValidationError(msg)
             request = setup_pb2.SearchSetupVersionsRequest(
-                name=setup_version_dict.get("name", ""),
+                setup_id=setup_version_dict.get("setup_id", ""),
                 version=setup_version_dict.get("version", ""),
             )
             response = self.exec_grpc_query("SearchSetupVersions", request)
@@ -265,15 +270,15 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
             content_struct = Struct()
             content_struct.update(valid_data.content)
             request = setup_pb2.UpdateSetupVersionRequest(
-                name=valid_data.name,
+                setup_version_id=valid_data.id,
                 version=valid_data.version,
                 content=content_struct,
             )
             response = self.exec_grpc_query("UpdateSetupVersion", request)
             logger.info(
                 "Setup Version '%s' for setup '%s' query sent successfully",
-                valid_data.version,
-                valid_data.name,
+                valid_data.id,
+                valid_data.setup_id,
             )
             return getattr(response, "success", False)
 
@@ -292,11 +297,11 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
             SetupServiceError: For any unexpected internal error.
         """
         with self._handle_grpc_errors("Setup Version Deletion"):
-            name = setup_version_dict.get("name")
-            if not name:
-                msg = "Setup version name is required for deletion"
+            setup_version_id = setup_version_dict.get("setup_version_id")
+            if not setup_version_id:
+                msg = "Setup version id is required for deletion"
                 raise ValidationError(msg)
-            request = setup_pb2.DeleteSetupVersionRequest(name=name)
+            request = setup_pb2.DeleteSetupVersionRequest(setup_version_id=setup_version_id)
             response = self.exec_grpc_query("DeleteSetupVersion", request)
-            logger.info("Setup Version '%s' query sent successfully", name)
+            logger.info("Setup Version '%s' query sent successfully", setup_version_id)
             return getattr(response, "success", False)

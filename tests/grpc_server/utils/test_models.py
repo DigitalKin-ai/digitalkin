@@ -21,42 +21,32 @@ def test_server_mode_enum() -> None:
 
     # Check ASYNC value
     if ServerMode.ASYNC != "async":
-        pytest.fail(
-            f"Expected ServerMode.ASYNC to be 'async', got '{ServerMode.ASYNC}'"
-        )
+        pytest.fail(f"Expected ServerMode.ASYNC to be 'async', got '{ServerMode.ASYNC}'")
 
     # Check all enum members
     expected_members = [ServerMode.SYNC, ServerMode.ASYNC]
     actual_members = list(ServerMode)
 
     if actual_members != expected_members:
-        pytest.fail(
-            f"Expected ServerMode enum to have members {expected_members}, got {actual_members}"
-        )
+        pytest.fail(f"Expected ServerMode enum to have members {expected_members}, got {actual_members}")
 
 
 def test_security_mode_enum() -> None:
     """Test the SecurityMode enum."""
     # Check SECURE value
     if SecurityMode.SECURE != "secure":
-        pytest.fail(
-            f"Expected SecurityMode.SECURE to be 'secure', got '{SecurityMode.SECURE}'"
-        )
+        pytest.fail(f"Expected SecurityMode.SECURE to be 'secure', got '{SecurityMode.SECURE}'")
 
     # Check INSECURE value
     if SecurityMode.INSECURE != "insecure":
-        pytest.fail(
-            f"Expected SecurityMode.INSECURE to be 'insecure', got '{SecurityMode.INSECURE}'"
-        )
+        pytest.fail(f"Expected SecurityMode.INSECURE to be 'insecure', got '{SecurityMode.INSECURE}'")
 
     # Check all enum members
     expected_members = [SecurityMode.SECURE, SecurityMode.INSECURE]
     actual_members = list(SecurityMode)
 
     if actual_members != expected_members:
-        pytest.fail(
-            f"Expected SecurityMode enum to have members {expected_members}, got {actual_members}"
-        )
+        pytest.fail(f"Expected SecurityMode enum to have members {expected_members}, got {actual_members}")
 
 
 def test_server_credentials_validation(tmp_path) -> None:
@@ -79,21 +69,15 @@ def test_server_credentials_validation(tmp_path) -> None:
 
     # Check key path
     if creds.server_key_path != server_key:
-        pytest.fail(
-            f"Expected server_key_path to be {server_key}, got {creds.server_key_path}"
-        )
+        pytest.fail(f"Expected server_key_path to be {server_key}, got {creds.server_key_path}")
 
     # Check cert path
     if creds.server_cert_path != server_cert:
-        pytest.fail(
-            f"Expected server_cert_path to be {server_cert}, got {creds.server_cert_path}"
-        )
+        pytest.fail(f"Expected server_cert_path to be {server_cert}, got {creds.server_cert_path}")
 
     # Check root cert path
     if creds.root_cert_path != ca_cert:
-        pytest.fail(
-            f"Expected root_cert_path to be {ca_cert}, got {creds.root_cert_path}"
-        )
+        pytest.fail(f"Expected root_cert_path to be {ca_cert}, got {creds.root_cert_path}")
 
     # Test optional root cert
     creds_no_ca = ServerCredentials(
@@ -103,9 +87,7 @@ def test_server_credentials_validation(tmp_path) -> None:
 
     # Check root cert is None
     if creds_no_ca.root_cert_path is not None:
-        pytest.fail(
-            f"Expected root_cert_path to be None, got {creds_no_ca.root_cert_path}"
-        )
+        pytest.fail(f"Expected root_cert_path to be None, got {creds_no_ca.root_cert_path}")
 
 
 def test_server_credentials_validation_errors(tmp_path) -> None:
@@ -144,33 +126,23 @@ def test_server_config_defaults() -> None:
 
     # Check security
     if config.security != SecurityMode.INSECURE:
-        pytest.fail(
-            f"Expected default security to be {SecurityMode.INSECURE}, got {config.security}"
-        )
+        pytest.fail(f"Expected default security to be {SecurityMode.INSECURE}, got {config.security}")
 
     # Check credentials
     if config.credentials is not None:
-        pytest.fail(
-            f"Expected default credentials to be None, got {config.credentials}"
-        )
+        pytest.fail(f"Expected default credentials to be None, got {config.credentials}")
 
     # Check server_options
     if config.server_options != []:
-        pytest.fail(
-            f"Expected default server_options to be empty list, got {config.server_options}"
-        )
+        pytest.fail(f"Expected default server_options to be empty list, got {config.server_options}")
 
     # Check enable_reflection
     if config.enable_reflection is not True:
-        pytest.fail(
-            f"Expected default enable_reflection to be True, got {config.enable_reflection}"
-        )
+        pytest.fail(f"Expected default enable_reflection to be True, got {config.enable_reflection}")
 
     # Check enable_health_check
     if config.enable_health_check is not True:
-        pytest.fail(
-            f"Expected default enable_health_check to be True, got {config.enable_health_check}"
-        )
+        pytest.fail(f"Expected default enable_health_check to be True, got {config.enable_health_check}")
 
 
 def test_server_config_custom() -> None:
@@ -206,36 +178,26 @@ def test_server_config_custom() -> None:
 
     # Check security
     if config.security != SecurityMode.INSECURE:
-        pytest.fail(
-            f"Expected security to be {SecurityMode.INSECURE}, got {config.security}"
-        )
+        pytest.fail(f"Expected security to be {SecurityMode.INSECURE}, got {config.security}")
 
     # Check server_options
     if config.server_options != expected_options:
-        pytest.fail(
-            f"Expected server_options to be {expected_options}, got {config.server_options}"
-        )
+        pytest.fail(f"Expected server_options to be {expected_options}, got {config.server_options}")
 
     # Check enable_reflection
     if config.enable_reflection is not False:
-        pytest.fail(
-            f"Expected enable_reflection to be False, got {config.enable_reflection}"
-        )
+        pytest.fail(f"Expected enable_reflection to be False, got {config.enable_reflection}")
 
     # Check enable_health_check
     if config.enable_health_check is not False:
-        pytest.fail(
-            f"Expected enable_health_check to be False, got {config.enable_health_check}"
-        )
+        pytest.fail(f"Expected enable_health_check to be False, got {config.enable_health_check}")
 
 
 def test_server_config_secure_without_credentials() -> None:
     """Test error when secure mode is specified without credentials."""
     # When creating a ServerConfig with secure mode but no credentials,
     # it should raise ConfigurationError
-    with pytest.raises(
-        ConfigurationError, match="Credentials must be provided when using secure mode"
-    ):
+    with pytest.raises(ConfigurationError, match="Credentials must be provided when using secure mode"):
         ServerConfig(
             security=SecurityMode.SECURE,
             credentials=None,
@@ -253,9 +215,7 @@ def test_server_config_secure_with_credentials(dummy_certs) -> None:
     )
 
     if config.security != SecurityMode.SECURE:
-        pytest.fail(
-            f"Expected security to be {SecurityMode.SECURE}, got {config.security}"
-        )
+        pytest.fail(f"Expected security to be {SecurityMode.SECURE}, got {config.security}")
 
     if config.credentials != credentials:
         pytest.fail(f"Expected credentials to match input, got {config.credentials}")
@@ -272,9 +232,7 @@ def test_server_config_insecure_with_credentials(dummy_certs) -> None:
     )
 
     if config.security != SecurityMode.INSECURE:
-        pytest.fail(
-            f"Expected security to be {SecurityMode.INSECURE}, got {config.security}"
-        )
+        pytest.fail(f"Expected security to be {SecurityMode.INSECURE}, got {config.security}")
 
     if config.credentials != credentials:
         pytest.fail(f"Expected credentials to match input, got {config.credentials}")
@@ -289,9 +247,7 @@ def test_server_config_insecure_without_credentials() -> None:
     )
 
     if config.security != SecurityMode.INSECURE:
-        pytest.fail(
-            f"Expected security to be {SecurityMode.INSECURE}, got {config.security}"
-        )
+        pytest.fail(f"Expected security to be {SecurityMode.INSECURE}, got {config.security}")
 
     if config.credentials is not None:
         pytest.fail(f"Expected credentials to be None, got {config.credentials}")
@@ -320,9 +276,7 @@ def test_server_config_address() -> None:
     expected_address = "localhost:8000"
 
     if config.address != expected_address:
-        pytest.fail(
-            f"Expected address to be '{expected_address}', got '{config.address}'"
-        )
+        pytest.fail(f"Expected address to be '{expected_address}', got '{config.address}'")
 
 
 def test_module_server_config() -> None:
@@ -331,9 +285,7 @@ def test_module_server_config() -> None:
     expected_registry_address = "localhost:50051"
 
     if config.registry_address != expected_registry_address:
-        pytest.fail(
-            f"Expected registry_address to be '{expected_registry_address}', got '{config.registry_address}'"
-        )
+        pytest.fail(f"Expected registry_address to be '{expected_registry_address}', got '{config.registry_address}'")
 
 
 def test_registry_server_config() -> None:
@@ -342,6 +294,4 @@ def test_registry_server_config() -> None:
     expected_database_url = "sqlite:///registry.db"
 
     if config.database_url != expected_database_url:
-        pytest.fail(
-            f"Expected database_url to be '{expected_database_url}', got '{config.database_url}'"
-        )
+        pytest.fail(f"Expected database_url to be '{expected_database_url}', got '{config.database_url}'")

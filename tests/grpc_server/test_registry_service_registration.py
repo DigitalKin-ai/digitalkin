@@ -28,9 +28,7 @@ from digitalkin.grpc_servers.registry_servicer import (
 # Create service instance and get service descriptor for tests
 alphabet = string.ascii_letters + string.digits
 service_instance = RegistryServicer()
-service_name = module_registry_service_pb2.DESCRIPTOR.services_by_name[
-    "ModuleRegistryService"
-]
+service_name = module_registry_service_pb2.DESCRIPTOR.services_by_name["ModuleRegistryService"]
 
 
 @pytest.fixture
@@ -159,9 +157,7 @@ def test_register_module_duplicate(
     # Try to register a module with an ID that already exists
     # Convert the module object to a request, excluding status and message fields
     request = registration_pb2.RegisterRequest(**{
-        k: v
-        for (k, v) in module_registry_obj.model_dump().items()
-        if k not in {"status", "message"}
+        k: v for (k, v) in module_registry_obj.model_dump().items() if k not in {"status", "message"}
     })
 
     # Invoke the register module method
@@ -196,9 +192,7 @@ def test_deregister_module_success(
         module_registry_obj: Pre-registered module fixture to be deregistered.
     """
     # Create deregistration request for existing module
-    request = registration_pb2.DeregisterRequest(
-        module_id=module_registry_obj.module_id
-    )
+    request = registration_pb2.DeregisterRequest(module_id=module_registry_obj.module_id)
 
     # Invoke the deregister module method
     deregister_module_method = grpc_test_server.invoke_unary_unary(
@@ -236,9 +230,7 @@ def test_deregister_module_not_found(
     """
     # Create deregistration request for non-existent module
     # Append additional text to ensure the ID doesn't match any existing module
-    request = registration_pb2.DeregisterRequest(
-        module_id=f"{module_registry_obj.module_id}+mf_doom"
-    )
+    request = registration_pb2.DeregisterRequest(module_id=f"{module_registry_obj.module_id}+mf_doom")
 
     # Invoke the deregister module method
     deregister_module_method = grpc_test_server.invoke_unary_unary(
@@ -392,9 +384,7 @@ def test_discover_search_module_success_empty(
         module_registry_objs: List of pre-registered modules without the specific tag.
     """
     # Create search request with a tag that won't match any module
-    request = discover_pb2.DiscoverSearchRequest(
-        module_type="kin", tags=[metadata_pb2.Tag(tag="westide_gunn")]
-    )
+    request = discover_pb2.DiscoverSearchRequest(module_type="kin", tags=[metadata_pb2.Tag(tag="westide_gunn")])
 
     # Invoke the discover search module method
     discover_search_method = grpc_test_server.invoke_unary_unary(
@@ -457,9 +447,7 @@ def test_get_module_status_success(
         grpc_test_server: Mock gRPC server for testing.
         module_registry_obj: Pre-registered module.
     """
-    request_get_module = status_pb2.ModuleStatusRequest(
-        module_id=module_registry_obj.module_id
-    )
+    request_get_module = status_pb2.ModuleStatusRequest(module_id=module_registry_obj.module_id)
     # Invoke the get module status method
     get_module_method = grpc_test_server.invoke_unary_unary(
         method_descriptor=(service_name.methods_by_name["GetModuleStatus"]),
@@ -556,9 +544,7 @@ def test_list_module_status_success_pagination(
 
     assert response.list_size <= list_size
     # Filter modules in the registry that match the search criteria
-    modules = list(service_instance.registered_modules.values())[
-        offset : offset + list_size
-    ]
+    modules = list(service_instance.registered_modules.values())[offset : offset + list_size]
 
     for response_module, expected_module in zip(response.modules_statuses, modules):
         # Verify each module is included in the response
@@ -732,9 +718,7 @@ def test_update_module_success(
     assert response.success is True
     assert code == grpc.StatusCode.OK
 
-    request_update_module = status_pb2.UpdateStatusRequest(
-        module_id=module.module_id, status=module.status.name
-    )
+    request_update_module = status_pb2.UpdateStatusRequest(module_id=module.module_id, status=module.status.name)
     # Invoke the get module status method
     update_module_method = grpc_test_server.invoke_unary_unary(
         method_descriptor=(service_name.methods_by_name["UpdateModuleStatus"]),
@@ -803,9 +787,7 @@ def test_update_module_success(
     ],
     ids=["outside_range", "negative"],
 )
-def test_update_module_error(
-    grpc_test_server: grpc_testing.Server, module: RegistryModule, error_status: int
-) -> None:
+def test_update_module_error(grpc_test_server: grpc_testing.Server, module: RegistryModule, error_status: int) -> None:
     """Test successful update module status.
 
     Verifies that a module can be updated successfully and that the
@@ -853,7 +835,4 @@ def test_update_module_error(
 
     # Test the response status
     assert code == grpc.StatusCode.INVALID_ARGUMENT
-    assert (
-        details
-        == f"ModuleStatus {error_status} is unknonw, please check the requested status"
-    )
+    assert details == f"ModuleStatus {error_status} is unknonw, please check the requested status"

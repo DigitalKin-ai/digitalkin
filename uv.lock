@@ -370,7 +370,7 @@ requires-dist = [
     { name = "build", marker = "extra == 'dev'", specifier = ">=1.2.2" },
     { name = "bump2version", marker = "extra == 'dev'", specifier = ">=1.0.1" },
     { name = "cryptography", marker = "extra == 'dev'", specifier = ">=44.0.2" },
-    { name = "digitalkin-proto", specifier = "==0.1.4" },
+    { name = "digitalkin-proto", specifier = ">=0.1.5" },
     { name = "freezegun", marker = "extra == 'dev'", specifier = ">=1.5.1" },
     { name = "grpcio-health-checking", specifier = ">=1.71.0" },
     { name = "grpcio-reflection", specifier = ">=1.71.0" },
@@ -379,7 +379,7 @@ requires-dist = [
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.15.0" },
     { name = "openai", marker = "extra == 'examples'", specifier = ">=1.66.3" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=4.2.0" },
-    { name = "pydantic", specifier = ">=2.11.1" },
+    { name = "pydantic", specifier = ">=2.11.3" },
     { name = "pyright", marker = "extra == 'dev'", specifier = ">=1.1.398" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3.4" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.26.0" },
@@ -392,7 +392,7 @@ provides-extras = ["dev", "examples"]
 
 [[package]]
 name = "digitalkin-proto"
-version = "0.1.4"
+version = "0.1.5"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "googleapis-common-protos" },
@@ -400,9 +400,9 @@ dependencies = [
     { name = "grpcio-tools" },
     { name = "protovalidate" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/8f/ac/3bded4ab2db33014e3ebf98c9deeb51b484fc48eebd2b5a5e7c09acb6424/digitalkin_proto-0.1.4.tar.gz", hash = "sha256:dfe9567f351eea19788f783640841d471ba874d3b0b10dcf5ce3dee0cfa4117e", size = 78042 }
+sdist = { url = "https://files.pythonhosted.org/packages/da/b2/948107be6dc5294c0d08d69777fb0aaa0010dba2f2c9b781bdb45ab99752/digitalkin_proto-0.1.5.tar.gz", hash = "sha256:39d39bb10ec372c28de15d842885f35a3bd2d0d3f7f7c905dea8a149aca89d2a", size = 78172 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/e7/6c/8d28b8c0b9a508eb2924988dbf27f7a083dbe03b74d64d59056907d85ad5/digitalkin_proto-0.1.4-py3-none-any.whl", hash = "sha256:183369da60ee3f0da332dd42a3f7c09e3889a8d6cda84da29dc42f7867b578f1", size = 145084 },
+    { url = "https://files.pythonhosted.org/packages/36/5d/c1f3e44098326a4e892cccac34d050bbacbb9391bb3042de009a8046c45c/digitalkin_proto-0.1.5-py3-none-any.whl", hash = "sha256:8663a0c2ef87e6e25ed59ae29fa7f513b8b826f021925910bca5700cb25ac2d4", size = 145189 },
 ]
 
 [[package]]
@@ -1073,7 +1073,7 @@ wheels = [
 
 [[package]]
 name = "pydantic"
-version = "2.11.2"
+version = "2.11.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "annotated-types" },
@@ -1081,9 +1081,9 @@ dependencies = [
     { name = "typing-extensions" },
     { name = "typing-inspection" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/b0/41/832125a41fe098b58d1fdd04ae819b4dc6b34d6b09ed78304fd93d4bc051/pydantic-2.11.2.tar.gz", hash = "sha256:2138628e050bd7a1e70b91d4bf4a91167f4ad76fdb83209b107c8d84b854917e", size = 784742 }
+sdist = { url = "https://files.pythonhosted.org/packages/10/2e/ca897f093ee6c5f3b0bee123ee4465c50e75431c3d5b6a3b44a47134e891/pydantic-2.11.3.tar.gz", hash = "sha256:7471657138c16adad9322fe3070c0116dd6c3ad8d649300e3cbdfe91f4db4ec3", size = 785513 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/bf/c2/0f3baea344d0b15e35cb3e04ad5b953fa05106b76efbf4c782a3f47f22f5/pydantic-2.11.2-py3-none-any.whl", hash = "sha256:7f17d25846bcdf89b670a86cdfe7b29a9f1c9ca23dee154221c9aa81845cfca7", size = 443295 },
+    { url = "https://files.pythonhosted.org/packages/b0/1d/407b29780a289868ed696d1616f4aad49d6388e5a77f567dcd2629dcd7b8/pydantic-2.11.3-py3-none-any.whl", hash = "sha256:a082753436a07f9ba1289c6ffa01cd93db3548776088aa917cc43b63f68fa60f", size = 443591 },
 ]
 
 [[package]]

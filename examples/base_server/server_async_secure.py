@@ -83,9 +83,7 @@ async def main_async() -> int:
         # Check if certificates exist
         if not cert_dir.exists() or not (cert_dir / "server.key").exists():
             logger.error("Certificate files not found. Please generate them first.")
-            logger.info(
-                "Run the generate_certificates.py script to create certificates."
-            )
+            logger.info("Run the generate_certificates.py script to create certificates.")
             return 1
 
         # Create server configuration with security credentials

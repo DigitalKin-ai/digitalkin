@@ -76,14 +76,19 @@ def client(test_channel: grpc_testing.Channel) -> GrpcSetup:
     return client
 
 
+def random_string(number: int = 16) -> str:
+    return "".join(secrets.choice(alphabet) for _ in range(number))
+
+
 @pytest.fixture
 @freeze_time("2025-04-01 12:00:01")
 def generate_setup_version_obj() -> SetupVersionData:
-    setup_id = "".join(secrets.choice(alphabet) for _ in range(18))
+    setup_id = random_string()
     return SetupVersionData(
-        name=setup_id,
-        version="v" + "".join(secrets.choice(alphabet) for _ in range(4)),
-        content={},
+        id=random_string(),
+        setup_id=setup_id,
+        version="v" + random_string(8),
+        content={random_string(8): random_string(8) for _ in range(5)},
         creation_date=datetime.datetime.now(),
     )
 
@@ -92,11 +97,11 @@ def generate_setup_version_obj() -> SetupVersionData:
 def generate_setup_obj(generate_setup_version_obj: SetupVersionData) -> SetupData:
     # Create registration request with test setup data
     return SetupData(
-        id=generate_setup_version_obj.name,
-        name="".join(secrets.choice(alphabet) for _ in range(18)),
-        organisation_id="".join(secrets.choice(alphabet) for _ in range(18)),
-        owner="".join(secrets.choice(alphabet) for _ in range(18)),
-        module_id="".join(secrets.choice(alphabet) for _ in range(18)),
+        id=generate_setup_version_obj.setup_id,
+        name=random_string(),
+        organisation_id=random_string(),
+        owner_id=random_string(),
+        module_id=random_string(),
         current_setup_version=generate_setup_version_obj,
     )
 
@@ -116,9 +121,7 @@ def test_create_setup_request_creation_success(
         grpc_test_server: Mock gRPC server for testing.
     """
     # Start the client call (this call will block until the response is simulated).
-    future = client_execution_thread_pool.submit(
-        client.create_setup, generate_setup_obj.model_dump()
-    )
+    future = client_execution_thread_pool.submit(client.create_setup, generate_setup_obj.model_dump())
 
     # Get the service and method descriptor.
     service_desc = setup_service_pb2.DESCRIPTOR.services_by_name["SetupService"]
@@ -144,23 +147,14 @@ def test_create_setup_request_creation_success(
     # Verify the request correspond to the setup data
     assert request.name == generate_setup_obj.name
     assert request.organisation_id == generate_setup_obj.organisation_id
-    assert request.owner == generate_setup_obj.owner
-    assert (
-        request.current_setup_version.name
-        == generate_setup_obj.current_setup_version.name
-    )
-    assert (
-        request.current_setup_version.version
-        == generate_setup_obj.current_setup_version.version
-    )
+    assert request.owner_id == generate_setup_obj.owner_id
+    assert request.current_setup_version.setup_id == generate_setup_obj.current_setup_version.setup_id
+    assert request.current_setup_version.version == generate_setup_obj.current_setup_version.version
     assert (
         request.current_setup_version.creation_date.ToDatetime()
         == generate_setup_obj.current_setup_version.creation_date
     )
-    assert (
-        dict(request.current_setup_version.content)
-        == generate_setup_obj.current_setup_version.content
-    )
+    assert dict(request.current_setup_version.content) == generate_setup_obj.current_setup_version.content
 
 
 @freeze_time("2025-04-01 12:00:01")
@@ -179,9 +173,7 @@ def test_create_setup_success(
         grpc_test_server: Mock gRPC server for testing.
     """
     # Start the client call (this call will block until the response is simulated).
-    future = client_execution_thread_pool.submit(
-        client.create_setup, generate_setup_obj.model_dump()
-    )
+    future = client_execution_thread_pool.submit(client.create_setup, generate_setup_obj.model_dump())
 
     # Get the service and method descriptor.
     service_desc = setup_service_pb2.DESCRIPTOR.services_by_name["SetupService"]
@@ -218,23 +210,11 @@ def test_create_setup_success(
     assert isinstance(setup, SetupData)
     assert setup.name == generate_setup_obj.name
     assert setup.organisation_id == generate_setup_obj.organisation_id
-    assert setup.owner == generate_setup_obj.owner
-    assert (
-        setup.current_setup_version.name
-        == generate_setup_obj.current_setup_version.name
-    )
-    assert (
-        setup.current_setup_version.version
-        == generate_setup_obj.current_setup_version.version
-    )
-    assert (
-        setup.current_setup_version.creation_date
-        == generate_setup_obj.current_setup_version.creation_date
-    )
-    assert (
-        setup.current_setup_version.content
-        == generate_setup_obj.current_setup_version.content
-    )
+    assert setup.owner_id == generate_setup_obj.owner_id
+    assert setup.current_setup_version.setup_id == generate_setup_obj.current_setup_version.setup_id
+    assert setup.current_setup_version.version == generate_setup_obj.current_setup_version.version
+    assert setup.current_setup_version.creation_date == generate_setup_obj.current_setup_version.creation_date
+    assert setup.current_setup_version.content == generate_setup_obj.current_setup_version.content
 
 
 # Test RegisterModule
@@ -258,9 +238,7 @@ def test_create_setup_validation_error(
     generate_setup_obj.current_setup_version = None
 
     # Start the client call (this call will block until the response is simulated).
-    future = client_execution_thread_pool.submit(
-        client.create_setup, generate_setup_obj.model_dump()
-    )
+    future = client_execution_thread_pool.submit(client.create_setup, generate_setup_obj.model_dump())
     with pytest.raises(ValueError, match="Invalid data for Setup Creation"):
         future.result()
 
@@ -279,9 +257,7 @@ def test_create_setup_version_request_creation_success(
         grpc_test_server: Mock gRPC server for testing.
     """
     # Start the client call (this call will block until the response is simulated).
-    future = client_execution_thread_pool.submit(
-        client.create_setup_version, generate_setup_version_obj.model_dump()
-    )
+    future = client_execution_thread_pool.submit(client.create_setup_version, generate_setup_version_obj.model_dump())
 
     # Get the service and method descriptor.
     service_desc = setup_service_pb2.DESCRIPTOR.services_by_name["SetupService"]
@@ -305,7 +281,7 @@ def test_create_setup_version_request_creation_success(
     assert result.success is True
 
     # Verify the request correspond to the setup data
-    assert request.name == generate_setup_version_obj.name
+    assert request.setup_id == generate_setup_version_obj.setup_id
     assert request.version == generate_setup_version_obj.version
     assert dict(request.content) == generate_setup_version_obj.content
 
@@ -325,9 +301,7 @@ def test_create_setup_version_success(
         grpc_test_server: Mock gRPC server for testing.
     """
     # Start the client call (this call will block until the response is simulated).
-    future = client_execution_thread_pool.submit(
-        client.create_setup_version, generate_setup_version_obj.model_dump()
-    )
+    future = client_execution_thread_pool.submit(client.create_setup_version, generate_setup_version_obj.model_dump())
 
     # Get the service and method descriptor.
     service_desc = setup_service_pb2.DESCRIPTOR.services_by_name["SetupService"]
@@ -339,9 +313,7 @@ def test_create_setup_version_success(
     # Use grpc_testing to send the response back to the client.
     rpc.send_initial_metadata(())
     request_obj = setup_pb2.CreateSetupVersionRequest(**{
-        k: v
-        for (k, v) in generate_setup_version_obj.model_dump().items()
-        if k not in ("creation_date")
+        k: v for (k, v) in generate_setup_version_obj.model_dump().items() if k not in {"creation_date", "id"}
     })
 
     rpc.terminate(
@@ -356,13 +328,13 @@ def test_create_setup_version_success(
     result = future.result()
     assert result.success is True
 
-    setup_version = mock_servicer.setup_versions[generate_setup_version_obj.name][
+    setup_version = mock_servicer.setup_versions[generate_setup_version_obj.setup_id][
         generate_setup_version_obj.version
     ]
 
     assert isinstance(setup_version, SetupVersionData)
     # Verify the request correspond to the setup data
-    assert setup_version.name == generate_setup_version_obj.name
+    assert setup_version.setup_id == generate_setup_version_obj.setup_id
     assert setup_version.version == generate_setup_version_obj.version
     assert setup_version.creation_date == generate_setup_version_obj.creation_date
     assert setup_version.content == generate_setup_version_obj.content
@@ -388,8 +360,6 @@ def test_create_setup_version_validation_error(
     generate_setup_version_obj.content = ""
 
     # Start the client call (this call will block until the response is simulated).
-    future = client_execution_thread_pool.submit(
-        client.create_setup_version, generate_setup_version_obj.model_dump()
-    )
+    future = client_execution_thread_pool.submit(client.create_setup_version, generate_setup_version_obj.model_dump())
     with pytest.raises(ValueError, match="Invalid data for Setup Version Creation"):
         future.result()

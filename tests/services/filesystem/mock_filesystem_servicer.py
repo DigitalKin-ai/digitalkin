@@ -10,21 +10,27 @@ from digitalkin_proto.digitalkin.filesystem.v2 import (
     filesystem_service_pb2_grpc,
 )
 from digitalkin_proto.digitalkin.filesystem.v2.filesystem_pb2 import (
-    FileType as FileTypeProto,
     File as FileProto,
+)
+from digitalkin_proto.digitalkin.filesystem.v2.filesystem_pb2 import (
     FileResult,
 )
+from digitalkin_proto.digitalkin.filesystem.v2.filesystem_pb2 import (
+    FileType as FileTypeProto,
+)
+from pydantic import ValidationError
+
 from digitalkin.services.filesystem.filesystem_strategy import (
     FilesystemData,
     FileType,
 )
-from pydantic import ValidationError
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
+
 
 # --- Fake Context for Servicer ---
 class FakeContext:
@@ -94,7 +100,7 @@ class MockFilesystemServicer(filesystem_service_pb2_grpc.FilesystemServiceServic
                 # Convert proto file type to our enum
                 file_type = FileType[FileTypeProto.Name(request.file_type)]
             except ValueError as e:
-                msg = f"Invalid file type: {str(e)}"
+                msg = f"Invalid file type: {e!s}"
                 logger.warning(msg)
                 context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
                 context.set_details(msg)
@@ -103,12 +109,7 @@ class MockFilesystemServicer(filesystem_service_pb2_grpc.FilesystemServiceServic
             # Create the file data
             url = self._generate_url(kin_context, name)
 
-            file_data = FilesystemData(
-                kin_context=kin_context,
-                name=name,
-                file_type=file_type,
-                url=url
-            )
+            file_data = FilesystemData(kin_context=kin_context, name=name, file_type=file_type, url=url)
 
             # Store the file
             self.files[kin_context][name] = file_data
@@ -119,19 +120,19 @@ class MockFilesystemServicer(filesystem_service_pb2_grpc.FilesystemServiceServic
                 kin_context=file_data.kin_context,
                 name=file_data.name,
                 file_type=getattr(FileTypeProto, file_data.file_type.name),
-                url=file_data.url
+                url=file_data.url,
             )
 
             return filesystem_pb2.UploadFileResponse(file=file_proto)
 
         except ValidationError as e:
-            msg = f"Validation error: {str(e)}"
+            msg = f"Validation error: {e!s}"
             logger.exception(msg)
             context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
             context.set_details(msg)
             return filesystem_pb2.UploadFileResponse()
         except Exception as e:
-            msg = f"Unexpected error in UploadFile: {str(e)}"
+            msg = f"Unexpected error in UploadFile: {e!s}"
             logger.exception(msg)
             context.set_code(grpc.StatusCode.INTERNAL)
             context.set_details(msg)
@@ -175,12 +176,12 @@ class MockFilesystemServicer(filesystem_service_pb2_grpc.FilesystemServiceServic
                 kin_context=file_data.kin_context,
                 name=file_data.name,
                 file_type=getattr(FileTypeProto, file_data.file_type.name),
-                url=file_data.url
+                url=file_data.url,
             )
 
             return filesystem_pb2.GetFileByNameResponse(file=file_proto)
         except Exception as e:
-            msg = f"Unexpected error in GetFileByName: {str(e)}"
+            msg = f"Unexpected error in GetFileByName: {e!s}"
             logger.exception(msg)
             context.set_code(grpc.StatusCode.INTERNAL)
             context.set_details(msg)
@@ -214,13 +215,13 @@ class MockFilesystemServicer(filesystem_service_pb2_grpc.FilesystemServiceServic
                     kin_context=file_data.kin_context,
                     name=file_data.name,
                     file_type=getattr(FileTypeProto, file_data.file_type.name),
-                    url=file_data.url
+                    url=file_data.url,
                 )
                 file_protos.append(file_proto)
 
             return filesystem_pb2.GetFilesByKinContextResponse(files=file_protos)
         except Exception as e:
-            msg = f"Unexpected error in GetFilesByKinContext: {str(e)}"
+            msg = f"Unexpected error in GetFilesByKinContext: {e!s}"
             logger.exception(msg)
             context.set_code(grpc.StatusCode.INTERNAL)
             context.set_details(msg)
@@ -259,7 +260,7 @@ class MockFilesystemServicer(filesystem_service_pb2_grpc.FilesystemServiceServic
                         kin_context=file_data.kin_context,
                         name=file_data.name,
                         file_type=getattr(FileTypeProto, file_data.file_type.name),
-                        url=file_data.url
+                        url=file_data.url,
                     )
                     file_protos[name] = FileResult(file=file_proto)
                 else:
@@ -268,7 +269,7 @@ class MockFilesystemServicer(filesystem_service_pb2_grpc.FilesystemServiceServic
 
             return filesystem_pb2.GetFilesByNamesResponse(files=file_protos)
         except Exception as e:
-            msg = f"Unexpected error in GetFilesByNames: {str(e)}"
+            msg = f"Unexpected error in GetFilesByNames: {e!s}"
             logger.exception(msg)
             context.set_code(grpc.StatusCode.INTERNAL)
             context.set_details(msg)
@@ -315,18 +316,18 @@ class MockFilesystemServicer(filesystem_service_pb2_grpc.FilesystemServiceServic
                 kin_context=file_data.kin_context,
                 name=file_data.name,
                 file_type=getattr(FileTypeProto, file_data.file_type.name),
-                url=file_data.url
+                url=file_data.url,
             )
 
             return filesystem_pb2.UpdateFileResponse(file=file_proto)
         except ValidationError as e:
-            msg = f"Validation error: {str(e)}"
+            msg = f"Validation error: {e!s}"
             logger.exception(msg)
             context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
             context.set_details(msg)
             return filesystem_pb2.UpdateFileResponse()
         except Exception as e:
-            msg = f"Unexpected error in UpdateFile: {str(e)}"
+            msg = f"Unexpected error in UpdateFile: {e!s}"
             logger.exception(msg)
             context.set_code(grpc.StatusCode.INTERNAL)
             context.set_details(msg)
@@ -356,7 +357,6 @@ class MockFilesystemServicer(filesystem_service_pb2_grpc.FilesystemServiceServic
                 context.set_details(msg)
                 return filesystem_pb2.DeleteFileResponse()
 
-
             # Check if file exists
             if name not in self.files[kin_context]:
                 msg = f"File {name} does not exist in context {kin_context}"
@@ -371,7 +371,7 @@ class MockFilesystemServicer(filesystem_service_pb2_grpc.FilesystemServiceServic
 
             return filesystem_pb2.DeleteFileResponse()
         except Exception as e:
-            msg = f"Unexpected error in DeleteFile: {str(e)}"
+            msg = f"Unexpected error in DeleteFile: {e!s}"
             logger.exception(msg)
             context.set_code(grpc.StatusCode.INTERNAL)
             context.set_details(msg)

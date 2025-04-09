@@ -80,7 +80,8 @@ async def serve_module() -> int:
 
             setup_id = "setups:0"
             setup_version_data = SetupVersionData(
-                name="gpt4o-mini",
+                id="0",
+                setup_id=setup_id,
                 version="v1",
                 creation_date=datetime.datetime.now(datetime.timezone.utc),
                 content={
@@ -94,13 +95,6 @@ async def serve_module() -> int:
                 },
             )
 
-            module_server.module_servicer.setup.create_setup_version(
-                setup_version_dict={
-                    "setup_id": setup_id,
-                    "data": setup_version_data,
-                }
-            )
-
             module_server.module_servicer.setup.create_setup(
                 setup_dict={
                     "setup_id": setup_id,
@@ -108,7 +102,7 @@ async def serve_module() -> int:
                         id="1",
                         name="module_openai",
                         organisation_id="organisations:1",
-                        owner="owner:1",
+                        owner_id="owner:1",
                         module_id="modules:1",
                         current_setup_version=setup_version_data,
                     ),
@@ -131,16 +125,11 @@ async def serve_module() -> int:
 
             setup_id = "setups:0"
             setup_version_data = SetupVersionData(
-                name="text_transform_5",
+                id="1",
+                setup_id=setup_id,
                 version="v1",
                 creation_date=datetime.datetime.now(datetime.timezone.utc),
                 content={**TextTransformSetup(shift_amount=2, uppercase=True).model_dump()},
-            )
-            module_server.module_servicer.setup.create_setup_version(
-                setup_version_dict={
-                    "setup_id": setup_id,
-                    "data": setup_version_data,
-                }
             )
 
             module_server.module_servicer.setup.create_setup(
@@ -150,7 +139,7 @@ async def serve_module() -> int:
                         id="1",
                         name="module_test_Transform",
                         organisation_id="organisations:1",
-                        owner="owner:1",
+                        owner_id="owner:1",
                         module_id="modules:1",
                         current_setup_version=setup_version_data,
                     ),

@@ -1,16 +1,15 @@
-"""Example module implementation to test BaseModule functionality."""
+"""Example module implementation to test ArchetypeModule functionality."""
 
 import asyncio
 import datetime
 from collections.abc import Callable
 from typing import Any
 
-from digitalkin.services.setup.setup_strategy import SetupData
 from pydantic import BaseModel, Field
 
 from digitalkin.logger import logger
 from digitalkin.models.module import ModuleStatus
-from digitalkin.modules._base_module import BaseModule
+from digitalkin.modules.archetype_module import ArchetypeModule
 from digitalkin.services.services_config import ServicesConfig
 from digitalkin.services.services_models import ServicesMode
 from digitalkin.services.storage.storage_strategy import DataType, StorageRecord
@@ -43,20 +42,23 @@ class ExampleSecret(BaseModel):
 
     api_key: str = Field(description="API key for external service")
 
+
 class ExampleStorage(BaseModel):
     """Secret model for example module."""
 
     test_key: str = Field(description="Test value for storage")
 
-class ExampleModule(BaseModule[ExampleInput, ExampleOutput, ExampleSetup, ExampleSecret]):
-    """Example module that demonstrates BaseModule functionality."""
+
+class ExampleModule(ArchetypeModule[ExampleInput, ExampleOutput, ExampleSetup, ExampleSecret]):
+    """Example module that demonstrates ArchetypeModule functionality."""
+
     name = "ExampleModule"
     description = "An example module for testing purposes"
     input_format = ExampleInput
     output_format = ExampleOutput
     setup_format = ExampleSetup
     secret_format = ExampleSecret
-    metadata = {"name": "ExampleModule", "description": "A module for testing BaseModule functionality"}
+    metadata = {"name": "ExampleModule", "description": "A module for testing ArchetypeModule functionality"}
 
     # Define services_config_params with default values
     services_config_strategies = {}
@@ -70,25 +72,28 @@ class ExampleModule(BaseModule[ExampleInput, ExampleOutput, ExampleSetup, Exampl
             name: Optional name for the module
         """
         # Initialize services configuration using the class attribute before the instance is created
-        self.services_config = ServicesConfig(services_config_strategies=self.services_config_strategies, services_config_params=self.services_config_params, mode=ServicesMode.LOCAL)
+        self.services_config = ServicesConfig(
+            services_config_strategies=self.services_config_strategies,
+            services_config_params=self.services_config_params,
+            mode=ServicesMode.LOCAL,
+        )
 
         super().__init__(job_id, mission_id)
 
-
-    async def initialize(self, setup_data: SetupData) -> None:
+    async def initialize(self, setup_data: ExampleSetup) -> None:
         """Initialize the module.
 
         Args:
             setup_data: Setup data for the module
         """
         logger.info("Initializing ExampleModule with setup data: %s", setup_data)
-        self.setup = self.setup_format.model_validate(setup_data.current_setup_version.content)
+        self.setup = self.setup_format.model_validate(setup_data)
         logger.info("Initialization complete, using processing mode: [%s]", self.setup.processing_mode)
 
     async def run(
         self,
         input_data: dict[str, Any],
-        setup_data: SetupData,
+        setup_data: ExampleSetup,
         callback: Callable,
     ) -> None:
         """Run the module.
@@ -130,67 +135,48 @@ class ExampleModule(BaseModule[ExampleInput, ExampleOutput, ExampleSetup, Exampl
         # Nothing to clean up in this example
 
 
-async def test_module():
+async def test_module() -> None:
     """Test the example module."""
     # Create the module
     module = ExampleModule(job_id="test-job-123", mission_id="test-mission-123")
 
     # Define input and setup data
-    input_data = {
-        "message": "Hello, world!",
-        "number": 42
-    }
+    input_data = ExampleInput(message="Hello, world!", number=42)
 
-    setup_data = {
-        "processing_mode": "test",
-        "multiply_factor": 10
-    }
+    setup_data = ExampleSetup(processing_mode="test", multiply_factor=10)
 
     # Define a callback function
-    def callback(result):
-        print(f"Callback received:")
+    def callback(result) -> None:
         for key, value in result.items():
-            print(f"  {key}: {value}")
+            pass
 
     # Start the module
     await module.start(input_data, setup_data, callback)
 
     # Wait for the module to complete
-    while module.status not in [ModuleStatus.STOPPED, ModuleStatus.FAILED]:
-        print(f"Module status: {module.status}")
+    while module.status not in {ModuleStatus.STOPPED, ModuleStatus.FAILED}:
         await asyncio.sleep(0.5)
 
     # Check the storage
     if module.status == ModuleStatus.STOPPED:
-        print('-' * 20)
         result: StorageRecord = module.storage.read("example_outputs")
         if result:
-            print(f"Storage result: {str(result)}")
-        else:
-            print("No data found in storage")
-    else:
-        print(f"Module failed with status: {module.status}")
+            pass
 
 
-def test_storage_directly():
+def test_storage_directly() -> None:
     """Test the storage service directly."""
-    print("\nTesting storage directly:")
-
     # Initialize storage service
     storage = ServicesConfig().storage(mission_id="test-mission", config={"test_table": ExampleStorage})
 
     # Create a test record
-    storage_id = storage.store("test_table", {"test_key": "test_value"}, DataType.OUTPUT)
-
-    print(f"Created record with ID: {storage_id}")
+    storage.store("test_table", {"test_key": "test_value"}, DataType.OUTPUT)
 
     # Retrieve the record
     retrieved = storage.read("test_table")
 
     if retrieved:
-        print(f"Retrieved data: {str(retrieved)}")
-    else:
-        print("No data retrieved")
+        pass
 
 
 if __name__ == "__main__":

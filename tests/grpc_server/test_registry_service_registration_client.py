@@ -10,9 +10,7 @@ from digitalkin_proto.digitalkin.module_registry.v2 import (
 from digitalkin.grpc_servers.registry_servicer import RegistryModule
 
 
-class MockModuleRegistryServicer(
-    module_registry_service_pb2_grpc.ModuleRegistryServiceServicer
-):
+class MockModuleRegistryServicer(module_registry_service_pb2_grpc.ModuleRegistryServiceServicer):
     """Implementation of the MockModuleRegistryServicer.
 
     Attributes:
@@ -57,6 +55,4 @@ class MockModuleRegistryServicer(
 
 
 service_instance = MockModuleRegistryServicer()
-service_name = module_registry_service_pb2.DESCRIPTOR.services_by_name[
-    "ModuleRegistryService"
-]
+service_name = module_registry_service_pb2.DESCRIPTOR.services_by_name["ModuleRegistryService"]
