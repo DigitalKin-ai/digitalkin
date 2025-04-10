@@ -9,7 +9,7 @@ from pydantic import BaseModel
 
 from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
 from digitalkin.grpc_servers.utils.models import ServerConfig
-from digitalkin.services.storage.storage_strategy import StorageRecord, StorageStrategy
+from digitalkin.services.storage.storage_strategy import StorageRecord, StorageServiceError, StorageStrategy
 
 logger = logging.getLogger(__name__)
 
@@ -31,14 +31,17 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
         self.stub = storage_service_pb2_grpc.StorageServiceStub(channel)
         logger.info("Channel client 'storage' initialized succesfully")
 
-    def _store(self, record: StorageRecord) -> str:
+    def _store(self, record: StorageRecord) -> StorageRecord:
         """Create a new record in the database.
 
         Parameters:
             record: The record to store
 
         Returns:
-            str: The ID of the new record
+            StorageRecord: The corresponding record
+
+        Raises:
+            StorageServiceError: If there is an error while storing the record
         """
         try:
             # Create a Struct for the data
@@ -52,10 +55,10 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
                 data_type=record.data_type.name,
             )
             return self.exec_grpc_query("StoreData", request)
-        except Exception as e:
-            msg = f"Error while storing record {record.name}: {e}"
+        except Exception:
+            msg = f"Error while storing record {record.name}"
             logger.exception(msg)
-            return msg
+            raise StorageServiceError(msg)
 
     def _read(self, name: str) -> StorageRecord | None:
         """Get records from the database.
