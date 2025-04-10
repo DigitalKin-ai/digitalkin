@@ -8,9 +8,8 @@ import grpc
 import openai
 from pydantic import BaseModel
 
-from digitalkin.modules._base_module import BaseModule
 from digitalkin.grpc_servers.utils.models import SecurityMode, ServerConfig, ServerMode
-
+from digitalkin.modules._base_module import BaseModule
 from digitalkin.services.setup.setup_strategy import SetupData
 
 # Configure logging with clear formatting

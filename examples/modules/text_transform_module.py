@@ -8,8 +8,6 @@ from pydantic import BaseModel
 
 from digitalkin.grpc_servers.utils.models import SecurityMode, ServerConfig, ServerMode
 from digitalkin.modules._base_module import BaseModule
-from digitalkin.services.storage.storage_strategy import DataType, StorageRecord
-from digitalkin.grpc_servers.utils.models import SecurityMode, ServerConfig, ServerMode
 from digitalkin.services.setup.setup_strategy import SetupData
 from digitalkin.services.storage.storage_strategy import DataType, StorageRecord
 
@@ -158,18 +156,13 @@ class TextTransformModule(BaseModule[TextTransformInput, TextTransformOutput, Te
         # Process the text for each iteration
         for i in range(transform_count):
             # Apply Caesar cipher (shift each character by specified amount)
-            transformed = "".join([
-                chr(ord(char) + shift_amount) if char.isalpha() else char
-                for char in text
-            ])
+            transformed = "".join([chr(ord(char) + shift_amount) if char.isalpha() else char for char in text])
 
             # Apply uppercase transformation if configured
             if uppercase:
                 transformed = transformed.upper()
 
-            output_data = TextTransformOutput(
-                transformed_text=transformed, iteration=i + 1
-            )
+            output_data = TextTransformOutput(transformed_text=transformed, iteration=i + 1)
 
             logger.info(
                 "Sending transformation %s/%s: '%s'",
@@ -190,9 +183,7 @@ class TextTransformModule(BaseModule[TextTransformInput, TextTransformOutput, Te
             await callback(job_id=self.job_id, output_data=output_data.model_dump())
             text = transformed
 
-        logger.info(
-            "Job %s completed with %s transformations", self.job_id, transform_count
-        )
+        logger.info("Job %s completed with %s transformations", self.job_id, transform_count)
 
     async def cleanup(self) -> None:
         """Clean up any resources when the module is stopped.

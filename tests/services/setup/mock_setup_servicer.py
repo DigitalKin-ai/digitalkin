@@ -57,7 +57,8 @@ class MockSetupServicer(setup_service_pb2_grpc.SetupServiceServicer):
     ) -> setup_pb2.CreateSetupResponse:
         try:
             setup_data_version = SetupVersionData(
-                name=request.current_setup_version.name,
+                id=request.current_setup_version.id,
+                setup_id=request.current_setup_version.setup_id,
                 version=request.current_setup_version.version,
                 creation_date=request.current_setup_version.creation_date.ToDatetime() or datetime.datetime.now(),
                 content=dict(request.current_setup_version.content),
@@ -67,7 +68,7 @@ class MockSetupServicer(setup_service_pb2_grpc.SetupServiceServicer):
                 name=request.name,
                 organisation_id=request.organisation_id,
                 module_id=request.module_id,
-                owner=request.owner,
+                owner_id=request.owner_id,
                 current_setup_version=setup_data_version,
             )
         except ValidationError:
@@ -103,8 +104,8 @@ class MockSetupServicer(setup_service_pb2_grpc.SetupServiceServicer):
 
         if request.name is not None:
             self.setups[request.setup_id].name = request.name
-        if request.owner is not None:
-            self.setups[request.setup_id].owner = request.owner
+        if request.owner_id is not None:
+            self.setups[request.setup_id].owner_id = request.owner_id
         if request.current_setup_version is not None:
             self.setups[request.setup_id].current_setup_version = SetupVersionData.model_validate(
                 request.current_setup_version
@@ -130,7 +131,8 @@ class MockSetupServicer(setup_service_pb2_grpc.SetupServiceServicer):
     ) -> setup_pb2.CreateSetupVersionResponse:
         try:
             setup_data_version = SetupVersionData(
-                name=request.name,
+                id=self._generate_id(),
+                setup_id=request.setup_id,
                 version=request.version,
                 creation_date=datetime.datetime.now(),
                 content=dict(request.content),
@@ -142,82 +144,92 @@ class MockSetupServicer(setup_service_pb2_grpc.SetupServiceServicer):
             context.set_details(msg)
             return setup_pb2.CreateSetupVersionResponse(success=False)
 
-        if request.name not in self.setup_versions:
-            self.setup_versions[request.name] = {}
-        self.setup_versions[request.name][setup_data_version.version] = setup_data_version
-        logger.info("CREATE SETUP VERSION DATA %s:%s succesfull", request.name, setup_data_version)
+        if request.setup_id not in self.setup_versions:
+            self.setup_versions[request.setup_id] = {}
+        self.setup_versions[request.setup_id][setup_data_version.version] = setup_data_version
+        logger.info("CREATE SETUP VERSION DATA %s:%s succesfull", request.setup_id, setup_data_version)
         return setup_pb2.CreateSetupVersionResponse(success=True)
 
     def GetSetupVersion(
         self, request: setup_pb2.GetSetupVersionRequest, context: grpc.ServicerContext
     ) -> setup_pb2.GetSetupVersionResponse:
-        logger.info("GET SETUP VERSION name = %s.", request.name)
-        if request.name not in self.setup_versions:
-            msg = f"GET SETUP VERSION name = {request.name} | name DOESN'T EXIST"
-            logger.warning(msg)
-            context.set_code(grpc.StatusCode.NOT_FOUND)
-            context.set_details(msg)
-            return setup_pb2.GetSetupVersionResponse()
+        logger.info("GET SETUP VERSION setup_version_id = %s.", request.setup_version_id)
 
-        if request.version not in self.setup_versions[request.version]:
-            msg = f"GET SETUP VERSION version = {request.version} | version DOESN'T EXIST"
-            logger.warning(msg)
-            context.set_code(grpc.StatusCode.NOT_FOUND)
-            context.set_details(msg)
-            return setup_pb2.GetSetupVersionResponse()
-
-        return setup_pb2.GetSetupVersionResponse(
-            setup_version=setup_pb2.SetupVersion(**self.setup_versions[request.name][request.version].model_dump())
+        setup_version = next(
+            filter(
+                lambda value: value is not None,
+                (inner.get(request.setup_version_id) for inner in self.setup_versions.values()),
+            ),
+            None,
         )
+
+        if setup_version is None:
+            msg = f"GET SETUP VERSION setup_version_id = {request.setup_version_id} | name DOESN'T EXIST"
+            logger.warning(msg)
+            context.set_code(grpc.StatusCode.NOT_FOUND)
+            context.set_details(msg)
+            return setup_pb2.GetSetupVersionResponse()
+
+        return setup_pb2.GetSetupVersionResponse(setup_version=setup_pb2.SetupVersion(**setup_version.model_dump()))
 
     def SearchSetupVersions(
         self, request: setup_pb2.SearchSetupVersionsRequest, context: grpc.ServicerContext
     ) -> setup_pb2.SearchSetupVersionsResponse:
-        if request.name not in self.setup_versions:
-            msg = f"GET setup_id = {request.name}: setup_id DOESN'T EXIST"
+        if request.setup_id is None or request.setup_id not in self.setup_versions:
+            msg = f"GET setup_id = {request.setup_id}: setup_id DOESN'T EXIST"
             logger.warning(msg)
             context.set_code(grpc.StatusCode.NOT_FOUND)
             context.set_details(msg)
             return setup_pb2.SearchSetupVersionsResponse()
 
-        query_setup_versions = self.setup_versions[request.name].values()
+        query_setup_versions = self.setup_versions[request.setup_id]
+        if request.version:
+            query_setup_versions = {k: v for k, v in query_setup_versions.items() if request.version in k}
+
         return setup_pb2.SearchSetupVersionsResponse(
-            setup_versions=[
-                setup_pb2.SetupVersion(**value.model_dump())
-                for value in query_setup_versions
-                if request.version in value.version
-            ]
+            setup_versions=[setup_pb2.SetupVersion(**value.model_dump()) for value in query_setup_versions.values()]
         )
 
     def UpdateSetupVersion(
         self, request: setup_pb2.UpdateSetupVersionRequest, context: grpc.ServicerContext
     ) -> setup_pb2.UpdateSetupVersionResponse:
-        if request.name not in self.setup_versions:
-            msg = "UPDATE name = {request.name}: name DOESN'T EXIST"
+        setup_version = next(
+            filter(
+                lambda value: value is not None,
+                (inner.get(request.setup_version_id) for inner in self.setup_versions.values()),
+            ),
+            None,
+        )
+
+        if setup_version is None:
+            msg = "UPDATE setup_version_id = {request.setup_version_id}: setup_version_id DOESN'T EXIST"
             logger.warning(msg)
             context.set_code(grpc.StatusCode.NOT_FOUND)
             context.set_details(msg)
             return setup_pb2.UpdateSetupVersionResponse(success=False)
 
-        if request.version not in self.setup_versions[request.name]:
-            msg = "UPDATE version = {request.version}: version DOESN'T EXIST"
-            logger.warning(msg)
-            context.set_code(grpc.StatusCode.NOT_FOUND)
-            context.set_details(msg)
-            return setup_pb2.UpdateSetupVersionResponse(success=False)
-
-        self.setup_versions[request.name][request.version].content = json_format.MessageToDict(request.content)
+        self.setup_versions[setup_version.setup_id][setup_version.version].content = json_format.MessageToDict(
+            request.content
+        )
         return setup_pb2.UpdateSetupVersionResponse(success=True)
 
     def DeleteSetupVersion(
         self, request: setup_pb2.DeleteSetupVersionRequest, context: grpc.ServicerContext
     ) -> setup_pb2.DeleteSetupVersionResponse:
-        if request.name not in self.setup_versions:
-            msg = f"DELETE name = {request.name} | name DOESN'T EXIST"
+        setup_version = next(
+            filter(
+                lambda value: value is not None,
+                (inner.get(request.setup_version_id) for inner in self.setup_versions.values()),
+            ),
+            None,
+        )
+
+        if setup_version is None:
+            msg = f"DELETE name = {request.setup_version_id} | name DOESN'T EXIST"
             logger.warning(msg)
             context.set_code(grpc.StatusCode.NOT_FOUND)
             context.set_details(msg)
             return setup_pb2.DeleteSetupVersionResponse(success=False)
 
-        del self.setup_versions[request.name]
+        del self.setup_versions[setup_version.setup_id]
         return setup_pb2.DeleteSetupVersionResponse(success=True)

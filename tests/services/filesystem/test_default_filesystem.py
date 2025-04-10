@@ -1,6 +1,9 @@
+import contextlib
 import os
+from collections import UserDict
+from unittest.mock import MagicMock, patch
+
 import pytest
-from unittest.mock import patch, MagicMock
 
 from digitalkin.services.filesystem import DefaultFilesystem
 from digitalkin.services.filesystem.filesystem_strategy import (
@@ -27,14 +30,12 @@ def default_fs(test_dir):
     yield fs
     # Clean up any test files
     for file_data in fs.get_all():
-        try:
+        with contextlib.suppress(FileNotFoundError, OSError):
             os.remove(file_data.url)
-        except (FileNotFoundError, OSError):
-            pass
 
 
 @pytest.fixture
-def sample_file():
+def sample_file() -> bytes:
     """Create a sample file content for testing."""
     return b"Sample file content for testing"
 
@@ -43,11 +44,7 @@ def sample_file():
 def uploaded_file(default_fs, sample_file):
     """Create and upload a sample file."""
     file_name = "test_file.txt"
-    file_data = default_fs.upload(
-        content=sample_file,
-        name=file_name,
-        file_type=FileType.DOCUMENT
-    )
+    file_data = default_fs.upload(content=sample_file, name=file_name, file_type=FileType.DOCUMENT)
     default_fs.db[file_name] = file_data
     return file_data
 
@@ -55,7 +52,7 @@ def uploaded_file(default_fs, sample_file):
 class TestDefaultFilesystem:
     """Test suite for DefaultFilesystem class."""
 
-    def test_init(self, test_dir):
+    def test_init(self, test_dir) -> None:
         """Test initialization of DefaultFilesystem."""
         config = {"temp_root": test_dir}
         mission_id = "test_mission:123"
@@ -66,9 +63,10 @@ class TestDefaultFilesystem:
         assert fs.db == {}
         assert os.path.isdir(test_dir)
 
-    def test_init_with_default_temp_dir(self):
+    def test_init_with_default_temp_dir(self) -> None:
         """Test initialization with default temp directory."""
         import tempfile
+
         mission_id = "test_mission:456"
         fs = DefaultFilesystem(mission_id, {})
 
@@ -76,7 +74,7 @@ class TestDefaultFilesystem:
         assert fs.temp_root == tempfile.gettempdir()
         assert fs.db == {}
 
-    def test_get_kin_context_temp_dir(self, default_fs, test_dir):
+    def test_get_kin_context_temp_dir(self, default_fs, test_dir) -> None:
         """Test _get_kin_context_temp_dir method."""
         kin_context = "test:context"
         expected_dir = os.path.join(test_dir, "test_context")
@@ -86,7 +84,7 @@ class TestDefaultFilesystem:
         assert result == expected_dir
         assert os.path.isdir(expected_dir)
 
-    def test_upload_success(self, default_fs, sample_file):
+    def test_upload_success(self, default_fs, sample_file) -> None:
         """Test successful file upload."""
         file_name = "new_file.txt"
         file_type = FileType.DOCUMENT
@@ -103,35 +101,31 @@ class TestDefaultFilesystem:
         with open(result.url, "rb") as f:
             assert f.read() == sample_file
 
-    def test_upload_file_exists(self, default_fs, uploaded_file):
+    def test_upload_file_exists(self, default_fs, uploaded_file) -> None:
         """Test upload when file already exists."""
         with pytest.raises(FileExistsError):
-            default_fs.upload(
-                b"New content",
-                uploaded_file.name,
-                FileType.DOCUMENT
-            )
+            default_fs.upload(b"New content", uploaded_file.name, FileType.DOCUMENT)
 
     @patch("pathlib.Path.write_bytes")
-    def test_upload_error(self, mock_write, default_fs, sample_file):
+    def test_upload_error(self, mock_write, default_fs, sample_file) -> None:
         """Test upload with error."""
         mock_write.side_effect = Exception("Test error")
 
         with pytest.raises(FilesystemServiceError):
             default_fs.upload(sample_file, "error_file.txt", FileType.DOCUMENT)
 
-    def test_get_success(self, default_fs, uploaded_file):
+    def test_get_success(self, default_fs, uploaded_file) -> None:
         """Test successful file retrieval."""
         result = default_fs.get(uploaded_file.name)
 
         assert result == uploaded_file
 
-    def test_get_not_found(self, default_fs):
+    def test_get_not_found(self, default_fs) -> None:
         """Test get with non-existent file."""
         with pytest.raises(FileNotFoundError):
             default_fs.get("nonexistent_file.txt")
 
-    def test_get_error(self, default_fs):
+    def test_get_error(self, default_fs) -> None:
         """Test get with unexpected error."""
         with patch.object(default_fs, "db", new=MagicMock()) as mock_db:
             mock_db.__getitem__.side_effect = Exception("Test error")
@@ -139,15 +133,11 @@ class TestDefaultFilesystem:
             with pytest.raises(FilesystemServiceError):
                 default_fs.get("error_file.txt")
 
-    def test_update_success(self, default_fs, uploaded_file):
+    def test_update_success(self, default_fs, uploaded_file) -> None:
         """Test successful file update."""
         new_content = b"Updated content"
 
-        result = default_fs.update(
-            uploaded_file.name,
-            new_content,
-            FileType.DOCUMENT
-        )
+        result = default_fs.update(uploaded_file.name, new_content, FileType.DOCUMENT)
 
         assert result.name == uploaded_file.name
         assert result.file_type == FileType.DOCUMENT
@@ -156,20 +146,20 @@ class TestDefaultFilesystem:
         with open(result.url, "rb") as f:
             assert f.read() == new_content
 
-    def test_update_not_found(self, default_fs):
+    def test_update_not_found(self, default_fs) -> None:
         """Test update with non-existent file."""
         with pytest.raises(FileNotFoundError):
             default_fs.update("nonexistent_file.txt", b"Content", FileType.DOCUMENT)
 
     @patch("pathlib.Path.write_bytes")
-    def test_update_error(self, mock_write, default_fs, uploaded_file):
+    def test_update_error(self, mock_write, default_fs, uploaded_file) -> None:
         """Test update with error."""
         mock_write.side_effect = Exception("Test error")
 
         with pytest.raises(FilesystemServiceError):
             default_fs.update(uploaded_file.name, b"New content", FileType.DOCUMENT)
 
-    def test_delete_success(self, default_fs, uploaded_file):
+    def test_delete_success(self, default_fs, uploaded_file) -> None:
         """Test successful file deletion."""
         result = default_fs.delete(uploaded_file.name)
 
@@ -177,12 +167,12 @@ class TestDefaultFilesystem:
         assert uploaded_file.name not in default_fs.db
         assert not os.path.exists(uploaded_file.url)
 
-    def test_delete_not_found_in_db(self, default_fs):
+    def test_delete_not_found_in_db(self, default_fs) -> None:
         """Test delete with file not in database."""
         with pytest.raises(FileNotFoundError):
             default_fs.delete("nonexistent_file.txt")
 
-    def test_delete_not_found_in_filesystem(self, default_fs, uploaded_file):
+    def test_delete_not_found_in_filesystem(self, default_fs, uploaded_file) -> None:
         """Test delete with file in db but not in filesystem."""
         # Remove the actual file but keep the db entry
         os.remove(uploaded_file.url)
@@ -192,9 +182,9 @@ class TestDefaultFilesystem:
 
         assert "exists in database but not in filesystem" in str(excinfo.value)
 
-    def test_delete_os_error(self, default_fs, uploaded_file):
+    def test_delete_os_error(self, default_fs, uploaded_file) -> None:
         """Test delete with OSError during file removal."""
-        with patch('os.remove') as mock_remove:
+        with patch("os.remove") as mock_remove:
             mock_remove.side_effect = OSError("Permission denied")
 
             with pytest.raises(FilesystemServiceError) as excinfo:
@@ -202,12 +192,14 @@ class TestDefaultFilesystem:
 
             assert "Error deleting file" in str(excinfo.value)
 
-    def test_delete_unexpected_error(self, default_fs, uploaded_file):
+    def test_delete_unexpected_error(self, default_fs, uploaded_file) -> None:
         """Test delete with unexpected error."""
+
         # Create a custom dict-like object that will raise an exception when __delitem__ is called
-        class ExceptionDict(dict):
-            def __delitem__(self, key):
-                raise Exception("Unexpected error")
+        class ExceptionDict(UserDict):
+            def __delitem__(self, key) -> None:
+                msg = "Unexpected error"
+                raise Exception(msg)
 
         # Replace the db with our custom dict containing the same items
         original_db = default_fs.db
@@ -223,14 +215,10 @@ class TestDefaultFilesystem:
             # Restore the original db
             default_fs.db = original_db
 
-    def test_get_all(self, default_fs, uploaded_file):
+    def test_get_all(self, default_fs, uploaded_file) -> None:
         """Test get_all method."""
         # Upload another file
-        another_file = default_fs.upload(
-            b"Another file content",
-            "another_file.txt",
-            FileType.DOCUMENT
-        )
+        another_file = default_fs.upload(b"Another file content", "another_file.txt", FileType.DOCUMENT)
         default_fs.db["another_file.txt"] = another_file
 
         result = default_fs.get_all()
@@ -239,14 +227,10 @@ class TestDefaultFilesystem:
         assert uploaded_file in result
         assert another_file in result
 
-    def test_get_batch(self, default_fs, uploaded_file):
+    def test_get_batch(self, default_fs, uploaded_file) -> None:
         """Test get_batch method."""
         # Upload another file
-        another_file = default_fs.upload(
-            b"Another file content",
-            "another_file.txt",
-            FileType.DOCUMENT
-        )
+        another_file = default_fs.upload(b"Another file content", "another_file.txt", FileType.DOCUMENT)
         default_fs.db["another_file.txt"] = another_file
 
         # Request both files

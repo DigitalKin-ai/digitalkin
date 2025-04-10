@@ -14,7 +14,8 @@ class SetupServiceError(Exception):
 class SetupVersionData(BaseModel):
     """Pydantic model for SetupVersion data validation."""
 
-    name: str
+    id: str
+    setup_id: str
     version: str
     content: dict[str, Any]
     creation_date: datetime.datetime
@@ -26,7 +27,7 @@ class SetupData(BaseModel):
     id: str
     name: str
     organisation_id: str
-    owner: str
+    owner_id: str
     module_id: str
     current_setup_version: SetupVersionData
 

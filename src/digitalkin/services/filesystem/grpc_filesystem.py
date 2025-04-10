@@ -24,13 +24,20 @@ logger = logging.getLogger(__name__)
 class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper):
     """Default state filesystem strategy."""
 
-    def __init__(self, mission_id: str, config: dict[str, str], server_config: ServerConfig) -> None:
+    def __init__(
+        self,
+        mission_id: str,
+        config: dict[str, str],
+        server_config: ServerConfig,
+        **kwargs,  # noqa: ANN003, ARG002
+    ) -> None:
         """Initialize the default filesystem strategy.
 
         Args:
             mission_id: The ID of the mission this strategy is associated with
             config: A dictionary mapping names to Pydantic model classes
             server_config: The server configuration object
+            kwargs: other optional arguments to pass to the parent class constructor
         """
         super().__init__(mission_id, config)
         channel = self._init_channel(server_config)
