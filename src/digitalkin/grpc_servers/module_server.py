@@ -69,7 +69,7 @@ class ModuleServer(BaseServer):
             module_service_pb2_grpc.add_ModuleServiceServicer_to_server,
             service_descriptor=module_service_pb2.DESCRIPTOR,
         )
-        logger.info("Registered Async Greeter servicer")
+        logger.info("Registered Module servicer")
 
     def start(self) -> None:
         """Start the module server and register with the registry if configured."""
