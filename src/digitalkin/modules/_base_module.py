@@ -4,7 +4,7 @@ import asyncio
 import contextlib
 import json
 from abc import ABC, abstractmethod
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
 from typing import Any, ClassVar, Generic
 
 from digitalkin.logger import logger
@@ -150,7 +150,7 @@ class BaseModule(ABC, Generic[InputModelT, OutputModelT, SetupModelT, SecretMode
         self,
         input_data: InputModelT,
         setup_data: SetupModelT,
-        callback: Callable,
+        callback: Callable[[OutputModelT], Coroutine[Any, Any, None]],
     ) -> None:
         """Run the module."""
         raise NotImplementedError
@@ -164,7 +164,7 @@ class BaseModule(ABC, Generic[InputModelT, OutputModelT, SetupModelT, SecretMode
         self,
         input_data: InputModelT,
         setup_data: SetupModelT,
-        callback: Callable,
+        callback: Callable[[OutputModelT], Coroutine[Any, Any, None]],
     ) -> None:
         """Run the module lifecycle.
 
@@ -186,7 +186,7 @@ class BaseModule(ABC, Generic[InputModelT, OutputModelT, SetupModelT, SecretMode
         self,
         input_data: InputModelT,
         setup_data: SetupModelT,
-        callback: Callable,
+        callback: Callable[[OutputModelT], Coroutine[Any, Any, None]],
     ) -> None:
         """Start the module."""
         try:

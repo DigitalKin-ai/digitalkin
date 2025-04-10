@@ -3,12 +3,12 @@
 import asyncio
 import uuid
 from argparse import ArgumentParser, Namespace
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
 from typing import Any
 
 from digitalkin.logger import logger
 from digitalkin.models import ModuleStatus
-from digitalkin.models.module import InputModelT, SetupModelT
+from digitalkin.models.module import InputModelT, OutputModelT, SetupModelT
 from digitalkin.modules._base_module import BaseModule
 from digitalkin.services.services_config import ServicesConfig
 from digitalkin.services.services_models import ServicesMode
@@ -19,6 +19,33 @@ class JobManager(ArgParser):
     """Background module manager."""
 
     args: Namespace
+
+    @staticmethod
+    async def _job_specific_callback(
+        callback: Callable[[str, OutputModelT], Coroutine[Any, Any, None]], job_id: str
+    ) -> Callable[[OutputModelT], Coroutine[Any, Any, None]]:
+        """Return a callback function for the job.
+
+        Args:
+            callback: Callback function to be called when the job is done
+            job_id: Identifiant du module
+
+        Returns:
+            Callable: Callback function
+        """
+
+        def callback_wrapper(output_data: OutputModelT) -> Coroutine[Any, Any, None]:
+            """Wrapper for the callback function.
+
+            Args:
+                output_data: Output data of the job
+
+            Returns:
+                Coroutine: Callback function
+            """
+            return callback(job_id, output_data)
+
+        return callback_wrapper
 
     def _add_parser_args(self, parser: ArgumentParser) -> None:
         super()._add_parser_args(parser)
@@ -51,7 +78,7 @@ class JobManager(ArgParser):
         self,
         input_data: InputModelT,
         setup_data: SetupModelT,
-        callback: Callable,
+        callback: Callable[[str, OutputModelT], Coroutine[Any, Any, None]],
     ) -> tuple[str, BaseModule]:
         """Start new module job in background (asyncio).
 
@@ -70,7 +97,7 @@ class JobManager(ArgParser):
         module = self.module_class(job_id, mission_id=mission_id)
         self.modules[job_id] = module
         try:
-            await module.start(input_data, setup_data, callback)
+            await module.start(input_data, setup_data, await JobManager._job_specific_callback(callback, job_id))
             logger.info("Module %s (%s) started successfully", job_id, module.name)
         except Exception:
             # En cas d'erreur, supprimer le module du gestionnaire

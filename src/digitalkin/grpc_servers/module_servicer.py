@@ -15,6 +15,7 @@ from digitalkin_proto.digitalkin.module.v2 import (
 from google.protobuf import json_format, struct_pb2
 
 from digitalkin.grpc_servers.utils.exceptions import ServicerError
+from digitalkin.models.module import OutputModelT
 from digitalkin.models.module.module import ModuleStatus
 from digitalkin.modules._base_module import BaseModule
 from digitalkin.modules.job_manager import JobManager
@@ -50,7 +51,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer):
         self.job_manager = JobManager(module_class)
         self.setup = GrpcSetup() if self.job_manager.args.services_mode == ServicesMode.REMOTE else DefaultSetup()
 
-    async def add_to_queue(self, job_id: str, output_data: dict[str, Any]) -> None:
+    async def add_to_queue(self, job_id: str, output_data: OutputModelT) -> None:
         """Callback used to add the output data to the queue of messages."""
         logger.info("JOB: %s added an output_data: %s", job_id, output_data)
         await self.queue.put({job_id: output_data})
