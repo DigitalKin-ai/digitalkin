@@ -2,14 +2,11 @@
 
 from abc import ABC, abstractmethod
 
+from digitalkin.services.base_strategy import BaseStrategy
 
-class RegistryStrategy(ABC):
+
+class RegistryStrategy(BaseStrategy, ABC):
     """Abstract base class for registry strategies."""
-
-    @abstractmethod
-    def __init__(self) -> None:
-        """Initialize the registry strategy."""
-        raise NotImplementedError
 
     @abstractmethod
     def get_by_id(self, module_id: str) -> None:

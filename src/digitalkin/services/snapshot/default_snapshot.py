@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from .snapshot_strategy import SnapshotStrategy
+from digitalkin.services.snapshot.snapshot_strategy import SnapshotStrategy
 
 
 class DefaultSnapshot(SnapshotStrategy):

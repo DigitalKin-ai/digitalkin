@@ -14,9 +14,15 @@ from digitalkin_proto.digitalkin.module.v2 import (
 )
 from google.protobuf import json_format, struct_pb2
 
+from digitalkin.grpc_servers.utils.exceptions import ServicerError
+from digitalkin.models.module import OutputModelT
 from digitalkin.models.module.module import ModuleStatus
 from digitalkin.modules._base_module import BaseModule
 from digitalkin.modules.job_manager import JobManager
+from digitalkin.services.services_models import ServicesMode
+from digitalkin.services.setup.default_setup import DefaultSetup
+from digitalkin.services.setup.grpc_setup import GrpcSetup
+from digitalkin.services.setup.setup_strategy import SetupStrategy
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +37,8 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer):
         active_jobs: Dictionary tracking active module jobs.
     """
 
+    setup: SetupStrategy
+
     def __init__(self, module_class: type[BaseModule]) -> None:
         """Initialize the module servicer.
 
@@ -41,8 +49,9 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer):
         self.queue: asyncio.Queue = asyncio.Queue()
         self.module_class = module_class
         self.job_manager = JobManager(module_class)
+        self.setup = GrpcSetup() if self.job_manager.args.services_mode == ServicesMode.REMOTE else DefaultSetup()
 
-    async def add_to_queue(self, job_id: str, output_data: dict[str, Any]) -> None:
+    async def add_to_queue(self, job_id: str, output_data: OutputModelT) -> None:
         """Callback used to add the output data to the queue of messages."""
         logger.info("JOB: %s added an output_data: %s", job_id, output_data)
         await self.queue.put({job_id: output_data})
@@ -60,19 +69,26 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer):
 
         Yields:
             Responses during module execution.
+
+        Raises:
+            ServicerError: the necessary query didn't work.
         """
         logger.info("StartModule called for module: '%s'", self.module_class.__name__)
         # Process the module input
-        input_data = dict(request.input.items())
-        setup_data = self.module_class.storage.get(
-            table="setups",
-            data={
-                "keys": [
-                    # remove prefix 'setups:'
-                    request.setup_id[7:],
-                ],
-            },
-        )[0]
+        # TODO: Check failure of input data format
+        input_data = self.module_class.input_format(**dict(request.input.items()))
+        setup_data_class = self.setup.get_setup(
+            setup_dict={
+                "setup_id": request.setup_id,
+                "mission_id": "missions:test_demo",
+            }
+        )
+
+        if not setup_data_class:
+            msg = "No setup data returned."
+            raise ServicerError(msg)
+        # TODO: Check failure of setup data format
+        setup_data = self.module_class.setup_format(**setup_data_class.current_setup_version.content)
 
         # setup_id should be use to request a precise setup from the module
         # Create a job for this execution
@@ -84,9 +100,9 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer):
 
         while module.status == ModuleStatus.RUNNING or not self.queue.empty():
             output_data = await self.queue.get()
-            if output_data.get("error", None) is not None:
-                context.set_code(output_data["error"]["code"])
-                context.set_details(output_data["error"]["error_message"])
+            if output_data[job_id].get("error", None) is not None:
+                context.set_code(output_data[job_id]["error"]["code"])
+                context.set_details(output_data[job_id]["error"]["error_message"])
                 yield lifecycle_pb2.StartModuleResponse(success=False)
                 return
             else:

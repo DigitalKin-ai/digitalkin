@@ -4,8 +4,12 @@ import asyncio
 import logging
 import sys
 
-from digitalkin.grpc.registry_server import RegistryServer
-from digitalkin.grpc.utils.models import RegistryServerConfig, SecurityMode, ServerMode
+from digitalkin.grpc_servers.registry_server import RegistryServer
+from digitalkin.grpc_servers.utils.models import (
+    RegistryServerConfig,
+    SecurityMode,
+    ServerMode,
+)
 
 # Configure logging
 logging.basicConfig(

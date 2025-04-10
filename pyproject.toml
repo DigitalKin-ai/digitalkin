@@ -1,198 +1,200 @@
 [build-system]
-requires = ["setuptools >= 75.8.2", "wheel"]
-build-backend = "setuptools.build_meta"
+    requires      = [ "setuptools >= 75.8.2", "wheel" ]
+    build-backend = "setuptools.build_meta"
 
 [project]
-name = "digitalkin"
-version = "0.1.1"
-description = "SDK to build kin used in DigitalKin"
-readme = "README.md"
-requires-python = ">=3.10"
-license = { file = "LICENSE" }
 
-keywords = ["digitalkin", "kin", "agent", "gprc", "sdk"]
+    name            = "digitalkin"
+    description     = "SDK to build kin used in DigitalKin"
+    readme          = "README.md"
+    requires-python = ">=3.10"
+    license         = { file = "LICENSE" }
 
-classifiers = [
-    "Development Status :: 3 - Alpha",
-    "Intended Audience :: Developers",
-    "Operating System :: OS Independent",
-    "Topic :: Software Development :: Libraries",
-    "Programming Language :: Python",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
-    "Programming Language :: Python :: 3.13",
-    "Programming Language :: Python :: 3 :: Only",
-    "License :: Other/Proprietary License",
-]
+    keywords = [ "digitalkin", "kin", "agent", "gprc", "sdk" ]
+    # Version of the package automatically updated by bump2version (that is why it is separated)
+    version = "0.2.0"
 
-dependencies = [
-    "digitalkin-proto>=0.0.8",
-    "grpcio-health-checking>=1.71.0",
-    "grpcio-reflection>=1.71.0",
-    "grpcio-status>=1.71.0",
-    "pydantic>=2.10.6",
-]
+    classifiers = [
+        "Development Status :: 3 - Alpha",
+        "Intended Audience :: Developers",
+        "Operating System :: OS Independent",
+        "Topic :: Software Development :: Libraries",
+        "Programming Language :: Python",
+        "Programming Language :: Python :: 3.10",
+        "Programming Language :: Python :: 3.11",
+        "Programming Language :: Python :: 3.12",
+        "Programming Language :: Python :: 3.13",
+        "Programming Language :: Python :: 3 :: Only",
+        "License :: Other/Proprietary License",
+    ]
 
-[project.optional-dependencies]
-dev = [
-    "pytest>=8.3.4",
-    "pytest-asyncio>=0.25.3",
-    "pytest-cov>=6.0.0",
-    "typos>=1.30.2",
-    "ruff>=0.11.2",
-    "mypy>=1.15.0",
-    "pyright>=1.1.397",
-    "pre-commit>=4.2.0",
-    "bump2version>=1.0.1",
-    "build>=1.2.2",
-    "twine>=6.1.0",
-    "cryptography>=44.0.2",
-    "grpcio-testing>=1.71.0",
-]
-examples = ["openai>=1.66.3"]
+    dependencies = [
+        "digitalkin-proto>=0.1.5",
+        "grpcio-health-checking>=1.71.0",
+        "grpcio-reflection>=1.71.0",
+        "grpcio-status>=1.71.0",
+        "pydantic>=2.11.3",
+    ]
 
-[project.urls]
-Homepage = "https://github.com/DigitalKin-ai/digitalkin"
-Documentation = "https://github.com/DigitalKin-ai/digitalkin"
-Issues = "https://github.com/DigitalKin-ai/digitalkin/issues"
+    [project.optional-dependencies]
+        dev = [
+            "pytest>=8.3.4",
+            "pytest-asyncio>=0.26.0",
+            "pytest-cov>=6.1.0",
+            "typos>=1.31.1",
+            "ruff>=0.11.2",
+            "mypy>=1.15.0",
+            "pyright>=1.1.398",
+            "pre-commit>=4.2.0",
+            "bump2version>=1.0.1",
+            "build>=1.2.2",
+            "twine>=6.1.0",
+            "cryptography>=44.0.2",
+            "grpcio-testing>=1.71.0",
+            "freezegun>=1.5.1",
+        ]
+        examples = [ "openai>=1.66.3" ]
 
-[[project.authors]]
-name = "DigitalKin.ai"
-email = "contact@digitalkin.ai"
+    [project.urls]
+        Homepage      = "https://github.com/DigitalKin-ai/digitalkin"
+        Documentation = "https://github.com/DigitalKin-ai/digitalkin"
+        Issues        = "https://github.com/DigitalKin-ai/digitalkin/issues"
+
+    [[project.authors]]
+        name  = "DigitalKin.ai"
+        email = "contact@digitalkin.ai"
 
 [tool.setuptools]
-package-dir = { "" = "src" }
+    package-dir = { "" = "src" }
 
-[tool.setuptools.packages.find]
-where = ["src"]
-
-[tool.uv]
+    [tool.setuptools.packages.find]
+        where = [ "src", "examples" ]
 
 [tool.ruff]
-src = ["src"]
-target-version = "py310"
-line-length = 120
-indent-width = 4
-show-fixes = true
-unsafe-fixes = true
-# Enable preview features.
-preview = true
-exclude = [
-    ".bzr",
-    ".direnv",
-    ".eggs",
-    ".git",
-    ".git-rewrite",
-    ".hg",
-    ".mypy_cache",
-    ".nox",
-    ".pants.d",
-    ".pytype",
-    ".ruff_cache",
-    ".svn",
-    ".tox",
-    ".venv",
-    "__pypackages__",
-    "_build",
-    "buck-out",
-    "build",
-    "dist",
-    "node_modules",
-    "venv",
-    "module_server.py",
-    "factory.py",
-    "tool_module.py",
-    "trigger_module.py",
-    "generate_certificates.py",
-    "test_*.py",
-    "tests/*",
-    "examples/*",
-    "grpc_storage.py",
-]
+    src            = [ "src" ]
+    target-version = "py310"
+    line-length    = 120
+    indent-width   = 4
+    show-fixes     = true
+    unsafe-fixes   = true
+    # Enable preview features.
+    exclude = [
+        ".bzr",
+        ".direnv",
+        ".eggs",
+        ".git",
+        ".git-rewrite",
+        ".hg",
+        ".mypy_cache",
+        ".nox",
+        ".pants.d",
+        ".pytype",
+        ".ruff_cache",
+        ".svn",
+        ".tox",
+        ".venv",
+        "__pypackages__",
+        "_build",
+        "buck-out",
+        "build",
+        "dist",
+        "node_modules",
+        "venv",
+        "module_server.py",
+        "factory.py",
+        "tool_module.py",
+        "trigger_module.py",
+        "generate_certificates.py",
+        "test_*.py",
+        "tests/*",
+        "examples/*",
+    ]
+    preview = true
 
-[tool.ruff.lint]
-select = [
-    "ANN",   # flake8-annotations
-    "ASYNC", # flake8-async
-    "S",     # flake8-bandit
-    "FBT",   # flake8-boolean-trap
-    "A",     # flake8-builtins
-    "COM",   # flake8-commas
-    "C4",    # flake8-comprehensions
-    "DTZ",   # flake8-datetimez
-    "EM",    # flake8-errmsg
-    "ISC",   # flake8-implicit-str-concat
-    "ICN",   # flake8-import-conventions
-    "G",     # flake8-logging-format
-    "LOG",   # flake8-logging
-    "PIE",   # flake8-pie
-    "T20",   # flake8-print
-    "PYI",   # flake8-pyi
-    "PT",    # flake8-pytest-style
-    "Q",     # flake8-quotes
-    "RSE",   # flake8-raise
-    "RET",   # flake8-return
-    "SLF",   # flake8-self
-    "SIM",   # flake8-simplify
-    "TC",    # flake8-type-checking
-    "ARG",   # flake8-unused-arguments
-    "FLY",   # flynt
-    "C90",   # mccabe (complex-structure)
-    "PL",    # Pylint
-    "TRY",   # tryceratops
-    "PERF",  # Perflint
-    "E",     # pycodestyle-errors
-    "W",     # pycodestyle-warnings
-    "F",     # pyflakes
-    "I",     # isort
-    "D",     # pydocstyle
-    "UP",    # pyupgrade
-    "N",     # pep8-naming
-    "ERA",   # eradicate
-    "RUF",   # Ruff-specific rules
-    "DOC",   # pydoclint
-    "FURB",  # Refurb
-    "PL",    # Pylint
-]
+    [tool.ruff.lint]
+        select = [
+            "ANN",   # flake8-annotations
+            "ASYNC", # flake8-async
+            "S",     # flake8-bandit
+            "FBT",   # flake8-boolean-trap
+            "A",     # flake8-builtins
+            "COM",   # flake8-commas
+            "C4",    # flake8-comprehensions
+            "DTZ",   # flake8-datetimez
+            "EM",    # flake8-errmsg
+            "ISC",   # flake8-implicit-str-concat
+            "ICN",   # flake8-import-conventions
+            "G",     # flake8-logging-format
+            "LOG",   # flake8-logging
+            "PIE",   # flake8-pie
+            "T20",   # flake8-print
+            "PYI",   # flake8-pyi
+            "PT",    # flake8-pytest-style
+            "Q",     # flake8-quotes
+            "RSE",   # flake8-raise
+            "RET",   # flake8-return
+            "SLF",   # flake8-self
+            "SIM",   # flake8-simplify
+            "TC",    # flake8-type-checking
+            "ARG",   # flake8-unused-arguments
+            "FLY",   # flynt
+            "C90",   # mccabe (complex-structure)
+            "PL",    # Pylint
+            "TRY",   # tryceratops
+            "PERF",  # Perflint
+            "E",     # pycodestyle-errors
+            "W",     # pycodestyle-warnings
+            "F",     # pyflakes
+            "I",     # isort
+            "D",     # pydocstyle
+            "UP",    # pyupgrade
+            "N",     # pep8-naming
+            "ERA",   # eradicate
+            "RUF",   # Ruff-specific rules
+            "DOC",   # pydoclint
+            "FURB",  # Refurb
+            "PL",    # Pylint
+        ]
 
-ignore = [
-    "COM812", # Disable because of formatter incompatibility
-    "DOC502", # Allow extraneous-exception in docstring
-    "S105",   # Hardcoded-password
-]
+        ignore = [
+            "COM812", # Disable because of formatter incompatibility
+            "DOC502", # Allow extraneous-exception in docstring
+            "S105",   # Hardcoded-password
+        ]
 
-fixable = ["ALL"]
+        fixable = [ "ALL" ]
 
-[tool.ruff.lint.pydocstyle]
-convention = "google"
+        [tool.ruff.lint.pydocstyle]
+            convention = "google"
 
-[tool.ruff.lint.per-file-ignores]
-"tests/**/*.py" = [
-    "S101",
-    "SLF001",
-    "PLC2701",
-    "PLR6301",
-    "TRY002",
-    "FBT001",
-    "FBT002",
-    "ANN003",
-    "ANN002",
-    "ARG002",
-]
+        [tool.ruff.lint.per-file-ignores]
+            "tests/**/*.py" = [
+                "S101",
+                "SLF001",
+                "PLC2701",
+                "PLR6301",
+                "TRY002",
+                "FBT001",
+                "FBT002",
+                "ANN003",
+                "ANN002",
+                "ARG002",
+            ]
 
-[tool.ruff.format]
-quote-style = "double"
-indent-style = "space"
-line-ending = "auto"
-docstring-code-format = true
-skip-magic-trailing-comma = false
+    [tool.ruff.format]
+        quote-style               = "double"
+        indent-style              = "space"
+        line-ending               = "auto"
+        docstring-code-format     = true
+        skip-magic-trailing-comma = false
 
 [tool.pyright]
-include = ["src"]
-exclude = ["**/.venv", "**/__pycache__"]
+    include = [ "src" ]
+    exclude = [ "**/.venv", "**/__pycache__" ]
 
+[tool.mypy]
+    exclude = [ "tests", "examples" ]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
-python_files = "test_*.py"
+    testpaths    = [ "tests" ]
+    python_files = "test_*.py"

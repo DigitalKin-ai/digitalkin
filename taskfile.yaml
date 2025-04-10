@@ -70,7 +70,7 @@ tasks:
   run-tests:
     desc: "Run pytest tests"
     cmds:
-      - pytest --cov=digitalkin
+      - uv run pytest --cov=digitalkin
 
   linter:
     desc: "run linter on the project"

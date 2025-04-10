@@ -18,7 +18,12 @@ from digitalkin_proto.digitalkin.module_registry.v2 import (
     status_pb2,
 )
 
-from digitalkin.grpc.registry_servicer import Metadata, ModuleStatus, RegistryModule, RegistryServicer
+from digitalkin.grpc_servers.registry_servicer import (
+    Metadata,
+    ModuleStatus,
+    RegistryModule,
+    RegistryServicer,
+)
 
 # Create service instance and get service descriptor for tests
 alphabet = string.ascii_letters + string.digits
@@ -350,7 +355,12 @@ def test_discover_search_module_success(
     assert code == grpc.StatusCode.OK
 
     # Filter modules in the registry that match the search criteria
-    modules = list(filter(lambda x: request.module_type == x.module_type, service_instance.registered_modules.values()))
+    modules = list(
+        filter(
+            lambda x: request.module_type == x.module_type,
+            service_instance.registered_modules.values(),
+        )
+    )
 
     # Verify all matching modules are returned
     assert len(response.modules) == len(modules)
@@ -674,7 +684,9 @@ def test_get_all_module_status_success(
     ids=["running", "idle", "ended"],
 )
 def test_update_module_success(
-    grpc_test_server: grpc_testing.Server, module: RegistryModule, expected_status: ModuleStatus
+    grpc_test_server: grpc_testing.Server,
+    module: RegistryModule,
+    expected_status: ModuleStatus,
 ) -> None:
     """Test successful update module status.
 

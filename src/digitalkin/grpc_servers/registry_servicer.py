@@ -88,7 +88,9 @@ class Metadata(BaseModel):
             metadata_pb2.Metadata: The protobuf representation of this metadata.
         """
         return metadata_pb2.Metadata(
-            name=self.name, tags=(t.to_proto() for t in self.tags), description=self.description
+            name=self.name,
+            tags=(t.to_proto() for t in self.tags),
+            description=self.description,
         )
 
     @classmethod
@@ -361,7 +363,11 @@ class RegistryServicer(module_registry_service_pb2_grpc.ModuleRegistryServiceSer
         Returns:
             status_pb2.ListModulesStatusResponse: A response containing a list of module statuses.
         """
-        logger.info("Getting registered modules with offset %d and limit %d", request.offset, request.list_size)
+        logger.info(
+            "Getting registered modules with offset %d and limit %d",
+            request.offset,
+            request.list_size,
+        )
         if request.offset > len(self.registered_modules):
             message = f"Out of range {request.offset}"
             logger.warning(message)

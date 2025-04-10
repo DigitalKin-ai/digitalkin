@@ -9,10 +9,13 @@ from pathlib import Path
 # Add parent directory to path to enable imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
-from digitalkin.grpc._base_server import BaseServer
-from digitalkin.grpc.utils.models import SecurityMode, ServerConfig, ServerMode
+from digitalkin.grpc_servers._base_server import BaseServer
+from digitalkin.grpc_servers.utils.models import SecurityMode, ServerConfig, ServerMode
 from examples.base_server.mock.mock_pb2 import DESCRIPTOR, HelloReply  # type: ignore
-from examples.base_server.mock.mock_pb2_grpc import Greeter, add_GreeterServicer_to_server
+from examples.base_server.mock.mock_pb2_grpc import (
+    Greeter,
+    add_GreeterServicer_to_server,
+)
 
 # Configure logging
 logging.basicConfig(

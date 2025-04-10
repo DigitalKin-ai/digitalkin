@@ -1,11 +1,8 @@
 """This package contains the models for DigitalKin."""
 
-from .module import Module, ModuleStatus
-from .services import CostEvent, StorageModel
+from digitalkin.models.module import Module, ModuleStatus
 
 __all__ = [
-    "CostEvent",
     "Module",
     "ModuleStatus",
-    "StorageModel",
 ]

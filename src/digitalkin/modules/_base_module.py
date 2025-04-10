@@ -4,44 +4,64 @@ import asyncio
 import contextlib
 import json
 from abc import ABC, abstractmethod
-from collections.abc import Callable
-from typing import Any, ClassVar, Generic, TypeVar
-
-from pydantic import BaseModel
+from collections.abc import Callable, Coroutine
+from typing import Any, ClassVar, Generic
 
 from digitalkin.logger import logger
-from digitalkin.models.module import ModuleStatus
-from digitalkin.services.service_provider import ServiceProvider
+from digitalkin.models.module import InputModelT, ModuleStatus, OutputModelT, SecretModelT, SetupModelT
+from digitalkin.services.agent.agent_strategy import AgentStrategy
+from digitalkin.services.cost.cost_strategy import CostStrategy
+from digitalkin.services.filesystem.filesystem_strategy import FilesystemStrategy
+from digitalkin.services.identity.identity_strategy import IdentityStrategy
+from digitalkin.services.registry.registry_strategy import RegistryStrategy
+from digitalkin.services.services_config import ServicesConfig, ServicesStrategy
+from digitalkin.services.snapshot.snapshot_strategy import SnapshotStrategy
 from digitalkin.services.storage.storage_strategy import StorageStrategy
 
-InputModelT = TypeVar("InputModelT", bound=BaseModel)
-OutputModelT = TypeVar("OutputModelT", bound=BaseModel)
-SetupModelT = TypeVar("SetupModelT", bound=BaseModel)
 
-
-class BaseModule(ABC, Generic[InputModelT, OutputModelT, SetupModelT]):
+class BaseModule(ABC, Generic[InputModelT, OutputModelT, SetupModelT, SecretModelT]):
     """BaseModule is the abstract base for all modules in the DigitalKin SDK."""
 
+    name: str
+    description: str
     input_format: type[InputModelT]
     output_format: type[OutputModelT]
     setup_format: type[SetupModelT]
+    secret_format: type[SecretModelT]
     metadata: ClassVar[dict[str, Any]]
 
-    local_services: type[ServiceProvider]
-    dev_services: type[ServiceProvider]
+    # service config params
+    services_config_strategies: ClassVar[dict[str, ServicesStrategy | None]]
+    services_config_params: ClassVar[dict[str, dict[str, Any | None] | None]]
+    services_config: ServicesConfig
 
+    # services list
+    agent: AgentStrategy
+    cost: CostStrategy
+    filesystem: FilesystemStrategy
+    identity: IdentityStrategy
+    registry: RegistryStrategy
+    snapshot: SnapshotStrategy
     storage: StorageStrategy
+
+    def _init_strategies(self) -> None:
+        """Initialize the services configuration."""
+        for service_name in self.services_config.valid_strategy_names():
+            service = self.services_config.init_strategy(service_name, self.mission_id)
+            setattr(self, service_name, service)
 
     def __init__(
         self,
         job_id: str,
-        name: str | None = None,
+        mission_id: str,
     ) -> None:
         """Initialize the module."""
         self.job_id: str = job_id
-        self.name = name or self.__class__.__name__
+        self.mission_id: str = mission_id
         self._status = ModuleStatus.CREATED
         self._task: asyncio.Task | None = None
+        # Initialize services configuration
+        self._init_strategies()
 
     @property
     def status(self) -> ModuleStatus:
@@ -53,6 +73,23 @@ class BaseModule(ABC, Generic[InputModelT, OutputModelT, SetupModelT]):
         return self._status
 
     @classmethod
+    def get_secret_format(cls, llm_format: bool) -> str:  # noqa: FBT001
+        """Get the JSON schema of the secret format model.
+
+        Raises:
+            NotImplementedError: If the `secret_format` is not defined.
+
+        Returns:
+            The JSON schema of the secret format as a string.
+        """
+        if cls.secret_format is not None:
+            if llm_format:
+                return json.dumps(cls.secret_format, indent=2)
+            return json.dumps(cls.secret_format.model_json_schema(), indent=2)
+        msg = f"{cls.__name__}' class does not define a 'secret_format'."
+        raise NotImplementedError(msg)
+
+    @classmethod
     def get_input_format(cls, llm_format: bool) -> str:  # noqa: FBT001
         """Get the JSON schema of the input format model.
 
@@ -62,7 +99,7 @@ class BaseModule(ABC, Generic[InputModelT, OutputModelT, SetupModelT]):
         Returns:
             The JSON schema of the input format as a string.
         """
-        if cls.output_format is not None:
+        if cls.input_format is not None:
             if llm_format:
                 return json.dumps(cls.input_format, indent=2)
             return json.dumps(cls.input_format.model_json_schema(), indent=2)
@@ -104,16 +141,16 @@ class BaseModule(ABC, Generic[InputModelT, OutputModelT, SetupModelT]):
         raise NotImplementedError(msg)
 
     @abstractmethod
-    async def initialize(self, setup_data: dict[str, Any]) -> None:
+    async def initialize(self, setup_data: SetupModelT) -> None:
         """Initialize the module."""
         raise NotImplementedError
 
     @abstractmethod
     async def run(
         self,
-        input_data: dict[str, Any],
-        setup_data: dict[str, Any],
-        callback: Callable,
+        input_data: InputModelT,
+        setup_data: SetupModelT,
+        callback: Callable[[OutputModelT], Coroutine[Any, Any, None]],
     ) -> None:
         """Run the module."""
         raise NotImplementedError
@@ -125,9 +162,9 @@ class BaseModule(ABC, Generic[InputModelT, OutputModelT, SetupModelT]):
 
     async def _run_lifecycle(
         self,
-        input_data: dict[str, Any],
-        setup_data: dict[str, Any],
-        callback: Callable,
+        input_data: InputModelT,
+        setup_data: SetupModelT,
+        callback: Callable[[OutputModelT], Coroutine[Any, Any, None]],
     ) -> None:
         """Run the module lifecycle.
 
@@ -147,9 +184,9 @@ class BaseModule(ABC, Generic[InputModelT, OutputModelT, SetupModelT]):
 
     async def start(
         self,
-        input_data: dict[str, Any],
-        setup_data: dict[str, Any],
-        callback: Callable,
+        input_data: InputModelT,
+        setup_data: SetupModelT,
+        callback: Callable[[OutputModelT], Coroutine[Any, Any, None]],
     ) -> None:
         """Start the module."""
         try:

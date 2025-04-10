@@ -1,6 +1,6 @@
 """Default identity."""
 
-from .identity_strategy import IdentityStrategy
+from digitalkin.services.identity.identity_strategy import IdentityStrategy
 
 
 class DefaultIdentity(IdentityStrategy):

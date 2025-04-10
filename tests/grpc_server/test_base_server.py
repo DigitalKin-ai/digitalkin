@@ -1,4 +1,5 @@
 """Tests for the BaseServer implementation."""
+
 import sys
 from typing import NoReturn
 from unittest import mock
@@ -7,8 +8,8 @@ import grpc
 import pytest
 from grpc import aio as grpc_aio
 
-from digitalkin.grpc._base_server import BaseServer
-from digitalkin.grpc.utils.exceptions import (
+from digitalkin.grpc_servers._base_server import BaseServer
+from digitalkin.grpc_servers.utils.exceptions import (
     SecurityError,
     ServerStateError,
     ServicerError,
@@ -159,15 +160,15 @@ def test_register_servicer_failure(server_config_sync_insecure) -> None:
 def test_add_reflection(server_config_sync_insecure) -> None:
     """Test adding reflection service to the server."""
     # First, clear any existing imports of the module
-    if 'grpc_reflection.v1alpha.reflection' in sys.modules:
-        del sys.modules['grpc_reflection.v1alpha.reflection']
+    if "grpc_reflection.v1alpha.reflection" in sys.modules:
+        del sys.modules["grpc_reflection.v1alpha.reflection"]
 
     # Create a mock module with the required attributes
     mock_reflection = mock.MagicMock()
     mock_reflection.SERVICE_NAME = "grpc.reflection.v1alpha.ServerReflection"
 
     # Directly patch the module in sys.modules
-    with mock.patch.dict('sys.modules', {'grpc_reflection.v1alpha.reflection': mock_reflection}):
+    with mock.patch.dict("sys.modules", {"grpc_reflection.v1alpha.reflection": mock_reflection}):
         # Create the server
         server = MockServer(server_config_sync_insecure)
 
@@ -183,7 +184,8 @@ def test_add_reflection(server_config_sync_insecure) -> None:
 
         # Verify the function was called
         mock_reflection.enable_server_reflection.assert_called_once_with(
-            ["my.test.Service", "grpc.reflection.v1alpha.ServerReflection"], mock_grpc_server
+            ["my.test.Service", "grpc.reflection.v1alpha.ServerReflection"],
+            mock_grpc_server,
         )
 
 
@@ -199,7 +201,10 @@ def test_add_reflection_import_error(server_config_sync_insecure) -> None:
     server._service_names = ["my.test.Service"]
 
     # Mock the import to raise ImportError
-    with mock.patch("importlib.import_module", side_effect=ImportError("No module named 'grpc_reflection'")):
+    with mock.patch(
+        "importlib.import_module",
+        side_effect=ImportError("No module named 'grpc_reflection'"),
+    ):
         # Call add_reflection - should not raise exception
         server._add_reflection()
 
@@ -210,8 +215,8 @@ def test_create_server_sync(server_config_sync_insecure) -> None:
     server = MockServer(server_config_sync_insecure)
 
     with (
-        mock.patch("digitalkin.grpc._base_server.grpc.server") as mock_server,
-        mock.patch("digitalkin.grpc._base_server.futures.ThreadPoolExecutor") as mock_executor,
+        mock.patch("digitalkin.grpc_servers._base_server.grpc.server") as mock_server,
+        mock.patch("digitalkin.grpc_servers._base_server.futures.ThreadPoolExecutor") as mock_executor,
     ):
         result = server._create_server()
 
@@ -228,7 +233,7 @@ def test_create_server_async(server_config_async_insecure) -> None:
     """Test creating an asynchronous server."""
     server = MockServer(server_config_async_insecure)
 
-    with mock.patch("digitalkin.grpc._base_server.grpc_aio.server") as mock_server:
+    with mock.patch("digitalkin.grpc_servers._base_server.grpc_aio.server") as mock_server:
         result = server._create_server()
 
         # Verify server was created with correct parameters
@@ -262,7 +267,7 @@ def test_add_insecure_port_async(server_config_async_insecure) -> None:
     mock_grpc_server.add_insecure_port.assert_called_once_with(server_config_async_insecure.address)
 
 
-@mock.patch("digitalkin.grpc._base_server.grpc.ssl_server_credentials")
+@mock.patch("digitalkin.grpc_servers._base_server.grpc.ssl_server_credentials")
 def test_add_secure_port_sync(mock_ssl_creds, server_config_sync_secure) -> None:
     """Test adding a secure port to a sync server."""
     server = MockServer(server_config_sync_secure)
@@ -515,9 +520,9 @@ def test_add_health_service_alternative(server_config_sync_insecure) -> None:
 
 def test_base_server_register_servicers_is_abstract() -> None:
     """Test that _register_servicers is an abstract method that must be implemented."""
-    from digitalkin.grpc.utils.models import ServerConfig
+    from digitalkin.grpc_servers.utils.models import ServerConfig
 
-    config = ServerConfig() # type: ignore
+    config = ServerConfig()  # type: ignore
 
     # Create a class that doesn't implement _register_servicers
     class BadServer(BaseServer):
@@ -525,14 +530,16 @@ def test_base_server_register_servicers_is_abstract() -> None:
 
     # Attempting to instantiate BadServer should raise TypeError
     try:
-        BadServer(config) # type: ignore
+        BadServer(config)  # type: ignore
         pytest.fail("Expected TypeError when creating class without implementing _register_servicers")
     except TypeError:
         # This is expected - abstract method must be implemented
         pass
 
 
-def test_register_servicers_checks_server_existence(server_config_sync_insecure) -> None:
+def test_register_servicers_checks_server_existence(
+    server_config_sync_insecure,
+) -> None:
     """Test that a good implementation of _register_servicers checks for server existence."""
     # MockServer already implements the check
     server = MockServer(server_config_sync_insecure)

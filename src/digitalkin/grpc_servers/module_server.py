@@ -5,13 +5,16 @@ import uuid
 
 import grpc
 
-from digitalkin.grpc._base_server import BaseServer
-from digitalkin.grpc.module_servicer import ModuleServicer
-from digitalkin.grpc.utils.exceptions import ServerError
-from digitalkin.grpc.utils.models import ModuleServerConfig, SecurityMode
+from digitalkin.grpc_servers._base_server import BaseServer
+from digitalkin.grpc_servers.module_servicer import ModuleServicer
+from digitalkin.grpc_servers.utils.exceptions import ServerError
+from digitalkin.grpc_servers.utils.models import ModuleServerConfig, SecurityMode
 from digitalkin.modules._base_module import BaseModule
 
-from digitalkin_proto.digitalkin.module.v2 import module_service_pb2, module_service_pb2_grpc
+from digitalkin_proto.digitalkin.module.v2 import (
+    module_service_pb2,
+    module_service_pb2_grpc,
+)
 from digitalkin_proto.digitalkin.module_registry.v2 import (
     metadata_pb2,
     module_registry_service_pb2_grpc,
@@ -111,7 +114,9 @@ class ModuleServer(BaseServer):
         Raises:
             ServerError: If communication with the registry server fails.
         """
-        logger.info("Registering module with registry at %s", self.config.registry_address)
+        logger.info(
+            "Registering module with registry at %s", self.config.registry_address
+        )
 
         # Create appropriate channel based on security mode
         channel = self._create_registry_channel()
@@ -125,11 +130,16 @@ class ModuleServer(BaseServer):
 
             metadata = metadata_pb2.Metadata(
                 name=self.module_class.metadata["name"],
-                tags=[metadata_pb2.Tag(tag=tag) for tag in self.module_class.metadata["tags"]],
+                tags=[
+                    metadata_pb2.Tag(tag=tag)
+                    for tag in self.module_class.metadata["tags"]
+                ],
                 description=self.module_class.metadata["description"],
             )
 
-            self.module_class.metadata["module_id"] = f"{self.module_class.metadata['name']}:{uuid.uuid4()}"
+            self.module_class.metadata["module_id"] = (
+                f"{self.module_class.metadata['name']}:{uuid.uuid4()}"
+            )
             # Create registration request
             request = registration_pb2.RegisterRequest(
                 module_id=self.module_class.metadata["module_id"],
@@ -162,7 +172,9 @@ class ModuleServer(BaseServer):
         Raises:
             ServerError: If communication with the registry server fails.
         """
-        logger.info("Deregistering module from registry at %s", self.config.registry_address)
+        logger.info(
+            "Deregistering module from registry at %s", self.config.registry_address
+        )
 
         # Create appropriate channel based on security mode
         channel = self._create_registry_channel()
@@ -204,13 +216,19 @@ class ModuleServer(BaseServer):
 
             root_certificates = None
             if self.config.credentials.root_cert_path:
-                with open(self.config.credentials.root_cert_path, "rb") as root_cert_file:  # noqa: FURB101
+                with open(
+                    self.config.credentials.root_cert_path, "rb"
+                ) as root_cert_file:  # noqa: FURB101
                     root_certificates = root_cert_file.read()
 
             # Create channel credentials
-            channel_credentials = grpc.ssl_channel_credentials(root_certificates=root_certificates or certificate_chain)
+            channel_credentials = grpc.ssl_channel_credentials(
+                root_certificates=root_certificates or certificate_chain
+            )
 
-            return grpc.secure_channel(self.config.registry_address, channel_credentials)
+            return grpc.secure_channel(
+                self.config.registry_address, channel_credentials
+            )
         # Insecure channel
         return grpc.insecure_channel(self.config.registry_address)
 

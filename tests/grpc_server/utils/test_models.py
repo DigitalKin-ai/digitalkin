@@ -2,8 +2,8 @@
 
 import pytest
 
-from digitalkin.grpc.utils.exceptions import ConfigurationError, SecurityError
-from digitalkin.grpc.utils.models import (
+from digitalkin.grpc_servers.utils.exceptions import ConfigurationError, SecurityError
+from digitalkin.grpc_servers.utils.models import (
     ModuleServerConfig,
     RegistryServerConfig,
     SecurityMode,

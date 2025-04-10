@@ -3,9 +3,9 @@
 from pathlib import Path
 from typing import Any
 
-from digitalkin.grpc.module_server import ModuleServer
-from digitalkin.grpc.registry_server import RegistryServer
-from digitalkin.grpc.utils.models import (
+from digitalkin.grpc_servers.module_server import ModuleServer
+from digitalkin.grpc_servers.registry_server import RegistryServer
+from digitalkin.grpc_servers.utils.models import (
     ModuleServerConfig,
     RegistryServerConfig,
     SecurityMode,
@@ -167,7 +167,9 @@ def _create_server_config(
     # Add credentials if secure mode
     if security == "secure":
         if not server_key_path or not server_cert_path:
-            raise ValueError("Server key and certificate paths are required for secure mode")
+            raise ValueError(
+                "Server key and certificate paths are required for secure mode"
+            )
 
         config_params["credentials"] = ServerCredentials(
             server_key_path=Path(server_key_path),

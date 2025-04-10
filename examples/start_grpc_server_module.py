@@ -2,29 +2,37 @@
 
 This example demonstrates how to create a custom module using the DigitalKin SDK.
 It shows:
-1. Defining input/output/setup schema using Pydantic models
-2. Implementing module business logic with streaming capabilities
-3. Starting a gRPC server to host the module
-4. Registering the module with a registry server
+1. Defining input/output/setup schema using Pydantic models.
+2. Implementing module business logic with streaming capabilities.
+3. Starting a gRPC server to host the module.
+4. Registering the module with a registry server.
 
 To run: uv run module_server_example.py
 
 Requirements:
-- DigitalKin SDK and proto files installed
-- Registry server running (default: localhost:50052)
+- DigitalKin SDK and proto files installed.
+- Registry server running (default: localhost:50052).
+
+Raises:
+    Exception: If server configuration or runtime operations fail.
 """
 
 import asyncio
+import datetime
 import logging
 import sys
-from os.path import dirname
 
-from digitalkin.grpc.module_server import ModuleServer
-from digitalkin.grpc.utils.models import ModuleServerConfig, SecurityMode, ServerConfig, ServerMode
-
-sys.path.append(dirname(__file__))
 from modules.minimal_llm_module import OpenAIToolModule, OpenAIToolSetup
 from modules.text_transform_module import TextTransformModule, TextTransformSetup
+
+from digitalkin.grpc_servers.module_server import ModuleServer
+from digitalkin.grpc_servers.utils.models import (
+    ModuleServerConfig,
+    SecurityMode,
+    ServerConfig,
+    ServerMode,
+)
+from digitalkin.services.setup.setup_strategy import SetupData, SetupVersionData
 
 # Configure logging with clear formatting
 logging.basicConfig(
@@ -38,26 +46,28 @@ async def serve_module() -> int:
     """Initialize and start the module server.
 
     Returns:
-        int: Exit code (0 for success, non-zero for errors)
+        int: Exit code (0 for success, non-zero for errors).
+
+    Raises:
+        Exception: If server startup or runtime errors occur.
     """
     module_server = None
     try:
-        # Configure the module server
         module_config = ModuleServerConfig(
-            host="[::]",  # Listen on all interfaces
-            port=50051,  # Port for the module server
-            mode=ServerMode.ASYNC,  # Use async mode for performance
-            security=SecurityMode.INSECURE,  # Use insecure mode for development
-            max_workers=10,  # Number of concurrent requests
-            credentials=None,  # No credentials for insecure mode
-            registry_address="[::]:50052",  # Address of the registry server
+            host="[::]",
+            port=50051,
+            mode=ServerMode.ASYNC,
+            security=SecurityMode.INSECURE,
+            max_workers=10,
+            credentials=None,
+            registry_address="[::]:50052",
         )
 
         if len(sys.argv) > 1 and "llm" in sys.argv:
             module_server = ModuleServer(OpenAIToolModule, config=module_config)
             await module_server.start_async()
 
-            module_server.module_class.storage.__post_init__(  # type: ignore
+            module_server.module_servicer.setup.__post_init__(  # type: ignore
                 ServerConfig(
                     host="[::]",
                     port=50151,
@@ -68,26 +78,41 @@ async def serve_module() -> int:
                 )
             )
 
-            module_server.module_class.storage.create(
-                table="monitor",
-                data={
-                    "mission_id": "mission_id:test_mission_id",
-                    "name": "monitor",
-                    "data": dict(
-                        OpenAIToolSetup(
-                            openai_key="XXX",
-                            model_name="gpt-4o-mini",
-                            prepa_prompt="You are an python specialist focused on the aync module and process optimization.",
-                        )
-                    ),
+            setup_id = "setups:0"
+            setup_version_data = SetupVersionData(
+                id="0",
+                setup_id=setup_id,
+                version="v1",
+                creation_date=datetime.datetime.now(datetime.timezone.utc),
+                content={
+                    **OpenAIToolSetup(
+                        openai_key="XXX",
+                        model_name="gpt-4o-mini",
+                        dev_prompt=(
+                            "You are a python specialist focused on the async module and process optimization."
+                        ),
+                    ).model_dump()
                 },
             )
+
+            module_server.module_servicer.setup.create_setup(
+                setup_dict={
+                    "setup_id": setup_id,
+                    "data": SetupData(
+                        id="1",
+                        name="module_openai",
+                        organisation_id="organisations:1",
+                        owner_id="owner:1",
+                        module_id="modules:1",
+                        current_setup_version=setup_version_data,
+                    ),
+                }
+            )
         else:
-            # Create the module server with our custom module
             module_server = ModuleServer(TextTransformModule, config=module_config)
             await module_server.start_async()
 
-            module_server.module_class.storage.__post_init__(  # type: ignore
+            module_server.module_servicer.setup.__post_init__(  # type: ignore
                 ServerConfig(
                     host="[::]",
                     port=50151,
@@ -98,19 +123,30 @@ async def serve_module() -> int:
                 )
             )
 
-            module_server.module_class.storage.create(
-                table="monitor",
-                data={
-                    "mission_id": "mission_id:test_mission_id",
-                    "name": "monitor",
-                    "data": dict(TextTransformSetup(shift_amount=2, uppercase=True)),
-                },
+            setup_id = "setups:0"
+            setup_version_data = SetupVersionData(
+                id="1",
+                setup_id=setup_id,
+                version="v1",
+                creation_date=datetime.datetime.now(datetime.timezone.utc),
+                content={**TextTransformSetup(shift_amount=2, uppercase=True).model_dump()},
             )
 
-        # Start the server asynchronously
-        logger.info("Module server started on port 50051. Press Ctrl+C to stop.")
+            module_server.module_servicer.setup.create_setup(
+                setup_dict={
+                    "setup_id": setup_id,
+                    "data": SetupData(
+                        id="1",
+                        name="module_test_Transform",
+                        organisation_id="organisations:1",
+                        owner_id="owner:1",
+                        module_id="modules:1",
+                        current_setup_version=setup_version_data,
+                    ),
+                }
+            )
 
-        # Keep the server running until interrupted
+        logger.info("Module server started on port 50051. Press Ctrl+C to stop.")
         await module_server.await_termination()
     except KeyboardInterrupt:
         logger.info("Server stopping due to keyboard interrupt...")
@@ -119,9 +155,7 @@ async def serve_module() -> int:
         logger.exception("Error running server:")
         return 1
     finally:
-        # Clean up server resources
         if module_server is not None and module_server.server is not None:
-            logger.warning("db: %s", module_server.module_class.storage.get_all())
             logger.info("Stopping module server...")
             await module_server.stop_async()
             logger.info("Module server stopped.")
@@ -133,7 +167,10 @@ def main() -> int:
     """Application entry point.
 
     Returns:
-        int: Exit code (0 for success, non-zero for errors)
+        int: Exit code (0 for success, non-zero for errors).
+
+    Raises:
+        Exception: If the server fails to run.
     """
     try:
         return asyncio.run(serve_module())

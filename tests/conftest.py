@@ -6,6 +6,13 @@ import grpc_testing
 import pytest
 from _pytest.fixtures import SubRequest
 
+from digitalkin.grpc_servers.utils.models import (
+    SecurityMode,
+    ServerConfig,
+    ServerCredentials,
+    ServerMode,
+)
+
 # Configure logging for tests
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
@@ -16,8 +23,6 @@ logging.getLogger("grpc").setLevel(logging.WARNING)
 @pytest.fixture
 def server_config_sync_insecure():
     """Create a sync insecure server configuration."""
-    from digitalkin.grpc.utils.models import SecurityMode, ServerConfig, ServerMode
-
     return ServerConfig(
         host="localhost",
         port=50051,
@@ -29,8 +34,6 @@ def server_config_sync_insecure():
 @pytest.fixture
 def server_config_async_insecure():
     """Create an async insecure server configuration."""
-    from digitalkin.grpc.utils.models import SecurityMode, ServerConfig, ServerMode
-
     return ServerConfig(
         host="localhost",
         port=50052,
@@ -62,13 +65,6 @@ def dummy_certs(tmp_path):
 @pytest.fixture
 def server_config_sync_secure(dummy_certs):
     """Create a sync secure server configuration."""
-    from digitalkin.grpc.utils.models import (
-        SecurityMode,
-        ServerConfig,
-        ServerCredentials,
-        ServerMode,
-    )
-
     credentials = ServerCredentials(**dummy_certs)
 
     return ServerConfig(
@@ -83,13 +79,6 @@ def server_config_sync_secure(dummy_certs):
 @pytest.fixture
 def server_config_async_secure(dummy_certs):
     """Create an async secure server configuration."""
-    from digitalkin.grpc.utils.models import (
-        SecurityMode,
-        ServerConfig,
-        ServerCredentials,
-        ServerMode,
-    )
-
     credentials = ServerCredentials(**dummy_certs)
 
     return ServerConfig(

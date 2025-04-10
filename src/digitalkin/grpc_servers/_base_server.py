@@ -11,15 +11,15 @@ from typing import Any, cast
 import grpc
 from grpc import aio as grpc_aio
 
-from digitalkin.grpc.utils.exceptions import (
+from digitalkin.grpc_servers.utils.exceptions import (
     ConfigurationError,
     ReflectionError,
     SecurityError,
     ServerStateError,
     ServicerError,
 )
-from digitalkin.grpc.utils.models import SecurityMode, ServerConfig, ServerMode
-from digitalkin.grpc.utils.types import GrpcServer, ServiceDescriptor, T
+from digitalkin.grpc_servers.utils.models import SecurityMode, ServerConfig, ServerMode
+from digitalkin.grpc_servers.utils.types import GrpcServer, ServiceDescriptor, T
 
 logger = logging.getLogger(__name__)
 

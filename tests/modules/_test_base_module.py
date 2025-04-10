@@ -42,7 +42,6 @@ class MockModule(BaseModule):
             raise Exception(msg)
         await asyncio.sleep(0.2)  # Simulate some work
 
-
     async def _cleanup(self) -> None:
         self.cleanup_called = True
         if self.cleanup_error:

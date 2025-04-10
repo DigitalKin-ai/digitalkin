@@ -6,7 +6,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field, ValidationInfo, field_validator
 
-from digitalkin.grpc.utils.exceptions import ConfigurationError, SecurityError
+from digitalkin.grpc_servers.utils.exceptions import ConfigurationError, SecurityError
 
 
 class ServerMode(str, Enum):
