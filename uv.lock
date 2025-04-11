@@ -334,7 +334,7 @@ wheels = [
 
 [[package]]
 name = "digitalkin"
-version = "0.2.0"
+version = "0.2.1"
 source = { editable = "." }
 dependencies = [
     { name = "digitalkin-proto" },
@@ -370,7 +370,7 @@ requires-dist = [
     { name = "build", marker = "extra == 'dev'", specifier = ">=1.2.2" },
     { name = "bump2version", marker = "extra == 'dev'", specifier = ">=1.0.1" },
     { name = "cryptography", marker = "extra == 'dev'", specifier = ">=44.0.2" },
-    { name = "digitalkin-proto", specifier = ">=0.1.5" },
+    { name = "digitalkin-proto", specifier = ">=0.1.6" },
     { name = "freezegun", marker = "extra == 'dev'", specifier = ">=1.5.1" },
     { name = "grpcio-health-checking", specifier = ">=1.71.0" },
     { name = "grpcio-reflection", specifier = ">=1.71.0" },
@@ -392,7 +392,7 @@ provides-extras = ["dev", "examples"]
 
 [[package]]
 name = "digitalkin-proto"
-version = "0.1.5"
+version = "0.1.6"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "googleapis-common-protos" },
@@ -400,9 +400,9 @@ dependencies = [
     { name = "grpcio-tools" },
     { name = "protovalidate" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/da/b2/948107be6dc5294c0d08d69777fb0aaa0010dba2f2c9b781bdb45ab99752/digitalkin_proto-0.1.5.tar.gz", hash = "sha256:39d39bb10ec372c28de15d842885f35a3bd2d0d3f7f7c905dea8a149aca89d2a", size = 78172 }
+sdist = { url = "https://files.pythonhosted.org/packages/5a/59/31740b4a78c6a94227f00d3c1b26d04676378c029eda44be22c962fe8750/digitalkin_proto-0.1.6.tar.gz", hash = "sha256:dad0548daa2ca7eebfc02ef7103fd49ebbdde13a73c315d12cb613b4eaacee24", size = 78126 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/36/5d/c1f3e44098326a4e892cccac34d050bbacbb9391bb3042de009a8046c45c/digitalkin_proto-0.1.5-py3-none-any.whl", hash = "sha256:8663a0c2ef87e6e25ed59ae29fa7f513b8b826f021925910bca5700cb25ac2d4", size = 145189 },
+    { url = "https://files.pythonhosted.org/packages/ec/91/b825e14f8c3644277c1b5cda810d7474a60d04d459fdf13ff710b3dcff0e/digitalkin_proto-0.1.6-py3-none-any.whl", hash = "sha256:5401562e53a9d801006dd0bb9260290979c0c424ef9612f03bb97e79c46a3943", size = 145190 },
 ]
 
 [[package]]
