@@ -69,7 +69,17 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
         try:
             request = data_pb2.ReadRecordRequest(mission_id=self.mission_id, name=name)
             response: data_pb2.ReadRecordResponse = self.exec_grpc_query("ReadRecord", request)
-            return StorageRecord(**json_format.MessageToDict(response.stored_data))
+            response_dict = json_format.MessageToDict(
+                response.stored_data,
+                preserving_proto_field_name=True,
+                always_print_fields_with_no_presence=True,
+            )
+            return StorageRecord(
+                mission_id=response_dict["mission_id"],
+                name=response_dict["name"],
+                data_type=response_dict["data_type"],
+                data=self._validate_data(name, response_dict["data"]),
+            )
         except Exception:
             msg = f"Error while reading record {name}"
             logger.exception(msg)
