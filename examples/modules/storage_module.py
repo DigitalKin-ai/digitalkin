@@ -12,7 +12,7 @@ from digitalkin.models.module import ModuleStatus
 from digitalkin.modules.archetype_module import ArchetypeModule
 from digitalkin.services.services_config import ServicesConfig
 from digitalkin.services.services_models import ServicesMode
-from digitalkin.services.storage.storage_strategy import DataType, StorageRecord
+from digitalkin.services.storage.storage_strategy import StorageRecord
 
 
 class ExampleInput(BaseModel):
@@ -62,7 +62,7 @@ class ExampleModule(ArchetypeModule[ExampleInput, ExampleOutput, ExampleSetup, E
 
     # Define services_config_params with default values
     services_config_strategies = {}
-    services_config_params = {"storage": {"config": {"example_outputs": ExampleOutput}}}
+    services_config_params = {"storage": {"config": {"example_outputs": ExampleOutput}}, "filesystem": {"config": {}}}
 
     def __init__(self, job_id: str, mission_id: str) -> None:
         """Initialize the example module.
@@ -119,7 +119,7 @@ class ExampleModule(ArchetypeModule[ExampleInput, ExampleOutput, ExampleSetup, E
         )
 
         # Store the output data in storage
-        storage_id = self.storage.store("example_outputs", output_data.model_dump(), data_type=DataType.OUTPUT)
+        storage_id = self.storage.store("example_outputs", output_data.model_dump(), data_type="OUTPUT")
 
         logger.info("Stored output data with ID: %s", storage_id)
 
@@ -170,7 +170,7 @@ def test_storage_directly() -> None:
     storage = ServicesConfig().storage(mission_id="test-mission", config={"test_table": ExampleStorage})
 
     # Create a test record
-    storage.store("test_table", {"test_key": "test_value"}, DataType.OUTPUT)
+    storage.store("test_table", {"test_key": "test_value"}, "OUTPUT")
 
     # Retrieve the record
     retrieved = storage.read("test_table")

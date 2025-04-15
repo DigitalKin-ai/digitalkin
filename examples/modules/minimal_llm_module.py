@@ -82,7 +82,11 @@ class OpenAIToolModule(BaseModule[OpenAIToolInput, OpenAIToolOutput, OpenAIToolS
         "storage": {
             "config": {"setups": OpenAIToolSetup},
             "server_config": server_config,
-        }
+        },
+        "filesystem": {
+            "config": {},
+            "server_config": server_config,
+        },
     }
 
     async def initialize(self, setup_data: SetupData) -> None:
