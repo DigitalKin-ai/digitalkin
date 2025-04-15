@@ -1,12 +1,13 @@
 """Client wrapper to ease channel creation with specific ServerConfig."""
 
 import logging
+from pathlib import Path
 from typing import Any
 
 import grpc
 
 from digitalkin.grpc_servers.utils.exceptions import ServerError
-from digitalkin.grpc_servers.utils.models import SecurityMode, ServerConfig
+from digitalkin.grpc_servers.utils.models import ClientConfig, SecurityMode
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +18,7 @@ class GrpcClientWrapper:
     stub: Any
 
     @staticmethod
-    def _init_channel(config: ServerConfig) -> grpc.Channel:
+    def _init_channel(config: ClientConfig) -> grpc.Channel:
         """Create an appropriate channel to the registry server.
 
         Returns:
@@ -26,22 +27,27 @@ class GrpcClientWrapper:
         Raises:
             ValueError: If credentials are required but not provided.
         """
-        if config.security == SecurityMode.SECURE and config.credentials:
+        if config.security == SecurityMode.SECURE and config.credentials is not None:
             # Secure channel
-            with open(config.credentials.server_cert_path, "rb") as cert_file:  # noqa: FURB101
-                certificate_chain = cert_file.read()
+            root_certificates = Path(config.credentials.root_cert_path).read_bytes()
 
-            root_certificates = None
-            if config.credentials.root_cert_path:
-                with open(config.credentials.root_cert_path, "rb") as root_cert_file:  # noqa: FURB101
-                    root_certificates = root_cert_file.read()
+            # mTLS channel
+            private_key = None
+            certificate_chain = None
+            if config.credentials.client_cert_path is not None and config.credentials.client_key_path is not None:
+                private_key = Path(config.credentials.client_key_path).read_bytes()
+                certificate_chain = Path(config.credentials.client_cert_path).read_bytes()
 
             # Create channel credentials
-            channel_credentials = grpc.ssl_channel_credentials(root_certificates=root_certificates or certificate_chain)
+            channel_credentials = grpc.ssl_channel_credentials(
+                root_certificates=root_certificates,
+                certificate_chain=certificate_chain,
+                private_key=private_key,
+            )
 
-            return grpc.secure_channel(f"{config.host}:{config.port}", channel_credentials)
+            return grpc.secure_channel(config.address, channel_credentials)
         # Insecure channel
-        return grpc.insecure_channel(f"{config.host}:{config.port}")
+        return grpc.insecure_channel(config.address)
 
     def exec_grpc_query(self, query_endpoint: str, request: Any) -> Any:  # noqa: ANN401
         """Execute a gRPC query with from the query's rpc endpoint name.

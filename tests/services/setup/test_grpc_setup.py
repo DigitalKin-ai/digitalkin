@@ -16,7 +16,7 @@ from freezegun import freeze_time
 from grpc.framework.foundation import logging_pool
 from mock_setup_servicer import FakeContext, MockSetupServicer
 
-from digitalkin.grpc_servers.utils.models import SecurityMode, ServerConfig, ServerMode
+from digitalkin.grpc_servers.utils.models import ClientConfig, SecurityMode, ServerMode
 from digitalkin.services.setup.grpc_setup import GrpcSetup
 from digitalkin.services.setup.setup_strategy import SetupData, SetupVersionData
 
@@ -59,12 +59,11 @@ def client(test_channel: grpc_testing.Channel) -> GrpcSetup:
     """
     channel = test_channel
     # Create a dummy ServerConfig; its values are not used since we override _init_channel.
-    dummy_config = ServerConfig(
+    dummy_config = ClientConfig(
         host="[::]",
         port=50151,
         mode=ServerMode.ASYNC,
         security=SecurityMode.INSECURE,
-        max_workers=10,
         credentials=None,
     )
     client = GrpcSetup()
