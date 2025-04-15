@@ -101,20 +101,31 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer):
         job_id, module = result
 
         while module.status == ModuleStatus.RUNNING or not self.queue.empty():
-            output_data = await self.queue.get()
+            output_data: dict = await self.queue.get()
+            if job_id not in output_data or output_data[job_id] not in self.job_manager.modules:
+                message = f"Job {job_id} not found"
+                logger.warning(message)
+                context.set_code(grpc.StatusCode.NOT_FOUND)
+                context.set_details(message)
+                yield lifecycle_pb2.StartModuleResponse(success=False)
+                return
+
             if output_data[job_id].get("error", None) is not None:
                 context.set_code(output_data[job_id]["error"]["code"])
                 context.set_details(output_data[job_id]["error"]["error_message"])
                 yield lifecycle_pb2.StartModuleResponse(success=False)
                 return
-            else:
-                # TODO: add a check for the job_id / error handling
-                output_proto = {key: str(value) for key, value in output_data[job_id].items()}
-                yield lifecycle_pb2.StartModuleResponse(
-                    success=True,
-                    output=output_proto,
-                    job_id=job_id,
-                )
+
+            output_proto = json_format.ParseDict(
+                output_data[job_id],
+                struct_pb2.Struct(),
+                ignore_unknown_fields=True,
+            )
+            yield lifecycle_pb2.StartModuleResponse(
+                success=True,
+                output=output_proto,
+                job_id=job_id,
+            )
 
     async def StopModule(  # noqa: N802
         self,
