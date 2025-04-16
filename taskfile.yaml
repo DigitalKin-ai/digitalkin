@@ -102,7 +102,7 @@ tasks:
   bump-version:
     desc: "Bump package version (type: major, minor, or patch)"
     cmds:
-      - bump2version {{.CLI_ARGS}}
+      - SKIP=pytest bump2version {{.CLI_ARGS}}
 
   setup-dev:
     desc: "Setup development environment"

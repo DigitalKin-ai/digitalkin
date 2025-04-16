@@ -8,7 +8,7 @@ from typing import Any
 
 from digitalkin.logger import logger
 from digitalkin.models import ModuleStatus
-from digitalkin.models.module import InputModelT, OutputModelT, SetupModelT
+from digitalkin.models.module import InputModelT, OutputModelT, SecretModelT, SetupModelT
 from digitalkin.modules._base_module import BaseModule
 from digitalkin.services.services_config import ServicesConfig
 from digitalkin.services.services_models import ServicesMode
@@ -78,8 +78,9 @@ class JobManager(ArgParser):
         self,
         input_data: InputModelT,
         setup_data: SetupModelT,
+        mission_id: str,
         callback: Callable[[str, OutputModelT], Coroutine[Any, Any, None]],
-    ) -> tuple[str, BaseModule]:
+    ) -> tuple[str, BaseModule[InputModelT, OutputModelT, SetupModelT, SecretModelT]]:  # type: ignore
         """Start new module job in background (asyncio).
 
         Args:
@@ -91,7 +92,6 @@ class JobManager(ArgParser):
             str: job_id of the module entity
         """
         job_id = str(uuid.uuid4())
-        mission_id = "missions:test_demo"
         """TODO: check uniqueness of the job_id"""
         # Création et démarrage du module
         module = self.module_class(job_id, mission_id=mission_id)
