@@ -218,6 +218,7 @@ async def run_client_text_transform() -> None:
             # Create setup data (we'll use default setup_id for this example)
             # In a real application, you might create and store a setup configuration first
             setup_id = "setups:0"
+            mission_id = "missions:0"
 
             # Create input data using the schema
             input_data = input_class(
@@ -226,7 +227,7 @@ async def run_client_text_transform() -> None:
             )
 
             # Create start module request
-            request = lifecycle_pb2.StartModuleRequest(input=input_data.model_dump(), setup_id=setup_id)
+            request = lifecycle_pb2.StartModuleRequest(input=input_data.model_dump(), setup_id=setup_id, mission_id=mission_id)
 
             logger.info("Starting module with input: %s", input_data.model_dump())
 
@@ -281,12 +282,13 @@ async def run_client_llm() -> None:
             # Create setup data (we'll use default setup_id for this example)
             # In a real application, you might create and store a setup configuration first
             setup_id = "setups:0"
+            mission_id = "missions:0"
 
             # Create input data using the schema
             input_data = input_class(prompt="Give me details about agentic mesh current advancement")
 
             # Create start module request
-            request = lifecycle_pb2.StartModuleRequest(input=input_data.model_dump(), setup_id=setup_id)
+            request = lifecycle_pb2.StartModuleRequest(input=input_data.model_dump(), setup_id=setup_id, mission_id=mission_id)
 
             logger.info("Starting module with input: %s", input_data.model_dump())
 

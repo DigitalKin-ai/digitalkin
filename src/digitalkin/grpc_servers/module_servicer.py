@@ -51,7 +51,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer):
         self.job_manager = JobManager(module_class)
         self.setup = GrpcSetup() if self.job_manager.args.services_mode == ServicesMode.REMOTE else DefaultSetup()
 
-    async def add_to_queue(self, job_id: str, output_data: OutputModelT) -> None:
+    async def add_to_queue(self, job_id: str, output_data: OutputModelT) -> None:  # type: ignore
         """Callback used to add the output data to the queue of messages."""
         logger.info("JOB: %s added an output_data: %s", job_id, output_data)
         await self.queue.put({job_id: output_data})
@@ -76,11 +76,11 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer):
         logger.info("StartModule called for module: '%s'", self.module_class.__name__)
         # Process the module input
         # TODO: Check failure of input data format
-        input_data = self.module_class.input_format(**dict(request.input.items()))
+        input_data = self.module_class.create_input_model(dict(request.input.items()))
         setup_data_class = self.setup.get_setup(
             setup_dict={
                 "setup_id": request.setup_id,
-                "mission_id": "missions:test_demo",
+                "mission_id": request.mission_id,
             }
         )
 
@@ -88,15 +88,17 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer):
             msg = "No setup data returned."
             raise ServicerError(msg)
         # TODO: Check failure of setup data format
-        setup_data = self.module_class.setup_format(**setup_data_class.current_setup_version.content)
+        setup_data = self.module_class.create_setup_model(setup_data_class.current_setup_version.content)
 
         # setup_id should be use to request a precise setup from the module
         # Create a job for this execution
-        job_id, module = await self.job_manager.create_job(
+        result: tuple[str, BaseModule] = await self.job_manager.create_job(
             input_data,
             setup_data,
+            mission_id=request.mission_id,
             callback=self.add_to_queue,
         )
+        job_id, module = result
 
         while module.status == ModuleStatus.RUNNING or not self.queue.empty():
             output_data = await self.queue.get()

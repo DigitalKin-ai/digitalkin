@@ -140,6 +140,54 @@ class BaseModule(ABC, Generic[InputModelT, OutputModelT, SetupModelT, SecretMode
         msg = "'%s' class does not define an 'setup_format'."
         raise NotImplementedError(msg)
 
+    @classmethod
+    def create_input_model(cls, input_data: dict[str, Any]) -> InputModelT:
+        """Create the input model from the input data.
+
+        Args:
+            input_data: The input data to create the model from.
+
+        Returns:
+            The input model.
+        """
+        return cls.input_format(**input_data)
+
+    @classmethod
+    def create_setup_model(cls, setup_data: dict[str, Any]) -> SetupModelT:
+        """Create the setup model from the setup data.
+
+        Args:
+            setup_data: The setup data to create the model from.
+
+        Returns:
+            The setup model.
+        """
+        return cls.setup_format(**setup_data)
+
+    @classmethod
+    def create_secret_model(cls, secret_data: dict[str, Any]) -> SecretModelT:
+        """Create the secret model from the secret data.
+
+        Args:
+            secret_data: The secret data to create the model from.
+
+        Returns:
+            The secret model.
+        """
+        return cls.secret_format(**secret_data)
+
+    @classmethod
+    def create_output_model(cls, output_data: dict[str, Any]) -> OutputModelT:
+        """Create the output model from the output data.
+
+        Args:
+            output_data: The output data to create the model from.
+
+        Returns:
+            The output model.
+        """
+        return cls.output_format(**output_data)
+
     @abstractmethod
     async def initialize(self, setup_data: SetupModelT) -> None:
         """Initialize the module."""
