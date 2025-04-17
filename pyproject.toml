@@ -12,7 +12,7 @@
 
     keywords = [ "digitalkin", "kin", "agent", "gprc", "sdk" ]
     # Version of the package automatically updated by bump2version (that is why it is separated)
-    version = "0.2.4"
+    version = "0.2.5"
 
     classifiers = [
         "Development Status :: 3 - Alpha",
@@ -33,6 +33,7 @@
         "grpcio-health-checking>=1.71.0",
         "grpcio-reflection>=1.71.0",
         "grpcio-status>=1.71.0",
+        "openai>=1.70.0",
         "pydantic>=2.11.3",
     ]
 

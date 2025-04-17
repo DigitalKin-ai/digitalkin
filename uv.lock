@@ -334,13 +334,14 @@ wheels = [
 
 [[package]]
 name = "digitalkin"
-version = "0.2.3"
+version = "0.2.4"
 source = { editable = "." }
 dependencies = [
     { name = "digitalkin-proto" },
     { name = "grpcio-health-checking" },
     { name = "grpcio-reflection" },
     { name = "grpcio-status" },
+    { name = "openai" },
     { name = "pydantic" },
 ]
 
@@ -377,6 +378,7 @@ requires-dist = [
     { name = "grpcio-status", specifier = ">=1.71.0" },
     { name = "grpcio-testing", marker = "extra == 'dev'", specifier = ">=1.71.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.15.0" },
+    { name = "openai", specifier = ">=1.70.0" },
     { name = "openai", marker = "extra == 'examples'", specifier = ">=1.66.3" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=4.2.0" },
     { name = "pydantic", specifier = ">=2.11.3" },

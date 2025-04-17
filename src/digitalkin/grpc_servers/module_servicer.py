@@ -102,7 +102,8 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer):
 
         while module.status == ModuleStatus.RUNNING or not self.queue.empty():
             output_data: dict = await self.queue.get()
-            if job_id not in output_data or output_data[job_id] not in self.job_manager.modules:
+
+            if job_id not in output_data or job_id not in self.job_manager.modules:
                 message = f"Job {job_id} not found"
                 logger.warning(message)
                 context.set_code(grpc.StatusCode.NOT_FOUND)
