@@ -16,7 +16,7 @@ from pydantic import ValidationError
 
 from digitalkin.grpc_servers.utils.exceptions import ServerError
 from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
-from digitalkin.grpc_servers.utils.models import ServerConfig
+from digitalkin.grpc_servers.utils.models import ClientConfig
 from digitalkin.services.setup.setup_strategy import SetupData, SetupServiceError, SetupStrategy, SetupVersionData
 
 logger = logging.getLogger(__name__)
@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 class GrpcSetup(SetupStrategy, GrpcClientWrapper):
     """This class implements the gRPC setup service."""
 
-    def __post_init__(self, config: ServerConfig) -> None:
+    def __post_init__(self, config: ClientConfig) -> None:
         """Init the channel from a config file.
 
         Need to be call if the user register a gRPC channel.

@@ -1,6 +1,7 @@
 """Module gRPC server implementation for DigitalKin."""
 
 import logging
+from pathlib import Path
 import uuid
 
 import grpc
@@ -8,7 +9,11 @@ import grpc
 from digitalkin.grpc_servers._base_server import BaseServer
 from digitalkin.grpc_servers.module_servicer import ModuleServicer
 from digitalkin.grpc_servers.utils.exceptions import ServerError
-from digitalkin.grpc_servers.utils.models import ModuleServerConfig, SecurityMode
+from digitalkin.grpc_servers.utils.models import (
+    ClientConfig,
+    ModuleServerConfig,
+    SecurityMode,
+)
 from digitalkin.modules._base_module import BaseModule
 
 from digitalkin_proto.digitalkin.module.v2 import (
@@ -32,14 +37,16 @@ class ModuleServer(BaseServer):
 
     Attributes:
         module: The module instance being served.
-        config: Server configuration.
+        server_config: Server configuration.
+        client_config: Setup client configuration.
         module_servicer: The gRPC servicer handling module requests.
     """
 
     def __init__(
         self,
         module_class: type[BaseModule],
-        config: ModuleServerConfig,
+        server_config: ModuleServerConfig,
+        client_config: ClientConfig | None = None,
     ) -> None:
         """Initialize the module server.
 
@@ -47,9 +54,10 @@ class ModuleServer(BaseServer):
             module_class: The module instance to be served.
             config: Server configuration including registry address if auto-registration is desired.
         """
-        super().__init__(config)
+        super().__init__(server_config)
         self.module_class = module_class
-        self.config = config
+        self.server_config = server_config
+        self.client_config = client_config
         self.module_servicer: ModuleServicer | None = None
 
     def _register_servicers(self) -> None:
@@ -73,34 +81,46 @@ class ModuleServer(BaseServer):
 
     def start(self) -> None:
         """Start the module server and register with the registry if configured."""
-        logger.critical(self.config)
+        logger.critical(self.server_config)
         super().start()
 
-        logger.critical(self.config)
+        logger.critical(self.server_config)
         # If a registry address is provided, register the module
-        if self.config.registry_address:
+        if self.server_config.registry_address:
             try:
                 self._register_with_registry()
             except Exception:
                 logger.exception("Failed to register with registry")
+
+        if self.module_servicer is not None:
+            logger.critical(
+                "Setup post init started with config: %s", self.client_config
+            )
+            self.module_servicer.setup.__post_init__(self.client_config)
 
     async def start_async(self) -> None:
         """Start the module server and register with the registry if configured."""
-        logger.critical(self.config)
+        logger.critical(self.server_config)
         await super().start_async()
 
-        logger.critical(self.config)
+        logger.critical(self.server_config)
         # If a registry address is provided, register the module
-        if self.config.registry_address:
+        if self.server_config.registry_address:
             try:
                 self._register_with_registry()
             except Exception:
                 logger.exception("Failed to register with registry")
+
+        if self.module_servicer is not None:
+            logger.critical(
+                "Setup post init started with config: %s", self.client_config
+            )
+            self.module_servicer.setup.__post_init__(self.client_config)
 
     def stop(self, grace: float | None = None) -> None:
         """Stop the module server and deregister from the registry if needed."""
         # If registered with a registry, deregister
-        if self.config.registry_address:
+        if self.server_config.registry_address:
             try:
                 self._deregister_from_registry()
             except ServerError:
@@ -115,7 +135,8 @@ class ModuleServer(BaseServer):
             ServerError: If communication with the registry server fails.
         """
         logger.info(
-            "Registering module with registry at %s", self.config.registry_address
+            "Registering module with registry at %s",
+            self.server_config.registry_address,
         )
 
         # Create appropriate channel based on security mode
@@ -145,7 +166,7 @@ class ModuleServer(BaseServer):
                 module_id=self.module_class.metadata["module_id"],
                 version=self.module_class.metadata["version"],
                 module_type=module_type,
-                address=self.config.address,
+                address=self.server_config.address,
                 metadata=metadata,
             )
 
@@ -173,7 +194,8 @@ class ModuleServer(BaseServer):
             ServerError: If communication with the registry server fails.
         """
         logger.info(
-            "Deregistering module from registry at %s", self.config.registry_address
+            "Deregistering module from registry at %s",
+            self.server_config.registry_address,
         )
 
         # Create appropriate channel based on security mode
@@ -208,29 +230,42 @@ class ModuleServer(BaseServer):
         Raises:
             ValueError: If credentials are required but not provided.
         """
-        if self.config.security == SecurityMode.SECURE and self.config.credentials:
+        if (
+            self.client_config is not None
+            and self.client_config.security == SecurityMode.SECURE
+            and self.client_config.credentials
+        ):
             # Secure channel
-            """TODO: use Path(self.config.credentials.server_cert_path).read_bytes()"""
-            with open(self.config.credentials.server_cert_path, "rb") as cert_file:  # noqa: FURB101
-                certificate_chain = cert_file.read()
+            # Secure channel
+            root_certificates = Path(
+                self.client_config.credentials.root_cert_path
+            ).read_bytes()
 
-            root_certificates = None
-            if self.config.credentials.root_cert_path:
-                with open(
-                    self.config.credentials.root_cert_path, "rb"
-                ) as root_cert_file:  # noqa: FURB101
-                    root_certificates = root_cert_file.read()
+            # mTLS channel
+            private_key = None
+            certificate_chain = None
+            if (
+                self.client_config.credentials.client_cert_path is not None
+                and self.client_config.credentials.client_key_path is not None
+            ):
+                private_key = Path(
+                    self.client_config.credentials.client_key_path
+                ).read_bytes()
+                certificate_chain = Path(
+                    self.client_config.credentials.client_cert_path
+                ).read_bytes()
 
             # Create channel credentials
             channel_credentials = grpc.ssl_channel_credentials(
-                root_certificates=root_certificates or certificate_chain
+                root_certificates=root_certificates,
+                certificate_chain=certificate_chain,
+                private_key=private_key,
             )
-
             return grpc.secure_channel(
-                self.config.registry_address, channel_credentials
+                self.server_config.registry_address, channel_credentials
             )
         # Insecure channel
-        return grpc.insecure_channel(self.config.registry_address)
+        return grpc.insecure_channel(self.server_config.registry_address)
 
     def _determine_module_type(self) -> str:
         """Determine the module type based on its class.

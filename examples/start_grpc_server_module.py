@@ -27,9 +27,9 @@ from modules.text_transform_module import TextTransformModule, TextTransformSetu
 
 from digitalkin.grpc_servers.module_server import ModuleServer
 from digitalkin.grpc_servers.utils.models import (
+    ClientConfig,
     ModuleServerConfig,
     SecurityMode,
-    ServerConfig,
     ServerMode,
 )
 from digitalkin.services.setup.setup_strategy import SetupData, SetupVersionData
@@ -63,20 +63,17 @@ async def serve_module() -> int:
             registry_address="[::]:50052",
         )
 
-        if len(sys.argv) > 1 and "llm" in sys.argv:
-            module_server = ModuleServer(OpenAIToolModule, config=module_config)
-            await module_server.start_async()
+        client_config = ClientConfig(
+            host="[::]",
+            port=50151,
+            mode=ServerMode.ASYNC,
+            security=SecurityMode.INSECURE,
+            credentials=None,
+        )
 
-            module_server.module_servicer.setup.__post_init__(  # type: ignore
-                ServerConfig(
-                    host="[::]",
-                    port=50151,
-                    mode=ServerMode.ASYNC,
-                    security=SecurityMode.INSECURE,
-                    max_workers=10,
-                    credentials=None,
-                )
-            )
+        if len(sys.argv) > 1 and "llm" in sys.argv:
+            module_server = ModuleServer(OpenAIToolModule, server_config=module_config, client_config=client_config)
+            await module_server.start_async()
 
             setup_id = "setups:0"
             setup_version_data = SetupVersionData(
@@ -109,19 +106,8 @@ async def serve_module() -> int:
                 }
             )
         else:
-            module_server = ModuleServer(TextTransformModule, config=module_config)
+            module_server = ModuleServer(TextTransformModule, server_config=module_config, client_config=client_config)
             await module_server.start_async()
-
-            module_server.module_servicer.setup.__post_init__(  # type: ignore
-                ServerConfig(
-                    host="[::]",
-                    port=50151,
-                    mode=ServerMode.ASYNC,
-                    security=SecurityMode.INSECURE,
-                    max_workers=10,
-                    credentials=None,
-                )
-            )
 
             setup_id = "setups:0"
             setup_version_data = SetupVersionData(
