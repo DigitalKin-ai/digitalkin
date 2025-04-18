@@ -21,7 +21,7 @@ from grpc.framework.foundation import logging_pool
 from mock_filesystem_servicer import FakeContext, MockFilesystemServicer
 
 from digitalkin.grpc_servers.utils.exceptions import ServerError
-from digitalkin.grpc_servers.utils.models import SecurityMode, ServerConfig, ServerMode
+from digitalkin.grpc_servers.utils.models import ClientConfig, SecurityMode, ServerMode
 from digitalkin.services.filesystem.filesystem_strategy import (
     FilesystemData,
     FilesystemServiceError,
@@ -67,19 +67,18 @@ def client(test_channel: grpc_testing.Channel) -> GrpcFilesystem:
         gRPC client as GrpcFilesystem
     """
     # Create a dummy ServerConfig; its values are not used since we override _init_channel.
-    dummy_config = ServerConfig(
+    dummy_config = ClientConfig(
         host="[::]",
         port=50151,
         mode=ServerMode.ASYNC,
         security=SecurityMode.INSECURE,
-        max_workers=10,
         credentials=None,
     )
 
     mission_id = "test_mission"
     config: dict[str, str] = {}
-
-    client = GrpcFilesystem(mission_id, config, dummy_config)
+    setup_version_id = "setup_version:1"
+    client = GrpcFilesystem(mission_id, setup_version_id, config, dummy_config)
 
     # Override the channel and stub to use our test channel
     client.stub = filesystem_service_pb2_grpc.FilesystemServiceStub(test_channel)

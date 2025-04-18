@@ -48,17 +48,19 @@ class BaseModule(ABC, Generic[InputModelT, OutputModelT, SetupModelT, SecretMode
     def _init_strategies(self) -> None:
         """Initialize the services configuration."""
         for service_name in self.services_config.valid_strategy_names():
-            service = self.services_config.init_strategy(service_name, self.mission_id)
+            service = self.services_config.init_strategy(service_name, self.mission_id, self.setup_version_id)
             setattr(self, service_name, service)
 
     def __init__(
         self,
         job_id: str,
         mission_id: str,
+        setup_version_id: str,
     ) -> None:
         """Initialize the module."""
         self.job_id: str = job_id
         self.mission_id: str = mission_id
+        self.setup_version_id: str = setup_version_id
         self._status = ModuleStatus.CREATED
         self._task: asyncio.Task | None = None
         # Initialize services configuration

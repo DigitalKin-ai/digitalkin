@@ -26,7 +26,8 @@ def default_fs(test_dir):
     """Create a DefaultFilesystem instance for testing."""
     config = {"temp_root": test_dir}
     mission_id = "test_mission:123"
-    fs = DefaultFilesystem(mission_id, config)
+    setup_version_id = "setup_version:1"
+    fs = DefaultFilesystem(mission_id, setup_version_id, config)
     yield fs
     # Clean up any test files
     for file_data in fs.get_all():
@@ -56,7 +57,8 @@ class TestDefaultFilesystem:
         """Test initialization of DefaultFilesystem."""
         config = {"temp_root": test_dir}
         mission_id = "test_mission:123"
-        fs = DefaultFilesystem(mission_id, config)
+        setup_version_id = "setup_version:1"
+        fs = DefaultFilesystem(mission_id, setup_version_id, config)
 
         assert fs.mission_id == mission_id
         assert fs.temp_root == test_dir
@@ -68,7 +70,8 @@ class TestDefaultFilesystem:
         import tempfile
 
         mission_id = "test_mission:456"
-        fs = DefaultFilesystem(mission_id, {})
+        setup_version_id = "setup_version:1"
+        fs = DefaultFilesystem(mission_id, setup_version_id, {})
 
         assert fs.mission_id == mission_id
         assert fs.temp_root == tempfile.gettempdir()

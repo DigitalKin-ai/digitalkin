@@ -35,14 +35,15 @@ class FilesystemData(BaseModel):
 class FilesystemStrategy(BaseStrategy, ABC):
     """Abstract base class for filesystem strategies."""
 
-    def __init__(self, mission_id: str, config: dict[str, str]) -> None:
+    def __init__(self, mission_id: str, setup_version_id: str, config: dict[str, str]) -> None:
         """Initialize the strategy.
 
         Args:
             mission_id: The ID of the mission this strategy is associated with
+            setup_version_id: The ID of the setup version this strategy is associated with
             config: configuration dictionary for the filesystem strategy
         """
-        super().__init__(mission_id)
+        super().__init__(mission_id, setup_version_id)
         self.config: dict[str, str] = config
 
     @abstractmethod

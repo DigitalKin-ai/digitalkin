@@ -79,6 +79,7 @@ class JobManager(ArgParser):
         input_data: InputModelT,
         setup_data: SetupModelT,
         mission_id: str,
+        setup_version_id: str,
         callback: Callable[[str, OutputModelT], Coroutine[Any, Any, None]],
     ) -> tuple[str, BaseModule[InputModelT, OutputModelT, SetupModelT, SecretModelT]]:  # type: ignore
         """Start new module job in background (asyncio).
@@ -94,7 +95,7 @@ class JobManager(ArgParser):
         job_id = str(uuid.uuid4())
         """TODO: check uniqueness of the job_id"""
         # Création et démarrage du module
-        module = self.module_class(job_id, mission_id=mission_id)
+        module = self.module_class(job_id, mission_id=mission_id, setup_version_id=setup_version_id)
         self.modules[job_id] = module
         try:
             await module.start(input_data, setup_data, await JobManager._job_specific_callback(callback, job_id))
