@@ -56,7 +56,7 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper):
             operation: Description of the operation being performed.
 
         Raises:
-            ValueError: Error wiht the model validation.
+            ValueError: Error with the model validation.
             ServerError: from gRPC Client.
             FilesystemServiceError: Filesystem service internal.
         """
