@@ -1,6 +1,5 @@
-"""This module implements the default Cost strategy."""
+"""This module implements the gRPC Cost strategy."""
 
-import logging
 from collections.abc import Generator
 from contextlib import contextmanager
 from typing import Any, Literal
@@ -11,9 +10,14 @@ from google.protobuf import json_format
 from digitalkin.grpc_servers.utils.exceptions import ServerError
 from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
 from digitalkin.grpc_servers.utils.models import ClientConfig
-from digitalkin.services.cost.cost_strategy import CostConfig, CostData, CostServiceError, CostStrategy, CostType
-
-logger = logging.getLogger(__name__)
+from digitalkin.logger import logger
+from digitalkin.services.cost.cost_strategy import (
+    CostConfig,
+    CostData,
+    CostServiceError,
+    CostStrategy,
+    CostType,
+)
 
 
 class GrpcCost(CostStrategy, GrpcClientWrapper):
@@ -51,13 +55,17 @@ class GrpcCost(CostStrategy, GrpcClientWrapper):
             raise CostServiceError(msg) from e
 
     def __init__(
-        self, mission_id: str, setup_version_id: str, config: dict[str, CostConfig], client_config: ClientConfig
+        self,
+        mission_id: str,
+        setup_version_id: str,
+        config: dict[str, CostConfig],
+        client_config: ClientConfig,
     ) -> None:
         """Initialize the cost."""
         super().__init__(mission_id=mission_id, setup_version_id=setup_version_id, config=config)
         channel = self._init_channel(client_config)
         self.stub = cost_service_pb2_grpc.CostServiceStub(channel)
-        logger.info("Channel client 'Cost' initialized succesfully")
+        logger.debug("Channel client 'Cost' initialized succesfully")
 
     def add(
         self,

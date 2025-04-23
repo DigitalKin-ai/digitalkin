@@ -1,6 +1,5 @@
 """Test file for Filesystem Servicer from the client side."""
 
-import logging
 import secrets
 import string
 
@@ -20,16 +19,11 @@ from digitalkin_proto.digitalkin.filesystem.v2.filesystem_pb2 import (
 )
 from pydantic import ValidationError
 
+from digitalkin.logger import logger
 from digitalkin.services.filesystem.filesystem_strategy import (
     FilesystemData,
     FileType,
 )
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-)
-logger = logging.getLogger(__name__)
 
 
 # --- Fake Context for Servicer ---
@@ -113,7 +107,7 @@ class MockFilesystemServicer(filesystem_service_pb2_grpc.FilesystemServiceServic
 
             # Store the file
             self.files[kin_context][name] = file_data
-            logger.info(f"Uploaded file {name} to context {kin_context}")
+            logger.debug(f"Uploaded file {name} to context {kin_context}")
 
             # Convert to proto and return
             file_proto = FileProto(
@@ -205,7 +199,7 @@ class MockFilesystemServicer(filesystem_service_pb2_grpc.FilesystemServiceServic
             # Check if kin_context exists
             if kin_context not in self.files:
                 # Return empty list rather than error, as this is a common case
-                logger.info(f"Context {kin_context} does not exist or is empty")
+                logger.debug(f"Context {kin_context} does not exist or is empty")
                 return filesystem_pb2.GetFilesByKinContextResponse(files=[])
 
             # Return all files in the context
@@ -264,7 +258,7 @@ class MockFilesystemServicer(filesystem_service_pb2_grpc.FilesystemServiceServic
                     )
                     file_protos[name] = FileResult(file=file_proto)
                 else:
-                    logger.info(f"File {name} does not exist in context {kin_context}")
+                    logger.debug(f"File {name} does not exist in context {kin_context}")
                     file_protos[name] = FileResult(error="File Not Found")
 
             return filesystem_pb2.GetFilesByNamesResponse(files=file_protos)
@@ -367,7 +361,7 @@ class MockFilesystemServicer(filesystem_service_pb2_grpc.FilesystemServiceServic
 
             # Delete the file
             del self.files[kin_context][name]
-            logger.info(f"Deleted file {name} from context {kin_context}")
+            logger.debug(f"Deleted file {name} from context {kin_context}")
 
             return filesystem_pb2.DeleteFileResponse()
         except Exception as e:

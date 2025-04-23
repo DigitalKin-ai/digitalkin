@@ -5,7 +5,6 @@ which handles registration, deregistration, discovery, and status management
 of DigitalKin modules.
 """
 
-import logging
 from collections.abc import Iterator
 from enum import Enum
 
@@ -20,7 +19,7 @@ from digitalkin_proto.digitalkin.module_registry.v2 import (
 from pydantic import BaseModel
 from typing_extensions import Self
 
-logger = logging.getLogger(__name__)
+from digitalkin.logger import logger
 
 
 class ExtendedEnum(Enum):
@@ -184,7 +183,7 @@ class RegistryServicer(module_registry_service_pb2_grpc.ModuleRegistryServiceSer
             registration_pb2.RegisterResponse: A response indicating success or failure.
         """
         module_id = request.module_id
-        logger.info("Registering module: %s", module_id)
+        logger.debug("Registering module: %s", module_id)
 
         # Check if module is already registered
         if module_id in self.registered_modules:
@@ -207,7 +206,7 @@ class RegistryServicer(module_registry_service_pb2_grpc.ModuleRegistryServiceSer
             message=None,
         )
 
-        logger.info("Module %s registered at %s:%d", module_id, request.address, request.port)
+        logger.debug("Module %s registered at %s:%d", module_id, request.address, request.port)
         return registration_pb2.RegisterResponse(success=True)
 
     def DeregisterModule(  # noqa: N802
@@ -228,7 +227,7 @@ class RegistryServicer(module_registry_service_pb2_grpc.ModuleRegistryServiceSer
             registration_pb2.DeregisterResponse: A response indicating success or failure.
         """
         module_id = request.module_id
-        logger.info("Deregistering module: %s", module_id)
+        logger.debug("Deregistering module: %s", module_id)
 
         # Check if module exists in registry
         if module_id not in self.registered_modules:
@@ -242,7 +241,7 @@ class RegistryServicer(module_registry_service_pb2_grpc.ModuleRegistryServiceSer
         # Remove the module
         del self.registered_modules[module_id]
 
-        logger.info("Module %s deregistered", module_id)
+        logger.debug("Module %s deregistered", module_id)
         return registration_pb2.DeregisterResponse(success=True)
 
     def DiscoverInfoModule(  # noqa: N802
@@ -261,7 +260,7 @@ class RegistryServicer(module_registry_service_pb2_grpc.ModuleRegistryServiceSer
         Returns:
             discover_pb2.DiscoverInfoResponse: A response containing the module's information.
         """
-        logger.info("Discovering module: %s", request.module_id)
+        logger.debug("Discovering module: %s", request.module_id)
 
         # Check if module exists in registry
         if request.module_id not in self.registered_modules:
@@ -289,24 +288,24 @@ class RegistryServicer(module_registry_service_pb2_grpc.ModuleRegistryServiceSer
         Returns:
             discover_pb2.DiscoverSearchResponse: A response containing matching modules.
         """
-        logger.info("Discovering modules with criteria:")
+        logger.debug("Discovering modules with criteria:")
 
         # Start with all modules
         results = list(self.registered_modules.values())
-        logger.info("%s", list(results))
+        logger.debug("%s", list(results))
         # Filter by name if specified
         if request.name:
-            logger.info("\tname %s", request.name)
+            logger.debug("\tname %s", request.name)
             results = [m for m in results if request.name in m.metadata.name]
 
         # Filter by type if specified
         if request.module_type:
-            logger.info("\tmodule_type %s", request.module_type)
+            logger.debug("\tmodule_type %s", request.module_type)
             results = [m for m in results if m.module_type == request.module_type]
 
         # Filter by tags if specified
         if request.tags:
-            logger.info("\ttags %s", request.tags)
+            logger.debug("\ttags %s", request.tags)
             results = [m for m in results if any(tag in m.metadata.tags for tag in request.tags)]
 
         # Filter by description if specified
@@ -315,7 +314,7 @@ class RegistryServicer(module_registry_service_pb2_grpc.ModuleRegistryServiceSer
             results = [m for m in results if request.description in m.metadata.description]
         """
 
-        logger.info("Found %d matching modules", len(results))
+        logger.debug("Found %d matching modules", len(results))
         return discover_pb2.DiscoverSearchResponse(modules=[r.to_proto() for r in results])
 
     def GetModuleStatus(  # noqa: N802
@@ -334,7 +333,7 @@ class RegistryServicer(module_registry_service_pb2_grpc.ModuleRegistryServiceSer
         Returns:
             status_pb2.ModuleStatusResponse: A response containing the module's status.
         """
-        logger.info("Getting status for module: %s", request.module_id)
+        logger.debug("Getting status for module: %s", request.module_id)
 
         # Check if module exists in registry
         if request.module_id not in self.registered_modules:
@@ -363,7 +362,7 @@ class RegistryServicer(module_registry_service_pb2_grpc.ModuleRegistryServiceSer
         Returns:
             status_pb2.ListModulesStatusResponse: A response containing a list of module statuses.
         """
-        logger.info(
+        logger.debug(
             "Getting registered modules with offset %d and limit %d",
             request.offset,
             request.list_size,
@@ -384,7 +383,7 @@ class RegistryServicer(module_registry_service_pb2_grpc.ModuleRegistryServiceSer
             for module in list(self.registered_modules.values())[request.offset : request.offset + list_size]
         ]
 
-        logger.info("Found %d registered modules", len(modules_statuses))
+        logger.debug("Found %d registered modules", len(modules_statuses))
         return status_pb2.ListModulesStatusResponse(
             list_size=len(modules_statuses),
             modules_statuses=modules_statuses,
@@ -406,7 +405,7 @@ class RegistryServicer(module_registry_service_pb2_grpc.ModuleRegistryServiceSer
         Yields:
             status_pb2.ModuleStatusResponse: Responses containing individual module statuses.
         """
-        logger.info("Streaming all %d registered modules", len(self.registered_modules))
+        logger.debug("Streaming all %d registered modules", len(self.registered_modules))
         for module in self.registered_modules.values():
             yield status_pb2.ModuleStatusResponse(
                 module_id=module.module_id,
@@ -431,7 +430,7 @@ class RegistryServicer(module_registry_service_pb2_grpc.ModuleRegistryServiceSer
             status_pb2.UpdateStatusResponse: A response indicating success or failure.
         """
         module_id = request.module_id
-        logger.info("Updating status for module: %s to %s", module_id, request.status)
+        logger.debug("Updating status for module: %s to %s", module_id, request.status)
 
         # Check if module exists in registry
         if request.module_id not in self.registered_modules:
@@ -453,5 +452,5 @@ class RegistryServicer(module_registry_service_pb2_grpc.ModuleRegistryServiceSer
         module_info = self.registered_modules[module_id]
         module_info.status = ModuleStatus(request.status)
 
-        logger.info("Status for module %s updated to %s", module_id, request.status)
+        logger.debug("Status for module %s updated to %s", module_id, request.status)
         return status_pb2.UpdateStatusResponse(success=True)

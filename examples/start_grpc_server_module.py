@@ -18,12 +18,11 @@ Raises:
 """
 
 import asyncio
-import datetime
 import logging
 import sys
 
-from modules.minimal_llm_module import OpenAIToolModule, OpenAIToolSetup
-from modules.text_transform_module import TextTransformModule, TextTransformSetup
+from modules.cpu_intensive_module import CPUIntensiveModule
+from modules.minimal_llm_module import OpenAIToolModule
 
 from digitalkin.grpc_servers.module_server import ModuleServer
 from digitalkin.grpc_servers.utils.models import (
@@ -32,7 +31,6 @@ from digitalkin.grpc_servers.utils.models import (
     SecurityMode,
     ServerMode,
 )
-from digitalkin.services.setup.setup_strategy import SetupData, SetupVersionData
 
 # Configure logging with clear formatting
 logging.basicConfig(
@@ -55,7 +53,7 @@ async def serve_module() -> int:
     try:
         module_config = ModuleServerConfig(
             host="[::]",
-            port=50051,
+            port=50055,
             mode=ServerMode.ASYNC,
             security=SecurityMode.INSECURE,
             max_workers=10,
@@ -65,7 +63,7 @@ async def serve_module() -> int:
 
         client_config = ClientConfig(
             host="[::]",
-            port=50151,
+            port=50051,
             mode=ServerMode.ASYNC,
             security=SecurityMode.INSECURE,
             credentials=None,
@@ -75,64 +73,11 @@ async def serve_module() -> int:
             module_server = ModuleServer(OpenAIToolModule, server_config=module_config, client_config=client_config)
             await module_server.start_async()
 
-            setup_id = "setups:0"
-            setup_version_data = SetupVersionData(
-                id="0",
-                setup_id=setup_id,
-                version="v1",
-                creation_date=datetime.datetime.now(datetime.timezone.utc),
-                content={
-                    **OpenAIToolSetup(
-                        openai_key="XXX",
-                        model_name="gpt-4o-mini",
-                        dev_prompt=(
-                            "You are a python specialist focused on the async module and process optimization."
-                        ),
-                    ).model_dump()
-                },
-            )
-
-            module_server.module_servicer.setup.create_setup(
-                setup_dict={
-                    "setup_id": setup_id,
-                    "data": SetupData(
-                        id="1",
-                        name="module_openai",
-                        organisation_id="organisations:1",
-                        owner_id="owner:1",
-                        module_id="modules:1",
-                        current_setup_version=setup_version_data,
-                    ),
-                }
-            )
         else:
-            module_server = ModuleServer(TextTransformModule, server_config=module_config, client_config=client_config)
+            module_server = ModuleServer(CPUIntensiveModule, server_config=module_config, client_config=client_config)
             await module_server.start_async()
 
-            setup_id = "setups:0"
-            setup_version_data = SetupVersionData(
-                id="1",
-                setup_id=setup_id,
-                version="v1",
-                creation_date=datetime.datetime.now(datetime.timezone.utc),
-                content={**TextTransformSetup(shift_amount=2, uppercase=True).model_dump()},
-            )
-
-            module_server.module_servicer.setup.create_setup(
-                setup_dict={
-                    "setup_id": setup_id,
-                    "data": SetupData(
-                        id="1",
-                        name="module_test_Transform",
-                        organisation_id="organisations:1",
-                        owner_id="owner:1",
-                        module_id="modules:1",
-                        current_setup_version=setup_version_data,
-                    ),
-                }
-            )
-
-        logger.info("Module server started on port 50051. Press Ctrl+C to stop.")
+        logger.info("Module server started on port 50055. Press Ctrl+C to stop.")
         await module_server.await_termination()
     except KeyboardInterrupt:
         logger.info("Server stopping due to keyboard interrupt...")
