@@ -8,7 +8,7 @@ import grpc
 import openai
 from pydantic import BaseModel
 
-from digitalkin.grpc_servers.utils.models import SecurityMode, ServerConfig, ServerMode
+from digitalkin.grpc_servers.utils.models import SecurityMode, ClientConfig, ServerMode
 from digitalkin.modules._base_module import BaseModule
 from digitalkin.services.setup.setup_strategy import SetupData
 
@@ -45,12 +45,11 @@ class OpenAIToolSecret(BaseModel):
     """Secret model defining module configuration parameters."""
 
 
-server_config = ServerConfig(
+client_config = ClientConfig(
     host="[::]",
     port=50151,
     mode=ServerMode.ASYNC,
     security=SecurityMode.INSECURE,
-    max_workers=10,
     credentials=None,
 )
 
@@ -81,11 +80,11 @@ class OpenAIToolModule(BaseModule[OpenAIToolInput, OpenAIToolOutput, OpenAIToolS
     services_config_params = {
         "storage": {
             "config": {"setups": OpenAIToolSetup},
-            "server_config": server_config,
+            "client_config": client_config,
         },
         "filesystem": {
             "config": {},
-            "server_config": server_config,
+            "client_config": client_config,
         },
     }
 

@@ -8,8 +8,8 @@ from google.protobuf.struct_pb2 import Struct
 from pydantic import BaseModel
 
 from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
-from digitalkin.grpc_servers.utils.models import ServerConfig
-from digitalkin.services.storage.storage_strategy import StorageRecord, StorageServiceError, StorageStrategy
+from digitalkin.grpc_servers.utils.models import ClientConfig
+from digitalkin.services.storage.storage_strategy import DataType, StorageRecord, StorageServiceError, StorageStrategy
 
 logger = logging.getLogger(__name__)
 
@@ -21,13 +21,13 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
         self,
         mission_id: str,
         config: dict[str, type[BaseModel]],
-        server_config: ServerConfig,
+        client_config: ClientConfig,
         **kwargs,  # noqa: ANN003, ARG002
     ) -> None:
         """Initialize the storage."""
         super().__init__(mission_id=mission_id, config=config)
 
-        channel = self._init_channel(server_config)
+        channel = self._init_channel(client_config)
         self.stub = storage_service_pb2_grpc.StorageServiceStub(channel)
         logger.info("Channel client 'storage' initialized succesfully")
 
@@ -98,7 +98,7 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
 
             request = data_pb2.ModifyRecordRequest(data=data_struct, mission_id=self.mission_id, name=name)
             response: data_pb2.ModifyRecordResponse = self.exec_grpc_query("ModifyRecord", request)
-            return StorageRecord(**json_format.MessageToDict(response.stored_data))
+            return self._build_record_from_proto(response.stored_data, name)
         except Exception:
             msg = f"Error while modifing record {name}"
             logger.exception(msg)
@@ -121,3 +121,36 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
             logger.exception(msg)
             return False
         return True
+
+    def _build_record_from_proto(self, stored_data: data_pb2.StorageRecord, default_name: str) -> StorageRecord:
+        """Helper to construire un StorageRecord complet à partir du message gRPC.
+
+        Args:
+            stored_data: Le message gRPC contenant les données stockées.
+            default_name: Le nom par défaut à utiliser si le nom n'est pas présent dans les données.
+
+        Returns:
+            StorageRecord: Un objet StorageRecord construit à partir des données stockées.
+        """
+        # Converti en dict, avec tous les champs même s'ils sont absents
+        raw = json_format.MessageToDict(
+            stored_data,
+            preserving_proto_field_name=True,
+            always_print_fields_with_no_presence=True,
+        )
+        # On récupère ou on complète les champs obligatoires
+        name = raw.get("name", default_name)
+        dtype = raw.get("data_type", DataType.OUTPUT.name)
+        payload = raw.get("data", {})
+
+        # Valide le modèle pydantic pour le champ `data`
+        validated = self._validate_data(name, payload)
+
+        return StorageRecord(
+            mission_id=self.mission_id,
+            name=name,
+            data_type=DataType[dtype],
+            data=validated,
+            creation_date=raw.get("creation_date"),
+            update_date=raw.get("update_date"),
+        )

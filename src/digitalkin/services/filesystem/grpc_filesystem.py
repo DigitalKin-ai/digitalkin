@@ -10,7 +10,7 @@ from digitalkin_proto.digitalkin.filesystem.v2.filesystem_pb2 import FileType as
 
 from digitalkin.grpc_servers.utils.exceptions import ServerError
 from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
-from digitalkin.grpc_servers.utils.models import ServerConfig
+from digitalkin.grpc_servers.utils.models import ClientConfig
 from digitalkin.services.filesystem.filesystem_strategy import (
     FilesystemData,
     FilesystemServiceError,
@@ -28,7 +28,7 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper):
         self,
         mission_id: str,
         config: dict[str, str],
-        server_config: ServerConfig,
+        client_config: ClientConfig,
         **kwargs,  # noqa: ANN003, ARG002
     ) -> None:
         """Initialize the default filesystem strategy.
@@ -36,11 +36,11 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper):
         Args:
             mission_id: The ID of the mission this strategy is associated with
             config: A dictionary mapping names to Pydantic model classes
-            server_config: The server configuration object
+            client_config: The client configuration object
             kwargs: other optional arguments to pass to the parent class constructor
         """
         super().__init__(mission_id, config)
-        channel = self._init_channel(server_config)
+        channel = self._init_channel(client_config)
         self.stub = filesystem_service_pb2_grpc.FilesystemServiceStub(channel)
         logger.info("Channel client 'Filesystem' initialized succesfully")
 

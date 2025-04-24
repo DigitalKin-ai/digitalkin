@@ -6,7 +6,7 @@ from typing import Any, ClassVar
 
 from pydantic import BaseModel
 
-from digitalkin.grpc_servers.utils.models import SecurityMode, ServerConfig, ServerMode
+from digitalkin.grpc_servers.utils.models import SecurityMode, ClientConfig, ServerMode
 from digitalkin.modules._base_module import BaseModule
 from digitalkin.services.setup.setup_strategy import SetupData
 from digitalkin.services.storage.storage_strategy import DataType, StorageRecord
@@ -54,12 +54,11 @@ class TextTransformStorage(BaseModel):
     ended: bool = False
 
 
-server_config = ServerConfig(
+client_config = ClientConfig(
     host="[::]",
     port=50151,
     mode=ServerMode.ASYNC,
     security=SecurityMode.INSECURE,
-    max_workers=10,
     credentials=None,
 )
 
@@ -91,8 +90,12 @@ class TextTransformModule(BaseModule[TextTransformInput, TextTransformOutput, Te
     services_config_params = {
         "storage": {
             "config": {"monitor": TextTransformStorage, "setups": TextTransformStorage},
-            "server_config": server_config,
-        }
+            "client_config": client_config,
+        },
+        "filesystem": {
+            "config": {},
+            "client_config": client_config,
+        },
     }
 
     async def initialize(self, setup_data: SetupData) -> None:
