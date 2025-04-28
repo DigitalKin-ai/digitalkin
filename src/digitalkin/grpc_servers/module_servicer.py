@@ -244,7 +244,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer):
         # Get input schema if available
         try:
             # Convert schema to proto format
-            input_schema_proto = self.module_class.get_input_format(request.llm_format)
+            input_schema_proto = self.module_class.get_input_format(llm_format=request.llm_format)
             input_format_struct = json_format.Parse(
                 text=input_schema_proto,
                 message=struct_pb2.Struct(),  # pylint: disable=no-member
@@ -280,7 +280,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer):
         # Get output schema if available
         try:
             # Convert schema to proto format
-            output_schema_proto = self.module_class.get_output_format(request.llm_format)
+            output_schema_proto = self.module_class.get_output_format(llm_format=request.llm_format)
             output_format_struct = json_format.Parse(
                 text=output_schema_proto,
                 message=struct_pb2.Struct(),  # pylint: disable=no-member
@@ -316,7 +316,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer):
         # Get setup schema if available
         try:
             # Convert schema to proto format
-            setup_schema_proto = self.module_class.get_setup_format(request.llm_format)
+            setup_schema_proto = self.module_class.get_setup_format(llm_format=request.llm_format)
             setup_format_struct = json_format.Parse(
                 text=setup_schema_proto,
                 message=struct_pb2.Struct(),  # pylint: disable=no-member
@@ -331,4 +331,40 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer):
         return information_pb2.GetModuleSetupResponse(
             success=True,
             setup_schema=setup_format_struct,
+        )
+
+    def GetModuleSecret(  # noqa: N802
+        self,
+        request: information_pb2.GetModuleSecretRequest,
+        context: grpc.ServicerContext,
+    ) -> information_pb2.GetModuleSecretResponse:
+        """Get information about the module's secrets.
+
+        Args:
+            request: The get module secret request.
+            context: The gRPC context.
+
+        Returns:
+            A response with the module's secret schema.
+        """
+        logger.info("GetModuleSecret called for module: '%s'", self.module_class.__name__)
+
+        # Get secret schema if available
+        try:
+            # Convert schema to proto format
+            secret_schema_proto = self.module_class.get_secret_format(llm_format=request.llm_format)
+            secret_format_struct = json_format.Parse(
+                text=secret_schema_proto,
+                message=struct_pb2.Struct(),  # pylint: disable=no-member
+                ignore_unknown_fields=True,
+            )
+        except NotImplementedError as e:
+            logger.warning(e)
+            context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+            context.set_details(e)
+            return information_pb2.GetModuleSecretResponse()
+
+        return information_pb2.GetModuleSecretResponse(
+            success=True,
+            secret_schema=secret_format_struct,
         )
