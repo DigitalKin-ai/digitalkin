@@ -17,6 +17,7 @@ from digitalkin.services.registry.registry_strategy import RegistryStrategy
 from digitalkin.services.services_config import ServicesConfig, ServicesStrategy
 from digitalkin.services.snapshot.snapshot_strategy import SnapshotStrategy
 from digitalkin.services.storage.storage_strategy import StorageStrategy
+from digitalkin.utils.llm_ready_schema import llm_ready_schema
 
 
 class BaseModule(ABC, Generic[InputModelT, OutputModelT, SetupModelT, SecretModelT]):
@@ -73,7 +74,7 @@ class BaseModule(ABC, Generic[InputModelT, OutputModelT, SetupModelT, SecretMode
         return self._status
 
     @classmethod
-    def get_secret_format(cls, llm_format: bool) -> str:  # noqa: FBT001
+    def get_secret_format(cls, *, llm_format: bool) -> str:
         """Get the JSON schema of the secret format model.
 
         Raises:
@@ -84,13 +85,13 @@ class BaseModule(ABC, Generic[InputModelT, OutputModelT, SetupModelT, SecretMode
         """
         if cls.secret_format is not None:
             if llm_format:
-                return json.dumps(cls.secret_format, indent=2)
+                return json.dumps(llm_ready_schema(cls.secret_format), indent=2)
             return json.dumps(cls.secret_format.model_json_schema(), indent=2)
         msg = f"{cls.__name__}' class does not define a 'secret_format'."
         raise NotImplementedError(msg)
 
     @classmethod
-    def get_input_format(cls, llm_format: bool) -> str:  # noqa: FBT001
+    def get_input_format(cls, *, llm_format: bool) -> str:
         """Get the JSON schema of the input format model.
 
         Raises:
@@ -101,13 +102,13 @@ class BaseModule(ABC, Generic[InputModelT, OutputModelT, SetupModelT, SecretMode
         """
         if cls.input_format is not None:
             if llm_format:
-                return json.dumps(cls.input_format, indent=2)
+                return json.dumps(llm_ready_schema(cls.input_format), indent=2)
             return json.dumps(cls.input_format.model_json_schema(), indent=2)
         msg = f"{cls.__name__}' class does not define an 'input_format'."
         raise NotImplementedError(msg)
 
     @classmethod
-    def get_output_format(cls, llm_format: bool) -> str:  # noqa: FBT001
+    def get_output_format(cls, *, llm_format: bool) -> str:
         """Get the JSON schema of the output format model.
 
         Raises:
@@ -118,13 +119,13 @@ class BaseModule(ABC, Generic[InputModelT, OutputModelT, SetupModelT, SecretMode
         """
         if cls.output_format is not None:
             if llm_format:
-                return json.dumps(cls.output_format, indent=2)
+                return json.dumps(llm_ready_schema(cls.output_format), indent=2)
             return json.dumps(cls.output_format.model_json_schema(), indent=2)
         msg = "'%s' class does not define an 'output_format'."
         raise NotImplementedError(msg)
 
     @classmethod
-    def get_setup_format(cls, llm_format: bool) -> str:  # noqa: FBT001
+    def get_setup_format(cls, *, llm_format: bool) -> str:
         """Gets the JSON schema of the setup format model.
 
         Raises:
@@ -135,7 +136,7 @@ class BaseModule(ABC, Generic[InputModelT, OutputModelT, SetupModelT, SecretMode
         """
         if cls.setup_format is not None:
             if llm_format:
-                return json.dumps(cls.setup_format, indent=2)
+                return json.dumps(llm_ready_schema(cls.setup_format), indent=2)
             return json.dumps(cls.setup_format.model_json_schema(), indent=2)
         msg = "'%s' class does not define an 'setup_format'."
         raise NotImplementedError(msg)
