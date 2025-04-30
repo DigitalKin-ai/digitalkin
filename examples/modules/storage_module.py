@@ -119,7 +119,12 @@ class ExampleModule(ArchetypeModule[ExampleInput, ExampleOutput, ExampleSetup, E
         )
 
         # Store the output data in storage
-        storage_id = self.storage.store("example_outputs", output_data.model_dump(), data_type="OUTPUT")
+        storage_id = self.storage.store(
+            collection="example",
+            record_id=f"example_outputs",
+            data=output_data.model_dump(),
+            data_type="OUTPUT"
+        )
 
         logger.info("Stored output data with ID: %s", storage_id)
 
@@ -159,7 +164,7 @@ async def test_module() -> None:
 
     # Check the storage
     if module.status == ModuleStatus.STOPPED:
-        result: StorageRecord = module.storage.read("example_outputs")
+        result: StorageRecord = module.storage.read("example", "example_outputs")
         if result:
             pass
 
@@ -170,10 +175,10 @@ def test_storage_directly() -> None:
     storage = ServicesConfig().storage(mission_id="test-mission", config={"test_table": ExampleStorage})
 
     # Create a test record
-    storage.store("test_table", {"test_key": "test_value"}, "OUTPUT")
+    storage.store("example", "test_table", {"test_key": "test_value"}, "OUTPUT")
 
     # Retrieve the record
-    retrieved = storage.read("test_table")
+    retrieved = storage.read("example", "test_table")
 
     if retrieved:
         pass
