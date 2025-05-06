@@ -39,11 +39,11 @@ class StorageRecord(BaseModel):
 class StorageStrategy(BaseStrategy, ABC):
     """Define CRUD + list/remove-collection against a collection/record store."""
 
-    def _validate_data(self, collection: str, data: dict[str, Any]) -> BaseModel:
+    def _validate_data(self, record_id: str, data: dict[str, Any]) -> BaseModel:
         """Validate data against the model schema for the given key.
 
         Args:
-            collection: The unique name for the record type
+            record_id: The unique ID for the record
             data: The data to validate
 
         Returns:
@@ -52,15 +52,15 @@ class StorageStrategy(BaseStrategy, ABC):
         Raises:
             ValueError: If the key has no associated model or validation fails
         """
-        model_cls = self.config.get(collection)
+        model_cls = self.config.get(record_id)
         if not model_cls:
-            msg = f"No schema registered for collection '{collection}'"
+            msg = f"No schema registered for collection '{record_id}'"
             raise ValueError(msg)
 
         try:
             return model_cls.model_validate(data)
         except Exception as e:
-            msg = f"Validation failed for '{collection}': {e!s}"
+            msg = f"Validation failed for '{record_id}': {e!s}"
             raise ValueError(msg) from e
 
     def _create_storage_record(
