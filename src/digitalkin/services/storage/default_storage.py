@@ -14,30 +14,30 @@ from digitalkin.services.storage.storage_strategy import DataType, StorageRecord
 logger = logging.getLogger(__name__)
 
 
-def _json_default(o: Any) -> str:  # noqa: ANN401
-    """JSON serializer for non-standard types (datetime → ISO).
-
-    Args:
-        o: The object to serialize
-
-    Returns:
-        str: The serialized object
-
-    Raises:
-        TypeError: If the object is not serializable
-    """
-    if isinstance(o, datetime.datetime):
-        return o.isoformat()
-    msg = f"Type {o.__class__.__name__} not serializable"
-    raise TypeError(msg)
-
-
 class DefaultStorage(StorageStrategy):
     """Persist records in a local JSON file for quick local development.
 
     File format: a JSON object of
       { "<collection>:<record_id>": { ... StorageRecord fields ... },
     """
+
+    @staticmethod
+    def _json_default(o: Any) -> str:  # noqa: ANN401
+        """JSON serializer for non-standard types (datetime → ISO).
+
+        Args:
+            o: The object to serialize
+
+        Returns:
+            str: The serialized object
+
+        Raises:
+            TypeError: If the object is not serializable
+        """
+        if isinstance(o, datetime.datetime):
+            return o.isoformat()
+        msg = f"Type {o.__class__.__name__} not serializable"
+        raise TypeError(msg)
 
     def _load_from_file(self) -> dict[str, StorageRecord]:
         """Load storage data from the file.
@@ -95,7 +95,7 @@ class DefaultStorage(StorageStrategy):
                         "creation_date": record.creation_date.isoformat() if record.creation_date else None,
                         "update_date": record.update_date.isoformat() if record.update_date else None,
                     }
-                json.dump(serial, temp, indent=2, default=_json_default)
+                json.dump(serial, temp, indent=2, default=self._json_default)
                 temp.flush()
                 Path(temp.name).replace(self.storage_file)
             except Exception:
@@ -122,7 +122,7 @@ class DefaultStorage(StorageStrategy):
         record.update_date = now
         self.storage[key] = record
         self._save_to_file()
-        logger.info("Created %s", key)
+        logger.debug("Created %s", key)
         return record
 
     def _read(self, collection: str, record_id: str) -> StorageRecord | None:
@@ -156,7 +156,7 @@ class DefaultStorage(StorageStrategy):
         rec.data = data
         rec.update_date = datetime.datetime.now(datetime.timezone.utc)
         self._save_to_file()
-        logger.info("Modified %s", key)
+        logger.debug("Modified %s", key)
         return rec
 
     def _remove(self, collection: str, record_id: str) -> bool:
@@ -174,7 +174,7 @@ class DefaultStorage(StorageStrategy):
             return False
         del self.storage[key]
         self._save_to_file()
-        logger.info("Removed %s", key)
+        logger.debug("Removed %s", key)
         return True
 
     def _list(self, collection: str) -> list[StorageRecord]:
@@ -203,7 +203,7 @@ class DefaultStorage(StorageStrategy):
         for k in to_delete:
             del self.storage[k]
         self._save_to_file()
-        logger.info("Removed collection %s (%d docs)", collection, len(to_delete))
+        logger.debug("Removed collection %s (%d docs)", collection, len(to_delete))
         return True
 
     def __init__(

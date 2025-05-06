@@ -17,19 +17,36 @@ logger = logging.getLogger(__name__)
 class GrpcStorage(StorageStrategy, GrpcClientWrapper):
     """This class implements the default storage strategy."""
 
-    def __init__(
-        self,
-        mission_id: str,
-        config: dict[str, type[BaseModel]],
-        client_config: ClientConfig,
-        **kwargs,  # noqa: ANN003, ARG002
-    ) -> None:
-        """Initialize the storage."""
-        super().__init__(mission_id=mission_id, config=config)
+    def _build_record_from_proto(self, proto: data_pb2.StorageRecord) -> StorageRecord:
+        """Convert a protobuf StorageRecord message into our Pydantic model.
 
-        channel = self._init_channel(client_config)
-        self.stub = storage_service_pb2_grpc.StorageServiceStub(channel)
-        logger.info("Channel client 'storage' initialized succesfully")
+        Args:
+            proto: gRPC StorageRecord
+
+        Returns:
+            A fully validated StorageRecord.
+        """
+        raw = json_format.MessageToDict(
+            proto,
+            preserving_proto_field_name=True,
+            always_print_fields_with_no_presence=True,
+        )
+        mission = raw["mission_id"]
+        coll = raw["collection"]
+        rid = raw["record_id"]
+        dtype = DataType[raw["data_type"]]
+        payload = raw.get("data", {})
+
+        validated = self._validate_data(coll, payload)
+        return StorageRecord(
+            mission_id=mission,
+            collection=coll,
+            record_id=rid,
+            data=validated,
+            data_type=dtype,
+            creation_date=raw.get("creation_date"),
+            update_date=raw.get("update_date"),
+        )
 
     def _store(self, record: StorageRecord) -> StorageRecord:
         """Create a new record in the database.
@@ -165,33 +182,16 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
             return False
         return True
 
-    def _build_record_from_proto(self, proto: data_pb2.StorageRecord) -> StorageRecord:
-        """Convert a protobuf StorageRecord message into our Pydantic model.
+    def __init__(
+        self,
+        mission_id: str,
+        config: dict[str, type[BaseModel]],
+        client_config: ClientConfig,
+        **kwargs,  # noqa: ANN003, ARG002
+    ) -> None:
+        """Initialize the storage."""
+        super().__init__(mission_id=mission_id, config=config)
 
-        Args:
-            proto: gRPC StorageRecord
-
-        Returns:
-            A fully validated StorageRecord.
-        """
-        raw = json_format.MessageToDict(
-            proto,
-            preserving_proto_field_name=True,
-            always_print_fields_with_no_presence=True,
-        )
-        mission = raw["mission_id"]
-        coll = raw["collection"]
-        rid = raw["record_id"]
-        dtype = DataType[raw["data_type"]]
-        payload = raw.get("data", {})
-
-        validated = self._validate_data(coll, payload)
-        return StorageRecord(
-            mission_id=mission,
-            collection=coll,
-            record_id=rid,
-            data=validated,
-            data_type=dtype,
-            creation_date=raw.get("creation_date"),
-            update_date=raw.get("update_date"),
-        )
+        channel = self._init_channel(client_config)
+        self.stub = storage_service_pb2_grpc.StorageServiceStub(channel)
+        logger.debug("Channel client 'storage' initialized succesfully")
