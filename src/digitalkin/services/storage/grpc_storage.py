@@ -37,7 +37,7 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
         dtype = DataType[raw["data_type"]]
         payload = raw.get("data", {})
 
-        validated = self._validate_data(coll, payload)
+        validated = self._validate_data(rid, payload)
         return StorageRecord(
             mission_id=mission,
             collection=coll,
