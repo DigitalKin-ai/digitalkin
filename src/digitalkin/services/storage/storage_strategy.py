@@ -4,6 +4,7 @@ import datetime
 from abc import ABC, abstractmethod
 from enum import Enum
 from typing import Any, Literal, TypeGuard
+from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
@@ -24,35 +25,69 @@ class DataType(Enum):
 
 
 class StorageRecord(BaseModel):
-    """Container for stored records with metadata."""
+    """A single record stored in a collection, with metadata."""
 
-    # Metadata
-    mission_id: str = Field(description="The ID of the mission this record is associated with")
-    name: str = Field(description="The name of the record")
-    creation_date: datetime.datetime | None = Field(default=None, description="The date the record was created")
-    update_date: datetime.datetime | None = Field(default=None, description="The date the record was last updated")
-    data_type: DataType = Field(default=DataType.OUTPUT, description="The type of data stored")
-    # Actual data payload
-    data: BaseModel = Field(description="The data stored in the record")
+    mission_id: str = Field(..., description="ID of the mission (bucket) this doc belongs to")
+    collection: str = Field(..., description="Logical collection name")
+    record_id: str = Field(..., description="Unique ID of this record in its collection")
+    data_type: DataType = Field(default=DataType.OUTPUT, description="Category of the data of this record")
+    data: BaseModel = Field(..., description="The typed payload of this record")
+    creation_date: datetime.datetime | None = Field(default=None, description="When this record was first created")
+    update_date: datetime.datetime | None = Field(default=None, description="When this record was last modified")
 
 
 class StorageStrategy(BaseStrategy, ABC):
-    """Abstract base class for storage strategies.
+    """Define CRUD + list/remove-collection against a collection/record store."""
 
-    This strategy defines how data is stored and retrieved, with
-    type validation through registered Pydantic models.
-    """
-
-    def __init__(self, mission_id: str, config: dict[str, type[BaseModel]]) -> None:
-        """Initialize the storage strategy.
+    def _validate_data(self, collection: str, data: dict[str, Any]) -> BaseModel:
+        """Validate data against the model schema for the given key.
 
         Args:
-            mission_id: The ID of the mission this strategy is associated with
-            config: A dictionary mapping names to Pydantic model classes
+            collection: The unique name for the record type
+            data: The data to validate
+
+        Returns:
+            A validated model instance
+
+        Raises:
+            ValueError: If the key has no associated model or validation fails
         """
-        super().__init__(mission_id)
-        # Schema configuration mapping keys to model classes
-        self.config: dict[str, type[BaseModel]] = config
+        model_cls = self.config.get(collection)
+        if not model_cls:
+            msg = f"No schema registered for collection '{collection}'"
+            raise ValueError(msg)
+
+        try:
+            return model_cls.model_validate(data)
+        except Exception as e:
+            msg = f"Validation failed for '{collection}': {e!s}"
+            raise ValueError(msg) from e
+
+    def _create_storage_record(
+        self,
+        collection: str,
+        record_id: str,
+        validated_data: BaseModel,
+        data_type: DataType,
+    ) -> StorageRecord:
+        """Create a storage record with metadata.
+
+        Args:
+            collection: The unique name for the record type
+            record_id: The unique ID for the record
+            validated_data: The validated data model
+            data_type: The type of data
+
+        Returns:
+            A complete storage record with metadata
+        """
+        return StorageRecord(
+            mission_id=self.mission_id,
+            collection=collection,
+            record_id=record_id,
+            data=validated_data,
+            data_type=data_type,
+        )
 
     @staticmethod
     def _is_valid_data_type_name(value: str) -> TypeGuard[str]:
@@ -69,16 +104,88 @@ class StorageStrategy(BaseStrategy, ABC):
             The ID of the created record
         """
 
+    @abstractmethod
+    def _read(self, collection: str, record_id: str) -> StorageRecord | None:
+        """Get records from storage by key.
+
+        Args:
+            collection: The unique name to retrieve data for
+            record_id: The unique ID of the record
+
+        Returns:
+            A storage record with validated data
+        """
+
+    @abstractmethod
+    def _update(self, collection: str, record_id: str, data: BaseModel) -> StorageRecord | None:
+        """Overwrite an existing record's payload.
+
+        Args:
+            collection: The unique name for the record type
+            record_id: The unique ID of the record
+            data: The new data to store
+
+        Returns:
+            StorageRecord: The modified record
+        """
+
+    @abstractmethod
+    def _remove(self, collection: str, record_id: str) -> bool:
+        """Delete a record from the storage.
+
+        Args:
+            collection: The unique name for the record type
+            record_id: The unique ID of the record
+
+        Returns:
+            True if the deletion was successful, False otherwise
+        """
+
+    @abstractmethod
+    def _list(self, collection: str) -> list[StorageRecord]:
+        """List all records in a collection.
+
+        Args:
+            collection: The unique name for the record type
+
+        Returns:
+            A list of storage records
+        """
+
+    @abstractmethod
+    def _remove_collection(self, collection: str) -> bool:
+        """Delete all records in a collection.
+
+        Args:
+            collection: The unique name for the record type
+
+        Returns:
+            True if the deletion was successful, False otherwise
+        """
+
+    def __init__(self, mission_id: str, config: dict[str, type[BaseModel]]) -> None:
+        """Initialize the storage strategy.
+
+        Args:
+            mission_id: The ID of the mission this strategy is associated with
+            config: A dictionary mapping names to Pydantic model classes
+        """
+        super().__init__(mission_id)
+        # Schema configuration mapping keys to model classes
+        self.config: dict[str, type[BaseModel]] = config
+
     def store(
         self,
-        name: str,
+        collection: str,
+        record_id: str | None,
         data: dict[str, Any],
         data_type: Literal["OUTPUT", "VIEW", "LOGS", "OTHER"] = "OUTPUT",
     ) -> StorageRecord:
         """Store a new record in the storage.
 
         Args:
-            name: The unique name to store the data under
+            collection: The unique name for the record type
+            record_id: The unique ID for the record (optional)
             data: The data to store
             data_type: The type of data being stored (default: OUTPUT)
 
@@ -91,123 +198,68 @@ class StorageStrategy(BaseStrategy, ABC):
         if not self._is_valid_data_type_name(data_type):
             msg = f"Invalid data type '{data_type}'. Must be one of {list(DataType.__members__.keys())}"
             raise ValueError(msg)
+        record_id = record_id or uuid4().hex
         data_type_enum = DataType[data_type]
-        validated_data = self._validate_data(name, {**data, "mission_id": self.mission_id})
-        record = self._create_storage_record(name, validated_data, data_type_enum)
+        validated_data = self._validate_data(record_id, {**data, "mission_id": self.mission_id})
+        record = self._create_storage_record(collection, record_id, validated_data, data_type_enum)
         return self._store(record)
 
-    @abstractmethod
-    def _read(self, name: str) -> StorageRecord | None:
+    def read(self, collection: str, record_id: str) -> StorageRecord | None:
         """Get records from storage by key.
 
         Args:
-            name: The unique name to retrieve data for
+            collection: The unique name to retrieve data for
+            record_id: The unique ID of the record
 
         Returns:
             A storage record with validated data
         """
+        return self._read(collection, record_id)
 
-    def read(self, name: str) -> StorageRecord | None:
-        """Get records from storage by key.
-
-        Args:
-            name: The unique name to retrieve data for
-
-        Returns:
-            A storage record with validated data
-        """
-        return self._read(name)
-
-    @abstractmethod
-    def _modify(self, name: str, data: BaseModel) -> StorageRecord | None:
-        """Update a record in the storage.
+    def update(self, collection: str, record_id: str, data: dict[str, Any]) -> StorageRecord | None:
+        """Validate & overwrite an existing record.
 
         Args:
-            name: The unique name for the record type
+            collection: The unique name for the record type
+            record_id: The unique ID of the record
             data: The new data to store
 
         Returns:
             StorageRecord: The modified record
         """
+        validated_data = self._validate_data(record_id, data)
+        return self._update(collection, record_id, validated_data)
 
-    def modify(self, name: str, data: dict[str, Any]) -> StorageRecord | None:
-        """Update a record in the storage (overwrite all the data).
-
-        Args:
-            name: The unique name for the record type
-            data: The new data to store
-
-        Returns:
-            StorageRecord: The modified record
-        """
-        validated_data = self._validate_data(name, data)
-        return self._modify(name, validated_data)
-
-    @abstractmethod
-    def _remove(self, name: str) -> bool:
+    def remove(self, collection: str, record_id: str) -> bool:
         """Delete a record from the storage.
 
         Args:
-            name: The unique name for the record type
+            collection: The unique name for the record type
+            record_id: The unique ID of the record
 
         Returns:
             True if the deletion was successful, False otherwise
         """
+        return self._remove(collection, record_id)
 
-    def remove(self, name: str) -> bool:
-        """Delete a record from the storage.
+    def list(self, collection: str) -> list[StorageRecord]:
+        """Get all records within a collection.
 
         Args:
-            name: The unique name for the record type
+            collection: The unique name for the record type
+
+        Returns:
+            A list of storage records
+        """
+        return self._list(collection)
+
+    def remove_collection(self, collection: str) -> bool:
+        """Wipe a record clean.
+
+        Args:
+            collection: The unique name for the record type
 
         Returns:
             True if the deletion was successful, False otherwise
         """
-        return self._remove(name)
-
-    def _validate_data(self, name: str, data: dict[str, Any]) -> BaseModel:
-        """Validate data against the model schema for the given key.
-
-        Args:
-            name: The unique name to get the model type for
-            data: The data to validate
-
-        Returns:
-            A validated model instance
-
-        Raises:
-            ValueError: If the key has no associated model or validation fails
-        """
-        model_cls = self.config.get(name)
-        if not model_cls:
-            msg = f"No model schema defined for name: {name}"
-            raise ValueError(msg)
-
-        try:
-            return model_cls.model_validate(data)
-        except Exception as e:
-            msg = f"Data validation failed for key '{name}': {e!s}"
-            raise ValueError(msg) from e
-
-    def _create_storage_record(
-        self,
-        name: str,
-        validated_data: BaseModel,
-        data_type: DataType,
-    ) -> StorageRecord:
-        """Create a storage record with metadata.
-
-        Args:
-            name: The unique name for the record
-            validated_data: The validated data model
-            data_type: The type of data
-
-        Returns:
-            A complete storage record with metadata
-        """
-        return StorageRecord(
-            mission_id=self.mission_id,
-            name=name,
-            data=validated_data,
-            data_type=data_type,
-        )
+        return self._remove_collection(collection)

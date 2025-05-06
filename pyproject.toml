@@ -12,7 +12,7 @@
 
     keywords = [ "digitalkin", "kin", "agent", "gprc", "sdk" ]
     # Version of the package automatically updated by bump2version (that is why it is separated)
-    version = "0.2.7"
+    version = "0.2.8"
 
     classifiers = [
         "Development Status :: 3 - Alpha",
@@ -29,12 +29,12 @@
     ]
 
     dependencies = [
-        "digitalkin-proto>=0.1.7",
+        "digitalkin-proto>=0.1.8",
         "grpcio-health-checking>=1.71.0",
         "grpcio-reflection>=1.71.0",
         "grpcio-status>=1.71.0",
-        "openai>=1.70.0",
-        "pydantic>=2.11.3",
+        "openai>=1.76.2",
+        "pydantic>=2.11.4",
     ]
 
     [project.optional-dependencies]
@@ -42,10 +42,10 @@
             "pytest>=8.3.4",
             "pytest-asyncio>=0.26.0",
             "pytest-cov>=6.1.0",
-            "typos>=1.31.1",
-            "ruff>=0.11.2",
+            "typos>=1.31.2",
+            "ruff>=0.11.7",
             "mypy>=1.15.0",
-            "pyright>=1.1.398",
+            "pyright>=1.1.400",
             "pre-commit>=4.2.0",
             "bump2version>=1.0.1",
             "build>=1.2.2",
