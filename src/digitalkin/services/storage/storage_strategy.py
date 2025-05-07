@@ -39,11 +39,11 @@ class StorageRecord(BaseModel):
 class StorageStrategy(BaseStrategy, ABC):
     """Define CRUD + list/remove-collection against a collection/record store."""
 
-    def _validate_data(self, record_id: str, data: dict[str, Any]) -> BaseModel:
+    def _validate_data(self, collection: str, data: dict[str, Any]) -> BaseModel:
         """Validate data against the model schema for the given key.
 
         Args:
-            record_id: The unique ID for the record
+            collection: The unique name for the record type
             data: The data to validate
 
         Returns:
@@ -52,15 +52,15 @@ class StorageStrategy(BaseStrategy, ABC):
         Raises:
             ValueError: If the key has no associated model or validation fails
         """
-        model_cls = self.config.get(record_id)
+        model_cls = self.config.get(collection)
         if not model_cls:
-            msg = f"No schema registered for collection '{record_id}'"
+            msg = f"No schema registered for collection '{collection}'"
             raise ValueError(msg)
 
         try:
             return model_cls.model_validate(data)
         except Exception as e:
-            msg = f"Validation failed for '{record_id}': {e!s}"
+            msg = f"Validation failed for '{collection}': {e!s}"
             raise ValueError(msg) from e
 
     def _create_storage_record(
@@ -200,7 +200,7 @@ class StorageStrategy(BaseStrategy, ABC):
             raise ValueError(msg)
         record_id = record_id or uuid4().hex
         data_type_enum = DataType[data_type]
-        validated_data = self._validate_data(record_id, {**data, "mission_id": self.mission_id})
+        validated_data = self._validate_data(collection, {**data, "mission_id": self.mission_id})
         record = self._create_storage_record(collection, record_id, validated_data, data_type_enum)
         return self._store(record)
 
@@ -227,7 +227,7 @@ class StorageStrategy(BaseStrategy, ABC):
         Returns:
             StorageRecord: The modified record
         """
-        validated_data = self._validate_data(record_id, data)
+        validated_data = self._validate_data(collection, data)
         return self._update(collection, record_id, validated_data)
 
     def remove(self, collection: str, record_id: str) -> bool:
