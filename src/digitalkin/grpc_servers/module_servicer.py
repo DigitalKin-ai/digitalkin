@@ -96,6 +96,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer):
             input_data,
             setup_data,
             mission_id=request.mission_id,
+            setup_version_id=setup_data_class.current_setup_version.id,
             callback=self.add_to_queue,
         )
         job_id, module = result

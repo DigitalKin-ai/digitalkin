@@ -163,14 +163,15 @@ class StorageStrategy(BaseStrategy, ABC):
             True if the deletion was successful, False otherwise
         """
 
-    def __init__(self, mission_id: str, config: dict[str, type[BaseModel]]) -> None:
+    def __init__(self, mission_id: str, setup_version_id: str, config: dict[str, type[BaseModel]]) -> None:
         """Initialize the storage strategy.
 
         Args:
             mission_id: The ID of the mission this strategy is associated with
+            setup_version_id: The ID of the setup version
             config: A dictionary mapping names to Pydantic model classes
         """
-        super().__init__(mission_id)
+        super().__init__(mission_id, setup_version_id)
         # Schema configuration mapping keys to model classes
         self.config: dict[str, type[BaseModel]] = config
 

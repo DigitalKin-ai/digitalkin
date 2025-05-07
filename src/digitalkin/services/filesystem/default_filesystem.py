@@ -18,14 +18,15 @@ logger = logging.getLogger(__name__)
 class DefaultFilesystem(FilesystemStrategy):
     """Default state filesystem strategy."""
 
-    def __init__(self, mission_id: str, config: dict[str, str]) -> None:
+    def __init__(self, mission_id: str, setup_version_id: str, config: dict[str, str]) -> None:
         """Initialize the default filesystem strategy.
 
         Args:
             mission_id: The ID of the mission this strategy is associated with
+            setup_version_id: The ID of the setup version this strategy is associated with
             config: A dictionary mapping names to Pydantic model classes
         """
-        super().__init__(mission_id, config)
+        super().__init__(mission_id, setup_version_id, config)
         self.temp_root: str = self.config.get("temp_root", "") or tempfile.gettempdir()
         os.makedirs(self.temp_root, exist_ok=True)
         self.db: dict[str, FilesystemData] = {}

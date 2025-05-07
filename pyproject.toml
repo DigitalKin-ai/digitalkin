@@ -12,7 +12,7 @@
 
     keywords = [ "digitalkin", "kin", "agent", "gprc", "sdk" ]
     # Version of the package automatically updated by bump2version (that is why it is separated)
-    version = "0.2.11"
+    version = "0.2.12"
 
     classifiers = [
         "Development Status :: 3 - Alpha",
@@ -29,13 +29,13 @@
     ]
 
     dependencies = [
-        "digitalkin-proto>=0.1.8",
+        "digitalkin-proto>=0.1.10",
         "grpcio-health-checking>=1.71.0",
         "grpcio-reflection>=1.71.0",
         "grpcio-status>=1.71.0",
         "openai>=1.76.2",
         "pydantic>=2.11.4",
-    ]
+]
 
     [project.optional-dependencies]
         dev = [
@@ -181,6 +181,9 @@
                 "ANN002",
                 "ARG002",
             ]
+
+        [tool.ruff.lint.pylint]
+            max-args = 10
 
     [tool.ruff.format]
         quote-style               = "double"
