@@ -5,7 +5,7 @@ from typing import Any, ClassVar
 from pydantic import BaseModel, Field, PrivateAttr
 
 from digitalkin.services.agent import AgentStrategy, DefaultAgent
-from digitalkin.services.cost import CostStrategy, DefaultCost
+from digitalkin.services.cost import CostStrategy, DefaultCost, GrpcCost
 from digitalkin.services.filesystem import DefaultFilesystem, FilesystemStrategy, GrpcFilesystem
 from digitalkin.services.identity import DefaultIdentity, IdentityStrategy
 from digitalkin.services.registry import DefaultRegistry, RegistryStrategy
@@ -30,7 +30,7 @@ class ServicesConfig(BaseModel):
     )
     _config_storage: dict[str, Any | None] = PrivateAttr(default_factory=dict)
     _cost: ServicesStrategy[CostStrategy] = PrivateAttr(
-        default_factory=lambda: ServicesStrategy(local=DefaultCost, remote=DefaultCost)
+        default_factory=lambda: ServicesStrategy(local=DefaultCost, remote=GrpcCost)
     )
     _config_cost: dict[str, Any | None] = PrivateAttr(default_factory=dict)
     _snapshot: ServicesStrategy[SnapshotStrategy] = PrivateAttr(
@@ -111,12 +111,13 @@ class ServicesConfig(BaseModel):
         """
         return getattr(self, f"_config_{name}", {})
 
-    def init_strategy(self, name: str, mission_id: str) -> ServicesStrategy:
+    def init_strategy(self, name: str, mission_id: str, setup_version_id: str) -> ServicesStrategy:
         """Initialize a specific strategy.
 
         Args:
             name: The name of the strategy to initialize
             mission_id: The ID of the mission this strategy is associated with
+            setup_version_id: The setup version ID for the strategy
 
         Returns:
             The initialized strategy instance
@@ -129,8 +130,8 @@ class ServicesConfig(BaseModel):
             msg = f"Strategy {name} not found in ServicesConfig."
             raise ValueError(msg)
 
-        # Instantiate the strategy with the mission ID and configuration
-        return strategy_type(mission_id, **self.get_strategy_config(name) or {})
+        # Instantiate the strategy with the mission ID, setup version ID, and configuration
+        return strategy_type(mission_id, setup_version_id, **self.get_strategy_config(name) or {})
 
     @property
     def storage(self) -> type[StorageStrategy]:

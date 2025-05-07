@@ -209,12 +209,13 @@ class DefaultStorage(StorageStrategy):
     def __init__(
         self,
         mission_id: str,
+        setup_version_id: str,
         config: dict[str, type[BaseModel]],
         storage_file_path: str = "local_storage",
         **kwargs,  # noqa: ANN003, ARG002
     ) -> None:
         """Initialize the storage."""
-        super().__init__(mission_id=mission_id, config=config)
+        super().__init__(mission_id=mission_id, setup_version_id=setup_version_id, config=config)
         self.storage_file_path = f"{self.mission_id}_{storage_file_path}.json"
         self.storage_file = Path(self.storage_file_path)
         self.storage = self._load_from_file()

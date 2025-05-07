@@ -24,26 +24,6 @@ logger = logging.getLogger(__name__)
 class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper):
     """Default state filesystem strategy."""
 
-    def __init__(
-        self,
-        mission_id: str,
-        config: dict[str, str],
-        client_config: ClientConfig,
-        **kwargs,  # noqa: ANN003, ARG002
-    ) -> None:
-        """Initialize the default filesystem strategy.
-
-        Args:
-            mission_id: The ID of the mission this strategy is associated with
-            config: A dictionary mapping names to Pydantic model classes
-            client_config: The client configuration object
-            kwargs: other optional arguments to pass to the parent class constructor
-        """
-        super().__init__(mission_id, config)
-        channel = self._init_channel(client_config)
-        self.stub = filesystem_service_pb2_grpc.FilesystemServiceStub(channel)
-        logger.info("Channel client 'Filesystem' initialized succesfully")
-
     @staticmethod
     @contextmanager
     def _handle_grpc_errors(operation: str) -> Generator[Any, Any, Any]:
@@ -56,7 +36,7 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper):
             operation: Description of the operation being performed.
 
         Raises:
-            ValueError: Error wiht the model validation.
+            ValueError: Error with the model validation.
             ServerError: from gRPC Client.
             FilesystemServiceError: Filesystem service internal.
         """
@@ -70,6 +50,28 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper):
             msg = f"Unexpected error in {operation}"
             logger.exception(msg)
             raise FilesystemServiceError(msg) from e
+
+    def __init__(
+        self,
+        mission_id: str,
+        setup_version_id: str,
+        config: dict[str, str],
+        client_config: ClientConfig,
+        **kwargs,  # noqa: ANN003, ARG002
+    ) -> None:
+        """Initialize the default filesystem strategy.
+
+        Args:
+            mission_id: The ID of the mission this strategy is associated with
+            setup_version_id: The ID of the setup version this strategy is associated with
+            config: A dictionary mapping names to Pydantic model classes
+            client_config: The server configuration object
+            kwargs: other optional arguments to pass to the parent class constructor
+        """
+        super().__init__(mission_id, setup_version_id, config)
+        channel = self._init_channel(client_config)
+        self.stub = filesystem_service_pb2_grpc.FilesystemServiceStub(channel)
+        logger.info("Channel client 'Filesystem' initialized succesfully")
 
     def upload(self, content: bytes, name: str, file_type: FileType) -> FilesystemData:
         """Create a new file in the file system.
