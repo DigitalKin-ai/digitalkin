@@ -1,14 +1,12 @@
 """Simple module calling an LLM."""
 
 import logging
-import os
 from collections.abc import Callable
 from typing import Any, ClassVar, Literal
 
-import openai
 from pydantic import BaseModel, Field
 
-from digitalkin.grpc_servers.utils.models import ClientConfig, SecurityMode, ServerMode
+from digitalkin.grpc_servers.utils.models import ClientConfig, SecurityMode, ServerConfig, ServerMode
 from digitalkin.modules._base_module import BaseModule
 from digitalkin.services.services_models import ServicesStrategy
 from digitalkin.services.setup.setup_strategy import SetupData
@@ -22,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 
 class MessageInputPayload(BaseModel):
-    """Message trigger model for the OpenAI Archetype module."""
+    """Message trigger model for the CPU Archetype module."""
 
     payload_type: Literal["message"] = "message"
     user_prompt: str = Field(
@@ -33,7 +31,7 @@ class MessageInputPayload(BaseModel):
 
 
 class InputFile(BaseModel):
-    """File model for the OpenAI Archetype module."""
+    """File model for the CPU Archetype module."""
 
     name: str = Field(
         ...,
@@ -54,7 +52,7 @@ class InputFile(BaseModel):
 
 
 class FileInputPayload(BaseModel):
-    """File input model for the OpenAI Archetype module."""
+    """File input model for the CPU Archetype module."""
 
     payload_type: Literal["file"] = "file"
     files: list[InputFile] = Field(
@@ -64,7 +62,7 @@ class FileInputPayload(BaseModel):
     )
 
 
-class OpenAIInput(BaseModel):
+class CPUInput(BaseModel):
     """Input model defining what data the module expects."""
 
     payload: MessageInputPayload | FileInputPayload = Field(
@@ -76,7 +74,7 @@ class OpenAIInput(BaseModel):
 
 
 class MessageOutputPayload(BaseModel):
-    """Message output model for the OpenAI Archetype module."""
+    """Message output model for the CPU Archetype module."""
 
     payload_type: Literal["message"] = "message"
     user_response: str = Field(
@@ -87,7 +85,7 @@ class MessageOutputPayload(BaseModel):
 
 
 class OutputFile(BaseModel):
-    """File model for the OpenAI Archetype module."""
+    """File model for the CPU Archetype module."""
 
     name: str = Field(
         ...,
@@ -108,7 +106,7 @@ class OutputFile(BaseModel):
 
 
 class FileOutputPayload(BaseModel):
-    """File output model for the OpenAI Archetype module."""
+    """File output model for the CPU Archetype module."""
 
     payload_type: Literal["file"] = "file"
     files: list[OutputFile] = Field(
@@ -118,7 +116,7 @@ class FileOutputPayload(BaseModel):
     )
 
 
-class OpenAIOutput(BaseModel):
+class CPUOutput(BaseModel):
     """Output model defining what data the module produces."""
 
     payload: MessageOutputPayload | FileOutputPayload = Field(
@@ -129,13 +127,13 @@ class OpenAIOutput(BaseModel):
     )
 
 
-class OpenAISetup(BaseModel):
+class CPUSetup(BaseModel):
     """Setup model defining module configuration parameters."""
 
     model_name: str = Field(
         ...,
         title="Model Name",
-        description="The name of the OpenAI model to use for processing.",
+        description="The name of the CPU model to use for processing.",
     )
     developer_prompt: str = Field(
         ...,
@@ -154,8 +152,18 @@ class OpenAISetup(BaseModel):
     )
 
 
-class OpenAIToolSecret(BaseModel):
+class CPUToolSecret(BaseModel):
     """Secret model defining module configuration parameters."""
+
+
+server_config = ServerConfig(
+    host="[::]",
+    port=50151,
+    mode=ServerMode.ASYNC,
+    security=SecurityMode.INSECURE,
+    max_workers=10,
+    credentials=None,
+)
 
 
 client_config = ClientConfig(
@@ -167,23 +175,21 @@ client_config = ClientConfig(
 )
 
 
-class OpenAIToolModule(BaseModule[OpenAIInput, OpenAIOutput, OpenAISetup, OpenAIToolSecret]):
-    """A openAI endpoint tool module module."""
+class CPUIntensiveModule(BaseModule[CPUInput, CPUOutput, CPUSetup, CPUToolSecret]):
+    """A CPU endpoint tool module module."""
 
-    name = "OpenAIToolModule"
-    description = "A module that interacts with OpenAI API to process text"
+    name = "CPUIntensiveModule"
+    description = "A module that interacts with CPU API to process text"
 
     # Define the schema formats for the module
-    input_format = OpenAIInput
-    output_format = OpenAIOutput
-    setup_format = OpenAISetup
-    secret_format = OpenAIToolSecret
-
-    openai_client: openai.OpenAI
+    input_format = CPUInput
+    output_format = CPUOutput
+    setup_format = CPUSetup
+    secret_format = CPUToolSecret
 
     # Define module metadata for discovery
     metadata: ClassVar[dict[str, Any]] = {
-        "name": "OpenAIToolModule",
+        "name": "CPUIntensiveModule",
         "description": "Transforms input text using a streaming LLM response.",
         "version": "1.0.0",
         "tags": ["text", "transformation", "encryption", "streaming"],
@@ -192,7 +198,7 @@ class OpenAIToolModule(BaseModule[OpenAIInput, OpenAIOutput, OpenAISetup, OpenAI
     services_config_strategies: ClassVar[dict[str, ServicesStrategy | None]] = {}
     services_config_params: ClassVar[dict[str, dict[str, Any | None] | None]] = {
         "storage": {
-            "config": {"setups": OpenAISetup},
+            "config": {"chat_history": None},
             "client_config": client_config,
         },
         "filesystem": {
@@ -211,56 +217,11 @@ class OpenAIToolModule(BaseModule[OpenAIInput, OpenAIOutput, OpenAISetup, OpenAI
         This method is called when the module is loaded by the server.
         Use it to set up module-specific resources or configurations.
         """
-        self.client: openai.AsyncOpenAI = openai.AsyncOpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
-        # Define what capabilities this module provides
-        self.capabilities = ["text-processing", "streaming", "transformation"]
-        logger.info(
-            "Module %s initialized with capabilities: %s",
-            self.metadata["name"],
-            self.capabilities,
-        )
-
-    async def run_message(
-        self,
-        input_model: MessageInputPayload,
-        setup_model: OpenAISetup,
-        callback: Callable,
-    ) -> None:
-        """Process input text and stream LLM responses.
-
-        Args:
-            input_data: Contains the text to process.
-            setup_data: Contains model configuration and development prompt.
-            callback: Function to send output data back to the client.
-
-        Raises:
-            grpc.RpcError: If gRPC communication fails.
-            openai.AuthenticationError: If authentication with OpenAI fails.
-            openai.APIConnectionError: If an API connection error occurs.
-            Exception: For any unexpected runtime errors.
-        """
-        # response = await self.client.responses.create(
-        #     model=setup_model.model_name,
-        #     instructions=setup_model.developer_prompt,
-        #     temperature=setup_model.temperature,
-        #     max_output_tokens=setup_model.max_tokens,
-        #     input=input_model.user_prompt,
-        # )
-        # logger.info("Recieved answer from OpenAI: %s", response)
-
-        # Get and save the output data
-        message_output_payload = MessageOutputPayload(
-            payload_type="message",
-            user_response="Mock data",
-            # user_response=response.output_text,
-        )
-        output_model = self.output_format.model_validate({"payload": message_output_payload})
-        await callback(output_data=output_model)
 
     async def run(
         self,
-        input_data: OpenAIInput,
-        setup_data: OpenAISetup,
+        input_data: CPUInput,
+        setup_data: CPUSetup,
         callback: Callable,
     ) -> None:
         """Run the module.
@@ -275,7 +236,7 @@ class OpenAIToolModule(BaseModule[OpenAIInput, OpenAIOutput, OpenAISetup, OpenAI
         """
         # Validate the input data
         input_model = self.input_format.model_validate(input_data)
-        setup_model = self.setup_format.model_validate(setup_data)
+        self.setup_format.model_validate(setup_data)
         logger.debug("Running with input data: %s", input_model)
 
         if not hasattr(input_model, "payload"):
@@ -286,17 +247,18 @@ class OpenAIToolModule(BaseModule[OpenAIInput, OpenAIOutput, OpenAISetup, OpenAI
             error_msg = "Input payload is missing 'type' field"
             raise ValueError(error_msg)
 
-        if input_model.payload.payload_type == "message":
-            # Validate against MessageInputPayload
-            message_payload = MessageInputPayload.model_validate(input_model.payload)
-            await self.run_message(message_payload, setup_model, callback)
-        elif input_model.payload.payload_type == "file":
-            # Validate against FileInputPayload
-            file_payload = FileInputPayload.model_validate(input_model.payload)
-            await self.run_file(file_payload, setup_model, callback)
-        else:
-            error_msg = f"Unknown input type '{input_model.payload.payload_type}'. Expected 'message' or 'file'."
-            raise ValueError(error_msg)
+        total = 0
+        input = MessageInputPayload.model_validate(input_model.payload).user_prompt
+
+        for i in range(int(input)):
+            total += i * i
+            if i % 100 == 0 or i == int(input) - 1:
+                message_output_payload = MessageOutputPayload(
+                    payload_type="message",
+                    user_response=f"result iteration {i}: {total}",
+                )
+                output_model = self.output_format.model_validate({"payload": message_output_payload})
+                await callback(output_data=output_model)
         logger.info("Job %s completed", self.job_id)
 
     async def cleanup(self) -> None:

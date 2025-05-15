@@ -1,7 +1,6 @@
 """Module servicer implementation for DigitalKin."""
 
-import asyncio
-import logging
+from argparse import ArgumentParser, Namespace
 from collections.abc import AsyncGenerator
 from typing import Any
 
@@ -15,19 +14,20 @@ from digitalkin_proto.digitalkin.module.v2 import (
 from google.protobuf import json_format, struct_pb2
 
 from digitalkin.grpc_servers.utils.exceptions import ServicerError
-from digitalkin.models.module import OutputModelT
+from digitalkin.logger import logger
 from digitalkin.models.module.module import ModuleStatus
 from digitalkin.modules._base_module import BaseModule
-from digitalkin.modules.job_manager import JobManager
+from digitalkin.modules.job_manager.base_job_manager import BaseJobManager
+from digitalkin.modules.job_manager.job_manager_models import JobManagerMode
 from digitalkin.services.services_models import ServicesMode
 from digitalkin.services.setup.default_setup import DefaultSetup
 from digitalkin.services.setup.grpc_setup import GrpcSetup
 from digitalkin.services.setup.setup_strategy import SetupStrategy
+from digitalkin.utils.arg_parser import ArgParser
+from digitalkin.utils.development_mode_action import DevelopmentModeMappingAction
 
-logger = logging.getLogger(__name__)
 
-
-class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer):
+class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
     """Implementation of the ModuleService.
 
     This servicer handles interactions with a DigitalKin module.
@@ -37,7 +37,31 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer):
         active_jobs: Dictionary tracking active module jobs.
     """
 
+    args: Namespace
     setup: SetupStrategy
+    job_manager: BaseJobManager
+
+    def _add_parser_args(self, parser: ArgumentParser) -> None:
+        super()._add_parser_args(parser)
+        parser.add_argument(
+            "-d",
+            "--dev-mode",
+            env_var="SERVICE_MODE",
+            choices=ServicesMode.__members__,
+            default="local",
+            action=DevelopmentModeMappingAction,
+            dest="services_mode",
+            help="Define Module Service configurations for endpoints",
+        )
+        parser.add_argument(
+            "-jm",
+            "--job-manager",
+            type=JobManagerMode,
+            choices=list(JobManagerMode),
+            default=JobManagerMode.SINGLE,
+            dest="job_manager_mode",
+            help="Define Module job manager configurations for load balancing",
+        )
 
     def __init__(self, module_class: type[BaseModule]) -> None:
         """Initialize the module servicer.
@@ -46,15 +70,16 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer):
             module_class: The module type to serve.
         """
         super().__init__()
-        self.queue: asyncio.Queue = asyncio.Queue()
         self.module_class = module_class
-        self.job_manager = JobManager(module_class)
-        self.setup = GrpcSetup() if self.job_manager.args.services_mode == ServicesMode.REMOTE else DefaultSetup()
+        job_manager_class = self.args.job_manager_mode.get_manager_class()
+        self.job_manager = job_manager_class(module_class, self.args.services_mode)
 
-    async def add_to_queue(self, job_id: str, output_data: OutputModelT) -> None:  # type: ignore
-        """Callback used to add the output data to the queue of messages."""
-        logger.info("JOB: %s added an output_data: %s", job_id, output_data)
-        await self.queue.put({job_id: output_data})
+        logger.debug(
+            "ModuleServicer initialized with job manager: %s | %s",
+            self.args.job_manager_mode,
+            self.job_manager,
+        )
+        self.setup = GrpcSetup() if self.args.services_mode == ServicesMode.REMOTE else DefaultSetup()
 
     async def StartModule(  # noqa: N802
         self,
@@ -87,47 +112,45 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer):
         if not setup_data_class:
             msg = "No setup data returned."
             raise ServicerError(msg)
-        # TODO: Check failure of setup data format
+
         setup_data = self.module_class.create_setup_model(setup_data_class.current_setup_version.content)
 
-        # setup_id should be use to request a precise setup from the module
-        # Create a job for this execution
-        result: tuple[str, BaseModule] = await self.job_manager.create_job(
+        # create a task to run the module in background
+        job_id = await self.job_manager.create_job(
             input_data,
             setup_data,
             mission_id=request.mission_id,
             setup_version_id=setup_data_class.current_setup_version.id,
-            callback=self.add_to_queue,
         )
-        job_id, module = result
 
-        while module.status == ModuleStatus.RUNNING or not self.queue.empty():
-            output_data: dict = await self.queue.get()
+        if job_id is None:
+            context.set_code(grpc.StatusCode.NOT_FOUND)
+            context.set_details("Failed to create module instance")
+            yield lifecycle_pb2.StartModuleResponse(success=False)
+            return
 
-            if job_id not in output_data or job_id not in self.job_manager.modules:
-                message = f"Job {job_id} not found"
-                logger.warning(message)
-                context.set_code(grpc.StatusCode.NOT_FOUND)
-                context.set_details(message)
-                yield lifecycle_pb2.StartModuleResponse(success=False)
-                return
+        async with self.job_manager.generate_stream_consumer(job_id) as stream:  # type: ignore
+            async for message in stream:
+                if message.get("error", None) is not None:
+                    context.set_code(message["error"]["code"])
+                    context.set_details(message["error"]["error_message"])
+                    yield lifecycle_pb2.StartModuleResponse(success=False, job_id=job_id)
+                    break
 
-            if output_data[job_id].get("error", None) is not None:
-                context.set_code(output_data[job_id]["error"]["code"])
-                context.set_details(output_data[job_id]["error"]["error_message"])
-                yield lifecycle_pb2.StartModuleResponse(success=False)
-                return
+                if message.get("exception", None) is not None:
+                    logger.error("Error in output_data")
+                    context.set_code(message["short_description"])
+                    context.set_details(message["exception"])
+                    yield lifecycle_pb2.StartModuleResponse(success=False, job_id=job_id)
+                    break
 
-            output_proto = json_format.ParseDict(
-                output_data[job_id],
-                struct_pb2.Struct(),
-                ignore_unknown_fields=True,
-            )
-            yield lifecycle_pb2.StartModuleResponse(
-                success=True,
-                output=output_proto,
-                job_id=job_id,
-            )
+                if message.get("code", None) is not None and message.get("code") == "__END_OF_STREAM__":
+                    yield lifecycle_pb2.StartModuleResponse(success=True, job_id=job_id)
+                    break
+
+                proto = json_format.ParseDict(message, struct_pb2.Struct(), ignore_unknown_fields=True)
+                yield lifecycle_pb2.StartModuleResponse(success=True, output=proto, job_id=job_id)
+        logger.info("Job %s finished", job_id)
 
     async def StopModule(  # noqa: N802
         self,
@@ -143,23 +166,20 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer):
         Returns:
             A response indicating success or failure.
         """
-        logger.info("StopModule called for module: '%s'", self.module_class.__name__)
+        logger.debug("StopModule called for module: '%s'", self.module_class.__name__)
 
-        job_id = request.job_id
-        if job_id not in self.job_manager.modules:
-            message = f"Job {job_id} not found"
+        response: bool = await self.job_manager.stop_module(request.job_id)
+        if not response:
+            message = f"Job {request.job_id} not found"
             logger.warning(message)
             context.set_code(grpc.StatusCode.NOT_FOUND)
             context.set_details(message)
             return lifecycle_pb2.StopModuleResponse(success=False)
 
-        # Update the job status
-        await self.job_manager.modules[job_id].stop()
-
-        logger.info("Job %s stopped successfully", job_id)
+        logger.debug("Job %s stopped successfully", request.job_id)
         return lifecycle_pb2.StopModuleResponse(success=True)
 
-    def GetModuleStatus(  # noqa: N802
+    async def GetModuleStatus(  # noqa: N802
         self,
         request: monitoring_pb2.GetModuleStatusRequest,
         context: grpc.ServicerContext,
@@ -173,33 +193,33 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer):
         Returns:
             A response with the module status.
         """
-        logger.info("GetModuleStatus called for module: '%s'", self.module_class.__name__)
+        logger.debug("GetModuleStatus called for module: '%s'", self.module_class.__name__)
 
-        # If job_id is specified, get status for that job
-        if request.job_id:
-            if request.job_id not in self.job_manager.modules:
-                message = f"Job {request.job_id} not found"
-                logger.warning(message)
-                context.set_code(grpc.StatusCode.NOT_FOUND)
-                context.set_details(message)
-                return monitoring_pb2.GetModuleStatusResponse()
-
-            status = self.job_manager.modules[request.job_id].status
-            logger.info("Job %s status: '%s'", request.job_id, status)
+        if not request.job_id:
+            logger.debug("Job %s status: '%s'", request.job_id, ModuleStatus.NOT_FOUND)
             return monitoring_pb2.GetModuleStatusResponse(
-                success=True,
-                status=status.name,
+                success=False,
+                status=ModuleStatus.NOT_FOUND.name,
                 job_id=request.job_id,
             )
 
-        logger.info("Job %s status: '%s'", request.job_id, ModuleStatus.NOT_FOUND)
+        status = await self.job_manager.get_module_status(request.job_id)
+
+        if status is None:
+            message = f"Job {request.job_id} not found"
+            logger.warning(message)
+            context.set_code(grpc.StatusCode.NOT_FOUND)
+            context.set_details(message)
+            return monitoring_pb2.GetModuleStatusResponse()
+
+        logger.debug("Job %s status: '%s'", request.job_id, status)
         return monitoring_pb2.GetModuleStatusResponse(
-            success=False,
-            status=ModuleStatus.NOT_FOUND.name,
+            success=True,
+            status=status.name,
             job_id=request.job_id,
         )
 
-    def GetModuleJobs(  # noqa: N802
+    async def GetModuleJobs(  # noqa: N802
         self,
         request: monitoring_pb2.GetModuleJobsRequest,  # noqa: ARG002
         context: grpc.ServicerContext,  # noqa: ARG002
@@ -213,20 +233,22 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer):
         Returns:
             A response with information about active jobs.
         """
-        logger.info("GetModuleJobs called for module: '%s'", self.module_class.__name__)
+        logger.debug("GetModuleJobs called for module: '%s'", self.module_class.__name__)
+
+        modules = await self.job_manager.list_modules()
 
         # Create job info objects for each active job
         return monitoring_pb2.GetModuleJobsResponse(
             jobs=[
                 monitoring_pb2.JobInfo(
                     job_id=job_id,
-                    job_status=job_data.status.name,
+                    job_status=job_data["status"].name,
                 )
-                for job_id, job_data in self.job_manager.modules.items()
+                for job_id, job_data in modules.items()
             ],
         )
 
-    def GetModuleInput(  # noqa: N802
+    async def GetModuleInput(  # noqa: N802
         self,
         request: information_pb2.GetModuleInputRequest,
         context: grpc.ServicerContext,
@@ -240,7 +262,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer):
         Returns:
             A response with the module's input schema.
         """
-        logger.info("GetModuleInput called for module: '%s'", self.module_class.__name__)
+        logger.debug("GetModuleInput called for module: '%s'", self.module_class.__name__)
 
         # Get input schema if available
         try:
@@ -262,7 +284,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer):
             input_schema=input_format_struct,
         )
 
-    def GetModuleOutput(  # noqa: N802
+    async def GetModuleOutput(  # noqa: N802
         self,
         request: information_pb2.GetModuleOutputRequest,
         context: grpc.ServicerContext,
@@ -276,7 +298,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer):
         Returns:
             A response with the module's output schema.
         """
-        logger.info("GetModuleOutput called for module: '%s'", self.module_class.__name__)
+        logger.debug("GetModuleOutput called for module: '%s'", self.module_class.__name__)
 
         # Get output schema if available
         try:
@@ -298,7 +320,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer):
             output_schema=output_format_struct,
         )
 
-    def GetModuleSetup(  # noqa: N802
+    async def GetModuleSetup(  # noqa: N802
         self,
         request: information_pb2.GetModuleSetupRequest,
         context: grpc.ServicerContext,
@@ -312,7 +334,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer):
         Returns:
             A response with the module's setup information.
         """
-        logger.info("GetModuleSetup called for module: '%s'", self.module_class.__name__)
+        logger.debug("GetModuleSetup called for module: '%s'", self.module_class.__name__)
 
         # Get setup schema if available
         try:

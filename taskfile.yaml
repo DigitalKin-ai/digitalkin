@@ -16,24 +16,28 @@ tasks:
     cmds:
       - uv pip compile pyproject.toml -o requirements.txt
       - |
-          if [ -n "$VIRTUAL_ENV" ] || [ -d ".venv" -a -f ".venv/bin/activate" ]; then
-            echo "Installing in virtual environment"
-            uv pip install -e .
-          else
-            echo "Installing in system Python"
-            uv pip install -e . --system
-          fi
+        if [ -n "$VIRTUAL_ENV" ] || [ -d ".venv" -a -f ".venv/bin/activate" ]; then
+          echo "Installing in virtual environment"
+          uv pip install -e .
+        else
+          echo "Installing in system Python"
+          uv pip install -e . --system
+        fi
 
   dev-deps:
     desc: "Install development dependencies"
     cmds:
-      - uv pip install -e ".[dev]"
+      - uv pip install -e ".[dev, taskiq]"
 
   examples-deps:
     desc: "Install examples dependencies"
     cmds:
       - uv pip install -e ".[examples]"
 
+  tests-deps:
+    desc: "Install tests dependencies"
+    cmds:
+      - uv pip install -e ".[tests]"
   setup-pre-commit:
     desc: "Install pre-commit hooks"
     cmds:
@@ -76,7 +80,7 @@ tasks:
     desc: "run linter on the project"
     cmds:
       - |
-          uv run ruff format . && uv run ruff check --select I --fix . && uv run ruff check . --fix
+        uv run ruff format . && uv run ruff check --select I --fix . && uv run ruff check . --fix
 
   clean:
     desc: "Remove build artifacts and cache directories"
@@ -110,4 +114,10 @@ tasks:
       - task: venv
       - task: install-deps
       - task: dev-deps
+      - task: tests-deps
       - task: setup-pre-commit
+
+  start-taskiq:
+    desc: "Start TaskIQ worker. be sure to enable rabbitMQ stream capability"
+    cmds:
+      - taskiq worker digitalkin.modules.job_manager.taskiq_broker:TASKIQ_BROKER -w 1

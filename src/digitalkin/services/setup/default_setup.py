@@ -1,16 +1,14 @@
 """This module contains the abstract base class for setup strategies."""
 
-import logging
 import secrets
 import string
 from typing import Any
 
 from pydantic import ValidationError
 
+from digitalkin.logger import logger
 from digitalkin.services.setup.grpc_setup import SetupData, SetupVersionData
 from digitalkin.services.setup.setup_strategy import SetupServiceError, SetupStrategy
-
-logger = logging.getLogger(__name__)
 
 
 class DefaultSetup(SetupStrategy):
@@ -49,7 +47,7 @@ class DefaultSetup(SetupStrategy):
         )
         valid_data.id = setup_id
         self.setups[setup_id] = valid_data
-        logger.info("CREATE SETUP DATA %s:%s succesfull", setup_id, valid_data)
+        logger.debug("CREATE SETUP DATA %s:%s succesfull", setup_id, valid_data)
         return setup_id
 
     def get_setup(self, setup_dict: dict[str, Any]) -> SetupData:
@@ -64,7 +62,7 @@ class DefaultSetup(SetupStrategy):
         Returns:
             Dict[str, Any]: Setup details including optional setup version.
         """
-        logger.info("GET setup_id = %s", setup_dict["setup_id"])
+        logger.debug("GET setup_id = %s", setup_dict["setup_id"])
         if setup_dict["setup_id"] not in self.setups:
             msg = f"GET setup_id = {setup_dict['setup_id']}: setup_id DOESN'T EXIST"
             logger.error(msg)
@@ -84,7 +82,7 @@ class DefaultSetup(SetupStrategy):
             bool: Success status of the update operation.
         """
         if setup_dict["setup_id"] not in self.setups:
-            logger.info("UPDATE setup_id = %s: setup_id DOESN'T EXIST", setup_dict["setup_id"])
+            logger.debug("UPDATE setup_id = %s: setup_id DOESN'T EXIST", setup_dict["setup_id"])
             return False
 
         try:
@@ -106,7 +104,7 @@ class DefaultSetup(SetupStrategy):
             bool: Success status of deletion.
         """
         if setup_dict["setup_id"] not in self.setups:
-            logger.info("UPDATE setup_id = %s: setup_id DOESN'T EXIST", setup_dict["setup_id"])
+            logger.debug("UPDATE setup_id = %s: setup_id DOESN'T EXIST", setup_dict["setup_id"])
             return False
         del self.setups[setup_dict["setup_id"]]
         return True
@@ -133,7 +131,7 @@ class DefaultSetup(SetupStrategy):
         if setup_version_dict["setup_id"] not in self.setup_versions:
             self.setup_versions[setup_version_dict["setup_id"]] = {}
         self.setup_versions[setup_version_dict["setup_id"]][valid_data.version] = valid_data
-        logger.info("CREATE SETUP VERSION DATA %s:%s succesfull", setup_version_dict["setup_id"], valid_data)
+        logger.debug("CREATE SETUP VERSION DATA %s:%s succesfull", setup_version_dict["setup_id"], valid_data)
         return valid_data.version
 
     def get_setup_version(self, setup_version_dict: dict[str, Any]) -> SetupVersionData:
@@ -148,7 +146,7 @@ class DefaultSetup(SetupStrategy):
         Returns:
             Dict[str, Any]: Setup version details.
         """
-        logger.info("GET setup_id = %s: version = %s", setup_version_dict["setup_id"], setup_version_dict["version"])
+        logger.debug("GET setup_id = %s: version = %s", setup_version_dict["setup_id"], setup_version_dict["version"])
         if setup_version_dict["setup_id"] not in self.setup_versions:
             msg = f"GET setup_id = {setup_version_dict['setup_id']}: setup_id DOESN'T EXIST"
             logger.error(msg)
@@ -189,11 +187,11 @@ class DefaultSetup(SetupStrategy):
             bool: Success status of the update operation.
         """
         if setup_version_dict["setup_id"] not in self.setup_versions:
-            logger.info("UPDATE setup_id = %s: setup_id DOESN'T EXIST", setup_version_dict["setup_id"])
+            logger.debug("UPDATE setup_id = %s: setup_id DOESN'T EXIST", setup_version_dict["setup_id"])
             return False
 
         if setup_version_dict["version"] not in self.setup_versions["setup_id"]:
-            logger.info("UPDATE setup_id = %s: setup_id DOESN'T EXIST", setup_version_dict["setup_id"])
+            logger.debug("UPDATE setup_id = %s: setup_id DOESN'T EXIST", setup_version_dict["setup_id"])
             return False
 
         try:
@@ -215,7 +213,7 @@ class DefaultSetup(SetupStrategy):
             bool: Success status of version deletion.
         """
         if setup_version_dict["setup_id"] not in self.setup_versions:
-            logger.info("UPDATE setup_id = %s: setup_id DOESN'T EXIST", setup_version_dict["setup_id"])
+            logger.debug("UPDATE setup_id = %s: setup_id DOESN'T EXIST", setup_version_dict["setup_id"])
             return False
 
         del self.setup_versions[setup_version_dict["setup_id"]][setup_version_dict["version"]]

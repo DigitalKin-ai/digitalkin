@@ -1,6 +1,5 @@
 """Module gRPC server implementation for DigitalKin."""
 
-import logging
 from pathlib import Path
 import uuid
 
@@ -25,8 +24,7 @@ from digitalkin_proto.digitalkin.module_registry.v2 import (
     module_registry_service_pb2_grpc,
     registration_pb2,
 )
-
-logger = logging.getLogger(__name__)
+from digitalkin.logger import logger
 
 
 class ModuleServer(BaseServer):
@@ -70,14 +68,14 @@ class ModuleServer(BaseServer):
             msg = "Server must be created before registering servicers"
             raise RuntimeError(msg)
 
-        logger.info("Registering module servicer for %s", self.module_class.__name__)
+        logger.debug("Registering module servicer for %s", self.module_class.__name__)
         self.module_servicer = ModuleServicer(self.module_class)
         self.register_servicer(
             self.module_servicer,
             module_service_pb2_grpc.add_ModuleServiceServicer_to_server,
             service_descriptor=module_service_pb2.DESCRIPTOR,
         )
-        logger.info("Registered Module servicer")
+        logger.debug("Registered Module servicer")
 
     def start(self) -> None:
         """Start the module server and register with the registry if configured."""
@@ -115,6 +113,7 @@ class ModuleServer(BaseServer):
             logger.critical(
                 "Setup post init started with config: %s", self.client_config
             )
+            await self.module_servicer.job_manager._start()
             self.module_servicer.setup.__post_init__(self.client_config)
 
     def stop(self, grace: float | None = None) -> None:
@@ -134,7 +133,7 @@ class ModuleServer(BaseServer):
         Raises:
             ServerError: If communication with the registry server fails.
         """
-        logger.info(
+        logger.debug(
             "Registering module with registry at %s",
             self.server_config.registry_address,
         )
@@ -172,7 +171,7 @@ class ModuleServer(BaseServer):
 
             try:
                 # Call the register method
-                logger.info(
+                logger.debug(
                     "Request sent to registry for module: %s:%s",
                     self.module_class.metadata["name"],
                     self.module_class.metadata["module_id"],
@@ -180,7 +179,7 @@ class ModuleServer(BaseServer):
                 response = stub.RegisterModule(request)
 
                 if response.success:
-                    logger.info("Module registered successfully")
+                    logger.debug("Module registered successfully")
                 else:
                     logger.error("Module registration failed")
             except grpc.RpcError:
@@ -193,7 +192,7 @@ class ModuleServer(BaseServer):
         Raises:
             ServerError: If communication with the registry server fails.
         """
-        logger.info(
+        logger.debug(
             "Deregistering module from registry at %s",
             self.server_config.registry_address,
         )
@@ -214,7 +213,7 @@ class ModuleServer(BaseServer):
             response = stub.DeregisterModule(request)
 
             if response.success:
-                logger.info("Module deregistered successfull")
+                logger.debug("Module deregistered successfull")
             else:
                 logger.error("Module deregistration failed")
         except grpc.RpcError:

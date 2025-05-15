@@ -1,18 +1,16 @@
 """Default filesystem."""
 
-import logging
 import os
 import tempfile
 from pathlib import Path
 
+from digitalkin.logger import logger
 from digitalkin.services.filesystem.filesystem_strategy import (
     FilesystemData,
     FilesystemServiceError,
     FilesystemStrategy,
     FileType,
 )
-
-logger = logging.getLogger(__name__)
 
 
 class DefaultFilesystem(FilesystemStrategy):
@@ -177,7 +175,7 @@ class DefaultFilesystem(FilesystemStrategy):
         try:
             os.remove(file_path)
             del self.db[name]
-            logger.info("File %s successfully deleted.", name)
+            logger.debug("File %s successfully deleted.", name)
 
         except OSError:
             msg = f"Error deleting file {name} from filesystem"

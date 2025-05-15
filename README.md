@@ -30,6 +30,16 @@ To install the DigitalKin SDK, simply run:
 pip install digitalkin
 ```
 
+**Optional Taskiq Integration**: Asynchronous task execution powered by Taskiq, backed by RabbitMQ and Redis
+To enable the Rabbitmq streaming capabilities, run:
+
+```sh
+sudo rabbitmq-plugins enable rabbitmq_stream
+
+# Core + Taskiq integration (RabbitMQ broker)
+pip install digitalkin[taskiq]
+```
+
 ## 🛠️ Usage
 
 ### Basic Import
@@ -39,6 +49,20 @@ Start by importing the necessary modules:
 ```python
 import digitalkin
 ```
+
+## Features
+
+### Taskiq with RabbitMQ
+
+TaskIQ intergration allows the module to scale for heavy CPU tasks by having the request's stateless module in a new instance.
+
+- **Decoupled Scalability**: RabbitMQ brokers messages, letting producers and consumers scale independently.
+- **Reliability**: Durable queues, acknowledgements, and dead-lettering ensure tasks aren’t lost.
+- **Concurrency Control**: Taskiq’s worker pool manages parallel execution without custom schedulers.
+- **Flexibility**: Built-in retries, exponential backoff, and Redis result-backend for resilient workflows.
+- **Ecosystem**: Battle-tested `aio-pika` AMQP client plus Taskiq’s decorator-based API.
+
+By combining Taskiq’s async API with RabbitMQ’s guarantees, you get a robust, production-ready queue with minimal boilerplate.
 
 ## 👷‍♂️ Development
 
