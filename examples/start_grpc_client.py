@@ -227,7 +227,9 @@ async def run_client_text_transform() -> None:
             )
 
             # Create start module request
-            request = lifecycle_pb2.StartModuleRequest(input=input_data.model_dump(), setup_id=setup_id, mission_id=mission_id)
+            request = lifecycle_pb2.StartModuleRequest(
+                input=input_data.model_dump(), setup_id=setup_id, mission_id=mission_id
+            )
 
             logger.info("Starting module with input: %s", input_data.model_dump())
 
@@ -255,7 +257,7 @@ async def run_client_llm() -> None:
         logger.info("Connecting to registry server at localhost:50052")
 
         # Find the module
-        module = await discover_module(registry_channel, "Minimal_LLM_Tool")
+        module = await discover_module(registry_channel, "OpenAIToolModule")
         if not module:
             logger.error("Module not found. Make sure the module server is running.")
             return
@@ -263,8 +265,8 @@ async def run_client_llm() -> None:
         logger.info("Found module: %s (ID: %s)", module.metadata.name, module.module_id)
 
         # Connect to module server
-        async with grpc.aio.insecure_channel("localhost:50051") as module_channel:
-            logger.info("Connecting to module server at localhost:50051")
+        async with grpc.aio.insecure_channel("localhost:50055") as module_channel:
+            logger.info("Connecting to module server at localhost:50055")
 
             # Create module service stub
             module_stub = module_service_pb2_grpc.ModuleServiceStub(module_channel)
@@ -288,13 +290,14 @@ async def run_client_llm() -> None:
             input_data = input_class(prompt="Give me details about agentic mesh current advancement")
 
             # Create start module request
-            request = lifecycle_pb2.StartModuleRequest(input=input_data.model_dump(), setup_id=setup_id, mission_id=mission_id)
+            lifecycle_pb2.StartModuleRequest(
+                input=input_data.model_dump(), setup_id=setup_id, mission_id=mission_id
+            )
 
             logger.info("Starting module with input: %s", input_data.model_dump())
 
             # Start the module and process streaming responses
             try:
-                responses = module_stub.StartModule(request)
                 async for response in responses:
                     # Process each output message
                     if response.HasField("output"):

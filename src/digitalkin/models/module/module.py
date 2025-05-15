@@ -14,6 +14,7 @@ class ModuleStatus(Enum):
     STOPPING = auto()  # Module is stopping
     STOPPED = auto()  # Module stop successfuly
     FAILED = auto()  # Module stopped due to internal error
+    CANCELLED = auto()  # Module stopped due to internal error
     NOT_FOUND = auto()
 
 

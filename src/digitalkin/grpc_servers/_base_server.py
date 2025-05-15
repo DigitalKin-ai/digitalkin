@@ -2,7 +2,6 @@
 
 import abc
 import asyncio
-import logging
 from collections.abc import Callable
 from concurrent import futures
 from pathlib import Path
@@ -20,8 +19,7 @@ from digitalkin.grpc_servers.utils.exceptions import (
 )
 from digitalkin.grpc_servers.utils.models import SecurityMode, ServerConfig, ServerMode
 from digitalkin.grpc_servers.utils.types import GrpcServer, ServiceDescriptor, T
-
-logger = logging.getLogger(__name__)
+from digitalkin.logger import logger
 
 
 class BaseServer(abc.ABC):
@@ -132,7 +130,7 @@ class BaseServer(abc.ABC):
             # reflection queries with detailed service information
             reflection.enable_server_reflection(service_names, self.server)
 
-            logger.info("Added gRPC reflection service with services: %s", service_names)
+            logger.debug("Added gRPC reflection service with services: %s", service_names)
         except ImportError:
             logger.warning("Could not enable reflection: grpcio-reflection package not installed")
         except Exception as e:
@@ -165,7 +163,7 @@ class BaseServer(abc.ABC):
                 if service_name not in self._service_names:
                     self._service_names.append(service_name)
 
-            logger.info("Added gRPC health checking service")
+            logger.debug("Added gRPC health checking service")
 
             # Set all services as SERVING
             for service_name in self._service_names:
@@ -255,7 +253,7 @@ class BaseServer(abc.ABC):
                 sync_server = cast("grpc.Server", server)
                 sync_server.add_secure_port(self.config.address, server_credentials)
 
-            logger.info("Added secure port %s", self.config.address)
+            logger.debug("Added secure port %s", self.config.address)
         except Exception as e:
             msg = f"Failed to configure secure port: {e}"
             raise SecurityError(msg) from e
@@ -277,7 +275,7 @@ class BaseServer(abc.ABC):
                 sync_server = cast("grpc.Server", server)
                 sync_server.add_insecure_port(self.config.address)
 
-            logger.info("Added insecure port %s", self.config.address)
+            logger.debug("Added insecure port %s", self.config.address)
         except Exception as e:
             msg = f"Failed to add insecure port: {e}"
             raise ConfigurationError(msg) from e
@@ -301,7 +299,7 @@ class BaseServer(abc.ABC):
         self._add_reflection()
 
         # Start the server
-        logger.info("Starting gRPC server on %s", self.config.address)
+        logger.debug("Starting gRPC server on %s", self.config.address)
         try:
             if self.config.mode == ServerMode.ASYNC:
                 # For async server, use the event loop
@@ -314,7 +312,7 @@ class BaseServer(abc.ABC):
                 # For sync server, directly call start
                 sync_server = cast("grpc.Server", self.server)
                 sync_server.start()
-            logger.info("✅ gRPC server started on %s", self.config.address)
+            logger.debug("✅ gRPC server started on %s", self.config.address)
         except Exception as e:
             logger.exception("❎ Error starting server")
             msg = f"Failed to start server: {e}"
@@ -351,7 +349,7 @@ class BaseServer(abc.ABC):
         self._add_reflection()
 
         # Start the server
-        logger.info("Starting gRPC server on %s", self.config.address)
+        logger.debug("Starting gRPC server on %s", self.config.address)
         try:
             if self.config.mode == ServerMode.ASYNC:
                 await self._start_async()
@@ -359,7 +357,7 @@ class BaseServer(abc.ABC):
                 # For sync server in async context
                 sync_server = cast("grpc.Server", self.server)
                 sync_server.start()
-            logger.info("✅ gRPC server started on %s", self.config.address)
+            logger.debug("✅ gRPC server started on %s", self.config.address)
         except Exception as e:
             logger.exception("❎ Error starting server")
             msg = f"Failed to start server: {e}"
@@ -375,7 +373,7 @@ class BaseServer(abc.ABC):
             logger.warning("Attempted to stop server, but no server is running")
             return
 
-        logger.info("Stopping gRPC server...")
+        logger.debug("Stopping gRPC server...")
         if self.config.mode == ServerMode.ASYNC:
             # We'll use a different approach that works whether we're in a running event loop or not
             try:
@@ -392,13 +390,13 @@ class BaseServer(abc.ABC):
                     )
                     # Set server to None to avoid further operations
                     self.server = None
-                    logger.info("✅ gRPC server marked as stopped")
+                    logger.debug("✅ gRPC server marked as stopped")
                     return
                 # If not in a running event loop, use run_until_complete
                 loop.run_until_complete(self._stop_async(grace))
             except RuntimeError:
                 # Event loop issues - try with a new loop
-                logger.info("Creating new event loop for shutdown")
+                logger.debug("Creating new event loop for shutdown")
                 try:
                     new_loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(new_loop)
@@ -410,7 +408,7 @@ class BaseServer(abc.ABC):
             sync_server = cast("grpc.Server", self.server)
             sync_server.stop(grace=grace)
 
-        logger.info("✅ gRPC server stopped")
+        logger.debug("✅ gRPC server stopped")
         self.server = None
 
     async def _stop_async(self, grace: float | None = None) -> None:
@@ -437,7 +435,7 @@ class BaseServer(abc.ABC):
             logger.warning("Attempted to stop server, but no server is running")
             return
 
-        logger.info("Stopping gRPC server asynchronously...")
+        logger.debug("Stopping gRPC server asynchronously...")
         if self.config.mode == ServerMode.ASYNC:
             await self._stop_async(grace)
         else:
@@ -445,7 +443,7 @@ class BaseServer(abc.ABC):
             sync_server = cast("grpc.Server", self.server)
             sync_server.stop(grace=grace)
 
-        logger.info("✅ gRPC server stopped")
+        logger.debug("✅ gRPC server stopped")
         self.server = None
 
     def wait_for_termination(self) -> None:

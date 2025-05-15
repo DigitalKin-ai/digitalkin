@@ -2,16 +2,18 @@
 
 import datetime
 import json
-import logging
 import tempfile
 from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel
 
-from digitalkin.services.storage.storage_strategy import DataType, StorageRecord, StorageStrategy
-
-logger = logging.getLogger(__name__)
+from digitalkin.logger import logger
+from digitalkin.services.storage.storage_strategy import (
+    DataType,
+    StorageRecord,
+    StorageStrategy,
+)
 
 
 class DefaultStorage(StorageStrategy):
@@ -80,7 +82,11 @@ class DefaultStorage(StorageStrategy):
         """Atomically write `self.storage` back to disk as JSON."""
         self.storage_file.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.NamedTemporaryFile(
-            mode="w", encoding="utf-8", delete=False, dir=str(self.storage_file.parent), suffix=".tmp"
+            mode="w",
+            encoding="utf-8",
+            delete=False,
+            dir=str(self.storage_file.parent),
+            suffix=".tmp",
         ) as temp:
             try:
                 # Convert storage to a serializable format

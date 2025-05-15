@@ -1,11 +1,15 @@
 """Default cost."""
 
-import logging
 from typing import Literal
 
-from digitalkin.services.cost.cost_strategy import CostConfig, CostData, CostServiceError, CostStrategy, CostType
-
-logger = logging.getLogger(__name__)
+from digitalkin.logger import logger
+from digitalkin.services.cost.cost_strategy import (
+    CostConfig,
+    CostData,
+    CostServiceError,
+    CostStrategy,
+    CostType,
+)
 
 
 class DefaultCost(CostStrategy):

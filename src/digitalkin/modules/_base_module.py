@@ -7,6 +7,8 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable, Coroutine
 from typing import Any, ClassVar, Generic
 
+from pydantic import BaseModel
+
 from digitalkin.logger import logger
 from digitalkin.models.module import InputModelT, ModuleStatus, OutputModelT, SecretModelT, SetupModelT
 from digitalkin.services.agent.agent_strategy import AgentStrategy
@@ -18,6 +20,14 @@ from digitalkin.services.services_config import ServicesConfig, ServicesStrategy
 from digitalkin.services.snapshot.snapshot_strategy import SnapshotStrategy
 from digitalkin.services.storage.storage_strategy import StorageStrategy
 from digitalkin.utils.llm_ready_schema import llm_ready_schema
+
+
+class ModuleErrorModel(BaseModel):
+    """Typed error/code model."""
+
+    code: str
+    exception: str
+    short_description: str
 
 
 class BaseModule(ABC, Generic[InputModelT, OutputModelT, SetupModelT, SecretModelT]):
@@ -223,30 +233,59 @@ class BaseModule(ABC, Generic[InputModelT, OutputModelT, SetupModelT, SecretMode
             asyncio.CancelledError: If the module is cancelled
         """
         try:
+            logger.warning("Starting module %s", self.name)
             await self.run(input_data, setup_data, callback)
-            await self.stop()
+            logger.warning("Module %s finished", self.name)
         except asyncio.CancelledError:
-            logger.info(f"Module {self.name} cancelled")
+            self._status = ModuleStatus.CANCELLED
+            logger.error(f"Module {self.name} cancelled")
         except Exception:
             self._status = ModuleStatus.FAILED
             logger.exception("Error inside module %s", self.name)
         else:
             self._status = ModuleStatus.STOPPED
+        finally:
+            await self.stop()
 
     async def start(
         self,
         input_data: InputModelT,
         setup_data: SetupModelT,
-        callback: Callable[[OutputModelT], Coroutine[Any, Any, None]],
+        callback: Callable[[OutputModelT | ModuleErrorModel], Coroutine[Any, Any, None]],
+        done_callback: Callable | None = None,
     ) -> None:
         """Start the module."""
         try:
+            logger.info("Inititalize module")
             await self.initialize(setup_data=setup_data)
+        except Exception as e:
+            self._status = ModuleStatus.FAILED
+            short_description = "Error initializing module"
+            logger.exception("%s: %s", short_description, e)
+            await callback(
+                ModuleErrorModel(
+                    code=str(self._status),
+                    short_description=short_description,
+                    exception=str(e),
+                )
+            )
+            if done_callback is not None:
+                await done_callback(None)
+            await self.stop()
+            return
+
+        try:
+            logger.info("Run lifecycle")
             self._status = ModuleStatus.RUNNING
-            self._task = asyncio.create_task(self._run_lifecycle(input_data, setup_data, callback))
+            self._task = asyncio.create_task(
+                self._run_lifecycle(input_data, setup_data, callback),
+                name="module_lifecycle",
+            )
+            if done_callback is not None:
+                self._task.add_done_callback(done_callback)
         except Exception:
             self._status = ModuleStatus.FAILED
-            logger.exception("Error starting module")
+            logger.exception("Error during module lifecyle")
 
     async def stop(self) -> None:
         """Stop the module."""

@@ -3,7 +3,7 @@
 import asyncio
 import datetime
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, Field
 
@@ -12,7 +12,9 @@ from digitalkin.models.module import ModuleStatus
 from digitalkin.modules.archetype_module import ArchetypeModule
 from digitalkin.services.services_config import ServicesConfig
 from digitalkin.services.services_models import ServicesMode
-from digitalkin.services.storage.storage_strategy import StorageRecord
+
+if TYPE_CHECKING:
+    from digitalkin.services.storage.storage_strategy import StorageRecord
 
 
 class ExampleInput(BaseModel):
@@ -120,10 +122,7 @@ class ExampleModule(ArchetypeModule[ExampleInput, ExampleOutput, ExampleSetup, E
 
         # Store the output data in storage
         storage_id = self.storage.store(
-            collection="example",
-            record_id=f"example_outputs",
-            data=output_data.model_dump(),
-            data_type="OUTPUT"
+            collection="example", record_id="example_outputs", data=output_data.model_dump(), data_type="OUTPUT"
         )
 
         logger.info("Stored output data with ID: %s", storage_id)

@@ -1,7 +1,5 @@
 """This module implements the default storage strategy."""
 
-import logging
-
 from digitalkin_proto.digitalkin.storage.v2 import data_pb2, storage_service_pb2_grpc
 from google.protobuf import json_format
 from google.protobuf.struct_pb2 import Struct
@@ -9,9 +7,13 @@ from pydantic import BaseModel
 
 from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
 from digitalkin.grpc_servers.utils.models import ClientConfig
-from digitalkin.services.storage.storage_strategy import DataType, StorageRecord, StorageServiceError, StorageStrategy
-
-logger = logging.getLogger(__name__)
+from digitalkin.logger import logger
+from digitalkin.services.storage.storage_strategy import (
+    DataType,
+    StorageRecord,
+    StorageServiceError,
+    StorageStrategy,
+)
 
 
 class GrpcStorage(StorageStrategy, GrpcClientWrapper):
@@ -73,7 +75,11 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
             resp = self.exec_grpc_query("StoreRecord", req)
             return self._build_record_from_proto(resp.stored_data)
         except Exception as e:
-            logger.exception("gRPC StoreRecord failed for %s:%s", record.collection, record.record_id)
+            logger.exception(
+                "gRPC StoreRecord failed for %s:%s",
+                record.collection,
+                record.record_id,
+            )
             raise StorageServiceError(str(e)) from e
 
     def _read(self, collection: str, record_id: str) -> StorageRecord | None:
@@ -94,7 +100,12 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
             logger.exception("gRPC ReadRecord failed for %s:%s", collection, record_id)
             return None
 
-    def _update(self, collection: str, record_id: str, data: BaseModel) -> StorageRecord | None:
+    def _update(
+        self,
+        collection: str,
+        record_id: str,
+        data: BaseModel,
+    ) -> StorageRecord | None:
         """Overwrite a document via gRPC.
 
         Args:
@@ -138,7 +149,11 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
             )
             self.exec_grpc_query("RemoveRecord", req)
         except Exception:
-            logger.exception("gRPC RemoveRecord failed for %s:%s", collection, record_id)
+            logger.exception(
+                "gRPC RemoveRecord failed for %s:%s",
+                collection,
+                record_id,
+            )
             return False
         return True
 

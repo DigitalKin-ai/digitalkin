@@ -1,6 +1,5 @@
 """Client wrapper to ease channel creation with specific ServerConfig."""
 
-import logging
 from pathlib import Path
 from typing import Any
 
@@ -8,8 +7,7 @@ import grpc
 
 from digitalkin.grpc_servers.utils.exceptions import ServerError
 from digitalkin.grpc_servers.utils.models import ClientConfig, SecurityMode
-
-logger = logging.getLogger(__name__)
+from digitalkin.logger import logger
 
 
 class GrpcClientWrapper:
@@ -64,9 +62,9 @@ class GrpcClientWrapper:
         """
         try:
             # Call the register method
-            logger.warning("send request to %s", query_endpoint)
+            logger.debug("send request to %s", query_endpoint)
             response = getattr(self.stub, query_endpoint)(request)
-            logger.warning("recive response from request to registry: %s", response)
+            logger.debug("receive response from request to registry: %s", response)
         except grpc.RpcError:
             logger.exception("RPC error during registration:")
             raise ServerError

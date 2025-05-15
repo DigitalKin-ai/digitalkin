@@ -1,7 +1,5 @@
 """Registry gRPC server implementation for DigitalKin."""
 
-import logging
-
 from digitalkin_proto.digitalkin.module_registry.v2 import (
     module_registry_service_pb2,
     module_registry_service_pb2_grpc,
@@ -10,8 +8,7 @@ from digitalkin_proto.digitalkin.module_registry.v2 import (
 from digitalkin.grpc_servers._base_server import BaseServer
 from digitalkin.grpc_servers.registry_servicer import RegistryModule, RegistryServicer
 from digitalkin.grpc_servers.utils.models import RegistryServerConfig
-
-logger = logging.getLogger(__name__)
+from digitalkin.logger import logger
 
 
 class RegistryServer(BaseServer):
@@ -48,14 +45,14 @@ class RegistryServer(BaseServer):
             msg = "Server must be created before registering servicers"
             raise RuntimeError(msg)
 
-        logger.info("Registering registry servicer")
+        logger.debug("Registering registry servicer")
         self.registry_servicer = RegistryServicer()
         self.register_servicer(
             self.registry_servicer,
             module_registry_service_pb2_grpc.add_ModuleRegistryServiceServicer_to_server,
             service_descriptor=module_registry_service_pb2.DESCRIPTOR,
         )
-        logger.info("Registered registry servicer")
+        logger.debug("Registered registry servicer")
 
     def get_registered_modules(self) -> list[RegistryModule]:
         """Get a list of all registered modules.

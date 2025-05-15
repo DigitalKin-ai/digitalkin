@@ -1,24 +1,27 @@
 """Grpc filesystem."""
 
-import logging
 from collections.abc import Generator
 from contextlib import contextmanager
 from typing import Any
 
-from digitalkin_proto.digitalkin.filesystem.v2 import filesystem_pb2, filesystem_service_pb2_grpc
-from digitalkin_proto.digitalkin.filesystem.v2.filesystem_pb2 import FileType as FileTypeProto
+from digitalkin_proto.digitalkin.filesystem.v2 import (
+    filesystem_pb2,
+    filesystem_service_pb2_grpc,
+)
+from digitalkin_proto.digitalkin.filesystem.v2.filesystem_pb2 import (
+    FileType as FileTypeProto,
+)
 
 from digitalkin.grpc_servers.utils.exceptions import ServerError
 from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
 from digitalkin.grpc_servers.utils.models import ClientConfig
+from digitalkin.logger import logger
 from digitalkin.services.filesystem.filesystem_strategy import (
     FilesystemData,
     FilesystemServiceError,
     FilesystemStrategy,
     FileType,
 )
-
-logger = logging.getLogger(__name__)
 
 
 class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper):

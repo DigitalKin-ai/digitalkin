@@ -1,6 +1,5 @@
 """Digital Kin Setup Service gRPC Client."""
 
-import logging
 from collections.abc import Generator
 from contextlib import contextmanager
 from typing import Any
@@ -17,9 +16,8 @@ from pydantic import ValidationError
 from digitalkin.grpc_servers.utils.exceptions import ServerError
 from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
 from digitalkin.grpc_servers.utils.models import ClientConfig
+from digitalkin.logger import logger
 from digitalkin.services.setup.setup_strategy import SetupData, SetupServiceError, SetupStrategy, SetupVersionData
-
-logger = logging.getLogger(__name__)
 
 
 class GrpcSetup(SetupStrategy, GrpcClientWrapper):
@@ -32,7 +30,7 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
         """
         channel = self._init_channel(config)
         self.stub = setup_service_pb2_grpc.SetupServiceStub(channel)
-        logger.info("Channel client 'setup' initialized succesfully")
+        logger.debug("Channel client 'setup' initialized succesfully")
 
     @contextmanager
     def _handle_grpc_errors(self, operation: str) -> Generator[Any, Any, Any]:  # noqa: PLR6301
@@ -89,7 +87,7 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
                 current_setup_version=setup_pb2.SetupVersion(**valid_data.current_setup_version.model_dump()),
             )
             response = self.exec_grpc_query("CreateSetup", request)
-            logger.info("Setup '%s' query sent successfully", valid_data.name)
+            logger.debug("Setup '%s' query sent successfully", valid_data.name)
             return response
 
     def get_setup(self, setup_dict: dict[str, Any]) -> SetupData:
@@ -146,7 +144,7 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
                 current_setup_version=current_setup_version,
             )
             response = self.exec_grpc_query("UpdateSetup", request)
-            logger.info("Setup '%s' query sent successfully", valid_data.name)
+            logger.debug("Setup '%s' query sent successfully", valid_data.name)
             return getattr(response, "success", False)
 
     def delete_setup(self, setup_dict: dict[str, Any]) -> bool:
@@ -170,7 +168,7 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
                 raise ValidationError(msg)
             request = setup_pb2.DeleteSetupRequest(setup_id=setup_id)
             response = self.exec_grpc_query("DeleteSetup", request)
-            logger.info("Setup '%s' query sent successfully", setup_id)
+            logger.debug("Setup '%s' query sent successfully", setup_id)
             return getattr(response, "success", False)
 
     def create_setup_version(self, setup_version_dict: dict[str, Any]) -> str:
@@ -196,7 +194,7 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
                 version=valid_data.version,
                 content=content_struct,
             )
-            logger.info(
+            logger.debug(
                 "Setup Version '%s' for setup '%s' query sent successfully",
                 valid_data.version,
                 valid_data.setup_id,
@@ -275,7 +273,7 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
                 content=content_struct,
             )
             response = self.exec_grpc_query("UpdateSetupVersion", request)
-            logger.info(
+            logger.debug(
                 "Setup Version '%s' for setup '%s' query sent successfully",
                 valid_data.id,
                 valid_data.setup_id,
@@ -303,5 +301,5 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
                 raise ValidationError(msg)
             request = setup_pb2.DeleteSetupVersionRequest(setup_version_id=setup_version_id)
             response = self.exec_grpc_query("DeleteSetupVersion", request)
-            logger.info("Setup Version '%s' query sent successfully", setup_version_id)
+            logger.debug("Setup Version '%s' query sent successfully", setup_version_id)
             return getattr(response, "success", False)

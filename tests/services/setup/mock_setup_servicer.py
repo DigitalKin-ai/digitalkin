@@ -1,7 +1,6 @@
 """Test file for Module setup Servicer from the client side."""
 
 import datetime
-import logging
 import secrets
 import string
 
@@ -13,13 +12,8 @@ from digitalkin_proto.digitalkin.setup.v2 import (
 from google.protobuf import json_format
 from pydantic import ValidationError
 
+from digitalkin.logger import logger
 from digitalkin.services.setup.setup_strategy import SetupData, SetupVersionData
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-)
-logger = logging.getLogger(__name__)
 
 
 # --- Fake Context for Servicer ---
@@ -79,11 +73,11 @@ class MockSetupServicer(setup_service_pb2_grpc.SetupServiceServicer):
             return setup_pb2.CreateSetupResponse(success=False)
 
         self.setups[setup_data.id] = setup_data
-        logger.info("CREATE SETUP DATA %s:%s succesfull", setup_data.id, setup_data)
+        logger.debug("CREATE SETUP DATA %s:%s succesfull", setup_data.id, setup_data)
         return setup_pb2.CreateSetupResponse(success=True)
 
     def GetSetup(self, request: setup_pb2.GetSetupRequest, context: grpc.ServicerContext) -> setup_pb2.GetSetupResponse:
-        logger.info("GET SETUP setup_id = %s.", request.setup_id)
+        logger.debug("GET SETUP setup_id = %s.", request.setup_id)
         if request.setup_id not in self.setups:
             msg = f"GET SETUP setup_id = {request.setup_id} | setup_id DOESN'T EXIST"
             logger.warning(msg)
@@ -110,7 +104,7 @@ class MockSetupServicer(setup_service_pb2_grpc.SetupServiceServicer):
             self.setups[request.setup_id].current_setup_version = SetupVersionData.model_validate(
                 request.current_setup_version
             )
-        logger.info("UPDATE SETUP DATA %s succesfull", request.setup_id)
+        logger.debug("UPDATE SETUP DATA %s succesfull", request.setup_id)
         return setup_pb2.UpdateSetupResponse(success=True)
 
     def DeleteSetup(
@@ -147,13 +141,13 @@ class MockSetupServicer(setup_service_pb2_grpc.SetupServiceServicer):
         if request.setup_id not in self.setup_versions:
             self.setup_versions[request.setup_id] = {}
         self.setup_versions[request.setup_id][setup_data_version.version] = setup_data_version
-        logger.info("CREATE SETUP VERSION DATA %s:%s succesfull", request.setup_id, setup_data_version)
+        logger.debug("CREATE SETUP VERSION DATA %s:%s succesfull", request.setup_id, setup_data_version)
         return setup_pb2.CreateSetupVersionResponse(success=True)
 
     def GetSetupVersion(
         self, request: setup_pb2.GetSetupVersionRequest, context: grpc.ServicerContext
     ) -> setup_pb2.GetSetupVersionResponse:
-        logger.info("GET SETUP VERSION setup_version_id = %s.", request.setup_version_id)
+        logger.debug("GET SETUP VERSION setup_version_id = %s.", request.setup_version_id)
 
         setup_version = next(
             filter(

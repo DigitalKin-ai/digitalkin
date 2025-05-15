@@ -6,7 +6,7 @@ from typing import Any, ClassVar
 
 from pydantic import BaseModel
 
-from digitalkin.grpc_servers.utils.models import SecurityMode, ClientConfig, ServerMode
+from digitalkin.grpc_servers.utils.models import ClientConfig, SecurityMode, ServerMode
 from digitalkin.modules._base_module import BaseModule
 from digitalkin.services.setup.setup_strategy import SetupData
 from digitalkin.services.storage.storage_strategy import DataType, StorageRecord
