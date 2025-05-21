@@ -31,3 +31,7 @@ class ReflectionError(ServerError):
 
 class HealthCheckError(ServerError):
     """Error related to gRPC health check service."""
+
+
+class OptionalFeatureNotImplementedError(NotImplementedError):
+    """Raised when an optional feature is not implemented, but was requested."""

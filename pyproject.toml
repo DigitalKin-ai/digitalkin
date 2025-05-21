@@ -29,41 +29,41 @@
     ]
 
     dependencies = [
-        "digitalkin-proto>=0.1.10",
-        "grpcio-health-checking>=1.71.0",
-        "grpcio-reflection>=1.71.0",
-        "grpcio-status>=1.71.0",
-        "pydantic>=2.11.4",
+        "digitalkin-proto>=0.1.11",
+        "grpcio-health-checking>=1.72.1",
+        "grpcio-reflection>=1.72.1",
+        "grpcio-status>=1.72.1",
+        "pydantic>=2.11.5",
     ]
 
     [project.optional-dependencies]
         dev = [
-            "typos>=1.32.0",
-            "ruff>=0.11.9",
-            "mypy>=1.15.0",
-            "pyright>=1.1.400",
+            "typos>=1.33.1",
+            "ruff>=0.11.12",
+            "mypy>=1.16.0",
+            "pyright>=1.1.401",
             "pre-commit>=4.2.0",
             "bump2version>=1.0.1",
             "build>=1.2.2",
             "twine>=6.1.0",
-            "cryptography>=44.0.3",
-            "taskiq[reload]>=0.11.17",
+            "cryptography>=45.0.3",
         ]
         examples = [ "openai>=1.75.0" ]
         tests = [
-            "freezegun>=1.5.1",
+            "freezegun>=1.5.2",
             "hdrhistogram>=0.10.3",
-            "grpcio-testing>=1.71.0",
+            "grpcio-testing>=1.72.1",
             "psutil>=7.0.0",
-            "pytest>=8.3.4",
-            "pytest-asyncio>=0.26.0",
+            "pytest>=8.4.0",
+            "pytest-asyncio>=1.0.0",
             "pytest-cov>=6.1.0",
         ]
         taskiq = [
             "rstream>=0.20.9",
             "taskiq-aio-pika>=0.4.2",
             "taskiq-redis>=1.0.8",
-]
+            "taskiq[reload]>=0.11.17",
+        ]
 
     [project.urls]
         Homepage      = "https://github.com/DigitalKin-ai/digitalkin"

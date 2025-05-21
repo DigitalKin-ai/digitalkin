@@ -30,8 +30,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          uv pip install -e . --system
-          uv pip install pytest grpcio-testing build twine freezegun --system
+          uv pip install -e ".[tests,dev]" --system
 
       - name: Run tests
         run: pytest

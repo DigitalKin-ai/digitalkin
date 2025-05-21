@@ -10,13 +10,13 @@ import grpc
 
 from digitalkin.logger import logger
 from digitalkin.models import ModuleStatus
-from digitalkin.models.module import InputModelT, OutputModelT, SetupModelT
+from digitalkin.models.module import ConfigSetupModelT, InputModelT, OutputModelT, SetupModelT
 from digitalkin.modules._base_module import BaseModule
 from digitalkin.modules.job_manager.base_job_manager import BaseJobManager
 from digitalkin.services.services_models import ServicesMode
 
 
-class SingleJobManager(BaseJobManager, Generic[InputModelT, SetupModelT]):
+class SingleJobManager(BaseJobManager, Generic[InputModelT, SetupModelT, ConfigSetupModelT]):
     """Manages a single instance of a module job.
 
     This class ensures that only one instance of a module job is active at a time.
@@ -43,6 +43,73 @@ class SingleJobManager(BaseJobManager, Generic[InputModelT, SetupModelT]):
         self._lock = asyncio.Lock()
         self.modules: dict[str, BaseModule] = {}
         self.queues: dict[str, asyncio.Queue] = {}
+
+    async def generate_config_setup_module_response(self, job_id: str) -> SetupModelT:
+        """Generate a stream consumer for a module's output data.
+
+        This method creates an asynchronous generator that streams output data
+        from a specific module job. If the module does not exist, it generates
+        an error message.
+
+        Args:
+            job_id: The unique identifier of the job.
+
+        Returns:
+            SetupModelT: the SetupModelT object fully processed.
+        """
+        module = self.modules.get(job_id, None)
+        logger.debug("Module %s found: %s", job_id, module)
+
+        try:
+            return await self.queues[job_id].get()
+        finally:
+            logger.info(f"{job_id=}: {self.queues[job_id].empty()}")
+            del self.queues[job_id]
+
+    async def create_config_setup_instance_job(
+        self,
+        config_setup_data: ConfigSetupModelT,
+        setup_data: SetupModelT,
+        mission_id: str,
+        setup_version_id: str,
+    ) -> str:
+        """Create and start a new module setup configuration job.
+
+        This method initializes a new module job, assigns it a unique job ID,
+        and starts the config setup it in the background.
+
+        Args:
+            config_setup_data: The input data required to start the job.
+            setup_data: The setup configuration for the module.
+            mission_id: The mission ID associated with the job.
+            setup_version_id: The setup ID.
+
+        Returns:
+            str: The unique identifier (job ID) of the created job.
+
+        Raises:
+            Exception: If the module fails to start.
+        """
+        job_id = str(uuid.uuid4())
+        # TODO: Ensure the job_id is unique.
+        module = self.module_class(job_id, mission_id=mission_id, setup_version_id=setup_version_id)
+        self.modules[job_id] = module
+        self.queues[job_id] = asyncio.Queue()
+
+        try:
+            await module.start_config_setup(
+                config_setup_data,
+                setup_data,
+                await self.job_specific_callback(self.add_to_queue, job_id),
+            )
+            logger.debug("Module %s (%s) started successfully", job_id, module.name)
+        except Exception:
+            # Remove the module from the manager in case of an error.
+            del self.modules[job_id]
+            logger.exception("Failed to start module %s: %s", job_id)
+            raise
+        else:
+            return job_id
 
     async def add_to_queue(self, job_id: str, output_data: OutputModelT) -> None:  # type: ignore
         """Add output data to the queue for a specific job.
@@ -106,7 +173,7 @@ class SingleJobManager(BaseJobManager, Generic[InputModelT, SetupModelT]):
 
         yield _stream()
 
-    async def create_job(
+    async def create_module_instance_job(
         self,
         input_data: InputModelT,
         setup_data: SetupModelT,

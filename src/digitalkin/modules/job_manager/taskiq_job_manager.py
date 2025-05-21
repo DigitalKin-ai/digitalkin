@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any, Generic
 from rstream import Consumer, ConsumerOffsetSpecification, MessageContext, OffsetType
 
 from digitalkin.logger import logger
-from digitalkin.models.module import InputModelT, SetupModelT
+from digitalkin.models.module import ConfigSetupModelT, InputModelT, SetupModelT
 from digitalkin.models.module.module import ModuleStatus
 from digitalkin.modules._base_module import BaseModule
 from digitalkin.modules.job_manager.base_job_manager import BaseJobManager
@@ -29,7 +29,7 @@ if TYPE_CHECKING:
     from taskiq.task import AsyncTaskiqTask
 
 
-class TaskiqJobManager(BaseJobManager, Generic[InputModelT, SetupModelT]):
+class TaskiqJobManager(BaseJobManager, Generic[InputModelT, SetupModelT, ConfigSetupModelT]):
     """Taskiq job manager for running modules in Taskiq tasks."""
 
     services_mode: ServicesMode
@@ -95,6 +95,92 @@ class TaskiqJobManager(BaseJobManager, Generic[InputModelT, SetupModelT]):
         with contextlib.suppress(asyncio.CancelledError):
             await self.stream_consumer_task
 
+    def __init__(
+        self,
+        module_class: type[BaseModule],
+        services_mode: ServicesMode,
+    ) -> None:
+        """Initialize the Taskiq job manager."""
+        super().__init__(module_class, services_mode)
+
+        logger.warning("TaskiqJobManager initialized with app: %s", TASKIQ_BROKER)
+        self.services_mode = services_mode
+        self.job_queues: dict[str, asyncio.Queue] = {}
+        self.max_queue_size = 1000
+
+    async def generate_config_setup_module_response(self, job_id: str) -> SetupModelT:
+        """Generate a stream consumer for a module's output data.
+
+        This method creates an asynchronous generator that streams output data
+        from a specific module job. If the module does not exist, it generates
+        an error message.
+
+        Args:
+            job_id: The unique identifier of the job.
+
+        Returns:
+            SetupModelT: the SetupModelT object fully processed.
+        """
+        queue: asyncio.Queue = asyncio.Queue(maxsize=self.max_queue_size)
+        self.job_queues[job_id] = queue
+
+        try:
+            item = await queue.get()
+            queue.task_done()
+            return item
+        finally:
+            logger.info(f"generate_config_setup_module_response: {job_id=}: {self.job_queues[job_id].empty()}")
+            self.job_queues.pop(job_id, None)
+
+    async def create_config_setup_instance_job(
+        self,
+        config_setup_data: ConfigSetupModelT,
+        setup_data: SetupModelT,
+        mission_id: str,
+        setup_version_id: str,
+    ) -> str:
+        """Create and start a new module setup configuration job.
+
+        This method initializes a new module job, assigns it a unique job ID,
+        and starts the config setup it in the background.
+
+        Args:
+            config_setup_data: The input data required to start the job.
+            setup_data: The setup configuration for the module.
+            mission_id: The mission ID associated with the job.
+            setup_version_id: The setup ID.
+
+        Returns:
+            str: The unique identifier (job ID) of the created job.
+
+        Raises:
+            TypeError: If the function is called with bad data type.
+            ValueError: If the module fails to start.
+        """
+        task = TASKIQ_BROKER.find_task("digitalkin.modules.job_manager.taskiq_broker:run_config_module")
+
+        if task is None:
+            msg = "Task not found"
+            raise ValueError(msg)
+
+        if config_setup_data is None:
+            msg = "config_setup_data must be a valid model with model_dump method"
+            raise TypeError(msg)
+
+        running_task: AsyncTaskiqTask[Any] = await task.kiq(
+            mission_id,
+            setup_version_id,
+            self.module_class,
+            self.services_mode,
+            config_setup_data.model_dump(),  # type: ignore
+            setup_data.model_dump(),
+        )
+
+        job_id = running_task.task_id
+        result = await running_task.wait_result(timeout=10)
+        logger.info("Job %s with data %s", job_id, result)
+        return job_id
+
     @asynccontextmanager  # type: ignore
     async def generate_stream_consumer(self, job_id: str) -> AsyncIterator[AsyncGenerator[dict[str, Any], None]]:  # type: ignore
         """Generate a stream consumer for the RStream stream.
@@ -132,20 +218,7 @@ class TaskiqJobManager(BaseJobManager, Generic[InputModelT, SetupModelT]):
         finally:
             self.job_queues.pop(job_id, None)
 
-    def __init__(
-        self,
-        module_class: type[BaseModule],
-        services_mode: ServicesMode,
-    ) -> None:
-        """Initialize the Taskiq job manager."""
-        super().__init__(module_class, services_mode)
-
-        logger.warning("TaskiqJobManager initialized with app: %s", TASKIQ_BROKER)
-        self.services_mode = services_mode
-        self.job_queues: dict[str, asyncio.Queue] = {}
-        self.max_queue_size = 1000
-
-    async def create_job(
+    async def create_module_instance_job(
         self,
         input_data: InputModelT,
         setup_data: SetupModelT,
@@ -166,7 +239,7 @@ class TaskiqJobManager(BaseJobManager, Generic[InputModelT, SetupModelT]):
         Raises:
             ValueError: If the task is not found.
         """
-        task = TASKIQ_BROKER.find_task("digitalkin.modules.job_manager.taskiq_broker:run_task")
+        task = TASKIQ_BROKER.find_task("digitalkin.modules.job_manager.taskiq_broker:run_start_module")
 
         if task is None:
             msg = "Task not found"
