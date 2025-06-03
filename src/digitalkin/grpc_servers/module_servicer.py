@@ -81,6 +81,62 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         )
         self.setup = GrpcSetup() if self.args.services_mode == ServicesMode.REMOTE else DefaultSetup()
 
+    async def ConfigSetupModule(  # noqa: N802
+        self,
+        request: lifecycle_pb2.ConfigSetupModuleRequest,
+        context: grpc.aio.ServicerContext,
+    ) -> lifecycle_pb2.ConfigSetupModuleResponse:
+        """Configure the module setup.
+
+        Args:
+            request: The configuration request.
+            context: The gRPC context.
+
+        Returns:
+            A response indicating success or failure.
+
+        Raises:
+            ServicerError: if the setup data is not returned or job creation fails.
+        """
+        logger.info("ConfigSetupVersion called for module: '%s'", self.module_class.__name__)
+        # Process the module input
+        # TODO: Secret should be used here as well
+        setup_version = request.setup_version
+        config_setup_data = self.module_class.create_config_setup_model(json_format.MessageToDict(request.content))
+        setup_version_data = self.module_class.create_setup_model(
+            json_format.MessageToDict(request.setup_version.content)
+        )
+
+        if not setup_version_data:
+            msg = "No setup data returned."
+            raise ServicerError(msg)
+
+        if not config_setup_data:
+            msg = "No config setup data returned."
+            raise ServicerError(msg)
+
+        # create a task to run the module in background
+        job_id = await self.job_manager.create_config_setup_instance_job(
+            config_setup_data,
+            setup_version_data,
+            request.mission_id,
+            setup_version.id,
+        )
+
+        if job_id is None:
+            context.set_code(grpc.StatusCode.NOT_FOUND)
+            context.set_details("Failed to create module instance")
+            return lifecycle_pb2.ConfigSetupModuleResponse(success=False)
+
+        updated_setup_data = await self.job_manager.generate_config_setup_module_response(job_id)
+        logger.warning(f"Updated setup data: {updated_setup_data=}")
+        setup_version.content = json_format.ParseDict(
+            updated_setup_data,
+            struct_pb2.Struct(),
+            ignore_unknown_fields=True,
+        )
+        return lifecycle_pb2.ConfigSetupModuleResponse(success=True, setup_version=setup_version)
+
     async def StartModule(  # noqa: N802
         self,
         request: lifecycle_pb2.StartModuleRequest,
@@ -116,7 +172,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         setup_data = self.module_class.create_setup_model(setup_data_class.current_setup_version.content)
 
         # create a task to run the module in background
-        job_id = await self.job_manager.create_job(
+        job_id = await self.job_manager.create_module_instance_job(
             input_data,
             setup_data,
             mission_id=request.mission_id,
@@ -390,4 +446,40 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         return information_pb2.GetModuleSecretResponse(
             success=True,
             secret_schema=secret_format_struct,
+        )
+
+    async def GetConfigSetupModule(  # noqa: N802
+        self,
+        request: information_pb2.GetConfigSetupModuleRequest,
+        context: grpc.ServicerContext,
+    ) -> information_pb2.GetConfigSetupModuleResponse:
+        """Get information about the module's setup and configuration.
+
+        Args:
+            request: The get module setup request.
+            context: The gRPC context.
+
+        Returns:
+            A response with the module's setup information.
+        """
+        logger.debug("GetConfigSetupModule called for module: '%s'", self.module_class.__name__)
+
+        # Get setup schema if available
+        try:
+            # Convert schema to proto format
+            config_setup_schema_proto = self.module_class.get_config_setup_format(llm_format=request.llm_format)
+            config_setup_format_struct = json_format.Parse(
+                text=config_setup_schema_proto,
+                message=struct_pb2.Struct(),  # pylint: disable=no-member
+                ignore_unknown_fields=True,
+            )
+        except NotImplementedError as e:
+            logger.warning(e)
+            context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+            context.set_details(e)
+            return information_pb2.GetConfigSetupModuleResponse()
+
+        return information_pb2.GetConfigSetupModuleResponse(
+            success=True,
+            config_setup_schema=config_setup_format_struct,
         )

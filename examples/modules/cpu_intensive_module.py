@@ -127,6 +127,16 @@ class CPUOutput(BaseModel):
     )
 
 
+class CPUConfigSetup(BaseModel):
+    """Config Setup model definining data that will be pre-computed for each setup and module instance."""
+
+    files: list[str] = Field(
+        ...,
+        title="Files to embed",
+        description="List of files to embed in the setup lifecycle.",
+    )
+
+
 class CPUSetup(BaseModel):
     """Setup model defining module configuration parameters."""
 
@@ -175,7 +185,7 @@ client_config = ClientConfig(
 )
 
 
-class CPUIntensiveModule(BaseModule[CPUInput, CPUOutput, CPUSetup, CPUToolSecret]):
+class CPUIntensiveModule(BaseModule[CPUInput, CPUOutput, CPUSetup, CPUToolSecret, None]):
     """A CPU endpoint tool module module."""
 
     name = "CPUIntensiveModule"

@@ -130,7 +130,7 @@ async def send_message_to_stream(job_id: str, output_data: OutputModelT) -> None
 
 
 @TASKIQ_BROKER.task
-async def run_task(
+async def run_start_module(
     mission_id: str,
     setup_version_id: str,
     module_class: type[BaseModule],
@@ -170,4 +170,45 @@ async def run_task(
         # ensure that the callback is called when the task is done + allow asyncio to run
         # TODO: should define a BaseModel for stream code / error
         done_callback=lambda _: asyncio.create_task(callback(StreamCodeModel(code="__END_OF_STREAM__"))),
+    )
+
+
+@TASKIQ_BROKER.task
+async def run_config_module(
+    mission_id: str,
+    setup_version_id: str,
+    module_class: type[BaseModule],
+    services_mode: ServicesMode,
+    config_setup_data: dict,
+    setup_data: dict,
+    context: Context = TaskiqDepends(),
+) -> None:
+    """TaskIQ task allowing a module to compute in the background asynchronously.
+
+    Args:
+        mission_id: str,
+        setup_version_id: The setup ID associated with the module.
+        module_class: type[BaseModule],
+        services_mode: ServicesMode,
+        config_setup_data: dict,
+        setup_data: dict,
+        context: Allow TaskIQ context access
+    """
+    logger.warning("%s", services_mode)
+    services_config = ServicesConfig(
+        services_config_strategies=module_class.services_config_strategies,
+        services_config_params=module_class.services_config_params,
+        mode=services_mode,
+    )
+    setattr(module_class, "services_config", services_config)
+    logger.warning("%s | %s", services_config, module_class.services_config)
+
+    job_id = context.message.task_id
+    callback = await BaseJobManager.job_specific_callback(send_message_to_stream, job_id)
+    module = module_class(job_id, mission_id=mission_id, setup_version_id=setup_version_id)
+
+    await module.start_config_setup(
+        module_class.create_config_setup_model(config_setup_data),
+        module_class.create_setup_model(setup_data),
+        callback,
     )

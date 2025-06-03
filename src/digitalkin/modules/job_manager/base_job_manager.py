@@ -7,12 +7,13 @@ from typing import Any, Generic
 
 from digitalkin.models import ModuleStatus
 from digitalkin.models.module import InputModelT, OutputModelT, SetupModelT
+from digitalkin.models.module.module_types import ConfigSetupModelT
 from digitalkin.modules._base_module import BaseModule
 from digitalkin.services.services_config import ServicesConfig
 from digitalkin.services.services_models import ServicesMode
 
 
-class BaseJobManager(abc.ABC, Generic[InputModelT, SetupModelT]):
+class BaseJobManager(abc.ABC, Generic[InputModelT, SetupModelT, ConfigSetupModelT]):
     """Abstract base class for managing background module jobs."""
 
     async def _start(self) -> None:
@@ -82,14 +83,14 @@ class BaseJobManager(abc.ABC, Generic[InputModelT, SetupModelT]):
         """
 
     @abc.abstractmethod
-    async def create_job(
+    async def create_module_instance_job(
         self,
         input_data: InputModelT,
         setup_data: SetupModelT,
         mission_id: str,
         setup_version_id: str,
     ) -> str:
-        """Create and start a new job for the module.
+        """Create and start a new job for the module's instance.
 
         Args:
             input_data: The input data required to start the job.
@@ -99,6 +100,47 @@ class BaseJobManager(abc.ABC, Generic[InputModelT, SetupModelT]):
 
         Returns:
             str: The unique identifier (job ID) of the created job.
+        """
+
+    @abc.abstractmethod
+    async def generate_config_setup_module_response(self, job_id: str) -> SetupModelT:
+        """Generate a stream consumer for a module's output data.
+
+        This method creates an asynchronous generator that streams output data
+        from a specific module job. If the module does not exist, it generates
+        an error message.
+
+        Args:
+            job_id: The unique identifier of the job.
+
+        Returns:
+            SetupModelT: the SetupModelT object fully processed.
+        """
+
+    @abc.abstractmethod
+    async def create_config_setup_instance_job(
+        self,
+        config_setup_data: ConfigSetupModelT,
+        setup_data: SetupModelT,
+        mission_id: str,
+        setup_version_id: str,
+    ) -> str:
+        """Create and start a new module job.
+
+        This method initializes a new module job, assigns it a unique job ID,
+        and starts it in the background.
+
+        Args:
+            config_setup_data: The input data required to start the job.
+            setup_data: The setup configuration for the module.
+            mission_id: The mission ID associated with the job.
+            setup_version_id: The setup ID.
+
+        Returns:
+            str: The unique identifier (job ID) of the created job.
+
+        Raises:
+            Exception: If the module fails to start.
         """
 
     @abc.abstractmethod
