@@ -57,7 +57,6 @@ def client(test_channel: grpc_testing.Channel) -> GrpcSetup:
     Returns:
         gRPC client as GrpcSetup
     """
-    channel = test_channel
     # Create a dummy ServerConfig; its values are not used since we override _init_channel.
     dummy_config = ClientConfig(
         host="[::]",
@@ -71,7 +70,7 @@ def client(test_channel: grpc_testing.Channel) -> GrpcSetup:
     client.__post_init__(dummy_config)
 
     # Override the channel and stub to use our test channel
-    client.stub = setup_service_pb2_grpc.SetupServiceStub(channel)
+    client.stub = setup_service_pb2_grpc.SetupServiceStub(test_channel)
     return client
 
 
@@ -88,7 +87,7 @@ def generate_setup_version_obj() -> SetupVersionData:
         setup_id=setup_id,
         version="v" + random_string(8),
         content={random_string(8): random_string(8) for _ in range(5)},
-        creation_date=datetime.datetime.now(),
+        creation_date=datetime.datetime.now(),  # noqa: DTZ005
     )
 
 
@@ -237,7 +236,7 @@ def test_create_setup_validation_error(
     generate_setup_obj.current_setup_version = None
 
     # Start the client call (this call will block until the response is simulated).
-    future = client_execution_thread_pool.submit(client.create_setup, generate_setup_obj.model_dump())
+    future = client_execution_thread_pool.submit(client.create_setup, generate_setup_obj.model_dump(warnings=False))
     with pytest.raises(ValueError, match="Invalid data for Setup Creation"):
         future.result()
 
@@ -359,6 +358,8 @@ def test_create_setup_version_validation_error(
     generate_setup_version_obj.content = ""
 
     # Start the client call (this call will block until the response is simulated).
-    future = client_execution_thread_pool.submit(client.create_setup_version, generate_setup_version_obj.model_dump())
+    future = client_execution_thread_pool.submit(
+        client.create_setup_version, generate_setup_version_obj.model_dump(warnings=False)
+    )
     with pytest.raises(ValueError, match="Invalid data for Setup Version Creation"):
         future.result()

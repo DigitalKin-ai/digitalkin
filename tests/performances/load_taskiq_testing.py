@@ -96,7 +96,7 @@ def _create_model_from_schema(
 
             # Create Union type for oneOf
             if union_types:
-                field_type = union_types[0] if len(union_types) == 1 else Union[tuple(union_types)]
+                field_type = union_types[0] if len(union_types) == 1 else Union[tuple(union_types)]  # noqa: UP007
             else:
                 field_type = Any
 
@@ -111,7 +111,7 @@ def _create_model_from_schema(
 
             # Create Union or Optional type for anyOf
             if union_types:
-                field_type = union_types[0] if len(union_types) == 1 else Union[tuple(union_types)]
+                field_type = union_types[0] if len(union_types) == 1 else Union[tuple(union_types)]  # noqa: UP007
             else:
                 field_type = Any
 
@@ -404,6 +404,7 @@ async def sustained_load(
     error_counter: Counter,
 ) -> list[tuple[bool, float]]:
     """Sustained load: use worker+queue pattern.
+
     Returns results list of (success, latency).
     """
     # prepare queue
@@ -450,7 +451,7 @@ async def sustained_load(
                 error_counter[type(e).__name__] += 1
                 histogram.record_value(latency * 1000)
                 results.append((False, latency))
-                logger.exception(f"Worker {worker_id} idx={idx} error={e}")
+                logger.exception(f"Worker {worker_id} idx={idx}")
             finally:
                 queue.task_done()
 
@@ -481,7 +482,7 @@ async def main() -> None:
     parser.add_argument("-f", "--filename", type=str, default="default")
     args = parser.parse_args()
 
-    global logger
+    global logger  # noqa: PLW0603
     logger = configure_logging(name=f"{args.filename}_c{args.concurrency}_r{args.requests}_burst-{args.burst}")
     logger.info(
         f"Starting load test: target={args.target}, concurrency={args.concurrency}, requests={args.requests}, burst={args.burst}"
@@ -547,7 +548,7 @@ async def main() -> None:
     logger.info(f"Successes: {successes}")
     logger.info(f"Failures: {failures} {dict(error_counter) if error_counter else ''}")
     if latencies:
-        ms = [l * 1000 for l in latencies]
+        ms = [latency * 1000 for latency in latencies]
         logger.info(f"Avg latency: {statistics.mean(ms):.2f}ms")
         logger.info(f"P50: {histogram.get_value_at_percentile(50):.2f}ms")
         logger.info(f"P90: {histogram.get_value_at_percentile(90):.2f}ms")

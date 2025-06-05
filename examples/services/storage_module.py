@@ -51,7 +51,7 @@ class ExampleStorage(BaseModel):
     test_key: str = Field(description="Test value for storage")
 
 
-class ExampleModule(ArchetypeModule[ExampleInput, ExampleOutput, ExampleSetup, ExampleSecret]):
+class ExampleModule(ArchetypeModule[ExampleInput, ExampleOutput, ExampleSetup, ExampleSecret, None]):
     """Example module that demonstrates ArchetypeModule functionality."""
 
     name = "ExampleModule"
@@ -64,14 +64,15 @@ class ExampleModule(ArchetypeModule[ExampleInput, ExampleOutput, ExampleSetup, E
 
     # Define services_config_params with default values
     services_config_strategies = {}
-    services_config_params = {"storage": {"config": {"example": ExampleOutput}}, "filesystem": {"config": {}}}
+    services_config_params = {"storage": {"config": {"example": ExampleOutput}},"cost": {"config":{}}}
 
-    def __init__(self, job_id: str, mission_id: str) -> None:
+    def __init__(self, job_id: str, mission_id: str, setup_version_id: str) -> None:
         """Initialize the example module.
 
         Args:
             job_id: Unique identifier for the job
-            name: Optional name for the module
+            mission_id: Unique identifier for the mission
+            setup_version_id: Unique identifier for the setup version
         """
         # Initialize services configuration using the class attribute before the instance is created
         self.services_config = ServicesConfig(
@@ -80,7 +81,7 @@ class ExampleModule(ArchetypeModule[ExampleInput, ExampleOutput, ExampleSetup, E
             mode=ServicesMode.LOCAL,
         )
 
-        super().__init__(job_id, mission_id)
+        super().__init__(job_id, mission_id, setup_version_id)
 
     async def initialize(self, setup_data: ExampleSetup) -> None:
         """Initialize the module.
@@ -91,6 +92,18 @@ class ExampleModule(ArchetypeModule[ExampleInput, ExampleOutput, ExampleSetup, E
         logger.info("Initializing ExampleModule with setup data: %s", setup_data)
         self.setup = self.setup_format.model_validate(setup_data)
         logger.info("Initialization complete, using processing mode: [%s]", self.setup.processing_mode)
+
+    async def run_config_setup(
+        self,
+        setup_data: ExampleSetup,
+    ) -> None:
+        """Run the configuration setup for the module.
+
+        Args:
+            setup_data: Setup data for the module
+        """
+        logger.info("Running config setup with data: %s", setup_data)
+        # Here we could implement any additional configuration logic if needed
 
     async def run(
         self,
@@ -142,7 +155,7 @@ class ExampleModule(ArchetypeModule[ExampleInput, ExampleOutput, ExampleSetup, E
 async def test_module() -> None:
     """Test the example module."""
     # Create the module
-    module = ExampleModule(job_id="test-job-123", mission_id="test-mission-123")
+    module = ExampleModule(job_id="test-job-123", mission_id="test-mission-123", setup_version_id="test-setup-123")
 
     # Define input and setup data
     input_data = ExampleInput(message="Hello, world!", number=42)
@@ -171,7 +184,7 @@ async def test_module() -> None:
 def test_storage_directly() -> None:
     """Test the storage service directly."""
     # Initialize storage service
-    storage = ServicesConfig().storage(mission_id="test-mission", config={"example": ExampleStorage})
+    storage = ServicesConfig().storage(mission_id="test-mission",setup_version_id="test-setup-123", config={"example": ExampleStorage})
 
     # Create a test record
     storage.store("example", "test_table", {"test_key": "test_value"}, "OUTPUT")

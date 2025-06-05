@@ -212,7 +212,6 @@ class CPUIntensiveModule(BaseModule[CPUInput, CPUOutput, CPUSetup, CPUToolSecret
             "client_config": client_config,
         },
         "filesystem": {
-            "config": {},
             "client_config": client_config,
         },
         "cost": {
