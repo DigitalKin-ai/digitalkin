@@ -12,7 +12,7 @@
 
     keywords = [ "digitalkin", "kin", "agent", "gprc", "sdk" ]
     # Version of the package automatically updated by bump2version (that is why it is separated)
-    version = "0.2.13"
+    version = "0.2.14"
 
     classifiers = [
         "Development Status :: 3 - Alpha",
@@ -29,39 +29,39 @@
     ]
 
     dependencies = [
-        "digitalkin-proto>=0.1.11",
-        "grpcio-health-checking>=1.72.1",
-        "grpcio-reflection>=1.72.1",
-        "grpcio-status>=1.72.1",
+        "digitalkin-proto>=0.1.15",
+        "grpcio-health-checking>=1.71.0",
+        "grpcio-reflection>=1.71.0",
+        "grpcio-status>=1.71.0",
         "pydantic>=2.11.5",
     ]
 
     [project.optional-dependencies]
         dev = [
             "typos>=1.33.1",
-            "ruff>=0.11.12",
+            "ruff>=0.11.13",
             "mypy>=1.16.0",
             "pyright>=1.1.401",
             "pre-commit>=4.2.0",
             "bump2version>=1.0.1",
             "build>=1.2.2",
             "twine>=6.1.0",
-            "cryptography>=45.0.3",
+            "cryptography>=45.0.4",
         ]
         examples = [ "openai>=1.75.0" ]
         tests = [
             "freezegun>=1.5.2",
             "hdrhistogram>=0.10.3",
-            "grpcio-testing>=1.72.1",
+            "grpcio-testing>=1.71.0",
             "psutil>=7.0.0",
             "pytest>=8.4.0",
             "pytest-asyncio>=1.0.0",
             "pytest-cov>=6.1.0",
         ]
         taskiq = [
-            "rstream>=0.20.9",
+            "rstream>=0.30.0",
             "taskiq-aio-pika>=0.4.2",
-            "taskiq-redis>=1.0.8",
+            "taskiq-redis>=1.0.9",
             "taskiq[reload]>=0.11.17",
         ]
 
