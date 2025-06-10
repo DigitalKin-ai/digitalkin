@@ -9,8 +9,16 @@ from typing import Any, ClassVar, Generic
 
 from pydantic import BaseModel
 
+from digitalkin.grpc_servers.utils.exceptions import OptionalFeatureNotImplementedError
 from digitalkin.logger import logger
-from digitalkin.models.module import InputModelT, ModuleStatus, OutputModelT, SecretModelT, SetupModelT
+from digitalkin.models.module import (
+    ConfigSetupModelT,
+    InputModelT,
+    ModuleStatus,
+    OutputModelT,
+    SecretModelT,
+    SetupModelT,
+)
 from digitalkin.services.agent.agent_strategy import AgentStrategy
 from digitalkin.services.cost.cost_strategy import CostStrategy
 from digitalkin.services.filesystem.filesystem_strategy import FilesystemStrategy
@@ -30,11 +38,22 @@ class ModuleErrorModel(BaseModel):
     short_description: str
 
 
-class BaseModule(ABC, Generic[InputModelT, OutputModelT, SetupModelT, SecretModelT]):
+class BaseModule(
+    ABC,
+    Generic[
+        InputModelT,
+        OutputModelT,
+        SetupModelT,
+        SecretModelT,
+        ConfigSetupModelT,
+    ],
+):
     """BaseModule is the abstract base for all modules in the DigitalKin SDK."""
 
     name: str
     description: str
+
+    config_setup_format: type[ConfigSetupModelT]
     input_format: type[InputModelT]
     output_format: type[OutputModelT]
     setup_format: type[SetupModelT]
@@ -137,6 +156,23 @@ class BaseModule(ABC, Generic[InputModelT, OutputModelT, SetupModelT, SecretMode
         raise NotImplementedError(msg)
 
     @classmethod
+    def get_config_setup_format(cls, *, llm_format: bool) -> str:
+        """Gets the JSON schema of the config setup format model.
+
+        Raises:
+            OptionalFeatureNotImplementedError: If the `config_setup_format` is not defined.
+
+        Returns:
+            The JSON schema of the config setup format as a string.
+        """
+        if cls.config_setup_format is not None:
+            if llm_format:
+                return json.dumps(llm_ready_schema(cls.config_setup_format), indent=2)
+            return json.dumps(cls.config_setup_format.model_json_schema(), indent=2)
+        msg = "'%s' class does not define an 'config_setup_format'."
+        raise OptionalFeatureNotImplementedError(msg)
+
+    @classmethod
     def get_setup_format(cls, *, llm_format: bool) -> str:
         """Gets the JSON schema of the setup format model.
 
@@ -152,6 +188,18 @@ class BaseModule(ABC, Generic[InputModelT, OutputModelT, SetupModelT, SecretMode
             return json.dumps(cls.setup_format.model_json_schema(), indent=2)
         msg = "'%s' class does not define an 'setup_format'."
         raise NotImplementedError(msg)
+
+    @classmethod
+    def create_config_setup_model(cls, config_setup_data: dict[str, Any]) -> ConfigSetupModelT:
+        """Create the setup model from the setup data.
+
+        Args:
+            config_setup_data: The setup data to create the model from.
+
+        Returns:
+            The setup model.
+        """
+        return cls.config_setup_format(**config_setup_data)
 
     @classmethod
     def create_input_model(cls, input_data: dict[str, Any]) -> InputModelT:
@@ -200,6 +248,21 @@ class BaseModule(ABC, Generic[InputModelT, OutputModelT, SetupModelT, SecretMode
             The output model.
         """
         return cls.output_format(**output_data)
+
+    @abstractmethod
+    async def run_config_setup(
+        self,
+        config_setup_data: ConfigSetupModelT,
+        setup_data: SetupModelT,
+        callback: Callable,
+    ) -> None:
+        """Run config setup the module.
+
+        Raises:
+            OptionalFeatureNotImplementedError: If the config setup feature is not implemented.
+        """
+        msg = f"'{self}' class does not define an optional 'run_config_setup' attribute."
+        raise OptionalFeatureNotImplementedError(msg)
 
     @abstractmethod
     async def initialize(self, setup_data: SetupModelT) -> None:
@@ -302,3 +365,18 @@ class BaseModule(ABC, Generic[InputModelT, OutputModelT, SetupModelT, SecretMode
         except Exception:
             self._status = ModuleStatus.FAILED
             logger.exception("Error stopping module")
+
+    async def start_config_setup(
+        self,
+        config_setup_data: ConfigSetupModelT,
+        setup_data: SetupModelT,
+        callback: Callable[[OutputModelT | ModuleErrorModel], Coroutine[Any, Any, None]],
+    ) -> None:
+        """Start the module."""
+        try:
+            logger.info("Run Config Setup lifecycle")
+            self._status = ModuleStatus.RUNNING
+            await self.run_config_setup(config_setup_data, setup_data, callback)
+        except Exception:
+            self._status = ModuleStatus.FAILED
+            logger.exception("Error during module lifecyle")

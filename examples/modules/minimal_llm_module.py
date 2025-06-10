@@ -11,7 +11,6 @@ from pydantic import BaseModel, Field
 from digitalkin.grpc_servers.utils.models import ClientConfig, SecurityMode, ServerMode
 from digitalkin.modules._base_module import BaseModule
 from digitalkin.services.services_models import ServicesStrategy
-from digitalkin.services.setup.setup_strategy import SetupData
 
 # Configure logging with clear formatting
 logging.basicConfig(
@@ -154,6 +153,16 @@ class OpenAISetup(BaseModel):
     )
 
 
+class OpenAIConfigSetup(BaseModel):
+    """Setup model defining module configuration parameters."""
+
+    rag_files: list[bytes] = Field(
+        ...,
+        title="RAG Files",
+        description="Files used for retrieval-augmented generation (RAG) with the OpenAI module.",
+    )
+
+
 class OpenAIToolSecret(BaseModel):
     """Secret model defining module configuration parameters."""
 
@@ -167,13 +176,22 @@ client_config = ClientConfig(
 )
 
 
-class OpenAIToolModule(BaseModule[OpenAIInput, OpenAIOutput, OpenAISetup, OpenAIToolSecret]):
+class OpenAIToolModule(
+    BaseModule[
+        OpenAIInput,
+        OpenAIOutput,
+        OpenAISetup,
+        OpenAIToolSecret,
+        OpenAIConfigSetup,
+    ]
+):
     """A openAI endpoint tool module module."""
 
     name = "OpenAIToolModule"
     description = "A module that interacts with OpenAI API to process text"
 
     # Define the schema formats for the module
+    config_setup_format = OpenAIConfigSetup
     input_format = OpenAIInput
     output_format = OpenAIOutput
     setup_format = OpenAISetup
@@ -205,7 +223,27 @@ class OpenAIToolModule(BaseModule[OpenAIInput, OpenAIOutput, OpenAISetup, OpenAI
         },
     }
 
-    async def initialize(self, setup_data: SetupData) -> None:
+    async def run_config_setup(
+        self,
+        config_setup_data: OpenAIConfigSetup,
+        setup_data: OpenAISetup,
+        callback: Callable,
+    ) -> None:
+        """Configure the module with additional setup data.
+
+        Args:
+            config_setup_data: Additional configuration content.
+            setup_data: Initial setup data for the module.
+            callback: Function to send output data back to the client.
+        """
+        logger.info("Configuring OpenAIToolModule with additional setup data. %s", config_setup_data)
+
+        # Here you can process config_content and update setup_data as needed
+        # For now, we just return the original setup_data
+        setup_data.developer_prompt = "| + |".join(f.decode("utf-8") for f in config_setup_data.rag_files)
+        await callback(setup_data)
+
+    async def initialize(self, setup_data: OpenAISetup) -> None:
         """Initialize the module capabilities.
 
         This method is called when the module is loaded by the server.

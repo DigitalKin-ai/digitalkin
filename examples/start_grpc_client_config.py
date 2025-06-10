@@ -15,9 +15,9 @@ Requirements:
 """
 
 import asyncio
+from base64 import b64encode
 import json
 import logging
-import sys
 from functools import lru_cache
 from typing import Any
 
@@ -26,7 +26,8 @@ import grpc
 # Import gRPC protobuf generated classes
 from digitalkin_proto.digitalkin.module.v2 import information_pb2, lifecycle_pb2, module_service_pb2_grpc
 from digitalkin_proto.digitalkin.module_registry.v2 import discover_pb2, module_registry_service_pb2_grpc
-from google.protobuf import json_format
+from digitalkin_proto.digitalkin.setup.v2 import setup_pb2
+from google.protobuf import json_format, struct_pb2
 from google.protobuf.message import Message
 from pydantic import BaseModel, create_model
 
@@ -184,72 +185,6 @@ async def get_module_schemas(
     return input_class, output_class, setup_class
 
 
-async def run_client_text_transform() -> None:
-    """Run the client application to interact with the module."""
-    # Connect to registry server
-    async with grpc.aio.insecure_channel("localhost:50052") as registry_channel:
-        logger.info("Connecting to registry server at localhost:50052")
-
-        # Find the module
-        module = await discover_module(registry_channel, "Text_Transform_Module")
-        if not module:
-            logger.error("Module not found. Make sure the module server is running.")
-            return
-
-        logger.info("Found module: %s (ID: %s)", module.metadata.name, module.module_id)
-
-        # Connect to module server
-        async with grpc.aio.insecure_channel("localhost:50051") as module_channel:
-            logger.info("Connecting to module server at localhost:50051")
-
-            # Create module service stub
-            module_stub = module_service_pb2_grpc.ModuleServiceStub(module_channel)
-
-            # Get module schemas
-            input_class, output_class, setup_class = await get_module_schemas(module_stub, module.module_id)
-
-            logger.info(
-                "Retrieved module schemas: %s, %s and %s",
-                input_class.__name__,
-                output_class.__name__,
-                setup_class.__name__,
-            )
-
-            # Create setup data (we'll use default setup_id for this example)
-            # In a real application, you might create and store a setup configuration first
-            setup_id = "setups:0"
-            mission_id = "missions:0"
-
-            # Create input data using the schema
-            input_data = input_class(
-                text="Hello DigitalKin",
-                transform_count=5,
-            )
-
-            # Create start module request
-            request = lifecycle_pb2.StartModuleRequest(
-                input=input_data.model_dump(), setup_id=setup_id, mission_id=mission_id
-            )
-
-            logger.info("Starting module with input: %s", input_data.model_dump())
-
-            # Start the module and process streaming responses
-            try:
-                responses = module_stub.StartModule(request)
-                async for response in responses:
-                    # Process each output message
-                    if response.HasField("output"):
-                        # Convert output data
-                        output_dict = json_format.MessageToDict(response.output)
-                        output = output_class(**output_dict)
-
-                        logger.info("Received transformation %s: '%s'", output.iteration, output.transformed_text)
-                logger.info("Module execution completed successfully")
-
-            except grpc.RpcError:
-                logger.exception("Error running module:")
-
-
 async def run_client_llm() -> None:
     """Run the client application to interact with the module."""
     # Connect to registry server
@@ -281,38 +216,54 @@ async def run_client_llm() -> None:
                 setup_class.__name__,
             )
 
-            # Create setup data (we'll use default setup_id for this example)
-            # In a real application, you might create and store a setup configuration first
-            setup_id = "setups:0"
             mission_id = "missions:0"
 
-            # Create input data using the schema
-            input_data = input_class(prompt="Give me details about agentic mesh current advancement")
+            setup_version_data = setup_class(
+                model_name="yes model",
+                developer_prompt="prompt yes",
+                temperature=1.0,
+                max_tokens=1000,
+            )
 
-            # Create start module request
-            lifecycle_pb2.StartModuleRequest(input=input_data.model_dump(), setup_id=setup_id, mission_id=mission_id)
+            config_setup_request = information_pb2.GetConfigSetupModuleRequest(module_id=module.module_id)
+            config_setup_response = await module_stub.GetConfigSetupModule(config_setup_request)
+            config_setup_class = json_to_pydantic(config_setup_response.config_setup_schema)
 
-            logger.info("Starting module with input: %s", input_data.model_dump())
+            content = config_setup_class(
+                rag_files=[
+                    b64encode(b"1111").decode("utf-8"),
+                    b64encode(b"2222").decode("utf-8"),
+                ]
+            ).model_dump()
 
-            # Start the module and process streaming responses
+            request = lifecycle_pb2.ConfigSetupModuleRequest(
+                setup_version=setup_pb2.SetupVersion(
+                    id="setup_versions:0",
+                    setup_id="setups:0",
+                    version="0.1.0",
+                    content=json_format.ParseDict(
+                        setup_version_data.model_dump(),
+                        message=struct_pb2.Struct(),
+                        ignore_unknown_fields=True,
+                    ),
+                ),
+                content=content,
+                mission_id=mission_id,
+            )
+
+            logger.info(
+                "Starting config setup module with setup_version: %s | content: %s",
+                setup_version_data.model_dump(),
+                content,
+            )
+
             try:
-                async for response in responses:
-                    # Process each output message
-                    if response.HasField("output"):
-                        # Convert output data
-                        output_dict = json_format.MessageToDict(response.output)
-                        output = output_class(**output_dict)
-
-                        logger.info("Received answer %s", output.response)
-
-                logger.info("Module execution completed successfully")
-
+                response = await module_stub.ConfigSetupModule(request)
+                logger.info("Module response %s", response)
             except grpc.RpcError:
                 logger.exception("Error running module:")
 
 
 if __name__ == "__main__":
-    fn = run_client_text_transform
-    if len(sys.argv) > 1 and "llm" in sys.argv:
-        fn = run_client_llm
+    fn = run_client_llm
     asyncio.run(fn())

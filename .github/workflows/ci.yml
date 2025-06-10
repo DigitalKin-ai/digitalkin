@@ -45,8 +45,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          uv pip install -e . --system
-          uv pip install pytest ruff grpcio-testing freezegun --system
+          uv pip install -e ".[tests,dev]" --system
 
       - name: Lint with Ruff
         run: ruff check
