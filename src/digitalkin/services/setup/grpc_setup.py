@@ -139,6 +139,7 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
                 current_setup_version = setup_pb2.SetupVersion(**valid_data.current_setup_version.model_dump())
 
             request = setup_pb2.UpdateSetupRequest(
+                setup_id=valid_data.id,
                 name=valid_data.name,
                 owner_id=valid_data.owner_id or "",
                 current_setup_version=current_setup_version,
