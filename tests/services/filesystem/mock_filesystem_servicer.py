@@ -2,27 +2,22 @@
 
 import secrets
 import string
+from datetime import datetime, timezone
+from typing import Any
 
 import grpc
-from digitalkin_proto.digitalkin.filesystem.v2 import (
+from digitalkin_proto.digitalkin.filesystem.v1 import (
     filesystem_pb2,
     filesystem_service_pb2_grpc,
 )
-from digitalkin_proto.digitalkin.filesystem.v2.filesystem_pb2 import (
-    File as FileProto,
-)
-from digitalkin_proto.digitalkin.filesystem.v2.filesystem_pb2 import (
-    FileResult,
-)
-from digitalkin_proto.digitalkin.filesystem.v2.filesystem_pb2 import (
-    FileType as FileTypeProto,
-)
+from google.protobuf import struct_pb2
+from google.protobuf.json_format import MessageToDict
 from pydantic import ValidationError
 
 from digitalkin.logger import logger
 from digitalkin.services.filesystem.filesystem_strategy import (
-    FilesystemData,
-    FileType,
+    FileFilter,
+    FilesystemRecord,
 )
 
 
@@ -47,230 +42,253 @@ class MockFilesystemServicer(filesystem_service_pb2_grpc.FilesystemServiceServic
     def __init__(self) -> None:
         """Initialize the filesystem servicer with an empty files dictionary."""
         super().__init__()
-        self.files: dict[str, dict[str, FilesystemData]] = {}  # kin_context -> {name: file_data}
+        self.files: dict[str, dict[str, FilesystemRecord]] = {}  # context -> {id: file_data}
 
-    def _generate_url(self, kin_context: str, name: str) -> str:
+    def _model_to_proto(self, model: dict[str, Any]) -> filesystem_pb2.File:
+        """Convert a database model to a proto message.
+
+        Args:
+            model: The database model
+
+        Returns:
+            File: The proto message
+        """
+        file_type = getattr(filesystem_pb2.FileType, model["file_type"], filesystem_pb2.FileType.FILE_TYPE_UNSPECIFIED)
+        status = getattr(filesystem_pb2.FileStatus, model["status"], filesystem_pb2.FileStatus.FILE_STATUS_UNSPECIFIED)
+
+        metadata = struct_pb2.Struct()
+        if model.get("metadata"):
+            metadata.update(model["metadata"])
+        return filesystem_pb2.File(
+            file_id=str(model.get("id")) if model.get("id") else "",
+            context=str(model.get("context")) if model.get("context") else "",
+            name=model.get("name"),
+            file_type=file_type,
+            content_type=model.get("content_type"),
+            size_bytes=model.get("size_bytes"),
+            checksum=model.get("checksum"),
+            metadata=metadata,
+            storage_url=model.get("storage_url"),
+            status=status,
+        )
+
+    def _generate_url(self, context: str, name: str) -> str:
         """Generate a fake URL for a file.
 
         Args:
-            kin_context: The context of the file
+            context: The context of the file
             name: The name of the file
 
         Returns:
             str: A fake URL for the file
         """
         random_id = "".join(secrets.choice(self.alphabet) for _ in range(8))
-        return f"https://storage.example.com/{kin_context}/{random_id}/{name}"
+        return f"https://storage.example.com/{context}/{random_id}/{name}"
 
-    def UploadFile(
-        self, request: filesystem_pb2.UploadFileRequest, context: grpc.ServicerContext
-    ) -> filesystem_pb2.UploadFileResponse:
-        """Upload a file to the mock filesystem.
+    def UploadFiles(
+        self, request: filesystem_pb2.UploadFilesRequest, grpc_context: grpc.ServicerContext
+    ) -> filesystem_pb2.UploadFilesResponse:
+        """Upload multiple files to the mock filesystem.
 
         Args:
-            request: The UploadFileRequest containing the file to upload
+            request: The UploadFilesRequest containing the files to upload
             context: The gRPC context
 
         Returns:
-            filesystem_pb2.UploadFileResponse: The response containing the uploaded file
+            filesystem_pb2.UploadFilesResponse: The response containing the uploaded files
         """
         try:
-            kin_context = request.kin_context
-            name = request.name
+            results = []
+            total_uploaded = 0
+            total_failed = 0
 
-            # Initialize the kin_context dict if it doesn't exist
-            if kin_context not in self.files:
-                self.files[kin_context] = {}
+            for file_data in request.files:
+                context = file_data.context
+                name = file_data.name
 
-            # Check if file already exists
-            if name in self.files[kin_context]:
-                msg = f"File {name} already exists in context {kin_context}"
-                logger.warning(msg)
-                context.set_code(grpc.StatusCode.ALREADY_EXISTS)
-                context.set_details(msg)
-                return filesystem_pb2.UploadFileResponse()
+                # Initialize the context dict if it doesn't exist
+                if context not in self.files:
+                    self.files[context] = {}
 
-            try:
-                # Convert proto file type to our enum
-                file_type = FileType[FileTypeProto.Name(request.file_type)]
-            except ValueError as e:
-                msg = f"Invalid file type: {e!s}"
-                logger.warning(msg)
-                context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
-                context.set_details(msg)
-                return filesystem_pb2.UploadFileResponse()
+                # Check if file already exists
+                if name in self.files[context] and not file_data.replace_if_exists:
+                    msg = f"File {name} already exists in context {context}"
+                    logger.warning(msg)
+                    grpc_context.set_code(grpc.StatusCode.ALREADY_EXISTS)
+                    grpc_context.set_details(msg)
+                    results.append(filesystem_pb2.FileResult(error=msg))
+                    total_failed += 1
+                    continue
 
-            # Create the file data
-            url = self._generate_url(kin_context, name)
+                try:
+                    # Create the file data
+                    url = self._generate_url(context, name)
+                    file_id = secrets.token_hex(16)
+                    datetime.now(timezone.utc)
+                    file_data_obj = FilesystemRecord(
+                        id=file_id,
+                        context=context,
+                        name=name,
+                        file_type=filesystem_pb2.FileType.Name(file_data.file_type),
+                        content_type=file_data.content_type or "application/octet-stream",
+                        size_bytes=len(file_data.content),
+                        checksum=secrets.token_hex(32),  # Mock checksum
+                        metadata=MessageToDict(file_data.metadata) if file_data.HasField("metadata") else None,
+                        storage_url=url,
+                        status=filesystem_pb2.FileStatus.Name(file_data.status),
+                    )
 
-            file_data = FilesystemData(kin_context=kin_context, name=name, file_type=file_type, url=url)
+                    # Store the file
+                    self.files[context][file_id] = file_data_obj
+                    logger.debug(f"Uploaded file {name} to context {context}")
+                    file_proto = self._model_to_proto(file_data_obj.model_dump())
+                    results.append(filesystem_pb2.FileResult(file=file_proto))
+                    total_uploaded += 1
 
-            # Store the file
-            self.files[kin_context][name] = file_data
-            logger.debug(f"Uploaded file {name} to context {kin_context}")
+                except Exception as e:
+                    msg = f"Error uploading file {name}: {e!s}"
+                    logger.exception(msg)
+                    results.append(filesystem_pb2.FileResult(error=msg))
+                    total_failed += 1
 
-            # Convert to proto and return
-            file_proto = FileProto(
-                kin_context=file_data.kin_context,
-                name=file_data.name,
-                file_type=getattr(FileTypeProto, file_data.file_type.name),
-                url=file_data.url,
+            return filesystem_pb2.UploadFilesResponse(
+                results=results,
+                total_uploaded=total_uploaded,
+                total_failed=total_failed,
             )
-
-            return filesystem_pb2.UploadFileResponse(file=file_proto)
 
         except ValidationError as e:
             msg = f"Validation error: {e!s}"
             logger.exception(msg)
-            context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
-            context.set_details(msg)
-            return filesystem_pb2.UploadFileResponse()
+            grpc_context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+            grpc_context.set_details(msg)
+            return filesystem_pb2.UploadFilesResponse()
         except Exception as e:
-            msg = f"Unexpected error in UploadFile: {e!s}"
+            msg = f"Unexpected error in UploadFiles: {e!s}"
             logger.exception(msg)
-            context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(msg)
-            return filesystem_pb2.UploadFileResponse()
+            grpc_context.set_code(grpc.StatusCode.INTERNAL)
+            grpc_context.set_details(msg)
+            return filesystem_pb2.UploadFilesResponse()
 
-    def GetFileByName(
-        self, request: filesystem_pb2.GetFileByNameRequest, context: grpc.ServicerContext
-    ) -> filesystem_pb2.GetFileByNameResponse:
-        """Get a file by name from the mock filesystem.
+    def GetFile(
+        self, request: filesystem_pb2.GetFileRequest, grpc_context: grpc.ServicerContext
+    ) -> filesystem_pb2.GetFileResponse:
+        """Get a file by ID from the mock filesystem.
 
         Args:
-            request: The GetFileByNameRequest containing the name of the file to get
+            request: The GetFileRequest containing the ID of the file to get
             context: The gRPC context
 
         Returns:
-            filesystem_pb2.GetFileByNameResponse: The response containing the file
+            filesystem_pb2.GetFileResponse: The response containing the file
         """
         try:
-            kin_context = request.kin_context
-            name = request.name
+            context = request.context
+            file_id = request.file_id
 
-            # Check if kin_context exists
-            if kin_context not in self.files:
-                msg = f"Context {kin_context} does not exist"
+            # Check if context exists
+            if context not in self.files:
+                msg = f"Context {context} does not exist"
                 logger.warning(msg)
-                context.set_code(grpc.StatusCode.NOT_FOUND)
-                context.set_details(msg)
-                return filesystem_pb2.GetFileByNameResponse()
+                grpc_context.set_code(grpc.StatusCode.NOT_FOUND)
+                grpc_context.set_details(msg)
+                return filesystem_pb2.GetFileResponse()
 
             # Check if file exists
-            if name not in self.files[kin_context]:
-                msg = f"File {name} does not exist in context {kin_context}"
+            if file_id not in self.files[context]:
+                msg = f"File with ID {file_id} does not exist in context {context}"
                 logger.warning(msg)
-                context.set_code(grpc.StatusCode.NOT_FOUND)
-                context.set_details(msg)
-                return filesystem_pb2.GetFileByNameResponse()
+                grpc_context.set_code(grpc.StatusCode.NOT_FOUND)
+                grpc_context.set_details(msg)
+                return filesystem_pb2.GetFileResponse()
 
             # Return the file
-            file_data = self.files[kin_context][name]
-            file_proto = FileProto(
-                kin_context=file_data.kin_context,
-                name=file_data.name,
-                file_type=getattr(FileTypeProto, file_data.file_type.name),
-                url=file_data.url,
-            )
+            file_data = self.files[context][file_id]
+            file_proto = self._model_to_proto(file_data.model_dump())
 
-            return filesystem_pb2.GetFileByNameResponse(file=file_proto)
+            return filesystem_pb2.GetFileResponse(file=file_proto)
         except Exception as e:
-            msg = f"Unexpected error in GetFileByName: {e!s}"
+            msg = f"Unexpected error in GetFile: {e!s}"
             logger.exception(msg)
-            context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(msg)
-            return filesystem_pb2.GetFileByNameResponse()
+            grpc_context.set_code(grpc.StatusCode.INTERNAL)
+            grpc_context.set_details(msg)
+            return filesystem_pb2.GetFileResponse()
 
-    def GetFilesByKinContext(
-        self, request: filesystem_pb2.GetFilesByKinContextRequest, context: grpc.ServicerContext
-    ) -> filesystem_pb2.GetFilesByKinContextResponse:
-        """Get all files for a specific kin context.
+    def GetFiles(
+        self, request: filesystem_pb2.GetFilesRequest, grpc_context: grpc.ServicerContext
+    ) -> filesystem_pb2.GetFilesResponse:
+        """Get files based on filter criteria.
 
         Args:
-            request: The GetFilesByKinContextRequest containing the kin context
+            request: The GetFilesRequest containing filter criteria
             context: The gRPC context
 
         Returns:
-            filesystem_pb2.GetFilesByKinContextResponse: The response containing all files
+            filesystem_pb2.GetFilesResponse: The response containing matching files
         """
         try:
-            kin_context = request.kin_context
+            context = request.context
+            filters = FileFilter(**MessageToDict(request.filters))
 
-            # Check if kin_context exists
-            if kin_context not in self.files:
+            # Check if context exists
+            if context not in self.files:
                 # Return empty list rather than error, as this is a common case
-                logger.debug(f"Context {kin_context} does not exist or is empty")
-                return filesystem_pb2.GetFilesByKinContextResponse(files=[])
+                logger.debug(f"Context {context} does not exist or is empty")
+                return filesystem_pb2.GetFilesResponse(files=[], total_count=0)
 
-            # Return all files in the context
-            file_protos = []
-            for file_data in self.files[kin_context].values():
-                file_proto = FileProto(
-                    kin_context=file_data.kin_context,
-                    name=file_data.name,
-                    file_type=getattr(FileTypeProto, file_data.file_type.name),
-                    url=file_data.url,
-                )
-                file_protos.append(file_proto)
+            # Apply filters
+            filtered_files = []
+            logger.info(f"Filters: {filters}")
+            logger.info(f"Files: {self.files[context]}")
+            for file_data in self.files[context].values():
+                if self._matches_filters(file_data, filters):
+                    file_proto = self._model_to_proto(file_data.model_dump())
+                    filtered_files.append(file_proto)
 
-            return filesystem_pb2.GetFilesByKinContextResponse(files=file_protos)
+            # Apply pagination
+            total_count = len(filtered_files)
+            start_idx = request.offset
+            end_idx = start_idx + request.list_size
+            paginated_files = filtered_files[start_idx:end_idx]
+
+            return filesystem_pb2.GetFilesResponse(files=paginated_files, total_count=total_count)
         except Exception as e:
-            msg = f"Unexpected error in GetFilesByKinContext: {e!s}"
+            msg = f"Unexpected error in GetFiles: {e!s}"
             logger.exception(msg)
-            context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(msg)
-            return filesystem_pb2.GetFilesByKinContextResponse(files=[])
+            grpc_context.set_code(grpc.StatusCode.INTERNAL)
+            grpc_context.set_details(msg)
+            return filesystem_pb2.GetFilesResponse(files=[], total_count=0)
 
-    def GetFilesByNames(
-        self, request: filesystem_pb2.GetFilesByNamesRequest, context: grpc.ServicerContext
-    ) -> filesystem_pb2.GetFilesByNamesResponse:
-        """Get multiple files by name.
+    def _matches_filters(self, file_data: FilesystemRecord, filters: FileFilter) -> bool:
+        """Check if a file matches the given filters.
 
         Args:
-            request: The GetFilesByNamesRequest containing the names of the files to get
-            context: The gRPC context
+            file_data: The file data to check
+            filters: The filter criteria
 
         Returns:
-            filesystem_pb2.GetFilesByNamesResponse: The response containing the files
+            bool: True if the file matches all filters, False otherwise
         """
-        try:
-            kin_context = request.kin_context
-            names = request.names
-
-            # Check if kin_context exists
-            if kin_context not in self.files:
-                msg = f"Context {kin_context} does not exist"
-                logger.warning(msg)
-                context.set_code(grpc.StatusCode.NOT_FOUND)
-                context.set_details(msg)
-                raise grpc.RpcError(msg)
-
-            # Get all files that exist
-            file_protos = {}
-            for name in names:
-                if name in self.files[kin_context]:
-                    file_data = self.files[kin_context][name]
-                    file_proto = FileProto(
-                        kin_context=file_data.kin_context,
-                        name=file_data.name,
-                        file_type=getattr(FileTypeProto, file_data.file_type.name),
-                        url=file_data.url,
-                    )
-                    file_protos[name] = FileResult(file=file_proto)
-                else:
-                    logger.debug(f"File {name} does not exist in context {kin_context}")
-                    file_protos[name] = FileResult(error="File Not Found")
-
-            return filesystem_pb2.GetFilesByNamesResponse(files=file_protos)
-        except Exception as e:
-            msg = f"Unexpected error in GetFilesByNames: {e!s}"
-            logger.exception(msg)
-            context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(msg)
-            return filesystem_pb2.GetFilesByNamesResponse(files={})
+        if filters.names and file_data.name not in filters.names:
+            return False
+        if filters.file_ids and file_data.id not in filters.file_ids:
+            return False
+        if filters.file_types and file_data.file_type not in filters.file_types:
+            return False
+        if filters.status and file_data.status != filters.status:
+            return False
+        if filters.content_type_prefix and not file_data.content_type.startswith(filters.content_type_prefix):
+            return False
+        if filters.min_size_bytes and file_data.size_bytes < filters.min_size_bytes:
+            return False
+        if filters.max_size_bytes and file_data.size_bytes > filters.max_size_bytes:
+            return False
+        if filters.prefix and not file_data.name.startswith(filters.prefix):
+            return False
+        return not (filters.content_type and file_data.content_type != filters.content_type)
 
     def UpdateFile(
-        self, request: filesystem_pb2.UpdateFileRequest, context: grpc.ServicerContext
+        self, request: filesystem_pb2.UpdateFileRequest, grpc_context: grpc.ServicerContext
     ) -> filesystem_pb2.UpdateFileResponse:
         """Update a file in the mock filesystem.
 
@@ -281,92 +299,117 @@ class MockFilesystemServicer(filesystem_service_pb2_grpc.FilesystemServiceServic
             filesystem_pb2.UpdateFileResponse: The response containing the updated file
         """
         try:
-            kin_context = request.kin_context
-            name = request.name
+            context = request.context
+            file_id = request.file_id
 
-            # Check if kin_context exists
-            if kin_context not in self.files:
-                msg = f"Context {kin_context} does not exist"
+            # Check if context exists
+            if context not in self.files:
+                msg = f"Context {context} does not exist"
                 logger.warning(msg)
-                context.set_code(grpc.StatusCode.NOT_FOUND)
-                context.set_details(msg)
+                grpc_context.set_code(grpc.StatusCode.NOT_FOUND)
+                grpc_context.set_details(msg)
                 return filesystem_pb2.UpdateFileResponse()
 
             # Check if file exists
-            if name not in self.files[kin_context]:
-                msg = f"File {name} does not exist in context {kin_context}"
+            if file_id not in self.files[context]:
+                msg = f"File with ID {file_id} does not exist in context {context}"
                 logger.warning(msg)
-                context.set_code(grpc.StatusCode.NOT_FOUND)
-                context.set_details(msg)
+                grpc_context.set_code(grpc.StatusCode.NOT_FOUND)
+                grpc_context.set_details(msg)
                 return filesystem_pb2.UpdateFileResponse()
 
             # Update the file data
-            file_data = self.files[kin_context][name]
-            file_data.file_type = FileType[FileTypeProto.Name(request.file_type)]
-            file_data.url = self._generate_url(kin_context, name)
+            file_data = self.files[context][file_id]
+            if request.content:
+                file_data.size_bytes = len(request.content)
+                file_data.checksum = secrets.token_hex(32)  # Mock checksum
+            if request.file_type:
+                file_data.file_type = filesystem_pb2.FileType.Name(request.file_type)
+            if request.content_type:
+                file_data.content_type = request.content_type
+            if request.metadata:
+                file_data.metadata = MessageToDict(request.metadata)
+            if request.new_name:
+                file_data.name = request.new_name
+                file_data.storage_url = self._generate_url(context, request.new_name)
+            if request.status:
+                file_data.status = filesystem_pb2.FileStatus.Name(request.status)
 
             # Convert to proto and return
-            file_proto = FileProto(
-                kin_context=file_data.kin_context,
-                name=file_data.name,
-                file_type=getattr(FileTypeProto, file_data.file_type.name),
-                url=file_data.url,
-            )
+            file_proto = self._model_to_proto(file_data.model_dump())
 
-            return filesystem_pb2.UpdateFileResponse(file=file_proto)
+            return filesystem_pb2.UpdateFileResponse(result=filesystem_pb2.FileResult(file=file_proto))
         except ValidationError as e:
             msg = f"Validation error: {e!s}"
             logger.exception(msg)
-            context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
-            context.set_details(msg)
+            grpc_context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+            grpc_context.set_details(msg)
             return filesystem_pb2.UpdateFileResponse()
         except Exception as e:
             msg = f"Unexpected error in UpdateFile: {e!s}"
             logger.exception(msg)
-            context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(msg)
+            grpc_context.set_code(grpc.StatusCode.INTERNAL)
+            grpc_context.set_details(msg)
             return filesystem_pb2.UpdateFileResponse()
 
-    def DeleteFile(
-        self, request: filesystem_pb2.DeleteFileRequest, context: grpc.ServicerContext
-    ) -> filesystem_pb2.DeleteFileResponse:
-        """Delete a file from the mock filesystem.
+    def DeleteFiles(
+        self, request: filesystem_pb2.DeleteFilesRequest, grpc_context: grpc.ServicerContext
+    ) -> filesystem_pb2.DeleteFilesResponse:
+        """Delete multiple files from the mock filesystem.
 
         Args:
-            request: The DeleteFileRequest containing the name of the file to delete
+            request: The DeleteFilesRequest containing filter criteria
             context: The gRPC context
 
         Returns:
-            filesystem_pb2.DeleteFileResponse: The response indicating success or failure
+            filesystem_pb2.DeleteFilesResponse: The response indicating success or failure
         """
         try:
-            kin_context = request.kin_context
-            name = request.name
+            context = request.context
+            filters = FileFilter(**MessageToDict(request.filters))
+            permanent = request.permanent
 
-            # Check if kin_context exists
-            if kin_context not in self.files:
-                msg = f"Context {kin_context} does not exist"
+            # Check if context exists
+            if context not in self.files:
+                msg = f"Context {context} does not exist"
                 logger.warning(msg)
-                context.set_code(grpc.StatusCode.NOT_FOUND)
-                context.set_details(msg)
-                return filesystem_pb2.DeleteFileResponse()
+                grpc_context.set_code(grpc.StatusCode.NOT_FOUND)
+                grpc_context.set_details(msg)
+                return filesystem_pb2.DeleteFilesResponse()
 
-            # Check if file exists
-            if name not in self.files[kin_context]:
-                msg = f"File {name} does not exist in context {kin_context}"
-                logger.warning(msg)
-                context.set_code(grpc.StatusCode.NOT_FOUND)
-                context.set_details(msg)
-                return filesystem_pb2.DeleteFileResponse()
+            results = {}
+            total_deleted = 0
+            total_failed = 0
 
-            # Delete the file
-            del self.files[kin_context][name]
-            logger.debug(f"Deleted file {name} from context {kin_context}")
+            # Find files matching the filters
+            files_to_delete = []
+            for file_id, file_data in self.files[context].items():
+                if self._matches_filters(file_data, filters):
+                    files_to_delete.append(file_id)
 
-            return filesystem_pb2.DeleteFileResponse()
+            # Delete the files
+            for file_id in files_to_delete:
+                try:
+                    if permanent:
+                        del self.files[context][file_id]
+                    else:
+                        self.files[context][file_id].status = "FILE_STATUS_DELETED"
+                    results[file_id] = True
+                    total_deleted += 1
+                except Exception as e:
+                    msg = f"Error deleting file {file_id}: {e!s}"
+                    logger.exception(msg)
+                    results[file_id] = False
+                    total_failed += 1
+
+            return filesystem_pb2.DeleteFilesResponse(
+                results=results,
+                total_deleted=total_deleted,
+                total_failed=total_failed,
+            )
         except Exception as e:
-            msg = f"Unexpected error in DeleteFile: {e!s}"
+            msg = f"Unexpected error in DeleteFiles: {e!s}"
             logger.exception(msg)
-            context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(msg)
-            return filesystem_pb2.DeleteFileResponse()
+            grpc_context.set_code(grpc.StatusCode.INTERNAL)
+            grpc_context.set_details(msg)
+            return filesystem_pb2.DeleteFilesResponse()

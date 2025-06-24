@@ -1,261 +1,576 @@
-import contextlib
-import os
-from collections import UserDict
-from unittest.mock import MagicMock, patch
+"""Test the default filesystem implementation."""
+
+from pathlib import Path
 
 import pytest
 
 from digitalkin.services.filesystem import DefaultFilesystem
 from digitalkin.services.filesystem.filesystem_strategy import (
-    FilesystemData,
+    FileFilter,
+    FilesystemRecord,
     FilesystemServiceError,
-    FileType,
+    UploadFileData,
 )
 
 
 @pytest.fixture
-def test_dir(tmp_path):
-    """Create a temporary directory for testing."""
-    test_dir = tmp_path / "test_filesystem"
-    test_dir.mkdir()
-    return str(test_dir)
+def filesystem() -> DefaultFilesystem:
+    """Create a DefaultFilesystem instance for testing with isolated temp_root."""
+    return DefaultFilesystem("test_mission", "test_setup")
 
 
 @pytest.fixture
-def default_fs(test_dir):
-    """Create a DefaultFilesystem instance for testing."""
-    config = {"temp_root": test_dir}
-    mission_id = "test_mission:123"
-    setup_version_id = "setup_version:1"
-    fs = DefaultFilesystem(mission_id, setup_version_id, config)
-    yield fs
-    # Clean up any test files
-    for file_data in fs.get_all():
-        with contextlib.suppress(FileNotFoundError, OSError):
-            os.remove(file_data.url)
+def sample_file_data() -> bytes:
+    """Generate sample file data for testing.
+
+    Returns:
+        bytes: Sample file data
+    """
+    return b"This is sample file content for testing."
 
 
 @pytest.fixture
-def sample_file() -> bytes:
-    """Create a sample file content for testing."""
-    return b"Sample file content for testing"
+def file_metadata() -> dict:
+    """Generate file metadata for testing.
 
-
-@pytest.fixture
-def uploaded_file(default_fs, sample_file):
-    """Create and upload a sample file."""
-    file_name = "test_file.txt"
-    file_data = default_fs.upload(content=sample_file, name=file_name, file_type=FileType.DOCUMENT)
-    default_fs.db[file_name] = file_data
-    return file_data
+    Returns:
+        dict: File metadata with context, name, file_type, and url
+    """
+    return {
+        "context": "test_mission",
+        "name": "test_file.txt",
+        "file_type": "DOCUMENT",
+        "content_type": "text/plain",
+        "metadata": {"key": "value"},
+        "status": "ACTIVE",
+    }
 
 
 class TestDefaultFilesystem:
-    """Test suite for DefaultFilesystem class."""
+    """Test the DefaultFilesystem class."""
 
-    def test_init(self, test_dir) -> None:
+    def test_init(self) -> None:
         """Test initialization of DefaultFilesystem."""
-        config = {"temp_root": test_dir}
-        mission_id = "test_mission:123"
-        setup_version_id = "setup_version:1"
-        fs = DefaultFilesystem(mission_id, setup_version_id, config)
+        filesystem = DefaultFilesystem("test_mission", "test_setup")
+        assert filesystem.temp_root
+        assert filesystem.mission_id == "test_mission"
 
-        assert fs.mission_id == mission_id
-        assert fs.temp_root == test_dir
-        assert fs.db == {}
-        assert os.path.isdir(test_dir)
+    def test_upload_files_success(
+        self, filesystem: DefaultFilesystem, sample_file_data: bytes, file_metadata: dict
+    ) -> None:
+        """Test successful file upload.
 
-    def test_init_with_default_temp_dir(self) -> None:
-        """Test initialization with default temp directory."""
-        import tempfile
+        Args:
+            filesystem: DefaultFilesystem instance
+            sample_file_data: Sample file data
+            file_metadata: File metadata
+        """
+        # Create upload file data
+        upload_file = UploadFileData(
+            content=sample_file_data,
+            name=file_metadata["name"],
+            file_type=file_metadata["file_type"],
+            content_type=file_metadata["content_type"],
+            metadata=file_metadata["metadata"],
+            status=file_metadata["status"],
+            replace_if_exists=False,
+        )
 
-        mission_id = "test_mission:456"
-        setup_version_id = "setup_version:1"
-        fs = DefaultFilesystem(mission_id, setup_version_id, {})
+        # Upload the file
+        files, total_uploaded, total_failed = filesystem.upload_files([upload_file])
+        assert len(files) == 1
+        assert total_uploaded == 1
+        assert total_failed == 0
 
-        assert fs.mission_id == mission_id
-        assert fs.temp_root == tempfile.gettempdir()
-        assert fs.db == {}
+        # Verify the file data
+        file_data = files[0]
+        assert isinstance(file_data, FilesystemRecord)
+        assert file_data.context == file_metadata["context"]
+        assert file_data.name == file_metadata["name"]
+        assert file_data.file_type == file_metadata["file_type"]
+        assert file_data.content_type == file_metadata["content_type"]
+        assert file_data.metadata == file_metadata["metadata"]
+        assert file_data.status == file_metadata["status"]
+        assert file_data.storage_url is not None
 
-    def test_get_kin_context_temp_dir(self, default_fs, test_dir) -> None:
-        """Test _get_kin_context_temp_dir method."""
-        kin_context = "test:context"
-        expected_dir = os.path.join(test_dir, "test_context")
+        # Verify the file exists on disk
+        file_path = Path(filesystem._get_context_temp_dir(file_metadata["context"]), file_metadata["name"])
+        assert file_path.exists()
+        assert file_path.read_bytes() == sample_file_data
 
-        result = default_fs._get_kin_context_temp_dir(kin_context)
+    def test_get_file_success(
+        self, filesystem: DefaultFilesystem, sample_file_data: bytes, file_metadata: dict
+    ) -> None:
+        """Test successful file retrieval.
 
-        assert result == expected_dir
-        assert os.path.isdir(expected_dir)
+        Args:
+            filesystem: DefaultFilesystem instance
+            sample_file_data: Sample file data
+            file_metadata: File metadata
+        """
+        # First upload a file
+        upload_file = UploadFileData(
+            content=sample_file_data,
+            name=file_metadata["name"],
+            file_type=file_metadata["file_type"],
+            content_type=file_metadata["content_type"],
+            metadata=file_metadata["metadata"],
+            status=file_metadata["status"],
+            replace_if_exists=False,
+        )
+        files, _, _ = filesystem.upload_files([upload_file])
+        file_id = files[0].id
 
-    def test_upload_success(self, default_fs, sample_file) -> None:
-        """Test successful file upload."""
-        file_name = "new_file.txt"
-        file_type = FileType.DOCUMENT
+        # Get the file
+        file_data = filesystem.get_file(file_id)
+        assert isinstance(file_data, FilesystemRecord)
+        assert file_data.id == file_id
+        assert file_data.context == file_metadata["context"]
+        assert file_data.name == file_metadata["name"]
+        assert file_data.file_type == file_metadata["file_type"]
+        assert file_data.content_type == file_metadata["content_type"]
+        assert file_data.metadata == file_metadata["metadata"]
+        assert file_data.status == file_metadata["status"]
+        assert file_data.storage_url is not None
 
-        result = default_fs.upload(sample_file, file_name, file_type)
+    def test_get_files_success(
+        self, filesystem: DefaultFilesystem, sample_file_data: bytes, file_metadata: dict
+    ) -> None:
+        """Test successful retrieval of multiple files.
 
-        assert isinstance(result, FilesystemData)
-        assert result.name == file_name
-        assert result.file_type == file_type
-        assert result.kin_context == default_fs.mission_id
-        assert os.path.exists(result.url)
+        Args:
+            filesystem: DefaultFilesystem instance
+            sample_file_data: Sample file data
+            file_metadata: File metadata
+        """
+        # Upload multiple files
+        file_names = [f"{file_metadata['name']}_{i}" for i in range(3)]
+        upload_files = [
+            UploadFileData(
+                content=sample_file_data,
+                name=name,
+                file_type=file_metadata["file_type"],
+                content_type=file_metadata["content_type"],
+                metadata=file_metadata["metadata"],
+                status=file_metadata["status"],
+                replace_if_exists=False,
+            )
+            for name in file_names
+        ]
 
-        # Verify file content
-        with open(result.url, "rb") as f:
-            assert f.read() == sample_file
+        _files, _, _ = filesystem.upload_files(upload_files)
 
-    def test_upload_file_exists(self, default_fs, uploaded_file) -> None:
-        """Test upload when file already exists."""
-        with pytest.raises(FileExistsError):
-            default_fs.upload(b"New content", uploaded_file.name, FileType.DOCUMENT)
+        # Create filter criteria
+        filters = FileFilter(
+            context=file_metadata["context"],
+            file_types=[file_metadata["file_type"]],
+            status=file_metadata["status"],
+        )
 
-    @patch("pathlib.Path.write_bytes")
-    def test_upload_error(self, mock_write, default_fs, sample_file) -> None:
-        """Test upload with error."""
-        mock_write.side_effect = Exception("Test error")
+        # Get the files
+        result_files, total_count = filesystem.get_files(
+            filters,
+            list_size=10,
+            offset=0,
+            order="created_at:desc",
+            include_content=False,
+        )
 
+        assert len(result_files) == 3
+        assert total_count == 3
+
+        for file_data in result_files:
+            assert isinstance(file_data, FilesystemRecord)
+            assert file_data.context == file_metadata["context"]
+            assert file_data.name in file_names
+            assert file_data.file_type == file_metadata["file_type"]
+            assert file_data.content_type == file_metadata["content_type"]
+            assert file_data.metadata == file_metadata["metadata"]
+            assert file_data.status == file_metadata["status"]
+            assert file_data.storage_url is not None
+
+    def test_update_file_success(
+        self, filesystem: DefaultFilesystem, sample_file_data: bytes, file_metadata: dict
+    ) -> None:
+        """Test successful file update.
+
+        Args:
+            filesystem: DefaultFilesystem instance
+            sample_file_data: Sample file data
+            file_metadata: File metadata
+        """
+        # First upload a file
+        upload_file = UploadFileData(
+            content=sample_file_data,
+            name=file_metadata["name"],
+            file_type=file_metadata["file_type"],
+            content_type=file_metadata["content_type"],
+            metadata=file_metadata["metadata"],
+            status=file_metadata["status"],
+            replace_if_exists=False,
+        )
+        files, _, _ = filesystem.upload_files([upload_file])
+        file_id = files[0].id
+
+        # Update the file
+        updated_content = b"Updated content"
+        updated_file = filesystem.update_file(
+            file_id,
+            content=updated_content,
+            file_type="DOCUMENT",
+            content_type="text/plain",
+            metadata={"new_key": "new_value"},
+            new_name="updated_file.txt",
+            status="ACTIVE",
+        )
+
+        assert isinstance(updated_file, FilesystemRecord)
+        assert updated_file.id == file_id
+        assert updated_file.context == file_metadata["context"]
+        assert updated_file.name == "updated_file.txt"
+        assert updated_file.file_type == "DOCUMENT"
+        assert updated_file.content_type == "text/plain"
+        assert updated_file.metadata == {"new_key": "new_value"}
+        assert updated_file.status == "ACTIVE"
+        assert updated_file.storage_url is not None
+
+        # Verify the file content was updated
+        file_path = Path(filesystem._get_context_temp_dir(file_metadata["context"]), "updated_file.txt")
+        assert file_path.exists()
+        assert file_path.read_bytes() == updated_content
+
+    def test_delete_files_success(
+        self, filesystem: DefaultFilesystem, sample_file_data: bytes, file_metadata: dict
+    ) -> None:
+        """Test successful file deletion.
+
+        Args:
+            filesystem: DefaultFilesystem instance
+            sample_file_data: Sample file data
+            file_metadata: File metadata
+        """
+        # Upload multiple files
+        file_names = [f"{file_metadata['name']}_{i}" for i in range(3)]
+        upload_files = [
+            UploadFileData(
+                content=sample_file_data,
+                name=name,
+                file_type=file_metadata["file_type"],
+                content_type=file_metadata["content_type"],
+                metadata=file_metadata["metadata"],
+                status=file_metadata["status"],
+                replace_if_exists=False,
+            )
+            for name in file_names
+        ]
+
+        files, _, _ = filesystem.upload_files(upload_files)
+        file_ids = [file_data.id for file_data in files]
+
+        # Create filter criteria
+        filters = FileFilter(
+            context=file_metadata["context"],
+            file_types=[file_metadata["file_type"]],
+            status=file_metadata["status"],
+        )
+
+        # Delete the files
+        results, total_deleted, total_failed = filesystem.delete_files(
+            filters,
+            permanent=True,
+            force=False,
+        )
+
+        assert len(results) == 3
+        assert total_deleted == 3
+        assert total_failed == 0
+
+        for file_id in file_ids:
+            assert results[file_id] is True
+
+        # Verify the files are deleted
+        for name in file_names:
+            file_path = Path(filesystem._get_context_temp_dir(file_metadata["context"]), name)
+            assert not file_path.exists()
+
+    def test_get_file_nonexistent(self, filesystem: DefaultFilesystem) -> None:
+        """Test getting a non-existent file.
+
+        Args:
+            filesystem: DefaultFilesystem instance
+        """
         with pytest.raises(FilesystemServiceError):
-            default_fs.upload(sample_file, "error_file.txt", FileType.DOCUMENT)
+            filesystem.get_file("nonexistent_file_id")
 
-    def test_get_success(self, default_fs, uploaded_file) -> None:
-        """Test successful file retrieval."""
-        result = default_fs.get(uploaded_file.name)
+    def test_update_file_nonexistent(self, filesystem: DefaultFilesystem, sample_file_data: bytes) -> None:
+        """Test updating a non-existent file.
 
-        assert result == uploaded_file
-
-    def test_get_not_found(self, default_fs) -> None:
-        """Test get with non-existent file."""
-        with pytest.raises(FileNotFoundError):
-            default_fs.get("nonexistent_file.txt")
-
-    def test_get_error(self, default_fs) -> None:
-        """Test get with unexpected error."""
-        with patch.object(default_fs, "db", new=MagicMock()) as mock_db:
-            mock_db.__getitem__.side_effect = Exception("Test error")
-
-            with pytest.raises(FilesystemServiceError):
-                default_fs.get("error_file.txt")
-
-    def test_update_success(self, default_fs, uploaded_file) -> None:
-        """Test successful file update."""
-        new_content = b"Updated content"
-
-        result = default_fs.update(uploaded_file.name, new_content, FileType.DOCUMENT)
-
-        assert result.name == uploaded_file.name
-        assert result.file_type == FileType.DOCUMENT
-
-        # Verify file content
-        with open(result.url, "rb") as f:
-            assert f.read() == new_content
-
-    def test_update_not_found(self, default_fs) -> None:
-        """Test update with non-existent file."""
-        with pytest.raises(FileNotFoundError):
-            default_fs.update("nonexistent_file.txt", b"Content", FileType.DOCUMENT)
-
-    @patch("pathlib.Path.write_bytes")
-    def test_update_error(self, mock_write, default_fs, uploaded_file) -> None:
-        """Test update with error."""
-        mock_write.side_effect = Exception("Test error")
-
+        Args:
+            filesystem: DefaultFilesystem instance
+            sample_file_data: Sample file data
+        """
         with pytest.raises(FilesystemServiceError):
-            default_fs.update(uploaded_file.name, b"New content", FileType.DOCUMENT)
+            filesystem.update_file(
+                "nonexistent_file_id",
+                content=sample_file_data,
+                file_type="DOCUMENT",
+                content_type="text/plain",
+                metadata={"key": "value"},
+                new_name="updated_file.txt",
+                status="ACTIVE",
+            )
 
-    def test_delete_success(self, default_fs, uploaded_file) -> None:
-        """Test successful file deletion."""
-        result = default_fs.delete(uploaded_file.name)
+    def test_delete_files_nonexistent(self, filesystem: DefaultFilesystem) -> None:
+        """Test deleting non-existent files.
 
-        assert result == 1
-        assert uploaded_file.name not in default_fs.db
-        assert not os.path.exists(uploaded_file.url)
+        Args:
+            filesystem: DefaultFilesystem instance
+        """
+        # Create filter criteria for non-existent files
+        filters = FileFilter(
+            context="nonexistent_context",
+            file_types=["DOCUMENT"],
+            status="ACTIVE",
+        )
 
-    def test_delete_not_found_in_db(self, default_fs) -> None:
-        """Test delete with file not in database."""
-        with pytest.raises(FileNotFoundError):
-            default_fs.delete("nonexistent_file.txt")
+        # Attempt to delete the files
+        results, total_deleted, total_failed = filesystem.delete_files(
+            filters,
+            permanent=True,
+            force=False,
+        )
 
-    def test_delete_not_found_in_filesystem(self, default_fs, uploaded_file) -> None:
-        """Test delete with file in db but not in filesystem."""
-        # Remove the actual file but keep the db entry
-        os.remove(uploaded_file.url)
+        assert len(results) == 0
+        assert total_deleted == 0
+        assert total_failed == 0
 
-        with pytest.raises(FilesystemServiceError) as excinfo:
-            default_fs.delete(uploaded_file.name)
+    def test_upload_files_duplicate_error(
+        self, filesystem: DefaultFilesystem, sample_file_data: bytes, file_metadata: dict
+    ) -> None:
+        """Test that uploading a duplicate file raises an error when replace_if_exists is False.
 
-        assert "exists in database but not in filesystem" in str(excinfo.value)
+        Args:
+            filesystem: DefaultFilesystem instance
+            sample_file_data: Sample file data
+            file_metadata: File metadata
+        """
+        # First upload a file
+        upload_file = UploadFileData(
+            content=sample_file_data,
+            name=file_metadata["name"],
+            file_type=file_metadata["file_type"],
+            content_type=file_metadata["content_type"],
+            metadata=file_metadata["metadata"],
+            replace_if_exists=False,
+        )
+        filesystem.upload_files([upload_file])
 
-    def test_delete_os_error(self, default_fs, uploaded_file) -> None:
-        """Test delete with OSError during file removal."""
-        with patch("os.remove") as mock_remove:
-            mock_remove.side_effect = OSError("Permission denied")
+        # Try to upload the same file again
+        with pytest.raises(FilesystemServiceError):
+            filesystem.upload_files([upload_file])
 
-            with pytest.raises(FilesystemServiceError) as excinfo:
-                default_fs.delete(uploaded_file.name)
+    def test_upload_files_replace_existing(
+        self, filesystem: DefaultFilesystem, sample_file_data: bytes, file_metadata: dict
+    ) -> None:
+        """Test that uploading a duplicate file succeeds when replace_if_exists is True.
 
-            assert "Error deleting file" in str(excinfo.value)
+        Args:
+            filesystem: DefaultFilesystem instance
+            sample_file_data: Sample file data
+            file_metadata: File metadata
+        """
+        # First upload a file
+        upload_file = UploadFileData(
+            content=sample_file_data,
+            name=file_metadata["name"],
+            file_type=file_metadata["file_type"],
+            content_type=file_metadata["content_type"],
+            metadata=file_metadata["metadata"],
+            replace_if_exists=False,
+        )
+        filesystem.upload_files([upload_file])
 
-    def test_delete_unexpected_error(self, default_fs, uploaded_file) -> None:
-        """Test delete with unexpected error."""
+        # Upload the same file with replace_if_exists=True
+        new_content = b"New content"
+        upload_file_replace = UploadFileData(
+            content=new_content,
+            name=file_metadata["name"],
+            file_type=file_metadata["file_type"],
+            content_type=file_metadata["content_type"],
+            metadata=file_metadata["metadata"],
+            replace_if_exists=True,
+        )
+        files, total_uploaded, total_failed = filesystem.upload_files([upload_file_replace])
+        assert len(files) == 1
+        assert total_uploaded == 1
+        assert total_failed == 0
 
-        # Create a custom dict-like object that will raise an exception when __delitem__ is called
-        class ExceptionDict(UserDict):
-            def __delitem__(self, key) -> None:
-                msg = "Unexpected error"
-                raise Exception(msg)
+        # Verify the file content was updated
+        file_path = Path(filesystem._get_context_temp_dir(file_metadata["context"]), file_metadata["name"])
+        assert file_path.exists()
+        assert file_path.read_bytes() == new_content
 
-        # Replace the db with our custom dict containing the same items
-        original_db = default_fs.db
-        custom_db = ExceptionDict(original_db)
-        default_fs.db = custom_db
+    def test_get_files_with_filters(
+        self, filesystem: DefaultFilesystem, sample_file_data: bytes, file_metadata: dict
+    ) -> None:
+        """Test getting files with various filter combinations.
 
-        try:
-            with pytest.raises(FilesystemServiceError) as excinfo:
-                default_fs.delete(uploaded_file.name)
+        Args:
+            filesystem: DefaultFilesystem instance
+            sample_file_data: Sample file data
+            file_metadata: File metadata
+        """
+        # Upload multiple files with different types
+        files_to_upload = [
+            UploadFileData(
+                content=sample_file_data,
+                name="file1.txt",
+                file_type="DOCUMENT",
+                content_type="text/plain",
+                metadata={"key": "value1"},
+                replace_if_exists=False,
+            ),
+            UploadFileData(
+                content=sample_file_data,
+                name="file2.txt",
+                file_type="IMAGE",
+                content_type="image/png",
+                metadata={"key": "value2"},
+                replace_if_exists=False,
+            ),
+            UploadFileData(
+                content=sample_file_data,
+                name="file3.txt",
+                file_type="DOCUMENT",
+                content_type="text/plain",
+                metadata={"key": "value3"},
+                replace_if_exists=False,
+            ),
+        ]
+        files, _, _ = filesystem.upload_files(files_to_upload)
 
-            assert "Unexpected error deleting file" in str(excinfo.value)
-        finally:
-            # Restore the original db
-            default_fs.db = original_db
+        # Update one file to ARCHIVED status
+        filesystem.update_file(files[1].id, status="ARCHIVED")
 
-    def test_get_all(self, default_fs, uploaded_file) -> None:
-        """Test get_all method."""
-        # Upload another file
-        another_file = default_fs.upload(b"Another file content", "another_file.txt", FileType.DOCUMENT)
-        default_fs.db["another_file.txt"] = another_file
+        # Test filtering by type
+        filters = FileFilter(
+            context=file_metadata["context"],
+            file_types=["DOCUMENT"],
+        )
+        result_files, total_count = filesystem.get_files(filters)
+        assert len(result_files) == 2
+        assert total_count == 2
+        assert all(f.file_type == "DOCUMENT" for f in result_files)
 
-        result = default_fs.get_all()
+        # Test filtering by status
+        filters = FileFilter(
+            context=file_metadata["context"],
+            status="ARCHIVED",
+        )
+        result_files, total_count = filesystem.get_files(filters)
+        assert len(result_files) == 1
+        assert total_count == 1
+        assert result_files[0].status == "ARCHIVED"
 
-        assert len(result) == 2
-        assert uploaded_file in result
-        assert another_file in result
+        # Test filtering by content type
+        filters = FileFilter(
+            context=file_metadata["context"],
+            content_type="image/png",
+        )
+        result_files, total_count = filesystem.get_files(filters)
+        assert len(result_files) == 1
+        assert total_count == 1
+        assert result_files[0].content_type == "image/png"
 
-    def test_get_batch(self, default_fs, uploaded_file) -> None:
-        """Test get_batch method."""
-        # Upload another file
-        another_file = default_fs.upload(b"Another file content", "another_file.txt", FileType.DOCUMENT)
-        default_fs.db["another_file.txt"] = another_file
+        # Test filtering by name prefix
+        filters = FileFilter(
+            context=file_metadata["context"],
+            prefix="file1",
+        )
+        result_files, total_count = filesystem.get_files(filters)
+        assert len(result_files) == 1
+        assert total_count == 1
+        assert result_files[0].name == "file1.txt"
 
-        # Request both files
-        result = default_fs.get_batch([uploaded_file.name, another_file.name])
-        assert len(result) == 2
-        assert uploaded_file.name in result
-        assert another_file.name in result
-        assert result[uploaded_file.name] == uploaded_file
-        assert result[another_file.name] == another_file
+    def test_get_files_pagination(
+        self, filesystem: DefaultFilesystem, sample_file_data: bytes, file_metadata: dict
+    ) -> None:
+        """Test getting files with pagination.
 
-        # Request one existing and one non-existent file
-        result = default_fs.get_batch([uploaded_file.name, "nonexistent.txt"])
-        assert len(result) == 2
-        assert uploaded_file.name in result
-        assert result[uploaded_file.name] == uploaded_file
-        assert "nonexistent.txt" in result
-        assert result["nonexistent.txt"] is None
+        Args:
+            filesystem: DefaultFilesystem instance
+            sample_file_data: Sample file data
+            file_metadata: File metadata
+        """
+        # Upload multiple files
+        files_to_upload = [
+            UploadFileData(
+                content=sample_file_data,
+                name=f"file{i}.txt",
+                file_type=file_metadata["file_type"],
+                content_type=file_metadata["content_type"],
+                metadata=file_metadata["metadata"],
+                status=file_metadata["status"],
+                replace_if_exists=False,
+            )
+            for i in range(5)
+        ]
+        filesystem.upload_files(files_to_upload)
 
-        # Request all non-existent files
-        result = default_fs.get_batch(["nonexistent1.txt", "nonexistent2.txt"])
-        assert len(result) == 2
-        assert "nonexistent1.txt" in result
-        assert "nonexistent2.txt" in result
-        assert result["nonexistent1.txt"] is None
-        assert result["nonexistent2.txt"] is None
+        # Test pagination with list_size=2
+        filters = FileFilter(context=file_metadata["context"])
+
+        # First page
+        result_files, total_count = filesystem.get_files(filters, list_size=2, offset=0)
+        assert len(result_files) == 2
+        assert total_count == 5
+
+        # Second page
+        result_files, total_count = filesystem.get_files(filters, list_size=2, offset=2)
+        assert len(result_files) == 2
+        assert total_count == 5
+
+        # Last page
+        result_files, total_count = filesystem.get_files(filters, list_size=2, offset=4)
+        assert len(result_files) == 1
+        assert total_count == 5
+
+    def test_delete_files_soft_delete(
+        self, filesystem: DefaultFilesystem, sample_file_data: bytes, file_metadata: dict
+    ) -> None:
+        """Test soft deletion of files.
+
+        Args:
+            filesystem: DefaultFilesystem instance
+            sample_file_data: Sample file data
+            file_metadata: File metadata
+        """
+        # Upload a file
+        upload_file = UploadFileData(
+            content=sample_file_data,
+            name=file_metadata["name"],
+            file_type=file_metadata["file_type"],
+            content_type=file_metadata["content_type"],
+            metadata=file_metadata["metadata"],
+            status=file_metadata["status"],
+            replace_if_exists=False,
+        )
+        files, _, _ = filesystem.upload_files([upload_file])
+        file_id = files[0].id
+
+        # Soft delete the file
+        filters = FileFilter(
+            context=file_metadata["context"],
+            file_ids=[file_id],
+        )
+        results, total_deleted, total_failed = filesystem.delete_files(filters, permanent=False)
+        assert len(results) == 1
+        assert total_deleted == 1
+        assert total_failed == 0
+        assert results[file_id] is True
+
+        # Verify the file still exists but is marked as deleted
+        file_data = filesystem.get_file(file_id)
+        assert file_data.status == "DELETED"
+        file_path = Path(filesystem._get_context_temp_dir(file_metadata["context"]), file_metadata["name"])
+        assert file_path.exists()

@@ -1,26 +1,23 @@
-"""Grpc filesystem."""
+"""gRPC filesystem implementation."""
 
 from collections.abc import Generator
 from contextlib import contextmanager
 from typing import Any
 
-from digitalkin_proto.digitalkin.filesystem.v2 import (
-    filesystem_pb2,
-    filesystem_service_pb2_grpc,
-)
-from digitalkin_proto.digitalkin.filesystem.v2.filesystem_pb2 import (
-    FileType as FileTypeProto,
-)
+from digitalkin_proto.digitalkin.filesystem.v1 import filesystem_pb2, filesystem_service_pb2_grpc
+from google.protobuf import struct_pb2
+from google.protobuf.json_format import MessageToDict
 
 from digitalkin.grpc_servers.utils.exceptions import ServerError
 from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
 from digitalkin.grpc_servers.utils.models import ClientConfig
 from digitalkin.logger import logger
 from digitalkin.services.filesystem.filesystem_strategy import (
-    FilesystemData,
+    FileFilter,
+    FilesystemRecord,
     FilesystemServiceError,
     FilesystemStrategy,
-    FileType,
+    UploadFileData,
 )
 
 
@@ -54,161 +51,272 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper):
             logger.exception(msg)
             raise FilesystemServiceError(msg) from e
 
+    @staticmethod
+    def _file_type_to_enum(file_type: str) -> filesystem_pb2.FileType:
+        """Convert a file type string to a FileType enum.
+
+        Args:
+            file_type: The file type string to convert
+
+        Returns:
+            filesystem_pb2.FileType: The converted file type enum
+        """
+        if not file_type.upper().startswith("FILE_TYPE_"):
+            file_type = f"FILE_TYPE_{file_type.upper()}"
+        try:
+            return getattr(filesystem_pb2.FileType, file_type.upper())
+        except AttributeError:
+            return filesystem_pb2.FileType.FILE_TYPE_UNSPECIFIED
+
+    @staticmethod
+    def _file_status_to_enum(file_status: str) -> filesystem_pb2.FileStatus:
+        """Convert a file status string to a FileStatus enum.
+
+        Args:
+            file_status: The file status string to convert
+
+        Returns:
+            filesystem_pb2.FileStatus: The converted file status enum
+        """
+        if not file_status.upper().startswith("FILE_STATUS_"):
+            file_status = f"FILE_STATUS_{file_status.upper()}"
+        try:
+            return getattr(filesystem_pb2.FileStatus, file_status.upper())
+        except AttributeError:
+            return filesystem_pb2.FileStatus.FILE_STATUS_UNSPECIFIED
+
+    def _filter_to_proto(self, filters: FileFilter) -> filesystem_pb2.FileFilter:
+        """Convert a FileFilter to a FileFilter proto message.
+
+        Args:
+            filters: The FileFilter to convert
+
+        Returns:
+            filesystem_pb2.FileFilter: The converted FileFilter proto message
+        """
+        return filesystem_pb2.FileFilter(
+            context=self.mission_id,
+            **filters.model_dump(exclude={"file_types", "status"}),
+            file_types=[self._file_type_to_enum(file_type) for file_type in filters.file_types]
+            if filters.file_types
+            else None,
+            status=self._file_status_to_enum(filters.status) if filters.status else None,
+        )
+
+    def _file_proto_to_data(self, file: filesystem_pb2.File, content: bytes | None = None) -> FilesystemRecord:
+        """Convert a File proto message to FilesystemRecord.
+
+        Args:
+            file: The File proto message to convert
+            content: The content of the file
+
+        Returns:
+            FilesystemRecord: The converted data
+        """
+        return FilesystemRecord(
+            id=file.file_id,
+            context=self.mission_id,
+            name=file.name,
+            file_type=filesystem_pb2.FileType.Name(file.file_type),
+            content_type=file.content_type,
+            size_bytes=file.size_bytes,
+            checksum=file.checksum,
+            metadata=MessageToDict(file.metadata),
+            storage_url=file.storage_url,
+            status=filesystem_pb2.FileStatus.Name(file.status),
+            content=content,
+        )
+
     def __init__(
         self,
         mission_id: str,
         setup_version_id: str,
-        config: dict[str, str],
         client_config: ClientConfig,
-        **kwargs,  # noqa: ANN003, ARG002
+        config: dict[str, Any] | None = None,
     ) -> None:
-        """Initialize the default filesystem strategy.
+        """Initialize the gRPC filesystem strategy.
 
         Args:
             mission_id: The ID of the mission this strategy is associated with
             setup_version_id: The ID of the setup version this strategy is associated with
-            config: A dictionary mapping names to Pydantic model classes
-            client_config: The server configuration object
-            kwargs: other optional arguments to pass to the parent class constructor
+            client_config: Configuration for the gRPC client connection
+            config: Configuration for the filesystem strategy
         """
         super().__init__(mission_id, setup_version_id, config)
+        self.service_name = "FilesystemService"
         channel = self._init_channel(client_config)
         self.stub = filesystem_service_pb2_grpc.FilesystemServiceStub(channel)
-        logger.info("Channel client 'Filesystem' initialized succesfully")
+        logger.debug("Channel client 'Filesystem' initialized succesfully")
 
-    def upload(self, content: bytes, name: str, file_type: FileType) -> FilesystemData:
-        """Create a new file in the file system.
+    def upload_files(
+        self,
+        files: list[UploadFileData],
+    ) -> tuple[list[FilesystemRecord], int, int]:
+        """Upload multiple files to the filesystem.
 
         Args:
-            content: The content of the file to be uploaded
-            name: The name of the file to be created
-            file_type: The type of data being uploaded
+            files: List of tuples containing (content, name, file_type, content_type, metadata, replace_if_exists)
 
         Returns:
-            FilesystemData: Metadata about the uploaded file
+            tuple[list[FilesystemRecord], int, int]: List of uploaded files, total uploaded count, total failed count
+        """
+        logger.debug("Uploading %d files", len(files))
+        with GrpcFilesystem._handle_grpc_errors("UploadFiles"):
+            upload_files: list[filesystem_pb2.UploadFileData] = []
+            for file in files:
+                metadata_struct: struct_pb2.Struct | None = None
+                if file.metadata:
+                    metadata_struct = struct_pb2.Struct()
+                    metadata_struct.update(file.metadata)
+                upload_files.append(
+                    filesystem_pb2.UploadFileData(
+                        context=self.mission_id,
+                        name=file.name,
+                        file_type=self._file_type_to_enum(file.file_type),
+                        content_type=file.content_type or "application/octet-stream",
+                        content=file.content,
+                        metadata=metadata_struct,
+                        status=filesystem_pb2.FileStatus.FILE_STATUS_UPLOADING,
+                        replace_if_exists=file.replace_if_exists,
+                    )
+                )
+            request = filesystem_pb2.UploadFilesRequest(files=upload_files)
+            response: filesystem_pb2.UploadFilesResponse = self.exec_grpc_query("UploadFiles", request)
+            results = [self._file_proto_to_data(result.file) for result in response.results if result.HasField("file")]
+            logger.debug("Uploaded files: %s", results)
+            return results, response.total_uploaded, response.total_failed
+
+    def get_file(
+        self,
+        file_id: str,
+        *,
+        include_content: bool = False,
+    ) -> FilesystemRecord:
+        """Get a file from the filesystem.
+
+        Args:
+            file_id: The ID of the file to be retrieved
+            include_content: Whether to include file content in response
+
+        Returns:
+            FilesystemRecord: Metadata about the retrieved file
 
         Raises:
-            ValueError: If the file already exists
+            FilesystemServiceError: If there is an error retrieving the file
         """
-        with GrpcFilesystem._handle_grpc_errors("UploadFile"):
-            request = filesystem_pb2.UploadFileRequest(
-                kin_context=self.mission_id,
-                name=name,
-                file_type=file_type.name,
-                content=content,
-            )
-            response: filesystem_pb2.UploadFileResponse = self.exec_grpc_query("UploadFile", request)
-            return FilesystemData(
-                kin_context=response.file.kin_context,
-                name=response.file.name,
-                file_type=FileType[FileTypeProto.Name(response.file.file_type)],
-                url=response.file.url,
+        with GrpcFilesystem._handle_grpc_errors("GetFile"):
+            request = filesystem_pb2.GetFileRequest(
+                context=self.mission_id,
+                file_id=file_id,
+                include_content=include_content,
             )
 
-    def get(self, name: str) -> FilesystemData:
-        """Get file from the filesystem.
+            response: filesystem_pb2.GetFileResponse = self.exec_grpc_query("GetFile", request)
+
+            return self._file_proto_to_data(response.file, response.content)
+
+    def update_file(
+        self,
+        file_id: str,
+        content: bytes | None = None,
+        file_type: str | None = None,
+        content_type: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        new_name: str | None = None,
+        status: str | None = None,
+    ) -> FilesystemRecord:
+        """Update a file in the filesystem.
 
         Args:
-            name: The name of the file to be retrieved
+            file_id: The id of the file to be updated
+            content: Optional new content of the file
+            file_type: Optional new type of data
+            content_type: Optional new MIME type
+            metadata: Optional new metadata (will merge with existing)
+            new_name: Optional new name for the file
+            status: Optional new status for the file
 
         Returns:
-            FilesystemData: Metadata about the retrieved file
-        """
-        with GrpcFilesystem._handle_grpc_errors("GetFileByName"):
-            request = filesystem_pb2.GetFileByNameRequest(name=name)
-            response: filesystem_pb2.GetFileByNameResponse = self.exec_grpc_query("GetFileByName", request)
-            return FilesystemData(
-                kin_context=response.file.kin_context,
-                name=response.file.name,
-                file_type=FileType[FileTypeProto.Name(response.file.file_type)],
-                url=response.file.url,
-            )
+            FilesystemRecord: Metadata about the updated file
 
-    def update(self, name: str, content: bytes, file_type: FileType) -> FilesystemData:
-        """Update files in the filesystem.
-
-        Args:
-            name: The name of the file to be updated
-            content: The new content of the file
-            file_type: The type of data being uploaded
-
-        Returns:
-            FilesystemData: Metadata about the updated file
+        Raises:
+            FilesystemServiceError: If there is an error during update
         """
         with GrpcFilesystem._handle_grpc_errors("UpdateFile"):
             request = filesystem_pb2.UpdateFileRequest(
-                kin_context=self.mission_id,
-                name=name,
-                file_type=file_type.name,
+                context=self.mission_id,
+                file_id=file_id,
                 content=content,
+                file_type=self._file_type_to_enum(file_type) if file_type else None,
+                content_type=content_type,
+                new_name=new_name,
+                status=self._file_status_to_enum(status) if status else None,
             )
+
+            if metadata:
+                request.metadata.update(metadata)
+
             response: filesystem_pb2.UpdateFileResponse = self.exec_grpc_query("UpdateFile", request)
-            return FilesystemData(
-                kin_context=response.file.kin_context,
-                name=response.file.name,
-                file_type=FileType[FileTypeProto.Name(response.file.file_type)],
-                url=response.file.url,
-            )
+            return self._file_proto_to_data(response.result.file)
 
-    def delete(self, name: str) -> bool:
-        """Delete files from the filesystem.
-
-        Args:
-            name: The name of the file to be deleted
-
-        Returns:
-            int: 1 if the file was deleted successfully, 0 if it didn't exist, None on error
-        """
-        with GrpcFilesystem._handle_grpc_errors("DeleteFile"):
-            request = filesystem_pb2.DeleteFileRequest(name=name)
-            _: filesystem_pb2.DeleteFileResponse = self.exec_grpc_query("DeleteFile", request)
-            return True
-
-    def get_all(self) -> list[FilesystemData]:
-        """Get all files from the filesystem.
-
-        Returns:
-            list[FilesystemData]: A list of all files in the filesystem
-        """
-        with GrpcFilesystem._handle_grpc_errors("GetFilesByKinContext"):
-            request = filesystem_pb2.GetFilesByKinContextRequest(kin_context=self.mission_id)
-            response: filesystem_pb2.GetFilesByKinContextResponse = self.exec_grpc_query(
-                "GetFilesByKinContext", request
-            )
-            return [
-                FilesystemData(
-                    kin_context=file.kin_context,
-                    name=file.name,
-                    file_type=FileType[FileTypeProto.Name(file.file_type)],
-                    url=file.url,
-                )
-                for file in response.files
-            ]
-
-    def get_batch(self, names: list[str]) -> dict[str, FilesystemData | None]:
-        """Get files from the filesystem.
+    def delete_files(
+        self,
+        filters: FileFilter,
+        *,
+        permanent: bool = False,
+        force: bool = False,
+    ) -> tuple[dict[str, bool], int, int]:
+        """Delete multiple files from the filesystem.
 
         Args:
-            names: The names of the files to be retrieved
+            filters: Filter criteria for the files
+            permanent: Whether to permanently delete the files
+            force: Whether to force delete even if files are in use
 
         Returns:
-            list[FilesystemData]: A list of metadata about the retrieved files
+            tuple[dict[str, bool], int, int]: Results per file, total deleted count, total failed count
         """
-        with GrpcFilesystem._handle_grpc_errors("GetFilesByNames"):
-            request = filesystem_pb2.GetFilesByNamesRequest(names=names)
-            response: filesystem_pb2.GetFilesByNamesResponse = self.exec_grpc_query("GetFilesByNames", request)
-            result: dict[str, FilesystemData | None] = {}
-            for name, file_result in response.files.items():
-                which_field = file_result.WhichOneof("result")
-                if which_field == "file":
-                    result[name] = FilesystemData(
-                        kin_context=file_result.file.kin_context,
-                        name=file_result.file.name,
-                        file_type=FileType[FileTypeProto.Name(file_result.file.file_type)],
-                        url=file_result.file.url,
-                    )
-                elif which_field == "error":
-                    # Handle error case
-                    result[name] = None
-                    logger.warning("Error retrieving file '%s': %s", name, file_result.error)
-            return result
+        with GrpcFilesystem._handle_grpc_errors("DeleteFiles"):
+            request = filesystem_pb2.DeleteFilesRequest(
+                context=self.mission_id,
+                filters=self._filter_to_proto(filters),
+                permanent=permanent,
+                force=force,
+            )
+
+            response: filesystem_pb2.DeleteFilesResponse = self.exec_grpc_query("DeleteFiles", request)
+            return dict(response.results), response.total_deleted, response.total_failed
+
+    def get_files(
+        self,
+        filters: FileFilter,
+        *,
+        list_size: int = 100,
+        offset: int = 0,
+        order: str | None = None,
+        include_content: bool = False,
+    ) -> tuple[list[FilesystemRecord], int]:
+        """Get multiple files from the filesystem.
+
+        Args:
+            filters: Filter criteria for the files
+            list_size: Number of files to return per page
+            offset: Offset to start from
+            order: Field to order results by
+            include_content: Whether to include file content in response
+
+        Returns:
+            tuple[list[FilesystemRecord], int]: List of files and total count
+        """
+        with GrpcFilesystem._handle_grpc_errors("GetFiles"):
+            request = filesystem_pb2.GetFilesRequest(
+                context=self.mission_id,
+                filters=self._filter_to_proto(filters),
+                include_content=include_content,
+                list_size=list_size,
+                offset=offset,
+                order=order,
+            )
+            response: filesystem_pb2.GetFilesResponse = self.exec_grpc_query("GetFiles", request)
+
+            return [self._file_proto_to_data(file) for file in response.files], response.total_count

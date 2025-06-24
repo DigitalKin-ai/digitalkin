@@ -23,7 +23,7 @@ class MockModuleRegistryServicer(module_registry_service_pb2_grpc.ModuleRegistry
         """Initialize the registry servicer with an empty module registry."""
         self.registered_modules = {}  # TODO replace with a database
 
-    def RegisterModule(  # noqa: N802
+    def RegisterModule(
         self, request: registration_pb2.RegisterRequest, context: grpc.ServicerContext
     ) -> registration_pb2.RegisterResponse:
         """Mock Register a module with the registry.
@@ -37,7 +37,7 @@ class MockModuleRegistryServicer(module_registry_service_pb2_grpc.ModuleRegistry
         """
         return registration_pb2.RegisterResponse(success=False)
 
-    def DeregisterModule(  # noqa: N802
+    def DeregisterModule(
         self, request: registration_pb2.DeregisterRequest, context: grpc.ServicerContext
     ) -> registration_pb2.DeregisterResponse:
         """Mock Deregistera module from the registry.
