@@ -54,7 +54,7 @@ class MockSetupServicer(setup_service_pb2_grpc.SetupServiceServicer):
                 id=request.current_setup_version.id,
                 setup_id=request.current_setup_version.setup_id,
                 version=request.current_setup_version.version,
-                creation_date=request.current_setup_version.creation_date.ToDatetime() or datetime.datetime.now(),
+                creation_date=request.current_setup_version.creation_date.ToDatetime() or datetime.datetime.now(),  # noqa: DTZ005
                 content=dict(request.current_setup_version.content),
             )
             setup_data = SetupData(
@@ -128,7 +128,7 @@ class MockSetupServicer(setup_service_pb2_grpc.SetupServiceServicer):
                 id=self._generate_id(),
                 setup_id=request.setup_id,
                 version=request.version,
-                creation_date=datetime.datetime.now(),
+                creation_date=datetime.datetime.now(),  # noqa: DTZ005
                 content=dict(request.content),
             )
         except ValidationError:

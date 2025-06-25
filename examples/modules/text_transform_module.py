@@ -93,7 +93,6 @@ class TextTransformModule(BaseModule[TextTransformInput, TextTransformOutput, Te
             "client_config": client_config,
         },
         "filesystem": {
-            "config": {},
             "client_config": client_config,
         },
     }

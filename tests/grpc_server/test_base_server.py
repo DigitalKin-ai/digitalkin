@@ -490,7 +490,7 @@ def test_add_health_service_alternative(server_config_sync_insecure) -> None:
     """Test adding health service to the server (simplified)."""
     # Skip this test if health-checking package isn't installed
     try:
-        import grpc_health  # noqa: F401
+        import grpc_health  # noqa: F401, PLC0415
     except ImportError:
         pytest.skip("grpc_health package not installed")
 
@@ -520,7 +520,7 @@ def test_add_health_service_alternative(server_config_sync_insecure) -> None:
 
 def test_base_server_register_servicers_is_abstract() -> None:
     """Test that _register_servicers is an abstract method that must be implemented."""
-    from digitalkin.grpc_servers.utils.models import ServerConfig
+    from digitalkin.grpc_servers.utils.models import ServerConfig  # noqa: PLC0415
 
     config = ServerConfig()  # type: ignore
 

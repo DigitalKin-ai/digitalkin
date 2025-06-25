@@ -12,7 +12,7 @@
 
     keywords = [ "digitalkin", "kin", "agent", "gprc", "sdk" ]
     # Version of the package automatically updated by bump2version (that is why it is separated)
-    version = "0.2.14"
+    version = "0.2.15"
 
     classifiers = [
         "Development Status :: 3 - Alpha",
@@ -115,8 +115,8 @@
         "tool_module.py",
         "trigger_module.py",
         "generate_certificates.py",
-        "test_*.py",
-        "tests/*",
+        # "test_*.py",
+        # "tests/*",
         "examples/*",
     ]
     preview = true
@@ -186,9 +186,33 @@
                 "TRY002",
                 "FBT001",
                 "FBT002",
+                "ANN001",
                 "ANN003",
                 "ANN002",
                 "ARG002",
+                "PLR0914",
+                "PLR2004",
+                "PLR0915",
+                "PLR1702",
+                "D417",
+                "ARG001",
+                "D103",
+                "D102",
+                "D101",
+                "D107",
+                "N802",
+                "DOC201",
+                "DOC501",
+                "PERF203",
+                "C901",
+                "PLR0911",
+                "G004",
+                "ERA001",
+                "E501",
+                "ANN401",
+                "PLR0912",
+                "ANN201",
+                "D100"
             ]
 
         [tool.ruff.lint.pylint]

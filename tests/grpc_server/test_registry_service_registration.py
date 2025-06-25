@@ -326,7 +326,7 @@ def test_discover_info_module_not_found(
 # Test DiscoverSearchModule
 def test_discover_search_module_success(
     grpc_test_server: grpc_testing.Server,
-    module_registry_objs: list[RegistryModule],  # noqa: ARG001
+    module_registry_objs: list[RegistryModule],
 ) -> None:
     """Test successful module search by module type.
 
@@ -372,7 +372,7 @@ def test_discover_search_module_success(
 # Test DiscoverSearchModule
 def test_discover_search_module_success_empty(
     grpc_test_server: grpc_testing.Server,
-    module_registry_objs: list[RegistryModule],  # noqa: ARG001
+    module_registry_objs: list[RegistryModule],
 ) -> None:
     """Test successful module search with no matching tags.
 
@@ -470,7 +470,7 @@ def test_get_module_status_success(
 # Test GetModuleStatus
 def test_get_module_not_found(
     grpc_test_server: grpc_testing.Server,
-    module_registry_obj: RegistryModule,  # noqa: ARG001
+    module_registry_obj: RegistryModule,
 ) -> None:
     """Test registration of a duplicate module.
 
@@ -511,7 +511,7 @@ def test_get_module_not_found(
 )
 def test_list_module_status_success_pagination(
     grpc_test_server: grpc_testing.Server,
-    module_registry_objs: list[RegistryModule],  # noqa: ARG001
+    module_registry_objs: list[RegistryModule],
     list_size: int,
     offset: int,
 ) -> None:
@@ -554,7 +554,7 @@ def test_list_module_status_success_pagination(
 # Test ListModuleStatus
 def test_list_module_status_success(
     grpc_test_server: grpc_testing.Server,
-    module_registry_objs: list[RegistryModule],  # noqa: ARG001
+    module_registry_objs: list[RegistryModule],
 ) -> None:
     """Test successful list all modules.
 
@@ -593,7 +593,7 @@ def test_list_module_status_success(
 
 def test_get_all_module_status_success(
     grpc_test_server: grpc_testing.Server,
-    module_registry_objs: list[RegistryModule],  # noqa: ARG001
+    module_registry_objs: list[RegistryModule],
 ) -> None:
     """Test successful get a stream of all modules.
 
