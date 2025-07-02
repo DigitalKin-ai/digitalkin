@@ -2,7 +2,7 @@
 
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -34,7 +34,21 @@ class FileFilter(BaseModel):
 
     names: list[str] | None = Field(default=None, description="Filter by file names (exact matches)")
     file_ids: list[str] | None = Field(default=None, description="Filter by file IDs")
-    file_types: list[str] | None = Field(default=None, description="Filter by file types")
+    file_types: (
+        list[
+            Literal[
+                "UNSPECIFIED",
+                "DOCUMENT",
+                "IMAGE",
+                "AUDIO",
+                "VIDEO",
+                "ARCHIVE",
+                "CODE",
+                "OTHER",
+            ]
+        ]
+        | None
+    ) = Field(default=None, description="Filter by file types")
     created_after: datetime | None = Field(default=None, description="Filter files created after this timestamp")
     created_before: datetime | None = Field(default=None, description="Filter files created before this timestamp")
     updated_after: datetime | None = Field(default=None, description="Filter files updated after this timestamp")
@@ -52,7 +66,16 @@ class UploadFileData(BaseModel):
 
     content: bytes = Field(description="The content of the file")
     name: str = Field(description="The name of the file")
-    file_type: str = Field(description="The type of the file")
+    file_type: Literal[
+        "UNSPECIFIED",
+        "DOCUMENT",
+        "IMAGE",
+        "AUDIO",
+        "VIDEO",
+        "ARCHIVE",
+        "CODE",
+        "OTHER",
+    ] = Field(description="The type of the file")
     content_type: str | None = Field(default=None, description="The content type of the file")
     metadata: dict[str, Any] | None = Field(default=None, description="The metadata of the file")
     replace_if_exists: bool = Field(default=False, description="Whether to replace the file if it already exists")
@@ -153,7 +176,17 @@ class FilesystemStrategy(BaseStrategy, ABC):
         self,
         file_id: str,
         content: bytes | None = None,
-        file_type: str | None = None,
+        file_type: Literal[
+            "UNSPECIFIED",
+            "DOCUMENT",
+            "IMAGE",
+            "VIDEO",
+            "AUDIO",
+            "ARCHIVE",
+            "CODE",
+            "OTHER",
+        ]
+        | None = None,
         content_type: str | None = None,
         metadata: dict[str, Any] | None = None,
         new_name: str | None = None,
