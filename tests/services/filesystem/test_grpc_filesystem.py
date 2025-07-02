@@ -12,12 +12,6 @@ from digitalkin_proto.digitalkin.filesystem.v1 import (
     filesystem_service_pb2,
     filesystem_service_pb2_grpc,
 )
-from digitalkin_proto.digitalkin.filesystem.v1.filesystem_pb2 import (
-    FileStatus as FileStatusProto,
-)
-from digitalkin_proto.digitalkin.filesystem.v1.filesystem_pb2 import (
-    FileType as FileTypeProto,
-)
 from google.protobuf import struct_pb2
 from grpc.framework.foundation import logging_pool
 from mock_filesystem_servicer import FakeContext, MockFilesystemServicer
@@ -116,10 +110,10 @@ def file_metadata() -> dict:
     return {
         "context": "test_mission",
         "name": name,
-        "file_type": "FILE_TYPE_DOCUMENT",
+        "file_type": "DOCUMENT",
         "content_type": "text/plain",
         "metadata": {"key": "value"},
-        "status": "FILE_STATUS_UPLOADING",
+        "status": "UPLOADING",
     }
 
 
@@ -174,11 +168,11 @@ def test_upload_files_success(
             filesystem_pb2.UploadFileData(
                 context=file_metadata["context"],
                 name=file_metadata["name"],
-                file_type=getattr(filesystem_pb2.FileType, file_metadata["file_type"]),
+                file_type=GrpcFilesystem._file_type_to_enum(file_metadata["file_type"]),
                 content_type=file_metadata["content_type"],
                 content=sample_file_data,
                 metadata=metadata_struct,
-                status=getattr(filesystem_pb2.FileStatus, file_metadata["status"]),
+                status=GrpcFilesystem._file_status_to_enum(file_metadata["status"]),
                 replace_if_exists=False,
             )
         ]
@@ -200,10 +194,10 @@ def test_upload_files_success(
     assert isinstance(file_data, FilesystemRecord)
     assert file_data.context == file_metadata["context"]
     assert file_data.name == file_metadata["name"]
-    assert file_data.file_type == file_metadata["file_type"]
+    assert file_data.file_type == "FILE_TYPE_" + file_metadata["file_type"]
     assert file_data.content_type == file_metadata["content_type"]
     assert file_data.metadata == file_metadata["metadata"]
-    assert file_data.status == "FILE_STATUS_UPLOADING"
+    assert file_data.status == "FILE_STATUS_" + file_metadata["status"]
     assert file_data.storage_url is not None
     assert file_data.size_bytes == len(sample_file_data)
     assert file_data.checksum is not None
@@ -237,11 +231,11 @@ def test_get_file_success(
             filesystem_pb2.UploadFileData(
                 context=file_metadata["context"],
                 name=file_metadata["name"],
-                file_type=FileTypeProto.Value(file_metadata["file_type"]),
+                file_type=GrpcFilesystem._file_type_to_enum(file_metadata["file_type"]),
                 content_type=file_metadata["content_type"],
                 content=sample_file_data,
                 metadata=metadata_struct,
-                status=FileStatusProto.Value(file_metadata["status"]),
+                status=GrpcFilesystem._file_status_to_enum(file_metadata["status"]),
                 replace_if_exists=False,
             )
         ]
@@ -276,10 +270,10 @@ def test_get_file_success(
     assert result.id == file_id
     assert result.context == file_metadata["context"]
     assert result.name == file_metadata["name"]
-    assert result.file_type == file_metadata["file_type"]
+    assert result.file_type == "FILE_TYPE_" + file_metadata["file_type"]
     assert result.content_type == file_metadata["content_type"]
     assert result.metadata == file_metadata["metadata"]
-    assert result.status == "FILE_STATUS_UPLOADING"  # Initial status from mock servicer
+    assert result.status == "FILE_STATUS_" + file_metadata["status"]
     assert result.storage_url is not None
     assert result.size_bytes == len(sample_file_data)
     assert result.checksum is not None
@@ -314,11 +308,11 @@ def test_get_files_success(
         filesystem_pb2.UploadFileData(
             context=file_metadata["context"],
             name=name,
-            file_type=FileTypeProto.Value(file_metadata["file_type"]),
+            file_type=GrpcFilesystem._file_type_to_enum(file_metadata["file_type"]),
             content_type=file_metadata["content_type"],
             content=sample_file_data,
             metadata=metadata_struct,
-            status=FileStatusProto.Value(file_metadata["status"]),
+            status=GrpcFilesystem._file_status_to_enum(file_metadata["status"]),
             replace_if_exists=False,
         )
         for name in file_names
@@ -355,8 +349,8 @@ def test_get_files_success(
         context=file_metadata["context"],
         filters=filesystem_pb2.FileFilter(
             context=file_metadata["context"],
-            file_types=[FileTypeProto.Value(file_metadata["file_type"])],
-            status=FileStatusProto.Value("FILE_STATUS_UPLOADING"),
+            file_types=[GrpcFilesystem._file_type_to_enum(file_metadata["file_type"])],
+            status=GrpcFilesystem._file_status_to_enum(file_metadata["status"]),
         ),
         list_size=10,
         offset=0,
@@ -379,10 +373,10 @@ def test_get_files_success(
         assert isinstance(file_data, FilesystemRecord)
         assert file_data.context == file_metadata["context"]
         assert file_data.name in file_names
-        assert file_data.file_type == file_metadata["file_type"]
+        assert file_data.file_type == "FILE_TYPE_" + file_metadata["file_type"]
         assert file_data.content_type == file_metadata["content_type"]
         assert file_data.metadata == file_metadata["metadata"]
-        assert file_data.status == "FILE_STATUS_UPLOADING"  # Initial status from mock servicer
+        assert file_data.status == "FILE_STATUS_" + file_metadata["status"]
         assert file_data.storage_url is not None
         assert file_data.size_bytes == len(sample_file_data)
         assert file_data.checksum is not None
@@ -392,7 +386,7 @@ def test_get_files_success(
     empty_filters = FileFilter(
         context="nonexistent_context",
         types=[file_metadata["file_type"]],
-        status="FILE_STATUS_UPLOADING",
+        status="UPLOADING",
     )
 
     future = client_execution_thread_pool.submit(
@@ -407,8 +401,8 @@ def test_get_files_success(
         context="nonexistent_context",
         filters=filesystem_pb2.FileFilter(
             context="nonexistent_context",
-            file_types=[FileTypeProto.Value(file_metadata["file_type"])],
-            status=FileStatusProto.Value("FILE_STATUS_UPLOADING"),
+            file_types=[GrpcFilesystem._file_type_to_enum(file_metadata["file_type"])],
+            status=GrpcFilesystem._file_status_to_enum(file_metadata["status"]),
         ),
         list_size=10,
         offset=0,
@@ -452,11 +446,11 @@ def test_update_file_success(
             filesystem_pb2.UploadFileData(
                 context=file_metadata["context"],
                 name=file_metadata["name"],
-                file_type=FileTypeProto.Value(file_metadata["file_type"]),
+                file_type=GrpcFilesystem._file_type_to_enum(file_metadata["file_type"]),
                 content_type=file_metadata["content_type"],
                 content=sample_file_data,
                 metadata=metadata_struct,
-                status=FileStatusProto.Value(file_metadata["status"]),
+                status=GrpcFilesystem._file_status_to_enum(file_metadata["status"]),
                 replace_if_exists=False,
             )
         ]
@@ -470,11 +464,11 @@ def test_update_file_success(
         client.update_file,
         file_id,
         content=updated_content,
-        file_type="FILE_TYPE_DOCUMENT",
+        file_type="DOCUMENT",
         content_type="text/plain",
         metadata={"new_key": "new_value"},
         new_name="updated_file.txt",
-        status="FILE_STATUS_ACTIVE",
+        status="ACTIVE",
     )
 
     # Get the service and method descriptor
@@ -489,11 +483,11 @@ def test_update_file_success(
         context=file_metadata["context"],
         file_id=file_id,
         content=updated_content,
-        file_type=FileTypeProto.Value("FILE_TYPE_DOCUMENT"),
+        file_type=GrpcFilesystem._file_type_to_enum("DOCUMENT"),
         content_type="text/plain",
         metadata=struct_pb2.Struct(fields={"new_key": struct_pb2.Value(string_value="new_value")}),
         new_name="updated_file.txt",
-        status=FileStatusProto.Value("FILE_STATUS_ACTIVE"),
+        status=GrpcFilesystem._file_status_to_enum("ACTIVE"),
     )
 
     # Use the mock servicer to handle the request
@@ -545,11 +539,11 @@ def test_delete_files_success(
         filesystem_pb2.UploadFileData(
             context=file_metadata["context"],
             name=name,
-            file_type=FileTypeProto.Value(file_metadata["file_type"]),
+            file_type=GrpcFilesystem._file_type_to_enum(file_metadata["file_type"]),
             content_type=file_metadata["content_type"],
             content=sample_file_data,
             metadata=metadata_struct,
-            status=FileStatusProto.Value(file_metadata["status"]),
+            status=GrpcFilesystem._file_status_to_enum(file_metadata["status"]),
             replace_if_exists=False,
         )
         for name in file_names
@@ -586,8 +580,8 @@ def test_delete_files_success(
         context=file_metadata["context"],
         filters=filesystem_pb2.FileFilter(
             context=file_metadata["context"],
-            file_types=[FileTypeProto.Value(file_metadata["file_type"])],
-            status=FileStatusProto.Value(file_metadata["status"]),
+            file_types=[GrpcFilesystem._file_type_to_enum(file_metadata["file_type"])],
+            status=GrpcFilesystem._file_status_to_enum(file_metadata["status"]),
         ),
         permanent=True,
         force=False,
@@ -698,11 +692,11 @@ def test_upload_files_duplicate_error(
             filesystem_pb2.UploadFileData(
                 context=file_metadata["context"],
                 name=file_metadata["name"],
-                file_type=FileTypeProto.Value(file_metadata["file_type"]),
+                file_type=GrpcFilesystem._file_type_to_enum(file_metadata["file_type"]),
                 content_type=file_metadata["content_type"],
                 content=sample_file_data,
                 metadata=metadata_struct,
-                status=FileStatusProto.Value(file_metadata["status"]),
+                status=GrpcFilesystem._file_status_to_enum(file_metadata["status"]),
                 replace_if_exists=False,
             )
         ]
@@ -784,7 +778,7 @@ def test_delete_files_not_found(
     filters = FileFilter(
         context="nonexistent_context",
         types=["DOCUMENT"],
-        status="FILE_STATUS_ACTIVE",
+        status="ACTIVE",
     )
 
     future = client_execution_thread_pool.submit(
@@ -854,11 +848,11 @@ def test_file_status_handling(
             filesystem_pb2.UploadFileData(
                 context=file_metadata["context"],
                 name=file_metadata["name"],
-                file_type=FileTypeProto.Value(file_metadata["file_type"]),
+                file_type=GrpcFilesystem._file_type_to_enum(file_metadata["file_type"]),
                 content_type=file_metadata["content_type"],
                 content=sample_file_data,
                 metadata=metadata_struct,
-                status=FileStatusProto.Value(file_metadata["status"]),
+                status=GrpcFilesystem._file_status_to_enum(file_metadata["status"]),
                 replace_if_exists=False,
             )
         ]
@@ -873,7 +867,7 @@ def test_file_status_handling(
     assert len(files) == 1
     assert total_uploaded == 1
     assert total_failed == 0
-    assert files[0].status == "FILE_STATUS_UPLOADING"  # Initial status
+    assert files[0].status == "FILE_STATUS_" + file_metadata["status"]
 
     file_id = files[0].id
 
@@ -881,7 +875,7 @@ def test_file_status_handling(
     future = client_execution_thread_pool.submit(
         client.update_file,
         file_id,
-        status="FILE_STATUS_ACTIVE",
+        status="ACTIVE",
     )
 
     method_desc = service_desc.methods_by_name["UpdateFile"]
@@ -889,7 +883,7 @@ def test_file_status_handling(
     update_request = filesystem_pb2.UpdateFileRequest(
         context=file_metadata["context"],
         file_id=file_id,
-        status=FileStatusProto.Value("FILE_STATUS_ACTIVE"),
+        status=GrpcFilesystem._file_status_to_enum("ACTIVE"),
     )
     response = mock_servicer.UpdateFile(update_request, FakeContext())
     rpc.send_initial_metadata(())
@@ -919,7 +913,7 @@ def test_file_status_handling(
     filters = FileFilter(
         context=file_metadata["context"],
         types=[file_metadata["file_type"]],
-        status="FILE_STATUS_ACTIVE",
+        status="ACTIVE",
     )
 
     future = client_execution_thread_pool.submit(

@@ -5,7 +5,7 @@ import os
 import tempfile
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from digitalkin.logger import logger
 from digitalkin.services.filesystem.filesystem_strategy import (
@@ -259,7 +259,17 @@ class DefaultFilesystem(FilesystemStrategy):
         self,
         file_id: str,
         content: bytes | None = None,
-        file_type: str | None = None,
+        file_type: Literal[
+            "UNSPECIFIED",
+            "DOCUMENT",
+            "IMAGE",
+            "VIDEO",
+            "AUDIO",
+            "ARCHIVE",
+            "CODE",
+            "OTHER",
+        ]
+        | None = None,
         content_type: str | None = None,
         metadata: dict[str, Any] | None = None,
         new_name: str | None = None,
