@@ -2,7 +2,7 @@
 
 from collections.abc import Generator
 from contextlib import contextmanager
-from typing import Any
+from typing import Any, Literal
 
 from digitalkin_proto.digitalkin.filesystem.v1 import filesystem_pb2, filesystem_service_pb2_grpc
 from google.protobuf import struct_pb2
@@ -103,12 +103,11 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper):
             status=self._file_status_to_enum(filters.status) if filters.status else None,
         )
 
-    def _file_proto_to_data(self, file: filesystem_pb2.File, content: bytes | None = None) -> FilesystemRecord:
+    def _file_proto_to_data(self, file: filesystem_pb2.File) -> FilesystemRecord:
         """Convert a File proto message to FilesystemRecord.
 
         Args:
             file: The File proto message to convert
-            content: The content of the file
 
         Returns:
             FilesystemRecord: The converted data
@@ -124,7 +123,7 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper):
             metadata=MessageToDict(file.metadata),
             storage_url=file.storage_url,
             status=filesystem_pb2.FileStatus.Name(file.status),
-            content=content,
+            content=file.content,
         )
 
     def __init__(
@@ -213,13 +212,23 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper):
 
             response: filesystem_pb2.GetFileResponse = self.exec_grpc_query("GetFile", request)
 
-            return self._file_proto_to_data(response.file, response.content)
+            return self._file_proto_to_data(response.file)
 
     def update_file(
         self,
         file_id: str,
         content: bytes | None = None,
-        file_type: str | None = None,
+        file_type: Literal[
+            "UNSPECIFIED",
+            "DOCUMENT",
+            "IMAGE",
+            "VIDEO",
+            "AUDIO",
+            "ARCHIVE",
+            "CODE",
+            "OTHER",
+        ]
+        | None = None,
         content_type: str | None = None,
         metadata: dict[str, Any] | None = None,
         new_name: str | None = None,
