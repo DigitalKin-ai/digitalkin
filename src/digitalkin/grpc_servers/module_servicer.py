@@ -70,6 +70,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             module_class: The module type to serve.
         """
         super().__init__()
+        module_class.discover()
         self.module_class = module_class
         job_manager_class = self.args.job_manager_mode.get_manager_class()
         self.job_manager = job_manager_class(module_class, self.args.services_mode)

@@ -12,7 +12,7 @@
 
     keywords = [ "digitalkin", "kin", "agent", "gprc", "sdk" ]
     # Version of the package automatically updated by bump2version (that is why it is separated)
-    version = "0.2.16"
+    version = "0.2.17"
 
     classifiers = [
         "Development Status :: 3 - Alpha",
@@ -212,7 +212,7 @@
                 "ANN401",
                 "PLR0912",
                 "ANN201",
-                "D100"
+                "D100",
             ]
 
         [tool.ruff.lint.pylint]
