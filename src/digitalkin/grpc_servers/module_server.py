@@ -79,10 +79,10 @@ class ModuleServer(BaseServer):
 
     def start(self) -> None:
         """Start the module server and register with the registry if configured."""
-        logger.critical(self.server_config)
+        logger.info(self.server_config)
         super().start()
 
-        logger.critical(self.server_config)
+        logger.info(self.server_config)
         # If a registry address is provided, register the module
         if self.server_config.registry_address:
             try:
@@ -91,17 +91,17 @@ class ModuleServer(BaseServer):
                 logger.exception("Failed to register with registry")
 
         if self.module_servicer is not None:
-            logger.critical(
+            logger.info(
                 "Setup post init started with config: %s", self.client_config
             )
             self.module_servicer.setup.__post_init__(self.client_config)
 
     async def start_async(self) -> None:
         """Start the module server and register with the registry if configured."""
-        logger.critical(self.server_config)
+        logger.info(self.server_config)
         await super().start_async()
 
-        logger.critical(self.server_config)
+        logger.info(self.server_config)
         # If a registry address is provided, register the module
         if self.server_config.registry_address:
             try:
@@ -110,7 +110,7 @@ class ModuleServer(BaseServer):
                 logger.exception("Failed to register with registry")
 
         if self.module_servicer is not None:
-            logger.critical(
+            logger.info(
                 "Setup post init started with config: %s", self.client_config
             )
             await self.module_servicer.job_manager._start()
