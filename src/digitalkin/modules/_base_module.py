@@ -1,13 +1,10 @@
 """BaseModule is the abstract base for all modules in the DigitalKin SDK."""
 
 import asyncio
-import contextlib
 import json
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Coroutine
 from typing import Any, ClassVar, Generic
-
-from pydantic import BaseModel
 
 from digitalkin.logger import logger
 from digitalkin.models.module import (
@@ -17,26 +14,12 @@ from digitalkin.models.module import (
     SecretModelT,
     SetupModelT,
 )
+from digitalkin.models.module.module import ModuleCodeModel
 from digitalkin.models.module.module_context import ModuleContext
 from digitalkin.modules.trigger_handler import TriggerHandler
-from digitalkin.services.agent.agent_strategy import AgentStrategy
-from digitalkin.services.cost.cost_strategy import CostStrategy
-from digitalkin.services.filesystem.filesystem_strategy import FilesystemStrategy
-from digitalkin.services.identity.identity_strategy import IdentityStrategy
-from digitalkin.services.registry.registry_strategy import RegistryStrategy
 from digitalkin.services.services_config import ServicesConfig, ServicesStrategy
-from digitalkin.services.snapshot.snapshot_strategy import SnapshotStrategy
-from digitalkin.services.storage.storage_strategy import StorageStrategy
 from digitalkin.utils.llm_ready_schema import llm_ready_schema
 from digitalkin.utils.package_discover import ModuleDiscoverer
-
-
-class ModuleCodeModel(BaseModel):
-    """typed error/code model."""
-
-    code: str
-    message: str
-    short_description: str
 
 
 class BaseModule(  # noqa: PLR0904
@@ -67,33 +50,35 @@ class BaseModule(  # noqa: PLR0904
     services_config_params: ClassVar[dict[str, dict[str, Any | None] | None]]
     services_config: ServicesConfig
 
-    # services list
-    agent: AgentStrategy
-    cost: CostStrategy
-    filesystem: FilesystemStrategy
-    identity: IdentityStrategy
-    registry: RegistryStrategy
-    snapshot: SnapshotStrategy
-    storage: StorageStrategy
-
     # runtime params
     job_id: str
     mission_id: str
     setup_id: str
     setup_version_id: str
-    _status: ModuleStatus
-    _task: asyncio.Task | None
 
-    def _init_strategies(self) -> None:
-        """Initialize the services configuration."""
-        for service_name in self.services_config.valid_strategy_names():
-            service = self.services_config.init_strategy(
+    def _init_strategies(self) -> dict[str, Any]:
+        """Initialize the services configuration.
+
+        Returns:
+            dict of services with name: Strategy
+                agent: AgentStrategy
+                cost: CostStrategy
+                filesystem: FilesystemStrategy
+                identity: IdentityStrategy
+                registry: RegistryStrategy
+                snapshot: SnapshotStrategy
+                storage: StorageStrategy
+        """
+        logger.debug("Service initialisation: %s", self.services_config_strategies.keys())
+        return {
+            service_name: self.services_config.init_strategy(
                 service_name,
                 self.mission_id,
                 self.setup_id,
                 self.setup_version_id,
             )
-            setattr(self, service_name, service)
+            for service_name in self.services_config.valid_strategy_names()
+        }
 
     def __init__(
         self,
@@ -110,15 +95,16 @@ class BaseModule(  # noqa: PLR0904
         # SetupVersion reference needed for the precise Kin scope as the cost
         self.setup_version_id: str = setup_version_id
         self._status = ModuleStatus.CREATED
-        self._task: asyncio.Task | None = None
-        # Initialize services configuration
-        self._init_strategies()
 
         # Initialize minimum context
         self.context = ModuleContext(
-            storage=self.storage,
-            cost=self.cost,
-            filesystem=self.filesystem,
+            # Initialize services configuration
+            **self._init_strategies(),
+            session={
+                "mission_id": mission_id,
+                "setup_version_id": setup_version_id,
+                "job_id": job_id,
+            },
         )
 
     @property
@@ -307,7 +293,11 @@ class BaseModule(  # noqa: PLR0904
         """
         return cls.triggers_discoverer.register_trigger(handler_cls)
 
-    async def run_config_setup(self, config_setup_data: SetupModelT) -> SetupModelT:  # noqa: PLR6301
+    async def run_config_setup(  # noqa: PLR6301
+        self,
+        context: ModuleContext,  # noqa: ARG002
+        config_setup_data: SetupModelT,
+    ) -> SetupModelT:
         """Run config setup the module.
 
         The config setup is used to initialize the setup with configuration data.
@@ -323,7 +313,7 @@ class BaseModule(  # noqa: PLR0904
         return config_setup_data
 
     @abstractmethod
-    async def initialize(self, setup_data: SetupModelT) -> None:
+    async def initialize(self, context: ModuleContext, setup_data: SetupModelT) -> None:
         """Initialize the module."""
         raise NotImplementedError
 
@@ -331,7 +321,6 @@ class BaseModule(  # noqa: PLR0904
         self,
         input_data: InputModelT,
         setup_data: SetupModelT,
-        callback: Callable[[OutputModelT], Coroutine[Any, Any, None]],
     ) -> None:
         """Run the module with the given input and setup data.
 
@@ -360,7 +349,6 @@ class BaseModule(  # noqa: PLR0904
         await handler_instance.handle(
             input_instance.root,
             setup_data,
-            callback,
             self.context,
         )
 
@@ -373,7 +361,6 @@ class BaseModule(  # noqa: PLR0904
         self,
         input_data: InputModelT,
         setup_data: SetupModelT,
-        callback: Callable[[OutputModelT], Coroutine[Any, Any, None]],
     ) -> None:
         """Run the module lifecycle.
 
@@ -391,7 +378,7 @@ class BaseModule(  # noqa: PLR0904
                     "job_id": self.job_id,
                 },
             )
-            await self.run(input_data, setup_data, callback)
+            await self.run(input_data, setup_data)
             logger.info(
                 "Module %s finished",
                 self.name,
@@ -428,8 +415,6 @@ class BaseModule(  # noqa: PLR0904
             )
         else:
             self._status = ModuleStatus.STOPPING
-        finally:
-            await self.stop()
 
     async def start(
         self,
@@ -440,15 +425,17 @@ class BaseModule(  # noqa: PLR0904
     ) -> None:
         """Start the module."""
         try:
-            logger.debug("Inititalize module")
-            await self.initialize(setup_data=setup_data)
+            self.context.callbacks.logger = logger
+            self.context.callbacks.send_message = callback
+            logger.info(f"Inititalize module {self.job_id}")
+            await self.initialize(self.context, setup_data)
         except Exception as e:
             self._status = ModuleStatus.FAILED
             short_description = "Error initializing module"
             logger.exception("%s: %s", short_description, e)
             await callback(
                 ModuleCodeModel(
-                    code=str(self._status),
+                    code="Error",
                     short_description=short_description,
                     message=str(e),
                 )
@@ -461,32 +448,22 @@ class BaseModule(  # noqa: PLR0904
         try:
             logger.debug("Init the discovered input handlers.")
             self.triggers_discoverer.init_handlers(self.context)
-            logger.debug("Run lifecycle")
-            self._status = ModuleStatus.RUNNING
-            self._task = asyncio.create_task(
-                self._run_lifecycle(input_data, setup_data, callback),
-                name="module_lifecycle",
-            )
-            if done_callback is not None:
-                self._task.add_done_callback(done_callback)
+            logger.debug(f"Run lifecycle {self.job_id}")
+            await self._run_lifecycle(input_data, setup_data)
         except Exception:
             self._status = ModuleStatus.FAILED
             logger.exception("Error during module lifecyle")
+        finally:
+            await self.stop()
 
     async def stop(self) -> None:
         """Stop the module."""
-        logger.info("Stopping module %s with status %s", self.name, self._status)
-        if self._status not in {ModuleStatus.RUNNING, ModuleStatus.STOPPING}:
-            return
-
+        logger.info("Stopping module %s | job_id=%s", self.name, self.job_id)
         try:
             self._status = ModuleStatus.STOPPING
-            if self._task and not self._task.done():
-                self._task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await self._task
             logger.debug("Module %s stopped", self.name)
             await self.cleanup()
+            await self.context.callbacks.send_message(ModuleCodeModel(code="__END_OF_STREAM__"))
             self._status = ModuleStatus.STOPPED
             logger.debug("Module %s cleaned", self.name)
         except Exception:
@@ -510,13 +487,15 @@ class BaseModule(  # noqa: PLR0904
                 },
             )
             self._status = ModuleStatus.RUNNING
-            content = await self.run_config_setup(config_setup_data)
+            self.context.callbacks.set_config_setup = callback
+            content = await self.run_config_setup(self.context, config_setup_data)
 
             wrapper = config_setup_data.model_dump()
             wrapper["content"] = content.model_dump()
             await callback(self.create_setup_model(wrapper))
             self._status = ModuleStatus.STOPPING
         except Exception:
+            logger.error("Error during module lifecyle")
             self._status = ModuleStatus.FAILED
             logger.exception(
                 "Error during module lifecyle",

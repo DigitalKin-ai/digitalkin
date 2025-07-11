@@ -19,7 +19,7 @@ from rstream import Consumer, ConsumerOffsetSpecification, MessageContext, Offse
 
 from digitalkin.logger import logger
 from digitalkin.models.module import InputModelT, SetupModelT
-from digitalkin.models.module.module import ModuleStatus
+from digitalkin.models.module.task_monitor import TaskStatus
 from digitalkin.modules._base_module import BaseModule
 from digitalkin.modules.job_manager.base_job_manager import BaseJobManager
 from digitalkin.modules.job_manager.taskiq_broker import STREAM, STREAM_RETENTION, TASKIQ_BROKER
@@ -279,7 +279,7 @@ class TaskiqJobManager(BaseJobManager, Generic[InputModelT, SetupModelT]):
         msg = "stop_all_modules not implemented in TaskiqJobManager"
         raise NotImplementedError(msg)
 
-    async def get_module_status(self, job_id: str) -> ModuleStatus | None:
+    async def get_module_status(self, job_id: str) -> TaskStatus:
         """Query a module status."""
         msg = "get_module_status not implemented in TaskiqJobManager"
         raise NotImplementedError(msg)

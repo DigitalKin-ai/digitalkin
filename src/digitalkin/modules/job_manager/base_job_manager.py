@@ -5,17 +5,18 @@ from collections.abc import AsyncGenerator, AsyncIterator, Callable, Coroutine
 from contextlib import asynccontextmanager
 from typing import Any, Generic
 
-from digitalkin.models import ModuleStatus
 from digitalkin.models.module import InputModelT, OutputModelT, SetupModelT
+from digitalkin.models.module.module import ModuleCodeModel
+from digitalkin.models.module.task_monitor import TaskStatus
 from digitalkin.modules._base_module import BaseModule
 from digitalkin.services.services_config import ServicesConfig
 from digitalkin.services.services_models import ServicesMode
 
 
-class BaseJobManager(abc.ABC, Generic[InputModelT, SetupModelT]):
+class BaseJobManager(abc.ABC, Generic[InputModelT, SetupModelT, OutputModelT]):
     """Abstract base class for managing background module jobs."""
 
-    async def _start(self) -> None:
+    async def start(self) -> None:
         """Start the job manager.
 
         This method initializes any necessary resources or configurations
@@ -24,8 +25,8 @@ class BaseJobManager(abc.ABC, Generic[InputModelT, SetupModelT]):
 
     @staticmethod
     async def job_specific_callback(
-        callback: Callable[[str, OutputModelT], Coroutine[Any, Any, None]], job_id: str
-    ) -> Callable[[OutputModelT], Coroutine[Any, Any, None]]:
+        callback: Callable[[str, OutputModelT | ModuleCodeModel], Coroutine[Any, Any, None]], job_id: str
+    ) -> Callable[[OutputModelT | ModuleCodeModel], Coroutine[Any, Any, None]]:
         """Generate a job-specific callback function.
 
         Args:
@@ -36,7 +37,7 @@ class BaseJobManager(abc.ABC, Generic[InputModelT, SetupModelT]):
             Callable: A wrapped callback function that includes the job ID.
         """
 
-        def callback_wrapper(output_data: OutputModelT) -> Coroutine[Any, Any, None]:
+        def callback_wrapper(output_data: OutputModelT | ModuleCodeModel) -> Coroutine[Any, Any, None]:
             """Wrapper for the callback function.
 
             Args:
@@ -53,12 +54,14 @@ class BaseJobManager(abc.ABC, Generic[InputModelT, SetupModelT]):
         self,
         module_class: type[BaseModule],
         services_mode: ServicesMode,
+        **kwargs,  # noqa: ANN003
     ) -> None:
         """Initialize the job manager.
 
         Args:
             module_class: The class of the module to be managed.
             services_mode: The mode of operation for the services (e.g., ASYNC or SYNC).
+            **kwargs: Additional keyword arguments for the job manager.
         """
         self.module_class = module_class
 
@@ -68,6 +71,7 @@ class BaseJobManager(abc.ABC, Generic[InputModelT, SetupModelT]):
             mode=services_mode,
         )
         setattr(self.module_class, "services_config", services_config)
+        super().__init__(**kwargs)
 
     @abc.abstractmethod  # type: ignore
     @asynccontextmanager  # type: ignore
@@ -156,14 +160,14 @@ class BaseJobManager(abc.ABC, Generic[InputModelT, SetupModelT]):
         """
 
     @abc.abstractmethod
-    async def get_module_status(self, job_id: str) -> ModuleStatus | None:
+    async def get_module_status(self, job_id: str) -> TaskStatus:
         """Retrieve the status of a module job.
 
         Args:
             job_id: The unique identifier of the job.
 
         Returns:
-            ModuleStatus | None: The status of the job, or None if the job does not exist.
+            ModuleStatu: The status of the job.
         """
 
     @abc.abstractmethod

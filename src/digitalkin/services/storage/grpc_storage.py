@@ -128,7 +128,7 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
             resp = self.exec_grpc_query("UpdateRecord", req)
             return self._build_record_from_proto(resp.stored_data)
         except Exception:
-            logger.exception("gRPC UpdateRecord failed for %s:%s", collection, record_id)
+            logger.warning("gRPC UpdateRecord failed for %s:%s", collection, record_id)
             return None
 
     def _remove(self, collection: str, record_id: str) -> bool:

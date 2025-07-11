@@ -48,17 +48,9 @@ class ColorJSONFormatter(logging.Formatter):
         log_obj: dict[str, Any] = {
             "timestamp": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
             "level": record.levelname.lower(),
-            "logger": record.name,
             "message": record.getMessage(),
             "module": record.module,
-            "location": f"{record.filename}:{record.lineno}",
-            "function": record.funcName,
-            "pathname": record.pathname,
-            "process": record.process,
-            "processName": record.processName,
-            "relativeCreated": record.relativeCreated,
-            "thread": record.thread,
-            "threadName": record.threadName,
+            "location": f"{record.pathname}:{record.lineno}:{record.funcName}",
         }
         # Add exception info if present
         if record.exc_info:
