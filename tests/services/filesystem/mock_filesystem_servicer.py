@@ -68,7 +68,8 @@ class MockFilesystemServicer(filesystem_service_pb2_grpc.FilesystemServiceServic
             size_bytes=model.get("size_bytes"),
             checksum=model.get("checksum"),
             metadata=metadata,
-            storage_url=model.get("storage_url"),
+            storage_uri=model.get("storage_uri"),
+            file_url=model.get("file_url"),
             status=status,
         )
 
@@ -134,7 +135,8 @@ class MockFilesystemServicer(filesystem_service_pb2_grpc.FilesystemServiceServic
                         size_bytes=len(file_data.content),
                         checksum=secrets.token_hex(32),  # Mock checksum
                         metadata=MessageToDict(file_data.metadata) if file_data.HasField("metadata") else None,
-                        storage_url=url,
+                        storage_uri=url,
+                        file_url=url,
                         status=filesystem_pb2.FileStatus.Name(file_data.status),
                     )
 
@@ -331,7 +333,7 @@ class MockFilesystemServicer(filesystem_service_pb2_grpc.FilesystemServiceServic
                 file_data.metadata = MessageToDict(request.metadata)
             if request.new_name:
                 file_data.name = request.new_name
-                file_data.storage_url = self._generate_url(context, request.new_name)
+                file_data.storage_uri = self._generate_url(context, request.new_name)
             if request.status:
                 file_data.status = filesystem_pb2.FileStatus.Name(request.status)
 
