@@ -126,7 +126,7 @@ class DefaultFilesystem(FilesystemStrategy):
                     raise FilesystemServiceError(msg)  # noqa: TRY301
 
                 Path(file_path).write_bytes(file.content)
-                storage_url = str(Path(file_path).resolve())
+                storage_uri = str(Path(file_path).resolve())
                 file_data = FilesystemRecord(
                     id=str(uuid.uuid4()),
                     context=self.mission_id,
@@ -136,7 +136,8 @@ class DefaultFilesystem(FilesystemStrategy):
                     size_bytes=len(file.content),
                     checksum=self._calculate_checksum(file.content),
                     metadata=file.metadata,
-                    storage_url=storage_url,
+                    storage_uri=storage_uri,
+                    file_url=storage_uri,
                     status=file.status if hasattr(file, "status") and file.status else "ACTIVE",
                 )
 
@@ -200,7 +201,7 @@ class DefaultFilesystem(FilesystemStrategy):
 
             if include_content:
                 for file in paginated_files:
-                    file.content = Path(file.storage_url).read_bytes()
+                    file.content = Path(file.storage_uri).read_bytes()
 
         except Exception as e:
             msg = f"Error listing files: {e!s}"
@@ -243,7 +244,7 @@ class DefaultFilesystem(FilesystemStrategy):
                 raise FilesystemServiceError(msg)  # noqa: TRY301
 
             if include_content:
-                file_path = file_data.storage_url
+                file_path = file_data.storage_uri
                 if os.path.exists(file_path):
                     content = Path(file_path).read_bytes()
                     file_data.content = content
@@ -330,7 +331,7 @@ class DefaultFilesystem(FilesystemStrategy):
                 new_path = os.path.join(context_dir, new_name)
                 os.rename(file_path, new_path)
                 existing_file.name = new_name
-                existing_file.storage_url = str(Path(new_path).resolve())
+                existing_file.storage_uri = str(Path(new_path).resolve())
 
             self.db[file_id] = existing_file
 
@@ -388,7 +389,7 @@ class DefaultFilesystem(FilesystemStrategy):
                     continue
 
                 try:
-                    file_path = file_data.storage_url
+                    file_path = file_data.storage_uri
                     if os.path.exists(file_path):
                         if permanent:
                             os.remove(file_path)

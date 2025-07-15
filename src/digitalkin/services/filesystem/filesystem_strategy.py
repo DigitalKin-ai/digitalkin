@@ -24,7 +24,8 @@ class FilesystemRecord(BaseModel):
     size_bytes: int = Field(default=0, description="Size of the file in bytes")
     checksum: str = Field(default="", description="SHA-256 checksum of the file content")
     metadata: dict[str, Any] | None = Field(default=None, description="Additional metadata for the file")
-    storage_url: str = Field(description="Internal URL for accessing the file content")
+    storage_uri: str = Field(description="Internal URI for accessing the file content")
+    file_url: str = Field(description="Public URL for accessing the file content")
     status: str = Field(default="UNSPECIFIED", description="Current status of the file")
     content: bytes | None = Field(default=None, description="The content of the file")
 

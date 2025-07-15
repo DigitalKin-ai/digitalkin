@@ -121,7 +121,8 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper):
             size_bytes=file.size_bytes,
             checksum=file.checksum,
             metadata=MessageToDict(file.metadata),
-            storage_url=file.storage_url,
+            storage_uri=file.storage_uri,
+            file_url=file.file_url,
             status=filesystem_pb2.FileStatus.Name(file.status),
             content=file.content,
         )
