@@ -198,7 +198,8 @@ def test_upload_files_success(
     assert file_data.content_type == file_metadata["content_type"]
     assert file_data.metadata == file_metadata["metadata"]
     assert file_data.status == "FILE_STATUS_" + file_metadata["status"]
-    assert file_data.storage_url is not None
+    assert file_data.storage_uri is not None
+    assert file_data.file_url is not None
     assert file_data.size_bytes == len(sample_file_data)
     assert file_data.checksum is not None
 
@@ -274,7 +275,8 @@ def test_get_file_success(
     assert result.content_type == file_metadata["content_type"]
     assert result.metadata == file_metadata["metadata"]
     assert result.status == "FILE_STATUS_" + file_metadata["status"]
-    assert result.storage_url is not None
+    assert result.storage_uri is not None
+    assert result.file_url is not None
     assert result.size_bytes == len(sample_file_data)
     assert result.checksum is not None
 
@@ -377,7 +379,8 @@ def test_get_files_success(
         assert file_data.content_type == file_metadata["content_type"]
         assert file_data.metadata == file_metadata["metadata"]
         assert file_data.status == "FILE_STATUS_" + file_metadata["status"]
-        assert file_data.storage_url is not None
+        assert file_data.storage_uri is not None
+        assert file_data.file_url is not None
         assert file_data.size_bytes == len(sample_file_data)
         assert file_data.checksum is not None
         assert file_data.id in file_ids
@@ -507,7 +510,8 @@ def test_update_file_success(
     assert result.content_type == "text/plain"
     assert result.metadata == {"new_key": "new_value"}
     assert result.status == "FILE_STATUS_ACTIVE"
-    assert result.storage_url is not None
+    assert result.storage_uri is not None
+    assert result.file_url is not None
 
 
 def test_delete_files_success(

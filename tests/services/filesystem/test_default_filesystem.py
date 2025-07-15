@@ -91,7 +91,8 @@ class TestDefaultFilesystem:
         assert file_data.content_type == file_metadata["content_type"]
         assert file_data.metadata == file_metadata["metadata"]
         assert file_data.status == file_metadata["status"]
-        assert file_data.storage_url is not None
+        assert file_data.storage_uri is not None
+        assert file_data.file_url is not None
 
         # Verify the file exists on disk
         file_path = Path(filesystem._get_context_temp_dir(file_metadata["context"]), file_metadata["name"])
@@ -131,7 +132,8 @@ class TestDefaultFilesystem:
         assert file_data.content_type == file_metadata["content_type"]
         assert file_data.metadata == file_metadata["metadata"]
         assert file_data.status == file_metadata["status"]
-        assert file_data.storage_url is not None
+        assert file_data.storage_uri is not None
+        assert file_data.file_url is not None
 
     def test_get_files_success(
         self, filesystem: DefaultFilesystem, sample_file_data: bytes, file_metadata: dict
@@ -187,7 +189,8 @@ class TestDefaultFilesystem:
             assert file_data.content_type == file_metadata["content_type"]
             assert file_data.metadata == file_metadata["metadata"]
             assert file_data.status == file_metadata["status"]
-            assert file_data.storage_url is not None
+            assert file_data.storage_uri is not None
+            assert file_data.file_url is not None
 
     def test_update_file_success(
         self, filesystem: DefaultFilesystem, sample_file_data: bytes, file_metadata: dict
@@ -232,7 +235,8 @@ class TestDefaultFilesystem:
         assert updated_file.content_type == "text/plain"
         assert updated_file.metadata == {"new_key": "new_value"}
         assert updated_file.status == "ACTIVE"
-        assert updated_file.storage_url is not None
+        assert updated_file.storage_uri is not None
+        assert updated_file.file_url is not None
 
         # Verify the file content was updated
         file_path = Path(filesystem._get_context_temp_dir(file_metadata["context"]), "updated_file.txt")
