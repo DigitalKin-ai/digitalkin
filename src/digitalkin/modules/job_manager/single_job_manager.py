@@ -10,13 +10,14 @@ import grpc
 
 from digitalkin.logger import logger
 from digitalkin.models import ModuleStatus
-from digitalkin.models.module import ConfigSetupModelT, InputModelT, OutputModelT, SetupModelT
+from digitalkin.models.module import InputModelT, OutputModelT, SetupModelT
 from digitalkin.modules._base_module import BaseModule
 from digitalkin.modules.job_manager.base_job_manager import BaseJobManager
+from digitalkin.modules.job_manager.job_manager_models import StreamCodeModel
 from digitalkin.services.services_models import ServicesMode
 
 
-class SingleJobManager(BaseJobManager, Generic[InputModelT, SetupModelT, ConfigSetupModelT]):
+class SingleJobManager(BaseJobManager, Generic[InputModelT, SetupModelT]):
     """Manages a single instance of a module job.
 
     This class ensures that only one instance of a module job is active at a time.
@@ -68,8 +69,7 @@ class SingleJobManager(BaseJobManager, Generic[InputModelT, SetupModelT, ConfigS
 
     async def create_config_setup_instance_job(
         self,
-        config_setup_data: ConfigSetupModelT,
-        setup_data: SetupModelT,
+        config_setup_data: SetupModelT,
         mission_id: str,
         setup_version_id: str,
     ) -> str:
@@ -99,7 +99,6 @@ class SingleJobManager(BaseJobManager, Generic[InputModelT, SetupModelT, ConfigS
         try:
             await module.start_config_setup(
                 config_setup_data,
-                setup_data,
                 await self.job_specific_callback(self.add_to_queue, job_id),
             )
             logger.debug("Module %s (%s) started successfully", job_id, module.name)
@@ -166,7 +165,6 @@ class SingleJobManager(BaseJobManager, Generic[InputModelT, SetupModelT, ConfigS
                 ):
                     logger.info(f"{job_id=}: {module.status=}")
                     yield await self.queues[job_id].get()
-                logger.info(f"{job_id=}: {module.status=} | {self.queues[job_id].empty()}")
 
             finally:
                 del self.queues[job_id]
@@ -202,12 +200,14 @@ class SingleJobManager(BaseJobManager, Generic[InputModelT, SetupModelT, ConfigS
         module = self.module_class(job_id, mission_id=mission_id, setup_version_id=setup_version_id)
         self.modules[job_id] = module
         self.queues[job_id] = asyncio.Queue()
+        callback = await self.job_specific_callback(self.add_to_queue, job_id)
 
         try:
             await module.start(
                 input_data,
                 setup_data,
-                await self.job_specific_callback(self.add_to_queue, job_id),
+                callback,
+                done_callback=lambda _: asyncio.create_task(callback(StreamCodeModel(code="__END_OF_STREAM__"))),
             )
             logger.debug("Module %s (%s) started successfully", job_id, module.name)
         except Exception:

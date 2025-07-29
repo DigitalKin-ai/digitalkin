@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import ClassVar
 
 from digitalkin.models.module.module_context import ModuleContext
-from digitalkin.models.module.module_types import InputTrigger
+from digitalkin.models.module.module_types import DataTrigger
 from digitalkin.modules.trigger_handler import TriggerHandler
 
 logger = logging.getLogger(__name__)
@@ -329,7 +329,7 @@ class ModuleDiscoverer:
         for protocol, handlers_cls in self._trigger_handlers_cls.items():
             self.trigger_handlers[protocol] = tuple(handler_cls(context) for handler_cls in set(handlers_cls))
 
-    def get_trigger(self, protocol: str, input_instance: InputTrigger) -> TriggerHandler:
+    def get_trigger(self, protocol: str, input_instance: DataTrigger) -> TriggerHandler:
         """Retrieve a trigger handler instance based on the provided protocol and input instance type.
 
         Args:

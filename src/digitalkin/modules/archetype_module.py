@@ -3,7 +3,6 @@
 from abc import ABC
 
 from digitalkin.models.module import InputModelT, OutputModelT, SecretModelT, SetupModelT
-from digitalkin.models.module.module_types import ConfigSetupModelT
 from digitalkin.modules._base_module import BaseModule
 
 
@@ -13,7 +12,6 @@ class ArchetypeModule(
         OutputModelT,
         SetupModelT,
         SecretModelT,
-        ConfigSetupModelT,
     ],
     ABC,
 ):

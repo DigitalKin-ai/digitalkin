@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any, Generic
 from rstream import Consumer, ConsumerOffsetSpecification, MessageContext, OffsetType
 
 from digitalkin.logger import logger
-from digitalkin.models.module import ConfigSetupModelT, InputModelT, SetupModelT
+from digitalkin.models.module import InputModelT, SetupModelT
 from digitalkin.models.module.module import ModuleStatus
 from digitalkin.modules._base_module import BaseModule
 from digitalkin.modules.job_manager.base_job_manager import BaseJobManager
@@ -29,7 +29,7 @@ if TYPE_CHECKING:
     from taskiq.task import AsyncTaskiqTask
 
 
-class TaskiqJobManager(BaseJobManager, Generic[InputModelT, SetupModelT, ConfigSetupModelT]):
+class TaskiqJobManager(BaseJobManager, Generic[InputModelT, SetupModelT]):
     """Taskiq job manager for running modules in Taskiq tasks."""
 
     services_mode: ServicesMode
@@ -134,8 +134,7 @@ class TaskiqJobManager(BaseJobManager, Generic[InputModelT, SetupModelT, ConfigS
 
     async def create_config_setup_instance_job(
         self,
-        config_setup_data: ConfigSetupModelT,
-        setup_data: SetupModelT,
+        config_setup_data: SetupModelT,
         mission_id: str,
         setup_version_id: str,
     ) -> str:
@@ -173,7 +172,6 @@ class TaskiqJobManager(BaseJobManager, Generic[InputModelT, SetupModelT, ConfigS
             self.module_class,
             self.services_mode,
             config_setup_data.model_dump(),  # type: ignore
-            setup_data.model_dump(),
         )
 
         job_id = running_task.task_id

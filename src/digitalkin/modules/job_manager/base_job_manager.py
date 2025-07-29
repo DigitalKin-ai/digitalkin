@@ -7,13 +7,12 @@ from typing import Any, Generic
 
 from digitalkin.models import ModuleStatus
 from digitalkin.models.module import InputModelT, OutputModelT, SetupModelT
-from digitalkin.models.module.module_types import ConfigSetupModelT
 from digitalkin.modules._base_module import BaseModule
 from digitalkin.services.services_config import ServicesConfig
 from digitalkin.services.services_models import ServicesMode
 
 
-class BaseJobManager(abc.ABC, Generic[InputModelT, SetupModelT, ConfigSetupModelT]):
+class BaseJobManager(abc.ABC, Generic[InputModelT, SetupModelT]):
     """Abstract base class for managing background module jobs."""
 
     async def _start(self) -> None:
@@ -120,8 +119,7 @@ class BaseJobManager(abc.ABC, Generic[InputModelT, SetupModelT, ConfigSetupModel
     @abc.abstractmethod
     async def create_config_setup_instance_job(
         self,
-        config_setup_data: ConfigSetupModelT,
-        setup_data: SetupModelT,
+        config_setup_data: SetupModelT,
         mission_id: str,
         setup_version_id: str,
     ) -> str:
@@ -132,7 +130,6 @@ class BaseJobManager(abc.ABC, Generic[InputModelT, SetupModelT, ConfigSetupModel
 
         Args:
             config_setup_data: The input data required to start the job.
-            setup_data: The setup configuration for the module.
             mission_id: The mission ID associated with the job.
             setup_version_id: The setup ID.
 

@@ -180,7 +180,6 @@ async def run_config_module(
     module_class: type[BaseModule],
     services_mode: ServicesMode,
     config_setup_data: dict,
-    setup_data: dict,
     context: Context = TaskiqDepends(),
 ) -> None:
     """TaskIQ task allowing a module to compute in the background asynchronously.
@@ -209,6 +208,5 @@ async def run_config_module(
 
     await module.start_config_setup(
         module_class.create_config_setup_model(config_setup_data),
-        module_class.create_setup_model(setup_data),
         callback,
     )
