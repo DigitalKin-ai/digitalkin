@@ -97,7 +97,7 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
             resp = self.exec_grpc_query("ReadRecord", req)
             return self._build_record_from_proto(resp.stored_data)
         except Exception:
-            logger.exception("gRPC ReadRecord failed for %s:%s", collection, record_id)
+            logger.warning("gRPC ReadRecord failed for %s:%s", collection, record_id)
             return None
 
     def _update(
@@ -149,7 +149,7 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
             )
             self.exec_grpc_query("RemoveRecord", req)
         except Exception:
-            logger.exception(
+            logger.warning(
                 "gRPC RemoveRecord failed for %s:%s",
                 collection,
                 record_id,
@@ -174,7 +174,7 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
             resp = self.exec_grpc_query("ListRecords", req)
             return [self._build_record_from_proto(r) for r in resp.records]
         except Exception:
-            logger.exception("gRPC ListRecords failed for %s", collection)
+            logger.warning("gRPC ListRecords failed for %s", collection)
             return []
 
     def _remove_collection(self, collection: str) -> bool:
@@ -193,7 +193,7 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
             )
             self.exec_grpc_query("RemoveCollection", req)
         except Exception:
-            logger.exception("gRPC RemoveCollection failed for %s", collection)
+            logger.warning("gRPC RemoveCollection failed for %s", collection)
             return False
         return True
 

@@ -105,7 +105,8 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         setup_version = request.setup_version
         config_setup_data = self.module_class.create_config_setup_model(json_format.MessageToDict(request.content))
         setup_version_data = self.module_class.create_setup_model(
-            json_format.MessageToDict(request.setup_version.content)
+            json_format.MessageToDict(request.setup_version.content),
+            config_fields=True,
         )
 
         if not setup_version_data:
@@ -119,7 +120,6 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         # create a task to run the module in background
         job_id = await self.job_manager.create_config_setup_instance_job(
             config_setup_data,
-            setup_version_data,
             request.mission_id,
             setup_version.id,
         )
@@ -333,7 +333,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         except NotImplementedError as e:
             logger.warning(e)
             context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-            context.set_details(e)
+            context.set_details(str(e))
             return information_pb2.GetModuleInputResponse()
 
         return information_pb2.GetModuleInputResponse(
@@ -369,7 +369,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         except NotImplementedError as e:
             logger.warning(e)
             context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-            context.set_details(e)
+            context.set_details(str(e))
             return information_pb2.GetModuleOutputResponse()
 
         return information_pb2.GetModuleOutputResponse(
@@ -405,7 +405,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         except NotImplementedError as e:
             logger.warning(e)
             context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-            context.set_details(e)
+            context.set_details(str(e))
             return information_pb2.GetModuleSetupResponse()
 
         return information_pb2.GetModuleSetupResponse(
@@ -441,7 +441,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         except NotImplementedError as e:
             logger.warning(e)
             context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-            context.set_details(e)
+            context.set_details(str(e))
             return information_pb2.GetModuleSecretResponse()
 
         return information_pb2.GetModuleSecretResponse(
@@ -477,7 +477,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         except NotImplementedError as e:
             logger.warning(e)
             context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-            context.set_details(e)
+            context.set_details(str(e))
             return information_pb2.GetConfigSetupModuleResponse()
 
         return information_pb2.GetConfigSetupModuleResponse(
