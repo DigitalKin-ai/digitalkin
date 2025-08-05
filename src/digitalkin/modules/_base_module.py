@@ -9,10 +9,8 @@ from typing import Any, ClassVar, Generic
 
 from pydantic import BaseModel
 
-from digitalkin.grpc_servers.utils.exceptions import OptionalFeatureNotImplementedError
 from digitalkin.logger import logger
 from digitalkin.models.module import (
-    ConfigSetupModelT,
     InputModelT,
     ModuleStatus,
     OutputModelT,
@@ -33,11 +31,11 @@ from digitalkin.utils.llm_ready_schema import llm_ready_schema
 from digitalkin.utils.package_discover import ModuleDiscoverer
 
 
-class ModuleErrorModel(BaseModel):
+class ModuleCodeModel(BaseModel):
     """typed error/code model."""
 
     code: str
-    exception: str
+    message: str
     short_description: str
 
 
@@ -48,7 +46,6 @@ class BaseModule(  # noqa: PLR0904
         OutputModelT,
         SetupModelT,
         SecretModelT,
-        ConfigSetupModelT,
     ],
 ):
     """BaseModule is the abstract base for all modules in the DigitalKin SDK."""
@@ -56,10 +53,10 @@ class BaseModule(  # noqa: PLR0904
     name: str
     description: str
 
-    config_setup_format: type[ConfigSetupModelT]
+    setup_format: type[SetupModelT]
+
     input_format: type[InputModelT]
     output_format: type[OutputModelT]
-    setup_format: type[SetupModelT]
     secret_format: type[SecretModelT]
     metadata: ClassVar[dict[str, Any]]
 
@@ -172,20 +169,22 @@ class BaseModule(  # noqa: PLR0904
     def get_config_setup_format(cls, *, llm_format: bool) -> str:
         """Gets the JSON schema of the config setup format model.
 
+        The config setup format is used only to initialize the module with configuration data.
+        The setup format is used to initialize an run the module with setup data.
+
         Raises:
-            OptionalFeatureNotImplementedError: If the `config_setup_format` is not defined.
+            NotImplementedError: If the `setup_format` is not defined.
 
         Returns:
             The JSON schema of the config setup format as a string.
         """
-        config_setup_format = getattr(cls, "config_setup_format", None)
-
-        if config_setup_format is not None:
+        if cls.setup_format is not None:
+            setup_format = cls.setup_format.get_clean_model(config_fields=True, hidden_fields=False)
             if llm_format:
-                return json.dumps(llm_ready_schema(config_setup_format), indent=2)
-            return json.dumps(config_setup_format.model_json_schema(), indent=2)
+                return json.dumps(llm_ready_schema(setup_format), indent=2)
+            return json.dumps(setup_format.model_json_schema(), indent=2)
         msg = "'%s' class does not define an 'config_setup_format'."
-        raise OptionalFeatureNotImplementedError(msg)
+        raise NotImplementedError(msg)
 
     @classmethod
     def get_setup_format(cls, *, llm_format: bool) -> str:
@@ -198,14 +197,15 @@ class BaseModule(  # noqa: PLR0904
             The JSON schema of the setup format as a string.
         """
         if cls.setup_format is not None:
+            setup_format = cls.setup_format.get_clean_model(config_fields=False, hidden_fields=True)
             if llm_format:
-                return json.dumps(llm_ready_schema(cls.setup_format), indent=2)
-            return json.dumps(cls.setup_format.model_json_schema(), indent=2)
+                return json.dumps(llm_ready_schema(setup_format), indent=2)
+            return json.dumps(setup_format.model_json_schema(), indent=2)
         msg = "'%s' class does not define an 'setup_format'."
         raise NotImplementedError(msg)
 
     @classmethod
-    def create_config_setup_model(cls, config_setup_data: dict[str, Any]) -> ConfigSetupModelT:
+    def create_config_setup_model(cls, config_setup_data: dict[str, Any]) -> SetupModelT:
         """Create the setup model from the setup data.
 
         Args:
@@ -214,7 +214,7 @@ class BaseModule(  # noqa: PLR0904
         Returns:
             The setup model.
         """
-        return cls.config_setup_format(**config_setup_data)
+        return cls.setup_format(**config_setup_data)
 
     @classmethod
     def create_input_model(cls, input_data: dict[str, Any]) -> InputModelT:
@@ -229,16 +229,17 @@ class BaseModule(  # noqa: PLR0904
         return cls.input_format(**input_data)
 
     @classmethod
-    def create_setup_model(cls, setup_data: dict[str, Any]) -> SetupModelT:
+    def create_setup_model(cls, setup_data: dict[str, Any], *, config_fields: bool = False) -> SetupModelT:
         """Create the setup model from the setup data.
 
         Args:
             setup_data: The setup data to create the model from.
+            config_fields: If True, include only fields with json_schema_extra["config"] == True.
 
         Returns:
             The setup model.
         """
-        return cls.setup_format(**setup_data)
+        return cls.setup_format.get_clean_model(config_fields=config_fields, hidden_fields=True)(**setup_data)
 
     @classmethod
     def create_secret_model(cls, secret_data: dict[str, Any]) -> SecretModelT:
@@ -290,20 +291,20 @@ class BaseModule(  # noqa: PLR0904
         """
         return cls.triggers_discoverer.register_trigger(handler_cls)
 
-    @abstractmethod
-    async def run_config_setup(
-        self,
-        config_setup_data: ConfigSetupModelT,
-        setup_data: SetupModelT,
-        callback: Callable,
-    ) -> None:
+    async def run_config_setup(self, config_setup_data: SetupModelT) -> SetupModelT:  # noqa: PLR6301
         """Run config setup the module.
 
-        Raises:
-            OptionalFeatureNotImplementedError: If the config setup feature is not implemented.
+        The config setup is used to initialize the setup with configuration data.
+        This method is typically used to set up the module with necessary configuration before running it,
+        especially for processing data like files.
+        The function needs to save the setup in the storage.
+        The module will be initialize with the setup and not the config setup.
+        This method is optional, the config setup and setup can be the same.
+
+        Returns:
+            The updated setup model after running the config setup.
         """
-        msg = f"'{self}' class does not define an optional 'run_config_setup' attribute."
-        raise OptionalFeatureNotImplementedError(msg)
+        return config_setup_data
 
     @abstractmethod
     async def initialize(self, setup_data: SetupModelT) -> None:
@@ -364,9 +365,9 @@ class BaseModule(  # noqa: PLR0904
             asyncio.CancelledError: If the module is cancelled
         """
         try:
-            logger.warning("Starting module %s", self.name)
+            logger.info("Starting module %s", self.name)
             await self.run(input_data, setup_data, callback)
-            logger.warning("Module %s finished", self.name)
+            logger.info("Module %s finished", self.name)
         except asyncio.CancelledError:
             self._status = ModuleStatus.CANCELLED
             logger.error(f"Module {self.name} cancelled")
@@ -374,7 +375,7 @@ class BaseModule(  # noqa: PLR0904
             self._status = ModuleStatus.FAILED
             logger.exception("Error inside module %s", self.name)
         else:
-            self._status = ModuleStatus.STOPPED
+            self._status = ModuleStatus.STOPPING
         finally:
             await self.stop()
 
@@ -382,22 +383,22 @@ class BaseModule(  # noqa: PLR0904
         self,
         input_data: InputModelT,
         setup_data: SetupModelT,
-        callback: Callable[[OutputModelT | ModuleErrorModel], Coroutine[Any, Any, None]],
+        callback: Callable[[OutputModelT | ModuleCodeModel], Coroutine[Any, Any, None]],
         done_callback: Callable | None = None,
     ) -> None:
         """Start the module."""
         try:
-            logger.info("Inititalize module")
+            logger.debug("Inititalize module")
             await self.initialize(setup_data=setup_data)
         except Exception as e:
             self._status = ModuleStatus.FAILED
             short_description = "Error initializing module"
             logger.exception("%s: %s", short_description, e)
             await callback(
-                ModuleErrorModel(
+                ModuleCodeModel(
                     code=str(self._status),
                     short_description=short_description,
-                    exception=str(e),
+                    message=str(e),
                 )
             )
             if done_callback is not None:
@@ -406,9 +407,9 @@ class BaseModule(  # noqa: PLR0904
             return
 
         try:
-            logger.info("Init the discod input handlers.")
+            logger.debug("Init the discovered input handlers.")
             self.triggers_discoverer.init_handlers(self.context)
-            logger.info("Run lifecycle")
+            logger.debug("Run lifecycle")
             self._status = ModuleStatus.RUNNING
             self._task = asyncio.create_task(
                 self._run_lifecycle(input_data, setup_data, callback),
@@ -422,7 +423,8 @@ class BaseModule(  # noqa: PLR0904
 
     async def stop(self) -> None:
         """Stop the module."""
-        if self._status != ModuleStatus.RUNNING:
+        logger.info("Stopping module %s with status %s", self.name, self._status)
+        if self._status not in {ModuleStatus.RUNNING, ModuleStatus.STOPPING}:
             return
 
         try:
@@ -431,22 +433,29 @@ class BaseModule(  # noqa: PLR0904
                 self._task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await self._task
+            logger.debug("Module %s stopped", self.name)
             await self.cleanup()
+            self._status = ModuleStatus.STOPPED
+            logger.debug("Module %s cleaned", self.name)
         except Exception:
             self._status = ModuleStatus.FAILED
             logger.exception("Error stopping module")
 
     async def start_config_setup(
         self,
-        config_setup_data: ConfigSetupModelT,
-        setup_data: SetupModelT,
-        callback: Callable[[OutputModelT | ModuleErrorModel], Coroutine[Any, Any, None]],
+        config_setup_data: SetupModelT,
+        callback: Callable[[SetupModelT | ModuleCodeModel], Coroutine[Any, Any, None]],
     ) -> None:
         """Start the module."""
         try:
             logger.info("Run Config Setup lifecycle")
             self._status = ModuleStatus.RUNNING
-            await self.run_config_setup(config_setup_data, setup_data, callback)
+            content = await self.run_config_setup(config_setup_data)
+
+            wrapper = config_setup_data.model_dump()
+            wrapper["content"] = content.model_dump()
+            await callback(self.create_setup_model(wrapper))
+            self._status = ModuleStatus.STOPPING
         except Exception:
             self._status = ModuleStatus.FAILED
             logger.exception("Error during module lifecyle")

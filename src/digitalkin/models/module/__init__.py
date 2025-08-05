@@ -3,24 +3,24 @@
 from digitalkin.models.module.module import Module, ModuleStatus
 from digitalkin.models.module.module_context import ModuleContext
 from digitalkin.models.module.module_types import (
-    ConfigSetupModelT,
-    InputModel,
+    DataModel,
+    DataTrigger,
     InputModelT,
-    InputTrigger,
     OutputModelT,
     SecretModelT,
+    SetupModel,
     SetupModelT,
 )
 
 __all__ = [
-    "ConfigSetupModelT",
-    "InputModel",
+    "DataModel",
+    "DataTrigger",
     "InputModelT",
-    "InputTrigger",
     "Module",
     "ModuleContext",
     "ModuleStatus",
     "OutputModelT",
     "SecretModelT",
+    "SetupModel",
     "SetupModelT",
 ]
