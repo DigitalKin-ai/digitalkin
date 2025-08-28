@@ -200,13 +200,14 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
     def __init__(
         self,
         mission_id: str,
+        setup_id: str,
         setup_version_id: str,
         config: dict[str, type[BaseModel]],
         client_config: ClientConfig,
         **kwargs,  # noqa: ANN003, ARG002
     ) -> None:
         """Initialize the storage."""
-        super().__init__(mission_id=mission_id, setup_version_id=setup_version_id, config=config)
+        super().__init__(mission_id=mission_id, setup_id=setup_id, setup_version_id=setup_version_id, config=config)
 
         channel = self._init_channel(client_config)
         self.stub = storage_service_pb2_grpc.StorageServiceStub(channel)

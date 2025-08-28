@@ -87,6 +87,7 @@ class BaseJobManager(abc.ABC, Generic[InputModelT, SetupModelT]):
         input_data: InputModelT,
         setup_data: SetupModelT,
         mission_id: str,
+        setup_id: str,
         setup_version_id: str,
     ) -> str:
         """Create and start a new job for the module's instance.
@@ -95,7 +96,8 @@ class BaseJobManager(abc.ABC, Generic[InputModelT, SetupModelT]):
             input_data: The input data required to start the job.
             setup_data: The setup configuration for the module.
             mission_id: The mission ID associated with the job.
-            setup_version_id: The setup ID associated with the module.
+            setup_id: The setup ID.
+            setup_version_id: The setup version ID associated with the module.
 
         Returns:
             str: The unique identifier (job ID) of the created job.
@@ -121,6 +123,7 @@ class BaseJobManager(abc.ABC, Generic[InputModelT, SetupModelT]):
         self,
         config_setup_data: SetupModelT,
         mission_id: str,
+        setup_id: str,
         setup_version_id: str,
     ) -> str:
         """Create and start a new module job.
@@ -131,7 +134,8 @@ class BaseJobManager(abc.ABC, Generic[InputModelT, SetupModelT]):
         Args:
             config_setup_data: The input data required to start the job.
             mission_id: The mission ID associated with the job.
-            setup_version_id: The setup ID.
+            setup_id: The setup ID.
+            setup_version_id: The setup version ID.
 
         Returns:
             str: The unique identifier (job ID) of the created job.

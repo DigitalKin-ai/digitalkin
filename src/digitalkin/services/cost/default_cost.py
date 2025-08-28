@@ -15,15 +15,16 @@ from digitalkin.services.cost.cost_strategy import (
 class DefaultCost(CostStrategy):
     """Default cost strategy."""
 
-    def __init__(self, mission_id: str, setup_version_id: str, config: dict[str, CostConfig]) -> None:
+    def __init__(self, mission_id: str, setup_id: str, setup_version_id: str, config: dict[str, CostConfig]) -> None:
         """Initialize the strategy.
 
         Args:
             mission_id: The ID of the mission this strategy is associated with
+            setup_id: The ID of the setup
             setup_version_id: The ID of the setup version this strategy is associated with
             config: The configuration dictionary for the cost
         """
-        super().__init__(mission_id=mission_id, setup_version_id=setup_version_id, config=config)
+        super().__init__(mission_id=mission_id, setup_id=setup_id, setup_version_id=setup_version_id, config=config)
         self.db: dict[str, list[CostData]] = {}
 
     def add(

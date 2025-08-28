@@ -121,6 +121,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         job_id = await self.job_manager.create_config_setup_instance_job(
             config_setup_data,
             request.mission_id,
+            setup_version.setup_id,
             setup_version.id,
         )
 
@@ -177,6 +178,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             input_data,
             setup_data,
             mission_id=request.mission_id,
+            setup_id=setup_data_class.current_setup_version.setup_id,
             setup_version_id=setup_data_class.current_setup_version.id,
         )
 

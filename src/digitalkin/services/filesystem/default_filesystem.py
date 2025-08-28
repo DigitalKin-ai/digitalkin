@@ -25,14 +25,15 @@ class DefaultFilesystem(FilesystemStrategy):
     Files are stored in a temporary directory with proper metadata tracking.
     """
 
-    def __init__(self, mission_id: str, setup_version_id: str) -> None:
+    def __init__(self, mission_id: str, setup_id: str, setup_version_id: str) -> None:
         """Initialize the default filesystem strategy.
 
         Args:
             mission_id: The ID of the mission this strategy is associated with
+            setup_id: The ID of the setup
             setup_version_id: The ID of the setup version this strategy is associated with
         """
-        super().__init__(mission_id, setup_version_id)
+        super().__init__(mission_id, setup_id, setup_version_id)
         self.temp_root: str = tempfile.mkdtemp()
         os.makedirs(self.temp_root, exist_ok=True)
         self.db: dict[str, FilesystemRecord] = {}
@@ -118,7 +119,7 @@ class DefaultFilesystem(FilesystemStrategy):
         for file in files:
             try:
                 # Check if file with same name exists in the context
-                context_dir = self._get_context_temp_dir(self.mission_id)
+                context_dir = self._get_context_temp_dir(self.setup_id)
                 file_path = os.path.join(context_dir, file.name)
                 if os.path.exists(file_path) and not file.replace_if_exists:
                     msg = f"File with name {file.name} already exists."
@@ -129,7 +130,7 @@ class DefaultFilesystem(FilesystemStrategy):
                 storage_uri = str(Path(file_path).resolve())
                 file_data = FilesystemRecord(
                     id=str(uuid.uuid4()),
-                    context=self.mission_id,
+                    context=self.setup_id,
                     name=file.name,
                     file_type=file.file_type,
                     content_type=file.content_type or "application/octet-stream",
@@ -138,14 +139,13 @@ class DefaultFilesystem(FilesystemStrategy):
                     metadata=file.metadata,
                     storage_uri=storage_uri,
                     file_url=storage_uri,
-                    status=file.status if hasattr(file, "status") and file.status else "ACTIVE",
+                    status="ACTIVE",
                 )
 
                 self.db[file_data.id] = file_data
                 uploaded_files.append(file_data)
                 total_uploaded += 1
                 logger.debug("Uploaded file %s", file_data)
-
             except Exception as e:  # noqa: PERF203
                 logger.exception("Error uploading file %s: %s", file.name, e)
                 total_failed += 1
@@ -198,6 +198,8 @@ class DefaultFilesystem(FilesystemStrategy):
             start_idx = offset
             end_idx = start_idx + list_size
             paginated_files = filtered_files[start_idx:end_idx]
+
+            logger.critical(f"{filters=} | {paginated_files=}")
 
             if include_content:
                 for file in paginated_files:
@@ -306,7 +308,7 @@ class DefaultFilesystem(FilesystemStrategy):
             raise FilesystemServiceError(msg)
 
         try:
-            context_dir = self._get_context_temp_dir(self.mission_id)
+            context_dir = self._get_context_temp_dir(self.setup_id)
             file_path = os.path.join(context_dir, file_id)
             existing_file = self.db[file_id]
 
