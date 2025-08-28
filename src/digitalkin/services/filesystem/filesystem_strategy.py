@@ -90,15 +90,22 @@ class FilesystemStrategy(BaseStrategy, ABC):
     filtering, and pagination.
     """
 
-    def __init__(self, mission_id: str, setup_version_id: str, config: dict[str, Any] | None = None) -> None:
+    def __init__(
+        self,
+        mission_id: str,
+        setup_id: str,
+        setup_version_id: str,
+        config: dict[str, Any] | None = None,
+    ) -> None:
         """Initialize the strategy.
 
         Args:
             mission_id: The ID of the mission this strategy is associated with
+            setup_id: The ID of the setup
             setup_version_id: The ID of the setup version this strategy is associated with
             config: Configuration for the filesystem strategy
         """
-        super().__init__(mission_id, setup_version_id)
+        super().__init__(mission_id, setup_id, setup_version_id)
         self.config = config
 
     @abstractmethod
@@ -125,7 +132,7 @@ class FilesystemStrategy(BaseStrategy, ABC):
         file_id: str,
         *,
         include_content: bool = False,
-    ) -> tuple[FilesystemRecord, bytes | None]:
+    ) -> FilesystemRecord:
         """Get a specific file by ID or name.
 
         This method fetches detailed information about a single file,

@@ -71,6 +71,7 @@ class SingleJobManager(BaseJobManager, Generic[InputModelT, SetupModelT]):
         self,
         config_setup_data: SetupModelT,
         mission_id: str,
+        setup_id: str,
         setup_version_id: str,
     ) -> str:
         """Create and start a new module setup configuration job.
@@ -82,6 +83,7 @@ class SingleJobManager(BaseJobManager, Generic[InputModelT, SetupModelT]):
             config_setup_data: The input data required to start the job.
             setup_data: The setup configuration for the module.
             mission_id: The mission ID associated with the job.
+            setup_id: The setup ID associated with the module.
             setup_version_id: The setup ID.
 
         Returns:
@@ -92,7 +94,7 @@ class SingleJobManager(BaseJobManager, Generic[InputModelT, SetupModelT]):
         """
         job_id = str(uuid.uuid4())
         # TODO: Ensure the job_id is unique.
-        module = self.module_class(job_id, mission_id=mission_id, setup_version_id=setup_version_id)
+        module = self.module_class(job_id, mission_id=mission_id, setup_id=setup_id, setup_version_id=setup_version_id)
         self.modules[job_id] = module
         self.queues[job_id] = asyncio.Queue()
 
@@ -176,6 +178,7 @@ class SingleJobManager(BaseJobManager, Generic[InputModelT, SetupModelT]):
         input_data: InputModelT,
         setup_data: SetupModelT,
         mission_id: str,
+        setup_id: str,
         setup_version_id: str,
     ) -> str:
         """Create and start a new module job.
@@ -187,7 +190,8 @@ class SingleJobManager(BaseJobManager, Generic[InputModelT, SetupModelT]):
             input_data: The input data required to start the job.
             setup_data: The setup configuration for the module.
             mission_id: The mission ID associated with the job.
-            setup_version_id: The setup ID associated with the module.
+            setup_id: The setup ID associated with the module.
+            setup_version_id: The setup Version ID associated with the module.
 
         Returns:
             str: The unique identifier (job ID) of the created job.
@@ -197,7 +201,12 @@ class SingleJobManager(BaseJobManager, Generic[InputModelT, SetupModelT]):
         """
         job_id = str(uuid.uuid4())
         # TODO: Ensure the job_id is unique.
-        module = self.module_class(job_id, mission_id=mission_id, setup_version_id=setup_version_id)
+        module = self.module_class(
+            job_id,
+            mission_id=mission_id,
+            setup_id=setup_id,
+            setup_version_id=setup_version_id,
+        )
         self.modules[job_id] = module
         self.queues[job_id] = asyncio.Queue()
         callback = await self.job_specific_callback(self.add_to_queue, job_id)

@@ -136,6 +136,7 @@ class TaskiqJobManager(BaseJobManager, Generic[InputModelT, SetupModelT]):
         self,
         config_setup_data: SetupModelT,
         mission_id: str,
+        setup_id: str,
         setup_version_id: str,
     ) -> str:
         """Create and start a new module setup configuration job.
@@ -147,6 +148,7 @@ class TaskiqJobManager(BaseJobManager, Generic[InputModelT, SetupModelT]):
             config_setup_data: The input data required to start the job.
             setup_data: The setup configuration for the module.
             mission_id: The mission ID associated with the job.
+            setup_id: The setup ID associated with the module.
             setup_version_id: The setup ID.
 
         Returns:
@@ -168,6 +170,7 @@ class TaskiqJobManager(BaseJobManager, Generic[InputModelT, SetupModelT]):
 
         running_task: AsyncTaskiqTask[Any] = await task.kiq(
             mission_id,
+            setup_id,
             setup_version_id,
             self.module_class,
             self.services_mode,
@@ -221,6 +224,7 @@ class TaskiqJobManager(BaseJobManager, Generic[InputModelT, SetupModelT]):
         input_data: InputModelT,
         setup_data: SetupModelT,
         mission_id: str,
+        setup_id: str,
         setup_version_id: str,
     ) -> str:
         """Launches the module_task in Taskiq, returns the Taskiq task id as job_id.
@@ -229,6 +233,7 @@ class TaskiqJobManager(BaseJobManager, Generic[InputModelT, SetupModelT]):
             input_data: Input data for the module
             setup_data: Setup data for the module
             mission_id: Mission ID for the module
+            setup_id: The setup ID associated with the module.
             setup_version_id: The setup ID associated with the module.
 
         Returns:
@@ -245,6 +250,7 @@ class TaskiqJobManager(BaseJobManager, Generic[InputModelT, SetupModelT]):
 
         running_task: AsyncTaskiqTask[Any] = await task.kiq(
             mission_id,
+            setup_id,
             setup_version_id,
             self.module_class,
             self.services_mode,

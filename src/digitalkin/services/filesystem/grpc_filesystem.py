@@ -95,7 +95,7 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper):
             filesystem_pb2.FileFilter: The converted FileFilter proto message
         """
         return filesystem_pb2.FileFilter(
-            context=self.mission_id,
+            context=self.setup_id,
             **filters.model_dump(exclude={"file_types", "status"}),
             file_types=[self._file_type_to_enum(file_type) for file_type in filters.file_types]
             if filters.file_types
@@ -114,7 +114,7 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper):
         """
         return FilesystemRecord(
             id=file.file_id,
-            context=self.mission_id,
+            context=self.setup_id,
             name=file.name,
             file_type=filesystem_pb2.FileType.Name(file.file_type),
             content_type=file.content_type,
@@ -130,6 +130,7 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper):
     def __init__(
         self,
         mission_id: str,
+        setup_id: str,
         setup_version_id: str,
         client_config: ClientConfig,
         config: dict[str, Any] | None = None,
@@ -138,11 +139,12 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper):
 
         Args:
             mission_id: The ID of the mission this strategy is associated with
+            setup_id: The ID of the setup
             setup_version_id: The ID of the setup version this strategy is associated with
             client_config: Configuration for the gRPC client connection
             config: Configuration for the filesystem strategy
         """
-        super().__init__(mission_id, setup_version_id, config)
+        super().__init__(mission_id, setup_id, setup_version_id, config)
         self.service_name = "FilesystemService"
         channel = self._init_channel(client_config)
         self.stub = filesystem_service_pb2_grpc.FilesystemServiceStub(channel)
@@ -170,7 +172,7 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper):
                     metadata_struct.update(file.metadata)
                 upload_files.append(
                     filesystem_pb2.UploadFileData(
-                        context=self.mission_id,
+                        context=self.setup_id,
                         name=file.name,
                         file_type=self._file_type_to_enum(file.file_type),
                         content_type=file.content_type or "application/octet-stream",
@@ -206,7 +208,7 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper):
         """
         with GrpcFilesystem._handle_grpc_errors("GetFile"):
             request = filesystem_pb2.GetFileRequest(
-                context=self.mission_id,
+                context=self.setup_id,
                 file_id=file_id,
                 include_content=include_content,
             )
@@ -254,7 +256,7 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper):
         """
         with GrpcFilesystem._handle_grpc_errors("UpdateFile"):
             request = filesystem_pb2.UpdateFileRequest(
-                context=self.mission_id,
+                context=self.setup_id,
                 file_id=file_id,
                 content=content,
                 file_type=self._file_type_to_enum(file_type) if file_type else None,
@@ -288,7 +290,7 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper):
         """
         with GrpcFilesystem._handle_grpc_errors("DeleteFiles"):
             request = filesystem_pb2.DeleteFilesRequest(
-                context=self.mission_id,
+                context=self.setup_id,
                 filters=self._filter_to_proto(filters),
                 permanent=permanent,
                 force=force,
@@ -320,7 +322,7 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper):
         """
         with GrpcFilesystem._handle_grpc_errors("GetFiles"):
             request = filesystem_pb2.GetFilesRequest(
-                context=self.mission_id,
+                context=self.setup_id,
                 filters=self._filter_to_proto(filters),
                 include_content=include_content,
                 list_size=list_size,
