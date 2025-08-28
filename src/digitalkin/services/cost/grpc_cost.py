@@ -57,12 +57,13 @@ class GrpcCost(CostStrategy, GrpcClientWrapper):
     def __init__(
         self,
         mission_id: str,
+        setup_id: str,
         setup_version_id: str,
         config: dict[str, CostConfig],
         client_config: ClientConfig,
     ) -> None:
         """Initialize the cost."""
-        super().__init__(mission_id=mission_id, setup_version_id=setup_version_id, config=config)
+        super().__init__(mission_id=mission_id, setup_id=setup_id, setup_version_id=setup_version_id, config=config)
         channel = self._init_channel(client_config)
         self.stub = cost_service_pb2_grpc.CostServiceStub(channel)
         logger.debug("Channel client 'Cost' initialized succesfully")

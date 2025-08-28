@@ -16,7 +16,7 @@ from digitalkin.services.filesystem.filesystem_strategy import (
 @pytest.fixture
 def filesystem() -> DefaultFilesystem:
     """Create a DefaultFilesystem instance for testing with isolated temp_root."""
-    return DefaultFilesystem("test_mission", "test_setup")
+    return DefaultFilesystem("test_mission", "test_setup", "test_setup_version")
 
 
 @pytest.fixture
@@ -37,7 +37,7 @@ def file_metadata() -> dict:
         dict: File metadata with context, name, file_type, and url
     """
     return {
-        "context": "test_mission",
+        "context": "test_setup",
         "name": "test_file.txt",
         "file_type": "DOCUMENT",
         "content_type": "text/plain",
@@ -51,7 +51,7 @@ class TestDefaultFilesystem:
 
     def test_init(self) -> None:
         """Test initialization of DefaultFilesystem."""
-        filesystem = DefaultFilesystem("test_mission", "test_setup")
+        filesystem = DefaultFilesystem("test_mission", "test_setup", "test_setup_version")
         assert filesystem.temp_root
         assert filesystem.mission_id == "test_mission"
 
@@ -72,7 +72,6 @@ class TestDefaultFilesystem:
             file_type=file_metadata["file_type"],
             content_type=file_metadata["content_type"],
             metadata=file_metadata["metadata"],
-            status=file_metadata["status"],
             replace_if_exists=False,
         )
 
@@ -116,7 +115,6 @@ class TestDefaultFilesystem:
             file_type=file_metadata["file_type"],
             content_type=file_metadata["content_type"],
             metadata=file_metadata["metadata"],
-            status=file_metadata["status"],
             replace_if_exists=False,
         )
         files, _, _ = filesystem.upload_files([upload_file])
@@ -154,7 +152,6 @@ class TestDefaultFilesystem:
                 file_type=file_metadata["file_type"],
                 content_type=file_metadata["content_type"],
                 metadata=file_metadata["metadata"],
-                status=file_metadata["status"],
                 replace_if_exists=False,
             )
             for name in file_names
@@ -163,11 +160,7 @@ class TestDefaultFilesystem:
         _files, _, _ = filesystem.upload_files(upload_files)
 
         # Create filter criteria
-        filters = FileFilter(
-            context=file_metadata["context"],
-            file_types=[file_metadata["file_type"]],
-            status=file_metadata["status"],
-        )
+        filters = FileFilter(file_types=[file_metadata["file_type"]])
 
         # Get the files
         result_files, total_count = filesystem.get_files(
@@ -209,7 +202,6 @@ class TestDefaultFilesystem:
             file_type=file_metadata["file_type"],
             content_type=file_metadata["content_type"],
             metadata=file_metadata["metadata"],
-            status=file_metadata["status"],
             replace_if_exists=False,
         )
         files, _, _ = filesystem.upload_files([upload_file])
@@ -262,7 +254,6 @@ class TestDefaultFilesystem:
                 file_type=file_metadata["file_type"],
                 content_type=file_metadata["content_type"],
                 metadata=file_metadata["metadata"],
-                status=file_metadata["status"],
                 replace_if_exists=False,
             )
             for name in file_names
@@ -272,11 +263,7 @@ class TestDefaultFilesystem:
         file_ids = [file_data.id for file_data in files]
 
         # Create filter criteria
-        filters = FileFilter(
-            context=file_metadata["context"],
-            file_types=[file_metadata["file_type"]],
-            status=file_metadata["status"],
-        )
+        filters = FileFilter(file_types=[file_metadata["file_type"]])
 
         # Delete the files
         results, total_deleted, total_failed = filesystem.delete_files(
@@ -332,7 +319,6 @@ class TestDefaultFilesystem:
         """
         # Create filter criteria for non-existent files
         filters = FileFilter(
-            context="nonexistent_context",
             file_types=["DOCUMENT"],
             status="ACTIVE",
         )
@@ -457,40 +443,28 @@ class TestDefaultFilesystem:
         filesystem.update_file(files[1].id, status="ARCHIVED")
 
         # Test filtering by type
-        filters = FileFilter(
-            context=file_metadata["context"],
-            file_types=["DOCUMENT"],
-        )
+        filters = FileFilter(file_types=["DOCUMENT"])
         result_files, total_count = filesystem.get_files(filters)
         assert len(result_files) == 2
         assert total_count == 2
         assert all(f.file_type == "DOCUMENT" for f in result_files)
 
         # Test filtering by status
-        filters = FileFilter(
-            context=file_metadata["context"],
-            status="ARCHIVED",
-        )
+        filters = FileFilter(status="ARCHIVED")
         result_files, total_count = filesystem.get_files(filters)
         assert len(result_files) == 1
         assert total_count == 1
         assert result_files[0].status == "ARCHIVED"
 
         # Test filtering by content type
-        filters = FileFilter(
-            context=file_metadata["context"],
-            content_type="image/png",
-        )
+        filters = FileFilter(content_type="image/png")
         result_files, total_count = filesystem.get_files(filters)
         assert len(result_files) == 1
         assert total_count == 1
         assert result_files[0].content_type == "image/png"
 
         # Test filtering by name prefix
-        filters = FileFilter(
-            context=file_metadata["context"],
-            prefix="file1",
-        )
+        filters = FileFilter(prefix="file1")
         result_files, total_count = filesystem.get_files(filters)
         assert len(result_files) == 1
         assert total_count == 1
@@ -514,7 +488,6 @@ class TestDefaultFilesystem:
                 file_type=file_metadata["file_type"],
                 content_type=file_metadata["content_type"],
                 metadata=file_metadata["metadata"],
-                status=file_metadata["status"],
                 replace_if_exists=False,
             )
             for i in range(5)
@@ -522,7 +495,7 @@ class TestDefaultFilesystem:
         filesystem.upload_files(files_to_upload)
 
         # Test pagination with list_size=2
-        filters = FileFilter(context=file_metadata["context"])
+        filters = FileFilter()
 
         # First page
         result_files, total_count = filesystem.get_files(filters, list_size=2, offset=0)
@@ -556,17 +529,13 @@ class TestDefaultFilesystem:
             file_type=file_metadata["file_type"],
             content_type=file_metadata["content_type"],
             metadata=file_metadata["metadata"],
-            status=file_metadata["status"],
             replace_if_exists=False,
         )
         files, _, _ = filesystem.upload_files([upload_file])
         file_id = files[0].id
 
         # Soft delete the file
-        filters = FileFilter(
-            context=file_metadata["context"],
-            file_ids=[file_id],
-        )
+        filters = FileFilter(file_ids=[file_id])
         results, total_deleted, total_failed = filesystem.delete_files(filters, permanent=False)
         assert len(results) == 1
         assert total_deleted == 1

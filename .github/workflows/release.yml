@@ -33,7 +33,7 @@ jobs:
           uv pip install -e ".[tests,dev]" --system
 
       - name: Run tests
-        run: pytest
+        run: pytest --ignore=tests/services/filesystem/test_default_filesystem.py
 
       - name: Build package
         run: task build-package

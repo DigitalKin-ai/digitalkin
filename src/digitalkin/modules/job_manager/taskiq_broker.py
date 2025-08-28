@@ -132,6 +132,7 @@ async def send_message_to_stream(job_id: str, output_data: OutputModelT) -> None
 @TASKIQ_BROKER.task
 async def run_start_module(
     mission_id: str,
+    setup_id: str,
     setup_version_id: str,
     module_class: type[BaseModule],
     services_mode: ServicesMode,
@@ -143,6 +144,7 @@ async def run_start_module(
 
     Args:
         mission_id: str,
+        setup_id: The setup ID associated with the module.
         setup_version_id: The setup ID associated with the module.
         module_class: type[BaseModule],
         services_mode: ServicesMode,
@@ -161,7 +163,7 @@ async def run_start_module(
 
     job_id = context.message.task_id
     callback = await BaseJobManager.job_specific_callback(send_message_to_stream, job_id)
-    module = module_class(job_id, mission_id=mission_id, setup_version_id=setup_version_id)
+    module = module_class(job_id, mission_id=mission_id, setup_id=setup_id, setup_version_id=setup_version_id)
 
     await module.start(
         input_data,
@@ -176,6 +178,7 @@ async def run_start_module(
 @TASKIQ_BROKER.task
 async def run_config_module(
     mission_id: str,
+    setup_id: str,
     setup_version_id: str,
     module_class: type[BaseModule],
     services_mode: ServicesMode,
@@ -186,6 +189,7 @@ async def run_config_module(
 
     Args:
         mission_id: str,
+        setup_id: The setup ID associated with the module.
         setup_version_id: The setup ID associated with the module.
         module_class: type[BaseModule],
         services_mode: ServicesMode,
@@ -204,7 +208,7 @@ async def run_config_module(
 
     job_id = context.message.task_id
     callback = await BaseJobManager.job_specific_callback(send_message_to_stream, job_id)
-    module = module_class(job_id, mission_id=mission_id, setup_version_id=setup_version_id)
+    module = module_class(job_id, mission_id=mission_id, setup_id=setup_id, setup_version_id=setup_version_id)
 
     await module.start_config_setup(
         module_class.create_config_setup_model(config_setup_data),

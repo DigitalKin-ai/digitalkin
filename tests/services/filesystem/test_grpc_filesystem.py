@@ -80,8 +80,9 @@ def client(test_channel: grpc_testing.Channel) -> GrpcFilesystem:
     )
 
     mission_id = "test_mission"
+    setup_id = "setup:1"
     setup_version_id = "setup_version:1"
-    client = GrpcFilesystem(mission_id, setup_version_id, dummy_config)
+    client = GrpcFilesystem(mission_id, setup_id, setup_version_id, dummy_config)
 
     # Override the channel and stub to use our test channel
     client.stub = filesystem_service_pb2_grpc.FilesystemServiceStub(test_channel)
@@ -108,7 +109,7 @@ def file_metadata() -> dict:
     """
     name = f"test_file_{secrets.token_hex(4)}.txt"
     return {
-        "context": "test_mission",
+        "context": "setup:1",
         "name": name,
         "file_type": "DOCUMENT",
         "content_type": "text/plain",
@@ -142,7 +143,6 @@ def test_upload_files_success(
         file_type=file_metadata["file_type"],
         content_type=file_metadata["content_type"],
         metadata=file_metadata["metadata"],
-        status=file_metadata["status"],
         replace_if_exists=False,
     )
 
@@ -325,9 +325,7 @@ def test_get_files_success(
     file_ids = [result.file.file_id for result in upload_response.results]
 
     # Create filter criteria
-    filters = FileFilter(
-        context=file_metadata["context"],
-    )
+    filters = FileFilter()
 
     # Start the client call to get files
     future = client_execution_thread_pool.submit(
@@ -387,8 +385,7 @@ def test_get_files_success(
 
     # Test empty context case
     empty_filters = FileFilter(
-        context="nonexistent_context",
-        types=[file_metadata["file_type"]],
+        file_types=[file_metadata["file_type"]],
         status="UPLOADING",
     )
 
@@ -559,9 +556,7 @@ def test_delete_files_success(
 
     # Create filter criteria
     filters = FileFilter(
-        context=file_metadata["context"],
-        types=[file_metadata["file_type"]],
-        status=file_metadata["status"],
+        file_types=[file_metadata["file_type"]],
     )
 
     # Start the client call to delete files
@@ -629,7 +624,6 @@ def test_server_error(
         file_type=file_metadata["file_type"],
         content_type=file_metadata["content_type"],
         metadata=file_metadata["metadata"],
-        status=file_metadata["status"],
         replace_if_exists=False,
     )
 
@@ -680,7 +674,6 @@ def test_upload_files_duplicate_error(
         file_type=file_metadata["file_type"],
         content_type=file_metadata["content_type"],
         metadata=file_metadata["metadata"],
-        status=file_metadata["status"],
         replace_if_exists=False,
     )
 
@@ -780,8 +773,7 @@ def test_delete_files_not_found(
         test_channel: Mock gRPC channel
     """
     filters = FileFilter(
-        context="nonexistent_context",
-        types=["DOCUMENT"],
+        file_types=["DOCUMENT"],
         status="ACTIVE",
     )
 
@@ -834,7 +826,6 @@ def test_file_status_handling(
         file_type=file_metadata["file_type"],
         content_type=file_metadata["content_type"],
         metadata=file_metadata["metadata"],
-        status=file_metadata["status"],
         replace_if_exists=False,
     )
 
@@ -915,8 +906,7 @@ def test_file_status_handling(
 
     # Delete the file (soft delete)
     filters = FileFilter(
-        context=file_metadata["context"],
-        types=[file_metadata["file_type"]],
+        file_types=[file_metadata["file_type"]],
         status="ACTIVE",
     )
 

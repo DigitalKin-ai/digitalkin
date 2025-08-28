@@ -57,15 +57,22 @@ class CostServiceError(Exception):
 class CostStrategy(BaseStrategy, ABC):
     """Abstract base class for cost strategies."""
 
-    def __init__(self, mission_id: str, setup_version_id: str, config: dict[str, CostConfig]) -> None:
+    def __init__(
+        self,
+        mission_id: str,
+        setup_id: str,
+        setup_version_id: str,
+        config: dict[str, CostConfig],
+    ) -> None:
         """Initialize the strategy.
 
         Args:
             mission_id: The ID of the mission this strategy is associated with
+            setup_id: The ID of the setup
             setup_version_id: The ID of the setup version this strategy is associated with
             config: Configuration dictionary for the strategy
         """
-        super().__init__(mission_id, setup_version_id)
+        super().__init__(mission_id, setup_id, setup_version_id)
         self.config = config
 
     @abstractmethod
