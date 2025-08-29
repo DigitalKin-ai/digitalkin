@@ -85,25 +85,8 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper):
         except AttributeError:
             return filesystem_pb2.FileStatus.FILE_STATUS_UNSPECIFIED
 
-    def _filter_to_proto(self, filters: FileFilter) -> filesystem_pb2.FileFilter:
-        """Convert a FileFilter to a FileFilter proto message.
-
-        Args:
-            filters: The FileFilter to convert
-
-        Returns:
-            filesystem_pb2.FileFilter: The converted FileFilter proto message
-        """
-        return filesystem_pb2.FileFilter(
-            context=self.setup_id,
-            **filters.model_dump(exclude={"file_types", "status"}),
-            file_types=[self._file_type_to_enum(file_type) for file_type in filters.file_types]
-            if filters.file_types
-            else None,
-            status=self._file_status_to_enum(filters.status) if filters.status else None,
-        )
-
-    def _file_proto_to_data(self, file: filesystem_pb2.File) -> FilesystemRecord:
+    @staticmethod
+    def _file_proto_to_data(file: filesystem_pb2.File) -> FilesystemRecord:
         """Convert a File proto message to FilesystemRecord.
 
         Args:
@@ -114,7 +97,7 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper):
         """
         return FilesystemRecord(
             id=file.file_id,
-            context=self.setup_id,
+            context=file.context,
             name=file.name,
             file_type=filesystem_pb2.FileType.Name(file.file_type),
             content_type=file.content_type,
@@ -125,6 +108,23 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper):
             file_url=file.file_url,
             status=filesystem_pb2.FileStatus.Name(file.status),
             content=file.content,
+        )
+
+    def _filter_to_proto(self, filters: FileFilter) -> filesystem_pb2.FileFilter:
+        """Convert a FileFilter to a FileFilter proto message.
+
+        Args:
+            filters: The FileFilter to convert
+
+        Returns:
+            filesystem_pb2.FileFilter: The converted FileFilter proto message
+        """
+        return filesystem_pb2.FileFilter(
+            **filters.model_dump(exclude={"file_types", "status"}),
+            file_types=[self._file_type_to_enum(file_type) for file_type in filters.file_types]
+            if filters.file_types
+            else None,
+            status=self._file_status_to_enum(filters.status) if filters.status else None,
         )
 
     def __init__(
@@ -172,7 +172,7 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper):
                     metadata_struct.update(file.metadata)
                 upload_files.append(
                     filesystem_pb2.UploadFileData(
-                        context=self.setup_id,
+                        context=self.mission_id,
                         name=file.name,
                         file_type=self._file_type_to_enum(file.file_type),
                         content_type=file.content_type or "application/octet-stream",
@@ -191,6 +191,7 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper):
     def get_file(
         self,
         file_id: str,
+        context: Literal["mission", "setup"] = "mission",
         *,
         include_content: bool = False,
     ) -> FilesystemRecord:
@@ -198,6 +199,7 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper):
 
         Args:
             file_id: The ID of the file to be retrieved
+            context: The context of the files (mission or setup)
             include_content: Whether to include file content in response
 
         Returns:
@@ -206,9 +208,14 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper):
         Raises:
             FilesystemServiceError: If there is an error retrieving the file
         """
+        match context:
+            case "setup":
+                context_id = self.setup_id
+            case "mission":
+                context_id = self.mission_id
         with GrpcFilesystem._handle_grpc_errors("GetFile"):
             request = filesystem_pb2.GetFileRequest(
-                context=self.setup_id,
+                context=context_id,
                 file_id=file_id,
                 include_content=include_content,
             )
@@ -256,7 +263,7 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper):
         """
         with GrpcFilesystem._handle_grpc_errors("UpdateFile"):
             request = filesystem_pb2.UpdateFileRequest(
-                context=self.setup_id,
+                context=self.mission_id,
                 file_id=file_id,
                 content=content,
                 file_type=self._file_type_to_enum(file_type) if file_type else None,
@@ -290,7 +297,7 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper):
         """
         with GrpcFilesystem._handle_grpc_errors("DeleteFiles"):
             request = filesystem_pb2.DeleteFilesRequest(
-                context=self.setup_id,
+                context=self.mission_id,
                 filters=self._filter_to_proto(filters),
                 permanent=permanent,
                 force=force,
@@ -322,7 +329,7 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper):
         """
         with GrpcFilesystem._handle_grpc_errors("GetFiles"):
             request = filesystem_pb2.GetFilesRequest(
-                context=self.setup_id,
+                context=filters.context,
                 filters=self._filter_to_proto(filters),
                 include_content=include_content,
                 list_size=list_size,

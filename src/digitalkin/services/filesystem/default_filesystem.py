@@ -84,7 +84,6 @@ class DefaultFilesystem(FilesystemStrategy):
             if (not filters.names or f.name in filters.names)
             and (not filters.file_ids or f.id in filters.file_ids)
             and (not filters.file_types or f.file_type in filters.file_types)
-            and f.context == self.mission_id
             and (not filters.status or f.status == filters.status)
             and (not filters.content_type_prefix or f.content_type.startswith(filters.content_type_prefix))
             and (not filters.min_size_bytes or f.size_bytes >= filters.min_size_bytes)
@@ -215,6 +214,7 @@ class DefaultFilesystem(FilesystemStrategy):
     def get_file(
         self,
         file_id: str,
+        context: Literal["mission", "setup"] = "mission",  # noqa: ARG002
         *,
         include_content: bool = False,
     ) -> FilesystemRecord:
@@ -226,6 +226,7 @@ class DefaultFilesystem(FilesystemStrategy):
 
         Args:
             file_id: The ID of the file to be retrieved
+            context: The context of the files (mission or setup)
             include_content: Whether to include file content in response
 
         Returns:
