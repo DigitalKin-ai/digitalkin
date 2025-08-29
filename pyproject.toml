@@ -12,7 +12,7 @@
 
     keywords = [ "digitalkin", "kin", "agent", "gprc", "sdk" ]
     # Version of the package automatically updated by bump2version (that is why it is separated)
-    version = "0.2.20"
+    version = "0.2.21"
 
     classifiers = [
         "Development Status :: 3 - Alpha",
