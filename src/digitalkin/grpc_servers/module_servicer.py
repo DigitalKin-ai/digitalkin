@@ -100,6 +100,9 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             ServicerError: if the setup data is not returned or job creation fails.
         """
         logger.info("ConfigSetupVersion called for module: '%s'", self.module_class.__name__)
+        logger.info(
+            "Context : %s, setup_version: %s, mission_id: %s", context, request.setup_version, request.mission_id
+        )
         # Process the module input
         # TODO: Secret should be used here as well
         setup_version = request.setup_version
@@ -157,6 +160,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             ServicerError: the necessary query didn't work.
         """
         logger.info("StartModule called for module: '%s'", self.module_class.__name__)
+        logger.info("Context : %s, setup_id: %s, mission_id: %s", context, request.setup_id, request.mission_id)
         # Process the module input
         # TODO: Check failure of input data format
         input_data = self.module_class.create_input_model(dict(request.input.items()))

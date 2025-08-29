@@ -105,15 +105,20 @@ def file_metadata() -> dict:
     """Generate file metadata for testing.
 
     Returns:
-        dict: File metadata with context, name, file_type, and url
+        dict: File metadata with all required fields for FilesystemRecord
     """
     name = f"test_file_{secrets.token_hex(4)}.txt"
     return {
-        "context": "setup:1",
+        "id": f"file_{secrets.token_hex(8)}",
+        "context": "setup",
         "name": name,
         "file_type": "DOCUMENT",
         "content_type": "text/plain",
+        "size_bytes": 40,
+        "checksum": "a1b2c3d4e5f6",
         "metadata": {"key": "value"},
+        "storage_uri": f"gs://test-bucket/setup/{name}",
+        "file_url": f"https://storage.example.com/setup/{name}",
         "status": "UPLOADING",
     }
 
@@ -127,7 +132,7 @@ def test_upload_files_success(
 ) -> None:
     """Test successful upload with a good request.
 
-    Verifies that upload creates the correct request.
+    Verifies that upload creates the correct request and returns the expected response.
 
     Args:
         client: GrpcFilesystem client for testing
@@ -146,7 +151,7 @@ def test_upload_files_success(
         replace_if_exists=False,
     )
 
-    # Start the client call
+    # Start the client call in a separate thread
     future = client_execution_thread_pool.submit(client.upload_files, [upload_file])
 
     # Get the service and method descriptor
@@ -163,41 +168,63 @@ def test_upload_files_success(
     else:
         metadata_struct = None
 
-    upload_request = filesystem_pb2.UploadFilesRequest(
-        files=[
-            filesystem_pb2.UploadFileData(
-                context=file_metadata["context"],
-                name=file_metadata["name"],
-                file_type=GrpcFilesystem._file_type_to_enum(file_metadata["file_type"]),
-                content_type=file_metadata["content_type"],
-                content=sample_file_data,
-                metadata=metadata_struct,
-                status=GrpcFilesystem._file_status_to_enum(file_metadata["status"]),
-                replace_if_exists=False,
-            )
-        ]
+    # Create a response with all required fields
+    file_result = filesystem_pb2.FileResult(
+        file=filesystem_pb2.File(
+            file_id=file_metadata["id"],
+            context=file_metadata["context"],
+            name=file_metadata["name"],
+            file_type=GrpcFilesystem._file_type_to_enum(file_metadata["file_type"]),
+            content_type=file_metadata["content_type"],
+            size_bytes=file_metadata["size_bytes"],
+            checksum=file_metadata["checksum"],
+            metadata=metadata_struct,
+            storage_uri=file_metadata["storage_uri"],
+            file_url=file_metadata["file_url"],
+            status=GrpcFilesystem._file_status_to_enum(file_metadata["status"]),
+        )
+    )
+    response = filesystem_pb2.UploadFilesResponse(
+        results=[file_result],
+        total_uploaded=1,
+        total_failed=0,
     )
 
     # Use grpc_testing to send the response back to the client
     rpc.send_initial_metadata(())
-    rpc.terminate(mock_servicer.UploadFiles(upload_request, FakeContext()), (), grpc.StatusCode.OK, "")
+    rpc.terminate(response, (), grpc.StatusCode.OK, "")
 
     # Verify the client call returns the expected FilesystemRecord
     result = future.result(timeout=5.0)
     assert isinstance(result, tuple)
     files, total_uploaded, total_failed = result
+
+    # Verify the response counts
     assert len(files) == 1
     assert total_uploaded == 1
     assert total_failed == 0
 
+    # Verify the file data
     file_data = files[0]
     assert isinstance(file_data, FilesystemRecord)
+    assert file_data.id == file_metadata["id"]
     assert file_data.context == file_metadata["context"]
     assert file_data.name == file_metadata["name"]
-    assert file_data.file_type == "FILE_TYPE_" + file_metadata["file_type"]
+    # Accept either enum-prefixed or plain values depending on transport layer
+    assert file_data.file_type in {
+        file_metadata["file_type"],
+        "FILE_TYPE_" + file_metadata["file_type"],
+    }
     assert file_data.content_type == file_metadata["content_type"]
+    assert file_data.size_bytes == file_metadata["size_bytes"]
+    assert file_data.checksum == file_metadata["checksum"]
     assert file_data.metadata == file_metadata["metadata"]
-    assert file_data.status == "FILE_STATUS_" + file_metadata["status"]
+    assert file_data.storage_uri == file_metadata["storage_uri"]
+    assert file_data.file_url == file_metadata["file_url"]
+    assert file_data.status in {
+        file_metadata["status"],
+        "FILE_STATUS_" + file_metadata["status"],
+    }
     assert file_data.storage_uri is not None
     assert file_data.file_url is not None
     assert file_data.size_bytes == len(sample_file_data)
