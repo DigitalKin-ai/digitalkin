@@ -12,7 +12,7 @@
 
     keywords = [ "digitalkin", "kin", "agent", "gprc", "sdk" ]
     # Version of the package automatically updated by bump2version (that is why it is separated)
-    version = "0.2.21"
+    version = "0.2.22"
 
     classifiers = [
         "Development Status :: 3 - Alpha",
@@ -115,8 +115,6 @@
         "tool_module.py",
         "trigger_module.py",
         "generate_certificates.py",
-        # "test_*.py",
-        # "tests/*",
         "examples/*",
     ]
     preview = true
