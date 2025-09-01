@@ -327,9 +327,14 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper):
         Returns:
             tuple[list[FilesystemRecord], int]: List of files and total count
         """
+        match filters.context:
+            case "setup":
+                context_id = self.setup_id
+            case "mission":
+                context_id = self.mission_id
         with GrpcFilesystem._handle_grpc_errors("GetFiles"):
             request = filesystem_pb2.GetFilesRequest(
-                context=filters.context,
+                context=context_id,
                 filters=self._filter_to_proto(filters),
                 include_content=include_content,
                 list_size=list_size,
