@@ -1,12 +1,15 @@
 """This module sets up a logger."""
 
+import json
 import logging
+import os
 import sys
-from typing import ClassVar
+from datetime import datetime, timezone
+from typing import Any, ClassVar
 
 
-class ColorFormatter(logging.Formatter):
-    """Color formatter for logging."""
+class ColorJSONFormatter(logging.Formatter):
+    """Color JSON formatter for development (pretty-printed with colors)."""
 
     grey = "\x1b[38;20m"
     green = "\x1b[32;20m"
@@ -15,28 +18,73 @@ class ColorFormatter(logging.Formatter):
     red = "\x1b[31;20m"
     bold_red = "\x1b[31;1m"
     reset = "\x1b[0m"
-    format: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s (%(filename)s:%(lineno)d)"  # type: ignore
 
-    FORMATS: ClassVar[dict[int, str]] = {
-        logging.DEBUG: grey + format + reset + "\n",  # type: ignore
-        logging.INFO: green + format + reset + "\n",  # type: ignore
-        logging.WARNING: yellow + format + reset + "\n",  # type: ignore
-        logging.ERROR: red + format + reset + "\n",  # type: ignore
-        logging.CRITICAL: bold_red + format + reset + "\n",  # type: ignore
+    COLORS: ClassVar[dict[int, str]] = {
+        logging.DEBUG: grey,
+        logging.INFO: green,
+        logging.WARNING: yellow,
+        logging.ERROR: red,
+        logging.CRITICAL: bold_red,
     }
 
-    def format(self, record: logging.LogRecord) -> str:  # type: ignore
-        """Format the log record.
+    def format(self, record: logging.LogRecord) -> str:
+        """Format the log record as colored JSON for development.
 
         Args:
             record: The log record to format.
 
         Returns:
-            str: The formatted log record.
+            str: The colored JSON formatted log record.
         """
-        log_fmt = self.FORMATS.get(record.levelno)
-        formatter = logging.Formatter(log_fmt)
-        return formatter.format(record)
+        log_obj: dict[str, Any] = {
+            "timestamp": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
+            "level": record.levelname.lower(),
+            "logger": record.name,
+            "message": record.getMessage(),
+            "location": f"{record.filename}:{record.lineno}",
+            "function": record.funcName,
+        }
+
+        # Add exception info if present
+        if record.exc_info:
+            log_obj["exception"] = self.formatException(record.exc_info)
+
+        # Add any extra fields
+        skip_attrs = {
+            "name",
+            "msg",
+            "args",
+            "created",
+            "filename",
+            "funcName",
+            "levelname",
+            "levelno",
+            "lineno",
+            "module",
+            "msecs",
+            "message",
+            "pathname",
+            "process",
+            "processName",
+            "relativeCreated",
+            "thread",
+            "threadName",
+            "exc_info",
+            "exc_text",
+            "stack_info",
+        }
+
+        extras = {key: value for key, value in record.__dict__.items() if key not in skip_attrs}
+
+        if extras:
+            log_obj["extra"] = extras
+
+        # Pretty print with color
+        color = self.COLORS.get(record.levelno, self.grey)
+        json_str = json.dumps(log_obj, indent=2, default=str)
+        if os.getenv("RAILWAY_SERVICE_NAME"):
+            json_str.replace("\\n", "\n")
+        return f"{color}{json_str}{self.reset}"
 
 
 logging.basicConfig(
@@ -54,8 +102,7 @@ logger = logging.getLogger("digitalkin")
 if not logger.handlers:
     ch = logging.StreamHandler()
     ch.setLevel(logging.INFO)
-
-    ch.setFormatter(ColorFormatter())
+    ch.setFormatter(ColorJSONFormatter())
 
     logger.addHandler(ch)
     logger.propagate = False

@@ -43,9 +43,9 @@ class GrpcClientWrapper:
                 private_key=private_key,
             )
 
-            return grpc.secure_channel(config.address, channel_credentials)
+            return grpc.secure_channel(config.address, channel_credentials, options=config.channel_options)
         # Insecure channel
-        return grpc.insecure_channel(config.address)
+        return grpc.insecure_channel(config.address, options=config.channel_options)
 
     def exec_grpc_query(self, query_endpoint: str, request: Any) -> Any:  # noqa: ANN401
         """Execute a gRPC query with from the query's rpc endpoint name.
@@ -65,8 +65,8 @@ class GrpcClientWrapper:
             logger.debug("send request to %s", query_endpoint)
             response = getattr(self.stub, query_endpoint)(request)
             logger.debug("receive response from request to registry: %s", response)
-        except grpc.RpcError:
-            logger.exception("RPC error during registration:")
+        except grpc.RpcError as e:
+            logger.exception("RPC error during %s: %s", query_endpoint, e.details())
             raise ServerError
         else:
             return response

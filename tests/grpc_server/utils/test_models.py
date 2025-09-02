@@ -133,7 +133,10 @@ def test_server_config_defaults() -> None:
         pytest.fail(f"Expected default credentials to be None, got {config.credentials}")
 
     # Check server_options
-    if config.server_options != []:
+    if config.server_options != [
+        ("grpc.max_receive_message_length", 50 * 1024 * 1024),  # 50MB
+        ("grpc.max_send_message_length", 50 * 1024 * 1024),  # 50MB
+    ]:
         pytest.fail(f"Expected default server_options to be empty list, got {config.server_options}")
 
     # Check enable_reflection
