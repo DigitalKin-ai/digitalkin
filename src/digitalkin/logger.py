@@ -11,6 +11,15 @@ from typing import Any, ClassVar
 class ColorJSONFormatter(logging.Formatter):
     """Color JSON formatter for development (pretty-printed with colors)."""
 
+    def __init__(self, *, is_production: bool = False) -> None:
+        """Initialize the formatter.
+
+        Args:
+            is_production: Whether the application is running in production.
+        """
+        self.is_production = is_production
+        super().__init__()
+
     grey = "\x1b[38;20m"
     green = "\x1b[32;20m"
     blue = "\x1b[34;20m"
@@ -81,9 +90,11 @@ class ColorJSONFormatter(logging.Formatter):
 
         # Pretty print with color
         color = self.COLORS.get(record.levelno, self.grey)
-        json_str = json.dumps(log_obj, indent=2, default=str)
-        if not os.getenv("RAILWAY_SERVICE_NAME"):
-            json_str.replace("\\n", "\n")
+        if self.is_production:
+            json_str = json.dumps(log_obj, default=str, separators=(",", ":"))
+        else:
+            json_str = json.dumps(log_obj, indent=2, default=str)
+            json_str = json_str.replace("\\n", "\n")
         return f"{color}{json_str}{self.reset}"
 
 
@@ -98,11 +109,12 @@ logging.getLogger("asyncio").setLevel(logging.DEBUG)
 
 
 logger = logging.getLogger("digitalkin")
+is_production = os.getenv("RAILWAY_SERVICE_NAME") is not None
 
 if not logger.handlers:
     ch = logging.StreamHandler()
     ch.setLevel(logging.INFO)
-    ch.setFormatter(ColorJSONFormatter())
+    ch.setFormatter(ColorJSONFormatter(is_production=is_production))
 
     logger.addHandler(ch)
     logger.propagate = False
