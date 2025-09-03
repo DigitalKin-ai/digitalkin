@@ -99,9 +99,14 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         Raises:
             ServicerError: if the setup data is not returned or job creation fails.
         """
-        logger.info("ConfigSetupVersion called for module: '%s'", self.module_class.__name__)
         logger.info(
-            "Context : %s, setup_version: %s, mission_id: %s", context, request.setup_version, request.mission_id
+            "ConfigSetupVersion called for module: '%s'",
+            self.module_class.__name__,
+            extra={
+                "module_class": self.module_class,
+                "setup_version": request.setup_version,
+                "mission_id": request.mission_id,
+            },
         )
         # Process the module input
         # TODO: Secret should be used here as well
@@ -134,7 +139,8 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             return lifecycle_pb2.ConfigSetupModuleResponse(success=False)
 
         updated_setup_data = await self.job_manager.generate_config_setup_module_response(job_id)
-        logger.warning(f"Updated setup data: {updated_setup_data=}")
+        logger.info("Setup updated")
+        logger.debug(f"Updated setup data: {updated_setup_data=}")
         setup_version.content = json_format.ParseDict(
             updated_setup_data,
             struct_pb2.Struct(),
@@ -159,8 +165,11 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         Raises:
             ServicerError: the necessary query didn't work.
         """
-        logger.info("StartModule called for module: '%s'", self.module_class.__name__)
-        logger.info("Context : %s, setup_id: %s, mission_id: %s", context, request.setup_id, request.mission_id)
+        logger.info(
+            "StartModule called for module: '%s'",
+            self.module_class.__name__,
+            extra={"module_class": self.module_class, "setup_id": request.setup_id, "mission_id": request.mission_id},
+        )
         # Process the module input
         # TODO: Check failure of input data format
         input_data = self.module_class.create_input_model(dict(request.input.items()))

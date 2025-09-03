@@ -169,9 +169,17 @@ class ClientConfig(ChannelConfig):
         mode: Client operation mode (sync/async)
         security: Security mode (secure/insecure)
         credentials: Client credentials for secure mode
+        channel_options: Additional channel options
     """
 
     credentials: ClientCredentials | None = Field(None, description="Client credentials for secure mode")
+    channel_options: list[tuple[str, Any]] = Field(
+        default_factory=lambda: [
+            ("grpc.max_receive_message_length", 50 * 1024 * 1024),  # 50MB
+            ("grpc.max_send_message_length", 50 * 1024 * 1024),  # 50MB
+        ],
+        description="Additional channel options",
+    )
 
     @field_validator("credentials")
     @classmethod
@@ -213,7 +221,13 @@ class ServerConfig(ChannelConfig):
 
     max_workers: int = Field(10, description="Maximum number of workers for sync mode")
     credentials: ServerCredentials | None = Field(None, description="Server credentials for secure mode")
-    server_options: list[tuple[str, Any]] = Field(default_factory=list, description="Additional server options")
+    server_options: list[tuple[str, Any]] = Field(
+        default_factory=lambda: [
+            ("grpc.max_receive_message_length", 50 * 1024 * 1024),  # 50MB
+            ("grpc.max_send_message_length", 50 * 1024 * 1024),  # 50MB
+        ],
+        description="Additional server options",
+    )
     enable_reflection: bool = Field(default=True, description="Enable reflection for the server")
     enable_health_check: bool = Field(default=True, description="Enable health check service")
 

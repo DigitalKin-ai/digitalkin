@@ -383,7 +383,7 @@ wheels = [
 
 [[package]]
 name = "digitalkin"
-version = "0.2.21"
+version = "0.2.23"
 source = { editable = "." }
 dependencies = [
     { name = "digitalkin-proto" },
