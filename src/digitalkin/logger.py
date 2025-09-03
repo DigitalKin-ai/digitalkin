@@ -82,7 +82,7 @@ class ColorJSONFormatter(logging.Formatter):
         # Pretty print with color
         color = self.COLORS.get(record.levelno, self.grey)
         json_str = json.dumps(log_obj, indent=2, default=str)
-        if os.getenv("RAILWAY_SERVICE_NAME"):
+        if not os.getenv("RAILWAY_SERVICE_NAME"):
             json_str.replace("\\n", "\n")
         return f"{color}{json_str}{self.reset}"
 
