@@ -91,10 +91,10 @@ class ColorJSONFormatter(logging.Formatter):
         # Pretty print with color
         color = self.COLORS.get(record.levelno, self.grey)
         if self.is_production:
-            json_str = json.dumps(log_obj, default=str, separators=(",", ":"))
-        else:
-            json_str = json.dumps(log_obj, indent=2, default=str)
-            json_str = json_str.replace("\\n", "\n")
+            log_obj["message"] = f"{color}{log_obj.get('message', '')}{self.reset}"
+            return json.dumps(log_obj, default=str, separators=(",", ":"))
+        json_str = json.dumps(log_obj, indent=2, default=str)
+        json_str = json_str.replace("\\n", "\n")
         return f"{color}{json_str}{self.reset}"
 
 
