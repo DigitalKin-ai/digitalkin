@@ -299,7 +299,7 @@ class BaseServer(abc.ABC):
         self._add_reflection()
 
         # Start the server
-        logger.debug("Starting gRPC server on %s", self.config.address)
+        logger.debug("Starting gRPC server on %s", self.config.address, extra={"config": self.config})
         try:
             if self.config.mode == ServerMode.ASYNC:
                 # For async server, use the event loop

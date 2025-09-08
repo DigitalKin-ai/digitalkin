@@ -400,8 +400,8 @@ def main() -> None:
 
         generate_certificates(config)
 
-    except Exception as e:
-        logger.exception(f"Certificate generation failed: {e}")
+    except Exception:
+        logger.exception("Certificate generation failed")
         sys.exit(1)
 
 
