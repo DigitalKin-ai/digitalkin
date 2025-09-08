@@ -141,7 +141,7 @@ async def discover_module(
     try:
         # Send request to registry
         response = await registry_stub.DiscoverSearchModule(request)
-        logger.info("Registry search response: %d modules found", len(response.modules))
+        logger.info("Registry search response: %d modules found", len(response.modules), extra={"response": response})
 
         if not response.modules:
             logger.warning("No modules found with name: %s", module_name)
@@ -197,7 +197,7 @@ async def run_client_llm() -> None:
             logger.error("Module not found. Make sure the module server is running.")
             return
 
-        logger.info("Found module: %s (ID: %s)", module.metadata.name, module.module_id)
+        logger.info("Found module: %s (ID: %s)", module.metadata.name, module.module_id, extra={"module_info": module})
 
         # Connect to module server
         async with grpc.aio.insecure_channel("localhost:50055") as module_channel:
@@ -214,6 +214,13 @@ async def run_client_llm() -> None:
                 input_class.__name__,
                 output_class.__name__,
                 setup_class.__name__,
+                extra={
+                    "schemas": {
+                        "input_class": input_class,
+                        "output_class": output_class,
+                        "setup_class": setup_class,
+                    }
+                },
             )
 
             mission_id = "missions:0"

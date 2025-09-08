@@ -62,11 +62,11 @@ class GrpcClientWrapper:
         """
         try:
             # Call the register method
-            logger.debug("send request to %s", query_endpoint)
+            logger.debug("send request to %s", query_endpoint, extra={"request": request})
             response = getattr(self.stub, query_endpoint)(request)
-            logger.debug("receive response from request to registry: %s", response)
+            logger.debug("receive response from request to %s", query_endpoint, extra={"response": response})
         except grpc.RpcError as e:
-            logger.exception("RPC error during %s: %s", query_endpoint, e.details())
+            logger.exception("RPC error during %s", query_endpoint, extra={"error": e.details()})
             raise ServerError
         else:
             return response

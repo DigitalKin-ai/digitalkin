@@ -381,15 +381,51 @@ class BaseModule(  # noqa: PLR0904
             asyncio.CancelledError: If the module is cancelled
         """
         try:
-            logger.info("Starting module %s", self.name)
+            logger.info(
+                "Starting module %s",
+                self.name,
+                extra={
+                    "mission_id": self.mission_id,
+                    "setup_id": self.setup_id,
+                    "setup_version_id": self.setup_version_id,
+                    "job_id": self.job_id,
+                },
+            )
             await self.run(input_data, setup_data, callback)
-            logger.info("Module %s finished", self.name)
+            logger.info(
+                "Module %s finished",
+                self.name,
+                extra={
+                    "mission_id": self.mission_id,
+                    "setup_id": self.setup_id,
+                    "setup_version_id": self.setup_version_id,
+                    "job_id": self.job_id,
+                },
+            )
         except asyncio.CancelledError:
             self._status = ModuleStatus.CANCELLED
-            logger.error(f"Module {self.name} cancelled")
+            logger.error(
+                "Module %s cancelled",
+                self.name,
+                extra={
+                    "mission_id": self.mission_id,
+                    "setup_id": self.setup_id,
+                    "setup_version_id": self.setup_version_id,
+                    "job_id": self.job_id,
+                },
+            )
         except Exception:
             self._status = ModuleStatus.FAILED
-            logger.exception("Error inside module %s", self.name)
+            logger.exception(
+                "Error inside module %s",
+                self.name,
+                extra={
+                    "mission_id": self.mission_id,
+                    "setup_id": self.setup_id,
+                    "setup_version_id": self.setup_version_id,
+                    "job_id": self.job_id,
+                },
+            )
         else:
             self._status = ModuleStatus.STOPPING
         finally:
@@ -464,7 +500,15 @@ class BaseModule(  # noqa: PLR0904
     ) -> None:
         """Start the module."""
         try:
-            logger.info("Run Config Setup lifecycle")
+            logger.info(
+                "Run Config Setup lifecycle",
+                extra={
+                    "mission_id": self.mission_id,
+                    "setup_id": self.setup_id,
+                    "setup_version_id": self.setup_version_id,
+                    "job_id": self.job_id,
+                },
+            )
             self._status = ModuleStatus.RUNNING
             content = await self.run_config_setup(config_setup_data)
 
@@ -474,4 +518,12 @@ class BaseModule(  # noqa: PLR0904
             self._status = ModuleStatus.STOPPING
         except Exception:
             self._status = ModuleStatus.FAILED
-            logger.exception("Error during module lifecyle")
+            logger.exception(
+                "Error during module lifecyle",
+                extra={
+                    "mission_id": self.mission_id,
+                    "setup_id": self.setup_id,
+                    "setup_version_id": self.setup_version_id,
+                    "job_id": self.job_id,
+                },
+            )

@@ -50,10 +50,16 @@ class ColorJSONFormatter(logging.Formatter):
             "level": record.levelname.lower(),
             "logger": record.name,
             "message": record.getMessage(),
+            "module": record.module,
             "location": f"{record.filename}:{record.lineno}",
             "function": record.funcName,
+            "pathname": record.pathname,
+            "process": record.process,
+            "processName": record.processName,
+            "relativeCreated": record.relativeCreated,
+            "thread": record.thread,
+            "threadName": record.threadName,
         }
-
         # Add exception info if present
         if record.exc_info:
             log_obj["exception"] = self.formatException(record.exc_info)
@@ -98,23 +104,62 @@ class ColorJSONFormatter(logging.Formatter):
         return f"{color}{json_str}{self.reset}"
 
 
-logging.basicConfig(
-    level=logging.DEBUG,
-    stream=sys.stdout,
-    datefmt="%Y-%m-%d %H:%M:%S",
+def setup_logger(
+    name: str,
+    level: int = logging.INFO,
+    additional_loggers: dict[str, int] | None = None,
+    *,
+    is_production: bool | None = None,
+    configure_root: bool = True,
+) -> logging.Logger:
+    """Set up a logger with the ColorJSONFormatter.
+
+    Args:
+        name: Name of the logger to create
+        level: Logging level (default: logging.INFO)
+        is_production: Whether running in production. If None, checks RAILWAY_SERVICE_NAME env var
+        configure_root: Whether to configure root logger (default: True)
+        additional_loggers: Dict of additional logger names and their levels to configure
+
+    Returns:
+        logging.Logger: Configured logger instance
+    """
+    # Determine if we're in production
+    if is_production is None:
+        is_production = os.getenv("RAILWAY_SERVICE_NAME") is not None
+
+    # Configure root logger if requested
+    if configure_root:
+        logging.basicConfig(
+            level=logging.DEBUG,
+            stream=sys.stdout,
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
+
+    # Configure additional loggers
+    if additional_loggers:
+        for logger_name, logger_level in additional_loggers.items():
+            logging.getLogger(logger_name).setLevel(logger_level)
+
+    # Create and configure the main logger
+    logger = logging.getLogger(name)
+    logger.setLevel(level)
+    # Only add handler if not already configured
+    if not logger.handlers:
+        ch = logging.StreamHandler()
+        ch.setLevel(level)
+        ch.setFormatter(ColorJSONFormatter(is_production=is_production))
+        logger.addHandler(ch)
+        logger.propagate = False
+
+    return logger
+
+
+logger = setup_logger(
+    "digitalkin",
+    level=logging.INFO,
+    additional_loggers={
+        "grpc": logging.DEBUG,
+        "asyncio": logging.DEBUG,
+    },
 )
-
-logging.getLogger("grpc").setLevel(logging.DEBUG)
-logging.getLogger("asyncio").setLevel(logging.DEBUG)
-
-
-logger = logging.getLogger("digitalkin")
-is_production = os.getenv("RAILWAY_SERVICE_NAME") is not None
-
-if not logger.handlers:
-    ch = logging.StreamHandler()
-    ch.setLevel(logging.INFO)
-    ch.setFormatter(ColorJSONFormatter(is_production=is_production))
-
-    logger.addHandler(ch)
-    logger.propagate = False
