@@ -133,7 +133,7 @@ class ModuleServer(BaseServer):
         """
         logger.debug(
             "Registering module with registry at %s",
-            self.server_config.registry_address,
+            self.server_config.registry_address, extra={"server_config": self.server_config}
         )
 
         # Create appropriate channel based on security mode
@@ -173,6 +173,7 @@ class ModuleServer(BaseServer):
                     "Request sent to registry for module: %s:%s",
                     self.module_class.metadata["name"],
                     self.module_class.metadata["module_id"],
+                    extra={"module_info": self.module_class.metadata}
                 )
                 response = stub.RegisterModule(request)
 

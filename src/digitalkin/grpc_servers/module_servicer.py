@@ -76,9 +76,9 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         self.job_manager = job_manager_class(module_class, self.args.services_mode)
 
         logger.debug(
-            "ModuleServicer initialized with job manager: %s | %s",
+            "ModuleServicer initialized with job manager: %s",
             self.args.job_manager_mode,
-            self.job_manager,
+            extra={"job_manager": self.job_manager},
         )
         self.setup = GrpcSetup() if self.args.services_mode == ServicesMode.REMOTE else DefaultSetup()
 
@@ -204,13 +204,14 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         async with self.job_manager.generate_stream_consumer(job_id) as stream:  # type: ignore
             async for message in stream:
                 if message.get("error", None) is not None:
+                    logger.error("Error in output_data", extra={"message": message})
                     context.set_code(message["error"]["code"])
                     context.set_details(message["error"]["error_message"])
                     yield lifecycle_pb2.StartModuleResponse(success=False, job_id=job_id)
                     break
 
                 if message.get("exception", None) is not None:
-                    logger.error("Error in output_data")
+                    logger.error("Exception in output_data", extra={"message": message})
                     context.set_code(message["short_description"])
                     context.set_details(message["exception"])
                     yield lifecycle_pb2.StartModuleResponse(success=False, job_id=job_id)
@@ -248,7 +249,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             context.set_details(message)
             return lifecycle_pb2.StopModuleResponse(success=False)
 
-        logger.debug("Job %s stopped successfully", request.job_id)
+        logger.debug("Job %s stopped successfully", request.job_id, extra={"job_id": request.job_id})
         return lifecycle_pb2.StopModuleResponse(success=True)
 
     async def GetModuleStatus(  # noqa: N802
