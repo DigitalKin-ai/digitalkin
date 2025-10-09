@@ -262,7 +262,7 @@ class ModuleServerConfig(ServerConfig):
         registry_address: Address of the registry server
     """
 
-    registry_address: str | None = Field(None, description="Address of the registry server")
+    registry_address: str = Field(..., description="Address of the registry server")
 
 
 class RegistryServerConfig(ServerConfig):

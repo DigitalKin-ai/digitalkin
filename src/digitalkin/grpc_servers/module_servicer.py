@@ -201,28 +201,33 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             yield lifecycle_pb2.StartModuleResponse(success=False)
             return
 
-        async with self.job_manager.generate_stream_consumer(job_id) as stream:  # type: ignore
-            async for message in stream:
-                if message.get("error", None) is not None:
-                    logger.error("Error in output_data", extra={"message": message})
-                    context.set_code(message["error"]["code"])
-                    context.set_details(message["error"]["error_message"])
-                    yield lifecycle_pb2.StartModuleResponse(success=False, job_id=job_id)
-                    break
+        try:
+            async with self.job_manager.generate_stream_consumer(job_id) as stream:  # type: ignore
+                async for message in stream:
+                    if message.get("error", None) is not None:
+                        logger.error("Error in output_data", extra={"message": message})
+                        context.set_code(message["error"]["code"])
+                        context.set_details(message["error"]["error_message"])
+                        yield lifecycle_pb2.StartModuleResponse(success=False, job_id=job_id)
+                        break
 
-                if message.get("exception", None) is not None:
-                    logger.error("Exception in output_data", extra={"message": message})
-                    context.set_code(message["short_description"])
-                    context.set_details(message["exception"])
-                    yield lifecycle_pb2.StartModuleResponse(success=False, job_id=job_id)
-                    break
+                    if message.get("exception", None) is not None:
+                        logger.error("Exception in output_data", extra={"message": message})
+                        context.set_code(message["short_description"])
+                        context.set_details(message["exception"])
+                        yield lifecycle_pb2.StartModuleResponse(success=False, job_id=job_id)
+                        break
 
-                if message.get("code", None) is not None and message.get("code") == "__END_OF_STREAM__":
-                    yield lifecycle_pb2.StartModuleResponse(success=True, job_id=job_id)
-                    break
+                    if message.get("code", None) is not None and message.get("code") == "__END_OF_STREAM__":
+                        yield lifecycle_pb2.StartModuleResponse(success=True, job_id=job_id)
+                        break
 
-                proto = json_format.ParseDict(message, struct_pb2.Struct(), ignore_unknown_fields=True)
-                yield lifecycle_pb2.StartModuleResponse(success=True, output=proto, job_id=job_id)
+                    proto = json_format.ParseDict(message, struct_pb2.Struct(), ignore_unknown_fields=True)
+                    yield lifecycle_pb2.StartModuleResponse(success=True, output=proto, job_id=job_id)
+        finally:
+            await self.job_manager.tasks[job_id]
+            await self.job_manager.clean_session(job_id)
+
         logger.info("Job %s finished", job_id)
 
     async def StopModule(  # noqa: N802

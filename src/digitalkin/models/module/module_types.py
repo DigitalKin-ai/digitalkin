@@ -9,9 +9,9 @@ from digitalkin.logger import logger
 
 
 class DataTrigger(BaseModel):
-    """Defines the root input model exposing the protocol.
+    """Defines the root input/output model exposing the protocol.
 
-    The mandatory protocol is important to define the module beahvior following the user or agent input.
+    The mandatory protocol is important to define the module beahvior following the user or agent input/output.
 
     Example:
         class MyInput(DataModel):
@@ -24,16 +24,16 @@ class DataTrigger(BaseModel):
     """
 
     protocol: ClassVar[str]
-    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    created_at: str = datetime.now(tz=timezone.utc).isoformat()
 
 
 DataTriggerT = TypeVar("DataTriggerT", bound=DataTrigger)
 
 
 class DataModel(BaseModel, Generic[DataTriggerT]):
-    """Base definition of input model showing mandatory root fields.
+    """Base definition of input/output model showing mandatory root fields.
 
-    The Model define the Module Input, usually referring to multiple input type defined by an union.
+    The Model define the Module Input/output, usually referring to multiple input/output type defined by an union.
 
     Example:
         class ModuleInput(DataModel):
@@ -102,4 +102,4 @@ class SetupModel(BaseModel):
             __config__=ConfigDict(arbitrary_types_allowed=True),
             **clean_fields,
         )
-        return cast("type[SetupModelT]", m)
+        return cast("type[SetupModelT]", m)  # type: ignore
