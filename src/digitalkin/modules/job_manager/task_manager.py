@@ -123,12 +123,10 @@ class TaskManager:
                 completed = next(iter(done))
                 await completed
 
-                logger.critical(f"{completed=} | {main_task=} | {hb_task=} | {sig_task=}")
-
                 if completed is main_task:
                     session.status = TaskStatus.COMPLETED
                 elif completed is sig_task or (completed is hb_task and sig_task.done()):
-                    logger.critical(f"{sig_task=}")
+                    logger.debug(f"Task cancelled due to signal {sig_task=}")
                     session.status = TaskStatus.CANCELLED
                 elif completed is hb_task:
                     session.status = TaskStatus.FAILED

@@ -1,0 +1,91 @@
+x-surrealdb-common: &surrealdb-common
+  image: surrealdb/surrealdb:${SURREALDB_IMAGE_TAG:-v2.3}
+  networks:
+    - services-network
+  environment:
+    - SURREAL_USER=${TEST_SURREALDB_USERNAME:-root}
+    - SURREAL_PASS=${TEST_SURREALDB_PASSWORD:-root}
+
+services:
+  tests-rabbitmq:
+    container_name: digitalkin-tests-rabbitmq
+    profiles: ["taskiq"]
+    build:
+      context: ${RABBITMQ_CONTEXT:-.}
+      dockerfile: ${RABBITMQ_DOCKERFILE:-dockerfiles/Dockerfile_rabbitmq}
+      args:
+        RABBITMQ_URL: ${RABBITMQ_URL:-digitalkin-tests-rabbitmq}
+        RABBITMQ_CERTIFICATE_VOLUME: ${RABBITMQ_CERTIFICATE_VOLUME:-/certificates/digitalkin-tests-rabbitmq}
+        RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:-guest}
+        RABBITMQ_DEFAULT_PASSWORD: ${RABBITMQ_DEFAULT_PASSWORD:-guest}
+        RABBITMQ_RSTREAM_ADVERTISED_HOST: ${RABBITMQ_RSTREAM_ADVERTISED_HOST:-localhost}
+        RABBITMQ_RSTREAM_ADVERTISED_PORT: ${RABBITMQ_RSTREAM_ADVERTISED_PORT:-5553}
+        RABBITMQ_BROKER_PORT: ${RABBITMQ_BROKER_PORT:-5553}
+        RABBITMQ_MANAGEMENT_PORT: ${RABBITMQ_MANAGEMENT_PORT:-16573}
+        RABBITMQ_RSTREAM_PORT: ${RABBITMQ_RSTREAM_PORT:-5673}
+    ports:
+      - ${RABBITMQ_BROKER_PORT:-5673}:${RABBITMQ_BROKER_PORT:-5673}
+      - ${RABBITMQ_MANAGEMENT_PORT:-15673}:${RABBITMQ_MANAGEMENT_PORT:-15673}
+      - ${RABBITMQ_RSTREAM_PORT:-5553}:${RABBITMQ_RSTREAM_PORT:-5553}
+    networks:
+      - services-network
+    depends_on:
+      - cert-init
+    volumes:
+      - shared-certificates:/certificates
+      - rabbitmq-data:/var/lib/rabbitmq
+    environment:
+      - RABBITMQ_CERTIFICATE_VOLUME=${CHAINLIT_CERTIFICATE_VOLUME:-/certificates/digitalkin-tests-rabbitmq}
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  tests-surrealdb:
+    container_name: digitalkin-tests-surrealdb
+    <<: *surrealdb-common
+    environment:
+      - TEST_SURREALDB_PORT=${TEST_SURREALDB_PORT:-8008}
+      - TEST_SURREALDB_USERNAME=${TEST_SURREALDB_USERNAME:-root}
+      - TEST_SURREALDB_PASSWORD=${TEST_SURREALDB_PASSWORD:-root}
+    command: >
+      start
+      --username=${TEST_SURREALDB_USERNAME:-root}
+      --password=${TEST_SURREALDB_PASSWORD:-root}
+      --bind 0.0.0.0:${TEST_SURREALDB_PORT:-8008}
+    ports:
+      - ${TEST_SURREALDB_PORT:-8008}:${TEST_SURREALDB_PORT:-8008}
+    volumes:
+      - surrealdb-data:/data
+
+  tests:
+    container_name: digitalkin-tests
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.test
+    networks:
+      - services-network
+    environment:
+      - TEST_SURREALDB_URL=ws://digitalkin-tests-surrealdb
+      - TEST_SURREALDB_PORT=${TEST_SURREALDB_PORT:-8008}
+      - TEST_SURREALDB_USERNAME=${TEST_SURREALDB_USERNAME:-root}
+      - TEST_SURREALDB_PASSWORD=${TEST_SURREALDB_PASSWORD:-root}
+      - TEST_SURREALDB_DATABASE=${TEST_SURREALDB_DATABASE:-test}
+      # optional defaults you can override at runtime:
+      - TEST_SELECTOR=tests/
+      - PYTEST_ARGS=
+    depends_on:
+      - tests-surrealdb
+    volumes:
+      - .:/app:cached
+      - /app/.venv
+    working_dir: /app
+
+networks:
+  services-network:
+    driver: bridge
+
+volumes:
+  surrealdb-data:
+  rabbitmq-data:

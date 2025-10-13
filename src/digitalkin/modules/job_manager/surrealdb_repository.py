@@ -75,7 +75,10 @@ class SurrealDBConnection(Generic[TSurreal]):
             timeout: Timeout for database operations
         """
         self.timeout = timeout
-        self.url = f"{os.getenv('SURREALDB_URL', 'ws://localhost')}:{os.getenv('SURREALDB_PORT', '8000')}/rpc"
+        base_url = os.getenv("SURREALDB_URL", "ws://localhost").strip()
+        port = (os.getenv("SURREALDB_PORT") or "").strip()
+        self.url = f"{base_url}{f':{port}' if port else ''}/rpc"
+
         self.username = os.getenv("SURREALDB_USERNAME", "root")
         self.password = os.getenv("SURREALDB_PASSWORD", "root")
         self.namespace = os.getenv("SURREALDB_NAMESPACE", "test")

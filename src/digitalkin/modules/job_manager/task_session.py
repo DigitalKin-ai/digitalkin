@@ -90,7 +90,6 @@ class TaskSession:
         if self.heartbeat_record_id is None:
             try:
                 success = await self.db.create("heartbeats", heartbeat.model_dump())
-                logger.critical(f"{success=} | {'code' not in success}")
                 if "code" not in success:
                     self.heartbeat_record_id = success.get("id")  # type: ignore
                     self._last_heartbeat = heartbeat.timestamp
@@ -138,7 +137,7 @@ class TaskSession:
 
     async def generate_heartbeats(self) -> None:
         """Periodic heartbeat generator with cancellation support."""
-        logger.critical("Heartbeat started")
+        logger.debug("Heartbeat started")
         while not self.cancelled:
             logger.debug(f"Heartbeat tick for task: '{self.task_id}' | {self.cancelled=}")
             success = await self.send_heartbeat()
@@ -167,7 +166,7 @@ class TaskSession:
         live_id, live_signals = await self.db.start_live("tasks")
         try:
             async for signal in live_signals:
-                logger.critical("Signal received for task '%s': %s", self.task_id, signal)
+                logger.debug("Signal received for task '%s': %s", self.task_id, signal)
                 if self.cancelled:
                     break
 
@@ -199,7 +198,7 @@ class TaskSession:
 
     async def _handle_cancel(self) -> None:
         """Idempotent cancellation with acknowledgment."""
-        logger.critical("Handle cancel called")
+        logger.debug("Handle cancel called")
         if self.is_cancelled.is_set():
             logger.debug(
                 "Cancel signal ignored - task already cancelled: '%s'", self.task_id, extra={"task_id": self.task_id}
