@@ -242,7 +242,7 @@ class SingleJobManager(BaseJobManager, TaskManager, Generic[InputModelT, OutputM
         Raises:
             Exception: If an error occurs while stopping the module.
         """
-        logger.critical(f"STOP {job_id=} | {self.tasks_sessions.keys()}")
+        logger.info(f"STOP required for {job_id=}")
 
         async with self._lock:
             session = self.tasks_sessions.get(job_id)

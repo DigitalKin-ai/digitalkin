@@ -198,8 +198,6 @@ class DefaultFilesystem(FilesystemStrategy):
             end_idx = start_idx + list_size
             paginated_files = filtered_files[start_idx:end_idx]
 
-            logger.critical(f"{filters=} | {paginated_files=}")
-
             if include_content:
                 for file in paginated_files:
                     file.content = Path(file.storage_uri).read_bytes()

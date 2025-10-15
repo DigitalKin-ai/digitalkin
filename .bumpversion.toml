@@ -1,0 +1,28 @@
+[tool.bumpversion]
+    current_version = "0.3.0-dev1"
+    parse = """(?x)
+(?P<major>0|[1-9]\\d*)\\.
+(?P<minor>0|[1-9]\\d*)\\.
+(?P<patch>0|[1-9]\\d*)
+(?:
+  (?P<pre_sep>[-\\.])?           # optional separator (we'll canonicalize)
+  (?P<pre_l>dev|rc)
+  (?P<pre_n>0|[1-9]\\d*)
+)?"""
+    serialize = [
+        "{major}.{minor}.{patch}.{pre_l}{pre_n}",
+        "{major}.{minor}.{patch}{pre_l}{pre_n}",
+        "{major}.{minor}.{patch}",
+    ]
+
+    # Normalize serialization rules (bump-my-version will use the pattern
+    # that matches; we treat 'dev' with a dot and 'rc' without).
+    [[tool.bumpversion.files]]
+        filename = "pyproject.toml"
+        search   = 'version = "{current_version}"'
+        replace  = 'version = "{new_version}"'
+
+    [[tool.bumpversion.files]]
+        filename = "src/digitalkin/__version__.py"
+        search   = '__version__ = "{current_version}"'
+        replace  = '__version__ = "{new_version}"'
