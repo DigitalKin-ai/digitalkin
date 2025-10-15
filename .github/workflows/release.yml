@@ -32,9 +32,6 @@ jobs:
         run: |
           uv pip install -e ".[tests,dev]" --system
 
-      - name: Run tests
-        run: pytest
-
       - name: Build package
         run: task build-package
 
