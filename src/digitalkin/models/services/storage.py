@@ -10,7 +10,7 @@ class BaseRole(str, Enum):
     """Officially supported Role Enum for chat messages."""
 
     ASSISTANT = "assistant"
-    HUMAN = "human"
+    USER = "user"
     SYSTEM = "system"
 
 

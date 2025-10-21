@@ -38,7 +38,7 @@ env:
 
 jobs:
   lint:
-    name: Lint & Format Check - Python 3.13
+    name: Lint & Format Check - Python 3.10
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -48,10 +48,10 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Set up Python 3.13
+      - name: Set up Python 3.10
         uses: actions/setup-python@v6
         with:
-          python-version: "3.13"
+          python-version: "3.10"
 
       - name: Install UV
         run: |
@@ -76,10 +76,10 @@ jobs:
           uv pip install -e ".[tests,dev]" --system
 
       - name: Lint with Ruff
-        run: ruff check --output-format=github .
+        run: uv run ruff check --output-format=github .
 
       - name: Format check with Ruff
-        run: ruff format --check .
+        run: uv run ruff format --check .
 
       - name: Build package
         run: task build-package

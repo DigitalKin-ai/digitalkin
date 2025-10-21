@@ -104,5 +104,5 @@ class ChatHistoryMixin(UserMessageMixin, StorageMixin, LoggerMixin, Generic[Inpu
             output: Message content as Pydantic Class
         """
         # TO-DO: we should define a default output message type to ease user experience
-        self.append_chat_history_message(context=context, role=role, content=str(output.root))
+        self.append_chat_history_message(context=context, role=role, content=output.root)
         await self.send_message(context=context, output=output)
