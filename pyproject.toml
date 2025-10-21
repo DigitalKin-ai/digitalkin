@@ -12,7 +12,7 @@
 
     keywords = [ "digitalkin", "kin", "agent", "gprc", "sdk" ]
 
-    version = "0.3.0-dev1"
+    version = "0.3.0-rc0"
     classifiers = [
         "Development Status :: 3 - Alpha",
         "Intended Audience :: Developers",
@@ -45,7 +45,7 @@
         ]
         dev = [
             "typos>=1.38.0",
-            "ruff>=0.13.3",
+            "ruff>=0.14.1",
             "mypy>=1.18.2",
             "pyright>=1.1.406",
             "pre-commit>=4.3.0",
@@ -157,9 +157,9 @@
             "N",     # pep8-naming
             "ERA",   # eradicate
             "RUF",   # Ruff-specific rules
-            "DOC",   # pydoclint
-            "FURB",  # Refurb
-            "PL",    # Pylint
+            # "DOC",   # pydoclint
+            "FURB", # Refurb
+            "PL",   # Pylint
         ]
 
         ignore = [

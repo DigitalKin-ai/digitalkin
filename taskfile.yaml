@@ -106,7 +106,7 @@ tasks:
   bump-version:
     desc: "Bump package version (type: major, minor, patch, pre_l or pre_n)"
     cmds:
-      - SKIP=pytest bump-my-version bump {{.CLI_ARGS}} --allow-dirty
+      - SKIP=pytest bump-my-version bump {{.CLI_ARGS}}
 
   setup-dev:
     desc: "Setup development environment"
