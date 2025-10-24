@@ -33,6 +33,8 @@ class ChatHistoryMixin(UserMessageMixin, StorageMixin, LoggerMixin, Generic[Inpu
         Returns:
             Unique history key for the current session
         """
+        # TODO: define mission-specific chat history key not dependant on mission_id
+        # or need customization by user
         mission_id = getattr(context.session, "mission_id", None) or "default"
         return f"{self.CHAT_HISTORY_RECORD_ID}_{mission_id}"
 

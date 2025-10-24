@@ -1,4 +1,4 @@
-"""."""
+"""Task monitoring models for signaling and heartbeat messages."""
 
 from datetime import datetime, timezone
 from enum import Enum
@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 
 
 class TaskStatus(Enum):
-    """."""
+    """Task status enumeration."""
 
     PENDING = "pending"
     RUNNING = "running"
@@ -18,7 +18,7 @@ class TaskStatus(Enum):
 
 
 class SignalType(Enum):
-    """."""
+    """Signal type enumeration."""
 
     START = "start"
     STOP = "stop"
@@ -34,9 +34,10 @@ class SignalType(Enum):
 
 
 class SignalMessage(BaseModel):
-    """."""
+    """Signal message model for task monitoring."""
 
     task_id: str = Field(..., description="Unique identifier for the task")
+    mission_id: str = Field(..., description="Identifier for the mission")
     status: TaskStatus = Field(..., description="Current status of the task")
     action: SignalType = Field(..., description="Type of signal action")
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -45,7 +46,8 @@ class SignalMessage(BaseModel):
 
 
 class HeartbeatMessage(BaseModel):
-    """."""
+    """Heartbeat message model for task monitoring."""
 
     task_id: str = Field(..., description="Unique identifier for the task")
+    mission_id: str = Field(..., description="Identifier for the mission")
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

@@ -520,7 +520,7 @@ def test_add_health_service_alternative(server_config_sync_insecure) -> None:
 
 def test_base_server_register_servicers_is_abstract() -> None:
     """Test that _register_servicers is an abstract method that must be implemented."""
-    from digitalkin.grpc_servers.utils.models import ServerConfig  # noqa: PLC0415
+    from digitalkin.models.grpc_servers.models import ServerConfig  # noqa: PLC0415
 
     config = ServerConfig()  # type: ignore
 

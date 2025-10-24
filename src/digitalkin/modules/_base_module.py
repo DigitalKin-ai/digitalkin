@@ -50,13 +50,7 @@ class BaseModule(  # noqa: PLR0904
     services_config_params: ClassVar[dict[str, dict[str, Any | None] | None]]
     services_config: ServicesConfig
 
-    # runtime params
-    job_id: str
-    mission_id: str
-    setup_id: str
-    setup_version_id: str
-
-    def _init_strategies(self) -> dict[str, Any]:
+    def _init_strategies(self, mission_id: str, setup_id: str, setup_version_id: str) -> dict[str, Any]:
         """Initialize the services configuration.
 
         Returns:
@@ -73,9 +67,9 @@ class BaseModule(  # noqa: PLR0904
         return {
             service_name: self.services_config.init_strategy(
                 service_name,
-                self.mission_id,
-                self.setup_id,
-                self.setup_version_id,
+                mission_id,
+                setup_id,
+                setup_version_id,
             )
             for service_name in self.services_config.valid_strategy_names()
         }
@@ -88,23 +82,19 @@ class BaseModule(  # noqa: PLR0904
         setup_version_id: str,
     ) -> None:
         """Initialize the module."""
-        self.job_id: str = job_id
-        self.mission_id: str = mission_id
-        # Setup reference needed for the overall Kin scope as the filesystem context
-        self.setup_id: str = setup_id
-        # SetupVersion reference needed for the precise Kin scope as the cost
-        self.setup_version_id: str = setup_version_id
         self._status = ModuleStatus.CREATED
 
         # Initialize minimum context
         self.context = ModuleContext(
             # Initialize services configuration
-            **self._init_strategies(),
+            **self._init_strategies(mission_id, setup_id, setup_version_id),
             session={
+                "setup_id": setup_id,
                 "mission_id": mission_id,
                 "setup_version_id": setup_version_id,
                 "job_id": job_id,
             },
+            callbacks={"logger": logger},
         )
 
     @property
@@ -335,7 +325,6 @@ class BaseModule(  # noqa: PLR0904
         Args:
             input_data (InputModelT): The input data to be processed by the module.
             setup_data (SetupModelT): The setup or configuration data required for the module.
-            callback (Callable[[OutputModelT], Coroutine[Any, Any, None]]): callback to be invoked to stream any result.
 
         Raises:
             ValueError: If no handler for the protocol is found.
@@ -368,51 +357,15 @@ class BaseModule(  # noqa: PLR0904
             asyncio.CancelledError: If the module is cancelled
         """
         try:
-            logger.info(
-                "Starting module %s",
-                self.name,
-                extra={
-                    "mission_id": self.mission_id,
-                    "setup_id": self.setup_id,
-                    "setup_version_id": self.setup_version_id,
-                    "job_id": self.job_id,
-                },
-            )
+            logger.info("Starting module %s", self.name, extra=self.context.session.current_ids())
             await self.run(input_data, setup_data)
-            logger.info(
-                "Module %s finished",
-                self.name,
-                extra={
-                    "mission_id": self.mission_id,
-                    "setup_id": self.setup_id,
-                    "setup_version_id": self.setup_version_id,
-                    "job_id": self.job_id,
-                },
-            )
+            logger.info("Module %s finished", self.name, extra=self.context.session.current_ids())
         except asyncio.CancelledError:
             self._status = ModuleStatus.CANCELLED
-            logger.error(
-                "Module %s cancelled",
-                self.name,
-                extra={
-                    "mission_id": self.mission_id,
-                    "setup_id": self.setup_id,
-                    "setup_version_id": self.setup_version_id,
-                    "job_id": self.job_id,
-                },
-            )
+            logger.error("Module %s cancelled", self.name, extra=self.context.session.current_ids())
         except Exception:
             self._status = ModuleStatus.FAILED
-            logger.exception(
-                "Error inside module %s",
-                self.name,
-                extra={
-                    "mission_id": self.mission_id,
-                    "setup_id": self.setup_id,
-                    "setup_version_id": self.setup_version_id,
-                    "job_id": self.job_id,
-                },
-            )
+            logger.exception("Error inside module %s", self.name, extra=self.context.session.current_ids())
         else:
             self._status = ModuleStatus.STOPPING
 
@@ -425,9 +378,8 @@ class BaseModule(  # noqa: PLR0904
     ) -> None:
         """Start the module."""
         try:
-            self.context.callbacks.logger = logger
             self.context.callbacks.send_message = callback
-            logger.info(f"Inititalize module {self.job_id}")
+            logger.info(f"Inititalize module {self.context.session.job_id}")
             await self.initialize(self.context, setup_data)
         except Exception as e:
             self._status = ModuleStatus.FAILED
@@ -448,7 +400,7 @@ class BaseModule(  # noqa: PLR0904
         try:
             logger.debug("Init the discovered input handlers.")
             self.triggers_discoverer.init_handlers(self.context)
-            logger.debug(f"Run lifecycle {self.job_id}")
+            logger.debug(f"Run lifecycle {self.context.session.job_id}")
             await self._run_lifecycle(input_data, setup_data)
         except Exception:
             self._status = ModuleStatus.FAILED
@@ -458,7 +410,7 @@ class BaseModule(  # noqa: PLR0904
 
     async def stop(self) -> None:
         """Stop the module."""
-        logger.info("Stopping module %s | job_id=%s", self.name, self.job_id)
+        logger.info("Stopping module %s | job_id=%s", self.name, self.context.session.job_id)
         try:
             self._status = ModuleStatus.STOPPING
             logger.debug("Module %s stopped", self.name)
@@ -477,15 +429,7 @@ class BaseModule(  # noqa: PLR0904
     ) -> None:
         """Start the module."""
         try:
-            logger.info(
-                "Run Config Setup lifecycle",
-                extra={
-                    "mission_id": self.mission_id,
-                    "setup_id": self.setup_id,
-                    "setup_version_id": self.setup_version_id,
-                    "job_id": self.job_id,
-                },
-            )
+            logger.info("Run Config Setup lifecycle", extra=self.context.session.current_ids())
             self._status = ModuleStatus.RUNNING
             self.context.callbacks.set_config_setup = callback
             content = await self.run_config_setup(self.context, config_setup_data)
@@ -497,12 +441,4 @@ class BaseModule(  # noqa: PLR0904
         except Exception:
             logger.error("Error during module lifecyle")
             self._status = ModuleStatus.FAILED
-            logger.exception(
-                "Error during module lifecyle",
-                extra={
-                    "mission_id": self.mission_id,
-                    "setup_id": self.setup_id,
-                    "setup_version_id": self.setup_version_id,
-                    "job_id": self.job_id,
-                },
-            )
+            logger.exception("Error during module lifecyle", extra=self.context.session.current_ids())

@@ -38,6 +38,7 @@ class CostConfig(BaseModel):
 class CostEvent(BaseModel):
     """Pydantic model that represents a cost event registered during service execution.
 
+    # DEPRECATED
     :param cost_name: Identifier for the cost configuration.
     :param cost_type: The type of cost.
     :param usage: The amount or units consumed.

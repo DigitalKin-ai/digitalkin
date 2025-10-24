@@ -71,7 +71,6 @@ class SurrealDBConnection(Generic[TSurreal]):
 
         Args:
             database: AsyncSurrealDB connection to a specific database
-            table_name: Name of the table to interact with
             timeout: Timeout for database operations
         """
         self.timeout = timeout

@@ -30,6 +30,8 @@ class FileHistoryMixin(StorageMixin, LoggerMixin):
         Returns:
             Unique history key for the current session
         """
+        # TODO: define mission-specific chat history key not dependant on mission_id
+        # or need customization by user
         mission_id = getattr(context.session, "mission_id", None) or "default"
         return f"{self.FILE_HISTORY_RECORD_ID}_{mission_id}"
 
@@ -62,38 +64,30 @@ class FileHistoryMixin(StorageMixin, LoggerMixin):
 
         Args:
             context: Module context containing storage strategy
-            role: Message role (user, assistant, system)
             files: list of files model
 
         Raises:
             StorageServiceError: If history update fails
         """
         history_key = self._get_history_key(context)
+        file_history = self.load_file_history(context)
 
-        try:
-            if not self.file_history_front.files:
-                self.file_history_front = self.load_file_history(context)
-            self.file_history_front.files.extend(files)
-        except Exception as e:
-            self.log_error(context, f"Failed to append message to File history: {e}")
-
-        try:
-            self.log_debug(context, f"Updating File history for session: {history_key}")
-            self.update_storage(
-                context,
-                self.FILE_HISTORY_COLLECTION,
-                history_key,
-                self.file_history_front.model_dump(),
-            )
-        except Exception as e:
-            self.log_error(context, f"Updating File history for session: {history_key} with error: {e}")
-
+        file_history.files.extend(files)
+        if len(file_history.files) == len(files):
             # Create new record
-            self.log_debug(context, f"Creating new File history for session: {history_key}")
+            self.log_debug(context, f"Creating new file history for session: {history_key}")
             self.store_storage(
                 context,
                 self.FILE_HISTORY_COLLECTION,
                 history_key,
-                self.file_history_front.model_dump(),
+                file_history.model_dump(),
                 data_type="OUTPUT",
+            )
+        else:
+            self.log_debug(context, f"Updating file history for session: {history_key}")
+            self.update_storage(
+                context,
+                self.FILE_HISTORY_COLLECTION,
+                history_key,
+                file_history.model_dump(),
             )

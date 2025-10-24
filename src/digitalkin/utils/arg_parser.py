@@ -55,7 +55,7 @@ class ArgParser:
     """
 
     class HelpAction(_HelpAction):
-        """."""
+        """Custom HelpAction to display subparsers helps too."""
 
         def __call__(
             self,

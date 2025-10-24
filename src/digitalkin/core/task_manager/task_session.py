@@ -1,13 +1,13 @@
-"""."""
+"""Task session easing task lifecycle management."""
 
 import asyncio
 import datetime
 from collections.abc import AsyncGenerator
 
+from digitalkin.core.task_manager.surrealdb_repository import SurrealDBConnection
 from digitalkin.logger import logger
-from digitalkin.models.module.task_monitor import HeartbeatMessage, SignalMessage, SignalType, TaskStatus
+from digitalkin.models.core.task_monitor import HeartbeatMessage, SignalMessage, SignalType, TaskStatus
 from digitalkin.modules._base_module import BaseModule
-from digitalkin.modules.job_manager.surrealdb_repository import SurrealDBConnection
 
 
 class TaskSession:
@@ -23,6 +23,7 @@ class TaskSession:
     signal_queue: AsyncGenerator | None
 
     task_id: str
+    mission_id: str
     signal_record_id: str | None
     heartbeat_record_id: str | None
 
@@ -37,11 +38,12 @@ class TaskSession:
     def __init__(
         self,
         task_id: str,
+        mission_id: str,
         db: SurrealDBConnection,
         module: BaseModule,
         heartbeat_interval: datetime.timedelta = datetime.timedelta(seconds=2),
     ) -> None:
-        """."""
+        """Initialize Task Session."""
         self.db = db
         self.module = module
 
@@ -49,6 +51,8 @@ class TaskSession:
         self.queue: asyncio.Queue = asyncio.Queue()
 
         self.task_id = task_id
+        self.mission_id = mission_id
+
         self.heartbeat = None
         self.started_at = None
         self.completed_at = None
@@ -63,17 +67,17 @@ class TaskSession:
         logger.info(
             "TaskContext initialized for task: '%s'",
             task_id,
-            extra={"task_id": task_id, "heartbeat_interval": heartbeat_interval},
+            extra={"task_id": task_id, "mission_id": mission_id, "heartbeat_interval": heartbeat_interval},
         )
 
     @property
     def cancelled(self) -> bool:
-        """."""
+        """Task cancellation status."""
         return self.is_cancelled.is_set()
 
     @property
     def paused(self) -> bool:
-        """."""
+        """Task paused status."""
         return self._paused.is_set()
 
     async def send_heartbeat(self) -> bool:
@@ -84,6 +88,7 @@ class TaskSession:
         """
         heartbeat = HeartbeatMessage(
             task_id=self.task_id,
+            mission_id=self.mission_id,
             timestamp=datetime.datetime.now(datetime.timezone.utc),
         )
 
@@ -142,7 +147,11 @@ class TaskSession:
             logger.debug(f"Heartbeat tick for task: '{self.task_id}' | {self.cancelled=}")
             success = await self.send_heartbeat()
             if not success:
-                logger.error("Heartbeat failed, cancelling task: '%s'", self.task_id, extra={"task_id": self.task_id})
+                logger.error(
+                    "Heartbeat failed, cancelling task: '%s'",
+                    self.task_id,
+                    extra={"task_id": self.task_id},
+                )
                 await self._handle_cancel()
                 break
             await asyncio.sleep(self._heartbeat_interval.total_seconds())
@@ -150,7 +159,11 @@ class TaskSession:
     async def wait_if_paused(self) -> None:
         """Block execution if task is paused."""
         if self._paused.is_set():
-            logger.info("Task paused, waiting for resume: '%s'", self.task_id, extra={"task_id": self.task_id})
+            logger.info(
+                "Task paused, waiting for resume: '%s'",
+                self.task_id,
+                extra={"task_id": self.task_id},
+            )
             await self._paused.wait()
 
     async def listen_signals(self) -> None:  # noqa: C901
@@ -159,7 +172,11 @@ class TaskSession:
         Raises:
             CancelledError: Asyncio when task cancelling
         """
-        logger.info("Signal listener started for task: '%s'", self.task_id, extra={"task_id": self.task_id})
+        logger.info(
+            "Signal listener started for task: '%s'",
+            self.task_id,
+            extra={"task_id": self.task_id},
+        )
         if self.signal_record_id is None:
             self.signal_record_id = (await self.db.select_by_task_id("tasks", self.task_id)).get("id")
 
@@ -183,7 +200,11 @@ class TaskSession:
                     await self._handle_status_request()
 
         except asyncio.CancelledError:
-            logger.debug("Signal listener cancelled for task: '%s'", self.task_id, extra={"task_id": self.task_id})
+            logger.debug(
+                "Signal listener cancelled for task: '%s'",
+                self.task_id,
+                extra={"task_id": self.task_id},
+            )
             raise
         except Exception as e:
             logger.error(
@@ -194,18 +215,28 @@ class TaskSession:
             )
         finally:
             await self.db.stop_live(live_id)
-            logger.info("Signal listener stopped for task: '%s'", self.task_id, extra={"task_id": self.task_id})
+            logger.info(
+                "Signal listener stopped for task: '%s'",
+                self.task_id,
+                extra={"task_id": self.task_id},
+            )
 
     async def _handle_cancel(self) -> None:
         """Idempotent cancellation with acknowledgment."""
         logger.debug("Handle cancel called")
         if self.is_cancelled.is_set():
             logger.debug(
-                "Cancel signal ignored - task already cancelled: '%s'", self.task_id, extra={"task_id": self.task_id}
+                "Cancel signal ignored - task already cancelled: '%s'",
+                self.task_id,
+                extra={"task_id": self.task_id},
             )
             return
 
-        logger.info("Cancelling task: '%s'", self.task_id, extra={"task_id": self.task_id})
+        logger.info(
+            "Cancelling task: '%s'",
+            self.task_id,
+            extra={"task_id": self.task_id},
+        )
 
         self.status = TaskStatus.CANCELLED
         self.is_cancelled.set()
@@ -219,6 +250,7 @@ class TaskSession:
             self.signal_record_id,  # type: ignore
             SignalMessage(
                 task_id=self.task_id,
+                mission_id=self.mission_id,
                 action=SignalType.ACK_CANCEL,
                 status=self.status,
             ).model_dump(),
@@ -227,7 +259,11 @@ class TaskSession:
     async def _handle_pause(self) -> None:
         """Pause task execution."""
         if not self._paused.is_set():
-            logger.info("Pausing task: '%s'", self.task_id, extra={"task_id": self.task_id})
+            logger.info(
+                "Pausing task: '%s'",
+                self.task_id,
+                extra={"task_id": self.task_id},
+            )
             self._paused.set()
 
         await self.db.update(
@@ -235,6 +271,7 @@ class TaskSession:
             self.signal_record_id,  # type: ignore
             SignalMessage(
                 task_id=self.task_id,
+                mission_id=self.mission_id,
                 action=SignalType.ACK_PAUSE,
                 status=self.status,
             ).model_dump(),
@@ -243,7 +280,11 @@ class TaskSession:
     async def _handle_resume(self) -> None:
         """Resume paused task."""
         if self._paused.is_set():
-            logger.info("Resuming task: '%s'", self.task_id, extra={"task_id": self.task_id})
+            logger.info(
+                "Resuming task: '%s'",
+                self.task_id,
+                extra={"task_id": self.task_id},
+            )
             self._paused.clear()
 
         await self.db.update(
@@ -251,6 +292,7 @@ class TaskSession:
             self.signal_record_id,  # type: ignore
             SignalMessage(
                 task_id=self.task_id,
+                mission_id=self.mission_id,
                 action=SignalType.ACK_RESUME,
                 status=self.status,
             ).model_dump(),
@@ -262,9 +304,10 @@ class TaskSession:
             "tasks",
             self.signal_record_id,  # type: ignore
             SignalMessage(
-                action=SignalType.ACK_STATUS,
+                mission_id=self.mission_id,
                 task_id=self.task_id,
                 status=self.status,
+                action=SignalType.ACK_STATUS,
             ).model_dump(),
         )
 

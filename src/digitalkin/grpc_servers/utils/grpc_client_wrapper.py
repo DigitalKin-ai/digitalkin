@@ -6,8 +6,8 @@ from typing import Any
 import grpc
 
 from digitalkin.grpc_servers.utils.exceptions import ServerError
-from digitalkin.grpc_servers.utils.models import ClientConfig, SecurityMode
 from digitalkin.logger import logger
+from digitalkin.models.grpc_servers.models import ClientConfig, SecurityMode
 
 
 class GrpcClientWrapper:

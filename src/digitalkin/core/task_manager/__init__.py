@@ -1,0 +1,1 @@
+"""Base task manager logic."""

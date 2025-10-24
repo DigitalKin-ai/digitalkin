@@ -17,10 +17,8 @@ class LoggerMixin:
         Args:
             context: Module context containing the callbacks strategy
             message: Debug message to log
-            *args: Positional arguments for message formatting
-            **kwargs: Keyword arguments for logger
         """
-        return context.callbacks.logger.debug(message)
+        return context.callbacks.logger.debug(message, extra=context.session.current_ids())
 
     @staticmethod
     def log_info(context: ModuleContext, message: str) -> None:
@@ -29,10 +27,8 @@ class LoggerMixin:
         Args:
             context: Module context containing the callbacks strategy
             message: Info message to log
-            *args: Positional arguments for message formatting
-            **kwargs: Keyword arguments for logger
         """
-        return context.callbacks.logger.info(message)
+        return context.callbacks.logger.info(message, extra=context.session.current_ids())
 
     @staticmethod
     def log_warning(context: ModuleContext, message: str) -> None:
@@ -41,10 +37,8 @@ class LoggerMixin:
         Args:
             context: Module context containing the callbacks strategy
             message: Warning message to log
-            *args: Positional arguments for message formatting
-            **kwargs: Keyword arguments for logger
         """
-        return context.callbacks.logger.warning(message)
+        return context.callbacks.logger.warning(message, extra=context.session.current_ids())
 
     @staticmethod
     def log_error(context: ModuleContext, message: str) -> None:
@@ -53,7 +47,5 @@ class LoggerMixin:
         Args:
             context: Module context containing the callbacks strategy
             message: Error message to log
-            *args: Positional arguments for message formatting
-            **kwargs: Keyword arguments for logger
         """
-        return context.callbacks.logger.error(message)
+        return context.callbacks.logger.error(message, extra=context.session.current_ids())

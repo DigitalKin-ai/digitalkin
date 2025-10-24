@@ -5,15 +5,16 @@ from collections.abc import AsyncGenerator, AsyncIterator, Callable, Coroutine
 from contextlib import asynccontextmanager
 from typing import Any, Generic
 
+from digitalkin.core.task_manager.task_manager import TaskManager
+from digitalkin.models.core.task_monitor import TaskStatus
 from digitalkin.models.module import InputModelT, OutputModelT, SetupModelT
 from digitalkin.models.module.module import ModuleCodeModel
-from digitalkin.models.module.task_monitor import TaskStatus
 from digitalkin.modules._base_module import BaseModule
 from digitalkin.services.services_config import ServicesConfig
 from digitalkin.services.services_models import ServicesMode
 
 
-class BaseJobManager(abc.ABC, Generic[InputModelT, SetupModelT, OutputModelT]):
+class BaseJobManager(abc.ABC, TaskManager, Generic[InputModelT, SetupModelT, OutputModelT]):
     """Abstract base class for managing background module jobs."""
 
     async def start(self) -> None:
@@ -25,7 +26,8 @@ class BaseJobManager(abc.ABC, Generic[InputModelT, SetupModelT, OutputModelT]):
 
     @staticmethod
     async def job_specific_callback(
-        callback: Callable[[str, OutputModelT | ModuleCodeModel], Coroutine[Any, Any, None]], job_id: str
+        callback: Callable[[str, OutputModelT | ModuleCodeModel], Coroutine[Any, Any, None]],
+        job_id: str,
     ) -> Callable[[OutputModelT | ModuleCodeModel], Coroutine[Any, Any, None]]:
         """Generate a job-specific callback function.
 

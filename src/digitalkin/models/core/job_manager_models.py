@@ -4,7 +4,7 @@ from enum import Enum
 
 from pydantic import BaseModel
 
-from digitalkin.modules.job_manager.base_job_manager import BaseJobManager
+from digitalkin.core.job_manager.base_job_manager import BaseJobManager
 
 
 class StreamCodeModel(BaseModel):
@@ -35,10 +35,10 @@ class JobManagerMode(Enum):
         """
         match self:
             case JobManagerMode.SINGLE:
-                from digitalkin.modules.job_manager.single_job_manager import SingleJobManager  # noqa: PLC0415
+                from digitalkin.core.job_manager.single_job_manager import SingleJobManager  # noqa: PLC0415
 
                 return SingleJobManager
             case JobManagerMode.TASKIQ:
-                from digitalkin.modules.job_manager.taskiq_job_manager import TaskiqJobManager  # noqa: PLC0415
+                from digitalkin.core.job_manager.taskiq_job_manager import TaskiqJobManager  # noqa: PLC0415
 
                 return TaskiqJobManager
