@@ -16,7 +16,7 @@ from freezegun import freeze_time
 from grpc.framework.foundation import logging_pool
 from mock_setup_servicer import FakeContext, MockSetupServicer
 
-from digitalkin.grpc_servers.utils.models import ClientConfig, SecurityMode, ServerMode
+from digitalkin.models.grpc_servers.models import ClientConfig, SecurityMode, ServerMode
 from digitalkin.services.setup.grpc_setup import GrpcSetup
 from digitalkin.services.setup.setup_strategy import SetupData, SetupVersionData
 

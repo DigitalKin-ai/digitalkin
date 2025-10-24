@@ -15,8 +15,8 @@ from pydantic import ValidationError
 
 from digitalkin.grpc_servers.utils.exceptions import ServerError
 from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
-from digitalkin.grpc_servers.utils.models import ClientConfig
 from digitalkin.logger import logger
+from digitalkin.models.grpc_servers.models import ClientConfig
 from digitalkin.services.setup.setup_strategy import SetupData, SetupServiceError, SetupStrategy, SetupVersionData
 
 

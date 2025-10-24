@@ -17,9 +17,9 @@ from digitalkin.grpc_servers.utils.exceptions import (
     ServerStateError,
     ServicerError,
 )
-from digitalkin.grpc_servers.utils.models import SecurityMode, ServerConfig, ServerMode
-from digitalkin.grpc_servers.utils.types import GrpcServer, ServiceDescriptor, T
 from digitalkin.logger import logger
+from digitalkin.models.grpc_servers.models import SecurityMode, ServerConfig, ServerMode
+from digitalkin.models.grpc_servers.types import GrpcServer, ServiceDescriptor, T
 
 
 class BaseServer(abc.ABC):

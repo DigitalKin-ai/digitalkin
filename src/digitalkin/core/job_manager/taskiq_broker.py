@@ -14,11 +14,11 @@ from taskiq.compat import model_validate
 from taskiq.message import BrokerMessage
 from taskiq_aio_pika import AioPikaBroker
 
+from digitalkin.core.job_manager.base_job_manager import BaseJobManager
 from digitalkin.logger import logger
+from digitalkin.models.core.job_manager_models import StreamCodeModel
 from digitalkin.models.module.module_types import OutputModelT
 from digitalkin.modules._base_module import BaseModule
-from digitalkin.modules.job_manager.base_job_manager import BaseJobManager
-from digitalkin.modules.job_manager.job_manager_models import StreamCodeModel
 from digitalkin.services.services_config import ServicesConfig
 from digitalkin.services.services_models import ServicesMode
 
@@ -194,7 +194,6 @@ async def run_config_module(
         module_class: type[BaseModule],
         services_mode: ServicesMode,
         config_setup_data: dict,
-        setup_data: dict,
         context: Allow TaskIQ context access
     """
     logger.warning("%s", services_mode)

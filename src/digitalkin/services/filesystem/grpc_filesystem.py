@@ -10,8 +10,8 @@ from google.protobuf.json_format import MessageToDict
 
 from digitalkin.grpc_servers.utils.exceptions import ServerError
 from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
-from digitalkin.grpc_servers.utils.models import ClientConfig
 from digitalkin.logger import logger
+from digitalkin.models.grpc_servers.models import ClientConfig
 from digitalkin.services.filesystem.filesystem_strategy import (
     FileFilter,
     FilesystemRecord,

@@ -30,13 +30,12 @@ class FilesystemMixin:
         return context.filesystem.upload_files(files)
 
     @staticmethod
-    def get_file(context: ModuleContext, file_id: str) -> tuple[FilesystemRecord, bytes | None]:
+    def get_file(context: ModuleContext, file_id: str) -> FilesystemRecord:
         """Retrieve a file by ID with the content.
 
         Args:
             context: Module context containing the filesystem strategy
             file_id: Unique identifier for the file
-            include_content: Whether to include file content in response
 
         Returns:
             File object with metadata and optionally content

@@ -6,7 +6,7 @@ import grpc_testing
 import pytest
 from _pytest.fixtures import SubRequest
 
-from digitalkin.grpc_servers.utils.models import (
+from digitalkin.models.grpc_servers.models import (
     SecurityMode,
     ServerConfig,
     ServerCredentials,

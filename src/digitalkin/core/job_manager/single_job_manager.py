@@ -9,19 +9,18 @@ from typing import Any, Generic
 
 import grpc
 
+from digitalkin.core.job_manager.base_job_manager import BaseJobManager
+from digitalkin.core.task_manager.surrealdb_repository import SurrealDBConnection
+from digitalkin.core.task_manager.task_session import TaskSession
 from digitalkin.logger import logger
+from digitalkin.models.core.task_monitor import TaskStatus
 from digitalkin.models.module import InputModelT, OutputModelT, SetupModelT
 from digitalkin.models.module.module import ModuleCodeModel
-from digitalkin.models.module.task_monitor import TaskStatus
 from digitalkin.modules._base_module import BaseModule
-from digitalkin.modules.job_manager.base_job_manager import BaseJobManager
-from digitalkin.modules.job_manager.surrealdb_repository import SurrealDBConnection
-from digitalkin.modules.job_manager.task_manager import TaskManager
-from digitalkin.modules.job_manager.task_session import TaskSession
 from digitalkin.services.services_models import ServicesMode
 
 
-class SingleJobManager(BaseJobManager, TaskManager, Generic[InputModelT, OutputModelT, SetupModelT]):
+class SingleJobManager(BaseJobManager, Generic[InputModelT, OutputModelT, SetupModelT]):
     """Manages a single instance of a module job.
 
     This class ensures that only one instance of a module job is active at a time.
@@ -31,7 +30,7 @@ class SingleJobManager(BaseJobManager, TaskManager, Generic[InputModelT, OutputM
 
     async def start(self) -> None:
         """Start manager."""
-        self.channel = SurrealDBConnection("task_manager", datetime.timedelta(seconds=5))
+        self.channel: SurrealDBConnection = SurrealDBConnection("task_manager", datetime.timedelta(seconds=5))
         await self.channel.init_surreal_instance()
 
     def __init__(
@@ -87,7 +86,6 @@ class SingleJobManager(BaseJobManager, TaskManager, Generic[InputModelT, OutputM
 
         Args:
             config_setup_data: The input data required to start the job.
-            setup_data: The setup configuration for the module.
             mission_id: The mission ID associated with the job.
             setup_id: The setup ID associated with the module.
             setup_version_id: The setup ID.
@@ -101,7 +99,7 @@ class SingleJobManager(BaseJobManager, TaskManager, Generic[InputModelT, OutputM
         job_id = str(uuid.uuid4())
         # TODO: Ensure the job_id is unique.
         module = self.module_class(job_id, mission_id=mission_id, setup_id=setup_id, setup_version_id=setup_version_id)
-        self.tasks_sessions[job_id] = TaskSession(job_id, self.channel, module)
+        self.tasks_sessions[job_id] = TaskSession(job_id, mission_id, self.channel, module)
 
         try:
             await module.start_config_setup(
@@ -224,6 +222,7 @@ class SingleJobManager(BaseJobManager, TaskManager, Generic[InputModelT, OutputM
 
         await self.create_task(
             job_id,
+            mission_id,
             module,
             module.start(input_data, setup_data, callback, done_callback=None),
         )
@@ -254,7 +253,7 @@ class SingleJobManager(BaseJobManager, TaskManager, Generic[InputModelT, OutputM
                 await session.module.stop()
 
                 if job_id in self.tasks:
-                    await self.cancel_task(job_id)
+                    await self.cancel_task(job_id, session.mission_id)
                 logger.debug(f"session {job_id} ({session.module.name}) stopped successfully")
             except Exception as e:
                 logger.error(f"Error while stopping module {job_id}: {e}")

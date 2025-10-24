@@ -15,11 +15,11 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 import pytest_asyncio
 
-from digitalkin.models.module.task_monitor import SignalType, TaskStatus
+from digitalkin.core.task_manager.surrealdb_repository import SurrealDBConnection
+from digitalkin.core.task_manager.task_manager import TaskManager
+from digitalkin.core.task_manager.task_session import TaskSession
+from digitalkin.models.core.task_monitor import SignalType, TaskStatus
 from digitalkin.modules._base_module import BaseModule
-from digitalkin.modules.job_manager.surrealdb_repository import SurrealDBConnection
-from digitalkin.modules.job_manager.task_manager import TaskManager
-from digitalkin.modules.job_manager.task_session import TaskSession
 
 pytestmark = pytest.mark.asyncio
 
@@ -97,8 +97,9 @@ async def mock_surreal_connection() -> Mock:
 
 @pytest_asyncio.fixture
 async def mock_task_session() -> Mock:
-    """Mock TaskSession with expected attributes and async methods."""
+    """Mock TaskSession with, "missions:hj" expected attributes and async methods."""
     session = Mock(spec=TaskSession)
+    session.mission_id = "missions:mock"
     session.status = TaskStatus.PENDING
     session.started_at = None
     session.completed_at = None
@@ -144,27 +145,32 @@ class TestTaskCreation:
     """Comprehensive task creation tests."""
 
     async def test_create_task_success(
-        self, task_manager: TaskManager, mock_base_module: Mock, mock_surreal_connection: Mock, mock_task_session: Mock
+        self,
+        task_manager: TaskManager,
+        mock_base_module: Mock,
+        mock_surreal_connection: Mock,
+        mock_task_session: Mock,
     ) -> None:
         """Test successful task creation with all components initialized."""
         task_id = "test_create_success"
+        mission_id = "missions:o"
 
         async def simple_coro() -> None:
             await asyncio.sleep(0.1)
 
         with (
             patch(
-                "digitalkin.modules.job_manager.task_manager.SurrealDBConnection",
+                "digitalkin.core.task_manager.task_manager.SurrealDBConnection",
                 return_value=mock_surreal_connection,
             ),
             patch(
-                "digitalkin.modules.job_manager.task_manager.TaskSession",
+                "digitalkin.core.task_manager.task_manager.TaskSession",
                 return_value=mock_task_session,
             ),
         ):
             task_manager.channel = mock_surreal_connection
 
-            await task_manager.create_task(task_id, mock_base_module, simple_coro())
+            await task_manager.create_task(task_id, mission_id, mock_base_module, simple_coro())
 
             assert task_id in task_manager.tasks
             assert task_id in task_manager.tasks_sessions
@@ -175,8 +181,12 @@ class TestTaskCreation:
             mock_surreal_connection.init_surreal_instance.assert_called_once()
 
     async def test_create_task_duplicate_raises(
-        self, task_manager, mock_base_module, mock_surreal_connection, mock_task_session
-    ):
+        self,
+        task_manager,
+        mock_base_module,
+        mock_surreal_connection,
+        mock_task_session,
+    ) -> None:
         """Negative: Duplicate ID raises ValueError."""
 
         async def work() -> None:
@@ -184,21 +194,26 @@ class TestTaskCreation:
 
         with (
             patch(
-                "digitalkin.modules.job_manager.task_manager.SurrealDBConnection",
+                "digitalkin.core.task_manager.task_manager.SurrealDBConnection",
                 return_value=mock_surreal_connection,
             ),
             patch(
-                "digitalkin.modules.job_manager.task_manager.TaskSession",
+                "digitalkin.core.task_manager.task_manager.TaskSession",
                 return_value=mock_task_session,
             ),
         ):
             task_manager.channel = mock_surreal_connection
-            await task_manager.create_task("dup", mock_base_module, work())
+            await task_manager.create_task("dup", "missions:eh", mock_base_module, work())
 
             with pytest.raises(ValueError, match="already exists"):
-                await task_manager.create_task("dup", mock_base_module, work())
+                await task_manager.create_task("dup", "missions:raise", mock_base_module, work())
 
-    async def test_create_task_max_limit(self, mock_base_module, mock_surreal_connection, mock_task_session):
+    async def test_create_task_max_limit(
+        self,
+        mock_base_module,
+        mock_surreal_connection,
+        mock_task_session,
+    ) -> None:
         """Negative: Max concurrent limit enforced."""
         mgr = TaskManager(max_concurrent_tasks=3)
 
@@ -207,23 +222,26 @@ class TestTaskCreation:
 
         with (
             patch(
-                "digitalkin.modules.job_manager.task_manager.SurrealDBConnection",
+                "digitalkin.core.task_manager.task_manager.SurrealDBConnection",
                 return_value=mock_surreal_connection,
             ),
             patch(
-                "digitalkin.modules.job_manager.task_manager.TaskSession",
+                "digitalkin.core.task_manager.task_manager.TaskSession",
                 return_value=mock_task_session,
             ),
         ):
             mgr.channel = mock_surreal_connection
             for i in range(3):
-                await mgr.create_task(f"task_{i}", mock_base_module, long_work())
+                await mgr.create_task(f"task_{i}", f"missions:{i}", mock_base_module, long_work())
 
             with pytest.raises(RuntimeError, match="Maximum concurrent"):
-                await mgr.create_task("overflow", mock_base_module, long_work())
+                await mgr.create_task("overflow", "missions:overflow", mock_base_module, long_work())
 
     async def test_create_task_with_custom_intervals(
-        self, task_manager: TaskManager, mock_base_module: Mock, mock_surreal_connection: Mock
+        self,
+        task_manager: TaskManager,
+        mock_base_module: Mock,
+        mock_surreal_connection: Mock,
     ) -> None:
         """Test task creation with custom heartbeat and connection intervals."""
         task_id = "custom_intervals_task"
@@ -233,64 +251,69 @@ class TestTaskCreation:
         async def simple_coro() -> None:
             await asyncio.sleep(0.1)
 
-        mock_session = Mock(spec=TaskSession)
-        mock_session.status = TaskStatus.PENDING
-        mock_session.listen_signals = AsyncMock()
-        mock_session.generate_heartbeats = AsyncMock()
-        mock_session.db = Mock()
-        mock_session.db.close = AsyncMock()
-
         with (
             patch(
-                "digitalkin.modules.job_manager.task_manager.SurrealDBConnection", return_value=mock_surreal_connection
+                "digitalkin.core.task_manager.task_manager.SurrealDBConnection",
+                return_value=mock_surreal_connection,
             ),
             patch(
-                "digitalkin.modules.job_manager.task_manager.TaskSession", return_value=mock_session
+                "digitalkin.core.task_manager.task_manager.TaskSession",
             ) as mock_session_class,
         ):
             task_manager.channel = mock_surreal_connection
 
             await task_manager.create_task(
                 task_id,
+                "missions:mock",
                 mock_base_module,
                 simple_coro(),
                 heartbeat_interval=heartbeat_interval,
                 connection_timeout=connection_timeout,
             )
 
-            # Verify TaskSession was created with correct parameters
+            # Verify TaskSession was, "missions:hj" created with correct parameters
             mock_session_class.assert_called_once()
             call_args = mock_session_class.call_args
-            assert call_args[0][3] == heartbeat_interval
+            assert call_args[0][4] == heartbeat_interval
 
-    async def test_create_task_initialization_failure(self, task_manager: TaskManager, mock_base_module: Mock) -> None:
+    async def test_create_task_initialization_failure(
+        self,
+        task_manager: TaskManager,
+        mock_base_module: Mock,
+    ) -> None:
         """Test cleanup on task initialization failure."""
         task_id = "init_failure_task"
+        mid = "missions:ghjkl"
         cleanup_called = False
 
         async def dummy_coro() -> None:
             pass
 
-        async def mock_cleanup(tid: str) -> None:
+        async def mock_cleanup(tid: str, mission_id: str) -> None:
             nonlocal cleanup_called
             cleanup_called = True
             assert tid == task_id
+            assert mission_id == mid
 
-        task_manager._cleanup_task = mock_cleanup # type: ignore
+        task_manager._cleanup_task = mock_cleanup  # type: ignore
 
         with patch(
-            "digitalkin.modules.job_manager.task_manager.SurrealDBConnection",
+            "digitalkin.core.task_manager.task_manager.SurrealDBConnection",
             side_effect=ConnectionError("Database unavailable"),
         ):
             with pytest.raises(ConnectionError):
-                await task_manager.create_task(task_id, mock_base_module, dummy_coro())
+                await task_manager.create_task(task_id, mid, mock_base_module, dummy_coro())
 
             assert cleanup_called
             assert task_id not in task_manager.tasks
             assert task_id not in task_manager.tasks_sessions
 
     async def test_concurrent_cancellation_and_creation(
-        self, task_manager: TaskManager, mock_base_module: Mock, mock_surreal_connection: Mock, mock_task_session: Mock
+        self,
+        task_manager: TaskManager,
+        mock_base_module: Mock,
+        mock_surreal_connection: Mock,
+        mock_task_session: Mock,
     ) -> None:
         """Test creating new tasks while cancelling others."""
         mgr = TaskManager(max_concurrent_tasks=3)
@@ -300,11 +323,11 @@ class TestTaskCreation:
 
         with (
             patch(
-                "digitalkin.modules.job_manager.task_manager.SurrealDBConnection",
+                "digitalkin.core.task_manager.task_manager.SurrealDBConnection",
                 return_value=mock_surreal_connection,
             ),
             patch(
-                "digitalkin.modules.job_manager.task_manager.TaskSession",
+                "digitalkin.core.task_manager.task_manager.TaskSession",
                 return_value=mock_task_session,
             ),
         ):
@@ -312,14 +335,16 @@ class TestTaskCreation:
 
             # Create initial batch
             for i in range(3):
-                await mgr.create_task(f"initial_{i}", mock_base_module, medium_coro())
+                await mgr.create_task(f"initial_{i}", f"missions:{i}", mock_base_module, medium_coro())
 
             await asyncio.sleep(0.05)
 
             # Concurrently cancel some and create new ones
             operations = []
-            operations.extend([mgr.cancel_task(f"initial_{i}") for i in range(2)])
-            operations.extend([mgr.create_task(f"new_{i}", mock_base_module, medium_coro()) for i in range(3)])
+            operations.extend([mgr.cancel_task(f"initial_{i}", "") for i in range(2)])
+            operations.extend([
+                mgr.create_task(f"new_{i}", "missions:k", mock_base_module, medium_coro()) for i in range(3)
+            ])
 
             results = await asyncio.gather(*operations, return_exceptions=True)
 
@@ -327,7 +352,11 @@ class TestTaskCreation:
             assert all(not isinstance(r, Exception) for r in results[:2])
 
     async def test_signal_send_during_task_completion(
-        self, task_manager: TaskManager, mock_base_module: Mock, mock_surreal_connection: Mock, mock_task_session: Mock
+        self,
+        task_manager: TaskManager,
+        mock_base_module: Mock,
+        mock_surreal_connection: Mock,
+        mock_task_session: Mock,
     ) -> None:
         """Test sending signal while task is completing."""
         task_id = "signal_race"
@@ -337,22 +366,22 @@ class TestTaskCreation:
 
         with (
             patch(
-                "digitalkin.modules.job_manager.task_manager.SurrealDBConnection",
+                "digitalkin.core.task_manager.task_manager.SurrealDBConnection",
                 return_value=mock_surreal_connection,
             ),
             patch(
-                "digitalkin.modules.job_manager.task_manager.TaskSession",
+                "digitalkin.core.task_manager.task_manager.TaskSession",
                 return_value=mock_task_session,
             ),
         ):
             task_manager.channel = mock_surreal_connection
-            await task_manager.create_task(task_id, mock_base_module, completing_coro())
+            await task_manager.create_task(task_id, "missions:id", mock_base_module, completing_coro())
 
             # Try to send signal right as task completes
             await asyncio.sleep(0.09)
 
             # This might succeed or fail depending on timing
-            result = await task_manager.send_signal(task_id, "pause", {})
+            result = await task_manager.send_signal(task_id, "missions:dfr", "pause", {})
             assert isinstance(result, bool)
 
 
@@ -365,7 +394,9 @@ class TestTaskWrapper:
     """Task wrapper and supervisor tests."""
 
     async def test_wrapper_main_task_completes_normally(
-        self, task_manager: TaskManager, mock_surreal_connection: Mock
+        self,
+        task_manager: TaskManager,
+        mock_surreal_connection: Mock,
     ) -> None:
         """Test wrapper when main task completes successfully."""
         task_id = "main_success"
@@ -376,7 +407,7 @@ class TestTaskWrapper:
             await running_event.wait()
 
         module = Mock(BaseModule)
-        session = TaskSession(task_id, mock_surreal_connection, module)
+        session = TaskSession(task_id, "missions:hj", mock_surreal_connection, module)
         session.listen_signals = AsyncMock(side_effect=stay_alive)
         session.generate_heartbeats = AsyncMock(side_effect=stay_alive)
 
@@ -386,7 +417,7 @@ class TestTaskWrapper:
             execution_log.append("main_end")
 
         task_manager.channel = mock_surreal_connection
-        supervisor = await task_manager._task_wrapper(task_id, main_coro(), session)
+        supervisor = await task_manager._task_wrapper(task_id, "missions:ou", main_coro(), session)
 
         await supervisor
 
@@ -397,7 +428,9 @@ class TestTaskWrapper:
         assert session.completed_at is not None
 
     async def test_wrapper_main_task_raises_exception(
-        self, task_manager: TaskManager, mock_surreal_connection: Mock
+        self,
+        task_manager: TaskManager,
+        mock_surreal_connection: Mock,
     ) -> None:
         """Test wrapper when main task raises an exception."""
         task_id = "main_exception"
@@ -407,7 +440,7 @@ class TestTaskWrapper:
             await running_event.wait()
 
         module = Mock(BaseModule)
-        session = TaskSession(task_id, mock_surreal_connection, module)
+        session = TaskSession(task_id, "missions:hj", mock_surreal_connection, module)
         session.listen_signals = AsyncMock(side_effect=stay_alive)
         session.generate_heartbeats = AsyncMock(side_effect=stay_alive)
 
@@ -417,14 +450,18 @@ class TestTaskWrapper:
             raise ValueError(msg)
 
         task_manager.channel = mock_surreal_connection
-        supervisor = await task_manager._task_wrapper(task_id, failing_coro(), session)
+        supervisor = await task_manager._task_wrapper(task_id, "missions:ou", failing_coro(), session)
 
         with pytest.raises(ValueError, match="Intentional failure"):
             await supervisor
 
         assert session.status == TaskStatus.FAILED
 
-    async def test_wrapper_heartbeat_fails(self, task_manager: TaskManager, mock_surreal_connection: Mock) -> None:
+    async def test_wrapper_heartbeat_fails(
+        self,
+        task_manager: TaskManager,
+        mock_surreal_connection: Mock,
+    ) -> None:
         """Test wrapper when heartbeat task fails."""
         task_id = "heartbeat_failure"
         running_event = asyncio.Event()
@@ -433,7 +470,7 @@ class TestTaskWrapper:
             await running_event.wait()
 
         module = Mock(BaseModule)
-        session = TaskSession(task_id, mock_surreal_connection, module)
+        session = TaskSession(task_id, "missions:hj", mock_surreal_connection, module)
         session.listen_signals = AsyncMock(side_effect=stay_alive)
 
         async def failing_heartbeat() -> NoReturn:
@@ -447,14 +484,18 @@ class TestTaskWrapper:
             await asyncio.sleep(10)
 
         task_manager.channel = mock_surreal_connection
-        supervisor = await task_manager._task_wrapper(task_id, long_main(), session)
+        supervisor = await task_manager._task_wrapper(task_id, "missions:ou", long_main(), session)
 
         with pytest.raises(RuntimeError, match=f"Heartbeat failure for task {task_id}"):
             await supervisor
 
         assert session.status == TaskStatus.FAILED
 
-    async def test_wrapper_signal_stops_task(self, task_manager: TaskManager, mock_surreal_connection: Mock) -> None:
+    async def test_wrapper_signal_stops_task(
+        self,
+        task_manager: TaskManager,
+        mock_surreal_connection: Mock,
+    ) -> None:
         """Test wrapper when signal listener receives stop signal."""
         task_id = "signal_stop"
 
@@ -468,7 +509,7 @@ class TestTaskWrapper:
             # Return normally to simulate stop signal received
 
         module = Mock(BaseModule)
-        session = TaskSession(task_id, mock_surreal_connection, module)
+        session = TaskSession(task_id, "missions:hj", mock_surreal_connection, module)
         session.generate_heartbeats = AsyncMock(side_effect=stay_alive)
         session.listen_signals = signal_that_stops
 
@@ -476,14 +517,16 @@ class TestTaskWrapper:
             await asyncio.sleep(10)
 
         task_manager.channel = mock_surreal_connection
-        supervisor = await task_manager._task_wrapper(task_id, long_main(), session)
+        supervisor = await task_manager._task_wrapper(task_id, "missions:ou", long_main(), session)
 
         await supervisor
 
         assert session.status == TaskStatus.CANCELLED
 
     async def test_wrapper_supervisor_cancellation(
-        self, task_manager: TaskManager, mock_surreal_connection: Mock
+        self,
+        task_manager: TaskManager,
+        mock_surreal_connection: Mock,
     ) -> None:
         """Test wrapper handling external cancellation."""
         task_id = "external_cancel"
@@ -494,7 +537,7 @@ class TestTaskWrapper:
             await running_event.wait()
 
         module = Mock(BaseModule)
-        session = TaskSession(task_id, mock_surreal_connection, module)
+        session = TaskSession(task_id, "missions:hj", mock_surreal_connection, module)
         session.generate_heartbeats = AsyncMock(side_effect=stay_alive)
         session.listen_signals = AsyncMock(side_effect=stay_alive)
 
@@ -502,7 +545,7 @@ class TestTaskWrapper:
             await asyncio.sleep(10)
 
         task_manager.channel = mock_surreal_connection
-        supervisor = await task_manager._task_wrapper(task_id, long_main(), session)
+        supervisor = await task_manager._task_wrapper(task_id, "missions:ou", long_main(), session)
 
         # Cancel externally after brief delay
         await asyncio.sleep(0.05)
@@ -513,7 +556,11 @@ class TestTaskWrapper:
 
         assert session.status == TaskStatus.CANCELLED
 
-    async def test_wrapper_concurrent_execution(self, task_manager: TaskManager, mock_surreal_connection: Mock) -> None:
+    async def test_wrapper_concurrent_execution(
+        self,
+        task_manager: TaskManager,
+        mock_surreal_connection: Mock,
+    ) -> None:
         """Test that main, heartbeat, and listener run concurrently."""
         task_id = "concurrent_test"
         execution_timeline = []
@@ -546,7 +593,7 @@ class TestTaskWrapper:
                 await asyncio.sleep(0.05)
 
         task_manager.channel = mock_surreal_connection
-        supervisor = await task_manager._task_wrapper(task_id, main_with_logs(), session)
+        supervisor = await task_manager._task_wrapper(task_id, "missions:ou", main_with_logs(), session)
 
         await supervisor
 
@@ -561,7 +608,11 @@ class TestTaskWrapper:
             assert not (max(main_indices) < min(hb_indices))
             assert not (max(hb_indices) < min(main_indices))
 
-    async def test_wrapper_completion_timing(self, task_manager, mock_surreal_connection):
+    async def test_wrapper_completion_timing(
+        self,
+        task_manager,
+        mock_surreal_connection,
+    ) -> None:
         """Positive: Accurate timing and COMPLETED status."""
         task_id = "timing"
         running_event = asyncio.Event()
@@ -570,7 +621,7 @@ class TestTaskWrapper:
             await running_event.wait()
 
         module = Mock(BaseModule)
-        session = TaskSession(task_id, mock_surreal_connection, module)
+        session = TaskSession(task_id, "missions:hj", mock_surreal_connection, module)
         session.generate_heartbeats = AsyncMock(side_effect=stay_alive)
         session.listen_signals = AsyncMock(side_effect=stay_alive)
 
@@ -579,7 +630,7 @@ class TestTaskWrapper:
 
         task_manager.channel = mock_surreal_connection
         start = time.monotonic()
-        supervisor = await task_manager._task_wrapper(task_id, job(), session)
+        supervisor = await task_manager._task_wrapper(task_id, "missions:ou", job(), session)
         await supervisor
         elapsed = time.monotonic() - start
 
@@ -589,7 +640,11 @@ class TestTaskWrapper:
         recorded = (session.completed_at - session.started_at).total_seconds()
         assert abs(recorded - elapsed) < 0.07
 
-    async def test_wrapper_exception_failed(self, task_manager, mock_surreal_connection):
+    async def test_wrapper_exception_failed(
+        self,
+        task_manager,
+        mock_surreal_connection,
+    ) -> None:
         """Negative: Exception sets FAILED status."""
         task_id = "fail"
         running_event = asyncio.Event()
@@ -598,7 +653,7 @@ class TestTaskWrapper:
             await running_event.wait()
 
         module = Mock(BaseModule)
-        session = TaskSession(task_id, mock_surreal_connection, module)
+        session = TaskSession(task_id, "missions:hj", mock_surreal_connection, module)
         session.generate_heartbeats = AsyncMock(side_effect=stay_alive)
         session.listen_signals = AsyncMock(side_effect=stay_alive)
 
@@ -607,7 +662,7 @@ class TestTaskWrapper:
             raise ValueError(msg)
 
         task_manager.channel = mock_surreal_connection
-        supervisor = await task_manager._task_wrapper(task_id, failing(), session)
+        supervisor = await task_manager._task_wrapper(task_id, "missions:ou", failing(), session)
 
         with pytest.raises(ValueError):
             await supervisor
@@ -624,11 +679,15 @@ class TestCancellation:
 
     async def test_cancel_nonexistent_task(self, task_manager: TaskManager) -> None:
         """Test cancelling a task that doesn't exist."""
-        result = await task_manager.cancel_task("nonexistent_task")
+        result = await task_manager.cancel_task("nonexistent_task", "missions:os")
         assert result is True
 
     async def test_cancel_task_graceful_shutdown(
-        self, task_manager: TaskManager, mock_base_module: Mock, mock_surreal_connection: Mock, mock_task_session: Mock
+        self,
+        task_manager: TaskManager,
+        mock_base_module: Mock,
+        mock_surreal_connection: Mock,
+        mock_task_session: Mock,
     ) -> None:
         """Test graceful task cancellation within timeout."""
         task_id = "graceful_cancel"
@@ -644,21 +703,21 @@ class TestCancellation:
 
         with (
             patch(
-                "digitalkin.modules.job_manager.task_manager.SurrealDBConnection",
+                "digitalkin.core.task_manager.task_manager.SurrealDBConnection",
                 return_value=mock_surreal_connection,
             ),
             patch(
-                "digitalkin.modules.job_manager.task_manager.TaskSession",
+                "digitalkin.core.task_manager.task_manager.TaskSession",
                 return_value=mock_task_session,
             ),
         ):
             task_manager.channel = mock_surreal_connection
-            await task_manager.create_task(task_id, mock_base_module, graceful_coro())
+            await task_manager.create_task(task_id, "missions:id", mock_base_module, graceful_coro())
 
             await asyncio.sleep(0.05)
 
             start = time.time()
-            result = await task_manager.cancel_task(task_id, timeout=1.0)
+            result = await task_manager.cancel_task(task_id, "missions:os", timeout=1.0)
             duration = time.time() - start
 
             assert result is True
@@ -666,7 +725,11 @@ class TestCancellation:
             await asyncio.wait_for(shutdown_detected.wait(), timeout=1.0)
 
     async def test_cancel_task_force_after_timeout(
-        self, task_manager: TaskManager, mock_base_module: Mock, mock_surreal_connection: Mock, mock_task_session: Mock
+        self,
+        task_manager: TaskManager,
+        mock_base_module: Mock,
+        mock_surreal_connection: Mock,
+        mock_task_session: Mock,
     ) -> None:
         """Test force cancellation when graceful shutdown times out."""
         task_id = "force_cancel"
@@ -682,28 +745,32 @@ class TestCancellation:
 
         with (
             patch(
-                "digitalkin.modules.job_manager.task_manager.SurrealDBConnection",
+                "digitalkin.core.task_manager.task_manager.SurrealDBConnection",
                 return_value=mock_surreal_connection,
             ),
             patch(
-                "digitalkin.modules.job_manager.task_manager.TaskSession",
+                "digitalkin.core.task_manager.task_manager.TaskSession",
                 return_value=mock_task_session,
             ),
         ):
             task_manager.channel = mock_surreal_connection
-            await task_manager.create_task(task_id, mock_base_module, stubborn_coro())
+            await task_manager.create_task(task_id, "missions:id", mock_base_module, stubborn_coro())
 
             await asyncio.sleep(0.05)
 
             start = time.time()
-            result = await task_manager.cancel_task(task_id, timeout=0.1)
+            result = await task_manager.cancel_task(task_id, "missions:os", timeout=0.1)
             duration = time.time() - start
 
             assert result is True
             assert duration < 1.0  # Should force-cancel relatively quickly
 
     async def test_cancel_already_completed_task(
-        self, task_manager: TaskManager, mock_base_module: Mock, mock_surreal_connection: Mock, mock_task_session: Mock
+        self,
+        task_manager: TaskManager,
+        mock_base_module: Mock,
+        mock_surreal_connection: Mock,
+        mock_task_session: Mock,
     ) -> None:
         """Test cancelling a task that has already completed."""
         task_id = "already_done"
@@ -713,24 +780,28 @@ class TestCancellation:
 
         with (
             patch(
-                "digitalkin.modules.job_manager.task_manager.SurrealDBConnection",
+                "digitalkin.core.task_manager.task_manager.SurrealDBConnection",
                 return_value=mock_surreal_connection,
             ),
             patch(
-                "digitalkin.modules.job_manager.task_manager.TaskSession",
+                "digitalkin.core.task_manager.task_manager.TaskSession",
                 return_value=mock_task_session,
             ),
         ):
             task_manager.channel = mock_surreal_connection
-            await task_manager.create_task(task_id, mock_base_module, quick_coro())
+            await task_manager.create_task(task_id, "missions:id", mock_base_module, quick_coro())
 
             await asyncio.sleep(0.2)  # Wait for completion
 
-            result = await task_manager.cancel_task(task_id)
+            result = await task_manager.cancel_task(task_id, "missions:os")
             assert result is True
 
     async def test_cancel_multiple_tasks_concurrently(
-        self, task_manager: TaskManager, mock_base_module: Mock, mock_surreal_connection: Mock, mock_task_session: Mock
+        self,
+        task_manager: TaskManager,
+        mock_base_module: Mock,
+        mock_surreal_connection: Mock,
+        mock_task_session: Mock,
     ) -> None:
         """Test cancelling multiple tasks at once."""
         task_ids = [f"cancel_multi_{i}" for i in range(5)]
@@ -740,23 +811,23 @@ class TestCancellation:
 
         with (
             patch(
-                "digitalkin.modules.job_manager.task_manager.SurrealDBConnection",
+                "digitalkin.core.task_manager.task_manager.SurrealDBConnection",
                 return_value=mock_surreal_connection,
             ),
             patch(
-                "digitalkin.modules.job_manager.task_manager.TaskSession",
+                "digitalkin.core.task_manager.task_manager.TaskSession",
                 return_value=mock_task_session,
             ),
         ):
             task_manager.channel = mock_surreal_connection
 
             for task_id in task_ids:
-                await task_manager.create_task(task_id, mock_base_module, long_coro())
+                await task_manager.create_task(task_id, "missions:id", mock_base_module, long_coro())
 
             await asyncio.sleep(0.05)
 
             # Cancel all concurrently
-            cancel_tasks = [task_manager.cancel_task(tid) for tid in task_ids]
+            cancel_tasks = [task_manager.cancel_task(tid, "missions:os") for tid in task_ids]
             results = await asyncio.gather(*cancel_tasks)
 
             assert all(results)
@@ -771,21 +842,21 @@ class TestSignals:
     """Signal handling tests."""
 
     @pytest.mark.parametrize("sig", [SignalType.PAUSE, SignalType.RESUME, "custom"])
-    async def test_send_signal(self, task_manager, sig):
+    async def test_send_signal(self, task_manager, sig) -> None:
         """Positive: Signal sending works."""
         mock_chan = AsyncMock()
         mock_chan.update = AsyncMock()
         task_manager.channel = mock_chan
         task_manager.tasks_sessions["t1"] = Mock()
 
-        result = await task_manager.send_signal("t1", sig, {})
+        result = await task_manager.send_signal("t1", "missions:os", sig, {})
         assert result is True
         mock_chan.update.assert_awaited_once_with("tasks", sig, {})
 
-    async def test_signal_unknown_task(self, task_manager):
+    async def test_signal_unknown_task(self, task_manager) -> None:
         """Negative: Unknown task returns False."""
         task_manager.channel = Mock()
-        result = await task_manager.send_signal("unknown", SignalType.PAUSE, {})
+        result = await task_manager.send_signal("unknown", "missions:os", SignalType.PAUSE, {})
         assert result is False
 
 
@@ -797,14 +868,14 @@ class TestSignals:
 class TestCleanup:
     """Session cleanup tests."""
 
-    async def test_cleanup_closes_db(self, task_manager):
+    async def test_cleanup_closes_db(self, task_manager) -> None:
         """Positive: DB connection closed."""
         sess = Mock()
         sess.db = Mock()
         sess.db.close = AsyncMock()
         task_manager.tasks_sessions["clean"] = sess
 
-        await task_manager._cleanup_task("clean")
+        await task_manager._cleanup_task("clean", "missions:os")
         sess.db.close.assert_awaited_once()
 
     async def test_clean_session_success(
@@ -813,29 +884,30 @@ class TestCleanup:
         mock_base_module,
         mock_surreal_connection,
         mock_task_session,
-    ):
+    ) -> None:
         """Positive: Session cleaned properly."""
+        mission_id = "missions:sgh"
 
         async def job() -> None:
             await asyncio.sleep(0.03)
 
         with (
             patch(
-                "digitalkin.modules.job_manager.task_manager.SurrealDBConnection",
+                "digitalkin.core.task_manager.task_manager.SurrealDBConnection",
                 return_value=mock_surreal_connection,
             ),
             patch(
-                "digitalkin.modules.job_manager.task_manager.TaskSession",
+                "digitalkin.core.task_manager.task_manager.TaskSession",
                 return_value=mock_task_session,
             ),
         ):
             task_manager.channel = mock_surreal_connection
             mock_task_session.module = mock_base_module
 
-            await task_manager.create_task("clean", mock_base_module, job())
+            await task_manager.create_task("clean", mission_id, mock_base_module, job())
             await asyncio.sleep(0.1)
 
-            result = await task_manager.clean_session("clean")
+            result = await task_manager.clean_session("clean", mission_id)
             assert result is True
 
 
@@ -853,7 +925,7 @@ class TestShutdown:
         mock_base_module,
         mock_surreal_connection,
         mock_task_session,
-    ):
+    ) -> None:
         """Positive: Shutdown sets event and cancels tasks."""
 
         async def persistent() -> None:
@@ -864,27 +936,27 @@ class TestShutdown:
 
         with (
             patch(
-                "digitalkin.modules.job_manager.task_manager.SurrealDBConnection",
+                "digitalkin.core.task_manager.task_manager.SurrealDBConnection",
                 return_value=mock_surreal_connection,
             ),
             patch(
-                "digitalkin.modules.job_manager.task_manager.TaskSession",
+                "digitalkin.core.task_manager.task_manager.TaskSession",
                 return_value=mock_task_session,
             ),
         ):
             task_manager.channel = mock_surreal_connection
             for i in range(3):
-                await task_manager.create_task(f"sd_{i}", mock_base_module, persistent())
+                await task_manager.create_task(f"sd_{i}", f"missions:{i}", mock_base_module, persistent())
 
             await asyncio.sleep(0.05)
-            await task_manager.shutdown(timeout=0.3)
+            await task_manager.shutdown("missions:oeoe", timeout=0.3)
 
             assert task_manager._shutdown_event.is_set()
 
-    async def test_shutdown_idempotent(self, task_manager):
+    async def test_shutdown_idempotent(self, task_manager) -> None:
         """Positive: Multiple shutdowns safe."""
-        await task_manager.shutdown(timeout=0.1)
-        await task_manager.shutdown(timeout=0.1)
+        await task_manager.shutdown("missions:dfg", timeout=0.1)
+        await task_manager.shutdown("missions:dfg", timeout=0.1)
         assert task_manager._shutdown_event.is_set()
 
 
@@ -896,7 +968,12 @@ class TestShutdown:
 class TestConcurrency:
     """Concurrency and stress tests."""
 
-    async def test_high_task_churn(self, mock_base_module, mock_surreal_connection, mock_task_session):
+    async def test_high_task_churn(
+        self,
+        mock_base_module,
+        mock_surreal_connection,
+        mock_task_session,
+    ) -> None:
         """Stress: Rapid creation/completion."""
         mgr = TaskManager(max_concurrent_tasks=150, default_timeout=1.0)
 
@@ -905,18 +982,18 @@ class TestConcurrency:
 
         with (
             patch(
-                "digitalkin.modules.job_manager.task_manager.SurrealDBConnection",
+                "digitalkin.core.task_manager.task_manager.SurrealDBConnection",
                 return_value=mock_surreal_connection,
             ),
             patch(
-                "digitalkin.modules.job_manager.task_manager.TaskSession",
+                "digitalkin.core.task_manager.task_manager.TaskSession",
                 return_value=mock_task_session,
             ),
         ):
             mgr.channel = mock_surreal_connection
 
             start = time.monotonic()
-            tasks = [mgr.create_task(f"c_{i}", mock_base_module, tiny()) for i in range(100)]
+            tasks = [mgr.create_task(f"c_{i}", f"missions:os{i}", mock_base_module, tiny()) for i in range(100)]
             await asyncio.gather(*tasks)
             await asyncio.sleep(0.2)
             elapsed = time.monotonic() - start
@@ -924,7 +1001,12 @@ class TestConcurrency:
             assert elapsed < 5.0
             assert mgr.task_count <= 100
 
-    async def test_concurrent_create_cancel(self, mock_base_module, mock_surreal_connection, mock_task_session):
+    async def test_concurrent_create_cancel(
+        self,
+        mock_base_module,
+        mock_surreal_connection,
+        mock_task_session,
+    ) -> None:
         """Stress: Create/cancel race conditions."""
         mgr = TaskManager(max_concurrent_tasks=100, default_timeout=1.0)
 
@@ -936,11 +1018,11 @@ class TestConcurrency:
 
         with (
             patch(
-                "digitalkin.modules.job_manager.task_manager.SurrealDBConnection",
+                "digitalkin.core.task_manager.task_manager.SurrealDBConnection",
                 return_value=mock_surreal_connection,
             ),
             patch(
-                "digitalkin.modules.job_manager.task_manager.TaskSession",
+                "digitalkin.core.task_manager.task_manager.TaskSession",
                 return_value=mock_task_session,
             ),
         ):
@@ -948,14 +1030,16 @@ class TestConcurrency:
             total = 40
 
             # Create tasks
-            await asyncio.gather(*(mgr.create_task(f"r_{i}", mock_base_module, sleeper()) for i in range(total)))
+            await asyncio.gather(
+                *(mgr.create_task(f"r_{i}", f"missions:os{i}", mock_base_module, sleeper()) for i in range(total))
+            )
 
             # Cancel half randomly
             to_cancel = random.sample([f"r_{i}" for i in range(total)], k=total // 2)
-            cancel_ops = [mgr.cancel_task(tid, timeout=0.05) for tid in to_cancel]
+            cancel_ops = [mgr.cancel_task(tid, "missions:def", timeout=0.05) for tid in to_cancel]
 
             # Create more
-            new_ops = [mgr.create_task(f"new_{i}", mock_base_module, sleeper()) for i in range(10)]
+            new_ops = [mgr.create_task(f"new_{i}", f"missions:{i}", mock_base_module, sleeper()) for i in range(10)]
 
             results = await asyncio.gather(*(cancel_ops + new_ops), return_exceptions=True)
 
@@ -963,7 +1047,7 @@ class TestConcurrency:
             for r in results[: len(cancel_ops)]:
                 assert not isinstance(r, Exception) or isinstance(r, RuntimeError)
 
-    async def test_signal_storm(self, task_manager):
+    async def test_signal_storm(self, task_manager) -> None:
         """Stress: Many concurrent signals."""
         mock_chan = Mock()
         mock_chan.update = AsyncMock()
@@ -974,7 +1058,9 @@ class TestConcurrency:
             task_manager.tasks_sessions[tid] = Mock()
 
         # 50 concurrent signals
-        signal_ops = [task_manager.send_signal(random.choice(task_ids), "ping", {}) for _ in range(50)]
+        signal_ops = [
+            task_manager.send_signal(random.choice(task_ids), "missions:defrg", "ping", {}) for _ in range(50)
+        ]
 
         start = time.monotonic()
         results = await asyncio.gather(*signal_ops)
@@ -994,8 +1080,12 @@ class TestErrorHandling:
     """Error handling and recovery tests."""
 
     async def test_main_exception_no_crash(
-        self, task_manager, mock_base_module, mock_surreal_connection, mock_task_session
-    ):
+        self,
+        task_manager,
+        mock_base_module,
+        mock_surreal_connection,
+        mock_task_session,
+    ) -> None:
         """Regression: Exception doesn't crash manager."""
 
         async def failing() -> NoReturn:
@@ -1005,25 +1095,25 @@ class TestErrorHandling:
 
         with (
             patch(
-                "digitalkin.modules.job_manager.task_manager.SurrealDBConnection",
+                "digitalkin.core.task_manager.task_manager.SurrealDBConnection",
                 return_value=mock_surreal_connection,
             ),
             patch(
-                "digitalkin.modules.job_manager.task_manager.TaskSession",
+                "digitalkin.core.task_manager.task_manager.TaskSession",
                 return_value=mock_task_session,
             ),
         ):
             task_manager.channel = mock_surreal_connection
-            await task_manager.create_task("failer", mock_base_module, failing())
+            await task_manager.create_task("failer", "missions:failer", mock_base_module, failing())
             await asyncio.sleep(0.1)
 
             assert "failer" in task_manager.tasks
 
-    async def test_cleanup_on_init_failure(self, task_manager, mock_base_module):
+    async def test_cleanup_on_init_failure(self, task_manager, mock_base_module) -> None:
         """Regression: Init failure triggers cleanup."""
         cleanup_called = asyncio.Event()
 
-        async def mock_cleanup(tid) -> None:
+        async def mock_cleanup(tid, mission_id) -> None:
             cleanup_called.set()
 
         task_manager._cleanup_task = mock_cleanup
@@ -1032,10 +1122,11 @@ class TestErrorHandling:
             pass
 
         with patch(
-            "digitalkin.modules.job_manager.task_manager.SurrealDBConnection", side_effect=RuntimeError("init fail")
+            "digitalkin.core.task_manager.task_manager.SurrealDBConnection",
+            side_effect=RuntimeError("init fail"),
         ):
             with pytest.raises(RuntimeError):
-                await task_manager.create_task("fail", mock_base_module, job())
+                await task_manager.create_task("fail", "missions:fail", mock_base_module, job())
 
             assert await wait_event(cleanup_called, 1.0)
 
@@ -1048,7 +1139,7 @@ class TestErrorHandling:
 class TestTiming:
     """Timing precision tests."""
 
-    async def test_timing_accuracy(self, task_manager, mock_surreal_connection):
+    async def test_timing_accuracy(self, task_manager, mock_surreal_connection) -> None:
         """Positive: Recorded duration matches wall clock."""
         session = Mock(spec=TaskSession)
         session.status = TaskStatus.PENDING
@@ -1060,7 +1151,7 @@ class TestTiming:
 
         task_manager.channel = mock_surreal_connection
         start = time.monotonic()
-        sup = await task_manager._task_wrapper("timing", job(), session)
+        sup = await task_manager._task_wrapper("timing", "missions:dfg", job(), session)
         await sup
         elapsed = time.monotonic() - start
 
@@ -1076,7 +1167,13 @@ class TestTiming:
 class TestEdgeCases:
     """Edge case tests."""
 
-    async def test_empty_task_id(self, task_manager, mock_base_module, mock_surreal_connection, mock_task_session):
+    async def test_empty_task_id(
+        self,
+        task_manager,
+        mock_base_module,
+        mock_surreal_connection,
+        mock_task_session,
+    ) -> None:
         """Edge: Empty string task ID."""
 
         async def job() -> None:
@@ -1084,19 +1181,19 @@ class TestEdgeCases:
 
         with (
             patch(
-                "digitalkin.modules.job_manager.task_manager.SurrealDBConnection",
+                "digitalkin.core.task_manager.task_manager.SurrealDBConnection",
                 return_value=mock_surreal_connection,
             ),
             patch(
-                "digitalkin.modules.job_manager.task_manager.TaskSession",
+                "digitalkin.core.task_manager.task_manager.TaskSession",
                 return_value=mock_task_session,
             ),
         ):
             task_manager.channel = mock_surreal_connection
-            await task_manager.create_task("", mock_base_module, job())
+            await task_manager.create_task("", "missions:void", mock_base_module, job())
             assert "" in task_manager.tasks
 
-    async def test_immediate_completion(self, task_manager, mock_surreal_connection):
+    async def test_immediate_completion(self, task_manager, mock_surreal_connection) -> None:
         """Edge: Task completes immediately."""
         task_id = "test_immediate_completion"
         running_event = asyncio.Event()
@@ -1105,7 +1202,7 @@ class TestEdgeCases:
             await running_event.wait()
 
         module = Mock(BaseModule)
-        session = TaskSession(task_id, mock_surreal_connection, module)
+        session = TaskSession(task_id, "missions:hj", mock_surreal_connection, module)
         session.listen_signals = AsyncMock(side_effect=stay_alive)
         session.generate_heartbeats = AsyncMock(side_effect=stay_alive)
 
@@ -1113,14 +1210,18 @@ class TestEdgeCases:
             return
 
         task_manager.channel = mock_surreal_connection
-        sup = await task_manager._task_wrapper("instant", instant(), session)
+        sup = await task_manager._task_wrapper("instant", "missions:dfih", instant(), session)
         await sup
 
         assert session.status == TaskStatus.COMPLETED
 
     async def test_very_long_task_name(
-        self, task_manager, mock_base_module, mock_surreal_connection, mock_task_session
-    ):
+        self,
+        task_manager,
+        mock_base_module,
+        mock_surreal_connection,
+        mock_task_session,
+    ) -> None:
         """Edge: Very long task ID."""
         long_id = "x" * 1000
 
@@ -1129,16 +1230,16 @@ class TestEdgeCases:
 
         with (
             patch(
-                "digitalkin.modules.job_manager.task_manager.SurrealDBConnection",
+                "digitalkin.core.task_manager.task_manager.SurrealDBConnection",
                 return_value=mock_surreal_connection,
             ),
             patch(
-                "digitalkin.modules.job_manager.task_manager.TaskSession",
+                "digitalkin.core.task_manager.task_manager.TaskSession",
                 return_value=mock_task_session,
             ),
         ):
             task_manager.channel = mock_surreal_connection
-            await task_manager.create_task(long_id, mock_base_module, job())
+            await task_manager.create_task(long_id, "missions:mock", mock_base_module, job())
             assert long_id in task_manager.tasks
 
 
@@ -1151,8 +1252,12 @@ class TestInternalState:
     """Internal state consistency tests."""
 
     async def test_task_count_property(
-        self, task_manager, mock_base_module, mock_surreal_connection, mock_task_session
-    ):
+        self,
+        task_manager,
+        mock_base_module,
+        mock_surreal_connection,
+        mock_task_session,
+    ) -> None:
         """Regression: task_count accurate."""
 
         async def job() -> None:
@@ -1160,23 +1265,28 @@ class TestInternalState:
 
         with (
             patch(
-                "digitalkin.modules.job_manager.task_manager.SurrealDBConnection",
+                "digitalkin.core.task_manager.task_manager.SurrealDBConnection",
                 return_value=mock_surreal_connection,
             ),
             patch(
-                "digitalkin.modules.job_manager.task_manager.TaskSession",
+                "digitalkin.core.task_manager.task_manager.TaskSession",
                 return_value=mock_task_session,
             ),
         ):
             task_manager.channel = mock_surreal_connection
 
             assert task_manager.task_count == 0
-            await task_manager.create_task("t1", mock_base_module, job())
+            await task_manager.create_task("t1", "missions:mock1", mock_base_module, job())
             assert task_manager.task_count == 1
-            await task_manager.create_task("t2", mock_base_module, job())
+            await task_manager.create_task("t2", "missions:mock2", mock_base_module, job())
             assert task_manager.task_count == 2
 
-    async def test_running_tasks_list(self, mock_base_module, mock_surreal_connection, mock_task_session):
+    async def test_running_tasks_list(
+        self,
+        mock_base_module,
+        mock_surreal_connection,
+        mock_task_session,
+    ) -> None:
         """Regression: running_tasks list accurate."""
         mgr = TaskManager(max_concurrent_tasks=50)
 
@@ -1185,16 +1295,18 @@ class TestInternalState:
 
         with (
             patch(
-                "digitalkin.modules.job_manager.task_manager.SurrealDBConnection",
+                "digitalkin.core.task_manager.task_manager.SurrealDBConnection",
                 return_value=mock_surreal_connection,
             ),
             patch(
-                "digitalkin.modules.job_manager.task_manager.TaskSession",
+                "digitalkin.core.task_manager.task_manager.TaskSession",
                 return_value=mock_task_session,
             ),
         ):
             mgr.channel = mock_surreal_connection
-            await asyncio.gather(*(mgr.create_task(f"is_{i}", mock_base_module, job()) for i in range(6)))
+            await asyncio.gather(
+                *(mgr.create_task(f"is_{i}", f"missions:{i}", mock_base_module, job()) for i in range(6))
+            )
             await asyncio.sleep(0.05)
 
             assert isinstance(mgr.running_tasks, set)

@@ -13,7 +13,7 @@ logger.setLevel(logging.INFO)
 
 
 class DevelopmentModeMappingAction(Action):
-    """."""
+    """ArgParse Action to map an environment variable to a ServicesMode enum."""
 
     def __init__(
         self,
@@ -22,7 +22,7 @@ class DevelopmentModeMappingAction(Action):
         default: str | None = None,
         **kwargs: dict[str, Any],
     ) -> None:
-        """."""
+        """Initialize the DevelopmentModeMappingAction."""
         default = ServicesMode(os.environ.get(env_var, default))
 
         if required and default:

@@ -12,18 +12,18 @@ Requirements:
 
 import asyncio
 import datetime
+import math
 import os
-from typing import AsyncGenerator, Callable, Awaitable
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from uuid import UUID
 
 import pytest
 from surrealdb import RecordID
 
-from digitalkin.modules.job_manager.surrealdb_repository import (
+from digitalkin.core.task_manager.surrealdb_repository import (
     SurrealDBConnection,
     SurrealDBSetupBadIDError,
 )
-
 
 # Configuration for test database
 TEST_DB_CONFIG = {
@@ -35,6 +35,7 @@ TEST_DB_CONFIG = {
     "SURREALDB_DATABASE": "test_surreal",
 }
 
+
 @pytest.fixture(scope="session")
 def event_loop():
     """Create event loop for async tests."""
@@ -43,7 +44,7 @@ def event_loop():
     loop.close()
 
 
-@pytest.fixture(scope="function")
+@pytest.fixture
 async def conn() -> AsyncGenerator[SurrealDBConnection, None]:
     """Create and initialize a real SurrealDBConnection instance.
 
@@ -80,6 +81,7 @@ def clean_table(conn: SurrealDBConnection) -> Callable[[str], Awaitable[None]]:
 
     Returns a coroutine function that must be awaited.
     """
+
     async def _clean(table_name: str) -> None:
         """Delete all records from specified table."""
         try:
@@ -120,7 +122,7 @@ class TestConnectionLifecycle:
     @pytest.mark.asyncio
     async def test_connection_attributes(self, conn):
         """Verify connection attributes are correctly set from environment."""
-        assert TEST_DB_CONFIG['SURREALDB_URL'] in conn.url or "ws://localhost:8008" in conn.url
+        assert TEST_DB_CONFIG["SURREALDB_URL"] in conn.url or "ws://localhost:8008" in conn.url
         assert conn.username == "root"
         assert conn.namespace == "test_surreal"
 
@@ -267,11 +269,14 @@ class TestCRUDOperations:
 
         # Create record
         task_id = "item_task_001"
-        created = await conn.create(table_name, {
-            "task_id": task_id,
-            "name": "Item 1",
-            "quantity": 10,
-        })
+        created = await conn.create(
+            table_name,
+            {
+                "task_id": task_id,
+                "name": "Item 1",
+                "quantity": 10,
+            },
+        )
         if isinstance(created, list):
             created = created[0]
 
@@ -314,11 +319,14 @@ class TestCRUDOperations:
         # Create multiple records
         task_ids = ["task_alpha", "task_beta", "task_gamma"]
         for task_id in task_ids:
-            await conn.create(table_name, {
-                "task_id": task_id,
-                "status": "active",
-                "owner": f"owner_{task_id}",
-            })
+            await conn.create(
+                table_name,
+                {
+                    "task_id": task_id,
+                    "status": "active",
+                    "owner": f"owner_{task_id}",
+                },
+            )
 
         # Verify each can be retrieved independently
         for task_id in task_ids:
@@ -458,10 +466,7 @@ class TestLiveOperations:
         try:
             # Create a record in another task
             create_task = asyncio.create_task(
-                conn.create(table_name, {
-                    "task_id": "live_task_001",
-                    "message": "Live update test"
-                })
+                conn.create(table_name, {"task_id": "live_task_001", "message": "Live update test"})
             )
 
             # Wait for the creation to complete
@@ -469,7 +474,7 @@ class TestLiveOperations:
 
             # Try to receive update with timeout
             try:
-                update = await asyncio.wait_for(generator.__anext__(), timeout=3.0)
+                update = await asyncio.wait_for(anext(generator), timeout=3.0)
                 assert update is not None
                 assert update["message"] == "Live update test"
                 assert update["task_id"] == "live_task_001"
@@ -491,8 +496,8 @@ class TestLiveOperations:
         await clean_table(table_name2)
 
         # Start two live queries
-        live_id1, gen1 = await conn.start_live(table_name1)
-        live_id2, gen2 = await conn.start_live(table_name2)
+        live_id1, _gen1 = await conn.start_live(table_name1)
+        live_id2, _gen2 = await conn.start_live(table_name2)
 
         assert live_id1 != live_id2
 
@@ -507,7 +512,7 @@ class TestLiveOperations:
         await clean_table(table_name)
 
         # Start subscription
-        live_id, generator = await conn.start_live(table_name)
+        live_id, _generator = await conn.start_live(table_name)
 
         # Verify subscription is active
         assert isinstance(live_id, UUID)
@@ -520,7 +525,7 @@ class TestLiveOperations:
         await conn.stop_live(live_id)
 
         # Verify we can start a new subscription after stopping
-        new_live_id, new_generator = await conn.start_live(table_name)
+        new_live_id, _new_generator = await conn.start_live(table_name)
         assert new_live_id != live_id
         await conn.stop_live(new_live_id)
 
@@ -539,7 +544,7 @@ class TestDataPersistence:
         data = {
             "task_id": task_id,
             "key": "persistent_value",
-            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat()
+            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         }
         created = await conn.create(table_name, data)
         if isinstance(created, list):
@@ -563,7 +568,7 @@ class TestDataPersistence:
             "task_id": task_id,
             "string_field": "test string",
             "number_field": 42,
-            "float_field": 3.14159,
+            "float_field": math.pi,
             "boolean_field": True,
             "array_field": [1, 2, 3, 4, 5],
             "object_field": {
@@ -680,11 +685,7 @@ class TestRegressionScenarios:
 
         # Create multiple records concurrently
         tasks = [
-            conn.create(table_name, {
-                "task_id": f"concurrent_task_{i}",
-                "index": i,
-                "data": f"test_{i}"
-            })
+            conn.create(table_name, {"task_id": f"concurrent_task_{i}", "index": i, "data": f"test_{i}"})
             for i in range(5)
         ]
 
@@ -743,16 +744,22 @@ class TestRegressionScenarios:
         task_id = "unique_task_001"
 
         # Create first record
-        await conn.create(table_name, {
-            "task_id": task_id,
-            "data": "first",
-        })
+        await conn.create(
+            table_name,
+            {
+                "task_id": task_id,
+                "data": "first",
+            },
+        )
 
         # Create second record with same task_id (SurrealDB allows duplicates by default)
-        await conn.create(table_name, {
-            "task_id": task_id,
-            "data": "second",
-        })
+        await conn.create(
+            table_name,
+            {
+                "task_id": task_id,
+                "data": "second",
+            },
+        )
 
         # Query should return the first match
         result = await conn.select_by_task_id(table_name, task_id)
@@ -845,20 +852,27 @@ class TestTaskIDWorkflows:
         # Create multiple tasks
         task_ids = [f"batch_task_{i:03d}" for i in range(5)]
         for task_id in task_ids:
-            await conn.create(table_name, {
-                "task_id": task_id,
-                "status": "pending",
-                "priority": "medium",
-            })
+            await conn.create(
+                table_name,
+                {
+                    "task_id": task_id,
+                    "status": "pending",
+                    "priority": "medium",
+                },
+            )
 
         # Batch update via task_id lookup
         for task_id in task_ids[:3]:  # Update first 3
             task = await conn.select_by_task_id(table_name, task_id)
             record_id = task["id"]
-            await conn.merge(table_name, record_id, {
-                "status": "in_progress",
-                "assigned_to": "team_alpha",
-            })
+            await conn.merge(
+                table_name,
+                record_id,
+                {
+                    "status": "in_progress",
+                    "assigned_to": "team_alpha",
+                },
+            )
 
         # Verify updates
         for i, task_id in enumerate(task_ids):
@@ -877,10 +891,13 @@ class TestTaskIDWorkflows:
         await clean_table(table_name)
 
         # Create one task
-        await conn.create(table_name, {
-            "task_id": "existing_task",
-            "data": "test",
-        })
+        await conn.create(
+            table_name,
+            {
+                "task_id": "existing_task",
+                "data": "test",
+            },
+        )
 
         # Try to fetch non-existent task_id
         with pytest.raises(ValueError, match="No records found"):
@@ -902,10 +919,13 @@ class TestTaskIDWorkflows:
         ]
 
         for task_id in special_task_ids:
-            await conn.create(table_name, {
-                "task_id": task_id,
-                "description": f"Task ID: {task_id}",
-            })
+            await conn.create(
+                table_name,
+                {
+                    "task_id": task_id,
+                    "description": f"Task ID: {task_id}",
+                },
+            )
 
         # Verify all can be retrieved
         for task_id in special_task_ids:
@@ -999,27 +1019,38 @@ class TestTaskIDWorkflows:
 
         # Create with created_at
         created_at = datetime.datetime.now(datetime.timezone.utc)
-        await conn.create(table_name, {
-            "task_id": task_id,
-            "status": "todo",
-            "created_at": created_at.isoformat(),
-        })
+        await conn.create(
+            table_name,
+            {
+                "task_id": task_id,
+                "status": "todo",
+                "created_at": created_at.isoformat(),
+            },
+        )
 
         # Update to in_progress with started_at
         task = await conn.select_by_task_id(table_name, task_id)
         started_at = datetime.datetime.now(datetime.timezone.utc)
-        await conn.merge(table_name, task["id"], {
-            "status": "in_progress",
-            "started_at": started_at.isoformat(),
-        })
+        await conn.merge(
+            table_name,
+            task["id"],
+            {
+                "status": "in_progress",
+                "started_at": started_at.isoformat(),
+            },
+        )
 
         # Complete with completed_at
         task = await conn.select_by_task_id(table_name, task_id)
         completed_at = datetime.datetime.now(datetime.timezone.utc)
-        await conn.merge(table_name, task["id"], {
-            "status": "completed",
-            "completed_at": completed_at.isoformat(),
-        })
+        await conn.merge(
+            table_name,
+            task["id"],
+            {
+                "status": "completed",
+                "completed_at": completed_at.isoformat(),
+            },
+        )
 
         # Verify all timestamps exist
         final_task = await conn.select_by_task_id(table_name, task_id)
@@ -1037,19 +1068,26 @@ class TestTaskIDWorkflows:
         task_id = "idempotent_task_001"
 
         # Create initial task
-        await conn.create(table_name, {
-            "task_id": task_id,
-            "counter": 0,
-            "status": "active",
-        })
+        await conn.create(
+            table_name,
+            {
+                "task_id": task_id,
+                "counter": 0,
+                "status": "active",
+            },
+        )
 
         # Perform same update multiple times
         for i in range(3):
             task = await conn.select_by_task_id(table_name, task_id)
-            await conn.merge(table_name, task["id"], {
-                "counter": i + 1,
-                "last_updated": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-            })
+            await conn.merge(
+                table_name,
+                task["id"],
+                {
+                    "counter": i + 1,
+                    "last_updated": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                },
+            )
 
         # Verify final state
         final_task = await conn.select_by_task_id(table_name, task_id)
@@ -1065,39 +1103,53 @@ class TestTaskIDWorkflows:
 
         # Test merge (partial update)
         task_id_merge = "merge_task"
-        await conn.create(table_name, {
-            "task_id": task_id_merge,
-            "field_a": "original_a",
-            "field_b": "original_b",
-            "field_c": "original_c",
-        })
+        await conn.create(
+            table_name,
+            {
+                "task_id": task_id_merge,
+                "field_a": "original_a",
+                "field_b": "original_b",
+                "field_c": "original_c",
+            },
+        )
 
         task = await conn.select_by_task_id(table_name, task_id_merge)
-        merged = await conn.merge(table_name, task["id"], {
-            "field_b": "updated_b",
-        })
+        merged = await conn.merge(
+            table_name,
+            task["id"],
+            {
+                "field_b": "updated_b",
+            },
+        )
         if isinstance(merged, list):
             merged = merged[0]
 
         assert merged["field_a"] == "original_a"  # Preserved
-        assert merged["field_b"] == "updated_b"   # Updated
+        assert merged["field_b"] == "updated_b"  # Updated
         assert merged["field_c"] == "original_c"  # Preserved
 
         # Test update (full replacement)
         task_id_update = "update_task"
-        await conn.create(table_name, {
-            "task_id": task_id_update,
-            "field_a": "original_a",
-            "field_b": "original_b",
-            "field_c": "original_c",
-        })
+        await conn.create(
+            table_name,
+            {
+                "task_id": task_id_update,
+                "field_a": "original_a",
+                "field_b": "original_b",
+                "field_c": "original_c",
+            },
+        )
 
         task = await conn.select_by_task_id(table_name, task_id_update)
-        updated = await conn.update(table_name, task["id"], {
-            "task_id": task_id_update,  # Must include task_id
-            "field_b": "updated_b",
-            "field_d": "new_d",
-        })
+        updated = await conn.update(
+            table_name,
+            task["id"],
+            {
+                "task_id": task_id_update,  # Must include task_id
+                "field_b": "updated_b",
+                "field_d": "new_d",
+            },
+        )
         if isinstance(updated, list):
             updated = updated[0]
 

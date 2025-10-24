@@ -13,13 +13,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from freezegun import freeze_time
 
-from digitalkin.models.module.task_monitor import (
+from digitalkin.core.task_manager.surrealdb_repository import SurrealDBConnection
+from digitalkin.core.task_manager.task_session import TaskSession
+from digitalkin.models.core.task_monitor import (
     SignalType,
     TaskStatus,
 )
 from digitalkin.modules._base_module import BaseModule
-from digitalkin.modules.job_manager.surrealdb_repository import SurrealDBConnection
-from digitalkin.modules.job_manager.task_session import TaskSession
 
 # ============================================================================
 # Fixtures
@@ -48,7 +48,7 @@ def mock_module():
 @pytest.fixture
 def mock_logger():
     """Mock logger to capture log calls without side effects."""
-    with patch("digitalkin.modules.job_manager.task_session.logger") as logger_mock:
+    with patch("digitalkin.core.task_manager.task_session.logger") as logger_mock:
         yield logger_mock
 
 
@@ -57,6 +57,7 @@ def task_session(mock_db, mock_module):
     """Create a TaskSession instance with mocked dependencies."""
     return TaskSession(
         task_id="test_task_123",
+        mission_id="missions:test_mission",
         db=mock_db,
         module=mock_module,
         heartbeat_interval=datetime.timedelta(seconds=2),
@@ -134,6 +135,7 @@ class TestInitialization:
 
         session = TaskSession(
             task_id=task_id,
+            mission_id="missions:default_mission",
             db=mock_db,
             module=mock_module,
             heartbeat_interval=heartbeat_interval,
@@ -172,6 +174,7 @@ class TestInitialization:
         """
         session = TaskSession(
             task_id="test_default",
+            mission_id="missions:default_mission",
             db=mock_db,
             module=mock_module,
         )
@@ -246,7 +249,7 @@ class TestHeartbeats:
         task_session.heartbeat_record_id = "heartbeats:existing_id"
         task_session._last_heartbeat = datetime.datetime.now(tz=datetime.timezone.utc) - datetime.timedelta(seconds=5)
 
-        with patch("digitalkin.modules.job_manager.task_session.datetime") as mock_dt:
+        with patch("digitalkin.core.task_manager.task_session.datetime") as mock_dt:
             new_time = datetime.datetime.now(tz=datetime.timezone.utc) + datetime.timedelta(seconds=3)
             mock_dt.datetime.now.return_value = new_time
             mock_dt.timezone = datetime.timezone
@@ -294,7 +297,7 @@ class TestHeartbeats:
 
         mock_db.merge.return_value = {"code": "MERGE_ERROR"}
 
-        with patch("digitalkin.modules.job_manager.task_session.datetime") as mock_dt:
+        with patch("digitalkin.core.task_manager.task_session.datetime") as mock_dt:
             new_time = datetime.datetime.now(tz=datetime.timezone.utc) + datetime.timedelta(seconds=3)
             mock_dt.datetime.now.return_value = new_time
             mock_dt.timezone = datetime.timezone
@@ -321,7 +324,7 @@ class TestHeartbeats:
 
         mock_db.merge.side_effect = RuntimeError("Database connection lost")
 
-        with patch("digitalkin.modules.job_manager.task_session.datetime") as mock_dt:
+        with patch("digitalkin.core.task_manager.task_session.datetime") as mock_dt:
             new_time = datetime.datetime.now(tz=datetime.timezone.utc) + datetime.timedelta(seconds=3)
             mock_dt.datetime.now.return_value = new_time
             mock_dt.timezone = datetime.timezone
@@ -1078,7 +1081,11 @@ class TestLifecycleIntegration:
 
         # Setup signal stream
         signals = [
-            {"id": "tasks:sig1", "action": "status", "payload": {}},
+            {
+                "id": "tasks:sig1",
+                "action": "status",
+                "payload": {},
+            },
         ]
         mock_db.start_live.return_value = ("live_123", _signal_generator(signals))
 
@@ -1366,7 +1373,7 @@ class TestRegressionSnapshots:
         Regression test to ensure heartbeat message structure doesn't
         change unexpectedly, which could break database schema compatibility.
         """
-        with patch("digitalkin.modules.job_manager.task_session.datetime") as mock_dt:
+        with patch("digitalkin.core.task_manager.task_session.datetime") as mock_dt:
             mock_dt.datetime.now.return_value = datetime.datetime.now(tz=datetime.timezone.utc)
             mock_dt.timezone = datetime.timezone
 
@@ -1375,9 +1382,10 @@ class TestRegressionSnapshots:
             payload = mock_db.create.call_args[0][1]
 
             # Snapshot of expected structure
-            expected_keys = {"task_id", "timestamp"}
+            expected_keys = {"task_id", "mission_id", "timestamp"}
             assert set(payload.keys()) == expected_keys
             assert payload["task_id"] == "test_task_123"
+            assert payload["mission_id"] == "missions:test_mission"
             assert isinstance(payload["timestamp"], datetime.datetime)
 
     @pytest.mark.asyncio
@@ -1393,8 +1401,9 @@ class TestRegressionSnapshots:
 
         payload = mock_db.update.call_args[0][2]
         # Snapshot of expected structure
-        expected_keys = {"task_id", "action", "status", "payload", "timestamp"}
+        expected_keys = {"task_id", "mission_id", "action", "status", "payload", "timestamp"}
         assert set(payload.keys()) == expected_keys
+        assert payload["mission_id"] == "missions:test_mission"
         assert payload["task_id"] == "test_task_123"
         assert payload["action"] == SignalType.ACK_CANCEL.value
         assert payload["status"] == TaskStatus.CANCELLED.value
@@ -1409,7 +1418,7 @@ class TestRegressionSnapshots:
         """
         task_session.signal_record_id = "tasks:test_signal_id"
 
-        with patch("digitalkin.modules.job_manager.task_session.datetime") as mock_dt:
+        with patch("digitalkin.core.task_manager.task_session.datetime") as mock_dt:
             mock_dt.datetime.now.return_value = datetime.datetime.now(tz=datetime.timezone.utc)
             mock_dt.timezone = datetime.timezone
 
@@ -1462,7 +1471,7 @@ class TestFailureModes:
             )
             mock_db.merge.return_value = return_value
 
-        with patch("digitalkin.modules.job_manager.task_session.datetime") as mock_dt:
+        with patch("digitalkin.core.task_manager.task_session.datetime") as mock_dt:
             mock_dt.datetime.now.return_value = datetime.datetime.now(tz=datetime.timezone.utc)
             mock_dt.timezone = datetime.timezone
 
@@ -1493,7 +1502,7 @@ class TestFailureModes:
 
         mock_db.merge.side_effect = exception_type("Simulated error")
 
-        with patch("digitalkin.modules.job_manager.task_session.datetime") as mock_dt:
+        with patch("digitalkin.core.task_manager.task_session.datetime") as mock_dt:
             mock_dt.datetime.now.return_value = datetime.datetime.now(tz=datetime.timezone.utc)
             mock_dt.timezone = datetime.timezone
 
@@ -1583,7 +1592,7 @@ class TestTimingAndConcurrency:
 
         timestamps = []
 
-        with patch("digitalkin.modules.job_manager.task_session.datetime") as mock_dt:
+        with patch("digitalkin.core.task_manager.task_session.datetime") as mock_dt:
             for i in range(3):
                 new_time = datetime.datetime.now(tz=datetime.timezone.utc) + datetime.timedelta(seconds=2.5 * i)
                 timestamps.append(new_time)
@@ -1606,6 +1615,7 @@ class TestTimingAndConcurrency:
         heartbeat_count = 0
         session = TaskSession(
             task_id="test_task_123",
+            mission_id="missions:default_mission",
             db=mock_db,
             module=mock_module,
             heartbeat_interval=datetime.timedelta(milliseconds=1),
@@ -1761,7 +1771,7 @@ class TestStateInvariants:
         Tests that once a heartbeat record is created, its ID remains
         stable across subsequent heartbeat updates.
         """
-        with patch("digitalkin.modules.job_manager.task_session.datetime") as mock_dt:
+        with patch("digitalkin.core.task_manager.task_session.datetime") as mock_dt:
             mock_dt.datetime.now.return_value = datetime.datetime.now(tz=datetime.timezone.utc)
             mock_dt.timezone = datetime.timezone
 
@@ -1830,6 +1840,7 @@ class TestLoggingValidation:
 
         TaskSession(
             task_id=task_id,
+            mission_id="missions:default_mission",
             db=mock_db,
             module=mock_module,
             heartbeat_interval=heartbeat_interval,
@@ -1920,7 +1931,7 @@ class TestDatabaseInteractionPatterns:
         Tests that heartbeat creation uses the correct table name
         to prevent data being written to wrong locations.
         """
-        with patch("digitalkin.modules.job_manager.task_session.datetime") as mock_dt:
+        with patch("digitalkin.core.task_manager.task_session.datetime") as mock_dt:
             mock_dt.datetime.now.return_value = datetime.datetime.now(tz=datetime.timezone.utc)
             mock_dt.timezone = datetime.timezone
 
@@ -1956,7 +1967,7 @@ class TestDatabaseInteractionPatterns:
         task_session.heartbeat_record_id = "heartbeats:existing_123"
         task_session._last_heartbeat = datetime.datetime.now(tz=datetime.timezone.utc) - datetime.timedelta(seconds=5)
 
-        with patch("digitalkin.modules.job_manager.task_session.datetime") as mock_dt:
+        with patch("digitalkin.core.task_manager.task_session.datetime") as mock_dt:
             mock_dt.datetime.now.return_value = datetime.datetime.now(tz=datetime.timezone.utc)
             mock_dt.timezone = datetime.timezone
 

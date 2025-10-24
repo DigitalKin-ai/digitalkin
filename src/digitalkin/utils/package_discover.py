@@ -1,4 +1,4 @@
-"""."""
+"""Secure module discovery and import utility for trigger handlers."""
 
 import importlib
 import importlib.util
@@ -276,7 +276,6 @@ class ModuleDiscoverer:
         Args:
             packages: List of package names to scan.
             file_pattern: Glob pattern for matching modules.
-            safe_mode: If True, blocks modules with forbidden names.
             max_file_size: Limit for module file sizes in bytes.
         """
         self.packages = packages

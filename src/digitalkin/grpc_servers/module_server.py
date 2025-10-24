@@ -17,12 +17,12 @@ from digitalkin_proto.digitalkin.module_registry.v2 import (
 from digitalkin.grpc_servers._base_server import BaseServer
 from digitalkin.grpc_servers.module_servicer import ModuleServicer
 from digitalkin.grpc_servers.utils.exceptions import ServerError
-from digitalkin.grpc_servers.utils.models import (
+from digitalkin.logger import logger
+from digitalkin.models.grpc_servers.models import (
     ClientConfig,
     ModuleServerConfig,
     SecurityMode,
 )
-from digitalkin.logger import logger
 from digitalkin.modules._base_module import BaseModule
 
 

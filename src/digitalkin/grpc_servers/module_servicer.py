@@ -13,12 +13,12 @@ from digitalkin_proto.digitalkin.module.v2 import (
 )
 from google.protobuf import json_format, struct_pb2
 
+from digitalkin.core.job_manager.base_job_manager import BaseJobManager
 from digitalkin.grpc_servers.utils.exceptions import ServicerError
 from digitalkin.logger import logger
+from digitalkin.models.core.job_manager_models import JobManagerMode
 from digitalkin.models.module.module import ModuleStatus
 from digitalkin.modules._base_module import BaseModule
-from digitalkin.modules.job_manager.base_job_manager import BaseJobManager
-from digitalkin.modules.job_manager.job_manager_models import JobManagerMode
 from digitalkin.services.services_models import ServicesMode
 from digitalkin.services.setup.default_setup import DefaultSetup
 from digitalkin.services.setup.grpc_setup import GrpcSetup
@@ -226,7 +226,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
                     yield lifecycle_pb2.StartModuleResponse(success=True, output=proto, job_id=job_id)
         finally:
             await self.job_manager.tasks[job_id]
-            await self.job_manager.clean_session(job_id)
+            await self.job_manager.clean_session(job_id, mission_id=request.mission_id)
 
         logger.info("Job %s finished", job_id)
 

@@ -17,12 +17,12 @@ from typing import TYPE_CHECKING, Any, Generic
 
 from rstream import Consumer, ConsumerOffsetSpecification, MessageContext, OffsetType
 
+from digitalkin.core.job_manager.base_job_manager import BaseJobManager
+from digitalkin.core.job_manager.taskiq_broker import STREAM, STREAM_RETENTION, TASKIQ_BROKER
 from digitalkin.logger import logger
+from digitalkin.models.core.task_monitor import TaskStatus
 from digitalkin.models.module import InputModelT, SetupModelT
-from digitalkin.models.module.task_monitor import TaskStatus
 from digitalkin.modules._base_module import BaseModule
-from digitalkin.modules.job_manager.base_job_manager import BaseJobManager
-from digitalkin.modules.job_manager.taskiq_broker import STREAM, STREAM_RETENTION, TASKIQ_BROKER
 from digitalkin.services.services_models import ServicesMode
 
 if TYPE_CHECKING:
@@ -146,7 +146,6 @@ class TaskiqJobManager(BaseJobManager, Generic[InputModelT, SetupModelT]):
 
         Args:
             config_setup_data: The input data required to start the job.
-            setup_data: The setup configuration for the module.
             mission_id: The mission ID associated with the job.
             setup_id: The setup ID associated with the module.
             setup_version_id: The setup ID.
@@ -158,7 +157,7 @@ class TaskiqJobManager(BaseJobManager, Generic[InputModelT, SetupModelT]):
             TypeError: If the function is called with bad data type.
             ValueError: If the module fails to start.
         """
-        task = TASKIQ_BROKER.find_task("digitalkin.modules.job_manager.taskiq_broker:run_config_module")
+        task = TASKIQ_BROKER.find_task("digitalkin.core.taskiq_broker:run_config_module")
 
         if task is None:
             msg = "Task not found"
@@ -242,7 +241,7 @@ class TaskiqJobManager(BaseJobManager, Generic[InputModelT, SetupModelT]):
         Raises:
             ValueError: If the task is not found.
         """
-        task = TASKIQ_BROKER.find_task("digitalkin.modules.job_manager.taskiq_broker:run_start_module")
+        task = TASKIQ_BROKER.find_task("digitalkin.core.taskiq_broker:run_start_module")
 
         if task is None:
             msg = "Task not found"

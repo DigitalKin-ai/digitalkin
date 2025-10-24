@@ -17,7 +17,7 @@ from grpc.framework.foundation import logging_pool
 from mock_filesystem_servicer import FakeContext, MockFilesystemServicer
 
 from digitalkin.grpc_servers.utils.exceptions import ServerError
-from digitalkin.grpc_servers.utils.models import ClientConfig, SecurityMode, ServerMode
+from digitalkin.models.grpc_servers.models import ClientConfig, SecurityMode, ServerMode
 from digitalkin.services.filesystem.filesystem_strategy import (
     FileFilter,
     FilesystemRecord,
