@@ -8,6 +8,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential gcc wget curl libffi-dev \
   && rm -rf /var/lib/apt/lists/*
 
+# install uv
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh && \
+    ln -s /root/.local/bin/uv /usr/local/bin/uv
+
 # copy project metadata for dependency caching
 COPY pyproject.toml uv.lock /app/
 
@@ -16,8 +20,8 @@ COPY src/ /app/src/
 COPY tests/ /app/tests/
 
 # install project (editable) + extras; this layer installs heavy deps one time
-RUN pip install --upgrade pip setuptools wheel \
- && pip install --upgrade ".[dev,tests,taskiq]"
+RUN uv pip install --system -e ".[taskiq]" && \
+    uv pip install --system --group dev --group tests
 
 # copy runtime script
 WORKDIR /app
