@@ -73,7 +73,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          uv pip install -e ".[tests,dev]" --system
+          uv pip install -e .  --group tests --group dev --system
 
       - name: Lint with Ruff
         run: uv run ruff check --output-format=github .
