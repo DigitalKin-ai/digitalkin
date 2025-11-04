@@ -90,6 +90,7 @@ markdown_extensions:
 
 plugins:
 - search
+- mike
 - autorefs
 - markdown-exec
 - section-index
@@ -164,3 +165,7 @@ extra:
     link: https://github.com/digitalkin-ai
   - icon: fontawesome/brands/python
     link: https://pypi.org/project/digitalkin/
+
+  version:
+    provider: mike
+    default: stable

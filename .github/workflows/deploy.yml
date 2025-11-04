@@ -4,28 +4,134 @@ on:
   push:
     branches:
       - main
-  pull_request:
-    branches:
-      - main
+      - dev
+      - 'feat/*'
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        type: choice
+        options:
+          - production
+          - staging
+        default: 'staging'
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
 
 jobs:
+  determine-version:
+    name: Determine Version & Environment
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      safe_version: ${{ steps.version.outputs.safe_version }}
+      alias: ${{ steps.version.outputs.alias }}
+      environment: ${{ steps.version.outputs.environment }}
+      should_deploy: ${{ steps.version.outputs.should_deploy }}
+      is_dev: ${{ steps.version.outputs.is_dev }}
+      warning_message: ${{ steps.version.outputs.warning_message }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine version and environment
+        id: version
+        run: |
+          REF_NAME="${{ github.ref_name }}"
+          REF_TYPE="${{ github.ref_type }}"
+
+          echo "Debug: REF_NAME=$REF_NAME, REF_TYPE=$REF_TYPE"
+
+          VERSION=""
+          ALIAS=""
+          ENVIRONMENT=""
+          IS_DEV="false"
+          WARNING_MESSAGE=""
+
+          if [[ "$REF_TYPE" == "tag" ]] && [[ "$REF_NAME" == v* ]]; then
+            # Release version: v1.0.0 -> 1.0.0
+            VERSION="${REF_NAME#v}"
+            ALIAS="latest"
+            ENVIRONMENT="production"
+            IS_DEV="false"
+            WARNING_MESSAGE=""
+          elif [[ "$REF_NAME" == "main" ]]; then
+            # Main branch
+            VERSION="main"
+            ALIAS="stable"
+            ENVIRONMENT="production"
+            IS_DEV="false"
+            WARNING_MESSAGE="⚠️ This is the development version of the documentation for the main branch."
+          elif [[ "$REF_NAME" == "dev" ]]; then
+            # Dev branch
+            VERSION="dev"
+            ALIAS="development"
+            ENVIRONMENT="staging"
+            IS_DEV="true"
+            WARNING_MESSAGE="⚠️ This is the development version of the documentation. Features may change."
+          elif [[ "$REF_NAME" =~ ^dev- ]]; then
+            # Feature branch: dev-feature-name
+            VERSION="$REF_NAME"
+            ALIAS=""
+            ENVIRONMENT="staging"
+            IS_DEV="true"
+            WARNING_MESSAGE="⚠️ This is a preview of documentation for the $REF_NAME branch. This version is experimental."
+          else
+            VERSION="$REF_NAME"
+            ALIAS=""
+            ENVIRONMENT="experimental"
+            IS_DEV="true"
+            WARNING_MESSAGE="⚠️ This is a preview of documentation for the $REF_NAME branch. This version is untested."
+          fi
+
+          SAFE_VERSION="${VERSION//\//-}"
+
+          if [[ "$ALIAS" == "$REF_NAME" ]]; then
+            ALIAS="$SAFE_VERSION"
+          fi
+
+
+          echo "safe_version=$SAFE_VERSION" >> $GITHUB_OUTPUT
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "alias=$ALIAS" >> $GITHUB_OUTPUT
+          echo "environment=$ENVIRONMENT" >> $GITHUB_OUTPUT
+          echo "is_dev=$IS_DEV" >> $GITHUB_OUTPUT
+          echo "warning_message=$WARNING_MESSAGE" >> $GITHUB_OUTPUT
+          echo "should_deploy=true" >> $GITHUB_OUTPUT
+
+          echo "Version: $VERSION"
+          echo " Alias: $ALIAS"
+          echo "Environment: $ENVIRONMENT"
+          echo " Is Dev: $IS_DEV"
+
   build:
+    name: Build Documentation
+    needs: determine-version
+    if: needs.determine-version.outputs.should_deploy == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
+          cache: 'pip'
 
       - name: Cache pip packages
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/pyproject.toml') }}
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/pyproject.toml', '**/requirements*.txt') }}
           restore-keys: |
             ${{ runner.os }}-pip-
 
@@ -33,26 +139,130 @@ jobs:
         run: pip install uv
 
       - name: Install project and dependencies
-        run: uv pip install -e . --group docs
+        run: uv pip install -e . --group docs --system
+
+      - name: Display version info
+        run: |
+          echo "Building version: ${{ needs.determine-version.outputs.version }}"
+          echo "Alias: ${{ needs.determine-version.outputs.alias }}"
+          echo "Environment: ${{ needs.determine-version.outputs.environment }}"
+          if [[ "${{ needs.determine-version.outputs.warning_message }}" != "" ]]; then
+            echo "Warning: ${{ needs.determine-version.outputs.warning_message }}"
+          fi
 
       - name: Build documentation
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          MKDOCS_GIT_COMMITTERS_ENABLED: true
+          DEPLOY: true
         run: uv run mkdocs build
+
+      - name: Inject warning banner (if dev)
+        if: needs.determine-version.outputs.is_dev == 'true'
+        run: |
+          # Create a custom CSS file for the warning banner
+          cat > site/custom-warning.css << 'EOF'
+          .md-banner {
+            background-color: #fff3cd;
+            border-bottom: 2px solid #ffc107;
+            padding: 12px 16px;
+            text-align: center;
+            color: #856404;
+            font-weight: 500;
+          }
+          EOF
+
+          # Inject warning into base HTML (if using custom theme)
+          find site -name "*.html" -type f -exec sed -i '/<body/a\    <div class="md-banner">${{ needs.determine-version.outputs.warning_message }}</div>' {} \;
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: site/
 
       - name: Upload site artifact
         uses: actions/upload-artifact@v4
         with:
-          name: documentation-site
-          path: ./site
-          retention-days: 1
+          name: docs-${{ needs.determine-version.outputs.safe_version }}-${{ github.run_number }}
+          path: site/
+          retention-days: 30
 
-      - name: Deploy to GitHub Pages
-        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-        uses: peaceiris/actions-gh-pages@v4
+  deploy:
+    name: Deploy Documentation
+    needs: [determine-version, build]
+    if: needs.determine-version.outputs.should_deploy == 'true'
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ needs.determine-version.outputs.environment }}
+      url: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}
+    steps:
+      - uses: actions/checkout@v4
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./site
-          cname: digitalkin.com  # Optional: if you have a custom domain
-          force_orphan: false
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Install project and dependencies
+        run: uv pip install -e . --group docs --system
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Deploy with mike
+        run: |
+          uv run mike deploy \
+            --push \
+            --update-aliases \
+            ${{ needs.determine-version.outputs.safe_version }} \
+            ${{ needs.determine-version.outputs.alias }}
+
+      - name: Deployment Summary
+        run: |
+          echo "## 📚 Documentation Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Version | ${{ needs.determine-version.outputs.version }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Alias | ${{ needs.determine-version.outputs.alias }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Environment | ${{ needs.determine-version.outputs.environment }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Branch/Tag | ${{ github.ref_name }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Commit | ${{ github.sha }} |" >> $GITHUB_STEP_SUMMARY
+          if [[ "${{ needs.determine-version.outputs.is_dev }}" == "true" ]]; then
+            echo "| Warning | ⚠️ Development version |" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Documentation deployed successfully!"
+          echo "📖 View at: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}"
+
+      - name: Comment on PR/Release
+        if: github.event_name == 'pull_request' || startsWith(github.ref, 'refs/tags/')
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const version = "${{ needs.determine-version.outputs.version }}";
+            const isDev = "${{ needs.determine-version.outputs.is_dev }}" === "true";
+            const warning = "${{ needs.determine-version.outputs.warning_message }}";
+
+            let message = `📚 **Documentation deployed for version \`${version}\`**\n`;
+            if (isDev) {
+              message += `\n${warning}\n`;
+            }
+            message += `\n🔗 View documentation: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}`;
+
+            if (context.eventName === 'pull_request') {
+              github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: message
+              });
+            }

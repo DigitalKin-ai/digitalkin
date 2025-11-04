@@ -100,7 +100,7 @@
         "mkdocstrings-python>=1.18.2",
         "mkdocs-open-in-new-tab>=1.0.8",
         "tomli>=2.3.0",
-    ]
+]
 
 [tool.setuptools]
     package-dir = { "" = "src" }
