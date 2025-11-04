@@ -3,5 +3,12 @@
     "version": "feat-docs-versionning",
     "title": "feat-docs-versionning",
     "aliases": []
+  },
+  {
+    "version": "dev",
+    "title": "dev",
+    "aliases": [
+      "development"
+    ]
   }
 ]
