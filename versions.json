@@ -1,5 +1,10 @@
 [
   {
+    "version": "feat-refacto-opti",
+    "title": "feat-refacto-opti",
+    "aliases": []
+  },
+  {
     "version": "feat-docs-versionning",
     "title": "feat-docs-versionning",
     "aliases": []
