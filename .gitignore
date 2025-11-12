@@ -173,3 +173,5 @@ cython_debug/
 .vscode/
 requirements.txt
 certs/
+
+CLAUDE.md

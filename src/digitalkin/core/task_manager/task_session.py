@@ -42,13 +42,23 @@ class TaskSession:
         db: SurrealDBConnection,
         module: BaseModule,
         heartbeat_interval: datetime.timedelta = datetime.timedelta(seconds=2),
+        queue_maxsize: int = 1000,
     ) -> None:
-        """Initialize Task Session."""
+        """Initialize Task Session.
+
+        Args:
+            task_id: Unique task identifier
+            mission_id: Mission identifier
+            db: SurrealDB connection
+            module: Module instance
+            heartbeat_interval: Interval between heartbeats
+            queue_maxsize: Maximum size for the queue (0 = unlimited)
+        """
         self.db = db
         self.module = module
 
         self.status = TaskStatus.PENDING
-        self.queue: asyncio.Queue = asyncio.Queue()
+        self.queue: asyncio.Queue = asyncio.Queue(maxsize=queue_maxsize)
 
         self.task_id = task_id
         self.mission_id = mission_id

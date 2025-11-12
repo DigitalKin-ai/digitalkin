@@ -134,8 +134,8 @@ def test_server_config_defaults() -> None:
 
     # Check server_options
     if config.server_options != [
-        ("grpc.max_receive_message_length", 50 * 1024 * 1024),  # 50MB
-        ("grpc.max_send_message_length", 50 * 1024 * 1024),  # 50MB
+        ("grpc.max_receive_message_length", 100 * 1024 * 1024),  # 100MB
+        ("grpc.max_send_message_length", 100 * 1024 * 1024),  # 100MB
     ]:
         pytest.fail(f"Expected default server_options to be empty list, got {config.server_options}")
 
