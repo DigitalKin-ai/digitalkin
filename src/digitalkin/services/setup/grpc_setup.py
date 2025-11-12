@@ -5,7 +5,7 @@ from contextlib import contextmanager
 from typing import Any
 
 import grpc
-from digitalkin_proto.digitalkin.setup.v2 import (
+from digitalkin_proto.agentic_mesh_protocol.setup.v1 import (
     setup_pb2,
     setup_service_pb2_grpc,
 )

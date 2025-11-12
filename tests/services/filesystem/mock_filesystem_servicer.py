@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import grpc
-from digitalkin_proto.digitalkin.filesystem.v1 import (
+from digitalkin_proto.agentic_mesh_protocol.filesystem.v1 import (
     filesystem_pb2,
     filesystem_service_pb2_grpc,
 )

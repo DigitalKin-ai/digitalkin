@@ -10,7 +10,7 @@ import string
 import grpc
 import grpc_testing
 import pytest
-from digitalkin_proto.digitalkin.module_registry.v2 import (
+from digitalkin_proto.agentic_mesh_protocol.module_registry.v1 import (
     discover_pb2,
     metadata_pb2,
     module_registry_service_pb2,

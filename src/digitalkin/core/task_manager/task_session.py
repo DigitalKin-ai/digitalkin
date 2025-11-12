@@ -48,7 +48,8 @@ class TaskSession:
         self.module = module
 
         self.status = TaskStatus.PENDING
-        self.queue: asyncio.Queue = asyncio.Queue()
+        # Bounded queue to prevent unbounded memory growth (max 1000 items)
+        self.queue: asyncio.Queue = asyncio.Queue(maxsize=1000)
 
         self.task_id = task_id
         self.mission_id = mission_id

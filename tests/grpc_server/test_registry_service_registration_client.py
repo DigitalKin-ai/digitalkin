@@ -1,7 +1,7 @@
 """Test file for Module Registry Servicer from the client side."""
 
 import grpc
-from digitalkin_proto.digitalkin.module_registry.v2 import (
+from digitalkin_proto.agentic_mesh_protocol.module_registry.v1 import (
     module_registry_service_pb2,
     module_registry_service_pb2_grpc,
     registration_pb2,

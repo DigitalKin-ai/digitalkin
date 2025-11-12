@@ -4,7 +4,7 @@ from collections.abc import Generator
 from contextlib import contextmanager
 from typing import Any, Literal
 
-from digitalkin_proto.digitalkin.cost.v1 import cost_pb2, cost_service_pb2_grpc
+from digitalkin_proto.agentic_mesh_protocol.cost.v1 import cost_pb2, cost_service_pb2_grpc
 from google.protobuf import json_format
 
 from digitalkin.grpc_servers.utils.exceptions import ServerError

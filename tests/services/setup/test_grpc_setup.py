@@ -7,7 +7,7 @@ import string
 import grpc
 import grpc_testing
 import pytest
-from digitalkin_proto.digitalkin.setup.v2 import (
+from digitalkin_proto.agentic_mesh_protocol.setup.v1 import (
     setup_pb2,
     setup_service_pb2,
     setup_service_pb2_grpc,
@@ -291,9 +291,9 @@ def test_create_setup_version_success(
     mock_servicer: MockSetupServicer,
     generate_setup_version_obj: SetupVersionData,
 ) -> None:
-    """Test successful create_setup.
+    """Test successful create_setup_version.
 
-    Verifies that create_setup RPC call with a valid request using the fake servicer.
+    Verifies that create_setup_version RPC call with a valid request using the fake servicer.
 
     Args:
         grpc_test_server: Mock gRPC server for testing.
@@ -363,3 +363,546 @@ def test_create_setup_version_validation_error(
     )
     with pytest.raises(ValueError, match="Invalid data for Setup Version Creation"):
         future.result()
+
+
+# ============================================================================
+# get_setup() Tests
+# ============================================================================
+
+
+@freeze_time("2025-04-01 12:00:01")
+def test_get_setup_success(
+    client: GrpcSetup,
+    test_channel: grpc_testing.Channel,
+    mock_servicer: MockSetupServicer,
+    generate_setup_obj: SetupData,
+) -> None:
+    """Test successfully retrieving a setup.
+
+    Verifies that get_setup returns the correct setup data.
+    """
+    service_desc = setup_service_pb2.DESCRIPTOR.services_by_name["SetupService"]
+    create_method_desc = service_desc.methods_by_name["CreateSetup"]
+    get_method_desc = service_desc.methods_by_name["GetSetup"]
+
+    # First create a setup
+    create_future = client_execution_thread_pool.submit(client.create_setup, generate_setup_obj.model_dump())
+    _, create_request, create_rpc = test_channel.take_unary_unary(create_method_desc)
+    create_rpc.send_initial_metadata(())
+    request_obj = setup_pb2.CreateSetupRequest(**{
+        k: v for (k, v) in generate_setup_obj.model_dump().items() if k not in ("id",)
+    })
+    create_response = mock_servicer.CreateSetup(request_obj, FakeContext())
+    create_rpc.terminate(create_response, (), grpc.StatusCode.OK, "")
+    create_future.result()
+
+    # Get the created setup's ID
+    created_setup_id = list(mock_servicer.setups.keys())[0]
+
+    # Now get the setup
+    get_future = client_execution_thread_pool.submit(client.get_setup, {"setup_id": created_setup_id})
+    _, get_request, get_rpc = test_channel.take_unary_unary(get_method_desc)
+
+    assert get_request.setup_id == created_setup_id
+
+    get_context = FakeContext()
+    get_response = mock_servicer.GetSetup(get_request, get_context)
+    get_rpc.terminate(get_response, (), grpc.StatusCode.OK, "")
+
+    result = get_future.result()
+    assert result is not None
+    assert result.name == generate_setup_obj.name
+    assert result.organisation_id == generate_setup_obj.organisation_id
+    assert result.owner_id == generate_setup_obj.owner_id
+
+
+def test_get_setup_not_found(
+    client: GrpcSetup,
+    test_channel: grpc_testing.Channel,
+    mock_servicer: MockSetupServicer,
+) -> None:
+    """Test getting a non-existent setup raises error.
+
+    Verifies that attempting to get a non-existent setup results in error.
+    """
+    service_desc = setup_service_pb2.DESCRIPTOR.services_by_name["SetupService"]
+    get_method_desc = service_desc.methods_by_name["GetSetup"]
+
+    get_future = client_execution_thread_pool.submit(client.get_setup, {"setup_id": "nonexistent_id"})
+    _, get_request, get_rpc = test_channel.take_unary_unary(get_method_desc)
+
+    get_context = FakeContext()
+    get_response = mock_servicer.GetSetup(get_request, get_context)
+    get_rpc.terminate(get_response, (), get_context._code, get_context._details)
+
+    with pytest.raises(Exception):
+        get_future.result()
+
+
+# ============================================================================
+# update_setup() Tests
+# ============================================================================
+
+
+@freeze_time("2025-04-01 12:00:01")
+def test_update_setup_success(
+    client: GrpcSetup,
+    test_channel: grpc_testing.Channel,
+    mock_servicer: MockSetupServicer,
+    generate_setup_obj: SetupData,
+) -> None:
+    """Test successfully updating a setup.
+
+    Verifies that update_setup updates the setup data correctly.
+    """
+    service_desc = setup_service_pb2.DESCRIPTOR.services_by_name["SetupService"]
+    create_method_desc = service_desc.methods_by_name["CreateSetup"]
+    update_method_desc = service_desc.methods_by_name["UpdateSetup"]
+
+    # First create a setup
+    create_future = client_execution_thread_pool.submit(client.create_setup, generate_setup_obj.model_dump())
+    _, create_request, create_rpc = test_channel.take_unary_unary(create_method_desc)
+    create_rpc.send_initial_metadata(())
+    request_obj = setup_pb2.CreateSetupRequest(**{
+        k: v for (k, v) in generate_setup_obj.model_dump().items() if k not in ("id",)
+    })
+    create_response = mock_servicer.CreateSetup(request_obj, FakeContext())
+    create_rpc.terminate(create_response, (), grpc.StatusCode.OK, "")
+    create_future.result()
+
+    # Get the created setup's ID
+    created_setup_id = list(mock_servicer.setups.keys())[0]
+
+    # Update the setup
+    updated_data = generate_setup_obj.model_dump()
+    updated_data["id"] = created_setup_id
+    updated_data["name"] = "Updated Name"
+    updated_data["owner_id"] = "new_owner_id"
+
+    update_future = client_execution_thread_pool.submit(client.update_setup, updated_data)
+    _, update_request, update_rpc = test_channel.take_unary_unary(update_method_desc)
+
+    assert update_request.setup_id == created_setup_id
+    assert update_request.name == "Updated Name"
+    assert update_request.owner_id == "new_owner_id"
+
+    update_context = FakeContext()
+    update_response = mock_servicer.UpdateSetup(update_request, update_context)
+    update_rpc.terminate(update_response, (), grpc.StatusCode.OK, "")
+
+    result = update_future.result()
+    assert result is True
+
+    # Verify the update in mock servicer
+    updated_setup = mock_servicer.setups[created_setup_id]
+    assert updated_setup.name == "Updated Name"
+    assert updated_setup.owner_id == "new_owner_id"
+
+
+def test_update_setup_not_found(
+    client: GrpcSetup,
+    test_channel: grpc_testing.Channel,
+    mock_servicer: MockSetupServicer,
+    generate_setup_obj: SetupData,
+) -> None:
+    """Test updating a non-existent setup returns False.
+
+    Verifies that attempting to update a non-existent setup returns False.
+    """
+    service_desc = setup_service_pb2.DESCRIPTOR.services_by_name["SetupService"]
+    update_method_desc = service_desc.methods_by_name["UpdateSetup"]
+
+    updated_data = generate_setup_obj.model_dump()
+    updated_data["id"] = "nonexistent_id"
+
+    update_future = client_execution_thread_pool.submit(client.update_setup, updated_data)
+    _, update_request, update_rpc = test_channel.take_unary_unary(update_method_desc)
+
+    update_context = FakeContext()
+    update_response = mock_servicer.UpdateSetup(update_request, update_context)
+    update_rpc.terminate(update_response, (), update_context._code, update_context._details)
+
+    result = update_future.result()
+    assert result is False
+
+
+# ============================================================================
+# delete_setup() Tests
+# ============================================================================
+
+
+@freeze_time("2025-04-01 12:00:01")
+def test_delete_setup_success(
+    client: GrpcSetup,
+    test_channel: grpc_testing.Channel,
+    mock_servicer: MockSetupServicer,
+    generate_setup_obj: SetupData,
+) -> None:
+    """Test successfully deleting a setup.
+
+    Verifies that delete_setup removes the setup from storage.
+    """
+    service_desc = setup_service_pb2.DESCRIPTOR.services_by_name["SetupService"]
+    create_method_desc = service_desc.methods_by_name["CreateSetup"]
+    delete_method_desc = service_desc.methods_by_name["DeleteSetup"]
+
+    # First create a setup
+    create_future = client_execution_thread_pool.submit(client.create_setup, generate_setup_obj.model_dump())
+    _, create_request, create_rpc = test_channel.take_unary_unary(create_method_desc)
+    create_rpc.send_initial_metadata(())
+    request_obj = setup_pb2.CreateSetupRequest(**{
+        k: v for (k, v) in generate_setup_obj.model_dump().items() if k not in ("id",)
+    })
+    create_response = mock_servicer.CreateSetup(request_obj, FakeContext())
+    create_rpc.terminate(create_response, (), grpc.StatusCode.OK, "")
+    create_future.result()
+
+    # Get the created setup's ID
+    created_setup_id = list(mock_servicer.setups.keys())[0]
+
+    # Delete the setup
+    delete_future = client_execution_thread_pool.submit(client.delete_setup, {"setup_id": created_setup_id})
+    _, delete_request, delete_rpc = test_channel.take_unary_unary(delete_method_desc)
+
+    assert delete_request.setup_id == created_setup_id
+
+    delete_context = FakeContext()
+    delete_response = mock_servicer.DeleteSetup(delete_request, delete_context)
+    delete_rpc.terminate(delete_response, (), grpc.StatusCode.OK, "")
+
+    result = delete_future.result()
+    assert result is True
+
+    # Verify deletion in mock servicer
+    assert created_setup_id not in mock_servicer.setups
+
+
+def test_delete_setup_not_found(
+    client: GrpcSetup,
+    test_channel: grpc_testing.Channel,
+    mock_servicer: MockSetupServicer,
+) -> None:
+    """Test deleting a non-existent setup returns False.
+
+    Verifies that attempting to delete a non-existent setup returns False.
+    """
+    service_desc = setup_service_pb2.DESCRIPTOR.services_by_name["SetupService"]
+    delete_method_desc = service_desc.methods_by_name["DeleteSetup"]
+
+    delete_future = client_execution_thread_pool.submit(client.delete_setup, {"setup_id": "nonexistent_id"})
+    _, delete_request, delete_rpc = test_channel.take_unary_unary(delete_method_desc)
+
+    delete_context = FakeContext()
+    delete_response = mock_servicer.DeleteSetup(delete_request, delete_context)
+    delete_rpc.terminate(delete_response, (), delete_context._code, delete_context._details)
+
+    result = delete_future.result()
+    assert result is False
+
+
+# ============================================================================
+# get_setup_version() Tests
+# ============================================================================
+
+
+@freeze_time("2025-04-01 12:00:01")
+def test_get_setup_version_success(
+    client: GrpcSetup,
+    test_channel: grpc_testing.Channel,
+    mock_servicer: MockSetupServicer,
+    generate_setup_version_obj: SetupVersionData,
+) -> None:
+    """Test successfully retrieving a setup version.
+
+    Verifies that get_setup_version returns the correct setup version data.
+    """
+    service_desc = setup_service_pb2.DESCRIPTOR.services_by_name["SetupService"]
+    create_method_desc = service_desc.methods_by_name["CreateSetupVersion"]
+    get_method_desc = service_desc.methods_by_name["GetSetupVersion"]
+
+    # First create a setup version
+    create_future = client_execution_thread_pool.submit(client.create_setup_version, generate_setup_version_obj.model_dump())
+    _, create_request, create_rpc = test_channel.take_unary_unary(create_method_desc)
+    create_rpc.send_initial_metadata(())
+    request_obj = setup_pb2.CreateSetupVersionRequest(**{
+        k: v for (k, v) in generate_setup_version_obj.model_dump().items() if k not in {"creation_date", "id"}
+    })
+    create_response = mock_servicer.CreateSetupVersion(request_obj, FakeContext())
+    create_rpc.terminate(create_response, (), grpc.StatusCode.OK, "")
+    create_future.result()
+
+    # Get the created version's ID (it's stored as version key in mock servicer)
+    created_version = mock_servicer.setup_versions[generate_setup_version_obj.setup_id][generate_setup_version_obj.version]
+
+    # Now get the setup version by ID
+    get_future = client_execution_thread_pool.submit(client.get_setup_version, {"setup_version_id": created_version.id})
+    _, get_request, get_rpc = test_channel.take_unary_unary(get_method_desc)
+
+    assert get_request.setup_version_id == created_version.id
+
+    get_context = FakeContext()
+    get_response = mock_servicer.GetSetupVersion(get_request, get_context)
+    get_rpc.terminate(get_response, (), grpc.StatusCode.OK, "")
+
+    result = get_future.result()
+    assert result is not None
+    assert result.setup_id == generate_setup_version_obj.setup_id
+    assert result.version == generate_setup_version_obj.version
+    assert result.content == generate_setup_version_obj.content
+
+
+def test_get_setup_version_not_found(
+    client: GrpcSetup,
+    test_channel: grpc_testing.Channel,
+    mock_servicer: MockSetupServicer,
+) -> None:
+    """Test getting a non-existent setup version raises error.
+
+    Verifies that attempting to get a non-existent setup version results in error.
+    """
+    service_desc = setup_service_pb2.DESCRIPTOR.services_by_name["SetupService"]
+    get_method_desc = service_desc.methods_by_name["GetSetupVersion"]
+
+    get_future = client_execution_thread_pool.submit(client.get_setup_version, {"setup_version_id": "nonexistent_version_id"})
+    _, get_request, get_rpc = test_channel.take_unary_unary(get_method_desc)
+
+    get_context = FakeContext()
+    get_response = mock_servicer.GetSetupVersion(get_request, get_context)
+    get_rpc.terminate(get_response, (), get_context._code, get_context._details)
+
+    with pytest.raises(Exception):
+        get_future.result()
+
+
+# ============================================================================
+# search_setup_versions() Tests
+# ============================================================================
+
+
+@freeze_time("2025-04-01 12:00:01")
+def test_search_setup_versions_success(
+    client: GrpcSetup,
+    test_channel: grpc_testing.Channel,
+    mock_servicer: MockSetupServicer,
+    generate_setup_version_obj: SetupVersionData,
+) -> None:
+    """Test successfully searching setup versions.
+
+    Verifies that search_setup_versions returns matching versions.
+    """
+    service_desc = setup_service_pb2.DESCRIPTOR.services_by_name["SetupService"]
+    create_method_desc = service_desc.methods_by_name["CreateSetupVersion"]
+    search_method_desc = service_desc.methods_by_name["SearchSetupVersions"]
+
+    # Create a setup version
+    create_future = client_execution_thread_pool.submit(client.create_setup_version, generate_setup_version_obj.model_dump())
+    _, create_request, create_rpc = test_channel.take_unary_unary(create_method_desc)
+    create_rpc.send_initial_metadata(())
+    request_obj = setup_pb2.CreateSetupVersionRequest(**{
+        k: v for (k, v) in generate_setup_version_obj.model_dump().items() if k not in {"creation_date", "id"}
+    })
+    create_response = mock_servicer.CreateSetupVersion(request_obj, FakeContext())
+    create_rpc.terminate(create_response, (), grpc.StatusCode.OK, "")
+    create_future.result()
+
+    # Search for versions
+    search_future = client_execution_thread_pool.submit(
+        client.search_setup_versions,
+        {"setup_id": generate_setup_version_obj.setup_id, "version": generate_setup_version_obj.version}
+    )
+    _, search_request, search_rpc = test_channel.take_unary_unary(search_method_desc)
+
+    assert search_request.setup_id == generate_setup_version_obj.setup_id
+    assert search_request.version == generate_setup_version_obj.version
+
+    search_context = FakeContext()
+    search_response = mock_servicer.SearchSetupVersions(search_request, search_context)
+    search_rpc.terminate(search_response, (), grpc.StatusCode.OK, "")
+
+    result = search_future.result()
+    assert len(result) == 1
+    assert result[0].setup_id == generate_setup_version_obj.setup_id
+    assert result[0].version == generate_setup_version_obj.version
+
+
+def test_search_setup_versions_empty_results(
+    client: GrpcSetup,
+    test_channel: grpc_testing.Channel,
+    mock_servicer: MockSetupServicer,
+) -> None:
+    """Test searching for setup versions with no results.
+
+    Verifies that search_setup_versions returns empty list when no matches found.
+    """
+    service_desc = setup_service_pb2.DESCRIPTOR.services_by_name["SetupService"]
+    search_method_desc = service_desc.methods_by_name["SearchSetupVersions"]
+
+    search_future = client_execution_thread_pool.submit(
+        client.search_setup_versions,
+        {"setup_id": "nonexistent_setup", "version": "v1.0.0"}
+    )
+    _, search_request, search_rpc = test_channel.take_unary_unary(search_method_desc)
+
+    search_context = FakeContext()
+    search_response = mock_servicer.SearchSetupVersions(search_request, search_context)
+    search_rpc.terminate(search_response, (), search_context._code, search_context._details)
+
+    with pytest.raises(Exception):
+        search_future.result()
+
+
+# ============================================================================
+# update_setup_version() Tests
+# ============================================================================
+
+
+@freeze_time("2025-04-01 12:00:01")
+def test_update_setup_version_success(
+    client: GrpcSetup,
+    test_channel: grpc_testing.Channel,
+    mock_servicer: MockSetupServicer,
+    generate_setup_version_obj: SetupVersionData,
+) -> None:
+    """Test successfully updating a setup version.
+
+    Verifies that update_setup_version updates the version data correctly.
+    """
+    service_desc = setup_service_pb2.DESCRIPTOR.services_by_name["SetupService"]
+    create_method_desc = service_desc.methods_by_name["CreateSetupVersion"]
+    update_method_desc = service_desc.methods_by_name["UpdateSetupVersion"]
+
+    # First create a setup version
+    create_future = client_execution_thread_pool.submit(client.create_setup_version, generate_setup_version_obj.model_dump())
+    _, create_request, create_rpc = test_channel.take_unary_unary(create_method_desc)
+    create_rpc.send_initial_metadata(())
+    request_obj = setup_pb2.CreateSetupVersionRequest(**{
+        k: v for (k, v) in generate_setup_version_obj.model_dump().items() if k not in {"creation_date", "id"}
+    })
+    create_response = mock_servicer.CreateSetupVersion(request_obj, FakeContext())
+    create_rpc.terminate(create_response, (), grpc.StatusCode.OK, "")
+    create_future.result()
+
+    # Get the created version
+    created_version = mock_servicer.setup_versions[generate_setup_version_obj.setup_id][generate_setup_version_obj.version]
+
+    # Update the setup version
+    updated_data = generate_setup_version_obj.model_dump()
+    updated_data["id"] = created_version.id
+    updated_data["content"] = {"updated_key": "updated_value"}
+
+    update_future = client_execution_thread_pool.submit(client.update_setup_version, updated_data)
+    _, update_request, update_rpc = test_channel.take_unary_unary(update_method_desc)
+
+    assert update_request.setup_version_id == created_version.id
+
+    update_context = FakeContext()
+    update_response = mock_servicer.UpdateSetupVersion(update_request, update_context)
+    update_rpc.terminate(update_response, (), grpc.StatusCode.OK, "")
+
+    result = update_future.result()
+    assert result is True
+
+    # Verify the update in mock servicer
+    updated_version = mock_servicer.setup_versions[generate_setup_version_obj.setup_id][generate_setup_version_obj.version]
+    assert updated_version.content == {"updated_key": "updated_value"}
+
+
+def test_update_setup_version_not_found(
+    client: GrpcSetup,
+    test_channel: grpc_testing.Channel,
+    mock_servicer: MockSetupServicer,
+    generate_setup_version_obj: SetupVersionData,
+) -> None:
+    """Test updating a non-existent setup version returns False.
+
+    Verifies that attempting to update a non-existent setup version returns False.
+    """
+    service_desc = setup_service_pb2.DESCRIPTOR.services_by_name["SetupService"]
+    update_method_desc = service_desc.methods_by_name["UpdateSetupVersion"]
+
+    updated_data = generate_setup_version_obj.model_dump()
+    updated_data["id"] = "nonexistent_version_id"
+
+    update_future = client_execution_thread_pool.submit(client.update_setup_version, updated_data)
+    _, update_request, update_rpc = test_channel.take_unary_unary(update_method_desc)
+
+    update_context = FakeContext()
+    update_response = mock_servicer.UpdateSetupVersion(update_request, update_context)
+    update_rpc.terminate(update_response, (), update_context._code, update_context._details)
+
+    result = update_future.result()
+    assert result is False
+
+
+# ============================================================================
+# delete_setup_version() Tests
+# ============================================================================
+
+
+@freeze_time("2025-04-01 12:00:01")
+def test_delete_setup_version_success(
+    client: GrpcSetup,
+    test_channel: grpc_testing.Channel,
+    mock_servicer: MockSetupServicer,
+    generate_setup_version_obj: SetupVersionData,
+) -> None:
+    """Test successfully deleting a setup version.
+
+    Verifies that delete_setup_version removes the version from storage.
+    """
+    service_desc = setup_service_pb2.DESCRIPTOR.services_by_name["SetupService"]
+    create_method_desc = service_desc.methods_by_name["CreateSetupVersion"]
+    delete_method_desc = service_desc.methods_by_name["DeleteSetupVersion"]
+
+    # First create a setup version
+    create_future = client_execution_thread_pool.submit(client.create_setup_version, generate_setup_version_obj.model_dump())
+    _, create_request, create_rpc = test_channel.take_unary_unary(create_method_desc)
+    create_rpc.send_initial_metadata(())
+    request_obj = setup_pb2.CreateSetupVersionRequest(**{
+        k: v for (k, v) in generate_setup_version_obj.model_dump().items() if k not in {"creation_date", "id"}
+    })
+    create_response = mock_servicer.CreateSetupVersion(request_obj, FakeContext())
+    create_rpc.terminate(create_response, (), grpc.StatusCode.OK, "")
+    create_future.result()
+
+    # Get the created version
+    created_version = mock_servicer.setup_versions[generate_setup_version_obj.setup_id][generate_setup_version_obj.version]
+
+    # Delete the setup version
+    delete_future = client_execution_thread_pool.submit(client.delete_setup_version, {"setup_version_id": created_version.id})
+    _, delete_request, delete_rpc = test_channel.take_unary_unary(delete_method_desc)
+
+    assert delete_request.setup_version_id == created_version.id
+
+    delete_context = FakeContext()
+    delete_response = mock_servicer.DeleteSetupVersion(delete_request, delete_context)
+    delete_rpc.terminate(delete_response, (), grpc.StatusCode.OK, "")
+
+    result = delete_future.result()
+    assert result is True
+
+    # Verify deletion in mock servicer
+    assert generate_setup_version_obj.setup_id not in mock_servicer.setup_versions
+
+
+def test_delete_setup_version_not_found(
+    client: GrpcSetup,
+    test_channel: grpc_testing.Channel,
+    mock_servicer: MockSetupServicer,
+) -> None:
+    """Test deleting a non-existent setup version returns False.
+
+    Verifies that attempting to delete a non-existent setup version returns False.
+    """
+    service_desc = setup_service_pb2.DESCRIPTOR.services_by_name["SetupService"]
+    delete_method_desc = service_desc.methods_by_name["DeleteSetupVersion"]
+
+    delete_future = client_execution_thread_pool.submit(client.delete_setup_version, {"setup_version_id": "nonexistent_version_id"})
+    _, delete_request, delete_rpc = test_channel.take_unary_unary(delete_method_desc)
+
+    delete_context = FakeContext()
+    delete_response = mock_servicer.DeleteSetupVersion(delete_request, delete_context)
+    delete_rpc.terminate(delete_response, (), delete_context._code, delete_context._details)
+
+    result = delete_future.result()
+    assert result is False

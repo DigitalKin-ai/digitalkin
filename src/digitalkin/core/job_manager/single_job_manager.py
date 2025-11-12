@@ -5,11 +5,12 @@ import datetime
 import uuid
 from collections.abc import AsyncGenerator, AsyncIterator
 from contextlib import asynccontextmanager
-from typing import Any, Generic
+from typing import Any
 
 import grpc
 
 from digitalkin.core.job_manager.base_job_manager import BaseJobManager
+from digitalkin.core.task_manager.local_task_manager import LocalTaskManager
 from digitalkin.core.task_manager.surrealdb_repository import SurrealDBConnection
 from digitalkin.core.task_manager.task_session import TaskSession
 from digitalkin.logger import logger
@@ -20,7 +21,7 @@ from digitalkin.modules._base_module import BaseModule
 from digitalkin.services.services_models import ServicesMode
 
 
-class SingleJobManager(BaseJobManager, Generic[InputModelT, OutputModelT, SetupModelT]):
+class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
     """Manages a single instance of a module job.
 
     This class ensures that only one instance of a module job is active at a time.
@@ -37,14 +38,23 @@ class SingleJobManager(BaseJobManager, Generic[InputModelT, OutputModelT, SetupM
         self,
         module_class: type[BaseModule],
         services_mode: ServicesMode,
+        default_timeout: float = 10.0,
+        max_concurrent_tasks: int = 100,
     ) -> None:
         """Initialize the job manager.
 
         Args:
             module_class: The class of the module to be managed.
             services_mode: The mode of operation for the services (e.g., ASYNC or SYNC).
+            default_timeout: Default timeout for task operations
+            max_concurrent_tasks: Maximum number of concurrent tasks
         """
-        super().__init__(module_class, services_mode)
+        # Create local task manager for same-process execution
+        task_manager = LocalTaskManager(default_timeout, max_concurrent_tasks)
+
+        # Initialize base job manager with task manager
+        super().__init__(module_class, services_mode, task_manager)
+
         self._lock = asyncio.Lock()
 
     async def generate_config_setup_module_response(self, job_id: str) -> SetupModelT | ModuleCodeModel:
@@ -68,7 +78,14 @@ class SingleJobManager(BaseJobManager, Generic[InputModelT, OutputModelT, SetupM
 
         logger.debug("Module %s found: %s", job_id, session.module)
         try:
-            return await session.queue.get()
+            # Add timeout to prevent indefinite blocking
+            return await asyncio.wait_for(session.queue.get(), timeout=30.0)
+        except asyncio.TimeoutError:
+            logger.error("Timeout waiting for config setup response from module %s", job_id)
+            return ModuleCodeModel(
+                code=str(grpc.StatusCode.DEADLINE_EXCEEDED),
+                message=f"Module {job_id} did not respond within 30 seconds",
+            )
         finally:
             logger.info(f"{job_id=}: {session.queue.empty()}")
 
@@ -276,12 +293,21 @@ class SingleJobManager(BaseJobManager, Generic[InputModelT, OutputModelT, SetupM
     async def stop_all_modules(self) -> None:
         """Stop all currently running module jobs.
 
-        This method ensures that all active jobs are gracefully terminated.
+        This method ensures that all active jobs are gracefully terminated
+        and closes the SurrealDB connection.
         """
         async with self._lock:
             stop_tasks = [self.stop_module(job_id) for job_id in list(self.tasks_sessions.keys())]
             if stop_tasks:
                 await asyncio.gather(*stop_tasks, return_exceptions=True)
+
+            # Close SurrealDB connection after stopping all modules
+            if hasattr(self, "channel"):
+                try:
+                    await self.channel.close()
+                    logger.info("SingleJobManager: SurrealDB connection closed")
+                except Exception as e:
+                    logger.warning("Failed to close SurrealDB connection: %s", e)
 
     async def list_modules(self) -> dict[str, dict[str, Any]]:
         """List all modules along with their statuses.

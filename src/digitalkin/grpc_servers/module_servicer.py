@@ -5,7 +5,7 @@ from collections.abc import AsyncGenerator
 from typing import Any
 
 import grpc
-from digitalkin_proto.digitalkin.module.v2 import (
+from digitalkin_proto.agentic_mesh_protocol.module.v1 import (
     information_pb2,
     lifecycle_pb2,
     module_service_pb2_grpc,

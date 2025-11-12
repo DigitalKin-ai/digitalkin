@@ -1,6 +1,6 @@
 """This module implements the default storage strategy."""
 
-from digitalkin_proto.digitalkin.storage.v2 import data_pb2, storage_service_pb2_grpc
+from digitalkin_proto.agentic_mesh_protocol.storage.v1 import data_pb2, storage_service_pb2_grpc
 from google.protobuf import json_format
 from google.protobuf.struct_pb2 import Struct
 from pydantic import BaseModel
