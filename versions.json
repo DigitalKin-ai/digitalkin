@@ -15,5 +15,12 @@
     "aliases": [
       "development"
     ]
+  },
+  {
+    "version": "0.3.0-rc2",
+    "title": "0.3.0-rc2",
+    "aliases": [
+      "latest"
+    ]
   }
 ]
