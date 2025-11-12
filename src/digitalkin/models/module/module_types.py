@@ -24,7 +24,11 @@ class DataTrigger(BaseModel):
     """
 
     protocol: ClassVar[str]
-    created_at: str = datetime.now(tz=timezone.utc).isoformat()
+    created_at: str = Field(
+        default_factory=lambda: datetime.now(tz=timezone.utc).isoformat(),
+        title="Created At",
+        description="Timestamp when the payload was created.",
+    )
 
 
 DataTriggerT = TypeVar("DataTriggerT", bound=DataTrigger)

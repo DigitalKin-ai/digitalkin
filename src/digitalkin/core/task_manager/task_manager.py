@@ -26,7 +26,7 @@ class TaskManager:
     max_concurrent_tasks: int
     _shutdown_event: asyncio.Event
 
-    def __init__(self, default_timeout: float = 10.0, max_concurrent_tasks: int = 100) -> None:
+    def __init__(self, default_timeout: float = 10.0, max_concurrent_tasks: int = 1000) -> None:
         """Defining task manager properties."""
         self.tasks = {}
         self.tasks_sessions = {}
@@ -67,6 +67,8 @@ class TaskManager:
         if task_id in self.tasks_sessions:
             await self.tasks_sessions[task_id].db.close()
         # Remove from collections
+        self.tasks.pop(task_id, None)
+        self.tasks_sessions.pop(task_id, None)
 
     async def _task_wrapper(  # noqa: C901, PLR0915
         self,
@@ -356,10 +358,11 @@ class TaskManager:
             return False
 
         await self.tasks_sessions[task_id].module.stop()
-        await self.cancel_task(mission_id, task_id)
+        await self.cancel_task(task_id, mission_id)
 
         logger.info("Cleaning up session for task: '%s'", task_id, extra={"mission_id": mission_id, "task_id": task_id})
         self.tasks_sessions.pop(task_id, None)
+        self.tasks.pop(task_id, None)
         return True
 
     async def pause_task(self, task_id: str, mission_id: str) -> bool:
