@@ -6,7 +6,13 @@ from collections.abc import AsyncGenerator
 
 from digitalkin.core.task_manager.surrealdb_repository import SurrealDBConnection
 from digitalkin.logger import logger
-from digitalkin.models.core.task_monitor import HeartbeatMessage, SignalMessage, SignalType, TaskStatus
+from digitalkin.models.core.task_monitor import (
+    CancellationReason,
+    HeartbeatMessage,
+    SignalMessage,
+    SignalType,
+    TaskStatus,
+)
 from digitalkin.modules._base_module import BaseModule
 
 
@@ -31,6 +37,7 @@ class TaskSession:
     completed_at: datetime.datetime | None
 
     is_cancelled: asyncio.Event
+    cancellation_reason: CancellationReason
     _paused: asyncio.Event
     _heartbeat_interval: datetime.timedelta
     _last_heartbeat: datetime.datetime
@@ -58,6 +65,7 @@ class TaskSession:
         self.module = module
 
         self.status = TaskStatus.PENDING
+        # Bounded queue to prevent unbounded memory growth (max 1000 items)
         self.queue: asyncio.Queue = asyncio.Queue(maxsize=queue_maxsize)
 
         self.task_id = task_id
@@ -71,6 +79,7 @@ class TaskSession:
         self.heartbeat_record_id = None
 
         self.is_cancelled = asyncio.Event()
+        self.cancellation_reason = CancellationReason.UNKNOWN
         self._paused = asyncio.Event()
         self._heartbeat_interval = heartbeat_interval
 
@@ -152,17 +161,26 @@ class TaskSession:
 
     async def generate_heartbeats(self) -> None:
         """Periodic heartbeat generator with cancellation support."""
-        logger.debug("Heartbeat started")
+        logger.debug(
+            "Heartbeat generator started for task: '%s'",
+            self.task_id,
+            extra={"task_id": self.task_id, "mission_id": self.mission_id},
+        )
         while not self.cancelled:
-            logger.debug(f"Heartbeat tick for task: '{self.task_id}' | {self.cancelled=}")
+            logger.debug(
+                "Heartbeat tick for task: '%s', cancelled=%s",
+                self.task_id,
+                self.cancelled,
+                extra={"task_id": self.task_id, "mission_id": self.mission_id},
+            )
             success = await self.send_heartbeat()
             if not success:
                 logger.error(
                     "Heartbeat failed, cancelling task: '%s'",
                     self.task_id,
-                    extra={"task_id": self.task_id},
+                    extra={"task_id": self.task_id, "mission_id": self.mission_id},
                 )
-                await self._handle_cancel()
+                await self._handle_cancel(CancellationReason.HEARTBEAT_FAILURE)
                 break
             await asyncio.sleep(self._heartbeat_interval.total_seconds())
 
@@ -201,7 +219,7 @@ class TaskSession:
                     continue
 
                 if signal["action"] == "cancel":
-                    await self._handle_cancel()
+                    await self._handle_cancel(CancellationReason.SIGNAL)
                 elif signal["action"] == "pause":
                     await self._handle_pause()
                 elif signal["action"] == "resume":
@@ -231,25 +249,54 @@ class TaskSession:
                 extra={"task_id": self.task_id},
             )
 
-    async def _handle_cancel(self) -> None:
-        """Idempotent cancellation with acknowledgment."""
-        logger.debug("Handle cancel called")
+    async def _handle_cancel(self, reason: CancellationReason = CancellationReason.UNKNOWN) -> None:
+        """Idempotent cancellation with acknowledgment and reason tracking.
+
+        Args:
+            reason: The reason for cancellation (signal, heartbeat failure, cleanup, etc.)
+        """
         if self.is_cancelled.is_set():
             logger.debug(
-                "Cancel signal ignored - task already cancelled: '%s'",
+                "Cancel ignored - task already cancelled: '%s' (existing reason: %s, new reason: %s)",
                 self.task_id,
-                extra={"task_id": self.task_id},
+                self.cancellation_reason.value,
+                reason.value,
+                extra={
+                    "task_id": self.task_id,
+                    "mission_id": self.mission_id,
+                    "existing_reason": self.cancellation_reason.value,
+                    "new_reason": reason.value,
+                },
             )
             return
 
-        logger.info(
-            "Cancelling task: '%s'",
-            self.task_id,
-            extra={"task_id": self.task_id},
-        )
-
+        self.cancellation_reason = reason
         self.status = TaskStatus.CANCELLED
         self.is_cancelled.set()
+
+        # Log with appropriate level based on reason
+        if reason in {CancellationReason.SUCCESS_CLEANUP, CancellationReason.FAILURE_CLEANUP}:
+            logger.debug(
+                "Task cancelled (cleanup): '%s', reason: %s",
+                self.task_id,
+                reason.value,
+                extra={
+                    "task_id": self.task_id,
+                    "mission_id": self.mission_id,
+                    "cancellation_reason": reason.value,
+                },
+            )
+        else:
+            logger.info(
+                "Task cancelled: '%s', reason: %s",
+                self.task_id,
+                reason.value,
+                extra={
+                    "task_id": self.task_id,
+                    "mission_id": self.mission_id,
+                    "cancellation_reason": reason.value,
+                },
+            )
 
         # Resume if paused so cancellation can proceed
         if self._paused.is_set():
@@ -326,3 +373,34 @@ class TaskSession:
             self.task_id,
             extra={"task_id": self.task_id},
         )
+
+    async def cleanup(self) -> None:
+        """Clean up task session resources.
+
+        This includes:
+        - Clearing queue to free memory
+        - Stopping module
+        - Closing database connection
+        - Clearing module reference
+        """
+        # Clear queue to free memory
+        try:
+            while not self.queue.empty():
+                self.queue.get_nowait()
+        except asyncio.QueueEmpty:
+            pass
+
+        # Stop module
+        try:
+            await self.module.stop()
+        except Exception:
+            logger.exception(
+                "Error stopping module during cleanup",
+                extra={"mission_id": self.mission_id, "task_id": self.task_id},
+            )
+
+        # Close DB connection (kills all live queries)
+        await self.db.close()
+
+        # Clear module reference to allow garbage collection
+        self.module = None  # type: ignore

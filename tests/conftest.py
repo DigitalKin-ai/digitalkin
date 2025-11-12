@@ -13,6 +13,12 @@ from digitalkin.models.grpc_servers.models import (
     ServerMode,
 )
 
+# Register fixture plugins
+pytest_plugins = [
+    "tests.fixtures.core_fixtures",
+    "tests.fixtures.db_fixtures",
+]
+
 # Configure logging for tests
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 

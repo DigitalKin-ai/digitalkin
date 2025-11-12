@@ -29,13 +29,11 @@ services:
       - ${RABBITMQ_RSTREAM_PORT:-5553}:${RABBITMQ_RSTREAM_PORT:-5553}
     networks:
       - services-network
-    depends_on:
-      - cert-init
     volumes:
-      - shared-certificates:/certificates
       - rabbitmq-data:/var/lib/rabbitmq
     environment:
-      - RABBITMQ_CERTIFICATE_VOLUME=${CHAINLIT_CERTIFICATE_VOLUME:-/certificates/digitalkin-tests-rabbitmq}
+      - RABBITMQ_DEFAULT_USER=${RABBITMQ_DEFAULT_USER:-guest}
+      - RABBITMQ_DEFAULT_PASSWORD=${RABBITMQ_DEFAULT_PASSWORD:-guest}
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "ping"]
       interval: 10s

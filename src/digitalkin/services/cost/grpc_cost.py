@@ -1,14 +1,12 @@
 """This module implements the gRPC Cost strategy."""
 
-from collections.abc import Generator
-from contextlib import contextmanager
-from typing import Any, Literal
+from typing import Literal
 
-from digitalkin_proto.digitalkin.cost.v1 import cost_pb2, cost_service_pb2_grpc
+from digitalkin_proto.agentic_mesh_protocol.cost.v1 import cost_pb2, cost_service_pb2_grpc
 from google.protobuf import json_format
 
-from digitalkin.grpc_servers.utils.exceptions import ServerError
 from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
+from digitalkin.grpc_servers.utils.grpc_error_handler import GrpcErrorHandlerMixin
 from digitalkin.logger import logger
 from digitalkin.models.grpc_servers.models import ClientConfig
 from digitalkin.services.cost.cost_strategy import (
@@ -20,39 +18,8 @@ from digitalkin.services.cost.cost_strategy import (
 )
 
 
-class GrpcCost(CostStrategy, GrpcClientWrapper):
+class GrpcCost(CostStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
     """This class implements the default Cost strategy."""
-
-    @staticmethod
-    @contextmanager
-    def _handle_grpc_errors(operation: str) -> Generator[Any, Any, Any]:
-        """Context manager for consistent gRPC error handling.
-
-        Yields:
-            Allow error handling in context.
-
-        Args:
-            operation: Description of the operation being performed.
-
-        Raises:
-            ValueError: Error with the model validation.
-            ServerError: from gRPC Client.
-            CostServiceError: Unexpected error.
-        """
-        try:
-            yield
-        except CostServiceError as e:
-            msg = f"CostServiceError in {operation}: {e}"
-            logger.exception(msg)
-            raise CostServiceError(msg) from e
-        except ServerError as e:
-            msg = f"gRPC {operation} failed: {e}"
-            logger.exception(msg)
-            raise ServerError(msg) from e
-        except Exception as e:
-            msg = f"Unexpected error in {operation}"
-            logger.exception(msg)
-            raise CostServiceError(msg) from e
 
     def __init__(
         self,
@@ -66,7 +33,7 @@ class GrpcCost(CostStrategy, GrpcClientWrapper):
         super().__init__(mission_id=mission_id, setup_id=setup_id, setup_version_id=setup_version_id, config=config)
         channel = self._init_channel(client_config)
         self.stub = cost_service_pb2_grpc.CostServiceStub(channel)
-        logger.debug("Channel client 'Cost' initialized succesfully")
+        logger.debug("Channel client 'Cost' initialized successfully")
 
     def add(
         self,
@@ -84,7 +51,7 @@ class GrpcCost(CostStrategy, GrpcClientWrapper):
         Raises:
             CostServiceError: If the cost config is invalid
         """
-        with self._handle_grpc_errors("AddCost"):
+        with self.handle_grpc_errors("AddCost", CostServiceError):
             cost_config = self.config.get(cost_config_name)
             if cost_config is None:
                 msg = f"Cost config {cost_config_name} not found in the configuration."
@@ -122,7 +89,7 @@ class GrpcCost(CostStrategy, GrpcClientWrapper):
         Returns:
             CostData: The cost data
         """
-        with self._handle_grpc_errors("GetCost"):
+        with self.handle_grpc_errors("GetCost", CostServiceError):
             request = cost_pb2.GetCostRequest(name=name, mission_id=self.mission_id)
             response: cost_pb2.GetCostResponse = self.exec_grpc_query("GetCost", request)
             cost_data_list = [
@@ -150,7 +117,7 @@ class GrpcCost(CostStrategy, GrpcClientWrapper):
         Returns:
             list[CostData]: The cost data
         """
-        with self._handle_grpc_errors("GetCosts"):
+        with self.handle_grpc_errors("GetCosts", CostServiceError):
             request = cost_pb2.GetCostsRequest(
                 mission_id=self.mission_id,
                 filter=cost_pb2.CostFilter(

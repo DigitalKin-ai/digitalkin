@@ -1,5 +1,6 @@
 """SurrealDB connection management."""
 
+import asyncio
 import datetime
 import os
 from collections.abc import AsyncGenerator
@@ -38,6 +39,7 @@ class SurrealDBConnection(Generic[TSurreal]):
 
     db: TSurreal
     timeout: datetime.timedelta
+    _live_queries: set[UUID]  # Track active live queries for cleanup
 
     @staticmethod
     def _valid_id(raw_id: str, table_name: str) -> RecordID:
@@ -82,6 +84,7 @@ class SurrealDBConnection(Generic[TSurreal]):
         self.password = os.getenv("SURREALDB_PASSWORD", "root")
         self.namespace = os.getenv("SURREALDB_NAMESPACE", "test")
         self.database = database or os.getenv("SURREALDB_DATABASE", "task_manager")
+        self._live_queries = set()  # Initialize live queries tracker
 
     async def init_surreal_instance(self) -> None:
         """Init a SurrealDB connection instance."""
@@ -92,7 +95,37 @@ class SurrealDBConnection(Generic[TSurreal]):
         logger.debug("Successfully connected to SurrealDB")
 
     async def close(self) -> None:
-        """Close the SurrealDB connection if it exists."""
+        """Close the SurrealDB connection if it exists.
+
+        This will also kill all active live queries to prevent memory leaks.
+        """
+        # Kill all tracked live queries before closing connection
+        if self._live_queries:
+            logger.debug("Killing %d active live queries before closing", len(self._live_queries))
+            live_query_ids = list(self._live_queries)
+
+            # Kill all queries concurrently, capturing any exceptions
+            results = await asyncio.gather(
+                *[self.db.kill(live_id) for live_id in live_query_ids], return_exceptions=True
+            )
+
+            # Process results and track failures
+            failed_queries = []
+            for live_id, result in zip(live_query_ids, results):
+                if isinstance(result, (ConnectionError, TimeoutError, Exception)):
+                    failed_queries.append((live_id, str(result)))
+                else:
+                    self._live_queries.discard(live_id)
+
+            # Log aggregated failures once instead of per-query
+            if failed_queries:
+                logger.warning(
+                    "Failed to kill %d live queries: %s",
+                    len(failed_queries),
+                    failed_queries[:5],  # Only log first 5 to avoid log spam
+                    extra={"total_failed": len(failed_queries)},
+                )
+
         logger.debug("Closing SurrealDB connection")
         await self.db.close()
 
@@ -208,20 +241,26 @@ class SurrealDBConnection(Generic[TSurreal]):
     ) -> tuple[UUID, AsyncGenerator[dict[str, Any], None]]:
         """Create and subscribe to a live SurrealQL query.
 
+        The live query ID is tracked to ensure proper cleanup on connection close.
+
         Args:
             table_name: Name of the table to insert into
 
         Returns:
-            List[Dict[str, Any]]: Query results
+            tuple[UUID, AsyncGenerator]: Live query ID and subscription generator
         """
         live_id = await self.db.live(table_name, diff=False)
+        self._live_queries.add(live_id)  # Track for cleanup
+        logger.debug("Started live query %s for table %s (total: %d)", live_id, table_name, len(self._live_queries))
         return live_id, await self.db.subscribe_live(live_id)
 
     async def stop_live(self, live_id: UUID) -> None:
         """Kill a live SurrealQL query.
 
         Args:
-            live_id: record ID to watch for
+            live_id: Live query ID to kill
         """
-        logger.debug("KILL Subscribe live for: %s", live_id)
+        logger.debug("Killing live query: %s", live_id)
         await self.db.kill(live_id)
+        self._live_queries.discard(live_id)  # Remove from tracker
+        logger.debug("Stopped live query %s (remaining: %d)", live_id, len(self._live_queries))
