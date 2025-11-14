@@ -24,8 +24,11 @@ from tests.mocks import (
     MockSetupModel,
     SimpleMockModule,
 )
+from digitalkin.modules._base_module import BaseModule
 
-pytestmark = pytest.mark.asyncio
+# Set timeout for all tests in this file (60 seconds)
+pytestmark = pytest.mark.timeout(60)
+
 
 
 # ============================================================================
@@ -87,7 +90,7 @@ async def taskiq_job_manager(
     """Create a TaskiqJobManager instance with mocked dependencies."""
     with (
         patch(
-            "digitalkin.core.job_manager.taskiq_job_manager.SurrealDBConnection",
+            "digitalkin.core.task_manager.base_task_manager.SurrealDBConnection",
             return_value=configured_mock_surreal_connection,
         ),
         patch(
@@ -110,6 +113,7 @@ async def taskiq_job_manager(
 # ============================================================================
 
 
+@pytest.mark.asyncio
 async def test_taskiq_job_manager_initialization():
     """Test TaskiqJobManager initialization."""
     manager = TaskiqJobManager(SimpleMockModule, ServicesMode.LOCAL)
@@ -121,6 +125,7 @@ async def test_taskiq_job_manager_initialization():
     assert manager.max_queue_size == 1000
 
 
+@pytest.mark.asyncio
 async def test_taskiq_job_manager_start(
     taskiq_job_manager: TaskiqJobManager,
     configured_mock_surreal_connection: Mock,
@@ -128,13 +133,14 @@ async def test_taskiq_job_manager_start(
     mock_consumer: Mock,
 ):
     """Test TaskiqJobManager start method."""
-    await taskiq_job_manager.start()
+    # Mock ConnectionFactory to avoid real connection
+    with patch("digitalkin.core.job_manager.taskiq_job_manager.ConnectionFactory.create_surreal_connection", new_callable=AsyncMock, return_value=configured_mock_surreal_connection):
+        await taskiq_job_manager.start()
 
     mock_taskiq_broker.startup.assert_called_once()
     mock_consumer.create_stream.assert_called_once()
     mock_consumer.start.assert_called_once()
     mock_consumer.subscribe.assert_called_once()
-    configured_mock_surreal_connection.init_surreal_instance.assert_called()
 
 
 # ============================================================================
@@ -142,24 +148,29 @@ async def test_taskiq_job_manager_start(
 # ============================================================================
 
 
+@pytest.mark.asyncio
 async def test_create_module_instance_job(
     taskiq_job_manager: TaskiqJobManager,
     mock_taskiq_task: Mock,
     mock_taskiq_broker: Mock,
 ):
     """Test creating a module instance job."""
+    from tests.mocks.models import MockInputTrigger
+
     mock_taskiq_broker.find_task.return_value = mock_taskiq_task
 
-    input_data = MockInputModel(data="test_input")
+    input_data = MockInputModel(root=MockInputTrigger(data="test_input"))
     setup_data = MockSetupModel(config="test_config")
 
-    job_id = await taskiq_job_manager.create_module_instance_job(
-        input_data=input_data,
-        setup_data=setup_data,
-        mission_id="test_mission",
-        setup_id="test_setup",
-        setup_version_id="v1",
-    )
+    # Mock SimpleMockModule.__init__ to avoid service initialization
+    with patch.object(SimpleMockModule, "__init__", return_value=None):
+        job_id = await taskiq_job_manager.create_module_instance_job(
+            input_data=input_data,
+            setup_data=setup_data,
+            mission_id="test_mission",
+            setup_id="test_setup",
+            setup_version_id="v1",
+        )
 
     assert job_id == "test_job_id"
     assert job_id in taskiq_job_manager._job_registry
@@ -168,20 +179,23 @@ async def test_create_module_instance_job(
     mock_taskiq_broker.find_task.assert_called_once_with(
         "digitalkin.core.job_manager.taskiq_broker:run_start_module"
     )
-    # Verify SurrealDB config was passed to worker
+    # Verify arguments were passed to worker (7 args total)
     call_args = mock_taskiq_task.kiq.call_args
     assert call_args is not None
-    assert len(call_args[0]) == 8  # Should have surreal_config as 8th argument
+    assert len(call_args[0]) == 7  # mission_id, setup_id, setup_version_id, module_class, services_mode, input_data, setup_data
 
 
+@pytest.mark.asyncio
 async def test_create_module_instance_job_task_not_found(
     taskiq_job_manager: TaskiqJobManager,
     mock_taskiq_broker: Mock,
 ):
     """Test creating a module instance job when task is not found."""
+    from tests.mocks.models import MockInputTrigger
+
     mock_taskiq_broker.find_task.return_value = None
 
-    input_data = MockInputModel(data="test_input")
+    input_data = MockInputModel(root=MockInputTrigger(data="test_input"))
     setup_data = MockSetupModel(config="test_config")
 
     with pytest.raises(ValueError, match="Task not found"):
@@ -194,6 +208,7 @@ async def test_create_module_instance_job_task_not_found(
         )
 
 
+@pytest.mark.asyncio
 async def test_create_config_setup_instance_job(
     taskiq_job_manager: TaskiqJobManager,
     mock_taskiq_task: Mock,
@@ -204,12 +219,14 @@ async def test_create_config_setup_instance_job(
 
     config_data = MockSetupModel(config="test_config")
 
-    job_id = await taskiq_job_manager.create_config_setup_instance_job(
-        config_setup_data=config_data,
-        mission_id="test_mission",
-        setup_id="test_setup",
-        setup_version_id="v1",
-    )
+    # Mock SimpleMockModule.__init__ to avoid service initialization
+    with patch.object(SimpleMockModule, "__init__", return_value=None):
+        job_id = await taskiq_job_manager.create_config_setup_instance_job(
+            config_setup_data=config_data,
+            mission_id="test_mission",
+            setup_id="test_setup",
+            setup_version_id="v1",
+        )
 
     assert job_id == "test_job_id"
     assert job_id in taskiq_job_manager._job_registry
@@ -218,12 +235,13 @@ async def test_create_config_setup_instance_job(
     mock_taskiq_broker.find_task.assert_called_once_with(
         "digitalkin.core.job_manager.taskiq_broker:run_config_module"
     )
-    # Verify SurrealDB config was passed to worker
+    # Verify arguments were passed to worker (6 args total)
     call_args = mock_taskiq_task.kiq.call_args
     assert call_args is not None
-    assert len(call_args[0]) == 7  # Should have surreal_config as 7th argument
+    assert len(call_args[0]) == 6  # mission_id, setup_id, setup_version_id, module_class, services_mode, config_setup_data
 
 
+@pytest.mark.asyncio
 async def test_create_config_setup_instance_job_none_data(
     taskiq_job_manager: TaskiqJobManager,
     mock_taskiq_task: Mock,
@@ -246,6 +264,7 @@ async def test_create_config_setup_instance_job_none_data(
 # ============================================================================
 
 
+@pytest.mark.asyncio
 async def test_get_module_status_running(
     taskiq_job_manager: TaskiqJobManager,
     configured_mock_surreal_connection: Mock,
@@ -264,6 +283,7 @@ async def test_get_module_status_running(
     configured_mock_surreal_connection.select_by_task_id.assert_called_with("tasks", "test_job_id")
 
 
+@pytest.mark.asyncio
 async def test_get_module_status_not_found(
     taskiq_job_manager: TaskiqJobManager,
 ):
@@ -273,6 +293,7 @@ async def test_get_module_status_not_found(
     assert status == TaskStatus.FAILED
 
 
+@pytest.mark.asyncio
 async def test_get_module_status_from_heartbeat(
     taskiq_job_manager: TaskiqJobManager,
     configured_mock_surreal_connection: Mock,
@@ -291,6 +312,7 @@ async def test_get_module_status_from_heartbeat(
     assert status == TaskStatus.RUNNING
 
 
+@pytest.mark.asyncio
 async def test_get_module_status_error(
     taskiq_job_manager: TaskiqJobManager,
     configured_mock_surreal_connection: Mock,
@@ -309,6 +331,7 @@ async def test_get_module_status_error(
 # ============================================================================
 
 
+@pytest.mark.asyncio
 async def test_stop_module(
     taskiq_job_manager: TaskiqJobManager,
     configured_mock_surreal_connection: Mock,
@@ -320,12 +343,8 @@ async def test_stop_module(
     taskiq_job_manager._job_registry["test_job_id"] = "test_job_id"
 
     # Create a mock module and task session
-    mock_module = SimpleMockModule(
-        job_id="test_job_id",
-        mission_id="test_mission",
-        setup_id="test_setup",
-        setup_version_id="v1"
-    )
+    mock_module = Mock(spec=BaseModule)
+    mock_module.stop = AsyncMock()
     taskiq_job_manager.tasks_sessions["test_job_id"] = TaskSession(
         "test_job_id",
         "test_mission",
@@ -342,6 +361,7 @@ async def test_stop_module(
         mock_cancel.assert_called_once_with("test_job_id", "test_mission")
 
 
+@pytest.mark.asyncio
 async def test_stop_module_not_found(
     taskiq_job_manager: TaskiqJobManager,
 ):
@@ -351,6 +371,7 @@ async def test_stop_module_not_found(
     assert result is False
 
 
+@pytest.mark.asyncio
 async def test_stop_module_no_task_session(
     taskiq_job_manager: TaskiqJobManager,
 ):
@@ -363,6 +384,7 @@ async def test_stop_module_no_task_session(
     assert result is False
 
 
+@pytest.mark.asyncio
 async def test_stop_module_error(
     taskiq_job_manager: TaskiqJobManager,
     configured_mock_surreal_connection: Mock,
@@ -373,12 +395,8 @@ async def test_stop_module_error(
     taskiq_job_manager._job_registry["test_job_id"] = "test_job_id"
 
     # Create a mock module and task session
-    mock_module = SimpleMockModule(
-        job_id="test_job_id",
-        mission_id="test_mission",
-        setup_id="test_setup",
-        setup_version_id="v1"
-    )
+    mock_module = Mock(spec=BaseModule)
+    mock_module.stop = AsyncMock()
     taskiq_job_manager.tasks_sessions["test_job_id"] = TaskSession(
         "test_job_id",
         "test_mission",
@@ -398,6 +416,7 @@ async def test_stop_module_error(
 # ============================================================================
 
 
+@pytest.mark.asyncio
 async def test_stop_all_modules(
     taskiq_job_manager: TaskiqJobManager,
     configured_mock_surreal_connection: Mock,
@@ -408,12 +427,8 @@ async def test_stop_all_modules(
     # Add multiple jobs to registry with task sessions
     for job_id in ["job_1", "job_2", "job_3"]:
         taskiq_job_manager._job_registry[job_id] = job_id
-        mock_module = SimpleMockModule(
-            job_id=job_id,
-            mission_id="test_mission",
-            setup_id="test_setup",
-            setup_version_id="v1"
-        )
+        mock_module = Mock(spec=BaseModule)
+        mock_module.stop = AsyncMock()
         taskiq_job_manager.tasks_sessions[job_id] = TaskSession(
             job_id,
             "test_mission",
@@ -428,6 +443,7 @@ async def test_stop_all_modules(
         assert mock_cancel.call_count == 3
 
 
+@pytest.mark.asyncio
 async def test_stop_all_modules_empty_registry(
     taskiq_job_manager: TaskiqJobManager,
 ):
@@ -441,6 +457,7 @@ async def test_stop_all_modules_empty_registry(
 # ============================================================================
 
 
+@pytest.mark.asyncio
 async def test_list_modules(
     taskiq_job_manager: TaskiqJobManager,
     configured_mock_surreal_connection: Mock,
@@ -466,6 +483,7 @@ async def test_list_modules(
     assert modules["job_1"]["status"] == TaskStatus.RUNNING
 
 
+@pytest.mark.asyncio
 async def test_list_modules_empty_registry(
     taskiq_job_manager: TaskiqJobManager,
 ):
@@ -475,6 +493,7 @@ async def test_list_modules_empty_registry(
     assert modules == {}
 
 
+@pytest.mark.asyncio
 async def test_list_modules_with_error(
     taskiq_job_manager: TaskiqJobManager,
     configured_mock_surreal_connection: Mock,
@@ -495,6 +514,7 @@ async def test_list_modules_with_error(
 # ============================================================================
 
 
+@pytest.mark.asyncio
 async def test_generate_stream_consumer(
     taskiq_job_manager: TaskiqJobManager,
 ):
@@ -510,13 +530,17 @@ async def test_generate_stream_consumer(
         # Read from the stream with timeout to prevent infinite loop
         outputs = []
         count = 0
+
+        async def read_stream():
+            async for output in stream:
+                outputs.append(output)
+                nonlocal count
+                count += 1
+                if count >= 2:
+                    break
+
         try:
-            async with asyncio.timeout(2.0):  # 2 second timeout
-                async for output in stream:
-                    outputs.append(output)
-                    count += 1
-                    if count >= 2:
-                        break
+            await asyncio.wait_for(read_stream(), timeout=2.0)
         except asyncio.TimeoutError:
             # Timeout is expected if stream doesn't close
             pass
@@ -529,19 +553,28 @@ async def test_generate_stream_consumer(
     assert job_id not in taskiq_job_manager.job_queues
 
 
+@pytest.mark.asyncio
 async def test_generate_config_setup_module_response(
     taskiq_job_manager: TaskiqJobManager,
 ):
     """Test generating config setup module response."""
     job_id = "test_job_id"
 
-    # Create the queue and add test data
-    queue: asyncio.Queue = asyncio.Queue(maxsize=taskiq_job_manager.max_queue_size)
-    taskiq_job_manager.job_queues[job_id] = queue
+    # Start the response generator in a background task
+    async def generate_response():
+        return await taskiq_job_manager.generate_config_setup_module_response(job_id)
+
+    response_task = asyncio.create_task(generate_response())
+
+    # Wait a bit for the queue to be created by the method
+    await asyncio.sleep(0.1)
+
+    # Put data in the queue that was created by the method
+    queue = taskiq_job_manager.job_queues[job_id]
     await queue.put(MockSetupModel(config="configured"))
 
     # Get the response
-    response = await taskiq_job_manager.generate_config_setup_module_response(job_id)
+    response = await response_task
 
     assert isinstance(response, MockSetupModel)
     assert response.config == "configured"

@@ -21,6 +21,9 @@ from digitalkin.models.core.task_monitor import (
 )
 from digitalkin.modules._base_module import BaseModule
 
+# Set timeout for all tests in this file (60 seconds)
+pytestmark = pytest.mark.timeout(60)
+
 # ============================================================================
 # Fixtures
 # ============================================================================
@@ -36,6 +39,7 @@ def mock_db():
     db.select_by_task_id = AsyncMock(return_value={"id": "tasks:test_signal_id"})
     db.start_live = AsyncMock(return_value=("live_id_123", _empty_async_gen()))
     db.stop_live = AsyncMock()
+    db.close = AsyncMock()
     return db
 
 
@@ -1263,6 +1267,193 @@ class TestLifecycleIntegration:
         hash_after_cancel = compute_state_hash(task_session)
         assert initial_hash != hash_after_cancel
         assert "cancelled" in hash_after_cancel
+
+
+# ============================================================================
+# Test Class: Cleanup Operations
+# ============================================================================
+
+
+class TestCleanup:
+    """Rigorous tests for TaskSession.cleanup() method.
+
+    Tests the cleanup contract:
+    - Queue must be cleared
+    - Module must be stopped
+    - DB connection must be closed
+
+    Critical invariant: DB close MUST happen even if module.stop() fails.
+    """
+
+    @pytest.mark.asyncio
+    async def test_cleanup_full_lifecycle(self, task_session, mock_db, mock_module):
+        """Test cleanup executes full lifecycle: queue clear, module stop, db close."""
+        # Setup: Add items to queue
+        for i in range(5):
+            await task_session.queue.put(f"item_{i}")
+
+        mock_module.stop = AsyncMock()
+
+        # Execute cleanup
+        await task_session.cleanup()
+
+        # Assert: Queue cleared
+        assert task_session.queue.empty(), "Queue should be empty after cleanup"
+
+        # Assert: Module stopped
+        mock_module.stop.assert_awaited_once()
+
+        # Assert: DB closed
+        mock_db.close.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_cleanup_invariant_db_closes_despite_module_failure(
+        self, task_session, mock_db, mock_module, mock_logger
+    ):
+        """CRITICAL: DB must close even if module.stop() raises exception.
+
+        This test verifies the most important cleanup invariant - resource cleanup
+        must complete even if intermediate steps fail.
+        """
+        # Setup: module.stop() will fail
+        mock_module.stop = AsyncMock(side_effect=RuntimeError("Module stop failed"))
+
+        # Execute cleanup
+        await task_session.cleanup()
+
+        # Assert CRITICAL INVARIANT: DB still closed
+        mock_db.close.assert_awaited_once()
+
+        # Assert: Exception was logged
+        mock_logger.exception.assert_called_once()
+        assert "Error stopping module during cleanup" in str(mock_logger.exception.call_args)
+
+    @pytest.mark.asyncio
+    async def test_cleanup_idempotent(self, task_session, mock_db, mock_module):
+        """Test cleanup can be called multiple times safely."""
+        mock_module.stop = AsyncMock()
+
+        # Call cleanup twice
+        await task_session.cleanup()
+        await task_session.cleanup()
+
+        # Should not raise, DB close called multiple times is acceptable
+        assert mock_db.close.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_cleanup_with_full_queue_maxsize(self, task_session, mock_db, mock_module):
+        """Test cleanup handles queue at maximum capacity (1000 items).
+
+        Ensures no infinite loop or timeout when queue is full.
+        """
+        mock_module.stop = AsyncMock()
+
+        # Fill queue to maxsize (1000)
+        for i in range(1000):
+            await task_session.queue.put(f"item_{i}")
+
+        assert task_session.queue.qsize() == 1000
+
+        # Execute cleanup
+        await task_session.cleanup()
+
+        # Assert: All items cleared
+        assert task_session.queue.empty()
+        assert task_session.queue.qsize() == 0
+
+    @pytest.mark.asyncio
+    async def test_cleanup_with_empty_queue(self, task_session, mock_db, mock_module):
+        """Test cleanup with empty queue doesn't fail."""
+        mock_module.stop = AsyncMock()
+
+        assert task_session.queue.empty()
+
+        # Should not raise
+        await task_session.cleanup()
+
+        mock_db.close.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "exception_type",
+        [RuntimeError, ValueError, TypeError, Exception],
+    )
+    async def test_cleanup_module_stop_various_exceptions(
+        self, task_session, mock_db, mock_module, exception_type, mock_logger
+    ):
+        """Test cleanup handles various exception types from module.stop().
+
+        Parametrized test ensures robustness across different failure modes.
+        Note: CancelledError is not included as it's a BaseException that should
+        propagate (it's used for task cancellation coordination).
+        """
+        mock_module.stop = AsyncMock(side_effect=exception_type("Module error"))
+
+        # Execute cleanup - should not propagate exception
+        await task_session.cleanup()
+
+        # Assert: DB still closed (invariant)
+        mock_db.close.assert_awaited_once()
+
+        # Assert: Exception logged
+        mock_logger.exception.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_cleanup_db_close_failure_propagates(self, task_session, mock_db, mock_module):
+        """Test that DB close failures propagate (critical failure).
+
+        Unlike module.stop() failures, DB close failures are critical and should
+        propagate to caller for proper error handling.
+        """
+        mock_module.stop = AsyncMock()
+        mock_db.close = AsyncMock(side_effect=ConnectionError("DB close failed"))
+
+        # Execute cleanup - exception should propagate
+        with pytest.raises(ConnectionError, match="DB close failed"):
+            await task_session.cleanup()
+
+        # Module should still have been stopped
+        mock_module.stop.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_cleanup_execution_order(self, task_session, mock_db, mock_module):
+        """Test cleanup executes steps in correct order: queue -> module -> db.
+
+        Order matters for proper resource cleanup hierarchy.
+        """
+        call_order = []
+
+        # Track call order
+        mock_module.stop = AsyncMock(side_effect=lambda: call_order.append("module_stop"))
+        original_close = mock_db.close
+        mock_db.close = AsyncMock(side_effect=lambda: call_order.append("db_close") or original_close())
+
+        # Add item to queue to verify it's processed first
+        await task_session.queue.put("test_item")
+
+        await task_session.cleanup()
+
+        # Assert: Queue cleared before module stop before db close
+        assert task_session.queue.empty()
+        assert call_order == ["module_stop", "db_close"]
+
+    @pytest.mark.asyncio
+    async def test_cleanup_with_queue_containing_different_types(self, task_session, mock_db, mock_module):
+        """Test queue cleanup handles various object types correctly."""
+        mock_module.stop = AsyncMock()
+
+        # Add different types to queue
+        await task_session.queue.put("string")
+        await task_session.queue.put(123)
+        await task_session.queue.put({"key": "value"})
+        await task_session.queue.put(None)
+        await task_session.queue.put([1, 2, 3])
+
+        await task_session.cleanup()
+
+        # All items cleared regardless of type
+        assert task_session.queue.empty()
+        mock_db.close.assert_awaited_once()
 
 
 # ============================================================================

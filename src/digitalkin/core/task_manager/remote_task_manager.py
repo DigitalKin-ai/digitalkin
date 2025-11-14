@@ -58,7 +58,7 @@ class RemoteTaskManager(BaseTaskManager):
 
         try:
             # Create session for metadata and signal handling
-            channel, session = await self._create_session(
+            _channel, _session = await self._create_session(
                 task_id, mission_id, module, heartbeat_interval, connection_timeout
             )
 

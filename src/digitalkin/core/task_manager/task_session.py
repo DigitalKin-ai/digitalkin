@@ -317,3 +317,30 @@ class TaskSession:
             self.task_id,
             extra={"task_id": self.task_id},
         )
+
+    async def cleanup(self) -> None:
+        """Clean up task session resources.
+
+        This includes:
+        - Clearing queue to free memory
+        - Stopping module
+        - Closing database connection
+        """
+        # Clear queue to free memory
+        try:
+            while not self.queue.empty():
+                self.queue.get_nowait()
+        except asyncio.QueueEmpty:
+            pass
+
+        # Stop module
+        try:
+            await self.module.stop()
+        except Exception:
+            logger.exception(
+                "Error stopping module during cleanup",
+                extra={"mission_id": self.mission_id, "task_id": self.task_id},
+            )
+
+        # Close DB connection (kills all live queries)
+        await self.db.close()

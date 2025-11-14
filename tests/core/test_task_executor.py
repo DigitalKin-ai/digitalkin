@@ -22,7 +22,8 @@ from digitalkin.core.task_manager.task_session import TaskSession
 from digitalkin.models.core.task_monitor import TaskStatus
 from digitalkin.modules._base_module import BaseModule
 
-pytestmark = pytest.mark.asyncio
+# Set timeout for all tests in this file (30 seconds)
+pytestmark = pytest.mark.timeout(30)
 
 
 # ============================================================================
@@ -78,6 +79,7 @@ async def mock_base_module() -> Mock:
 class TestMainTaskCompletion:
     """Tests for normal main task completion."""
 
+    @pytest.mark.asyncio
     async def test_main_task_completes_successfully(
         self,
         task_executor: TaskExecutor,
@@ -114,6 +116,7 @@ class TestMainTaskCompletion:
         assert session.started_at is not None
         assert session.completed_at is not None
 
+    @pytest.mark.asyncio
     async def test_main_task_completion_timing_accuracy(
         self,
         task_executor: TaskExecutor,
@@ -148,6 +151,7 @@ class TestMainTaskCompletion:
         recorded = (session.completed_at - session.started_at).total_seconds()
         assert abs(recorded - elapsed) < 0.07
 
+    @pytest.mark.asyncio
     async def test_main_task_with_result_value(
         self,
         task_executor: TaskExecutor,
@@ -189,6 +193,7 @@ class TestMainTaskCompletion:
 class TestExceptionHandling:
     """Tests for exception handling in various scenarios."""
 
+    @pytest.mark.asyncio
     async def test_main_task_raises_exception(
         self,
         task_executor: TaskExecutor,
@@ -221,6 +226,7 @@ class TestExceptionHandling:
 
         assert session.status == TaskStatus.FAILED
 
+    @pytest.mark.asyncio
     async def test_exception_sets_failed_status(
         self,
         task_executor: TaskExecutor,
@@ -251,6 +257,7 @@ class TestExceptionHandling:
             await supervisor
         assert session.status == TaskStatus.FAILED
 
+    @pytest.mark.asyncio
     async def test_exception_propagated_to_caller(
         self,
         task_executor: TaskExecutor,
@@ -292,6 +299,7 @@ class TestExceptionHandling:
 class TestHeartbeatFailures:
     """Tests for heartbeat task failure scenarios."""
 
+    @pytest.mark.asyncio
     async def test_heartbeat_failure_stops_task(
         self,
         task_executor: TaskExecutor,
@@ -328,6 +336,7 @@ class TestHeartbeatFailures:
 
         assert session.status == TaskStatus.FAILED
 
+    @pytest.mark.asyncio
     async def test_heartbeat_failure_sets_status_correctly(
         self,
         task_executor: TaskExecutor,
@@ -376,6 +385,7 @@ class TestHeartbeatFailures:
 class TestSignalListener:
     """Tests for signal listener behavior."""
 
+    @pytest.mark.asyncio
     async def test_signal_listener_stops_task(
         self,
         task_executor: TaskExecutor,
@@ -410,6 +420,7 @@ class TestSignalListener:
 
         assert session.status == TaskStatus.CANCELLED
 
+    @pytest.mark.asyncio
     async def test_signal_creates_start_message(
         self,
         task_executor: TaskExecutor,
@@ -445,6 +456,7 @@ class TestSignalListener:
         assert start_call[0][1]["task_id"] == task_id
         assert start_call[0][1]["action"] == "start"
 
+    @pytest.mark.asyncio
     async def test_signal_creates_stop_message(
         self,
         task_executor: TaskExecutor,
@@ -488,6 +500,7 @@ class TestSignalListener:
 class TestCancellation:
     """Tests for task cancellation scenarios."""
 
+    @pytest.mark.asyncio
     async def test_supervisor_cancellation(
         self,
         task_executor: TaskExecutor,
@@ -523,6 +536,7 @@ class TestCancellation:
 
         assert session.status == TaskStatus.CANCELLED
 
+    @pytest.mark.asyncio
     async def test_cancellation_cleanup(
         self,
         task_executor: TaskExecutor,
@@ -569,6 +583,7 @@ class TestCancellation:
         # Verify cleanup happened
         assert len(cleanup_log) >= 2  # At least heartbeat and listener cleanup
 
+    @pytest.mark.asyncio
     async def test_cancelled_sets_status_correctly(
         self,
         task_executor: TaskExecutor,
@@ -614,6 +629,7 @@ class TestCancellation:
 class TestConcurrentExecution:
     """Tests for concurrent execution of three sub-tasks."""
 
+    @pytest.mark.asyncio
     async def test_concurrent_execution_of_three_tasks(
         self,
         task_executor: TaskExecutor,
@@ -668,6 +684,7 @@ class TestConcurrentExecution:
             assert not (max(main_indices) < min(hb_indices))
             assert not (max(hb_indices) < min(main_indices))
 
+    @pytest.mark.asyncio
     async def test_first_completed_wins(
         self,
         task_executor: TaskExecutor,
@@ -710,6 +727,7 @@ class TestConcurrentExecution:
 class TestEdgeCases:
     """Tests for edge cases and corner scenarios."""
 
+    @pytest.mark.asyncio
     async def test_immediate_completion(
         self,
         task_executor: TaskExecutor,
@@ -739,6 +757,7 @@ class TestEdgeCases:
 
         assert session.status == TaskStatus.COMPLETED
 
+    @pytest.mark.asyncio
     async def test_empty_task_id(
         self,
         task_executor: TaskExecutor,
@@ -768,6 +787,7 @@ class TestEdgeCases:
 
         assert session.status == TaskStatus.COMPLETED
 
+    @pytest.mark.asyncio
     async def test_very_long_task_name(
         self,
         task_executor: TaskExecutor,
@@ -806,6 +826,7 @@ class TestEdgeCases:
 class TestSupervisorTaskNames:
     """Tests for proper task naming in asyncio."""
 
+    @pytest.mark.asyncio
     async def test_supervisor_task_name(
         self,
         task_executor: TaskExecutor,

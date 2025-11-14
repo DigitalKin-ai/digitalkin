@@ -23,7 +23,8 @@ from digitalkin.core.task_manager.task_session import TaskSession
 from digitalkin.models.core.task_monitor import SignalType, TaskStatus
 from digitalkin.modules._base_module import BaseModule
 
-pytestmark = pytest.mark.asyncio
+# Set timeout for all tests in this file (30 seconds)
+pytestmark = pytest.mark.timeout(30)
 
 
 # ============================================================================
@@ -62,6 +63,12 @@ async def mock_task_session() -> Mock:
     session.db.close = AsyncMock()
     session.listen_signals = AsyncMock(side_effect=asyncio.CancelledError())
     session.generate_heartbeats = AsyncMock(side_effect=asyncio.CancelledError())
+
+    # Add cleanup method that calls db.close()
+    async def mock_cleanup():
+        await session.db.close()
+
+    session.cleanup = AsyncMock(side_effect=mock_cleanup)
     return session
 
 
@@ -79,6 +86,7 @@ async def task_manager() -> RemoteTaskManager:
 class TestTaskRegistration:
     """Tests for remote task registration without execution."""
 
+    @pytest.mark.asyncio
     async def test_register_task_success(
         self,
         task_manager: RemoteTaskManager,
@@ -95,11 +103,11 @@ class TestTaskRegistration:
 
         with (
             patch(
-                "digitalkin.core.task_manager.remote_task_manager.SurrealDBConnection",
+                "digitalkin.core.task_manager.base_task_manager.SurrealDBConnection",
                 return_value=mock_surreal_connection,
             ),
             patch(
-                "digitalkin.core.task_manager.remote_task_manager.TaskSession",
+                "digitalkin.core.task_manager.base_task_manager.TaskSession",
                 return_value=mock_task_session,
             ),
         ):
@@ -110,8 +118,10 @@ class TestTaskRegistration:
             # Session created but no task in registry
             assert task_id in task_manager.tasks_sessions
             assert task_id not in task_manager.tasks  # Key difference from LocalTaskManager
-            assert task_manager.task_count == 0  # No local tasks
+            assert task_manager.task_count == 1  # One session created (task_count = len(tasks_sessions))
+            assert len(task_manager.tasks) == 0  # No local task execution
 
+    @pytest.mark.asyncio
     async def test_register_task_duplicate_raises(
         self,
         task_manager: RemoteTaskManager,
@@ -126,11 +136,11 @@ class TestTaskRegistration:
 
         with (
             patch(
-                "digitalkin.core.task_manager.remote_task_manager.SurrealDBConnection",
+                "digitalkin.core.task_manager.base_task_manager.SurrealDBConnection",
                 return_value=mock_surreal_connection,
             ),
             patch(
-                "digitalkin.core.task_manager.remote_task_manager.TaskSession",
+                "digitalkin.core.task_manager.base_task_manager.TaskSession",
                 return_value=mock_task_session,
             ),
         ):
@@ -141,6 +151,7 @@ class TestTaskRegistration:
             with pytest.raises(ValueError, match="already exists"):
                 await task_manager.create_task("dup", "missions:dup", mock_base_module, work())
 
+    @pytest.mark.asyncio
     async def test_register_task_max_limit(
         self,
         mock_base_module: Mock,
@@ -155,11 +166,11 @@ class TestTaskRegistration:
 
         with (
             patch(
-                "digitalkin.core.task_manager.remote_task_manager.SurrealDBConnection",
+                "digitalkin.core.task_manager.base_task_manager.SurrealDBConnection",
                 return_value=mock_surreal_connection,
             ),
             patch(
-                "digitalkin.core.task_manager.remote_task_manager.TaskSession",
+                "digitalkin.core.task_manager.base_task_manager.TaskSession",
                 return_value=mock_task_session,
             ),
         ):
@@ -168,9 +179,10 @@ class TestTaskRegistration:
             await small_manager.create_task("t1", "missions:limit", mock_base_module, work())
             await small_manager.create_task("t2", "missions:limit", mock_base_module, work())
 
-            with pytest.raises(RuntimeError, match="Cannot create more tasks"):
+            with pytest.raises(RuntimeError, match="Maximum concurrent tasks"):
                 await small_manager.create_task("t3", "missions:limit", mock_base_module, work())
 
+    @pytest.mark.asyncio
     async def test_register_task_custom_intervals(
         self,
         task_manager: RemoteTaskManager,
@@ -187,11 +199,11 @@ class TestTaskRegistration:
 
         with (
             patch(
-                "digitalkin.core.task_manager.remote_task_manager.SurrealDBConnection",
+                "digitalkin.core.task_manager.base_task_manager.SurrealDBConnection",
                 return_value=mock_surreal_connection,
             ),
             patch(
-                "digitalkin.core.task_manager.remote_task_manager.TaskSession",
+                "digitalkin.core.task_manager.base_task_manager.TaskSession",
                 return_value=mock_task_session,
             ),
         ):
@@ -218,6 +230,7 @@ class TestTaskRegistration:
 class TestCoroutineClosure:
     """Tests for coroutine closure behavior."""
 
+    @pytest.mark.asyncio
     async def test_coroutine_closed_immediately(
         self,
         task_manager: RemoteTaskManager,
@@ -238,11 +251,11 @@ class TestCoroutineClosure:
 
         with (
             patch(
-                "digitalkin.core.task_manager.remote_task_manager.SurrealDBConnection",
+                "digitalkin.core.task_manager.base_task_manager.SurrealDBConnection",
                 return_value=mock_surreal_connection,
             ),
             patch(
-                "digitalkin.core.task_manager.remote_task_manager.TaskSession",
+                "digitalkin.core.task_manager.base_task_manager.TaskSession",
                 return_value=mock_task_session,
             ),
         ):
@@ -257,6 +270,7 @@ class TestCoroutineClosure:
             assert "executed" not in execution_log
             assert task_id in task_manager.tasks_sessions
 
+    @pytest.mark.asyncio
     async def test_coroutine_closed_prevents_execution(
         self,
         task_manager: RemoteTaskManager,
@@ -275,11 +289,11 @@ class TestCoroutineClosure:
 
         with (
             patch(
-                "digitalkin.core.task_manager.remote_task_manager.SurrealDBConnection",
+                "digitalkin.core.task_manager.base_task_manager.SurrealDBConnection",
                 return_value=mock_surreal_connection,
             ),
             patch(
-                "digitalkin.core.task_manager.remote_task_manager.TaskSession",
+                "digitalkin.core.task_manager.base_task_manager.TaskSession",
                 return_value=mock_task_session,
             ),
         ):
@@ -301,6 +315,7 @@ class TestCoroutineClosure:
 class TestSessionCreation:
     """Tests for session creation for signal handling."""
 
+    @pytest.mark.asyncio
     async def test_session_created_for_signals(
         self,
         task_manager: RemoteTaskManager,
@@ -317,11 +332,11 @@ class TestSessionCreation:
 
         with (
             patch(
-                "digitalkin.core.task_manager.remote_task_manager.SurrealDBConnection",
+                "digitalkin.core.task_manager.base_task_manager.SurrealDBConnection",
                 return_value=mock_surreal_connection,
             ),
             patch(
-                "digitalkin.core.task_manager.remote_task_manager.TaskSession",
+                "digitalkin.core.task_manager.base_task_manager.TaskSession",
                 return_value=mock_task_session,
             ),
         ):
@@ -333,6 +348,7 @@ class TestSessionCreation:
             assert task_id in task_manager.tasks_sessions
             assert task_manager.tasks_sessions[task_id] == mock_task_session
 
+    @pytest.mark.asyncio
     async def test_db_connection_initialized(
         self,
         task_manager: RemoteTaskManager,
@@ -349,11 +365,11 @@ class TestSessionCreation:
 
         with (
             patch(
-                "digitalkin.core.task_manager.remote_task_manager.SurrealDBConnection",
+                "digitalkin.core.task_manager.base_task_manager.SurrealDBConnection",
                 return_value=mock_surreal_connection,
             ),
             patch(
-                "digitalkin.core.task_manager.remote_task_manager.TaskSession",
+                "digitalkin.core.task_manager.base_task_manager.TaskSession",
                 return_value=mock_task_session,
             ),
         ):
@@ -373,6 +389,7 @@ class TestSessionCreation:
 class TestNoLocalExecution:
     """Tests verifying no local execution happens."""
 
+    @pytest.mark.asyncio
     async def test_tasks_dict_remains_empty(
         self,
         task_manager: RemoteTaskManager,
@@ -388,11 +405,11 @@ class TestNoLocalExecution:
 
         with (
             patch(
-                "digitalkin.core.task_manager.remote_task_manager.SurrealDBConnection",
+                "digitalkin.core.task_manager.base_task_manager.SurrealDBConnection",
                 return_value=mock_surreal_connection,
             ),
             patch(
-                "digitalkin.core.task_manager.remote_task_manager.TaskSession",
+                "digitalkin.core.task_manager.base_task_manager.TaskSession",
                 return_value=mock_task_session,
             ),
         ):
@@ -403,11 +420,12 @@ class TestNoLocalExecution:
 
             # All sessions created
             assert len(task_manager.tasks_sessions) == 5
+            assert task_manager.task_count == 5  # task_count = len(tasks_sessions)
 
             # But NO tasks in execution dict
             assert len(task_manager.tasks) == 0
-            assert task_manager.task_count == 0
 
+    @pytest.mark.asyncio
     async def test_running_tasks_empty(
         self,
         task_manager: RemoteTaskManager,
@@ -424,11 +442,11 @@ class TestNoLocalExecution:
 
         with (
             patch(
-                "digitalkin.core.task_manager.remote_task_manager.SurrealDBConnection",
+                "digitalkin.core.task_manager.base_task_manager.SurrealDBConnection",
                 return_value=mock_surreal_connection,
             ),
             patch(
-                "digitalkin.core.task_manager.remote_task_manager.TaskSession",
+                "digitalkin.core.task_manager.base_task_manager.TaskSession",
                 return_value=mock_task_session,
             ),
         ):
@@ -448,6 +466,7 @@ class TestNoLocalExecution:
 class TestSignalOperations:
     """Tests for signal operations with remote tasks."""
 
+    @pytest.mark.asyncio
     async def test_send_signal_to_remote_task(
         self,
         task_manager: RemoteTaskManager,
@@ -455,48 +474,27 @@ class TestSignalOperations:
     ) -> None:
         """Test sending signal to remote task."""
         task_id = "signal_test"
-        mock_chan = AsyncMock()
-        mock_chan.update = AsyncMock()
-        task_manager.channel = mock_chan
-        task_manager.tasks_sessions[task_id] = Mock()
 
-        result = await task_manager.send_signal(task_id, "missions:signal", SignalType.PAUSE, {})
+        # Create mock session with db.update
+        mock_session = Mock()
+        mock_session.db = Mock()
+        mock_session.db.update = AsyncMock()
+
+        task_manager.channel = mock_surreal_connection
+        task_manager.tasks_sessions[task_id] = mock_session
+
+        result = await task_manager.send_signal(task_id, "missions:signal", SignalType.CANCEL, {})
         assert result is True
-        mock_chan.update.assert_awaited_once_with("tasks", SignalType.PAUSE, {})
+        mock_session.db.update.assert_awaited_once_with("signals", task_id, {"type": SignalType.CANCEL, "payload": {}})
 
-    async def test_pause_remote_task(
-        self,
-        task_manager: RemoteTaskManager,
-    ) -> None:
-        """Test pause signal for remote task."""
-        task_id = "pause_test"
-        mock_chan = AsyncMock()
-        task_manager.channel = mock_chan
-        task_manager.tasks_sessions[task_id] = Mock()
-
-        result = await task_manager.pause_task(task_id, "missions:pause")
-        assert result is True
-
-    async def test_resume_remote_task(
-        self,
-        task_manager: RemoteTaskManager,
-    ) -> None:
-        """Test resume signal for remote task."""
-        task_id = "resume_test"
-        mock_chan = AsyncMock()
-        task_manager.channel = mock_chan
-        task_manager.tasks_sessions[task_id] = Mock()
-
-        result = await task_manager.resume_task(task_id, "missions:resume")
-        assert result is True
-
+    @pytest.mark.asyncio
     async def test_signal_unknown_task(
         self,
         task_manager: RemoteTaskManager,
     ) -> None:
         """Test signal to unknown task returns False."""
         task_manager.channel = Mock()
-        result = await task_manager.send_signal("unknown", "missions:signal", SignalType.PAUSE, {})
+        result = await task_manager.send_signal("unknown", "missions:signal", SignalType.CANCEL, {})
         assert result is False
 
 
@@ -508,6 +506,7 @@ class TestSignalOperations:
 class TestCleanupShutdown:
     """Tests for cleanup and shutdown of remote task metadata."""
 
+    @pytest.mark.asyncio
     async def test_cleanup_closes_db(
         self,
         task_manager: RemoteTaskManager,
@@ -515,28 +514,46 @@ class TestCleanupShutdown:
         """Test cleanup closes database connection."""
         mock_db = AsyncMock()
         mock_db.close = AsyncMock()
-        task_manager.tasks_sessions["t1"] = Mock()
-        task_manager.tasks_sessions["t1"].db = mock_db
+
+        mock_session = Mock()
+        mock_session.db = mock_db
+
+        # Create cleanup that calls db.close
+        async def mock_cleanup():
+            await mock_session.db.close()
+
+        mock_session.cleanup = AsyncMock(side_effect=mock_cleanup)
+        task_manager.tasks_sessions["t1"] = mock_session
 
         await task_manager._cleanup_task("t1", mission_id="missions:cleanup")
 
         mock_db.close.assert_awaited_once()
         assert "t1" not in task_manager.tasks_sessions
 
+    @pytest.mark.asyncio
     async def test_cleanup_stops_module(
         self,
         task_manager: RemoteTaskManager,
         mock_base_module: Mock,
     ) -> None:
         """Test cleanup stops module."""
-        task_manager.tasks_sessions["t1"] = Mock()
-        task_manager.tasks_sessions["t1"].db = AsyncMock()
-        task_manager.tasks_sessions["t1"].module = mock_base_module
+        mock_session = Mock()
+        mock_session.db = AsyncMock()
+        mock_session.module = mock_base_module
+
+        # Create cleanup that calls module.stop and db.close
+        async def mock_cleanup():
+            await mock_session.module.stop()
+            await mock_session.db.close()
+
+        mock_session.cleanup = AsyncMock(side_effect=mock_cleanup)
+        task_manager.tasks_sessions["t1"] = mock_session
 
         await task_manager._cleanup_task("t1", mission_id="missions:cleanup")
 
         mock_base_module.stop.assert_awaited_once()
 
+    @pytest.mark.asyncio
     async def test_cleanup_on_registration_failure(
         self,
         task_manager: RemoteTaskManager,
@@ -556,7 +573,7 @@ class TestCleanupShutdown:
         )
 
         with patch(
-            "digitalkin.core.task_manager.remote_task_manager.SurrealDBConnection",
+            "digitalkin.core.task_manager.base_task_manager.SurrealDBConnection",
             return_value=mock_surreal_connection,
         ):
             task_manager.channel = mock_surreal_connection
@@ -568,6 +585,7 @@ class TestCleanupShutdown:
             assert task_id not in task_manager.tasks
             assert task_id not in task_manager.tasks_sessions
 
+    @pytest.mark.asyncio
     async def test_shutdown_sets_event(
         self,
         task_manager: RemoteTaskManager,
@@ -579,6 +597,7 @@ class TestCleanupShutdown:
 
         assert task_manager._shutdown_event.is_set()
 
+    @pytest.mark.asyncio
     async def test_shutdown_idempotent(
         self,
         task_manager: RemoteTaskManager,
@@ -600,6 +619,7 @@ class TestCleanupShutdown:
 class TestCancellation:
     """Tests for cancellation of remote task metadata."""
 
+    @pytest.mark.asyncio
     async def test_cancel_remote_task_metadata(
         self,
         task_manager: RemoteTaskManager,
@@ -616,11 +636,11 @@ class TestCancellation:
 
         with (
             patch(
-                "digitalkin.core.task_manager.remote_task_manager.SurrealDBConnection",
+                "digitalkin.core.task_manager.base_task_manager.SurrealDBConnection",
                 return_value=mock_surreal_connection,
             ),
             patch(
-                "digitalkin.core.task_manager.remote_task_manager.TaskSession",
+                "digitalkin.core.task_manager.base_task_manager.TaskSession",
                 return_value=mock_task_session,
             ),
         ):
@@ -631,6 +651,7 @@ class TestCancellation:
             result = await task_manager.cancel_task(task_id, mission_id)
             assert result is True
 
+    @pytest.mark.asyncio
     async def test_cancel_nonexistent_task(
         self,
         task_manager: RemoteTaskManager,
@@ -639,6 +660,7 @@ class TestCancellation:
         result = await task_manager.cancel_task("nonexistent", "missions:cancel")
         assert result is True
 
+    @pytest.mark.asyncio
     async def test_cancel_all_remote_tasks(
         self,
         task_manager: RemoteTaskManager,
@@ -654,11 +676,11 @@ class TestCancellation:
 
         with (
             patch(
-                "digitalkin.core.task_manager.remote_task_manager.SurrealDBConnection",
+                "digitalkin.core.task_manager.base_task_manager.SurrealDBConnection",
                 return_value=mock_surreal_connection,
             ),
             patch(
-                "digitalkin.core.task_manager.remote_task_manager.TaskSession",
+                "digitalkin.core.task_manager.base_task_manager.TaskSession",
                 return_value=mock_task_session,
             ),
         ):
@@ -668,7 +690,7 @@ class TestCancellation:
                 await task_manager.create_task(task_id, "missions:all", mock_base_module, work())
 
             # Cancel all
-            await task_manager.cancel_all_tasks()
+            await task_manager.cancel_all_tasks("missions:all")
 
             # Sessions should be cleaned up (no local tasks to cancel)
             # Note: cancel_all_tasks behavior depends on BaseTaskManager implementation
@@ -682,6 +704,7 @@ class TestCancellation:
 class TestEdgeCases:
     """Tests for edge cases specific to remote task management."""
 
+    @pytest.mark.asyncio
     async def test_empty_task_id(
         self,
         task_manager: RemoteTaskManager,
@@ -698,11 +721,11 @@ class TestEdgeCases:
 
         with (
             patch(
-                "digitalkin.core.task_manager.remote_task_manager.SurrealDBConnection",
+                "digitalkin.core.task_manager.base_task_manager.SurrealDBConnection",
                 return_value=mock_surreal_connection,
             ),
             patch(
-                "digitalkin.core.task_manager.remote_task_manager.TaskSession",
+                "digitalkin.core.task_manager.base_task_manager.TaskSession",
                 return_value=mock_task_session,
             ),
         ):
@@ -713,6 +736,7 @@ class TestEdgeCases:
             assert task_id in task_manager.tasks_sessions
             assert task_id not in task_manager.tasks
 
+    @pytest.mark.asyncio
     async def test_very_long_task_name(
         self,
         task_manager: RemoteTaskManager,
@@ -729,11 +753,11 @@ class TestEdgeCases:
 
         with (
             patch(
-                "digitalkin.core.task_manager.remote_task_manager.SurrealDBConnection",
+                "digitalkin.core.task_manager.base_task_manager.SurrealDBConnection",
                 return_value=mock_surreal_connection,
             ),
             patch(
-                "digitalkin.core.task_manager.remote_task_manager.TaskSession",
+                "digitalkin.core.task_manager.base_task_manager.TaskSession",
                 return_value=mock_task_session,
             ),
         ):
@@ -743,6 +767,7 @@ class TestEdgeCases:
 
             assert task_id in task_manager.tasks_sessions
 
+    @pytest.mark.asyncio
     async def test_multiple_sessions_no_tasks(
         self,
         task_manager: RemoteTaskManager,
@@ -758,11 +783,11 @@ class TestEdgeCases:
 
         with (
             patch(
-                "digitalkin.core.task_manager.remote_task_manager.SurrealDBConnection",
+                "digitalkin.core.task_manager.base_task_manager.SurrealDBConnection",
                 return_value=mock_surreal_connection,
             ),
             patch(
-                "digitalkin.core.task_manager.remote_task_manager.TaskSession",
+                "digitalkin.core.task_manager.base_task_manager.TaskSession",
                 return_value=mock_task_session,
             ),
         ):
@@ -773,7 +798,7 @@ class TestEdgeCases:
 
             # Many sessions
             assert len(task_manager.tasks_sessions) == 10
+            assert task_manager.task_count == 10  # task_count = len(tasks_sessions)
 
             # Zero local tasks
             assert len(task_manager.tasks) == 0
-            assert task_manager.task_count == 0

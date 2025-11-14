@@ -29,6 +29,11 @@ from typing import NoReturn
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
+
+# Set timeout for all tests in this file (30 seconds)
+pytestmark = pytest.mark.timeout(30)
+
+import pytest
 import pytest_asyncio
 
 from digitalkin.core.task_manager.local_task_manager import LocalTaskManager
@@ -401,7 +406,7 @@ class TestTaskCreation:
             await asyncio.sleep(0.09)
 
             # This might succeed or fail depending on timing
-            result = await task_manager.send_signal(task_id, "missions:dfr", "pause", {})
+            result = await task_manager.send_signal(task_id, "missions:dfr", "cancel", {})
             assert isinstance(result, bool)
 
 
@@ -866,7 +871,7 @@ class TestCancellation:
 class TestSignals:
     """Signal handling tests."""
 
-    @pytest.mark.parametrize("sig", [SignalType.PAUSE, SignalType.RESUME, "custom"])
+    @pytest.mark.parametrize("sig", [SignalType.CANCEL, "custom"])
     async def test_send_signal(self, task_manager, sig) -> None:
         """Positive: Signal sending works."""
         mock_chan = AsyncMock()
@@ -881,7 +886,7 @@ class TestSignals:
     async def test_signal_unknown_task(self, task_manager) -> None:
         """Negative: Unknown task returns False."""
         task_manager.channel = Mock()
-        result = await task_manager.send_signal("unknown", "missions:os", SignalType.PAUSE, {})
+        result = await task_manager.send_signal("unknown", "missions:os", SignalType.CANCEL, {})
         assert result is False
 
 

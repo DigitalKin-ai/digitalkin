@@ -75,6 +75,7 @@
         "pytest-cov>=7.0.0",
         "pytest-html==4.1.1",
         "pytest-json-report==1.5.0",
+        "pytest-timeout>=2.3.1",
     ]
     docs = [
         "mike>=2.1.3",
@@ -261,3 +262,15 @@
     testpaths    = [ "tests" ]
     python_files = "test_*.py"
     asyncio_mode = "auto"
+
+    log_cli   = false
+    log_level = "ERROR"
+
+    # Default timeout for tests (in seconds)
+    timeout        = 10
+    timeout_method = "signal"  # More reliable for asyncio tests on Linux
+
+    # Custom markers
+    markers = [
+        "integration: marks tests that require real SurrealDB connection (deselect with '-m \"not integration\"')",
+    ]

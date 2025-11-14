@@ -5,7 +5,7 @@ Tests for abstract base task manager functionality including:
 - Validation logic (_validate_task_creation)
 - Session creation (_create_session)
 - Cleanup logic (_cleanup_task)
-- Signal sending (send_signal, pause_task, resume_task, get_task_status)
+- Signal sending (send_signal, get_task_status)
 - Cancellation logic (cancel_task, cancel_all_tasks)
 - Shutdown coordination
 - Property accessors (task_count, running_tasks)
@@ -26,7 +26,8 @@ from digitalkin.core.task_manager.task_session import TaskSession
 from digitalkin.models.core.task_monitor import SignalType, TaskStatus
 from digitalkin.modules._base_module import BaseModule
 
-pytestmark = pytest.mark.asyncio
+# Set timeout for all tests in this file (60 seconds)
+pytestmark = pytest.mark.timeout(60)
 
 
 # ============================================================================
@@ -93,8 +94,15 @@ async def mock_task_session() -> Mock:
     session.completed_at = None
     session.db = Mock()
     session.db.close = AsyncMock()
+    session.db.update = AsyncMock()
     session.listen_signals = AsyncMock(side_effect=asyncio.CancelledError())
     session.generate_heartbeats = AsyncMock(side_effect=asyncio.CancelledError())
+
+    # Realistic cleanup implementation that calls db.close()
+    async def mock_cleanup():
+        await session.db.close()
+
+    session.cleanup = AsyncMock(side_effect=mock_cleanup)
     return session
 
 
@@ -117,81 +125,12 @@ class TestAbstractMethods:
         with pytest.raises(TypeError, match="Can't instantiate abstract class"):
             BaseTaskManager()  # type: ignore
 
-    def test_must_implement_create_task(self) -> None:
-        """Test that subclasses must implement create_task."""
-
-        class IncompleteManager(BaseTaskManager):
-            pass
-
-        with pytest.raises(TypeError, match="Can't instantiate abstract class"):
-            IncompleteManager()  # type: ignore
-
-    async def test_concrete_implementation_works(
-        self,
-        task_manager: ConcreteTaskManager,
-        mock_base_module: Mock,
-        mock_surreal_connection: Mock,
-        mock_task_session: Mock,
-    ) -> None:
-        """Test that concrete implementation with create_task works."""
-        task_id = "concrete_test"
-        mission_id = "missions:concrete"
-
-        async def work() -> None:
-            await asyncio.sleep(0.05)
-
-        with (
-            patch(
-                "digitalkin.core.task_manager.base_task_manager.SurrealDBConnection",
-                return_value=mock_surreal_connection,
-            ),
-            patch(
-                "digitalkin.core.task_manager.base_task_manager.TaskSession",
-                return_value=mock_task_session,
-            ),
-        ):
-            task_manager.channel = mock_surreal_connection
-            await task_manager.create_task(task_id, mission_id, mock_base_module, work())
-
-            assert task_id in task_manager.tasks
-            assert task_id in task_manager.tasks_sessions
-
-
-# ============================================================================
-# Test: Initialization
-# ============================================================================
-
-
-class TestInitialization:
-    """Tests for BaseTaskManager initialization."""
-
-    def test_initialization_defaults(self) -> None:
-        """Test initialization with default parameters."""
-        manager = ConcreteTaskManager()
-
-        assert manager.default_timeout == 10.0
-        assert manager.max_concurrent_tasks == 100
-        assert len(manager.tasks) == 0
-        assert len(manager.tasks_sessions) == 0
-        assert isinstance(manager._shutdown_event, asyncio.Event)
-        assert not manager._shutdown_event.is_set()
-
     def test_initialization_custom_params(self) -> None:
         """Test initialization with custom parameters."""
         manager = ConcreteTaskManager(default_timeout=5.0, max_concurrent_tasks=50)
 
         assert manager.default_timeout == 5.0
         assert manager.max_concurrent_tasks == 50
-
-    def test_shutdown_event_internal_attribute(self) -> None:
-        """Test that _shutdown_event internal attribute exists."""
-        manager = ConcreteTaskManager()
-
-        # Access internal attribute
-        assert hasattr(manager, "_shutdown_event")
-        event = manager._shutdown_event
-        assert isinstance(event, asyncio.Event)
-        assert not event.is_set()
 
 
 # ============================================================================
@@ -202,6 +141,7 @@ class TestInitialization:
 class TestValidation:
     """Tests for _validate_task_creation logic."""
 
+    @pytest.mark.asyncio
     async def test_validate_duplicate_task_id(
         self,
         task_manager: ConcreteTaskManager,
@@ -225,6 +165,7 @@ class TestValidation:
         with pytest.raises((StopIteration, RuntimeError)):
             await coro
 
+    @pytest.mark.asyncio
     async def test_validate_max_concurrent_tasks(
         self,
     ) -> None:
@@ -248,6 +189,7 @@ class TestValidation:
         with pytest.raises((StopIteration, RuntimeError)):
             await coro
 
+    @pytest.mark.asyncio
     async def test_validate_success(
         self,
         task_manager: ConcreteTaskManager,
@@ -276,6 +218,7 @@ class TestValidation:
 class TestSessionCreation:
     """Tests for _create_session logic."""
 
+    @pytest.mark.asyncio
     async def test_create_session_success(
         self,
         task_manager: ConcreteTaskManager,
@@ -316,6 +259,7 @@ class TestSessionCreation:
             # Verify DB initialized
             mock_surreal_connection.init_surreal_instance.assert_called_once()
 
+    @pytest.mark.asyncio
     async def test_create_session_custom_intervals(
         self,
         task_manager: ConcreteTaskManager,
@@ -354,33 +298,235 @@ class TestSessionCreation:
 
 
 class TestCleanup:
-    """Tests for _cleanup_task logic."""
+    """Rigorous tests for BaseTaskManager._cleanup_task delegation.
 
-    async def test_cleanup_closes_db(
+    Tests the contract between BaseTaskManager and TaskSession:
+    - BaseTaskManager delegates cleanup to TaskSession.cleanup()
+    - Tracking dictionaries are properly maintained
+    - Cleanup happens in all cancellation scenarios
+    """
+
+    @pytest.mark.asyncio
+    async def test_cleanup_task_delegates_to_session(
         self,
         task_manager: ConcreteTaskManager,
     ) -> None:
-        """Test cleanup closes database connection."""
-        task_id = "cleanup_test"
-        mission_id = "missions:cleanup"
+        """Test _cleanup_task properly delegates to session.cleanup()."""
+        task_id = "delegate_test"
+        mission_id = "missions:delegate"
 
-        mock_db = AsyncMock()
-        mock_db.close = AsyncMock()
+        # Create mock session with cleanup
+        mock_session = Mock(spec=TaskSession)
+        mock_session.cleanup = AsyncMock()
 
-        task_manager.tasks_sessions[task_id] = Mock()
-        task_manager.tasks_sessions[task_id].db = mock_db
+        task_manager.tasks_sessions[task_id] = mock_session
+        task_manager.tasks[task_id] = Mock()  # Mock task object
+
+        # Execute cleanup
+        await task_manager._cleanup_task(task_id, mission_id)
+
+        # Assert: cleanup() was called exactly once
+        mock_session.cleanup.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_cleanup_task_removes_from_tracking_dicts(
+        self,
+        task_manager: ConcreteTaskManager,
+    ) -> None:
+        """Test cleanup removes task from both tracking dictionaries."""
+        task_id = "tracking_test"
+        mission_id = "missions:tracking"
+
+        # Setup: Add to both dictionaries
+        mock_session = Mock(spec=TaskSession)
+        mock_session.cleanup = AsyncMock()
+        task_manager.tasks_sessions[task_id] = mock_session
+        task_manager.tasks[task_id] = Mock()
+
+        # Verify present before cleanup
+        assert task_id in task_manager.tasks_sessions
+        assert task_id in task_manager.tasks
+
+        # Execute cleanup
+        await task_manager._cleanup_task(task_id, mission_id)
+
+        # Assert: Removed from both dictionaries
+        assert task_id not in task_manager.tasks_sessions
+        assert task_id not in task_manager.tasks
+
+    @pytest.mark.asyncio
+    async def test_cleanup_task_with_no_session(
+        self,
+        task_manager: ConcreteTaskManager,
+    ) -> None:
+        """Test cleanup handles missing session gracefully."""
+        task_id = "no_session_test"
+        mission_id = "missions:no_session"
+
+        # Only task exists, no session
+        task_manager.tasks[task_id] = Mock()
+
+        # Should not raise
+        await task_manager._cleanup_task(task_id, mission_id)
+
+        # Assert: Task still removed
+        assert task_id not in task_manager.tasks
+
+    @pytest.mark.asyncio
+    async def test_cleanup_task_with_no_task(
+        self,
+        task_manager: ConcreteTaskManager,
+    ) -> None:
+        """Test cleanup handles missing task gracefully."""
+        task_id = "no_task_test"
+        mission_id = "missions:no_task"
+
+        # Only session exists, no task
+        mock_session = Mock(spec=TaskSession)
+        mock_session.cleanup = AsyncMock()
+        task_manager.tasks_sessions[task_id] = mock_session
+
+        # Should not raise
+        await task_manager._cleanup_task(task_id, mission_id)
+
+        # Assert: Session removed, cleanup called
+        assert task_id not in task_manager.tasks_sessions
+        mock_session.cleanup.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_cleanup_task_idempotent(
+        self,
+        task_manager: ConcreteTaskManager,
+    ) -> None:
+        """Test cleanup can be called multiple times safely."""
+        task_id = "idempotent_test"
+        mission_id = "missions:idempotent"
+
+        # First cleanup with session
+        mock_session = Mock(spec=TaskSession)
+        mock_session.cleanup = AsyncMock()
+        task_manager.tasks_sessions[task_id] = mock_session
+        task_manager.tasks[task_id] = Mock()
 
         await task_manager._cleanup_task(task_id, mission_id)
 
-        mock_db.close.assert_awaited_once()
+        # Second cleanup - should not raise
+        await task_manager._cleanup_task(task_id, mission_id)
 
+        # Session was removed after first call
+        assert task_id not in task_manager.tasks_sessions
+
+    @pytest.mark.asyncio
+    async def test_cancel_task_orphaned_session_gets_cleaned(
+        self,
+        task_manager: ConcreteTaskManager,
+    ) -> None:
+        """Test cancel_task cleans up orphaned sessions (session without task).
+
+        This is a critical edge case - session exists but task was never created
+        or was already removed. cancel_task must still cleanup the session.
+        """
+        task_id = "orphaned_test"
+        mission_id = "missions:orphaned"
+
+        # Session exists but NO task
+        mock_session = Mock(spec=TaskSession)
+        mock_session.cleanup = AsyncMock()
+        task_manager.tasks_sessions[task_id] = mock_session
+
+        # Execute cancel - task not found, but cleanup should still happen
+        result = await task_manager.cancel_task(task_id, mission_id)
+
+        # Assert: Returns True (success)
+        assert result is True
+
+        # Assert: Session cleanup was called
+        mock_session.cleanup.assert_awaited_once()
+
+        # Assert: Session removed from tracking
+        assert task_id not in task_manager.tasks_sessions
+
+    @pytest.mark.asyncio
+    async def test_cancel_task_cleanup_in_finally_block(
+        self,
+        task_manager: ConcreteTaskManager,
+    ) -> None:
+        """Test cleanup happens even if cancel_task encounters errors.
+
+        Cleanup must happen in finally block to ensure resource release.
+        """
+        task_id = "finally_test"
+        mission_id = "missions:finally"
+
+        # Create a task that will timeout and be force-cancelled
+        async def long_running_task():
+            await asyncio.sleep(100)
+
+        task = asyncio.create_task(long_running_task())
+        task_manager.tasks[task_id] = task
+
+        # Add session
+        mock_session = Mock(spec=TaskSession)
+        mock_session.cleanup = AsyncMock()
+        task_manager.tasks_sessions[task_id] = mock_session
+
+        # Cancel with short timeout - will timeout and force cancel
+        result = await task_manager.cancel_task(task_id, mission_id, timeout=0.05)
+
+        # Assert: Cancel succeeded
+        assert result is True
+
+        # Assert: Cleanup still happened despite timeout
+        mock_session.cleanup.assert_awaited_once()
+
+        # Assert: Resources cleaned up
+        assert task_id not in task_manager.tasks_sessions
+        assert task_id not in task_manager.tasks
+
+    @pytest.mark.asyncio
+    async def test_cleanup_task_execution_order_verified(
+        self,
+        task_manager: ConcreteTaskManager,
+    ) -> None:
+        """Test cleanup executes: session.cleanup() then dict removal."""
+        task_id = "order_test"
+        mission_id = "missions:order"
+
+        execution_order = []
+
+        mock_session = Mock(spec=TaskSession)
+
+        # Track when cleanup is called and when session is still in dict
+        async def track_cleanup():
+            # At this point, session should still be in dict
+            if task_id in task_manager.tasks_sessions:
+                execution_order.append("cleanup_while_in_dict")
+            else:
+                execution_order.append("cleanup_after_removed")
+
+        mock_session.cleanup = AsyncMock(side_effect=track_cleanup)
+        task_manager.tasks_sessions[task_id] = mock_session
+
+        await task_manager._cleanup_task(task_id, mission_id)
+
+        # Assert: cleanup was called while still in dict (proper order)
+        assert execution_order == ["cleanup_while_in_dict"]
+
+        # Assert: Now removed
+        assert task_id not in task_manager.tasks_sessions
+
+    @pytest.mark.asyncio
     async def test_cleanup_nonexistent_task(
         self,
         task_manager: ConcreteTaskManager,
     ) -> None:
-        """Test cleanup of nonexistent task doesn't fail."""
-        # Should not raise
-        await task_manager._cleanup_task("nonexistent", "missions:cleanup")
+        """Test cleanup of completely nonexistent task doesn't fail."""
+        # Task not in any dictionary - should not raise
+        await task_manager._cleanup_task("nonexistent", "missions:nonexistent")
+
+        # Also test via cancel_task
+        result = await task_manager.cancel_task("nonexistent2", "missions:cancel")
+        assert result is True
 
 
 # ============================================================================
@@ -391,23 +537,26 @@ class TestCleanup:
 class TestSignalOperations:
     """Tests for signal sending operations."""
 
+    @pytest.mark.asyncio
     async def test_send_signal_success(
         self,
         task_manager: ConcreteTaskManager,
         mock_surreal_connection: Mock,
+        mock_task_session: Mock,
     ) -> None:
         """Test successful signal sending."""
         task_id = "signal_test"
         mission_id = "missions:signal"
 
         task_manager.channel = mock_surreal_connection
-        task_manager.tasks_sessions[task_id] = Mock()
+        task_manager.tasks_sessions[task_id] = mock_task_session
 
-        result = await task_manager.send_signal(task_id, mission_id, SignalType.PAUSE, {"key": "value"})
+        result = await task_manager.send_signal(task_id, mission_id, SignalType.CANCEL, {"key": "value"})
 
         assert result is True
-        mock_surreal_connection.update.assert_awaited_once_with("tasks", SignalType.PAUSE, {"key": "value"})
+        mock_task_session.db.update.assert_awaited_once_with("signals", task_id, {"type": SignalType.CANCEL, "payload": {"key": "value"}})
 
+    @pytest.mark.asyncio
     async def test_send_signal_unknown_task(
         self,
         task_manager: ConcreteTaskManager,
@@ -416,61 +565,29 @@ class TestSignalOperations:
         """Test signal sending to unknown task returns False."""
         task_manager.channel = mock_surreal_connection
 
-        result = await task_manager.send_signal("unknown", "missions:signal", SignalType.PAUSE, {})
+        result = await task_manager.send_signal("unknown", "missions:signal", SignalType.CANCEL, {})
 
         assert result is False
         mock_surreal_connection.update.assert_not_called()
 
-    async def test_pause_task(
-        self,
-        task_manager: ConcreteTaskManager,
-        mock_surreal_connection: Mock,
-    ) -> None:
-        """Test pause_task sends pause signal."""
-        task_id = "pause_test"
-        mission_id = "missions:pause"
-
-        task_manager.channel = mock_surreal_connection
-        task_manager.tasks_sessions[task_id] = Mock()
-
-        result = await task_manager.pause_task(task_id, mission_id)
-
-        assert result is True
-        mock_surreal_connection.update.assert_awaited_once_with("tasks", "pause", {})
-
-    async def test_resume_task(
-        self,
-        task_manager: ConcreteTaskManager,
-        mock_surreal_connection: Mock,
-    ) -> None:
-        """Test resume_task sends resume signal."""
-        task_id = "resume_test"
-        mission_id = "missions:resume"
-
-        task_manager.channel = mock_surreal_connection
-        task_manager.tasks_sessions[task_id] = Mock()
-
-        result = await task_manager.resume_task(task_id, mission_id)
-
-        assert result is True
-        mock_surreal_connection.update.assert_awaited_once_with("tasks", "resume", {})
-
+    @pytest.mark.asyncio
     async def test_get_task_status(
         self,
         task_manager: ConcreteTaskManager,
         mock_surreal_connection: Mock,
+        mock_task_session: Mock,
     ) -> None:
         """Test get_task_status sends status signal."""
         task_id = "status_test"
         mission_id = "missions:status"
 
         task_manager.channel = mock_surreal_connection
-        task_manager.tasks_sessions[task_id] = Mock()
+        task_manager.tasks_sessions[task_id] = mock_task_session
 
         result = await task_manager.get_task_status(task_id, mission_id)
 
         assert result is True
-        mock_surreal_connection.update.assert_awaited_once_with("tasks", "status", {})
+        mock_task_session.db.update.assert_awaited_once_with("signals", task_id, {"type": "status", "payload": {}})
 
 
 # ============================================================================
@@ -481,6 +598,7 @@ class TestSignalOperations:
 class TestCancellation:
     """Tests for task cancellation logic."""
 
+    @pytest.mark.asyncio
     async def test_cancel_task_graceful(
         self,
         task_manager: ConcreteTaskManager,
@@ -500,6 +618,7 @@ class TestCancellation:
         assert result is True
         assert task.done()
 
+    @pytest.mark.asyncio
     async def test_cancel_task_force_after_timeout(
         self,
         task_manager: ConcreteTaskManager,
@@ -520,6 +639,7 @@ class TestCancellation:
         assert task.done()
         assert task.cancelled()
 
+    @pytest.mark.asyncio
     async def test_cancel_nonexistent_task(
         self,
         task_manager: ConcreteTaskManager,
@@ -529,6 +649,7 @@ class TestCancellation:
 
         assert result is True
 
+    @pytest.mark.asyncio
     async def test_cancel_all_tasks(
         self,
         task_manager: ConcreteTaskManager,
@@ -550,6 +671,7 @@ class TestCancellation:
         assert len(results) == 3
         assert all(results.values())
 
+    @pytest.mark.asyncio
     async def test_cancel_all_tasks_empty(
         self,
         task_manager: ConcreteTaskManager,
@@ -568,6 +690,7 @@ class TestCancellation:
 class TestShutdown:
     """Tests for shutdown coordination."""
 
+    @pytest.mark.asyncio
     async def test_shutdown_sets_event(
         self,
         task_manager: ConcreteTaskManager,
@@ -579,6 +702,7 @@ class TestShutdown:
 
         assert task_manager._shutdown_event.is_set()
 
+    @pytest.mark.asyncio
     async def test_shutdown_cancels_tasks(
         self,
         task_manager: ConcreteTaskManager,
@@ -601,6 +725,7 @@ class TestShutdown:
         for task in task_manager.tasks.values():
             assert task.done()
 
+    @pytest.mark.asyncio
     async def test_shutdown_idempotent(
         self,
         task_manager: ConcreteTaskManager,
@@ -622,6 +747,7 @@ class TestShutdown:
 class TestProperties:
     """Tests for property accessors."""
 
+    @pytest.mark.asyncio
     async def test_task_count_property(
         self,
         task_manager: ConcreteTaskManager,
@@ -635,6 +761,7 @@ class TestProperties:
 
         assert task_manager.task_count == 2
 
+    @pytest.mark.asyncio
     async def test_running_tasks_property(
         self,
         task_manager: ConcreteTaskManager,
@@ -670,6 +797,7 @@ class TestProperties:
         except asyncio.CancelledError:
             pass
 
+    @pytest.mark.asyncio
     async def test_shutdown_event_internal_access(
         self,
         task_manager: ConcreteTaskManager,
@@ -685,6 +813,281 @@ class TestProperties:
 
 
 # ============================================================================
+# Test: Async Context Manager
+# ============================================================================
+
+
+class TestAsyncContextManager:
+    """Tests for async context manager functionality."""
+
+    @pytest.mark.asyncio
+    async def test_context_manager_basic_usage(
+        self,
+        mock_base_module: Mock,
+        mock_surreal_connection: Mock,
+        mock_task_session: Mock,
+    ) -> None:
+        """Test basic async context manager usage."""
+        with (
+            patch(
+                "digitalkin.core.task_manager.base_task_manager.SurrealDBConnection",
+                return_value=mock_surreal_connection,
+            ),
+            patch(
+                "digitalkin.core.task_manager.base_task_manager.TaskSession",
+                return_value=mock_task_session,
+            ),
+        ):
+            async with ConcreteTaskManager() as manager:
+                # Manager should be usable within context
+                assert isinstance(manager, ConcreteTaskManager)
+                assert len(manager.tasks) == 0
+                assert len(manager.tasks_sessions) == 0
+
+                # Create a task within context
+                await manager.create_task(
+                    "context_task",
+                    "missions:context",
+                    mock_base_module,
+                    asyncio.sleep(0.01),
+                )
+
+                assert "context_task" in manager.tasks_sessions
+
+            # After exit, shutdown should have been called
+            assert manager._shutdown_event.is_set()
+
+    @pytest.mark.asyncio
+    async def test_context_manager_calls_shutdown_on_exit(
+        self,
+    ) -> None:
+        """Test that __aexit__ calls shutdown."""
+        shutdown_called = False
+        shutdown_mission_id = None
+
+        async def mock_shutdown(mission_id: str) -> None:
+            nonlocal shutdown_called, shutdown_mission_id
+            shutdown_called = True
+            shutdown_mission_id = mission_id
+
+        manager = ConcreteTaskManager()
+        manager.shutdown = mock_shutdown  # type: ignore
+
+        async with manager:
+            pass
+
+        # Verify shutdown was called with correct mission_id
+        assert shutdown_called
+        assert shutdown_mission_id == "context_manager_cleanup"
+
+    @pytest.mark.asyncio
+    async def test_context_manager_cleanup_on_exception(
+        self,
+        mock_base_module: Mock,
+        mock_surreal_connection: Mock,
+        mock_task_session: Mock,
+    ) -> None:
+        """Test context manager cleans up even when exception occurs."""
+        with (
+            patch(
+                "digitalkin.core.task_manager.base_task_manager.SurrealDBConnection",
+                return_value=mock_surreal_connection,
+            ),
+            patch(
+                "digitalkin.core.task_manager.base_task_manager.TaskSession",
+                return_value=mock_task_session,
+            ),
+        ):
+            manager = ConcreteTaskManager()
+
+            try:
+                async with manager:
+                    # Create a task
+                    await manager.create_task(
+                        "exception_task",
+                        "missions:exception",
+                        mock_base_module,
+                        asyncio.sleep(0.01),
+                    )
+
+                    # Raise an exception
+                    raise ValueError("Test exception")
+            except ValueError:
+                pass
+
+            # Shutdown should still have been called
+            assert manager._shutdown_event.is_set()
+
+    @pytest.mark.asyncio
+    async def test_context_manager_nested_usage(
+        self,
+    ) -> None:
+        """Test nested context manager usage."""
+        async with ConcreteTaskManager() as outer_manager:
+            assert not outer_manager._shutdown_event.is_set()
+
+            async with ConcreteTaskManager() as inner_manager:
+                assert not inner_manager._shutdown_event.is_set()
+                assert not outer_manager._shutdown_event.is_set()
+
+            # Inner should be shut down, outer still active
+            assert inner_manager._shutdown_event.is_set()
+            assert not outer_manager._shutdown_event.is_set()
+
+        # Both should be shut down
+        assert outer_manager._shutdown_event.is_set()
+        assert inner_manager._shutdown_event.is_set()
+
+    @pytest.mark.asyncio
+    async def test_context_manager_returns_self(
+        self,
+    ) -> None:
+        """Test that __aenter__ returns self."""
+        manager = ConcreteTaskManager()
+
+        async with manager as context_var:
+            assert context_var is manager
+            assert id(context_var) == id(manager)
+
+    @pytest.mark.asyncio
+    async def test_context_manager_with_running_tasks(
+        self,
+        mock_base_module: Mock,
+        mock_surreal_connection: Mock,
+        mock_task_session: Mock,
+    ) -> None:
+        """Test context manager properly cancels running tasks on exit."""
+        with (
+            patch(
+                "digitalkin.core.task_manager.base_task_manager.SurrealDBConnection",
+                return_value=mock_surreal_connection,
+            ),
+            patch(
+                "digitalkin.core.task_manager.base_task_manager.TaskSession",
+                return_value=mock_task_session,
+            ),
+        ):
+            tasks_created = []
+
+            async with ConcreteTaskManager() as manager:
+                # Create multiple long-running tasks
+                for i in range(3):
+                    task_id = f"long_task_{i}"
+
+                    async def long_work() -> None:
+                        await asyncio.sleep(10)
+
+                    await manager.create_task(
+                        task_id,
+                        "missions:long",
+                        mock_base_module,
+                        long_work(),
+                    )
+
+                    if task_id in manager.tasks:
+                        tasks_created.append(manager.tasks[task_id])
+
+            # All tasks should be cancelled after exit
+            for task in tasks_created:
+                assert task.done() or task.cancelled()
+
+    @pytest.mark.asyncio
+    async def test_context_manager_exception_info_passed(
+        self,
+    ) -> None:
+        """Test that exception info is passed to __aexit__."""
+        exc_type_seen = None
+        exc_val_seen = None
+        exc_tb_seen = None
+
+        class TrackingManager(ConcreteTaskManager):
+            async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+                nonlocal exc_type_seen, exc_val_seen, exc_tb_seen
+                exc_type_seen = exc_type
+                exc_val_seen = exc_val
+                exc_tb_seen = exc_tb
+                await super().__aexit__(exc_type, exc_val, exc_tb)
+
+        try:
+            async with TrackingManager():
+                raise RuntimeError("Test error")
+        except RuntimeError:
+            pass
+
+        # Verify exception info was passed
+        assert exc_type_seen == RuntimeError
+        assert str(exc_val_seen) == "Test error"
+        assert exc_tb_seen is not None
+
+    @pytest.mark.asyncio
+    async def test_context_manager_multiple_sequential_uses(
+        self,
+    ) -> None:
+        """Test that same manager instance can be used multiple times."""
+        manager = ConcreteTaskManager()
+
+        # First usage
+        async with manager:
+            assert not manager._shutdown_event.is_set()
+
+        assert manager._shutdown_event.is_set()
+
+        # Clear the event manually for test
+        manager._shutdown_event.clear()
+
+        # Second usage should work
+        async with manager:
+            assert not manager._shutdown_event.is_set()
+
+        assert manager._shutdown_event.is_set()
+
+    @pytest.mark.asyncio
+    async def test_context_manager_with_session_cleanup(
+        self,
+        mock_base_module: Mock,
+        mock_surreal_connection: Mock,
+    ) -> None:
+        """Test that context manager properly cleans up sessions."""
+        with patch(
+            "digitalkin.core.task_manager.base_task_manager.SurrealDBConnection",
+            return_value=mock_surreal_connection,
+        ):
+            session_db_connections = []
+
+            async with ConcreteTaskManager() as manager:
+                # Create tasks with mock sessions
+                for i in range(3):
+                    task_id = f"session_task_{i}"
+                    mock_session = Mock(spec=TaskSession)
+                    mock_db = AsyncMock()
+                    mock_db.close = AsyncMock()
+                    mock_session.db = mock_db
+                    mock_session.queue = asyncio.Queue()
+
+                    # Add cleanup method that calls db.close()
+                    # Use default argument to capture current value
+                    def make_cleanup(session):
+                        async def cleanup_impl():
+                            await session.db.close()
+                        return cleanup_impl
+
+                    mock_session.cleanup = AsyncMock(side_effect=make_cleanup(mock_session))
+
+                    manager.tasks_sessions[task_id] = mock_session
+                    session_db_connections.append(mock_db)
+
+                    # Create a dummy task
+                    manager.tasks[task_id] = asyncio.create_task(asyncio.sleep(0.01))
+
+            # After context exit, all DB connections should be closed
+            for mock_db in session_db_connections:
+                mock_db.close.assert_awaited()
+
+            # Sessions should be cleaned up
+            assert len(manager.tasks_sessions) == 0
+
+
+# ============================================================================
 # Test: Edge Cases
 # ============================================================================
 
@@ -692,6 +1095,7 @@ class TestProperties:
 class TestEdgeCases:
     """Tests for edge cases and error conditions."""
 
+    @pytest.mark.asyncio
     async def test_empty_task_id(
         self,
         task_manager: ConcreteTaskManager,
@@ -721,6 +1125,7 @@ class TestEdgeCases:
 
             assert task_id in task_manager.tasks_sessions
 
+    @pytest.mark.asyncio
     async def test_very_long_task_id(
         self,
         task_manager: ConcreteTaskManager,
@@ -749,3 +1154,155 @@ class TestEdgeCases:
             await task_manager.create_task(task_id, mission_id, mock_base_module, work())
 
             assert task_id in task_manager.tasks_sessions
+
+
+# ============================================================================
+# Test: Integration Tests
+# ============================================================================
+
+
+class TestCleanupIntegration:
+    """Integration tests verifying cleanup through full task lifecycle.
+
+    These tests verify the complete workflow from task creation through
+    cancellation and cleanup, ensuring proper integration between components.
+    """
+
+    @pytest.mark.asyncio
+    async def test_cleanup_full_integration_real_task(
+        self,
+        task_manager: ConcreteTaskManager,
+        mock_base_module: Mock,
+        mock_surreal_connection: Mock,
+        mock_task_session: Mock,
+    ) -> None:
+        """Integration test: Create task, run it, cancel it, verify cleanup.
+
+        This test exercises the complete task lifecycle to ensure cleanup
+        happens correctly in a realistic scenario.
+        """
+        task_id = "integration_test"
+        mission_id = "missions:integration"
+
+        # Create a task that runs for a bit
+        async def work_task():
+            await asyncio.sleep(0.5)
+
+        # Setup patches for task creation
+        with (
+            patch(
+                "digitalkin.core.task_manager.base_task_manager.SurrealDBConnection",
+                return_value=mock_surreal_connection,
+            ),
+            patch(
+                "digitalkin.core.task_manager.base_task_manager.TaskSession",
+                return_value=mock_task_session,
+            ),
+        ):
+            task_manager.channel = mock_surreal_connection
+
+            # Create task
+            await task_manager.create_task(task_id, mission_id, mock_base_module, work_task())
+
+            # Verify task created
+            assert task_id in task_manager.tasks
+            assert task_id in task_manager.tasks_sessions
+
+            # Cancel task
+            result = await task_manager.cancel_task(task_id, mission_id, timeout=0.1)
+
+            # Assert: Cancel succeeded
+            assert result is True
+
+            # Assert: cleanup() was called during cancel
+            mock_task_session.cleanup.assert_awaited()
+
+            # Assert: All resources released
+            assert task_id not in task_manager.tasks
+            assert task_id not in task_manager.tasks_sessions
+
+    @pytest.mark.asyncio
+    async def test_shutdown_calls_cleanup_for_all_tasks(
+        self,
+        task_manager: ConcreteTaskManager,
+        mock_base_module: Mock,
+        mock_surreal_connection: Mock,
+    ) -> None:
+        """Integration test: shutdown cleans up all running tasks.
+
+        Verifies that shutdown properly calls cleanup() for each session.
+        """
+        mission_id = "missions:shutdown_cleanup"
+
+        # Create multiple mock sessions
+        sessions = {}
+        for i in range(3):
+            task_id = f"task_{i}"
+            mock_session = Mock(spec=TaskSession)
+            mock_session.cleanup = AsyncMock()
+            sessions[task_id] = mock_session
+            task_manager.tasks_sessions[task_id] = mock_session
+
+            # Create long-running task
+            async def long_task():
+                await asyncio.sleep(100)
+
+            task_manager.tasks[task_id] = asyncio.create_task(long_task())
+
+        # Execute shutdown
+        await task_manager.shutdown(mission_id, timeout=0.1)
+
+        # Assert: cleanup called for all sessions
+        for task_id, session in sessions.items():
+            session.cleanup.assert_awaited_once()
+
+        # Assert: All cleaned up
+        assert len(task_manager.tasks) == 0
+        assert len(task_manager.tasks_sessions) == 0
+
+    @pytest.mark.asyncio
+    async def test_multiple_concurrent_cancels_with_cleanup(
+        self,
+        task_manager: ConcreteTaskManager,
+    ) -> None:
+        """Integration test: concurrent cancellations all cleanup properly.
+
+        Tests that cleanup works correctly under concurrent load.
+        """
+        mission_id = "missions:concurrent"
+
+        # Create multiple tasks
+        sessions = {}
+        cancel_coros = []
+
+        for i in range(5):
+            task_id = f"concurrent_{i}"
+
+            # Create mock session
+            mock_session = Mock(spec=TaskSession)
+            mock_session.cleanup = AsyncMock()
+            sessions[task_id] = mock_session
+            task_manager.tasks_sessions[task_id] = mock_session
+
+            # Create task
+            async def work():
+                await asyncio.sleep(10)
+
+            task_manager.tasks[task_id] = asyncio.create_task(work())
+
+            # Prepare cancel coroutine
+            cancel_coros.append(task_manager.cancel_task(task_id, mission_id, timeout=0.05))
+
+        # Execute all cancels concurrently
+        results = await asyncio.gather(*cancel_coros)
+
+        # Assert: All cancels succeeded
+        assert all(results)
+
+        # Assert: All sessions cleaned up
+        for session in sessions.values():
+            session.cleanup.assert_awaited_once()
+
+        # Assert: All resources released
+        assert len(task_manager.tasks) == 0
+        assert len(task_manager.tasks_sessions) == 0

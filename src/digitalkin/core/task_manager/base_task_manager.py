@@ -5,8 +5,7 @@ import contextlib
 import datetime
 from abc import ABC, abstractmethod
 from collections.abc import Coroutine
-import signal
-from typing import Any, final
+from typing import Any
 
 from digitalkin.core.task_manager.surrealdb_repository import SurrealDBConnection
 from digitalkin.core.task_manager.task_session import TaskSession
@@ -19,11 +18,15 @@ class BaseTaskManager(ABC):
 
     Provides shared functionality for task orchestration, monitoring, signaling, and cancellation.
     Subclasses implement specific execution strategies (local or remote).
+
+    Supports async context manager protocol for automatic resource cleanup:
+        async with LocalTaskManager() as manager:
+            await manager.create_task(...)
+            # Resources automatically cleaned up on exit
     """
 
     tasks: dict[str, asyncio.Task]
     tasks_sessions: dict[str, TaskSession]
-    channel: SurrealDBConnection
     default_timeout: float
     max_concurrent_tasks: int
     _shutdown_event: asyncio.Event
@@ -69,6 +72,13 @@ class BaseTaskManager(ABC):
     async def _cleanup_task(self, task_id: str, mission_id: str) -> None:
         """Clean up task resources.
 
+        Delegates cleanup to TaskSession which handles:
+        - Clearing queue items to free memory
+        - Stopping module (if not already stopped)
+        - Closing database connection (which kills live queries)
+
+        Then removes task from tracking dictionaries.
+
         Args:
             task_id: The ID of the task to clean up
             mission_id: The ID of the mission associated with the task
@@ -77,7 +87,11 @@ class BaseTaskManager(ABC):
             "Cleaning up resources for task: '%s'", task_id, extra={"mission_id": mission_id, "task_id": task_id}
         )
         if task_id in self.tasks_sessions:
-            await self.tasks_sessions[task_id].db.close()
+            session = self.tasks_sessions[task_id]
+            await session.cleanup()
+            self.tasks_sessions.pop(task_id, None)
+
+        self.tasks.pop(task_id, None)
 
     async def _validate_task_creation(self, task_id: str, mission_id: str, coro: Coroutine[Any, Any, None]) -> None:
         """Validate task creation preconditions.
@@ -203,7 +217,9 @@ class BaseTaskManager(ABC):
             extra={"mission_id": mission_id, "task_id": task_id, "signal_type": signal_type, "payload": payload},
         )
 
-        await self.channel.update("tasks", signal_type, payload)
+        # Use the task session's db connection to send the signal
+        session = self.tasks_sessions[task_id]
+        await session.db.update("signals", task_id, {"type": signal_type, "payload": payload})
         return True
 
     async def cancel_task(self, task_id: str, mission_id: str, timeout: float | None = None) -> bool:
@@ -221,6 +237,8 @@ class BaseTaskManager(ABC):
             logger.warning(
                 "Cannot cancel - task not found: '%s'", task_id, extra={"mission_id": mission_id, "task_id": task_id}
             )
+            # Still cleanup any orphaned session
+            await self._cleanup_task(task_id, mission_id)
             return True
 
         timeout = timeout or self.default_timeout
@@ -265,8 +283,7 @@ class BaseTaskManager(ABC):
             )
             return False
         finally:
-            self.tasks.pop(task_id, None)
-
+            await self._cleanup_task(task_id, mission_id)
         return True
 
     async def clean_session(self, task_id: str, mission_id: str) -> bool:
@@ -286,11 +303,9 @@ class BaseTaskManager(ABC):
             )
             return False
 
-        await self.tasks_sessions[task_id].module.stop()
         await self.cancel_task(mission_id=mission_id, task_id=task_id)
 
         logger.info("Cleaning up session for task: '%s'", task_id, extra={"mission_id": mission_id, "task_id": task_id})
-        self.tasks_sessions.pop(task_id, None)
         return True
 
     async def pause_task(self, task_id: str, mission_id: str) -> bool:
@@ -395,6 +410,13 @@ class BaseTaskManager(ABC):
                 extra={"mission_id": mission_id, "failed_tasks": failed_tasks, "failed_count": len(failed_tasks)},
             )
 
+        # Clean up any remaining sessions (in case cancellation didn't clean them)
+        remaining_sessions = list(self.tasks_sessions.keys())
+        if remaining_sessions:
+            logger.info("Cleaning up %d remaining task sessions", len(remaining_sessions))
+            cleanup_coros = [self._cleanup_task(task_id, mission_id) for task_id in remaining_sessions]
+            await asyncio.gather(*cleanup_coros, return_exceptions=True)
+
         logger.info(
             "TaskManager shutdown completed, cancelled: %d, failed: %d",
             len(results) - len(failed_tasks),
@@ -405,3 +427,29 @@ class BaseTaskManager(ABC):
                 "failed_count": len(failed_tasks),
             },
         )
+
+    async def __aenter__(self) -> "BaseTaskManager":
+        """Enter async context manager.
+
+        Returns:
+            Self for use in async with statements
+        """
+        logger.debug("Entering %s context", self.__class__.__name__)
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+        """Exit async context manager and clean up resources.
+
+        Args:
+            exc_type: Exception type if an exception occurred
+            exc_val: Exception value if an exception occurred
+            exc_tb: Exception traceback if an exception occurred
+        """
+        logger.debug(
+            "Exiting %s context, exception: %s",
+            self.__class__.__name__,
+            exc_type,
+            extra={"exc_type": exc_type, "exc_val": exc_val},
+        )
+        # Shutdown with default mission_id for context manager usage
+        await self.shutdown(mission_id="context_manager_cleanup")

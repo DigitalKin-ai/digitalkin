@@ -15,8 +15,8 @@ from taskiq.compat import model_validate
 from taskiq.message import BrokerMessage
 from taskiq_aio_pika import AioPikaBroker
 
+from digitalkin.core.common import ConnectionFactory, ModuleFactory
 from digitalkin.core.job_manager.base_job_manager import BaseJobManager
-from digitalkin.core.task_manager.surrealdb_repository import SurrealDBConnection
 from digitalkin.core.task_manager.task_executor import TaskExecutor
 from digitalkin.core.task_manager.task_session import TaskSession
 from digitalkin.logger import logger
@@ -185,18 +185,24 @@ async def run_start_module(
 
     job_id = context.message.task_id
     callback = await BaseJobManager.job_specific_callback(send_message_to_stream, job_id)
-    module = module_class(job_id, mission_id=mission_id, setup_id=setup_id, setup_version_id=setup_version_id)
+    module = ModuleFactory.create_module_instance(module_class, job_id, mission_id, setup_id, setup_version_id)
 
     channel = None
     try:
         # Create TaskExecutor and supporting components for worker execution
         executor = TaskExecutor()
         # SurrealDB env vars are expected to be set in env.
-        channel = SurrealDBConnection("taskiq_worker", datetime.timedelta(seconds=5))
-        await channel.init_surreal_instance()
+        channel = await ConnectionFactory.create_surreal_connection("taskiq_worker", datetime.timedelta(seconds=5))
         session = TaskSession(job_id, mission_id, channel, module, datetime.timedelta(seconds=2))
 
         # Execute the task using TaskExecutor
+        # Create a proper done callback that handles errors
+        async def send_end_of_stream(_) -> None:
+            try:
+                await callback(StreamCodeModel(code="__END_OF_STREAM__"))
+            except Exception as e:
+                logger.error("Error sending end of stream: %s", e, exc_info=True)
+
         supervisor_task = await executor.execute_task(
             task_id=job_id,
             mission_id=mission_id,
@@ -204,7 +210,7 @@ async def run_start_module(
                 input_data,
                 setup_data,
                 callback,
-                done_callback=lambda _: asyncio.create_task(callback(StreamCodeModel(code="__END_OF_STREAM__"))),
+                done_callback=lambda result: asyncio.ensure_future(send_end_of_stream(result)),
             ),
             session=session,
             channel=channel,
@@ -257,7 +263,7 @@ async def run_config_module(
 
     job_id = context.message.task_id
     callback = await BaseJobManager.job_specific_callback(send_message_to_stream, job_id)
-    module = module_class(job_id, mission_id=mission_id, setup_id=setup_id, setup_version_id=setup_version_id)
+    module = ModuleFactory.create_module_instance(module_class, job_id, mission_id, setup_id, setup_version_id)
 
     # Override environment variables temporarily to use manager's SurrealDB
     channel = None
@@ -265,8 +271,7 @@ async def run_config_module(
         # Create TaskExecutor and supporting components for worker execution
         executor = TaskExecutor()
         # SurrealDB env vars are expected to be set in env.
-        channel = SurrealDBConnection("taskiq_worker", datetime.timedelta(seconds=5))
-        await channel.init_surreal_instance()
+        channel = await ConnectionFactory.create_surreal_connection("taskiq_worker", datetime.timedelta(seconds=5))
         session = TaskSession(job_id, mission_id, channel, module, datetime.timedelta(seconds=2))
 
         # Create and run the config setup task with TaskExecutor

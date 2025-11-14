@@ -15,6 +15,7 @@ from typing import Any
 
 import grpc_testing
 import pytest
+
 from digitalkin_proto.agentic_mesh_protocol.storage.v1 import storage_service_pb2_grpc
 from pydantic import BaseModel, Field
 
@@ -22,6 +23,9 @@ from digitalkin.models.grpc_servers.models import ClientConfig
 from digitalkin.services.storage.grpc_storage import GrpcStorage
 from digitalkin.services.storage.storage_strategy import DataType, StorageServiceError
 from tests.services.storage.mock_storage_servicer import FakeContext, MockStorageServicer
+
+# Set timeout for all tests in this file (20 seconds)
+pytestmark = pytest.mark.timeout(20)
 
 # --- Test Constants ---
 MISSION_ID = "missions:test_mission"

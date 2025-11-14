@@ -18,10 +18,10 @@ from typing import TYPE_CHECKING, Any
 
 from rstream import Consumer, ConsumerOffsetSpecification, MessageContext, OffsetType
 
+from digitalkin.core.common import ConnectionFactory, QueueFactory
 from digitalkin.core.job_manager.base_job_manager import BaseJobManager
 from digitalkin.core.job_manager.taskiq_broker import STREAM, STREAM_RETENTION, TASKIQ_BROKER, cleanup_global_resources
 from digitalkin.core.task_manager.remote_task_manager import RemoteTaskManager
-from digitalkin.core.task_manager.surrealdb_repository import SurrealDBConnection
 from digitalkin.logger import logger
 from digitalkin.models.core.task_monitor import TaskStatus
 from digitalkin.models.module import InputModelT, OutputModelT, SetupModelT
@@ -69,8 +69,9 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
     async def start(self) -> None:
         """Start the TaskiqJobManager and initialize SurrealDB connection."""
         await self._start()
-        self.channel: SurrealDBConnection = SurrealDBConnection("taskiq_job_manager", datetime.timedelta(seconds=5))
-        await self.channel.init_surreal_instance()
+        self.channel = await ConnectionFactory.create_surreal_connection(
+            database="taskiq_job_manager", timeout=datetime.timedelta(seconds=5)
+        )
 
     async def _start(self) -> None:
         await TASKIQ_BROKER.startup()
@@ -92,8 +93,21 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             callback=self._on_message,  # type: ignore
             offset_specification=start_spec,
         )
+
+        # Wrap the consumer task with error handling
+        async def run_consumer_with_error_handling() -> None:
+            try:
+                await self.stream_consumer.run()
+            except asyncio.CancelledError:
+                logger.debug("Stream consumer task cancelled")
+                raise
+            except Exception as e:
+                logger.error("Stream consumer task failed: %s", e, exc_info=True, extra={"error": str(e)})
+                # Re-raise to ensure the error is not silently ignored
+                raise
+
         self.stream_consumer_task = asyncio.create_task(
-            self.stream_consumer.run(),
+            run_consumer_with_error_handling(),
             name="stream_consumer_task",
         )
 
@@ -160,13 +174,17 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         Returns:
             SetupModelT: the SetupModelT object fully processed.
         """
-        queue: asyncio.Queue = asyncio.Queue(maxsize=self.max_queue_size)
+        queue = QueueFactory.create_bounded_queue(maxsize=self.max_queue_size)
         self.job_queues[job_id] = queue
 
         try:
-            item = await queue.get()
+            # Add timeout to prevent indefinite blocking
+            item = await asyncio.wait_for(queue.get(), timeout=30.0)
             queue.task_done()
             return item
+        except asyncio.TimeoutError:
+            logger.error("Timeout waiting for config setup response for job %s", job_id)
+            raise
         finally:
             logger.info(f"generate_config_setup_module_response: {job_id=}: {self.job_queues[job_id].empty()}")
             self.job_queues.pop(job_id, None)
@@ -253,27 +271,55 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         Yields:
             messages: The stream messages from the associated module.
         """
-        queue: asyncio.Queue = asyncio.Queue(maxsize=self.max_queue_size)
+        queue = QueueFactory.create_bounded_queue(maxsize=self.max_queue_size)
         self.job_queues[job_id] = queue
 
         async def _stream() -> AsyncGenerator[dict[str, Any], Any]:
-            """Generate the stream allowing flowless communication.
+            """Generate the stream with batch-drain optimization.
+
+            This implementation uses a micro-batching pattern optimized for distributed
+            message streams from RabbitMQ:
+            1. Block waiting for the first item (with timeout for termination checks)
+            2. Drain all immediately available items without blocking (micro-batch)
+            3. Yield control back to event loop
+
+            This pattern provides:
+            - Better throughput for bursty message streams
+            - Reduced gRPC streaming overhead
+            - Lower latency when multiple messages arrive simultaneously
 
             Yields:
                 dict: generated object from the module
             """
             while True:
-                item = await queue.get()
-                queue.task_done()
-                yield item
-
-                while True:
-                    try:
-                        item = queue.get_nowait()
-                    except asyncio.QueueEmpty:
-                        break
+                try:
+                    # Block for first item with timeout to allow termination checks
+                    item = await asyncio.wait_for(queue.get(), timeout=60.0)
                     queue.task_done()
                     yield item
+
+                    # Drain all immediately available items (micro-batch optimization)
+                    # This reduces latency when messages arrive in bursts from RabbitMQ
+                    batch_count = 0
+                    max_batch_size = 100  # Safety limit to prevent memory spikes
+                    while batch_count < max_batch_size:
+                        try:
+                            item = queue.get_nowait()
+                            queue.task_done()
+                            yield item
+                            batch_count += 1
+                        except asyncio.QueueEmpty:
+                            # No more items immediately available, break to next blocking wait
+                            break
+
+                except asyncio.TimeoutError:
+                    logger.warning("Stream consumer timeout for job %s, checking if job is still active", job_id)
+                    # Periodic timeout allows checking if job is still active
+                    if job_id not in self._job_registry:
+                        logger.info("Job %s no longer registered, ending stream", job_id)
+                        break
+                    # Otherwise continue waiting for more items
+                    continue
 
         try:
             yield _stream()
@@ -333,7 +379,6 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         # Dummy coroutine will be closed by TaskManager since execution_mode="remote"
         async def _dummy_coro() -> None:
             """Dummy coroutine - actual execution happens in worker."""
-            pass
 
         await self.create_task(
             job_id,

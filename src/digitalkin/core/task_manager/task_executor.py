@@ -92,11 +92,15 @@ class TaskExecutor:
             session.started_at = datetime.datetime.now(datetime.timezone.utc)
             session.status = TaskStatus.RUNNING
 
-            main_task = asyncio.create_task(coro, name=f"{task_id}_main")
-            hb_task = asyncio.create_task(heartbeat_wrapper(), name=f"{task_id}_heartbeat")
-            sig_task = asyncio.create_task(signal_wrapper(), name=f"{task_id}_listener")
+            # Create tasks with proper exception handling
+            main_task = None
+            hb_task = None
+            sig_task = None
 
             try:
+                main_task = asyncio.create_task(coro, name=f"{task_id}_main")
+                hb_task = asyncio.create_task(heartbeat_wrapper(), name=f"{task_id}_heartbeat")
+                sig_task = asyncio.create_task(signal_wrapper(), name=f"{task_id}_listener")
                 done, pending = await asyncio.wait(
                     [main_task, sig_task, hb_task],
                     return_when=asyncio.FIRST_COMPLETED,
@@ -143,10 +147,12 @@ class TaskExecutor:
             finally:
                 session.completed_at = datetime.datetime.now(datetime.timezone.utc)
                 # Ensure all tasks are cleaned up
-                for t in [main_task, hb_task, sig_task]:
+                tasks_to_cleanup = [t for t in [main_task, hb_task, sig_task] if t is not None]
+                for t in tasks_to_cleanup:
                     if not t.done():
                         t.cancel()
-                await asyncio.gather(main_task, hb_task, sig_task, return_exceptions=True)
+                if tasks_to_cleanup:
+                    await asyncio.gather(*tasks_to_cleanup, return_exceptions=True)
 
                 logger.info(
                     "Task execution completed with status: %s",
