@@ -117,7 +117,7 @@ async def test_taskiq_job_manager_initialization():
 
     assert manager.module_class == SimpleMockModule
     assert manager.services_mode == ServicesMode.LOCAL
-    assert manager._job_registry == {}
+    assert manager.tasks_sessions == {}
     assert manager.job_queues == {}
     assert manager.max_queue_size == 1000
 
@@ -174,7 +174,6 @@ async def test_create_module_instance_job(
         )
 
     assert job_id == "test_job_id"
-    assert job_id in taskiq_job_manager._job_registry
     # Verify TaskSession was created in manager
     assert job_id in taskiq_job_manager.tasks_sessions
     mock_taskiq_broker.find_task.assert_called_once_with("digitalkin.core.job_manager.taskiq_broker:run_start_module")
@@ -230,7 +229,6 @@ async def test_create_config_setup_instance_job(
         )
 
     assert job_id == "test_job_id"
-    assert job_id in taskiq_job_manager._job_registry
     # Verify TaskSession was created in manager
     assert job_id in taskiq_job_manager.tasks_sessions
     mock_taskiq_broker.find_task.assert_called_once_with("digitalkin.core.job_manager.taskiq_broker:run_config_module")
@@ -271,7 +269,13 @@ async def test_get_module_status_running(
     configured_mock_surreal_connection: Mock,
 ):
     """Test getting module status when task is running."""
-    taskiq_job_manager._job_registry["test_job_id"] = "test_job_id"
+    # Create mock TaskSession for the test
+    from digitalkin.core.task_manager.task_session import TaskSession
+
+    mock_module = Mock(spec=BaseModule)
+    taskiq_job_manager.tasks_sessions["test_job_id"] = TaskSession(
+        "test_job_id", "test_mission", configured_mock_surreal_connection, mock_module
+    )
     configured_mock_surreal_connection.select_by_task_id.return_value = {
         "id": "task_123",
         "task_id": "test_job_id",
@@ -300,7 +304,13 @@ async def test_get_module_status_from_heartbeat(
     configured_mock_surreal_connection: Mock,
 ):
     """Test getting module status from heartbeat when task record not found."""
-    taskiq_job_manager._job_registry["test_job_id"] = "test_job_id"
+    # Create mock TaskSession for the test
+    from digitalkin.core.task_manager.task_session import TaskSession
+
+    mock_module = Mock(spec=BaseModule)
+    taskiq_job_manager.tasks_sessions["test_job_id"] = TaskSession(
+        "test_job_id", "test_mission", configured_mock_surreal_connection, mock_module
+    )
 
     # First call returns None (no task record), second call returns heartbeat
     configured_mock_surreal_connection.select_by_task_id.side_effect = [
@@ -319,7 +329,13 @@ async def test_get_module_status_error(
     configured_mock_surreal_connection: Mock,
 ):
     """Test getting module status when an error occurs."""
-    taskiq_job_manager._job_registry["test_job_id"] = "test_job_id"
+    # Create mock TaskSession for the test
+    from digitalkin.core.task_manager.task_session import TaskSession
+
+    mock_module = Mock(spec=BaseModule)
+    taskiq_job_manager.tasks_sessions["test_job_id"] = TaskSession(
+        "test_job_id", "test_mission", configured_mock_surreal_connection, mock_module
+    )
     configured_mock_surreal_connection.select_by_task_id.side_effect = Exception("DB error")
 
     status = await taskiq_job_manager.get_module_status("test_job_id")
@@ -339,9 +355,6 @@ async def test_stop_module(
 ):
     """Test stopping a module using TaskManager."""
     from digitalkin.core.task_manager.task_session import TaskSession
-
-    # Setup job registry and task session
-    taskiq_job_manager._job_registry["test_job_id"] = "test_job_id"
 
     # Create a mock module and task session
     mock_module = Mock(spec=BaseModule)
@@ -374,8 +387,7 @@ async def test_stop_module_no_task_session(
     taskiq_job_manager: TaskiqJobManager,
 ):
     """Test stopping a module when task session is not found."""
-    taskiq_job_manager._job_registry["test_job_id"] = "test_job_id"
-    # No task session created
+    # No task session created - the job doesn't exist in tasks_sessions
 
     result = await taskiq_job_manager.stop_module("test_job_id")
 
@@ -389,8 +401,6 @@ async def test_stop_module_error(
 ):
     """Test stopping a module when an error occurs."""
     from digitalkin.core.task_manager.task_session import TaskSession
-
-    taskiq_job_manager._job_registry["test_job_id"] = "test_job_id"
 
     # Create a mock module and task session
     mock_module = Mock(spec=BaseModule)
@@ -419,9 +429,8 @@ async def test_stop_all_modules(
     """Test stopping all modules."""
     from digitalkin.core.task_manager.task_session import TaskSession
 
-    # Add multiple jobs to registry with task sessions
+    # Add multiple jobs with task sessions
     for job_id in ["job_1", "job_2", "job_3"]:
-        taskiq_job_manager._job_registry[job_id] = job_id
         mock_module = Mock(spec=BaseModule)
         mock_module.stop = AsyncMock()
         taskiq_job_manager.tasks_sessions[job_id] = TaskSession(
@@ -455,8 +464,14 @@ async def test_list_modules(
     configured_mock_surreal_connection: Mock,
 ):
     """Test listing all modules."""
-    taskiq_job_manager._job_registry["job_1"] = "job_1"
-    taskiq_job_manager._job_registry["job_2"] = "job_2"
+    # Create mock TaskSessions for the test
+    from digitalkin.core.task_manager.task_session import TaskSession
+
+    for job_id in ["job_1", "job_2"]:
+        mock_module = Mock(spec=BaseModule)
+        taskiq_job_manager.tasks_sessions[job_id] = TaskSession(
+            job_id, "test_mission", configured_mock_surreal_connection, mock_module
+        )
 
     configured_mock_surreal_connection.select_by_task_id.return_value = {
         "id": "task_123",
@@ -491,7 +506,13 @@ async def test_list_modules_with_error(
     configured_mock_surreal_connection: Mock,
 ):
     """Test listing modules when an error occurs."""
-    taskiq_job_manager._job_registry["job_1"] = "job_1"
+    # Create mock TaskSession for the test
+    from digitalkin.core.task_manager.task_session import TaskSession
+
+    mock_module = Mock(spec=BaseModule)
+    taskiq_job_manager.tasks_sessions["job_1"] = TaskSession(
+        "job_1", "test_mission", configured_mock_surreal_connection, mock_module
+    )
     configured_mock_surreal_connection.select_by_task_id.side_effect = Exception("DB error")
 
     modules = await taskiq_job_manager.list_modules()

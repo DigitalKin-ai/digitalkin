@@ -36,7 +36,6 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
     """Taskiq job manager for running modules in Taskiq tasks."""
 
     services_mode: ServicesMode
-    _job_registry: dict[str, str]  # Maps job_id to taskiq task_id
 
     @staticmethod
     def _define_consumer() -> Consumer:
@@ -159,7 +158,6 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         logger.warning("TaskiqJobManager initialized with app: %s", TASKIQ_BROKER)
         self.job_queues: dict[str, asyncio.Queue] = {}
         self.max_queue_size = 1000
-        self._job_registry = {}  # Maps job_id to taskiq task_id
 
     async def generate_config_setup_module_response(self, job_id: str) -> SetupModelT:
         """Generate a stream consumer for a module's output data.
@@ -255,7 +253,6 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             _dummy_coro(),
         )
 
-        self._job_registry[job_id] = job_id  # Track the job
         logger.info("Registered config task: %s, waiting for initial result", job_id)
         result = await running_task.wait_result(timeout=10)
         logger.info("Job %s with data %s", job_id, result)
@@ -316,7 +313,7 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
                     logger.warning("Stream consumer timeout for job %s, checking if job is still active", job_id)
 
                     # Check if job is registered
-                    if job_id not in self._job_registry:
+                    if job_id not in self.tasks_sessions:
                         logger.info("Job %s no longer registered, ending stream", job_id)
                         break
 
@@ -406,7 +403,6 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             _dummy_coro(),  # Will be closed immediately by TaskManager in remote mode
         )
 
-        self._job_registry[job_id] = job_id  # Track the job
         logger.info("Registered remote task: %s, waiting for initial result", job_id)
         result = await running_task.wait_result(timeout=10)
         logger.debug("Job %s with data %s", job_id, result)
@@ -421,7 +417,7 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         Returns:
             TaskStatus: The status of the module task.
         """
-        if job_id not in self._job_registry:
+        if job_id not in self.tasks_sessions:
             logger.warning("Job %s not found in registry", job_id)
             return TaskStatus.FAILED
 
@@ -455,12 +451,8 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         Returns:
             bool: True if the signal was successfully sent, False otherwise.
         """
-        if job_id not in self._job_registry:
-            logger.warning("Job %s not found in registry", job_id)
-            return False
-
         if job_id not in self.tasks_sessions:
-            logger.warning("Task session not found for job %s", job_id)
+            logger.warning("Job %s not found in registry", job_id)
             return False
 
         try:
@@ -469,10 +461,9 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             await self.cancel_task(job_id, session.mission_id)
             logger.info("Cancel signal sent for job %s via TaskManager", job_id)
 
-            # Clean up job registry and queue after cancellation
-            self._job_registry.pop(job_id, None)
+            # Clean up queue after cancellation
             self.job_queues.pop(job_id, None)
-            logger.debug("Cleaned up registry and queue for job %s", job_id)
+            logger.debug("Cleaned up queue for job %s", job_id)
         except Exception:
             logger.exception("Error stopping job %s", job_id)
             return False
@@ -480,7 +471,7 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
 
     async def stop_all_modules(self) -> None:
         """Stop all running modules tracked in the registry."""
-        stop_tasks = [self.stop_module(job_id) for job_id in list(self._job_registry.keys())]
+        stop_tasks = [self.stop_module(job_id) for job_id in list(self.tasks_sessions.keys())]
         if stop_tasks:
             results = await asyncio.gather(*stop_tasks, return_exceptions=True)
             logger.info("Stopped %d modules, results: %s", len(results), results)
@@ -493,7 +484,7 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         """
         modules_info: dict[str, dict[str, Any]] = {}
 
-        for job_id in self._job_registry:
+        for job_id in self.tasks_sessions:
             try:
                 status = await self.get_module_status(job_id)
                 task_record = await self.channel.select_by_task_id("tasks", job_id)

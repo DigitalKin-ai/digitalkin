@@ -339,33 +339,39 @@ class TestJobManagerMemoryLeaks:
 
     @pytest.mark.asyncio
     async def test_job_registry_cleanup(self):
-        """Test that job registries are properly cleaned up."""
+        """Test that job registries (task sessions) are properly cleaned up."""
         with patch("digitalkin.core.job_manager.taskiq_job_manager.TASKIQ_BROKER"):
             with patch("digitalkin.core.job_manager.taskiq_job_manager.TaskiqJobManager._start"):
-                from digitalkin.core.job_manager.taskiq_job_manager import TaskiqJobManager
+                with patch("digitalkin.core.task_manager.base_task_manager.SurrealDBConnection"):
+                    from digitalkin.core.job_manager.taskiq_job_manager import TaskiqJobManager
+                    from digitalkin.core.task_manager.task_session import TaskSession
 
-                manager = TaskiqJobManager(MockModule, ServicesMode.REMOTE)
+                    manager = TaskiqJobManager(MockModule, ServicesMode.REMOTE)
+                    mock_db = Mock()
 
-                # Populate job registry
-                for i in range(10):
-                    job_id = f"job-{i}"
-                    manager._job_registry[job_id] = job_id
-                    manager.job_queues[job_id] = asyncio.Queue()
+                    # Populate task sessions and job queues
+                    for i in range(10):
+                        job_id = f"job-{i}"
+                        mock_module = Mock(spec=BaseModule)
+                        manager.tasks_sessions[job_id] = TaskSession(
+                            job_id, "test_mission", mock_db, mock_module
+                        )
+                        manager.job_queues[job_id] = asyncio.Queue()
 
-                # Track memory
-                registry_size_before = len(manager._job_registry)
-                queues_size_before = len(manager.job_queues)
+                    # Track memory
+                    sessions_size_before = len(manager.tasks_sessions)
+                    queues_size_before = len(manager.job_queues)
 
-                # Clear specific job
-                job_to_remove = "job-5"
-                manager._job_registry.pop(job_to_remove, None)
-                manager.job_queues.pop(job_to_remove, None)
+                    # Clear specific job
+                    job_to_remove = "job-5"
+                    manager.tasks_sessions.pop(job_to_remove, None)
+                    manager.job_queues.pop(job_to_remove, None)
 
-                # Verify removal
-                assert len(manager._job_registry) == registry_size_before - 1
-                assert len(manager.job_queues) == queues_size_before - 1
-                assert job_to_remove not in manager._job_registry
-                assert job_to_remove not in manager.job_queues
+                    # Verify removal
+                    assert len(manager.tasks_sessions) == sessions_size_before - 1
+                    assert len(manager.job_queues) == queues_size_before - 1
+                    assert job_to_remove not in manager.tasks_sessions
+                    assert job_to_remove not in manager.job_queues
 
 
 class TestLiveQueryCleanup:

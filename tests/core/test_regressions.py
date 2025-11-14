@@ -384,26 +384,34 @@ class TestQueueTimeoutRegression:
         """
         with patch("digitalkin.core.job_manager.taskiq_job_manager.TASKIQ_BROKER"):
             with patch("digitalkin.core.job_manager.taskiq_job_manager.TaskiqJobManager._start"):
-                from digitalkin.core.job_manager.taskiq_job_manager import TaskiqJobManager
+                with patch("digitalkin.core.task_manager.base_task_manager.SurrealDBConnection"):
+                    from digitalkin.core.job_manager.taskiq_job_manager import TaskiqJobManager
+                    from digitalkin.core.task_manager.task_session import TaskSession
 
-                manager = TaskiqJobManager(MockModule, ServicesMode.REMOTE)
+                    manager = TaskiqJobManager(MockModule, ServicesMode.REMOTE)
 
-                queue = asyncio.Queue()
-                manager.job_queues["disappearing-job"] = queue
-                manager._job_registry["disappearing-job"] = "disappearing-job"
+                    queue = asyncio.Queue()
+                    manager.job_queues["disappearing-job"] = queue
 
-                items_consumed = []
+                    # Create a task session to simulate a registered job
+                    mock_db = Mock()
+                    mock_module = Mock(spec=BaseModule)
+                    manager.tasks_sessions["disappearing-job"] = TaskSession(
+                        "disappearing-job", "test_mission", mock_db, mock_module
+                    )
 
-                async with manager.generate_stream_consumer("disappearing-job") as stream:
-                    # Remove job from registry (simulating job disappearance)
-                    del manager._job_registry["disappearing-job"]
+                    items_consumed = []
 
-                    # Stream should eventually detect job is gone
-                    items_consumed.extend([item async for item in stream])
-                        # Should break due to timeout and job check
+                    async with manager.generate_stream_consumer("disappearing-job") as stream:
+                        # Remove job from registry (simulating job disappearance)
+                        del manager.tasks_sessions["disappearing-job"]
 
-                # Stream should have ended
-                assert "disappearing-job" not in manager.job_queues
+                        # Stream should eventually detect job is gone
+                        items_consumed.extend([item async for item in stream])
+                            # Should break due to timeout and job check
+
+                    # Stream should have ended
+                    assert "disappearing-job" not in manager.job_queues
 
 
 class TestFactoryPatternRegression:
