@@ -9,7 +9,8 @@ import gc
 import sys
 import tracemalloc
 import weakref
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from collections.abc import Callable
+from typing import Any
 
 import pytest
 import pytest_asyncio
@@ -20,12 +21,12 @@ def memory_tracker():
     """Fixture for tracking memory usage during tests."""
 
     class MemoryTracker:
-        def __init__(self):
-            self.snapshots: List[Tuple[str, int]] = []
-            self.start_memory: Optional[int] = None
+        def __init__(self) -> None:
+            self.snapshots: list[tuple[str, int]] = []
+            self.start_memory: int | None = None
             self.tracemalloc_started = False
 
-        def start(self):
+        def start(self) -> None:
             """Start memory tracking."""
             if not tracemalloc.is_tracing():
                 tracemalloc.start()
@@ -47,12 +48,13 @@ def memory_tracker():
             if sys.platform == "linux":
                 try:
                     import resource
+
                     return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024
                 except ImportError:
                     pass
 
             # Fallback to tracemalloc
-            current, peak = tracemalloc.get_traced_memory()
+            current, _peak = tracemalloc.get_traced_memory()
             return current
 
         def get_growth(self) -> int:
@@ -68,13 +70,14 @@ def memory_tracker():
                 return 0
             return max(memory for _, memory in self.snapshots)
 
-        def assert_no_leak(self, threshold_kb: int = 1024):
+        def assert_no_leak(self, threshold_kb: int = 1024) -> None:
             """Assert no memory leak above threshold."""
             growth = self.get_growth()
             growth_kb = growth / 1024
 
-            assert growth_kb < threshold_kb, \
+            assert growth_kb < threshold_kb, (
                 f"Memory leak detected: {growth_kb:.2f} KB growth (threshold: {threshold_kb} KB)"
+            )
 
         def report(self) -> str:
             """Generate memory usage report."""
@@ -86,19 +89,15 @@ def memory_tracker():
 
             for label, memory in self.snapshots[1:]:
                 growth = memory - self.start_memory
-                lines.append(
-                    f"{label}: {memory / 1024 / 1024:.2f} MB "
-                    f"(+{growth / 1024:.2f} KB)"
-                )
+                lines.append(f"{label}: {memory / 1024 / 1024:.2f} MB (+{growth / 1024:.2f} KB)")
 
             peak = self.get_peak()
             total_growth = self.get_growth()
-            lines.append(f"Peak: {peak / 1024 / 1024:.2f} MB")
-            lines.append(f"Total Growth: {total_growth / 1024:.2f} KB")
+            lines.extend((f"Peak: {peak / 1024 / 1024:.2f} MB", f"Total Growth: {total_growth / 1024:.2f} KB"))
 
             return "\n".join(lines)
 
-        def cleanup(self):
+        def cleanup(self) -> None:
             """Clean up tracking."""
             if self.tracemalloc_started:
                 tracemalloc.stop()
@@ -113,8 +112,8 @@ def weak_ref_tracker():
     """Fixture for tracking object lifecycle with weak references."""
 
     class WeakRefTracker:
-        def __init__(self):
-            self.refs: Dict[str, weakref.ReferenceType] = {}
+        def __init__(self) -> None:
+            self.refs: dict[str, weakref.ReferenceType] = {}
 
         def track(self, name: str, obj: Any) -> weakref.ReferenceType:
             """Track an object with a weak reference."""
@@ -128,30 +127,28 @@ def weak_ref_tracker():
                 return False
             return self.refs[name]() is not None
 
-        def get(self, name: str) -> Optional[Any]:
+        def get(self, name: str) -> Any | None:
             """Get tracked object if still alive."""
             if name not in self.refs:
                 return None
             return self.refs[name]()
 
-        def assert_garbage_collected(self, name: str, force_collect: bool = True):
+        def assert_garbage_collected(self, name: str, force_collect: bool = True) -> None:
             """Assert that object has been garbage collected."""
             if force_collect:
                 gc.collect()
 
-            assert not self.is_alive(name), \
-                f"Object '{name}' was not garbage collected"
+            assert not self.is_alive(name), f"Object '{name}' was not garbage collected"
 
-        def assert_all_collected(self, force_collect: bool = True):
+        def assert_all_collected(self, force_collect: bool = True) -> None:
             """Assert all tracked objects have been garbage collected."""
             if force_collect:
                 gc.collect()
 
             alive = [name for name in self.refs if self.is_alive(name)]
-            assert not alive, \
-                f"Objects not garbage collected: {', '.join(alive)}"
+            assert not alive, f"Objects not garbage collected: {', '.join(alive)}"
 
-        def clear(self):
+        def clear(self) -> None:
             """Clear all references."""
             self.refs.clear()
 
@@ -163,9 +160,9 @@ def queue_memory_monitor():
     """Fixture for monitoring asyncio.Queue memory usage."""
 
     class QueueMemoryMonitor:
-        def __init__(self):
-            self.queues: Dict[str, asyncio.Queue] = {}
-            self.max_sizes: Dict[str, int] = {}
+        def __init__(self) -> None:
+            self.queues: dict[str, asyncio.Queue] = {}
+            self.max_sizes: dict[str, int] = {}
 
         def create_queue(self, name: str, maxsize: int = 0) -> asyncio.Queue:
             """Create a monitored queue."""
@@ -174,10 +171,11 @@ def queue_memory_monitor():
             self.max_sizes[name] = 0
             return queue
 
-        async def put(self, name: str, item: Any):
+        async def put(self, name: str, item: Any) -> None:
             """Put item and track size."""
             if name not in self.queues:
-                raise KeyError(f"Queue '{name}' not found")
+                msg = f"Queue '{name}' not found"
+                raise KeyError(msg)
 
             await self.queues[name].put(item)
             current_size = self.queues[name].qsize()
@@ -187,13 +185,12 @@ def queue_memory_monitor():
             """Get maximum size reached by queue."""
             return self.max_sizes.get(name, 0)
 
-        def assert_queue_bounded(self, name: str, max_expected: int):
+        def assert_queue_bounded(self, name: str, max_expected: int) -> None:
             """Assert queue never exceeded expected size."""
             actual_max = self.get_max_size(name)
-            assert actual_max <= max_expected, \
-                f"Queue '{name}' exceeded bounds: {actual_max} > {max_expected}"
+            assert actual_max <= max_expected, f"Queue '{name}' exceeded bounds: {actual_max} > {max_expected}"
 
-        async def drain_all(self):
+        async def drain_all(self) -> None:
             """Drain all queues."""
             for queue in self.queues.values():
                 while not queue.empty():
@@ -202,7 +199,7 @@ def queue_memory_monitor():
                     except asyncio.QueueEmpty:
                         break
 
-        def clear(self):
+        def clear(self) -> None:
             """Clear all queues."""
             self.queues.clear()
             self.max_sizes.clear()
@@ -215,8 +212,8 @@ async def connection_leak_detector():
     """Fixture for detecting connection leaks."""
 
     class ConnectionLeakDetector:
-        def __init__(self):
-            self.connections: List[weakref.ReferenceType] = []
+        def __init__(self) -> None:
+            self.connections: list[weakref.ReferenceType] = []
             self.connection_count = 0
 
         def track_connection(self, conn: Any) -> Any:
@@ -225,24 +222,23 @@ async def connection_leak_detector():
             self.connection_count += 1
             return conn
 
-        def get_alive_connections(self) -> List[Any]:
+        def get_alive_connections(self) -> list[Any]:
             """Get list of connections still alive."""
             gc.collect()
             return [ref() for ref in self.connections if ref() is not None]
 
-        def assert_no_leaks(self):
+        def assert_no_leaks(self) -> None:
             """Assert no connection leaks."""
             alive = self.get_alive_connections()
-            assert not alive, \
-                f"Connection leak detected: {len(alive)} connections still alive"
+            assert not alive, f"Connection leak detected: {len(alive)} connections still alive"
 
-        def get_stats(self) -> Dict[str, int]:
+        def get_stats(self) -> dict[str, int]:
             """Get connection statistics."""
             alive = self.get_alive_connections()
             return {
                 "total_created": self.connection_count,
                 "still_alive": len(alive),
-                "properly_closed": self.connection_count - len(alive)
+                "properly_closed": self.connection_count - len(alive),
             }
 
     detector = ConnectionLeakDetector()
@@ -257,8 +253,8 @@ def memory_stress_test():
     """Fixture for memory stress testing."""
 
     class MemoryStressTester:
-        def __init__(self):
-            self.allocations: List[Any] = []
+        def __init__(self) -> None:
+            self.allocations: list[Any] = []
 
         def allocate_mb(self, size_mb: int) -> bytes:
             """Allocate specified amount of memory."""
@@ -266,7 +262,7 @@ def memory_stress_test():
             self.allocations.append(data)
             return data
 
-        def allocate_objects(self, count: int, size_bytes: int = 1024) -> List[bytes]:
+        def allocate_objects(self, count: int, size_bytes: int = 1024) -> list[bytes]:
             """Allocate many small objects."""
             objects = []
             for _ in range(count):
@@ -275,25 +271,19 @@ def memory_stress_test():
                 self.allocations.append(obj)
             return objects
 
-        def clear(self):
+        def clear(self) -> None:
             """Clear all allocations."""
             self.allocations.clear()
             gc.collect()
 
-        async def stress_test_coroutine(
-            self,
-            coro: Callable,
-            memory_mb: int = 100,
-            duration_seconds: float = 1.0
-        ):
+        async def stress_test_coroutine(self, coro: Callable, memory_mb: int = 100, duration_seconds: float = 1.0):
             """Run coroutine under memory pressure."""
             # Allocate memory to create pressure
             self.allocate_mb(memory_mb)
 
             # Run coroutine
             try:
-                result = await asyncio.wait_for(coro(), timeout=duration_seconds)
-                return result
+                return await asyncio.wait_for(coro(), timeout=duration_seconds)
             finally:
                 self.clear()
 
@@ -305,7 +295,7 @@ def gc_monitor():
     """Fixture for monitoring garbage collection."""
 
     class GCMonitor:
-        def __init__(self):
+        def __init__(self) -> None:
             self.initial_stats = gc.get_stats()
             self.collection_counts = gc.get_count()
 
@@ -313,25 +303,21 @@ def gc_monitor():
             """Force garbage collection and return objects collected."""
             return gc.collect()
 
-        def get_collection_delta(self) -> Tuple[int, int, int]:
+        def get_collection_delta(self) -> tuple[int, int, int]:
             """Get change in collection counts for each generation."""
             current = gc.get_count()
-            return tuple(
-                current[i] - self.collection_counts[i]
-                for i in range(len(current))
-            )
+            return tuple(current[i] - self.collection_counts[i] for i in range(len(current)))
 
-        def assert_collected(self, min_objects: int = 1):
+        def assert_collected(self, min_objects: int = 1) -> None:
             """Assert that garbage collection occurred."""
             collected = self.force_collect()
-            assert collected >= min_objects, \
-                f"Expected at least {min_objects} objects collected, got {collected}"
+            assert collected >= min_objects, f"Expected at least {min_objects} objects collected, got {collected}"
 
-        def disable(self):
+        def disable(self) -> None:
             """Temporarily disable garbage collection."""
             gc.disable()
 
-        def enable(self):
+        def enable(self) -> None:
             """Re-enable garbage collection."""
             gc.enable()
 
@@ -353,20 +339,15 @@ def task_memory_limiter():
     """Fixture for limiting memory usage in async tasks."""
 
     class TaskMemoryLimiter:
-        def __init__(self):
-            self.limits: Dict[str, int] = {}
-            self.usage: Dict[str, int] = {}
+        def __init__(self) -> None:
+            self.limits: dict[str, int] = {}
+            self.usage: dict[str, int] = {}
 
-        def set_limit(self, task_name: str, limit_mb: int):
+        def set_limit(self, task_name: str, limit_mb: int) -> None:
             """Set memory limit for a task."""
             self.limits[task_name] = limit_mb * 1024 * 1024
 
-        async def run_with_limit(
-            self,
-            task_name: str,
-            coro: Callable,
-            limit_mb: int = 100
-        ):
+        async def run_with_limit(self, task_name: str, coro: Callable, limit_mb: int = 100):
             """Run coroutine with memory limit checking."""
             self.set_limit(task_name, limit_mb)
 
@@ -382,14 +363,14 @@ def task_memory_limiter():
 
                 # Check memory usage
                 if tracemalloc.is_tracing():
-                    current, peak = tracemalloc.get_traced_memory()
+                    _current, peak = tracemalloc.get_traced_memory()
                     usage = peak - baseline
                     self.usage[task_name] = usage
 
                     if task_name in self.limits:
-                        assert usage <= self.limits[task_name], \
-                            f"Task '{task_name}' exceeded memory limit: " \
-                            f"{usage / 1024 / 1024:.2f} MB > {limit_mb} MB"
+                        assert usage <= self.limits[task_name], (
+                            f"Task '{task_name}' exceeded memory limit: {usage / 1024 / 1024:.2f} MB > {limit_mb} MB"
+                        )
 
                 return result
             except Exception:
@@ -407,38 +388,33 @@ def session_memory_tracker():
     """Fixture specifically for tracking TaskSession memory."""
 
     class SessionMemoryTracker:
-        def __init__(self):
-            self.sessions: Dict[str, weakref.ReferenceType] = {}
-            self.session_queues: Dict[str, weakref.ReferenceType] = {}
+        def __init__(self) -> None:
+            self.sessions: dict[str, weakref.ReferenceType] = {}
+            self.session_queues: dict[str, weakref.ReferenceType] = {}
 
-        def track_session(self, session_id: str, session: Any):
+        def track_session(self, session_id: str, session: Any) -> None:
             """Track a TaskSession instance."""
             self.sessions[session_id] = weakref.ref(session)
-            if hasattr(session, 'queue'):
+            if hasattr(session, "queue"):
                 self.session_queues[session_id] = weakref.ref(session.queue)
 
-        def assert_session_cleaned(self, session_id: str):
+        def assert_session_cleaned(self, session_id: str) -> None:
             """Assert session and its resources are cleaned up."""
             gc.collect()
 
             # Check session object
             if session_id in self.sessions:
-                assert self.sessions[session_id]() is None, \
-                    f"Session '{session_id}' not garbage collected"
+                assert self.sessions[session_id]() is None, f"Session '{session_id}' not garbage collected"
 
             # Check session queue
             if session_id in self.session_queues:
                 queue_ref = self.session_queues[session_id]()
                 if queue_ref is not None:
-                    assert queue_ref.empty(), \
-                        f"Session '{session_id}' queue not empty"
+                    assert queue_ref.empty(), f"Session '{session_id}' queue not empty"
 
-        def get_active_sessions(self) -> List[str]:
+        def get_active_sessions(self) -> list[str]:
             """Get list of sessions still in memory."""
             gc.collect()
-            return [
-                sid for sid, ref in self.sessions.items()
-                if ref() is not None
-            ]
+            return [sid for sid, ref in self.sessions.items() if ref() is not None]
 
     return SessionMemoryTracker()

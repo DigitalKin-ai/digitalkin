@@ -12,10 +12,10 @@ from concurrent import futures
 import grpc_testing
 import pytest
 from digitalkin_proto.agentic_mesh_protocol.user_profile.v1 import user_profile_service_pb2_grpc
+from tests.services.user_profile.mock_user_profile_servicer import FakeContext, MockUserProfileServicer
 
 from digitalkin.models.grpc_servers.models import ClientConfig
 from digitalkin.services.user_profile.grpc_user_profile import GrpcUserProfile, UserProfileServiceError
-from tests.services.user_profile.mock_user_profile_servicer import FakeContext, MockUserProfileServicer
 
 # --- Test Constants ---
 USER_ID = "users:test_user_123"

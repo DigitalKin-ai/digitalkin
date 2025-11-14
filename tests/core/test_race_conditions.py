@@ -6,16 +6,14 @@ ensuring thread-safety and proper synchronization.
 
 import asyncio
 import random
-from typing import Any, ClassVar, List, Set
+from typing import Any, ClassVar
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
 from digitalkin.core.job_manager.single_job_manager import SingleJobManager
 from digitalkin.core.task_manager.local_task_manager import LocalTaskManager
-from digitalkin.core.task_manager.remote_task_manager import RemoteTaskManager
 from digitalkin.core.task_manager.surrealdb_repository import SurrealDBConnection
-from digitalkin.models.core.task_monitor import TaskStatus
 from digitalkin.modules._base_module import BaseModule
 from digitalkin.services.services_config import ServicesConfig
 from digitalkin.services.services_models import ServicesMode, ServicesStrategy
@@ -30,12 +28,10 @@ class MockModule(BaseModule):
     services_config_strategies: ClassVar[dict[str, ServicesStrategy | None]] = {}
     services_config_params: ClassVar[dict[str, dict[str, str | None] | None]] = {}
     services_config: ClassVar[ServicesConfig] = ServicesConfig(
-        services_config_strategies={},
-        services_config_params={},
-        mode=ServicesMode.LOCAL
+        services_config_strategies={}, services_config_params={}, mode=ServicesMode.LOCAL
     )
 
-    def __init__(self, job_id: str, mission_id: str, setup_id: str, setup_version_id: str):
+    def __init__(self, job_id: str, mission_id: str, setup_id: str, setup_version_id: str) -> None:
         super().__init__(job_id, mission_id, setup_id, setup_version_id)
         self.job_id = job_id
         self.mission_id = mission_id
@@ -66,7 +62,6 @@ class MockModule(BaseModule):
 
     async def cleanup(self) -> None:
         """Clean up the module."""
-        pass
 
 
 class TestConcurrentTaskCreation:
@@ -75,7 +70,7 @@ class TestConcurrentTaskCreation:
     @pytest.mark.asyncio
     async def test_concurrent_task_creation_unique_ids(self):
         """Test that concurrent task creation maintains unique IDs."""
-        with patch('digitalkin.core.task_manager.base_task_manager.SurrealDBConnection') as mock_conn:
+        with patch("digitalkin.core.task_manager.base_task_manager.SurrealDBConnection") as mock_conn:
             mock_db = Mock(spec=SurrealDBConnection)
             mock_db.init_surreal_instance = AsyncMock()
             mock_db.close = AsyncMock()
@@ -89,10 +84,10 @@ class TestConcurrentTaskCreation:
             created_task_ids = set()
             creation_lock = asyncio.Lock()
 
-            async def create_task_safely(task_id: str):
+            async def create_task_safely(task_id: str) -> None:
                 module = MockModule(f"job-{task_id}", "mission", "setup", "version")
 
-                async def task():
+                async def task() -> None:
                     async with creation_lock:
                         created_task_ids.add(task_id)
                     await asyncio.sleep(0.01)
@@ -117,7 +112,7 @@ class TestConcurrentTaskCreation:
     @pytest.mark.asyncio
     async def test_max_concurrent_tasks_race_condition(self):
         """Test that max concurrent tasks limit is enforced under race conditions."""
-        with patch('digitalkin.core.task_manager.base_task_manager.SurrealDBConnection') as mock_conn:
+        with patch("digitalkin.core.task_manager.base_task_manager.SurrealDBConnection") as mock_conn:
             mock_db = Mock(spec=SurrealDBConnection)
             mock_db.init_surreal_instance = AsyncMock()
             mock_db.close = AsyncMock()
@@ -132,10 +127,10 @@ class TestConcurrentTaskCreation:
             successful_creates = []
             failed_creates = []
 
-            async def try_create_task(task_id: str):
+            async def try_create_task(task_id: str) -> None:
                 module = MockModule(f"job-{task_id}", "mission", "setup", "version")
 
-                async def task():
+                async def task() -> None:
                     await asyncio.sleep(0.1)
 
                 try:
@@ -164,7 +159,7 @@ class TestConcurrentTaskCreation:
     @pytest.mark.asyncio
     async def test_duplicate_task_id_race_condition(self):
         """Test handling of duplicate task IDs submitted concurrently."""
-        with patch('digitalkin.core.task_manager.base_task_manager.SurrealDBConnection') as mock_conn:
+        with patch("digitalkin.core.task_manager.base_task_manager.SurrealDBConnection") as mock_conn:
             mock_db = Mock(spec=SurrealDBConnection)
             mock_db.init_surreal_instance = AsyncMock()
             mock_db.close = AsyncMock()
@@ -178,13 +173,13 @@ class TestConcurrentTaskCreation:
             success_count = 0
             duplicate_errors = 0
 
-            async def try_create_duplicate(index: int):
+            async def try_create_duplicate(index: int) -> None:
                 nonlocal success_count, duplicate_errors
                 # Multiple tasks with same ID
                 task_id = "duplicate-task"
                 module = MockModule(f"job-{index}", "mission", "setup", "version")
 
-                async def task():
+                async def task() -> None:
                     await asyncio.sleep(0.01)
 
                 try:
@@ -216,7 +211,7 @@ class TestConcurrentCancellation:
     @pytest.mark.asyncio
     async def test_concurrent_cancel_same_task(self):
         """Test concurrent cancellation of the same task."""
-        with patch('digitalkin.core.task_manager.base_task_manager.SurrealDBConnection') as mock_conn:
+        with patch("digitalkin.core.task_manager.base_task_manager.SurrealDBConnection") as mock_conn:
             mock_db = Mock(spec=SurrealDBConnection)
             mock_db.init_surreal_instance = AsyncMock()
             mock_db.close = AsyncMock()
@@ -229,20 +224,19 @@ class TestConcurrentCancellation:
 
             module = MockModule("job-1", "mission", "setup", "version")
 
-            async def long_task():
+            async def long_task() -> None:
                 await asyncio.sleep(1.0)
 
             await manager.create_task("task-1", "mission", module, long_task())
 
             # Try to cancel the same task concurrently
-            cancel_tasks = [
-                manager.cancel_task("task-1", "mission", timeout=0.5)
-                for _ in range(5)
-            ]
+            cancel_tasks = [manager.cancel_task("task-1", "mission", timeout=0.5) for _ in range(5)]
             results = await asyncio.gather(*cancel_tasks, return_exceptions=True)
 
             # All cancellations should succeed (idempotent) or return True
-            assert all(r is True or r is False for r in results if not isinstance(r, Exception)), f"Unexpected results: {results}"
+            assert all(r is True or r is False for r in results if not isinstance(r, Exception)), (
+                f"Unexpected results: {results}"
+            )
 
             # Task should be removed
             assert "task-1" not in manager.tasks
@@ -251,7 +245,7 @@ class TestConcurrentCancellation:
     @pytest.mark.asyncio
     async def test_cancel_all_tasks_concurrent_with_creation(self):
         """Test cancel_all_tasks while new tasks are being created."""
-        with patch('digitalkin.core.task_manager.base_task_manager.SurrealDBConnection') as mock_conn:
+        with patch("digitalkin.core.task_manager.base_task_manager.SurrealDBConnection") as mock_conn:
             mock_db = Mock(spec=SurrealDBConnection)
             mock_db.init_surreal_instance = AsyncMock()
             mock_db.close = AsyncMock()
@@ -265,14 +259,14 @@ class TestConcurrentCancellation:
             creation_complete = asyncio.Event()
             cancellation_started = asyncio.Event()
 
-            async def create_tasks():
+            async def create_tasks() -> None:
                 for i in range(20):
                     if cancellation_started.is_set():
                         break
 
                     module = MockModule(f"job-{i}", "mission", "setup", "version")
 
-                    async def task():
+                    async def task() -> None:
                         await asyncio.sleep(0.5)
 
                     try:
@@ -287,8 +281,7 @@ class TestConcurrentCancellation:
             async def cancel_tasks():
                 await asyncio.sleep(0.05)  # Let some tasks be created
                 cancellation_started.set()
-                results = await manager.cancel_all_tasks("mission", timeout=0.1)
-                return results
+                return await manager.cancel_all_tasks("mission", timeout=0.1)
 
             # Run creation and cancellation concurrently
             create_task = asyncio.create_task(create_tasks())
@@ -299,7 +292,7 @@ class TestConcurrentCancellation:
             await create_task
 
             # All tasks that were created should have been cancelled
-            for task_id, cancelled in cancel_results.items():
+            for cancelled in cancel_results.values():
                 assert cancelled is True
 
             # No tasks should remain
@@ -312,7 +305,7 @@ class TestConcurrentSignaling:
     @pytest.mark.asyncio
     async def test_concurrent_signals_to_same_task(self):
         """Test sending multiple signals concurrently to the same task."""
-        with patch('digitalkin.core.task_manager.base_task_manager.SurrealDBConnection') as mock_conn:
+        with patch("digitalkin.core.task_manager.base_task_manager.SurrealDBConnection") as mock_conn:
             mock_db = Mock(spec=SurrealDBConnection)
             mock_db.init_surreal_instance = AsyncMock()
             mock_db.close = AsyncMock()
@@ -323,7 +316,7 @@ class TestConcurrentSignaling:
 
             manager = LocalTaskManager()
 
-            module = MockModule("job-1", "mission", "setup", "version")
+            MockModule("job-1", "mission", "setup", "version")
 
             # Create a mock session
             mock_session = Mock()
@@ -347,7 +340,7 @@ class TestConcurrentSignaling:
     @pytest.mark.asyncio
     async def test_signal_during_cancellation(self):
         """Test sending signals while task is being cancelled."""
-        with patch('digitalkin.core.task_manager.base_task_manager.SurrealDBConnection') as mock_conn:
+        with patch("digitalkin.core.task_manager.base_task_manager.SurrealDBConnection") as mock_conn:
             mock_db = Mock(spec=SurrealDBConnection)
             mock_db.init_surreal_instance = AsyncMock()
             mock_db.close = AsyncMock()
@@ -360,26 +353,22 @@ class TestConcurrentSignaling:
 
             module = MockModule("job-1", "mission", "setup", "version")
 
-            async def task():
+            async def task() -> None:
                 await asyncio.sleep(0.5)
 
             await manager.create_task("task-1", "mission", module, task())
 
             # Send signal and cancel concurrently
             signal_task = asyncio.create_task(manager.pause_task("task-1", "mission"))
-            cancel_task = asyncio.create_task(
-                manager.cancel_task("task-1", "mission", timeout=0.1)
-            )
+            cancel_task = asyncio.create_task(manager.cancel_task("task-1", "mission", timeout=0.1))
 
-            signal_result, cancel_result = await asyncio.gather(
-                signal_task, cancel_task, return_exceptions=True
-            )
+            signal_result, cancel_result = await asyncio.gather(signal_task, cancel_task, return_exceptions=True)
 
             # At least one should succeed
             if not isinstance(signal_result, Exception):
-                assert signal_result in [True, False]
+                assert signal_result in {True, False}
             if not isinstance(cancel_result, Exception):
-                assert cancel_result in [True, False]
+                assert cancel_result in {True, False}
 
             # Task should be cancelled
             assert "task-1" not in manager.tasks
@@ -403,14 +392,14 @@ class TestQueueRaceConditions:
         produced_items = set()
         consumed_items = set()
 
-        async def producer(start_idx: int):
+        async def producer(start_idx: int) -> None:
             for i in range(start_idx, start_idx + 20):
                 item = f"item-{i}"
                 await session.queue.put(item)
                 produced_items.add(item)
                 await asyncio.sleep(random.uniform(0, 0.001))
 
-        async def consumer():
+        async def consumer() -> None:
             while True:
                 try:
                     item = await asyncio.wait_for(session.queue.get(), timeout=0.5)
@@ -451,13 +440,10 @@ class TestQueueRaceConditions:
         overflow_count = 0
         success_count = 0
 
-        async def try_add_item(item_id: int):
+        async def try_add_item(item_id: int) -> None:
             nonlocal overflow_count, success_count
             try:
-                await asyncio.wait_for(
-                    session.queue.put(f"item-{item_id}"),
-                    timeout=0.01
-                )
+                await asyncio.wait_for(session.queue.put(f"item-{item_id}"), timeout=0.01)
                 success_count += 1
             except asyncio.TimeoutError:
                 overflow_count += 1
@@ -478,7 +464,7 @@ class TestJobManagerRaceConditions:
     @pytest.mark.asyncio
     async def test_single_job_manager_concurrent_job_creation(self):
         """Test concurrent job creation in SingleJobManager."""
-        with patch('digitalkin.core.job_manager.single_job_manager.ConnectionFactory') as mock_factory:
+        with patch("digitalkin.core.job_manager.single_job_manager.ConnectionFactory") as mock_factory:
             # Create mock connection
             mock_conn = AsyncMock()
             mock_conn.create.return_value = True
@@ -494,10 +480,10 @@ class TestJobManagerRaceConditions:
             manager = SingleJobManager(MockModule, ServicesMode.LOCAL)
             await manager.start()
 
-            created_jobs: Set[str] = set()
+            created_jobs: set[str] = set()
             creation_errors = 0
 
-            async def create_job(index: int):
+            async def create_job(index: int) -> None:
                 nonlocal creation_errors
                 try:
                     from digitalkin.models.module import InputModel, SetupModel
@@ -509,11 +495,7 @@ class TestJobManagerRaceConditions:
                         config: int = index
 
                     job_id = await manager.create_module_instance_job(
-                        MockInput(),
-                        MockSetup(),
-                        "mission",
-                        "setup",
-                        "version"
+                        MockInput(), MockSetup(), "mission", "setup", "version"
                     )
                     created_jobs.add(job_id)
                 except Exception:
@@ -533,7 +515,7 @@ class TestJobManagerRaceConditions:
     @pytest.mark.asyncio
     async def test_concurrent_stop_module_operations(self):
         """Test concurrent stop operations on the same module."""
-        with patch('digitalkin.core.job_manager.single_job_manager.ConnectionFactory') as mock_factory:
+        with patch("digitalkin.core.job_manager.single_job_manager.ConnectionFactory") as mock_factory:
             # Create mock connection
             mock_conn = AsyncMock()
             mock_conn.create.return_value = True
@@ -564,7 +546,7 @@ class TestJobManagerRaceConditions:
 
             stop_results = []
 
-            async def try_stop():
+            async def try_stop() -> None:
                 result = await manager.stop_module("job-1")
                 stop_results.append(result)
 
@@ -585,7 +567,7 @@ class TestShutdownRaceConditions:
     @pytest.mark.asyncio
     async def test_concurrent_shutdown_calls(self):
         """Test multiple concurrent shutdown calls."""
-        with patch('digitalkin.core.task_manager.base_task_manager.SurrealDBConnection') as mock_conn:
+        with patch("digitalkin.core.task_manager.base_task_manager.SurrealDBConnection") as mock_conn:
             mock_db = Mock(spec=SurrealDBConnection)
             mock_db.init_surreal_instance = AsyncMock()
             mock_db.close = AsyncMock()
@@ -600,16 +582,13 @@ class TestShutdownRaceConditions:
             for i in range(5):
                 module = MockModule(f"job-{i}", "mission", "setup", "version")
 
-                async def task():
+                async def task() -> None:
                     await asyncio.sleep(0.1)
 
                 await manager.create_task(f"task-{i}", "mission", module, task())
 
             # Call shutdown concurrently
-            shutdown_tasks = [
-                manager.shutdown("mission", timeout=0.5)
-                for _ in range(3)
-            ]
+            shutdown_tasks = [manager.shutdown("mission", timeout=0.5) for _ in range(3)]
 
             await asyncio.gather(*shutdown_tasks, return_exceptions=True)
 
@@ -620,7 +599,7 @@ class TestShutdownRaceConditions:
     @pytest.mark.asyncio
     async def test_task_creation_during_shutdown(self):
         """Test creating tasks while shutdown is in progress."""
-        with patch('digitalkin.core.task_manager.base_task_manager.SurrealDBConnection') as mock_conn:
+        with patch("digitalkin.core.task_manager.base_task_manager.SurrealDBConnection") as mock_conn:
             mock_db = Mock(spec=SurrealDBConnection)
             mock_db.init_surreal_instance = AsyncMock()
             mock_db.close = AsyncMock()
@@ -635,7 +614,7 @@ class TestShutdownRaceConditions:
             creation_attempts = 0
             creation_failures = 0
 
-            async def try_create_during_shutdown():
+            async def try_create_during_shutdown() -> None:
                 nonlocal creation_attempts, creation_failures
 
                 # Wait for shutdown to start
@@ -645,7 +624,7 @@ class TestShutdownRaceConditions:
                     creation_attempts += 1
                     module = MockModule(f"late-job-{i}", "mission", "setup", "version")
 
-                    async def task():
+                    async def task() -> None:
                         await asyncio.sleep(0.01)
 
                     try:
@@ -653,7 +632,7 @@ class TestShutdownRaceConditions:
                     except:
                         creation_failures += 1
 
-            async def shutdown_with_signal():
+            async def shutdown_with_signal() -> None:
                 shutdown_started.set()
                 await manager.shutdown("mission", timeout=0.5)
 

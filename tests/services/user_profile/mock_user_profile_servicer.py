@@ -94,7 +94,7 @@ class MockUserProfileServicer(user_profile_service_pb2_grpc.UserProfileServiceSe
 
         except Exception as e:
             context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(f"Internal error: {str(e)}")
+            context.set_details(f"Internal error: {e!s}")
             logger.error(f"Error in GetUserProfile: {e}", exc_info=True)
             return user_profile_pb2.GetUserProfileResponse(success=False)
 

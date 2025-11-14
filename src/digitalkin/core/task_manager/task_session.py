@@ -325,6 +325,7 @@ class TaskSession:
         - Clearing queue to free memory
         - Stopping module
         - Closing database connection
+        - Clearing module reference
         """
         # Clear queue to free memory
         try:
@@ -344,3 +345,6 @@ class TaskSession:
 
         # Close DB connection (kills all live queries)
         await self.db.close()
+
+        # Clear module reference to allow garbage collection
+        self.module = None  # type: ignore

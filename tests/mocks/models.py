@@ -26,8 +26,6 @@ class MockInputModel(DataModel[MockInputTrigger]):
     Wraps MockInputTrigger in DataModel for module input.
     """
 
-    pass
-
 
 class MockOutputModel(BaseModel):
     """Mock output model for testing.

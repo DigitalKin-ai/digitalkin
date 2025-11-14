@@ -415,7 +415,9 @@ class TestTaskCreation:
 # ============================================================================
 
 
-@pytest.mark.skip(reason="TestTaskWrapper tests use deprecated _task_wrapper method. See test_task_executor.py for current tests.")
+@pytest.mark.skip(
+    reason="TestTaskWrapper tests use deprecated _task_wrapper method. See test_task_executor.py for current tests."
+)
 class TestTaskWrapper:
     """Task wrapper and supervisor tests.
 

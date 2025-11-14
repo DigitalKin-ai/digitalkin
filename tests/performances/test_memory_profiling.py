@@ -5,11 +5,13 @@ to detect performance regressions and memory inefficiencies.
 """
 
 import asyncio
+import builtins
+import contextlib
 import gc
 import sys
 import tracemalloc
-from typing import Any, ClassVar, Dict, List, Tuple
-from unittest.mock import AsyncMock, Mock, patch
+from typing import Any, ClassVar, NoReturn
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -31,12 +33,10 @@ class MockModule(BaseModule):
     services_config_strategies: ClassVar[dict[str, ServicesStrategy | None]] = {}
     services_config_params: ClassVar[dict[str, dict[str, str | None] | None]] = {}
     services_config: ClassVar[ServicesConfig] = ServicesConfig(
-        services_config_strategies={},
-        services_config_params={},
-        mode=ServicesMode.LOCAL
+        services_config_strategies={}, services_config_params={}, mode=ServicesMode.LOCAL
     )
 
-    def __init__(self, job_id: str, mission_id: str, setup_id: str, setup_version_id: str):
+    def __init__(self, job_id: str, mission_id: str, setup_id: str, setup_version_id: str) -> None:
         super().__init__(job_id, mission_id, setup_id, setup_version_id)
         self.job_id = job_id
         self.mission_id = mission_id
@@ -57,7 +57,6 @@ class MockModule(BaseModule):
 
     async def initialize(self, context: Any, setup_data: Any) -> None:
         """Initialize the module."""
-        pass
 
     async def run(self) -> None:
         """Run the module."""
@@ -65,7 +64,6 @@ class MockModule(BaseModule):
 
     async def cleanup(self) -> None:
         """Clean up the module."""
-        pass
 
 
 def get_memory_usage() -> int:
@@ -75,11 +73,12 @@ def get_memory_usage() -> int:
         # Try to use resource module for more accurate memory measurement
         try:
             import resource
+
             return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024
         except ImportError:
             pass
     # Fallback to tracemalloc
-    current, peak = tracemalloc.get_traced_memory()
+    current, _peak = tracemalloc.get_traced_memory()
     return current
 
 
@@ -92,7 +91,7 @@ class TestTaskManagerMemoryProfile:
         tracemalloc.start()
         manager = LocalTaskManager(max_concurrent_tasks=100)
 
-        with patch('digitalkin.core.task_manager.base_task_manager.SurrealDBConnection') as mock_conn:
+        with patch("digitalkin.core.task_manager.base_task_manager.SurrealDBConnection") as mock_conn:
             mock_db = AsyncMock()
             mock_conn.return_value = mock_db
 
@@ -107,7 +106,7 @@ class TestTaskManagerMemoryProfile:
             for i in range(num_tasks):
                 module = MockModule(f"job-{i}", "mission", "setup", "version")
 
-                async def task():
+                async def task() -> None:
                     await asyncio.sleep(0.01)
 
                 await manager.create_task(f"task-{i}", "mission", module, task())
@@ -143,7 +142,7 @@ class TestTaskManagerMemoryProfile:
         tracemalloc.start()
         manager = RemoteTaskManager(max_concurrent_tasks=100)
 
-        with patch('digitalkin.core.task_manager.base_task_manager.SurrealDBConnection') as mock_conn:
+        with patch("digitalkin.core.task_manager.base_task_manager.SurrealDBConnection") as mock_conn:
             mock_db = AsyncMock()
             mock_conn.return_value = mock_db
 
@@ -155,7 +154,7 @@ class TestTaskManagerMemoryProfile:
             for i in range(10):
                 module = MockModule(f"job-{i}", "mission", "setup", "version")
 
-                async def dummy():
+                async def dummy() -> None:
                     pass
 
                 await manager.create_task(f"task-{i}", "mission", module, dummy())
@@ -177,22 +176,17 @@ class TestTaskManagerMemoryProfile:
         """Test memory scaling with queue size."""
         tracemalloc.start()
 
-        with patch('digitalkin.core.task_manager.surrealdb_repository.SurrealDBConnection') as mock_conn:
+        with patch("digitalkin.core.task_manager.surrealdb_repository.SurrealDBConnection"):
             mock_db = AsyncMock()
             module = MockModule("job-1", "mission", "setup", "version")
 
-            memory_by_queue_size: Dict[int, int] = {}
+            memory_by_queue_size: dict[int, int] = {}
 
             for queue_items in [10, 50, 100, 500, 1000]:
                 gc.collect()
                 baseline = get_memory_usage()
 
-                session = TaskSession(
-                    task_id="task-1",
-                    mission_id="mission",
-                    db=mock_db,
-                    module=module
-                )
+                session = TaskSession(task_id="task-1", mission_id="mission", db=mock_db, module=module)
 
                 # Fill queue with items
                 for i in range(queue_items):
@@ -218,8 +212,9 @@ class TestTaskManagerMemoryProfile:
 
                     # Memory ratio should be within reasonable bounds of size ratio
                     # Allow for some overhead
-                    assert memory_ratio < size_ratio * 2, \
+                    assert memory_ratio < size_ratio * 2, (
                         f"Memory scaling issue: {sizes[i]} items uses {memory_ratio:.2f}x memory (expected ~{size_ratio}x)"
+                    )
 
 
 class TestJobManagerMemoryProfile:
@@ -230,7 +225,7 @@ class TestJobManagerMemoryProfile:
         """Test baseline memory usage of SingleJobManager."""
         tracemalloc.start()
 
-        with patch('digitalkin.core.job_manager.single_job_manager.ConnectionFactory') as mock_factory:
+        with patch("digitalkin.core.job_manager.single_job_manager.ConnectionFactory") as mock_factory:
             mock_conn = AsyncMock()
             mock_factory.create_surreal_connection.return_value = mock_conn
 
@@ -257,14 +252,15 @@ class TestJobManagerMemoryProfile:
             assert init_memory < 10 * 1024 * 1024, f"Init memory: {init_memory / 1024 / 1024:.2f} MB"
 
             # Memory should be mostly freed after cleanup
-            assert cleanup_memory < init_memory * 0.5, \
+            assert cleanup_memory < init_memory * 0.5, (
                 f"Cleanup memory ({cleanup_memory / 1024:.2f} KB) > 50% of init ({init_memory / 1024:.2f} KB)"
+            )
 
     @pytest.mark.asyncio
     async def test_taskiq_job_manager_stream_memory(self):
         """Test memory usage of TaskiqJobManager stream processing."""
-        with patch('digitalkin.core.job_manager.taskiq_job_manager.TASKIQ_BROKER'):
-            with patch('digitalkin.core.job_manager.taskiq_job_manager.TaskiqJobManager._start'):
+        with patch("digitalkin.core.job_manager.taskiq_job_manager.TASKIQ_BROKER"):
+            with patch("digitalkin.core.job_manager.taskiq_job_manager.TaskiqJobManager._start"):
                 from digitalkin.core.job_manager.taskiq_job_manager import TaskiqJobManager
 
                 tracemalloc.start()
@@ -276,10 +272,7 @@ class TestJobManagerMemoryProfile:
                 # Simulate stream data
                 stream_data = []
                 for i in range(1000):
-                    data = {
-                        "job_id": f"job-{i % 10}",
-                        "output_data": {"index": i, "payload": "x" * 1000}
-                    }
+                    data = {"job_id": f"job-{i % 10}", "output_data": {"index": i, "payload": "x" * 1000}}
                     stream_data.append(data)
 
                 # Process stream data
@@ -307,8 +300,7 @@ class TestJobManagerMemoryProfile:
                 assert peak_memory < 50 * 1024 * 1024, f"Peak memory: {peak_memory / 1024 / 1024:.2f} MB"
 
                 # Memory should be freed after clearing
-                assert after_clear < peak_memory * 0.1, \
-                    f"Memory not freed: {after_clear / 1024:.2f} KB still used"
+                assert after_clear < peak_memory * 0.1, f"Memory not freed: {after_clear / 1024:.2f} KB still used"
 
 
 class TestMemoryLeakDetection:
@@ -320,7 +312,7 @@ class TestMemoryLeakDetection:
         tracemalloc.start()
         manager = LocalTaskManager()
 
-        with patch('digitalkin.core.task_manager.base_task_manager.SurrealDBConnection') as mock_conn:
+        with patch("digitalkin.core.task_manager.base_task_manager.SurrealDBConnection") as mock_conn:
             mock_db = AsyncMock()
             mock_conn.return_value = mock_db
 
@@ -333,7 +325,7 @@ class TestMemoryLeakDetection:
                 for i in range(tasks_per_cycle):
                     module = MockModule(f"job-{cycle}-{i}", "mission", "setup", "version")
 
-                    async def task():
+                    async def task() -> None:
                         await asyncio.sleep(0.01)
 
                     await manager.create_task(f"task-{cycle}-{i}", "mission", module, task())
@@ -366,7 +358,7 @@ class TestMemoryLeakDetection:
         tracemalloc.start()
         manager = LocalTaskManager()
 
-        with patch('digitalkin.core.task_manager.base_task_manager.SurrealDBConnection') as mock_conn:
+        with patch("digitalkin.core.task_manager.base_task_manager.SurrealDBConnection") as mock_conn:
             mock_db = AsyncMock()
             mock_conn.return_value = mock_db
 
@@ -377,14 +369,13 @@ class TestMemoryLeakDetection:
             for i in range(20):
                 module = MockModule(f"job-{i}", "mission", "setup", "version")
 
-                async def failing_task():
+                async def failing_task() -> NoReturn:
                     await asyncio.sleep(0.01)
-                    raise ValueError(f"Task {i} failed")
+                    msg = f"Task {i} failed"
+                    raise ValueError(msg)
 
-                try:
+                with contextlib.suppress(builtins.BaseException):
                     await manager.create_task(f"task-{i}", "mission", module, failing_task())
-                except:
-                    pass
 
                 # Wait and cancel
                 await asyncio.sleep(0.05)
@@ -406,7 +397,7 @@ class TestMemoryOptimizations:
     @pytest.mark.asyncio
     async def test_queue_memory_clearing_optimization(self):
         """Test that queue clearing optimization reduces memory."""
-        with patch('digitalkin.core.task_manager.surrealdb_repository.SurrealDBConnection') as mock_conn:
+        with patch("digitalkin.core.task_manager.surrealdb_repository.SurrealDBConnection"):
             mock_db = AsyncMock()
             mock_db.close = AsyncMock()
 
@@ -444,7 +435,7 @@ class TestMemoryOptimizations:
         """Test memory efficiency of connection pooling."""
         tracemalloc.start()
 
-        with patch('digitalkin.core.common.factories.SurrealDBConnection') as mock_conn_class:
+        with patch("digitalkin.core.common.factories.SurrealDBConnection") as mock_conn_class:
             connections = []
 
             def create_mock_conn(*args, **kwargs):
@@ -463,10 +454,7 @@ class TestMemoryOptimizations:
             # Create multiple connections
             created_connections = []
             for i in range(20):
-                conn = await ConnectionFactory.create_surreal_connection(
-                    database=f"db-{i}",
-                    auto_init=False
-                )
+                conn = await ConnectionFactory.create_surreal_connection(database=f"db-{i}", auto_init=False)
                 created_connections.append(conn)
 
             gc.collect()
@@ -483,12 +471,12 @@ class TestMemoryOptimizations:
 
             # Average memory per connection should be reasonable
             avg_memory_per_conn = memory_with_connections / 20
-            assert avg_memory_per_conn < 100 * 1024, \
+            assert avg_memory_per_conn < 100 * 1024, (
                 f"Average memory per connection: {avg_memory_per_conn / 1024:.2f} KB"
+            )
 
             # Memory should be freed
-            assert memory_after_clear < memory_with_connections * 0.2, \
-                "Connections not properly garbage collected"
+            assert memory_after_clear < memory_with_connections * 0.2, "Connections not properly garbage collected"
 
 
 class TestMemoryBenchmarks:
@@ -503,7 +491,7 @@ class TestMemoryBenchmarks:
         tracemalloc.start()
         manager = LocalTaskManager(max_concurrent_tasks=1000)
 
-        with patch('digitalkin.core.task_manager.base_task_manager.SurrealDBConnection') as mock_conn:
+        with patch("digitalkin.core.task_manager.base_task_manager.SurrealDBConnection") as mock_conn:
             mock_db = AsyncMock()
             mock_conn.return_value = mock_db
 
@@ -514,15 +502,14 @@ class TestMemoryBenchmarks:
             for i in range(1000):
                 module = MockModule(f"job-{i}", "mission", "setup", "version")
 
-                async def task():
+                async def task() -> None:
                     await asyncio.sleep(0.001)
 
                 await manager.create_task(f"task-{i}", "mission", module, task())
 
                 if i % 100 == 0:
                     gc.collect()
-                    current_memory = get_memory_usage() - baseline
-                    print(f"Memory after {i} tasks: {current_memory / 1024 / 1024:.2f} MB")
+                    get_memory_usage() - baseline
 
             gc.collect()
             peak_memory = get_memory_usage() - baseline
@@ -536,9 +523,6 @@ class TestMemoryBenchmarks:
             tracemalloc.stop()
 
             # Report results
-            print(f"Peak memory for 1000 tasks: {peak_memory / 1024 / 1024:.2f} MB")
-            print(f"Memory after cleanup: {final_memory / 1024 / 1024:.2f} MB")
-            print(f"Average memory per task: {peak_memory / 1000 / 1024:.2f} KB")
 
             # Assert reasonable limits
             assert peak_memory < 100 * 1024 * 1024, "Peak memory > 100MB for 1000 tasks"

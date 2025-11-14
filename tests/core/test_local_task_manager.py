@@ -30,7 +30,6 @@ from digitalkin.modules._base_module import BaseModule
 pytestmark = pytest.mark.timeout(30)
 
 
-
 # ============================================================================
 # Enhanced Mock with State Tracking
 # ============================================================================
@@ -116,7 +115,7 @@ async def mock_task_session() -> Mock:
 
     # Make these stay alive so main task can complete first
     # Use sleep loop that responds to cancellation
-    async def stay_alive():
+    async def stay_alive() -> None:
         try:
             while True:
                 await asyncio.sleep(0.01)
@@ -246,7 +245,7 @@ class TestTaskCreation:
             await small_manager.create_task("t1", "missions:id", mock_base_module, work())
             await small_manager.create_task("t2", "missions:id", mock_base_module, work())
 
-            with pytest.raises(RuntimeError, match=f"Maximum concurrent tasks"):
+            with pytest.raises(RuntimeError, match="Maximum concurrent tasks"):
                 await small_manager.create_task("t3", "missions:id", mock_base_module, work())
 
     @pytest.mark.asyncio
@@ -302,9 +301,7 @@ class TestTaskCreation:
             await asyncio.sleep(0.1)
 
         # Make SurrealDB initialization fail
-        mock_surreal_connection.init_surreal_instance = AsyncMock(
-            side_effect=ConnectionError("DB connection failed")
-        )
+        mock_surreal_connection.init_surreal_instance = AsyncMock(side_effect=ConnectionError("DB connection failed"))
 
         with patch(
             "digitalkin.core.task_manager.base_task_manager.SurrealDBConnection",
@@ -466,7 +463,8 @@ class TestCancellation:
 
             assert result is True
             # With mocked listen_signals, cancel_task waits for timeout then force-cancels
-            assert duration >= 1.0 and duration < 1.5
+            assert duration >= 1.0
+            assert duration < 1.5
             # Shutdown still detected because task receives CancelledError
             await asyncio.wait_for(shutdown_detected.wait(), timeout=0.5)
 
@@ -670,7 +668,7 @@ class TestCleanupShutdown:
         mock_session.db = mock_db
 
         # Create cleanup that calls db.close
-        async def mock_cleanup():
+        async def mock_cleanup() -> None:
             await mock_session.db.close()
 
         mock_session.cleanup = AsyncMock(side_effect=mock_cleanup)
@@ -693,7 +691,7 @@ class TestCleanupShutdown:
         mock_session.module = mock_base_module
 
         # Create cleanup that calls module.stop and db.close
-        async def mock_cleanup():
+        async def mock_cleanup() -> None:
             await mock_session.module.stop()
             await mock_session.db.close()
 
@@ -762,9 +760,7 @@ class TestConcurrencyStress:
 
             for i in range(50):
                 task_id = f"churn_{i}"
-                await high_capacity_manager.create_task(
-                    task_id, "missions:churn", mock_base_module, quick_task()
-                )
+                await high_capacity_manager.create_task(task_id, "missions:churn", mock_base_module, quick_task())
 
             # Wait for all to complete
             await asyncio.sleep(0.5)
@@ -800,14 +796,10 @@ class TestConcurrencyStress:
             for i in range(20):
                 task_id = f"race_{i}"
                 task_ids.append(task_id)
-                await high_capacity_manager.create_task(
-                    task_id, "missions:race", mock_base_module, medium_task()
-                )
+                await high_capacity_manager.create_task(task_id, "missions:race", mock_base_module, medium_task())
 
             # Immediately start cancelling randomly
-            cancel_tasks = []
-            for task_id in random.sample(task_ids, 10):
-                cancel_tasks.append(high_capacity_manager.cancel_task(task_id, "missions:race"))
+            cancel_tasks = [high_capacity_manager.cancel_task(task_id, "missions:race") for task_id in random.sample(task_ids, 10)]
 
             # Should not raise
             await asyncio.gather(*cancel_tasks, return_exceptions=True)

@@ -10,11 +10,10 @@ import secrets
 import grpc
 import grpc_testing
 import pytest
-from digitalkin_proto.agentic_mesh_protocol.cost.v1 import cost_pb2, cost_service_pb2, cost_service_pb2_grpc
+from digitalkin_proto.agentic_mesh_protocol.cost.v1 import cost_service_pb2, cost_service_pb2_grpc
 from grpc.framework.foundation import logging_pool
 from mock_cost_servicer import FakeContext, MockCostServicer
 
-from digitalkin.grpc_servers.utils.exceptions import ServerError
 from digitalkin.models.grpc_servers.models import ClientConfig, SecurityMode, ServerMode
 from digitalkin.services.cost.cost_strategy import CostConfig, CostData, CostServiceError, CostType
 from digitalkin.services.cost.grpc_cost import GrpcCost
@@ -162,7 +161,7 @@ def test_add_cost_success(
     method_desc = service_desc.methods_by_name["AddCost"]
 
     # Intercept the pending unary-unary call
-    invocation_metadata, request, rpc = test_channel.take_unary_unary(method_desc)
+    _invocation_metadata, request, rpc = test_channel.take_unary_unary(method_desc)
 
     # Process with mock servicer
     context = FakeContext()
@@ -471,7 +470,7 @@ def test_get_cost_multiple_with_same_name(
         future_add.result(timeout=5.0)
 
     # Get all costs with this name
-    future_get = client_execution_thread_pool.submit(client.get, name)
+    client_execution_thread_pool.submit(client.get, name)
 
     method_desc = service_desc.methods_by_name["GetCost"]
     _, request, rpc = test_channel.take_unary_unary(method_desc)
@@ -576,9 +575,7 @@ def test_get_filtered_by_cost_types(
         future_add.result(timeout=5.0)
 
     # Filter by token types only
-    future_get = client_execution_thread_pool.submit(
-        client.get_filtered, cost_types=["TOKEN_INPUT", "TOKEN_OUTPUT"]
-    )
+    future_get = client_execution_thread_pool.submit(client.get_filtered, cost_types=["TOKEN_INPUT", "TOKEN_OUTPUT"])
 
     method_desc = service_desc.methods_by_name["GetCosts"]
     _, request, rpc = test_channel.take_unary_unary(method_desc)
@@ -592,7 +589,7 @@ def test_get_filtered_by_cost_types(
     result = future_get.result(timeout=5.0)
     assert isinstance(result, list)
     assert len(result) == 2
-    assert all(c.cost_type in [CostType.TOKEN_INPUT, CostType.TOKEN_OUTPUT] for c in result)
+    assert all(c.cost_type in {CostType.TOKEN_INPUT, CostType.TOKEN_OUTPUT} for c in result)
 
 
 def test_get_filtered_by_names_and_types(
@@ -643,7 +640,7 @@ def test_get_filtered_by_names_and_types(
     result = future_get.result(timeout=5.0)
     assert isinstance(result, list)
     assert len(result) == 2
-    assert all(c.name in ["cost_a", "cost_d"] for c in result)
+    assert all(c.name in {"cost_a", "cost_d"} for c in result)
     assert all(c.cost_type == CostType.TOKEN_INPUT for c in result)
 
 

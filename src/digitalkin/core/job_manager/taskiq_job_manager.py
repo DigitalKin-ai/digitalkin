@@ -294,7 +294,7 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             while True:
                 try:
                     # Block for first item with timeout to allow termination checks
-                    item = await asyncio.wait_for(queue.get(), timeout=60.0)
+                    item = await asyncio.wait_for(queue.get(), timeout=5.0)
                     queue.task_done()
                     yield item
 
@@ -314,11 +314,30 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
 
                 except asyncio.TimeoutError:
                     logger.warning("Stream consumer timeout for job %s, checking if job is still active", job_id)
-                    # Periodic timeout allows checking if job is still active
+
+                    # Check if job is registered
                     if job_id not in self._job_registry:
                         logger.info("Job %s no longer registered, ending stream", job_id)
                         break
-                    # Otherwise continue waiting for more items
+
+                    # Check job status to detect cancelled/failed jobs
+                    status = await self.get_module_status(job_id)
+
+                    if status in {TaskStatus.CANCELLED, TaskStatus.FAILED}:
+                        logger.info("Job %s has terminal status %s, draining queue and ending stream", job_id, status)
+
+                        # Drain remaining queue items before stopping
+                        while not queue.empty():
+                            try:
+                                item = queue.get_nowait()
+                                queue.task_done()
+                                yield item
+                            except asyncio.QueueEmpty:
+                                break
+
+                        break
+
+                    # Continue waiting for active/completed jobs
                     continue
 
         try:
@@ -404,6 +423,11 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         """
         if job_id not in self._job_registry:
             logger.warning("Job %s not found in registry", job_id)
+            return TaskStatus.FAILED
+
+        # Safety check: if channel not initialized (start() wasn't called), return FAILED
+        if not hasattr(self, "channel") or self.channel is None:
+            logger.warning("Job %s status check failed - channel not initialized", job_id)
             return TaskStatus.FAILED
 
         try:

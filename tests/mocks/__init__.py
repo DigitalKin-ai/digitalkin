@@ -17,15 +17,15 @@ from tests.mocks.sessions import create_mock_task_session
 __all__ = [
     # Modules
     "ConfigurableMockModule",
-    "SimpleMockModule",
     # Models
     "MockInputModel",
     "MockOutputModel",
-    "MockSetupModel",
     "MockSecretModel",
+    "MockSetupModel",
+    "SimpleMockModule",
+    "StatefulMockSurrealConnection",
     # Database
     "create_mock_surreal_connection",
-    "StatefulMockSurrealConnection",
     # Sessions
     "create_mock_task_session",
 ]

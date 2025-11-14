@@ -7,18 +7,16 @@ memory leaks in task managers, job managers, and related components.
 import asyncio
 import gc
 import weakref
-from typing import Any, ClassVar, List
+from typing import Any, ClassVar, NoReturn
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
 from digitalkin.core.job_manager.single_job_manager import SingleJobManager
-from digitalkin.core.task_manager.base_task_manager import BaseTaskManager
 from digitalkin.core.task_manager.local_task_manager import LocalTaskManager
 from digitalkin.core.task_manager.remote_task_manager import RemoteTaskManager
 from digitalkin.core.task_manager.surrealdb_repository import SurrealDBConnection
 from digitalkin.core.task_manager.task_session import TaskSession
-from digitalkin.models.core.task_monitor import TaskStatus
 from digitalkin.modules._base_module import BaseModule
 from digitalkin.services.services_config import ServicesConfig
 from digitalkin.services.services_models import ServicesMode, ServicesStrategy
@@ -33,12 +31,10 @@ class MockModule(BaseModule):
     services_config_strategies: ClassVar[dict[str, ServicesStrategy | None]] = {}
     services_config_params: ClassVar[dict[str, dict[str, str | None] | None]] = {}
     services_config: ClassVar[ServicesConfig] = ServicesConfig(
-        services_config_strategies={},
-        services_config_params={},
-        mode=ServicesMode.LOCAL
+        services_config_strategies={}, services_config_params={}, mode=ServicesMode.LOCAL
     )
 
-    def __init__(self, job_id: str, mission_id: str, setup_id: str, setup_version_id: str):
+    def __init__(self, job_id: str, mission_id: str, setup_id: str, setup_version_id: str) -> None:
         # Skip service initialization for tests
         self.job_id = job_id
         self.mission_id = mission_id
@@ -52,7 +48,6 @@ class MockModule(BaseModule):
 
     async def initialize(self, context: Any, setup_data: Any) -> None:
         """Initialize the module."""
-        pass
 
     async def run(self) -> None:
         """Run the module."""
@@ -60,11 +55,9 @@ class MockModule(BaseModule):
 
     async def cleanup(self) -> None:
         """Clean up the module."""
-        pass
 
     async def stop(self) -> None:
         """Stop the module."""
-        pass
 
 
 class TestTaskManagerMemoryLeaks:
@@ -73,7 +66,7 @@ class TestTaskManagerMemoryLeaks:
     @pytest.mark.asyncio
     async def test_local_task_manager_cleanup_on_cancel(self):
         """Test that LocalTaskManager properly cleans up resources on task cancellation."""
-        with patch('digitalkin.core.task_manager.base_task_manager.SurrealDBConnection') as mock_conn:
+        with patch("digitalkin.core.task_manager.base_task_manager.SurrealDBConnection") as mock_conn:
             mock_db = Mock(spec=SurrealDBConnection)
             mock_db.init_surreal_instance = AsyncMock()
             mock_db.close = AsyncMock()
@@ -86,20 +79,21 @@ class TestTaskManagerMemoryLeaks:
             manager = LocalTaskManager()
             weak_refs = []
 
-            # Create multiple tasks
-            for i in range(5):
-                module = MockModule(f"job-{i}", "mission", "setup", "version")
+            # Helper function to create tasks without persisting loop variables
+            async def create_task_and_track(task_idx: int) -> None:
+                module = MockModule(f"job-{task_idx}", "mission", "setup", "version")
                 weak_refs.append(weakref.ref(module))
+                print(f"init: i={task_idx} | weak_refs[-1]={weak_refs[-1]}")
 
-                async def task_coro():
+                async def task_coro() -> None:
                     await asyncio.sleep(0.5)
 
-                await manager.create_task(
-                    f"task-{i}",
-                    "mission",
-                    module,
-                    task_coro()
-                )
+                await manager.create_task(f"task-{task_idx}", "mission", module, task_coro())
+                # module and task_coro go out of scope here
+
+            # Create multiple tasks
+            for i in range(5):
+                await create_task_and_track(i)
 
             # Cancel all tasks
             await manager.cancel_all_tasks("mission", timeout=1.0)
@@ -114,12 +108,13 @@ class TestTaskManagerMemoryLeaks:
             # Verify all modules can be garbage collected
             # Since sessions are cleaned up, modules should be collectible
             for weak_ref in weak_refs:
+                print(f"{weak_ref=}, {weak_ref()=}")
                 assert weak_ref() is None, "Module not garbage collected after cancellation"
 
     @pytest.mark.asyncio
     async def test_remote_task_manager_cleanup_on_shutdown(self):
         """Test that RemoteTaskManager properly cleans up on shutdown."""
-        with patch('digitalkin.core.task_manager.base_task_manager.SurrealDBConnection') as mock_conn:
+        with patch("digitalkin.core.task_manager.base_task_manager.SurrealDBConnection") as mock_conn:
             mock_db = Mock(spec=SurrealDBConnection)
             mock_db.init_surreal_instance = AsyncMock()
             mock_db.close = AsyncMock()
@@ -135,15 +130,10 @@ class TestTaskManagerMemoryLeaks:
             for i in range(3):
                 module = MockModule(f"job-{i}", "mission", "setup", "version")
 
-                async def dummy_coro():
+                async def dummy_coro() -> None:
                     pass
 
-                await manager.create_task(
-                    f"task-{i}",
-                    "mission",
-                    module,
-                    dummy_coro()
-                )
+                await manager.create_task(f"task-{i}", "mission", module, dummy_coro())
 
             # Shutdown should clean everything
             await manager.shutdown("mission")
@@ -162,12 +152,7 @@ class TestTaskManagerMemoryLeaks:
 
         module = MockModule("job-1", "mission", "setup", "version")
 
-        session = TaskSession(
-            task_id="task-1",
-            mission_id="mission",
-            db=mock_db,
-            module=module
-        )
+        session = TaskSession(task_id="task-1", mission_id="mission", db=mock_db, module=module)
 
         # Fill queue with large items
         for i in range(100):
@@ -189,7 +174,7 @@ class TestTaskManagerMemoryLeaks:
     @pytest.mark.asyncio
     async def test_context_manager_cleanup(self):
         """Test that context managers properly clean up resources."""
-        with patch('digitalkin.core.task_manager.base_task_manager.SurrealDBConnection') as mock_conn:
+        with patch("digitalkin.core.task_manager.base_task_manager.SurrealDBConnection") as mock_conn:
             mock_db = Mock(spec=SurrealDBConnection)
             mock_db.init_surreal_instance = AsyncMock()
             mock_db.close = AsyncMock()
@@ -202,7 +187,7 @@ class TestTaskManagerMemoryLeaks:
             # Track if cleanup was called
             cleanup_called = False
 
-            async def track_cleanup(*args, **kwargs):
+            async def track_cleanup(*args, **kwargs) -> None:
                 nonlocal cleanup_called
                 cleanup_called = True
 
@@ -213,7 +198,7 @@ class TestTaskManagerMemoryLeaks:
                 # Create a task
                 module = MockModule("job-1", "mission", "setup", "version")
 
-                async def task():
+                async def task() -> None:
                     await asyncio.sleep(0.01)
 
                 await manager.create_task("task-1", "mission", module, task())
@@ -224,7 +209,7 @@ class TestTaskManagerMemoryLeaks:
     @pytest.mark.asyncio
     async def test_circular_reference_prevention(self):
         """Test that circular references don't prevent garbage collection."""
-        with patch('digitalkin.core.task_manager.base_task_manager.SurrealDBConnection') as mock_conn:
+        with patch("digitalkin.core.task_manager.base_task_manager.SurrealDBConnection") as mock_conn:
             mock_db = Mock(spec=SurrealDBConnection)
             mock_db.init_surreal_instance = AsyncMock()
             mock_db.close = AsyncMock()
@@ -245,7 +230,7 @@ class TestTaskManagerMemoryLeaks:
             weak_module = weakref.ref(module)
             weak_manager = weakref.ref(manager)
 
-            async def task():
+            async def task() -> None:
                 pass
 
             await manager.create_task("task-1", "mission", module, task())
@@ -270,90 +255,93 @@ class TestJobManagerMemoryLeaks:
     @pytest.mark.asyncio
     async def test_single_job_manager_queue_cleanup(self):
         """Test that SingleJobManager cleans up queues properly."""
-        with patch('digitalkin.core.task_manager.base_task_manager.SurrealDBConnection') as mock_conn:
-            with patch('digitalkin.core.job_manager.single_job_manager.ConnectionFactory.create_surreal_connection') as mock_conn_factory:
-                mock_db = Mock(spec=SurrealDBConnection)
-                mock_db.init_surreal_instance = AsyncMock()
-                mock_db.close = AsyncMock()
-                mock_db.create = AsyncMock(return_value={"id": "signal_123"})
-                mock_db.update = AsyncMock()
-                mock_db.merge = AsyncMock()
-                mock_db.start_live = AsyncMock(return_value=("live_123", AsyncMock()))
-                mock_conn.return_value = mock_db
-                mock_conn_factory.return_value = AsyncMock()
+        with patch("digitalkin.core.task_manager.base_task_manager.SurrealDBConnection") as mock_conn, patch(
+            "digitalkin.core.job_manager.single_job_manager.ConnectionFactory.create_surreal_connection"
+        ) as mock_conn_factory:
+            mock_db = Mock(spec=SurrealDBConnection)
+            mock_db.init_surreal_instance = AsyncMock()
+            mock_db.close = AsyncMock()
+            mock_db.create = AsyncMock(return_value={"id": "signal_123"})
+            mock_db.update = AsyncMock()
+            mock_db.merge = AsyncMock()
+            mock_db.start_live = AsyncMock(return_value=("live_123", AsyncMock()))
+            mock_conn.return_value = mock_db
+            mock_conn_factory.return_value = AsyncMock()
 
-                manager = SingleJobManager(MockModule, ServicesMode.LOCAL)
-                await manager.start()
+            manager = SingleJobManager(MockModule, ServicesMode.LOCAL)
+            await manager.start()
 
-                # Create jobs with queues
-                job_ids = []
-                for i in range(5):
-                    job_id = f"job-{i}"
-                    job_ids.append(job_id)
+            # Create jobs with queues
+            job_ids = []
+            for i in range(5):
+                job_id = f"job-{i}"
+                job_ids.append(job_id)
 
-                    # Simulate job creation
-                    module = MockModule(job_id, "mission", "setup", "version")
-                    session = TaskSession(job_id, "mission", mock_db, module)
-                    manager.tasks_sessions[job_id] = session
+                # Simulate job creation
+                module = MockModule(job_id, "mission", "setup", "version")
+                session = TaskSession(job_id, "mission", mock_db, module)
+                manager.tasks_sessions[job_id] = session
 
-                    # Fill queue with data
-                    for j in range(10):
-                        await session.queue.put({"data": f"item-{j}"})
+                # Fill queue with data
+                for j in range(10):
+                    await session.queue.put({"data": f"item-{j}"})
 
-                # Stop all modules should clean queues
-                await manager.stop_all_modules()
+            # Stop all modules should clean queues
+            await manager.stop_all_modules()
 
-                # Verify all sessions and queues cleaned
-                assert len(manager.tasks_sessions) == 0
+            # Verify all sessions and queues cleaned
+            assert len(manager.tasks_sessions) == 0
 
     @pytest.mark.asyncio
     async def test_taskiq_job_manager_stream_consumer_cleanup(self):
         """Test that TaskiqJobManager cleans up stream consumers."""
-        with patch('digitalkin.core.job_manager.taskiq_job_manager.TASKIQ_BROKER') as mock_broker:
-            with patch('digitalkin.core.job_manager.taskiq_job_manager.TaskiqJobManager._define_consumer') as mock_consumer_factory:
-                with patch('digitalkin.core.job_manager.taskiq_job_manager.ConnectionFactory.create_surreal_connection') as mock_conn_factory:
-                    mock_broker.startup = AsyncMock()
-                    mock_consumer = AsyncMock()
-                    mock_consumer_factory.return_value = mock_consumer
+        with patch("digitalkin.core.job_manager.taskiq_job_manager.TASKIQ_BROKER") as mock_broker, patch(
+            "digitalkin.core.job_manager.taskiq_job_manager.TaskiqJobManager._define_consumer"
+        ) as mock_consumer_factory, patch(
+            "digitalkin.core.job_manager.taskiq_job_manager.ConnectionFactory.create_surreal_connection"
+        ) as mock_conn_factory:
+            mock_broker.startup = AsyncMock()
+            mock_consumer = AsyncMock()
+            mock_consumer_factory.return_value = mock_consumer
 
-                    # Create mock connection
-                    mock_conn = AsyncMock()
-                    mock_conn.init_surreal_instance = AsyncMock()
-                    mock_conn.close = AsyncMock()
-                    mock_conn.create = AsyncMock(return_value={"id": "signal_123"})
-                    mock_conn.update = AsyncMock()
-                    mock_conn.merge = AsyncMock()
-                    mock_conn.start_live = AsyncMock(return_value=("live_123", AsyncMock()))
+            # Create mock connection
+            mock_conn = AsyncMock()
+            mock_conn.init_surreal_instance = AsyncMock()
+            mock_conn.close = AsyncMock()
+            mock_conn.create = AsyncMock(return_value={"id": "signal_123"})
+            mock_conn.update = AsyncMock()
+            mock_conn.merge = AsyncMock()
+            mock_conn.start_live = AsyncMock(return_value=("live_123", AsyncMock()))
 
-                    async def create_connection(*args, **kwargs):
-                        return mock_conn
+            async def create_connection(*args, **kwargs):
+                return mock_conn
 
-                    mock_conn_factory.side_effect = create_connection
+            mock_conn_factory.side_effect = create_connection
 
-                    # Import here to avoid issues with patches
-                    from digitalkin.core.job_manager.taskiq_job_manager import TaskiqJobManager
+            # Import here to avoid issues with patches
+            from digitalkin.core.job_manager.taskiq_job_manager import TaskiqJobManager
 
-                    manager = TaskiqJobManager(MockModule, ServicesMode.REMOTE)
-                    await manager.start()
+            manager = TaskiqJobManager(MockModule, ServicesMode.REMOTE)
+            await manager.start()
 
-                    # Track consumer task
-                    consumer_task_ref = weakref.ref(manager.stream_consumer_task)
+            # Track consumer task
+            weakref.ref(manager.stream_consumer_task)
 
-                    # Stop should clean up consumer
-                    await manager._stop()
+            # Stop should clean up consumer
+            await manager._stop()
 
-                    # Verify consumer cleaned up
-                    mock_consumer.close.assert_awaited_once()
-                    assert manager.stream_consumer_task.cancelled()
+            # Verify consumer cleaned up
+            mock_consumer.close.assert_awaited_once()
+            assert manager.stream_consumer_task.cancelled()
 
-                    # Verify job queues cleared
-                    assert len(manager.job_queues) == 0
+            # Verify job queues cleared
+            assert len(manager.job_queues) == 0
 
     @pytest.mark.asyncio
     async def test_job_registry_cleanup(self):
         """Test that job registries are properly cleaned up."""
-        with patch('digitalkin.core.job_manager.taskiq_job_manager.TASKIQ_BROKER'):
-            with patch('digitalkin.core.job_manager.taskiq_job_manager.TaskiqJobManager._start'):
+        with patch("digitalkin.core.job_manager.taskiq_job_manager.TASKIQ_BROKER"):
+            with patch("digitalkin.core.job_manager.taskiq_job_manager.TaskiqJobManager._start"):
                 from digitalkin.core.job_manager.taskiq_job_manager import TaskiqJobManager
 
                 manager = TaskiqJobManager(MockModule, ServicesMode.REMOTE)
@@ -386,7 +374,7 @@ class TestLiveQueryCleanup:
     @pytest.mark.asyncio
     async def test_live_query_cleanup_on_task_cancel(self):
         """Test that live queries are properly closed when tasks are cancelled."""
-        with patch('digitalkin.core.task_manager.base_task_manager.SurrealDBConnection') as mock_conn:
+        with patch("digitalkin.core.task_manager.base_task_manager.SurrealDBConnection") as mock_conn:
             mock_db = Mock(spec=SurrealDBConnection)
             mock_db.init_surreal_instance = AsyncMock()
             mock_db.close = AsyncMock()
@@ -399,7 +387,7 @@ class TestLiveQueryCleanup:
             manager = LocalTaskManager()
             module = MockModule("job-1", "mission", "setup", "version")
 
-            async def task_with_live_query():
+            async def task_with_live_query() -> None:
                 await asyncio.sleep(0.5)
 
             await manager.create_task("task-1", "mission", module, task_with_live_query())
@@ -413,7 +401,7 @@ class TestLiveQueryCleanup:
     @pytest.mark.asyncio
     async def test_multiple_live_queries_cleanup(self):
         """Test cleanup of multiple concurrent live queries."""
-        with patch('digitalkin.core.task_manager.base_task_manager.SurrealDBConnection') as mock_conn:
+        with patch("digitalkin.core.task_manager.base_task_manager.SurrealDBConnection") as mock_conn:
             mock_db = Mock(spec=SurrealDBConnection)
             mock_db.init_surreal_instance = AsyncMock()
             mock_db.close = AsyncMock()
@@ -429,7 +417,7 @@ class TestLiveQueryCleanup:
             for i in range(5):
                 module = MockModule(f"job-{i}", "mission", "setup", "version")
 
-                async def task():
+                async def task() -> None:
                     await asyncio.sleep(0.01)
 
                 await manager.create_task(f"task-{i}", "mission", module, task())
@@ -448,7 +436,7 @@ class TestAsyncTaskCleanup:
     @pytest.mark.asyncio
     async def test_fire_and_forget_task_prevention(self):
         """Test that fire-and-forget tasks are properly managed."""
-        with patch('digitalkin.core.task_manager.base_task_manager.SurrealDBConnection') as mock_conn:
+        with patch("digitalkin.core.task_manager.base_task_manager.SurrealDBConnection") as mock_conn:
             mock_db = Mock(spec=SurrealDBConnection)
             mock_db.init_surreal_instance = AsyncMock()
             mock_db.close = AsyncMock()
@@ -460,7 +448,7 @@ class TestAsyncTaskCleanup:
 
             uncaught_exceptions = []
 
-            def exception_handler(loop, context):
+            def exception_handler(loop, context) -> None:
                 uncaught_exceptions.append(context)
 
             loop = asyncio.get_event_loop()
@@ -472,9 +460,10 @@ class TestAsyncTaskCleanup:
 
                 module = MockModule("job-1", "mission", "setup", "version")
 
-                async def failing_task():
+                async def failing_task() -> NoReturn:
                     await asyncio.sleep(0.01)
-                    raise ValueError("Task failed")
+                    msg = "Task failed"
+                    raise ValueError(msg)
 
                 # This should be properly managed, not fire-and-forget
                 await manager.create_task("task-1", "mission", module, failing_task())
@@ -494,7 +483,7 @@ class TestAsyncTaskCleanup:
     @pytest.mark.asyncio
     async def test_background_task_cleanup(self):
         """Test that background tasks are properly cleaned up."""
-        with patch('digitalkin.core.task_manager.base_task_manager.SurrealDBConnection') as mock_conn:
+        with patch("digitalkin.core.task_manager.base_task_manager.SurrealDBConnection") as mock_conn:
             mock_db = Mock(spec=SurrealDBConnection)
             mock_db.init_surreal_instance = AsyncMock()
             mock_db.close = AsyncMock()
@@ -512,7 +501,7 @@ class TestAsyncTaskCleanup:
             for i in range(3):
                 module = MockModule(f"job-{i}", "mission", "setup", "version")
 
-                async def background_work():
+                async def background_work() -> None:
                     try:
                         while True:
                             await asyncio.sleep(0.1)
@@ -536,7 +525,7 @@ class TestAsyncTaskCleanup:
             await asyncio.sleep(0.1)
 
             # All manager tasks should be cancelled
-            for task_id, task in manager.tasks.items():
+            for task in manager.tasks.values():
                 assert task.cancelled() or task.done()
 
 
@@ -546,47 +535,48 @@ class TestMemoryGrowthPrevention:
     @pytest.mark.asyncio
     async def test_queue_memory_growth_prevention(self):
         """Test that queues don't grow unbounded."""
-        with patch('digitalkin.core.task_manager.base_task_manager.SurrealDBConnection') as mock_conn:
-            with patch('digitalkin.core.job_manager.single_job_manager.ConnectionFactory.create_surreal_connection') as mock_conn_factory:
-                mock_db = Mock(spec=SurrealDBConnection)
-                mock_db.init_surreal_instance = AsyncMock()
-                mock_db.close = AsyncMock()
-                mock_db.create = AsyncMock(return_value={"id": "signal_123"})
-                mock_db.update = AsyncMock()
-                mock_db.merge = AsyncMock()
-                mock_db.start_live = AsyncMock(return_value=("live_123", AsyncMock()))
-                mock_conn.return_value = mock_db
-                mock_conn_factory.return_value = AsyncMock()
+        with patch("digitalkin.core.task_manager.base_task_manager.SurrealDBConnection") as mock_conn, patch(
+            "digitalkin.core.job_manager.single_job_manager.ConnectionFactory.create_surreal_connection"
+        ) as mock_conn_factory:
+            mock_db = Mock(spec=SurrealDBConnection)
+            mock_db.init_surreal_instance = AsyncMock()
+            mock_db.close = AsyncMock()
+            mock_db.create = AsyncMock(return_value={"id": "signal_123"})
+            mock_db.update = AsyncMock()
+            mock_db.merge = AsyncMock()
+            mock_db.start_live = AsyncMock(return_value=("live_123", AsyncMock()))
+            mock_conn.return_value = mock_db
+            mock_conn_factory.return_value = AsyncMock()
 
-                manager = SingleJobManager(MockModule, ServicesMode.LOCAL)
-                await manager.start()
+            manager = SingleJobManager(MockModule, ServicesMode.LOCAL)
+            await manager.start()
 
-                # Create a job with a bounded queue
-                module = MockModule("job-1", "mission", "setup", "version")
-                session = TaskSession("job-1", "mission", mock_db, module)
-                manager.tasks_sessions["job-1"] = session
+            # Create a job with a bounded queue
+            module = MockModule("job-1", "mission", "setup", "version")
+            session = TaskSession("job-1", "mission", mock_db, module)
+            manager.tasks_sessions["job-1"] = session
 
-                # Try to overflow the queue
-                queue_size = session.queue.maxsize if session.queue.maxsize > 0 else 1000
+            # Try to overflow the queue
+            queue_size = session.queue.maxsize if session.queue.maxsize > 0 else 1000
 
-                # Fill queue to capacity
-                for i in range(queue_size):
-                    session.queue.put_nowait({"data": f"item-{i}"})
+            # Fill queue to capacity
+            for i in range(queue_size):
+                session.queue.put_nowait({"data": f"item-{i}"})
 
-                # Queue should be full
-                assert session.queue.full() or session.queue.qsize() == queue_size
+            # Queue should be full
+            assert session.queue.full() or session.queue.qsize() == queue_size
 
-                # Further puts should not increase memory (would block or raise)
-                with pytest.raises((asyncio.QueueFull, AttributeError)):
-                    session.queue.put_nowait({"overflow": "data"})
+            # Further puts should not increase memory (would block or raise)
+            with pytest.raises((asyncio.QueueFull, AttributeError)):
+                session.queue.put_nowait({"overflow": "data"})
 
-                # Clean up resources
-                await manager.stop_all_modules()
+            # Clean up resources
+            await manager.stop_all_modules()
 
     @pytest.mark.asyncio
     async def test_session_dict_memory_growth_prevention(self):
         """Test that session dictionaries don't grow unbounded."""
-        with patch('digitalkin.core.task_manager.base_task_manager.SurrealDBConnection') as mock_conn:
+        with patch("digitalkin.core.task_manager.base_task_manager.SurrealDBConnection") as mock_conn:
             mock_db = Mock(spec=SurrealDBConnection)
             mock_db.init_surreal_instance = AsyncMock()
             mock_db.close = AsyncMock()
@@ -602,7 +592,7 @@ class TestMemoryGrowthPrevention:
             for i in range(5):
                 module = MockModule(f"job-{i}", "mission", "setup", "version")
 
-                async def task():
+                async def task() -> None:
                     await asyncio.sleep(0.01)
 
                 await manager.create_task(f"task-{i}", "mission", module, task())
@@ -610,7 +600,7 @@ class TestMemoryGrowthPrevention:
             # Should not be able to create more tasks
             module = MockModule("job-overflow", "mission", "setup", "version")
 
-            async def overflow_task():
+            async def overflow_task() -> None:
                 pass
 
             with pytest.raises(RuntimeError, match="Maximum concurrent tasks"):

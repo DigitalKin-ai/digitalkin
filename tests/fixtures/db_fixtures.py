@@ -9,7 +9,6 @@ import datetime
 import os
 import uuid
 from collections.abc import AsyncGenerator, Awaitable, Callable
-from unittest.mock import AsyncMock, patch
 
 import pytest_asyncio
 

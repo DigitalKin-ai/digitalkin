@@ -11,18 +11,16 @@ This test suite validates the GrpcStorage service implementation, including:
 """
 
 from concurrent import futures
-from typing import Any
 
 import grpc_testing
 import pytest
-
 from digitalkin_proto.agentic_mesh_protocol.storage.v1 import storage_service_pb2_grpc
 from pydantic import BaseModel, Field
+from tests.services.storage.mock_storage_servicer import FakeContext, MockStorageServicer
 
 from digitalkin.models.grpc_servers.models import ClientConfig
 from digitalkin.services.storage.grpc_storage import GrpcStorage
 from digitalkin.services.storage.storage_strategy import DataType, StorageServiceError
-from tests.services.storage.mock_storage_servicer import FakeContext, MockStorageServicer
 
 # Set timeout for all tests in this file (20 seconds)
 pytestmark = pytest.mark.timeout(20)
@@ -308,7 +306,12 @@ def test_store_record_with_logs_type(
     """
     collection = "logs"
     record_id = "log_001"
-    data = {"mission_id": MISSION_ID, "level": "INFO", "message": "Test log message", "timestamp": "2024-01-01T00:00:00Z"}
+    data = {
+        "mission_id": MISSION_ID,
+        "level": "INFO",
+        "message": "Test log message",
+        "timestamp": "2024-01-01T00:00:00Z",
+    }
 
     method_desc = storage_service_pb2_grpc.DESCRIPTOR.services_by_name["StorageService"].methods_by_name["StoreRecord"]
 

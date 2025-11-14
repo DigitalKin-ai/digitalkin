@@ -387,17 +387,17 @@ def test_get_setup_success(
 
     # First create a setup
     create_future = client_execution_thread_pool.submit(client.create_setup, generate_setup_obj.model_dump())
-    _, create_request, create_rpc = test_channel.take_unary_unary(create_method_desc)
+    _, _create_request, create_rpc = test_channel.take_unary_unary(create_method_desc)
     create_rpc.send_initial_metadata(())
     request_obj = setup_pb2.CreateSetupRequest(**{
-        k: v for (k, v) in generate_setup_obj.model_dump().items() if k not in ("id",)
+        k: v for (k, v) in generate_setup_obj.model_dump().items() if k != "id"
     })
     create_response = mock_servicer.CreateSetup(request_obj, FakeContext())
     create_rpc.terminate(create_response, (), grpc.StatusCode.OK, "")
     create_future.result()
 
     # Get the created setup's ID
-    created_setup_id = list(mock_servicer.setups.keys())[0]
+    created_setup_id = next(iter(mock_servicer.setups.keys()))
 
     # Now get the setup
     get_future = client_execution_thread_pool.submit(client.get_setup, {"setup_id": created_setup_id})
@@ -461,17 +461,17 @@ def test_update_setup_success(
 
     # First create a setup
     create_future = client_execution_thread_pool.submit(client.create_setup, generate_setup_obj.model_dump())
-    _, create_request, create_rpc = test_channel.take_unary_unary(create_method_desc)
+    _, _create_request, create_rpc = test_channel.take_unary_unary(create_method_desc)
     create_rpc.send_initial_metadata(())
     request_obj = setup_pb2.CreateSetupRequest(**{
-        k: v for (k, v) in generate_setup_obj.model_dump().items() if k not in ("id",)
+        k: v for (k, v) in generate_setup_obj.model_dump().items() if k != "id"
     })
     create_response = mock_servicer.CreateSetup(request_obj, FakeContext())
     create_rpc.terminate(create_response, (), grpc.StatusCode.OK, "")
     create_future.result()
 
     # Get the created setup's ID
-    created_setup_id = list(mock_servicer.setups.keys())[0]
+    created_setup_id = next(iter(mock_servicer.setups.keys()))
 
     # Update the setup
     updated_data = generate_setup_obj.model_dump()
@@ -548,17 +548,17 @@ def test_delete_setup_success(
 
     # First create a setup
     create_future = client_execution_thread_pool.submit(client.create_setup, generate_setup_obj.model_dump())
-    _, create_request, create_rpc = test_channel.take_unary_unary(create_method_desc)
+    _, _create_request, create_rpc = test_channel.take_unary_unary(create_method_desc)
     create_rpc.send_initial_metadata(())
     request_obj = setup_pb2.CreateSetupRequest(**{
-        k: v for (k, v) in generate_setup_obj.model_dump().items() if k not in ("id",)
+        k: v for (k, v) in generate_setup_obj.model_dump().items() if k != "id"
     })
     create_response = mock_servicer.CreateSetup(request_obj, FakeContext())
     create_rpc.terminate(create_response, (), grpc.StatusCode.OK, "")
     create_future.result()
 
     # Get the created setup's ID
-    created_setup_id = list(mock_servicer.setups.keys())[0]
+    created_setup_id = next(iter(mock_servicer.setups.keys()))
 
     # Delete the setup
     delete_future = client_execution_thread_pool.submit(client.delete_setup, {"setup_id": created_setup_id})
@@ -621,8 +621,10 @@ def test_get_setup_version_success(
     get_method_desc = service_desc.methods_by_name["GetSetupVersion"]
 
     # First create a setup version
-    create_future = client_execution_thread_pool.submit(client.create_setup_version, generate_setup_version_obj.model_dump())
-    _, create_request, create_rpc = test_channel.take_unary_unary(create_method_desc)
+    create_future = client_execution_thread_pool.submit(
+        client.create_setup_version, generate_setup_version_obj.model_dump()
+    )
+    _, _create_request, create_rpc = test_channel.take_unary_unary(create_method_desc)
     create_rpc.send_initial_metadata(())
     request_obj = setup_pb2.CreateSetupVersionRequest(**{
         k: v for (k, v) in generate_setup_version_obj.model_dump().items() if k not in {"creation_date", "id"}
@@ -632,7 +634,9 @@ def test_get_setup_version_success(
     create_future.result()
 
     # Get the created version's ID (it's stored as version key in mock servicer)
-    created_version = mock_servicer.setup_versions[generate_setup_version_obj.setup_id][generate_setup_version_obj.version]
+    created_version = mock_servicer.setup_versions[generate_setup_version_obj.setup_id][
+        generate_setup_version_obj.version
+    ]
 
     # Now get the setup version by ID
     get_future = client_execution_thread_pool.submit(client.get_setup_version, {"setup_version_id": created_version.id})
@@ -663,7 +667,9 @@ def test_get_setup_version_not_found(
     service_desc = setup_service_pb2.DESCRIPTOR.services_by_name["SetupService"]
     get_method_desc = service_desc.methods_by_name["GetSetupVersion"]
 
-    get_future = client_execution_thread_pool.submit(client.get_setup_version, {"setup_version_id": "nonexistent_version_id"})
+    get_future = client_execution_thread_pool.submit(
+        client.get_setup_version, {"setup_version_id": "nonexistent_version_id"}
+    )
     _, get_request, get_rpc = test_channel.take_unary_unary(get_method_desc)
 
     get_context = FakeContext()
@@ -695,8 +701,10 @@ def test_search_setup_versions_success(
     search_method_desc = service_desc.methods_by_name["SearchSetupVersions"]
 
     # Create a setup version
-    create_future = client_execution_thread_pool.submit(client.create_setup_version, generate_setup_version_obj.model_dump())
-    _, create_request, create_rpc = test_channel.take_unary_unary(create_method_desc)
+    create_future = client_execution_thread_pool.submit(
+        client.create_setup_version, generate_setup_version_obj.model_dump()
+    )
+    _, _create_request, create_rpc = test_channel.take_unary_unary(create_method_desc)
     create_rpc.send_initial_metadata(())
     request_obj = setup_pb2.CreateSetupVersionRequest(**{
         k: v for (k, v) in generate_setup_version_obj.model_dump().items() if k not in {"creation_date", "id"}
@@ -708,7 +716,7 @@ def test_search_setup_versions_success(
     # Search for versions
     search_future = client_execution_thread_pool.submit(
         client.search_setup_versions,
-        {"setup_id": generate_setup_version_obj.setup_id, "version": generate_setup_version_obj.version}
+        {"setup_id": generate_setup_version_obj.setup_id, "version": generate_setup_version_obj.version},
     )
     _, search_request, search_rpc = test_channel.take_unary_unary(search_method_desc)
 
@@ -738,8 +746,7 @@ def test_search_setup_versions_empty_results(
     search_method_desc = service_desc.methods_by_name["SearchSetupVersions"]
 
     search_future = client_execution_thread_pool.submit(
-        client.search_setup_versions,
-        {"setup_id": "nonexistent_setup", "version": "v1.0.0"}
+        client.search_setup_versions, {"setup_id": "nonexistent_setup", "version": "v1.0.0"}
     )
     _, search_request, search_rpc = test_channel.take_unary_unary(search_method_desc)
 
@@ -772,8 +779,10 @@ def test_update_setup_version_success(
     update_method_desc = service_desc.methods_by_name["UpdateSetupVersion"]
 
     # First create a setup version
-    create_future = client_execution_thread_pool.submit(client.create_setup_version, generate_setup_version_obj.model_dump())
-    _, create_request, create_rpc = test_channel.take_unary_unary(create_method_desc)
+    create_future = client_execution_thread_pool.submit(
+        client.create_setup_version, generate_setup_version_obj.model_dump()
+    )
+    _, _create_request, create_rpc = test_channel.take_unary_unary(create_method_desc)
     create_rpc.send_initial_metadata(())
     request_obj = setup_pb2.CreateSetupVersionRequest(**{
         k: v for (k, v) in generate_setup_version_obj.model_dump().items() if k not in {"creation_date", "id"}
@@ -783,7 +792,9 @@ def test_update_setup_version_success(
     create_future.result()
 
     # Get the created version
-    created_version = mock_servicer.setup_versions[generate_setup_version_obj.setup_id][generate_setup_version_obj.version]
+    created_version = mock_servicer.setup_versions[generate_setup_version_obj.setup_id][
+        generate_setup_version_obj.version
+    ]
 
     # Update the setup version
     updated_data = generate_setup_version_obj.model_dump()
@@ -803,7 +814,9 @@ def test_update_setup_version_success(
     assert result is True
 
     # Verify the update in mock servicer
-    updated_version = mock_servicer.setup_versions[generate_setup_version_obj.setup_id][generate_setup_version_obj.version]
+    updated_version = mock_servicer.setup_versions[generate_setup_version_obj.setup_id][
+        generate_setup_version_obj.version
+    ]
     assert updated_version.content == {"updated_key": "updated_value"}
 
 
@@ -855,8 +868,10 @@ def test_delete_setup_version_success(
     delete_method_desc = service_desc.methods_by_name["DeleteSetupVersion"]
 
     # First create a setup version
-    create_future = client_execution_thread_pool.submit(client.create_setup_version, generate_setup_version_obj.model_dump())
-    _, create_request, create_rpc = test_channel.take_unary_unary(create_method_desc)
+    create_future = client_execution_thread_pool.submit(
+        client.create_setup_version, generate_setup_version_obj.model_dump()
+    )
+    _, _create_request, create_rpc = test_channel.take_unary_unary(create_method_desc)
     create_rpc.send_initial_metadata(())
     request_obj = setup_pb2.CreateSetupVersionRequest(**{
         k: v for (k, v) in generate_setup_version_obj.model_dump().items() if k not in {"creation_date", "id"}
@@ -866,10 +881,14 @@ def test_delete_setup_version_success(
     create_future.result()
 
     # Get the created version
-    created_version = mock_servicer.setup_versions[generate_setup_version_obj.setup_id][generate_setup_version_obj.version]
+    created_version = mock_servicer.setup_versions[generate_setup_version_obj.setup_id][
+        generate_setup_version_obj.version
+    ]
 
     # Delete the setup version
-    delete_future = client_execution_thread_pool.submit(client.delete_setup_version, {"setup_version_id": created_version.id})
+    delete_future = client_execution_thread_pool.submit(
+        client.delete_setup_version, {"setup_version_id": created_version.id}
+    )
     _, delete_request, delete_rpc = test_channel.take_unary_unary(delete_method_desc)
 
     assert delete_request.setup_version_id == created_version.id
@@ -897,7 +916,9 @@ def test_delete_setup_version_not_found(
     service_desc = setup_service_pb2.DESCRIPTOR.services_by_name["SetupService"]
     delete_method_desc = service_desc.methods_by_name["DeleteSetupVersion"]
 
-    delete_future = client_execution_thread_pool.submit(client.delete_setup_version, {"setup_version_id": "nonexistent_version_id"})
+    delete_future = client_execution_thread_pool.submit(
+        client.delete_setup_version, {"setup_version_id": "nonexistent_version_id"}
+    )
     _, delete_request, delete_rpc = test_channel.take_unary_unary(delete_method_desc)
 
     delete_context = FakeContext()

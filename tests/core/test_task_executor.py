@@ -9,6 +9,7 @@ Tests the supervisor pattern implementation including:
 """
 
 import asyncio
+import contextlib
 import time
 from typing import NoReturn
 from unittest.mock import AsyncMock, Mock
@@ -139,9 +140,7 @@ class TestMainTaskCompletion:
             await asyncio.sleep(0.08)
 
         start = time.monotonic()
-        supervisor = await task_executor.execute_task(
-            task_id, mission_id, job(), session, mock_surreal_connection
-        )
+        supervisor = await task_executor.execute_task(task_id, mission_id, job(), session, mock_surreal_connection)
         await supervisor
         elapsed = time.monotonic() - start
 
@@ -249,9 +248,7 @@ class TestExceptionHandling:
             msg = "boom"
             raise ValueError(msg)
 
-        supervisor = await task_executor.execute_task(
-            task_id, mission_id, failing(), session, mock_surreal_connection
-        )
+        supervisor = await task_executor.execute_task(task_id, mission_id, failing(), session, mock_surreal_connection)
 
         with pytest.raises(ValueError):
             await supervisor
@@ -281,7 +278,8 @@ class TestExceptionHandling:
 
         async def custom_failure() -> NoReturn:
             await asyncio.sleep(0.01)
-            raise CustomError("custom error message")
+            msg = "custom error message"
+            raise CustomError(msg)
 
         supervisor = await task_executor.execute_task(
             task_id, mission_id, custom_failure(), session, mock_surreal_connection
@@ -368,10 +366,8 @@ class TestHeartbeatFailures:
             task_id, mission_id, long_main(), session, mock_surreal_connection
         )
 
-        try:
+        with contextlib.suppress(RuntimeError):
             await supervisor
-        except RuntimeError:
-            pass
 
         assert session.status == TaskStatus.FAILED
         assert session.completed_at is not None
@@ -575,10 +571,8 @@ class TestCancellation:
         await asyncio.sleep(0.05)
         supervisor.cancel()
 
-        try:
+        with contextlib.suppress(asyncio.CancelledError):
             await supervisor
-        except asyncio.CancelledError:
-            pass
 
         # Verify cleanup happened
         assert len(cleanup_log) >= 2  # At least heartbeat and listener cleanup
@@ -612,10 +606,8 @@ class TestCancellation:
         await asyncio.sleep(0.02)
         supervisor.cancel()
 
-        try:
+        with contextlib.suppress(asyncio.CancelledError):
             await supervisor
-        except asyncio.CancelledError:
-            pass
 
         assert session.status == TaskStatus.CANCELLED
         assert session.completed_at is not None

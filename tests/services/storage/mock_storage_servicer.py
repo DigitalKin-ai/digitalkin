@@ -148,7 +148,7 @@ class MockStorageServicer(storage_service_pb2_grpc.StorageServiceServicer):
                     self._validate_schema(request.collection, data_dict)
                 except (ValidationError, ValueError) as e:
                     context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
-                    context.set_details(f"Schema validation failed: {str(e)}")
+                    context.set_details(f"Schema validation failed: {e!s}")
                     return data_pb2.StoreRecordResponse()
 
             # Check if record already exists
@@ -180,7 +180,7 @@ class MockStorageServicer(storage_service_pb2_grpc.StorageServiceServicer):
 
         except Exception as e:
             context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(f"Internal error: {str(e)}")
+            context.set_details(f"Internal error: {e!s}")
             logger.error(f"Error in StoreRecord: {e}", exc_info=True)
             return data_pb2.StoreRecordResponse()
 
@@ -219,9 +219,7 @@ class MockStorageServicer(storage_service_pb2_grpc.StorageServiceServicer):
 
             if not record_data:
                 context.set_code(grpc.StatusCode.NOT_FOUND)
-                context.set_details(
-                    f"Record {request.record_id} not found in collection {request.collection}"
-                )
+                context.set_details(f"Record {request.record_id} not found in collection {request.collection}")
                 return data_pb2.ReadRecordResponse()
 
             # Create response
@@ -234,7 +232,7 @@ class MockStorageServicer(storage_service_pb2_grpc.StorageServiceServicer):
 
         except Exception as e:
             context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(f"Internal error: {str(e)}")
+            context.set_details(f"Internal error: {e!s}")
             logger.error(f"Error in ReadRecord: {e}", exc_info=True)
             return data_pb2.ReadRecordResponse()
 
@@ -273,9 +271,7 @@ class MockStorageServicer(storage_service_pb2_grpc.StorageServiceServicer):
 
             if not record_data:
                 context.set_code(grpc.StatusCode.NOT_FOUND)
-                context.set_details(
-                    f"Record {request.record_id} not found in collection {request.collection}"
-                )
+                context.set_details(f"Record {request.record_id} not found in collection {request.collection}")
                 return data_pb2.UpdateRecordResponse()
 
             # Convert Struct to dict
@@ -287,7 +283,7 @@ class MockStorageServicer(storage_service_pb2_grpc.StorageServiceServicer):
                     self._validate_schema(request.collection, data_dict)
                 except (ValidationError, ValueError) as e:
                     context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
-                    context.set_details(f"Schema validation failed: {str(e)}")
+                    context.set_details(f"Schema validation failed: {e!s}")
                     return data_pb2.UpdateRecordResponse()
 
             # Update the record
@@ -305,7 +301,7 @@ class MockStorageServicer(storage_service_pb2_grpc.StorageServiceServicer):
 
         except Exception as e:
             context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(f"Internal error: {str(e)}")
+            context.set_details(f"Internal error: {e!s}")
             logger.error(f"Error in UpdateRecord: {e}", exc_info=True)
             return data_pb2.UpdateRecordResponse()
 
@@ -353,7 +349,7 @@ class MockStorageServicer(storage_service_pb2_grpc.StorageServiceServicer):
 
         except Exception as e:
             context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(f"Internal error: {str(e)}")
+            context.set_details(f"Internal error: {e!s}")
             logger.error(f"Error in RemoveRecord: {e}", exc_info=True)
             return data_pb2.RemoveRecordResponse()
 
@@ -387,9 +383,7 @@ class MockStorageServicer(storage_service_pb2_grpc.StorageServiceServicer):
             # Convert to proto records
             proto_records = []
             for record_id, record_data in collection_records.items():
-                proto_record = self._create_proto_record(
-                    request.mission_id, request.collection, record_id, record_data
-                )
+                proto_record = self._create_proto_record(request.mission_id, request.collection, record_id, record_data)
                 proto_records.append(proto_record)
 
             logger.info(f"Listed {len(proto_records)} records from {request.collection}")
@@ -397,7 +391,7 @@ class MockStorageServicer(storage_service_pb2_grpc.StorageServiceServicer):
 
         except Exception as e:
             context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(f"Internal error: {str(e)}")
+            context.set_details(f"Internal error: {e!s}")
             logger.error(f"Error in ListRecords: {e}", exc_info=True)
             return data_pb2.ListRecordsResponse(records=[])
 
@@ -436,6 +430,6 @@ class MockStorageServicer(storage_service_pb2_grpc.StorageServiceServicer):
 
         except Exception as e:
             context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(f"Internal error: {str(e)}")
+            context.set_details(f"Internal error: {e!s}")
             logger.error(f"Error in RemoveCollection: {e}", exc_info=True)
             return data_pb2.RemoveCollectionResponse()

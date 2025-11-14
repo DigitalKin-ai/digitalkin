@@ -9,17 +9,18 @@ Usage in tests:
         await mock_surreal_connection.create("tasks", {"task_id": "test"})
 """
 
-import pytest
-import pytest_asyncio
 from unittest.mock import Mock
 
-from digitalkin.modules._base_module import BaseModule
+import pytest
+import pytest_asyncio
 from tests.mocks import (
     ConfigurableMockModule,
     SimpleMockModule,
     create_mock_surreal_connection,
     create_mock_task_session,
 )
+
+from digitalkin.modules._base_module import BaseModule
 
 
 @pytest_asyncio.fixture

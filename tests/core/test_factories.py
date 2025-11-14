@@ -7,13 +7,13 @@ to ensure proper resource creation, error handling, and memory management.
 import asyncio
 import datetime
 from typing import Any, ClassVar
-from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from digitalkin.core.common import ConnectionFactory, ModuleFactory, QueueFactory
 from digitalkin.core.task_manager.surrealdb_repository import SurrealDBConnection
-from digitalkin.models.module.module_types import DataModel, SetupModel, DataTrigger
+from digitalkin.models.module.module_types import DataModel, DataTrigger, SetupModel
 from digitalkin.modules._base_module import BaseModule
 from digitalkin.services.services_config import ServicesConfig
 from digitalkin.services.services_models import ServicesMode, ServicesStrategy
@@ -22,22 +22,22 @@ from digitalkin.services.services_models import ServicesMode, ServicesStrategy
 # Create mock model classes
 class MockDataTrigger(DataTrigger):
     """Mock data trigger."""
+
     protocol: str = "mock"
     value: str = "test"
 
 
 class MockInputModel(DataModel[MockDataTrigger]):
     """Mock input model."""
-    pass
 
 
 class MockOutputModel(DataModel[MockDataTrigger]):
     """Mock output model."""
-    pass
 
 
 class MockSetupModel(SetupModel):
     """Mock setup model."""
+
     config_value: str = "default"
 
 
@@ -47,12 +47,10 @@ class MockModule(BaseModule[MockInputModel, MockOutputModel, MockSetupModel, Non
     services_config_strategies: ClassVar[dict[str, ServicesStrategy | None]] = {}
     services_config_params: ClassVar[dict[str, dict[str, str | None] | None]] = {}
     services_config: ClassVar[ServicesConfig] = ServicesConfig(
-        services_config_strategies={},
-        services_config_params={},
-        mode=ServicesMode.LOCAL
+        services_config_strategies={}, services_config_params={}, mode=ServicesMode.LOCAL
     )
 
-    def __init__(self, job_id: str, mission_id: str, setup_id: str, setup_version_id: str):
+    def __init__(self, job_id: str, mission_id: str, setup_id: str, setup_version_id: str) -> None:
         super().__init__(job_id, mission_id, setup_id, setup_version_id)
         self.job_id = job_id
         self.mission_id = mission_id
@@ -78,11 +76,9 @@ class MockModule(BaseModule[MockInputModel, MockOutputModel, MockSetupModel, Non
 
     async def run(self) -> None:
         """Run the module."""
-        pass
 
     async def cleanup(self) -> None:
         """Clean up the module."""
-        pass
 
 
 class TestConnectionFactory:
@@ -91,7 +87,7 @@ class TestConnectionFactory:
     @pytest.mark.asyncio
     async def test_create_surreal_connection_default_params(self):
         """Test creating connection with default parameters."""
-        with patch('digitalkin.core.common.factories.SurrealDBConnection') as mock_conn_class:
+        with patch("digitalkin.core.common.factories.SurrealDBConnection") as mock_conn_class:
             mock_conn = AsyncMock(spec=SurrealDBConnection)
             mock_conn_class.return_value = mock_conn
 
@@ -105,7 +101,7 @@ class TestConnectionFactory:
     @pytest.mark.asyncio
     async def test_create_surreal_connection_custom_params(self):
         """Test creating connection with custom parameters."""
-        with patch('digitalkin.core.common.factories.SurrealDBConnection') as mock_conn_class:
+        with patch("digitalkin.core.common.factories.SurrealDBConnection") as mock_conn_class:
             mock_conn = AsyncMock(spec=SurrealDBConnection)
             mock_conn_class.return_value = mock_conn
 
@@ -113,9 +109,7 @@ class TestConnectionFactory:
             custom_timeout = datetime.timedelta(seconds=10)
 
             connection = await ConnectionFactory.create_surreal_connection(
-                database=custom_db,
-                timeout=custom_timeout,
-                auto_init=False
+                database=custom_db, timeout=custom_timeout, auto_init=False
             )
 
             # Verify custom parameters
@@ -126,7 +120,7 @@ class TestConnectionFactory:
     @pytest.mark.asyncio
     async def test_create_surreal_connection_init_failure(self):
         """Test handling of initialization failure."""
-        with patch('digitalkin.core.common.factories.SurrealDBConnection') as mock_conn_class:
+        with patch("digitalkin.core.common.factories.SurrealDBConnection") as mock_conn_class:
             mock_conn = AsyncMock(spec=SurrealDBConnection)
             mock_conn.init_surreal_instance.side_effect = ConnectionError("Failed to connect")
             mock_conn_class.return_value = mock_conn
@@ -137,7 +131,7 @@ class TestConnectionFactory:
     @pytest.mark.asyncio
     async def test_create_surreal_connection_memory_cleanup(self):
         """Test that connections are properly cleaned up on error."""
-        with patch('digitalkin.core.common.factories.SurrealDBConnection') as mock_conn_class:
+        with patch("digitalkin.core.common.factories.SurrealDBConnection") as mock_conn_class:
             mock_conn = AsyncMock(spec=SurrealDBConnection)
             mock_conn.init_surreal_instance.side_effect = Exception("Init failed")
             mock_conn_class.return_value = mock_conn
@@ -162,10 +156,10 @@ class TestConnectionFactory:
     @pytest.mark.asyncio
     async def test_create_surreal_connection_timeout_handling(self):
         """Test timeout handling during connection creation."""
-        with patch('digitalkin.core.common.factories.SurrealDBConnection') as mock_conn_class:
+        with patch("digitalkin.core.common.factories.SurrealDBConnection") as mock_conn_class:
             mock_conn = AsyncMock(spec=SurrealDBConnection)
 
-            async def slow_init():
+            async def slow_init() -> None:
                 await asyncio.sleep(10)  # Simulate slow connection
 
             mock_conn.init_surreal_instance = slow_init
@@ -174,9 +168,7 @@ class TestConnectionFactory:
             # This should timeout if the factory properly handles timeouts
             with pytest.raises(asyncio.TimeoutError):
                 await asyncio.wait_for(
-                    ConnectionFactory.create_surreal_connection(
-                        timeout=datetime.timedelta(seconds=0.05)
-                    ),
+                    ConnectionFactory.create_surreal_connection(timeout=datetime.timedelta(seconds=0.05)),
                     timeout=0.1,
                 )
 
@@ -191,13 +183,7 @@ class TestModuleFactory:
         setup_id = "setup-789"
         setup_version_id = "version-001"
 
-        module = ModuleFactory.create_module_instance(
-            MockModule,
-            job_id,
-            mission_id,
-            setup_id,
-            setup_version_id
-        )
+        module = ModuleFactory.create_module_instance(MockModule, job_id, mission_id, setup_id, setup_version_id)
 
         assert isinstance(module, MockModule)
         assert module.job_id == job_id
@@ -207,9 +193,9 @@ class TestModuleFactory:
 
     def test_create_module_instance_invalid_class(self):
         """Test creation with invalid module class."""
+
         class NotAModule:
             """Not a valid module class."""
-            pass
 
         with pytest.raises(TypeError):
             ModuleFactory.create_module_instance(
@@ -217,7 +203,7 @@ class TestModuleFactory:
                 "job-id",
                 "mission-id",
                 "setup-id",
-                "version-id"
+                "version-id",
             )
 
     def test_create_module_instance_memory_reference(self):
@@ -227,12 +213,8 @@ class TestModuleFactory:
         setup_id = "test-setup"
         version_id = "test-version"
 
-        module1 = ModuleFactory.create_module_instance(
-            MockModule, job_id, mission_id, setup_id, version_id
-        )
-        module2 = ModuleFactory.create_module_instance(
-            MockModule, job_id, mission_id, setup_id, version_id
-        )
+        module1 = ModuleFactory.create_module_instance(MockModule, job_id, mission_id, setup_id, version_id)
+        module2 = ModuleFactory.create_module_instance(MockModule, job_id, mission_id, setup_id, version_id)
 
         # Should be different instances
         assert module1 is not module2
@@ -240,31 +222,23 @@ class TestModuleFactory:
 
     def test_create_module_instance_constructor_error(self):
         """Test handling of module constructor errors."""
+
         class FailingModule(BaseModule):
-            def __init__(self, job_id: str, mission_id: str, setup_id: str, setup_version_id: str):
-                raise ValueError("Constructor failed")
+            def __init__(self, job_id: str, mission_id: str, setup_id: str, setup_version_id: str) -> None:
+                msg = "Constructor failed"
+                raise ValueError(msg)
 
         with pytest.raises(TypeError, match="Can't instantiate abstract"):
-            ModuleFactory.create_module_instance(
-                FailingModule,
-                "job-id",
-                "mission-id",
-                "setup-id",
-                "version-id"
-            )
+            ModuleFactory.create_module_instance(FailingModule, "job-id", "mission-id", "setup-id", "version-id")
 
     def test_create_module_instance_parameter_validation(self):
         """Test validation of string parameters."""
         # Test empty strings
         with pytest.raises(ValueError, match="job_id cannot be empty"):
-            ModuleFactory.create_module_instance(
-                MockModule, "", "mission", "setup", "version"
-            )
+            ModuleFactory.create_module_instance(MockModule, "", "mission", "setup", "version")
 
         with pytest.raises(ValueError, match="mission_id cannot be empty"):
-            ModuleFactory.create_module_instance(
-                MockModule, "job", "", "setup", "version"
-            )
+            ModuleFactory.create_module_instance(MockModule, "job", "", "setup", "version")
 
 
 class TestQueueFactory:
@@ -355,7 +329,7 @@ class TestQueueFactory:
         """Test queue behavior under concurrent access."""
         queue = QueueFactory.create_bounded_queue(maxsize=10)
 
-        async def producer(n: int):
+        async def producer(n: int) -> None:
             for i in range(5):
                 await queue.put(f"producer-{n}-item-{i}")
                 await asyncio.sleep(0.01)
@@ -372,11 +346,7 @@ class TestQueueFactory:
         producers = [producer(i) for i in range(2)]
         consumers = [consumer(i) for i in range(2)]
 
-        results = await asyncio.gather(
-            *producers,
-            *consumers,
-            return_exceptions=True
-        )
+        results = await asyncio.gather(*producers, *consumers, return_exceptions=True)
 
         # Verify no exceptions occurred
         for result in results:
@@ -392,15 +362,13 @@ class TestFactoryIntegration:
     @pytest.mark.asyncio
     async def test_factories_combined_usage(self):
         """Test using multiple factories together."""
-        with patch('digitalkin.core.common.factories.SurrealDBConnection') as mock_conn_class:
+        with patch("digitalkin.core.common.factories.SurrealDBConnection") as mock_conn_class:
             mock_conn = AsyncMock(spec=SurrealDBConnection)
             mock_conn_class.return_value = mock_conn
 
             # Create resources using factories
             connection = await ConnectionFactory.create_surreal_connection()
-            module = ModuleFactory.create_module_instance(
-                MockModule, "job-1", "mission-1", "setup-1", "version-1"
-            )
+            module = ModuleFactory.create_module_instance(MockModule, "job-1", "mission-1", "setup-1", "version-1")
             queue = QueueFactory.create_bounded_queue(maxsize=50)
 
             # Verify all resources created successfully
@@ -413,7 +381,7 @@ class TestFactoryIntegration:
     async def test_factory_error_isolation(self):
         """Test that errors in one factory don't affect others."""
         # Make ConnectionFactory fail
-        with patch('digitalkin.core.common.factories.SurrealDBConnection') as mock_conn_class:
+        with patch("digitalkin.core.common.factories.SurrealDBConnection") as mock_conn_class:
             mock_conn_class.side_effect = Exception("Connection failed")
 
             # ConnectionFactory should fail
@@ -421,9 +389,7 @@ class TestFactoryIntegration:
                 await ConnectionFactory.create_surreal_connection()
 
             # But other factories should still work
-            module = ModuleFactory.create_module_instance(
-                MockModule, "job-1", "mission-1", "setup-1", "version-1"
-            )
+            module = ModuleFactory.create_module_instance(MockModule, "job-1", "mission-1", "setup-1", "version-1")
             queue = QueueFactory.create_bounded_queue()
 
             assert isinstance(module, MockModule)

@@ -85,9 +85,7 @@ class MockCostServicer(cost_service_pb2_grpc.CostServiceServicer):
             setup_version_id=cost_dict["setup_version_id"],
         )
 
-    def AddCost(
-        self, request: cost_pb2.AddCostRequest, context: grpc.ServicerContext
-    ) -> cost_pb2.AddCostResponse:
+    def AddCost(self, request: cost_pb2.AddCostRequest, context: grpc.ServicerContext) -> cost_pb2.AddCostResponse:
         """Add a cost record to the mock database.
 
         Args:
@@ -124,9 +122,7 @@ class MockCostServicer(cost_service_pb2_grpc.CostServiceServicer):
             if request.cost_type not in valid_cost_types:
                 context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
                 context.set_details(f"Invalid cost type: {request.cost_type}")
-                return cost_pb2.AddCostResponse(
-                    success=False, message=f"Invalid cost type: {request.cost_type}"
-                )
+                return cost_pb2.AddCostResponse(success=False, message=f"Invalid cost type: {request.cost_type}")
 
             # Create cost dictionary
             cost_dict = {
@@ -148,19 +144,17 @@ class MockCostServicer(cost_service_pb2_grpc.CostServiceServicer):
 
         except ValidationError as e:
             context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
-            context.set_details(f"Validation error: {str(e)}")
+            context.set_details(f"Validation error: {e!s}")
             logger.error(f"Validation error in AddCost: {e}")
-            return cost_pb2.AddCostResponse(success=False, message=f"Validation error: {str(e)}")
+            return cost_pb2.AddCostResponse(success=False, message=f"Validation error: {e!s}")
 
         except Exception as e:
             context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(f"Internal error: {str(e)}")
+            context.set_details(f"Internal error: {e!s}")
             logger.error(f"Error in AddCost: {e}", exc_info=True)
-            return cost_pb2.AddCostResponse(success=False, message=f"Internal error: {str(e)}")
+            return cost_pb2.AddCostResponse(success=False, message=f"Internal error: {e!s}")
 
-    def GetCost(
-        self, request: cost_pb2.GetCostRequest, context: grpc.ServicerContext
-    ) -> cost_pb2.GetCostResponse:
+    def GetCost(self, request: cost_pb2.GetCostRequest, context: grpc.ServicerContext) -> cost_pb2.GetCostResponse:
         """Get costs by name for a specific mission.
 
         Args:
@@ -195,20 +189,17 @@ class MockCostServicer(cost_service_pb2_grpc.CostServiceServicer):
             cost_protos = [self._cost_dict_to_proto(cost) for cost in matching_costs]
 
             logger.info(
-                f"Retrieved {len(matching_costs)} costs with name '{request.name}' "
-                f"for mission {request.mission_id}"
+                f"Retrieved {len(matching_costs)} costs with name '{request.name}' for mission {request.mission_id}"
             )
             return cost_pb2.GetCostResponse(costs=cost_protos)
 
         except Exception as e:
             context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(f"Internal error: {str(e)}")
+            context.set_details(f"Internal error: {e!s}")
             logger.error(f"Error in GetCost: {e}", exc_info=True)
             return cost_pb2.GetCostResponse(costs=[])
 
-    def GetCosts(
-        self, request: cost_pb2.GetCostsRequest, context: grpc.ServicerContext
-    ) -> cost_pb2.GetCostsResponse:
+    def GetCosts(self, request: cost_pb2.GetCostsRequest, context: grpc.ServicerContext) -> cost_pb2.GetCostsResponse:
         """Get costs filtered by names and/or cost types.
 
         Args:
@@ -248,6 +239,6 @@ class MockCostServicer(cost_service_pb2_grpc.CostServiceServicer):
 
         except Exception as e:
             context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(f"Internal error: {str(e)}")
+            context.set_details(f"Internal error: {e!s}")
             logger.error(f"Error in GetCosts: {e}", exc_info=True)
             return cost_pb2.GetCostsResponse(costs=[])

@@ -268,7 +268,7 @@
 
     # Default timeout for tests (in seconds)
     timeout        = 10
-    timeout_method = "signal"  # More reliable for asyncio tests on Linux
+    timeout_method = "signal" # More reliable for asyncio tests on Linux
 
     # Custom markers
     markers = [

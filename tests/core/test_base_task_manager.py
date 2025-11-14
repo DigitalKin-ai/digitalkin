@@ -12,6 +12,7 @@ Tests for abstract base task manager functionality including:
 """
 
 import asyncio
+import contextlib
 import datetime
 from collections.abc import Coroutine
 from typing import Any
@@ -49,7 +50,7 @@ class ConcreteTaskManager(BaseTaskManager):
     ) -> None:
         """Minimal create_task implementation for testing."""
         await self._validate_task_creation(task_id, mission_id, coro)
-        channel, session = await self._create_session(
+        _channel, _session = await self._create_session(
             task_id, mission_id, module, heartbeat_interval, connection_timeout
         )
 
@@ -99,7 +100,7 @@ async def mock_task_session() -> Mock:
     session.generate_heartbeats = AsyncMock(side_effect=asyncio.CancelledError())
 
     # Realistic cleanup implementation that calls db.close()
-    async def mock_cleanup():
+    async def mock_cleanup() -> None:
         await session.db.close()
 
     session.cleanup = AsyncMock(side_effect=mock_cleanup)
@@ -459,7 +460,7 @@ class TestCleanup:
         mission_id = "missions:finally"
 
         # Create a task that will timeout and be force-cancelled
-        async def long_running_task():
+        async def long_running_task() -> None:
             await asyncio.sleep(100)
 
         task = asyncio.create_task(long_running_task())
@@ -497,7 +498,7 @@ class TestCleanup:
         mock_session = Mock(spec=TaskSession)
 
         # Track when cleanup is called and when session is still in dict
-        async def track_cleanup():
+        async def track_cleanup() -> None:
             # At this point, session should still be in dict
             if task_id in task_manager.tasks_sessions:
                 execution_order.append("cleanup_while_in_dict")
@@ -554,7 +555,9 @@ class TestSignalOperations:
         result = await task_manager.send_signal(task_id, mission_id, SignalType.CANCEL, {"key": "value"})
 
         assert result is True
-        mock_task_session.db.update.assert_awaited_once_with("signals", task_id, {"type": SignalType.CANCEL, "payload": {"key": "value"}})
+        mock_task_session.db.update.assert_awaited_once_with(
+            "signals", task_id, {"type": SignalType.CANCEL, "payload": {"key": "value"}}
+        )
 
     @pytest.mark.asyncio
     async def test_send_signal_unknown_task(
@@ -792,10 +795,8 @@ class TestProperties:
 
         # Cleanup
         task.cancel()
-        try:
+        with contextlib.suppress(asyncio.CancelledError):
             await task
-        except asyncio.CancelledError:
-            pass
 
     @pytest.mark.asyncio
     async def test_shutdown_event_internal_access(
@@ -911,7 +912,8 @@ class TestAsyncContextManager:
                     )
 
                     # Raise an exception
-                    raise ValueError("Test exception")
+                    msg = "Test exception"
+                    raise ValueError(msg)
             except ValueError:
                 pass
 
@@ -1010,7 +1012,8 @@ class TestAsyncContextManager:
 
         try:
             async with TrackingManager():
-                raise RuntimeError("Test error")
+                msg = "Test error"
+                raise RuntimeError(msg)
         except RuntimeError:
             pass
 
@@ -1067,8 +1070,9 @@ class TestAsyncContextManager:
                     # Add cleanup method that calls db.close()
                     # Use default argument to capture current value
                     def make_cleanup(session):
-                        async def cleanup_impl():
+                        async def cleanup_impl() -> None:
                             await session.db.close()
+
                         return cleanup_impl
 
                     mock_session.cleanup = AsyncMock(side_effect=make_cleanup(mock_session))
@@ -1185,7 +1189,7 @@ class TestCleanupIntegration:
         mission_id = "missions:integration"
 
         # Create a task that runs for a bit
-        async def work_task():
+        async def work_task() -> None:
             await asyncio.sleep(0.5)
 
         # Setup patches for task creation
@@ -1244,7 +1248,7 @@ class TestCleanupIntegration:
             task_manager.tasks_sessions[task_id] = mock_session
 
             # Create long-running task
-            async def long_task():
+            async def long_task() -> None:
                 await asyncio.sleep(100)
 
             task_manager.tasks[task_id] = asyncio.create_task(long_task())
@@ -1285,7 +1289,7 @@ class TestCleanupIntegration:
             task_manager.tasks_sessions[task_id] = mock_session
 
             # Create task
-            async def work():
+            async def work() -> None:
                 await asyncio.sleep(10)
 
             task_manager.tasks[task_id] = asyncio.create_task(work())

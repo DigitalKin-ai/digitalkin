@@ -9,7 +9,6 @@ Tests cover:
 """
 
 import asyncio
-from typing import Any
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -17,18 +16,16 @@ import pytest_asyncio
 
 from digitalkin.core.job_manager.taskiq_job_manager import TaskiqJobManager
 from digitalkin.models.core.task_monitor import TaskStatus
+from digitalkin.modules._base_module import BaseModule
 from digitalkin.services.services_models import ServicesMode
 from tests.mocks import (
     MockInputModel,
-    MockOutputModel,
     MockSetupModel,
     SimpleMockModule,
 )
-from digitalkin.modules._base_module import BaseModule
 
 # Set timeout for all tests in this file (60 seconds)
 pytestmark = pytest.mark.timeout(60)
-
 
 
 # ============================================================================
@@ -134,7 +131,11 @@ async def test_taskiq_job_manager_start(
 ):
     """Test TaskiqJobManager start method."""
     # Mock ConnectionFactory to avoid real connection
-    with patch("digitalkin.core.job_manager.taskiq_job_manager.ConnectionFactory.create_surreal_connection", new_callable=AsyncMock, return_value=configured_mock_surreal_connection):
+    with patch(
+        "digitalkin.core.job_manager.taskiq_job_manager.ConnectionFactory.create_surreal_connection",
+        new_callable=AsyncMock,
+        return_value=configured_mock_surreal_connection,
+    ):
         await taskiq_job_manager.start()
 
     mock_taskiq_broker.startup.assert_called_once()
@@ -176,13 +177,13 @@ async def test_create_module_instance_job(
     assert job_id in taskiq_job_manager._job_registry
     # Verify TaskSession was created in manager
     assert job_id in taskiq_job_manager.tasks_sessions
-    mock_taskiq_broker.find_task.assert_called_once_with(
-        "digitalkin.core.job_manager.taskiq_broker:run_start_module"
-    )
+    mock_taskiq_broker.find_task.assert_called_once_with("digitalkin.core.job_manager.taskiq_broker:run_start_module")
     # Verify arguments were passed to worker (7 args total)
     call_args = mock_taskiq_task.kiq.call_args
     assert call_args is not None
-    assert len(call_args[0]) == 7  # mission_id, setup_id, setup_version_id, module_class, services_mode, input_data, setup_data
+    assert (
+        len(call_args[0]) == 7
+    )  # mission_id, setup_id, setup_version_id, module_class, services_mode, input_data, setup_data
 
 
 @pytest.mark.asyncio
@@ -232,13 +233,13 @@ async def test_create_config_setup_instance_job(
     assert job_id in taskiq_job_manager._job_registry
     # Verify TaskSession was created in manager
     assert job_id in taskiq_job_manager.tasks_sessions
-    mock_taskiq_broker.find_task.assert_called_once_with(
-        "digitalkin.core.job_manager.taskiq_broker:run_config_module"
-    )
+    mock_taskiq_broker.find_task.assert_called_once_with("digitalkin.core.job_manager.taskiq_broker:run_config_module")
     # Verify arguments were passed to worker (6 args total)
     call_args = mock_taskiq_task.kiq.call_args
     assert call_args is not None
-    assert len(call_args[0]) == 6  # mission_id, setup_id, setup_version_id, module_class, services_mode, config_setup_data
+    assert (
+        len(call_args[0]) == 6
+    )  # mission_id, setup_id, setup_version_id, module_class, services_mode, config_setup_data
 
 
 @pytest.mark.asyncio
@@ -346,10 +347,7 @@ async def test_stop_module(
     mock_module = Mock(spec=BaseModule)
     mock_module.stop = AsyncMock()
     taskiq_job_manager.tasks_sessions["test_job_id"] = TaskSession(
-        "test_job_id",
-        "test_mission",
-        configured_mock_surreal_connection,
-        mock_module
+        "test_job_id", "test_mission", configured_mock_surreal_connection, mock_module
     )
 
     # Mock cancel_task method
@@ -398,10 +396,7 @@ async def test_stop_module_error(
     mock_module = Mock(spec=BaseModule)
     mock_module.stop = AsyncMock()
     taskiq_job_manager.tasks_sessions["test_job_id"] = TaskSession(
-        "test_job_id",
-        "test_mission",
-        configured_mock_surreal_connection,
-        mock_module
+        "test_job_id", "test_mission", configured_mock_surreal_connection, mock_module
     )
 
     # Mock cancel_task to raise an exception
@@ -430,10 +425,7 @@ async def test_stop_all_modules(
         mock_module = Mock(spec=BaseModule)
         mock_module.stop = AsyncMock()
         taskiq_job_manager.tasks_sessions[job_id] = TaskSession(
-            job_id,
-            "test_mission",
-            configured_mock_surreal_connection,
-            mock_module
+            job_id, "test_mission", configured_mock_surreal_connection, mock_module
         )
 
     with patch.object(taskiq_job_manager, "cancel_task", new_callable=AsyncMock) as mock_cancel:
@@ -531,7 +523,7 @@ async def test_generate_stream_consumer(
         outputs = []
         count = 0
 
-        async def read_stream():
+        async def read_stream() -> None:
             async for output in stream:
                 outputs.append(output)
                 nonlocal count

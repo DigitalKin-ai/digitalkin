@@ -65,7 +65,7 @@ async def mock_task_session() -> Mock:
     session.generate_heartbeats = AsyncMock(side_effect=asyncio.CancelledError())
 
     # Add cleanup method that calls db.close()
-    async def mock_cleanup():
+    async def mock_cleanup() -> None:
         await session.db.close()
 
     session.cleanup = AsyncMock(side_effect=mock_cleanup)
@@ -519,7 +519,7 @@ class TestCleanupShutdown:
         mock_session.db = mock_db
 
         # Create cleanup that calls db.close
-        async def mock_cleanup():
+        async def mock_cleanup() -> None:
             await mock_session.db.close()
 
         mock_session.cleanup = AsyncMock(side_effect=mock_cleanup)
@@ -542,7 +542,7 @@ class TestCleanupShutdown:
         mock_session.module = mock_base_module
 
         # Create cleanup that calls module.stop and db.close
-        async def mock_cleanup():
+        async def mock_cleanup() -> None:
             await mock_session.module.stop()
             await mock_session.db.close()
 
@@ -568,9 +568,7 @@ class TestCleanupShutdown:
             await asyncio.sleep(0.1)
 
         # Make SurrealDB initialization fail
-        mock_surreal_connection.init_surreal_instance = AsyncMock(
-            side_effect=ConnectionError("DB connection failed")
-        )
+        mock_surreal_connection.init_surreal_instance = AsyncMock(side_effect=ConnectionError("DB connection failed"))
 
         with patch(
             "digitalkin.core.task_manager.base_task_manager.SurrealDBConnection",

@@ -272,6 +272,7 @@ class BaseTaskManager(ABC):
                 await task
 
             logger.warning("Task force-cancelled: '%s'", task_id, extra={"mission_id": mission_id, "task_id": task_id})
+            await self._cleanup_task(task_id, mission_id)
             return True
 
         except Exception as e:
@@ -281,9 +282,10 @@ class BaseTaskManager(ABC):
                 extra={"mission_id": mission_id, "task_id": task_id, "error": str(e)},
                 exc_info=True,
             )
-            return False
-        finally:
             await self._cleanup_task(task_id, mission_id)
+            return False
+
+        await self._cleanup_task(task_id, mission_id)
         return True
 
     async def clean_session(self, task_id: str, mission_id: str) -> bool:
