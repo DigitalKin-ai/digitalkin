@@ -11,7 +11,6 @@ from digitalkin_proto.agentic_mesh_protocol.user_profile.v1 import (
 from google.protobuf import timestamp_pb2
 
 from digitalkin.logger import logger
-from tests.fixtures.grpc_fixtures import FakeContext
 
 
 class MockUserProfileServicer(user_profile_service_pb2_grpc.UserProfileServiceServicer):

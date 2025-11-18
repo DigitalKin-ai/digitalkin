@@ -121,4 +121,4 @@ tasks:
   start-taskiq:
     desc: "Start TaskIQ worker. be sure to enable rabbitMQ stream capability"
     cmds:
-      - taskiq worker digitalkin.modules.job_manager.taskiq_broker:TASKIQ_BROKER -w 1
+      - taskiq worker digitalkin.core.job_manager.taskiq_broker:TASKIQ_BROKER -w 1

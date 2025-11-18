@@ -100,10 +100,12 @@ def mock_job_manager():
     mock_status_1.name = "MODULE_STATUS_PROCESSING"
     mock_status_2 = Mock()
     mock_status_2.name = "MODULE_STATUS_STOPPED"
-    manager.list_modules = AsyncMock(return_value={
-        "job-1": {"status": mock_status_1},
-        "job-2": {"status": mock_status_2},
-    })
+    manager.list_modules = AsyncMock(
+        return_value={
+            "job-1": {"status": mock_status_1},
+            "job-2": {"status": mock_status_2},
+        }
+    )
     manager.generate_config_setup_module_response = AsyncMock(return_value={"updated": "config"})
     return manager
 
@@ -240,7 +242,7 @@ class TestStartModule:
             yield {
                 "error": {
                     "code": grpc.StatusCode.INTERNAL.value[0],  # Get the integer value
-                    "error_message": "Internal error occurred"
+                    "error_message": "Internal error occurred",
                 }
             }
 
@@ -273,10 +275,7 @@ class TestStartModule:
         # Mock stream with exception
         async def mock_stream_with_exception() -> AsyncGenerator[dict[str, Any], None]:  # noqa: RUF029
             yield {"output": "data 1"}
-            yield {
-                "exception": "ValueError: Something went wrong",
-                "short_description": "VALUE_ERROR"
-            }
+            yield {"exception": "ValueError: Something went wrong", "short_description": "VALUE_ERROR"}
 
         mock_context_manager = AsyncMock()
         mock_context_manager.__aenter__ = AsyncMock(return_value=mock_stream_with_exception())

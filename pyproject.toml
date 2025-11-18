@@ -70,8 +70,8 @@
         "hdrhistogram>=0.10.3",
         "grpcio-testing>=1.76.0",
         "psutil>=7.1.3",
-        "pytest>=8.4.2",
-        "pytest-asyncio>=1.2.0",
+        "pytest>=9.0.1",
+        "pytest-asyncio>=1.3.0",
         "pytest-cov>=7.0.0",
         "pytest-html==4.1.1",
         "pytest-json-report==1.5.0",
@@ -273,4 +273,9 @@
     # Custom markers
     markers = [
         "integration: marks tests that require real SurrealDB connection (deselect with '-m \"not integration\"')",
+        "grpc: marks tests for gRPC service functionality",
+        "smoke: marks critical path tests that should always pass",
+        "edge_case: marks tests for boundary conditions and edge cases",
+        "validation: marks tests for input validation and schema checking",
+        "regression: marks tests for previously fixed bugs",
     ]

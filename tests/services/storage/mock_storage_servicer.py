@@ -9,7 +9,6 @@ from google.protobuf import json_format, struct_pb2
 from pydantic import BaseModel, ValidationError
 
 from digitalkin.logger import logger
-from tests.fixtures.grpc_fixtures import FakeContext
 
 
 class MockStorageServicer(storage_service_pb2_grpc.StorageServiceServicer):
@@ -65,7 +64,10 @@ class MockStorageServicer(storage_service_pb2_grpc.StorageServiceServicer):
             data_pb2.StorageRecord: Proto storage record
         """
         # Convert data dict to Struct
-        data_struct = json_format.ParseDict(record_data["data"],             struct_pb2.Struct(),)
+        data_struct = json_format.ParseDict(
+            record_data["data"],
+            struct_pb2.Struct(),
+        )
 
         # Convert stored string name back to protobuf enum value
         # "OUTPUT" -> data_pb2.OUTPUT (integer)

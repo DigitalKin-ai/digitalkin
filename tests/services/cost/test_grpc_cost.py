@@ -12,8 +12,10 @@ import grpc
 import grpc_testing
 import pytest
 from digitalkin_proto.agentic_mesh_protocol.cost.v1 import cost_service_pb2, cost_service_pb2_grpc
-from mock_cost_servicer import FakeContext, MockCostServicer
+from mock_cost_servicer import MockCostServicer
+from tests.fixtures.grpc_fixtures import FakeContext
 
+from digitalkin.grpc_servers.utils.exceptions import ServerError
 from digitalkin.models.grpc_servers.models import ClientConfig, SecurityMode, ServerMode
 from digitalkin.services.cost.cost_strategy import CostConfig, CostData, CostServiceError, CostType
 from digitalkin.services.cost.grpc_cost import GrpcCost
@@ -151,102 +153,279 @@ def client(test_channel: grpc_testing.Channel, cost_config: dict[str, CostConfig
 # ============================================================================
 
 
-def test_add_cost_success(
-    client: GrpcCost,
-    test_channel: grpc_testing.Channel,
-    mock_servicer: MockCostServicer,
-    thread_pool: futures.ThreadPoolExecutor,
-) -> None:
-    """Test successful cost addition with valid configuration.
+class TestAddCost:
+    """Tests for the add() method of GrpcCost service.
 
-    Args:
-        client: GrpcCost client for testing
-        test_channel: Mock gRPC channel
-        mock_servicer: Mock cost servicer
+    Covers success cases, validation errors, various cost types,
+    cost calculations, and edge cases for quantity values.
     """
-    # Add a cost
-    name = f"test_cost_{secrets.token_hex(4)}"
-    quantity = 1000.0
 
-    # Start the client call in a separate thread
-    future = thread_pool.submit(client.add, name, "gpt4_input", quantity)
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    @pytest.mark.smoke
+    def test_add_cost_success(
+        self,
+        client: GrpcCost,
+        test_channel: grpc_testing.Channel,
+        mock_servicer: MockCostServicer,
+        thread_pool: futures.ThreadPoolExecutor,
+    ) -> None:
+        """Test successful cost addition with valid configuration.
 
-    # Get the method descriptor
-    service_desc = cost_service_pb2.DESCRIPTOR.services_by_name["CostService"]
-    method_desc = service_desc.methods_by_name["AddCost"]
+        Args:
+            client: GrpcCost client for testing
+            test_channel: Mock gRPC channel
+            mock_servicer: Mock cost servicer
+        """
+        # Add a cost
+        name = f"test_cost_{secrets.token_hex(4)}"
+        quantity = 1000.0
 
-    # Intercept the pending unary-unary call
-    _invocation_metadata, request, rpc = test_channel.take_unary_unary(method_desc)
+        # Start the client call in a separate thread
+        future = thread_pool.submit(client.add, name, "gpt4_input", quantity)
 
-    # Process with mock servicer
-    context = FakeContext()
-    response = mock_servicer.AddCost(request, context)
+        # Get the method descriptor
+        service_desc = cost_service_pb2.DESCRIPTOR.services_by_name["CostService"]
+        method_desc = service_desc.methods_by_name["AddCost"]
 
-    # Send response back to client
-    rpc.send_initial_metadata(())
-    rpc.terminate(response, (), grpc.StatusCode.OK, "")
+        # Intercept the pending unary-unary call
+        _invocation_metadata, request, rpc = test_channel.take_unary_unary(method_desc)
 
-    # Verify the client call completes without error
-    result = future.result(timeout=5.0)
-    assert result is None  # add() returns None on success
+        # Process with mock servicer
+        context = FakeContext()
+        response = mock_servicer.AddCost(request, context)
 
-    # Verify the cost was stored
-    assert client.mission_id in mock_servicer.costs
-    stored_costs = mock_servicer.costs[client.mission_id]
-    assert len(stored_costs) == 1
-    assert stored_costs[0]["name"] == name
-    assert stored_costs[0]["quantity"] == quantity
-    assert stored_costs[0]["cost"] == 0.00003 * quantity  # rate * quantity
+        # Send response back to client
+        rpc.send_initial_metadata(())
+        rpc.terminate(response, (), grpc.StatusCode.OK, "")
 
+        # Verify the client call completes without error
+        result = future.result(timeout=5.0)
+        assert result is None  # add() returns None on success
 
-def test_add_cost_invalid_config_name(
-    client: GrpcCost,
-    test_channel: grpc_testing.Channel,
-    thread_pool: futures.ThreadPoolExecutor,
-) -> None:
-    """Test add with non-existent cost configuration name.
+        # Verify the cost was stored
+        assert client.mission_id in mock_servicer.costs
+        stored_costs = mock_servicer.costs[client.mission_id]
+        assert len(stored_costs) == 1
+        assert stored_costs[0]["name"] == name
+        assert stored_costs[0]["quantity"] == quantity
+        assert stored_costs[0]["cost"] == 0.00003 * quantity  # rate * quantity
 
-    Args:
-        client: GrpcCost client for testing
-        test_channel: Mock gRPC channel
-    """
-    name = f"test_cost_{secrets.token_hex(4)}"
-    quantity = 100.0
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    @pytest.mark.validation
+    def test_add_cost_invalid_config_name(
+        self,
+        client: GrpcCost,
+        test_channel: grpc_testing.Channel,
+        thread_pool: futures.ThreadPoolExecutor,
+    ) -> None:
+        """Test add with non-existent cost configuration name.
 
-    # Try to add cost with invalid config name
-    with pytest.raises(CostServiceError, match="Cost config .* not found"):
-        client.add(name, "nonexistent_config", quantity)
+        Args:
+            client: GrpcCost client for testing
+            test_channel: Mock gRPC channel
+        """
+        name = f"test_cost_{secrets.token_hex(4)}"
+        quantity = 100.0
 
+        # Try to add cost with invalid config name
+        with pytest.raises(CostServiceError, match="Cost config .* not found"):
+            client.add(name, "nonexistent_config", quantity)
 
-def test_add_cost_various_types(
-    client: GrpcCost,
-    test_channel: grpc_testing.Channel,
-    mock_servicer: MockCostServicer,
-    thread_pool: futures.ThreadPoolExecutor,
-) -> None:
-    """Test adding costs with various cost types.
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    @pytest.mark.smoke
+    def test_add_cost_various_types(
+        self,
+        client: GrpcCost,
+        test_channel: grpc_testing.Channel,
+        mock_servicer: MockCostServicer,
+        thread_pool: futures.ThreadPoolExecutor,
+    ) -> None:
+        """Test adding costs with various cost types.
 
-    Args:
-        client: GrpcCost client for testing
-        test_channel: Mock gRPC channel
-        mock_servicer: Mock cost servicer
-    """
-    configs = [
-        ("gpt4_input", "TOKEN_INPUT", 1000.0),
-        ("gpt4_output", "TOKEN_OUTPUT", 500.0),
-        ("api_call", "API_CALL", 10.0),
-        ("storage", "STORAGE", 5.0),
-        ("compute_time", "TIME", 2.0),
-        ("other_cost", "OTHER", 7.0),
-    ]
+        Args:
+            client: GrpcCost client for testing
+            test_channel: Mock gRPC channel
+            mock_servicer: Mock cost servicer
+        """
+        configs = [
+            ("gpt4_input", "TOKEN_INPUT", 1000.0),
+            ("gpt4_output", "TOKEN_OUTPUT", 500.0),
+            ("api_call", "API_CALL", 10.0),
+            ("storage", "STORAGE", 5.0),
+            ("compute_time", "TIME", 2.0),
+            ("other_cost", "OTHER", 7.0),
+        ]
 
-    for config_name, expected_type, quantity in configs:
-        name = f"test_{config_name}_{secrets.token_hex(4)}"
+        for config_name, expected_type, quantity in configs:
+            name = f"test_{config_name}_{secrets.token_hex(4)}"
 
-        # Start client call
-        future = thread_pool.submit(client.add, name, config_name, quantity)
+            # Start client call
+            future = thread_pool.submit(client.add, name, config_name, quantity)
 
-        # Intercept and process
+            # Intercept and process
+            service_desc = cost_service_pb2.DESCRIPTOR.services_by_name["CostService"]
+            method_desc = service_desc.methods_by_name["AddCost"]
+            _, request, rpc = test_channel.take_unary_unary(method_desc)
+
+            context = FakeContext()
+            response = mock_servicer.AddCost(request, context)
+
+            rpc.send_initial_metadata(())
+            rpc.terminate(response, (), grpc.StatusCode.OK, "")
+
+            result = future.result(timeout=5.0)
+            assert result is None
+
+        # Verify all costs were stored
+        stored_costs = mock_servicer.costs[client.mission_id]
+        assert len(stored_costs) == len(configs)
+
+        # Verify cost types
+        cost_types = [cost["cost_type"].name for cost in stored_costs]
+        expected_types = [ct for _, ct, _ in configs]
+        assert sorted(cost_types) == sorted(expected_types)
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    @pytest.mark.smoke
+    def test_add_cost_calculation(
+        self,
+        client: GrpcCost,
+        test_channel: grpc_testing.Channel,
+        mock_servicer: MockCostServicer,
+        thread_pool: futures.ThreadPoolExecutor,
+    ) -> None:
+        """Test that cost calculation (rate * quantity) is correct.
+
+        Args:
+            client: GrpcCost client for testing
+            test_channel: Mock gRPC channel
+            mock_servicer: Mock cost servicer
+        """
+        test_cases = [
+            ("gpt4_input", 1000.0, 0.00003 * 1000),  # $0.03
+            ("gpt4_output", 500.0, 0.00006 * 500),  # $0.03
+            ("api_call", 25.0, 0.001 * 25),  # $0.025
+            ("storage", 100.0, 0.02 * 100),  # $2.00
+        ]
+
+        for config_name, quantity, expected_cost in test_cases:
+            name = f"test_{config_name}_{secrets.token_hex(4)}"
+
+            future = thread_pool.submit(client.add, name, config_name, quantity)
+
+            service_desc = cost_service_pb2.DESCRIPTOR.services_by_name["CostService"]
+            method_desc = service_desc.methods_by_name["AddCost"]
+            _, request, rpc = test_channel.take_unary_unary(method_desc)
+
+            context = FakeContext()
+            response = mock_servicer.AddCost(request, context)
+
+            rpc.send_initial_metadata(())
+            rpc.terminate(response, (), grpc.StatusCode.OK, "")
+
+            future.result(timeout=5.0)
+
+        # Verify calculations
+        stored_costs = mock_servicer.costs[client.mission_id]
+        for i, (_, _, expected_cost) in enumerate(test_cases):
+            assert abs(stored_costs[i]["cost"] - expected_cost) < 0.0001
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    @pytest.mark.validation
+    def test_add_cost_zero_quantity(
+        self,
+        client: GrpcCost,
+        test_channel: grpc_testing.Channel,
+        mock_servicer: MockCostServicer,
+        thread_pool: futures.ThreadPoolExecutor,
+    ) -> None:
+        """Test adding cost with zero quantity (edge case).
+
+        Args:
+            client: GrpcCost client for testing
+            test_channel: Mock gRPC channel
+            mock_servicer: Mock cost servicer
+        """
+        name = f"test_zero_{secrets.token_hex(4)}"
+
+        future = thread_pool.submit(client.add, name, "gpt4_input", 0.0)
+
+        service_desc = cost_service_pb2.DESCRIPTOR.services_by_name["CostService"]
+        method_desc = service_desc.methods_by_name["AddCost"]
+        _, request, rpc = test_channel.take_unary_unary(method_desc)
+
+        context = FakeContext()
+        response = mock_servicer.AddCost(request, context)
+
+        # Zero quantity should be rejected
+        rpc.send_initial_metadata(())
+        rpc.terminate(response, (), context._code, context._details)
+
+        # Should fail - zero quantity not allowed
+        with pytest.raises(ServerError):
+            future.result(timeout=5.0)
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    @pytest.mark.validation
+    def test_add_cost_negative_quantity(
+        self,
+        client: GrpcCost,
+        test_channel: grpc_testing.Channel,
+        mock_servicer: MockCostServicer,
+        thread_pool: futures.ThreadPoolExecutor,
+    ) -> None:
+        """Test adding cost with negative quantity (invalid).
+
+        Args:
+            client: GrpcCost client for testing
+            test_channel: Mock gRPC channel
+            mock_servicer: Mock cost servicer
+        """
+        name = f"test_negative_{secrets.token_hex(4)}"
+
+        future = thread_pool.submit(client.add, name, "gpt4_input", -100.0)
+
+        service_desc = cost_service_pb2.DESCRIPTOR.services_by_name["CostService"]
+        method_desc = service_desc.methods_by_name["AddCost"]
+        _, request, rpc = test_channel.take_unary_unary(method_desc)
+
+        context = FakeContext()
+        response = mock_servicer.AddCost(request, context)
+
+        rpc.send_initial_metadata(())
+        rpc.terminate(response, (), context._code, context._details)
+
+        # Should fail with validation error - negative quantity not allowed
+        with pytest.raises(ServerError):
+            future.result(timeout=5.0)
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    @pytest.mark.edge_case
+    def test_cost_with_special_characters_in_name(
+        self,
+        client: GrpcCost,
+        test_channel: grpc_testing.Channel,
+        mock_servicer: MockCostServicer,
+        thread_pool: futures.ThreadPoolExecutor,
+    ) -> None:
+        """Test cost with special characters in name.
+
+        Args:
+            client: GrpcCost client for testing
+            test_channel: Mock gRPC channel
+            mock_servicer: Mock cost servicer
+        """
+        name = "test-cost_123.special@chars"
+
+        future = thread_pool.submit(client.add, name, "gpt4_input", 100.0)
+
         service_desc = cost_service_pb2.DESCRIPTOR.services_by_name["CostService"]
         method_desc = service_desc.methods_by_name["AddCost"]
         _, request, rpc = test_channel.take_unary_unary(method_desc)
@@ -260,40 +439,449 @@ def test_add_cost_various_types(
         result = future.result(timeout=5.0)
         assert result is None
 
-    # Verify all costs were stored
-    stored_costs = mock_servicer.costs[client.mission_id]
-    assert len(stored_costs) == len(configs)
-
-    # Verify cost types
-    cost_types = [cost["cost_type"].name for cost in stored_costs]
-    expected_types = [ct for _, ct, _ in configs]
-    assert sorted(cost_types) == sorted(expected_types)
+        # Verify stored
+        stored_costs = mock_servicer.costs[client.mission_id]
+        assert any(c["name"] == name for c in stored_costs)
 
 
-def test_add_cost_calculation(
-    client: GrpcCost,
-    test_channel: grpc_testing.Channel,
-    mock_servicer: MockCostServicer,
-    thread_pool: futures.ThreadPoolExecutor,
-) -> None:
-    """Test that cost calculation (rate * quantity) is correct.
+# ============================================================================
+# Test: get() Method
+# ============================================================================
 
-    Args:
-        client: GrpcCost client for testing
-        test_channel: Mock gRPC channel
-        mock_servicer: Mock cost servicer
+
+class TestGetCost:
+    """Tests for the get() method of GrpcCost service.
+
+    Covers retrieving costs by name, handling non-existent costs,
+    and retrieving multiple costs with the same name.
     """
-    test_cases = [
-        ("gpt4_input", 1000.0, 0.00003 * 1000),  # $0.03
-        ("gpt4_output", 500.0, 0.00006 * 500),  # $0.03
-        ("api_call", 25.0, 0.001 * 25),  # $0.025
-        ("storage", 100.0, 0.02 * 100),  # $2.00
-    ]
 
-    for config_name, quantity, expected_cost in test_cases:
-        name = f"test_{config_name}_{secrets.token_hex(4)}"
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    @pytest.mark.smoke
+    def test_get_cost_success(
+        self,
+        client: GrpcCost,
+        test_channel: grpc_testing.Channel,
+        mock_servicer: MockCostServicer,
+        thread_pool: futures.ThreadPoolExecutor,
+    ) -> None:
+        """Test successful retrieval of costs by name.
 
-        future = thread_pool.submit(client.add, name, config_name, quantity)
+        Args:
+            client: GrpcCost client for testing
+            test_channel: Mock gRPC channel
+            mock_servicer: Mock cost servicer
+        """
+        # First, add a cost
+        name = f"test_get_{secrets.token_hex(4)}"
+        quantity = 1000.0
+
+        # Add cost
+        future_add = thread_pool.submit(client.add, name, "gpt4_input", quantity)
+        service_desc = cost_service_pb2.DESCRIPTOR.services_by_name["CostService"]
+        method_desc = service_desc.methods_by_name["AddCost"]
+        _, request, rpc = test_channel.take_unary_unary(method_desc)
+        context = FakeContext()
+        response = mock_servicer.AddCost(request, context)
+        rpc.send_initial_metadata(())
+        rpc.terminate(response, (), grpc.StatusCode.OK, "")
+        future_add.result(timeout=5.0)
+
+        # Now get the cost
+        future_get = thread_pool.submit(client.get, name)
+
+        method_desc = service_desc.methods_by_name["GetCost"]
+        _, request, rpc = test_channel.take_unary_unary(method_desc)
+
+        context = FakeContext()
+        response = mock_servicer.GetCost(request, context)
+
+        rpc.send_initial_metadata(())
+        rpc.terminate(response, (), grpc.StatusCode.OK, "")
+
+        result = future_get.result(timeout=5.0)
+        assert isinstance(result, list)
+        assert len(result) == 1
+        assert isinstance(result[0], CostData)
+        assert result[0].name == name
+        assert result[0].quantity == quantity
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    @pytest.mark.smoke
+    def test_get_cost_not_found(
+        self,
+        client: GrpcCost,
+        test_channel: grpc_testing.Channel,
+        mock_servicer: MockCostServicer,
+        thread_pool: futures.ThreadPoolExecutor,
+    ) -> None:
+        """Test getting a cost that doesn't exist.
+
+        Args:
+            client: GrpcCost client for testing
+            test_channel: Mock gRPC channel
+            mock_servicer: Mock cost servicer
+        """
+        name = f"nonexistent_{secrets.token_hex(4)}"
+
+        future = thread_pool.submit(client.get, name)
+
+        service_desc = cost_service_pb2.DESCRIPTOR.services_by_name["CostService"]
+        method_desc = service_desc.methods_by_name["GetCost"]
+        _, request, rpc = test_channel.take_unary_unary(method_desc)
+
+        context = FakeContext()
+        response = mock_servicer.GetCost(request, context)
+
+        rpc.send_initial_metadata(())
+        rpc.terminate(response, (), grpc.StatusCode.OK, "")
+
+        result = future.result(timeout=5.0)
+        assert isinstance(result, list)
+        assert len(result) == 0
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    @pytest.mark.smoke
+    def test_get_cost_multiple_with_same_name(
+        self,
+        client: GrpcCost,
+        test_channel: grpc_testing.Channel,
+        mock_servicer: MockCostServicer,
+        thread_pool: futures.ThreadPoolExecutor,
+    ) -> None:
+        """Test getting multiple costs with the same name.
+
+        Args:
+            client: GrpcCost client for testing
+            test_channel: Mock gRPC channel
+            mock_servicer: Mock cost servicer
+        """
+        name = f"test_multi_{secrets.token_hex(4)}"
+
+        # Add multiple costs with the same name
+        quantities = [100.0, 200.0, 300.0]
+        service_desc = cost_service_pb2.DESCRIPTOR.services_by_name["CostService"]
+
+        for quantity in quantities:
+            future_add = thread_pool.submit(client.add, name, "gpt4_input", quantity)
+            method_desc = service_desc.methods_by_name["AddCost"]
+            _, request, rpc = test_channel.take_unary_unary(method_desc)
+            context = FakeContext()
+            response = mock_servicer.AddCost(request, context)
+            rpc.send_initial_metadata(())
+            rpc.terminate(response, (), grpc.StatusCode.OK, "")
+            future_add.result(timeout=5.0)
+
+        # Get all costs with this name
+        future_get = thread_pool.submit(client.get, name)
+
+        method_desc = service_desc.methods_by_name["GetCost"]
+        _, request, rpc = test_channel.take_unary_unary(method_desc)
+
+        context = FakeContext()
+        response = mock_servicer.GetCost(request, context)
+
+        rpc.send_initial_metadata(())
+        rpc.terminate(response, (), grpc.StatusCode.OK, "")
+
+        result = future_get.result(timeout=5.0)
+        assert isinstance(result, list)
+        assert len(result) == 3
+        assert all(isinstance(c, CostData) for c in result)
+        assert all(c.name == name for c in result)
+
+        # Verify quantities
+        result_quantities = sorted([c.quantity for c in result])
+        assert result_quantities == sorted(quantities)
+
+
+# ============================================================================
+# Test: get_filtered() Method
+# ============================================================================
+
+
+class TestGetFilteredCost:
+    """Tests for the get_filtered() method of GrpcCost service.
+
+    Covers filtering by names, cost types, combinations of both,
+    empty results, and no filters (return all).
+    """
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    @pytest.mark.smoke
+    def test_get_filtered_by_names(
+        self,
+        client: GrpcCost,
+        test_channel: grpc_testing.Channel,
+        mock_servicer: MockCostServicer,
+        thread_pool: futures.ThreadPoolExecutor,
+    ) -> None:
+        """Test filtering costs by names.
+
+        Args:
+            client: GrpcCost client for testing
+            test_channel: Mock gRPC channel
+            mock_servicer: Mock cost servicer
+        """
+        # Add multiple costs
+        names = [f"cost_{i}_{secrets.token_hex(4)}" for i in range(5)]
+        service_desc = cost_service_pb2.DESCRIPTOR.services_by_name["CostService"]
+
+        for name in names:
+            future_add = thread_pool.submit(client.add, name, "gpt4_input", 100.0)
+            method_desc = service_desc.methods_by_name["AddCost"]
+            _, request, rpc = test_channel.take_unary_unary(method_desc)
+            context = FakeContext()
+            response = mock_servicer.AddCost(request, context)
+            rpc.send_initial_metadata(())
+            rpc.terminate(response, (), grpc.StatusCode.OK, "")
+            future_add.result(timeout=5.0)
+
+        # Filter by subset of names
+        filter_names = names[:3]
+        future_get = thread_pool.submit(client.get_filtered, names=filter_names)
+
+        method_desc = service_desc.methods_by_name["GetCosts"]
+        _, request, rpc = test_channel.take_unary_unary(method_desc)
+
+        context = FakeContext()
+        response = mock_servicer.GetCosts(request, context)
+
+        rpc.send_initial_metadata(())
+        rpc.terminate(response, (), grpc.StatusCode.OK, "")
+
+        result = future_get.result(timeout=5.0)
+        assert isinstance(result, list)
+        assert len(result) == 3
+        assert all(c.name in filter_names for c in result)
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    @pytest.mark.smoke
+    def test_get_filtered_by_cost_types(
+        self,
+        client: GrpcCost,
+        test_channel: grpc_testing.Channel,
+        mock_servicer: MockCostServicer,
+        thread_pool: futures.ThreadPoolExecutor,
+    ) -> None:
+        """Test filtering costs by cost types.
+
+        Args:
+            client: GrpcCost client for testing
+            test_channel: Mock gRPC channel
+            mock_servicer: Mock cost servicer
+        """
+        # Add costs with different types
+        configs = [
+            ("gpt4_input", "TOKEN_INPUT"),
+            ("gpt4_output", "TOKEN_OUTPUT"),
+            ("api_call", "API_CALL"),
+            ("storage", "STORAGE"),
+        ]
+        service_desc = cost_service_pb2.DESCRIPTOR.services_by_name["CostService"]
+
+        for config_name, _ in configs:
+            name = f"test_{config_name}_{secrets.token_hex(4)}"
+            future_add = thread_pool.submit(client.add, name, config_name, 100.0)
+            method_desc = service_desc.methods_by_name["AddCost"]
+            _, request, rpc = test_channel.take_unary_unary(method_desc)
+            context = FakeContext()
+            response = mock_servicer.AddCost(request, context)
+            rpc.send_initial_metadata(())
+            rpc.terminate(response, (), grpc.StatusCode.OK, "")
+            future_add.result(timeout=5.0)
+
+        # Filter by token types only
+        future_get = thread_pool.submit(client.get_filtered, cost_types=["TOKEN_INPUT", "TOKEN_OUTPUT"])
+
+        method_desc = service_desc.methods_by_name["GetCosts"]
+        _, request, rpc = test_channel.take_unary_unary(method_desc)
+
+        context = FakeContext()
+        response = mock_servicer.GetCosts(request, context)
+
+        rpc.send_initial_metadata(())
+        rpc.terminate(response, (), grpc.StatusCode.OK, "")
+
+        result = future_get.result(timeout=5.0)
+        assert isinstance(result, list)
+        assert len(result) == 2
+        assert all(c.cost_type in {CostType.TOKEN_INPUT, CostType.TOKEN_OUTPUT} for c in result)
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    @pytest.mark.smoke
+    def test_get_filtered_by_names_and_types(
+        self,
+        client: GrpcCost,
+        test_channel: grpc_testing.Channel,
+        mock_servicer: MockCostServicer,
+        thread_pool: futures.ThreadPoolExecutor,
+    ) -> None:
+        """Test filtering costs by both names and types.
+
+        Args:
+            client: GrpcCost client for testing
+            test_channel: Mock gRPC channel
+            mock_servicer: Mock cost servicer
+        """
+        # Add various costs
+        test_data = [
+            ("cost_a", "gpt4_input", "TOKEN_INPUT"),
+            ("cost_b", "gpt4_output", "TOKEN_OUTPUT"),
+            ("cost_c", "api_call", "API_CALL"),
+            ("cost_d", "gpt4_input", "TOKEN_INPUT"),
+        ]
+        service_desc = cost_service_pb2.DESCRIPTOR.services_by_name["CostService"]
+
+        for name, config, _ in test_data:
+            future_add = thread_pool.submit(client.add, name, config, 100.0)
+            method_desc = service_desc.methods_by_name["AddCost"]
+            _, request, rpc = test_channel.take_unary_unary(method_desc)
+            context = FakeContext()
+            response = mock_servicer.AddCost(request, context)
+            rpc.send_initial_metadata(())
+            rpc.terminate(response, (), grpc.StatusCode.OK, "")
+            future_add.result(timeout=5.0)
+
+        # Filter by names and token input type
+        future_get = thread_pool.submit(client.get_filtered, names=["cost_a", "cost_d"], cost_types=["TOKEN_INPUT"])
+
+        method_desc = service_desc.methods_by_name["GetCosts"]
+        _, request, rpc = test_channel.take_unary_unary(method_desc)
+
+        context = FakeContext()
+        response = mock_servicer.GetCosts(request, context)
+
+        rpc.send_initial_metadata(())
+        rpc.terminate(response, (), grpc.StatusCode.OK, "")
+
+        result = future_get.result(timeout=5.0)
+        assert isinstance(result, list)
+        assert len(result) == 2
+        assert all(c.name in {"cost_a", "cost_d"} for c in result)
+        assert all(c.cost_type == CostType.TOKEN_INPUT for c in result)
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    @pytest.mark.edge_case
+    def test_get_filtered_empty_results(
+        self,
+        client: GrpcCost,
+        test_channel: grpc_testing.Channel,
+        mock_servicer: MockCostServicer,
+        thread_pool: futures.ThreadPoolExecutor,
+    ) -> None:
+        """Test filtering with no matching results.
+
+        Args:
+            client: GrpcCost client for testing
+            test_channel: Mock gRPC channel
+            mock_servicer: Mock cost servicer
+        """
+        # Filter with non-existent names
+        future = thread_pool.submit(client.get_filtered, names=["nonexistent"])
+
+        service_desc = cost_service_pb2.DESCRIPTOR.services_by_name["CostService"]
+        method_desc = service_desc.methods_by_name["GetCosts"]
+        _, request, rpc = test_channel.take_unary_unary(method_desc)
+
+        context = FakeContext()
+        response = mock_servicer.GetCosts(request, context)
+
+        rpc.send_initial_metadata(())
+        rpc.terminate(response, (), grpc.StatusCode.OK, "")
+
+        result = future.result(timeout=5.0)
+        assert isinstance(result, list)
+        assert len(result) == 0
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    @pytest.mark.smoke
+    def test_get_filtered_no_filters(
+        self,
+        client: GrpcCost,
+        test_channel: grpc_testing.Channel,
+        mock_servicer: MockCostServicer,
+        thread_pool: futures.ThreadPoolExecutor,
+    ) -> None:
+        """Test get_filtered with no filters (returns all costs).
+
+        Args:
+            client: GrpcCost client for testing
+            test_channel: Mock gRPC channel
+            mock_servicer: Mock cost servicer
+        """
+        # Add some costs
+        service_desc = cost_service_pb2.DESCRIPTOR.services_by_name["CostService"]
+
+        for i in range(3):
+            name = f"cost_{i}"
+            future_add = thread_pool.submit(client.add, name, "gpt4_input", 100.0)
+            method_desc = service_desc.methods_by_name["AddCost"]
+            _, request, rpc = test_channel.take_unary_unary(method_desc)
+            context = FakeContext()
+            response = mock_servicer.AddCost(request, context)
+            rpc.send_initial_metadata(())
+            rpc.terminate(response, (), grpc.StatusCode.OK, "")
+            future_add.result(timeout=5.0)
+
+        # Get all costs (no filter)
+        future_get = thread_pool.submit(client.get_filtered)
+
+        method_desc = service_desc.methods_by_name["GetCosts"]
+        _, request, rpc = test_channel.take_unary_unary(method_desc)
+
+        context = FakeContext()
+        response = mock_servicer.GetCosts(request, context)
+
+        rpc.send_initial_metadata(())
+        rpc.terminate(response, (), grpc.StatusCode.OK, "")
+
+        result = future_get.result(timeout=5.0)
+        assert isinstance(result, list)
+        assert len(result) == 3
+
+
+# ============================================================================
+# Test: Edge Cases and Error Handling
+# ============================================================================
+
+
+class TestCostEdgeCases:
+    """Tests for edge cases in GrpcCost service.
+
+    Covers very large quantities, fractional quantities,
+    and isolation between different missions.
+    """
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    @pytest.mark.edge_case
+    def test_cost_with_very_large_quantity(
+        self,
+        client: GrpcCost,
+        test_channel: grpc_testing.Channel,
+        mock_servicer: MockCostServicer,
+        thread_pool: futures.ThreadPoolExecutor,
+    ) -> None:
+        """Test cost with very large quantity.
+
+        Args:
+            client: GrpcCost client for testing
+            test_channel: Mock gRPC channel
+            mock_servicer: Mock cost servicer
+        """
+        name = "large_quantity_test"
+        quantity = 1_000_000_000.0  # 1 billion
+
+        future = thread_pool.submit(client.add, name, "gpt4_input", quantity)
 
         service_desc = cost_service_pb2.DESCRIPTOR.services_by_name["CostService"]
         method_desc = service_desc.methods_by_name["AddCost"]
@@ -305,613 +893,135 @@ def test_add_cost_calculation(
         rpc.send_initial_metadata(())
         rpc.terminate(response, (), grpc.StatusCode.OK, "")
 
+        result = future.result(timeout=5.0)
+        assert result is None
+
+        # Verify calculation
+        stored_costs = mock_servicer.costs[client.mission_id]
+        assert stored_costs[0]["quantity"] == quantity
+        assert stored_costs[0]["cost"] == 0.00003 * quantity
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    @pytest.mark.edge_case
+    def test_cost_with_fractional_quantity(
+        self,
+        client: GrpcCost,
+        test_channel: grpc_testing.Channel,
+        mock_servicer: MockCostServicer,
+        thread_pool: futures.ThreadPoolExecutor,
+    ) -> None:
+        """Test cost with fractional quantity.
+
+        Args:
+            client: GrpcCost client for testing
+            test_channel: Mock gRPC channel
+            mock_servicer: Mock cost servicer
+        """
+        name = "fractional_test"
+        quantity = 123.456
+
+        future = thread_pool.submit(client.add, name, "gpt4_input", quantity)
+
+        service_desc = cost_service_pb2.DESCRIPTOR.services_by_name["CostService"]
+        method_desc = service_desc.methods_by_name["AddCost"]
+        _, request, rpc = test_channel.take_unary_unary(method_desc)
+
+        context = FakeContext()
+        response = mock_servicer.AddCost(request, context)
+
+        rpc.send_initial_metadata(())
+        rpc.terminate(response, (), grpc.StatusCode.OK, "")
+
+        result = future.result(timeout=5.0)
+        assert result is None
+
+        # Verify stored correctly
+        stored_costs = mock_servicer.costs[client.mission_id]
+        assert abs(stored_costs[0]["quantity"] - quantity) < 0.0001
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    @pytest.mark.edge_case
+    def test_multiple_missions_isolation(
+        self,
+        client: GrpcCost,
+        test_channel: grpc_testing.Channel,
+        mock_servicer: MockCostServicer,
+        thread_pool: futures.ThreadPoolExecutor,
+    ) -> None:
+        """Test that costs for different missions are isolated.
+
+        Args:
+            client: GrpcCost client for testing
+            test_channel: Mock gRPC channel
+            mock_servicer: Mock cost servicer
+        """
+        # Add costs for the test client's mission
+        name1 = "mission1_cost"
+        future = thread_pool.submit(client.add, name1, "gpt4_input", 100.0)
+
+        service_desc = cost_service_pb2.DESCRIPTOR.services_by_name["CostService"]
+        method_desc = service_desc.methods_by_name["AddCost"]
+        _, request, rpc = test_channel.take_unary_unary(method_desc)
+
+        context = FakeContext()
+        response = mock_servicer.AddCost(request, context)
+
+        rpc.send_initial_metadata(())
+        rpc.terminate(response, (), grpc.StatusCode.OK, "")
         future.result(timeout=5.0)
 
-    # Verify calculations
-    stored_costs = mock_servicer.costs[client.mission_id]
-    for i, (_, _, expected_cost) in enumerate(test_cases):
-        assert abs(stored_costs[i]["cost"] - expected_cost) < 0.0001
+        # Manually add cost for a different mission
+        different_mission_cost = {
+            "cost": 50.0,
+            "name": "mission2_cost",
+            "unit": "tokens",
+            "cost_type": CostType.TOKEN_INPUT,
+            "mission_id": "different_mission",
+            "rate": 0.00003,
+            "quantity": 1000.0,
+            "setup_version_id": "setup:2",
+        }
+        mock_servicer._validate_and_store_cost(different_mission_cost)
 
+        # Get costs for original mission
+        future_get = thread_pool.submit(client.get_filtered)
 
-def test_add_cost_zero_quantity(
-    client: GrpcCost,
-    test_channel: grpc_testing.Channel,
-    mock_servicer: MockCostServicer,
-    thread_pool: futures.ThreadPoolExecutor,
-) -> None:
-    """Test adding cost with zero quantity (edge case).
-
-    Args:
-        client: GrpcCost client for testing
-        test_channel: Mock gRPC channel
-        mock_servicer: Mock cost servicer
-    """
-    name = f"test_zero_{secrets.token_hex(4)}"
-
-    future = thread_pool.submit(client.add, name, "gpt4_input", 0.0)
-
-    service_desc = cost_service_pb2.DESCRIPTOR.services_by_name["CostService"]
-    method_desc = service_desc.methods_by_name["AddCost"]
-    _, request, rpc = test_channel.take_unary_unary(method_desc)
-
-    context = FakeContext()
-    response = mock_servicer.AddCost(request, context)
-
-    # Zero quantity should be rejected
-    rpc.send_initial_metadata(())
-    rpc.terminate(response, (), context._code, context._details)
-
-    # Should fail
-    with pytest.raises(Exception):  # Will raise gRPC error
-        future.result(timeout=5.0)
-
-
-def test_add_cost_negative_quantity(
-    client: GrpcCost,
-    test_channel: grpc_testing.Channel,
-    mock_servicer: MockCostServicer,
-    thread_pool: futures.ThreadPoolExecutor,
-) -> None:
-    """Test adding cost with negative quantity (invalid).
-
-    Args:
-        client: GrpcCost client for testing
-        test_channel: Mock gRPC channel
-        mock_servicer: Mock cost servicer
-    """
-    name = f"test_negative_{secrets.token_hex(4)}"
-
-    future = thread_pool.submit(client.add, name, "gpt4_input", -100.0)
-
-    service_desc = cost_service_pb2.DESCRIPTOR.services_by_name["CostService"]
-    method_desc = service_desc.methods_by_name["AddCost"]
-    _, request, rpc = test_channel.take_unary_unary(method_desc)
-
-    context = FakeContext()
-    response = mock_servicer.AddCost(request, context)
-
-    rpc.send_initial_metadata(())
-    rpc.terminate(response, (), context._code, context._details)
-
-    # Should fail with validation error
-    with pytest.raises(Exception):
-        future.result(timeout=5.0)
-
-
-# ============================================================================
-# Test: get() Method
-# ============================================================================
-
-
-def test_get_cost_success(
-    client: GrpcCost,
-    test_channel: grpc_testing.Channel,
-    mock_servicer: MockCostServicer,
-    thread_pool: futures.ThreadPoolExecutor,
-) -> None:
-    """Test successful retrieval of costs by name.
-
-    Args:
-        client: GrpcCost client for testing
-        test_channel: Mock gRPC channel
-        mock_servicer: Mock cost servicer
-    """
-    # First, add a cost
-    name = f"test_get_{secrets.token_hex(4)}"
-    quantity = 1000.0
-
-    # Add cost
-    future_add = thread_pool.submit(client.add, name, "gpt4_input", quantity)
-    service_desc = cost_service_pb2.DESCRIPTOR.services_by_name["CostService"]
-    method_desc = service_desc.methods_by_name["AddCost"]
-    _, request, rpc = test_channel.take_unary_unary(method_desc)
-    context = FakeContext()
-    response = mock_servicer.AddCost(request, context)
-    rpc.send_initial_metadata(())
-    rpc.terminate(response, (), grpc.StatusCode.OK, "")
-    future_add.result(timeout=5.0)
-
-    # Now get the cost
-    future_get = thread_pool.submit(client.get, name)
-
-    method_desc = service_desc.methods_by_name["GetCost"]
-    _, request, rpc = test_channel.take_unary_unary(method_desc)
-
-    context = FakeContext()
-    response = mock_servicer.GetCost(request, context)
-
-    rpc.send_initial_metadata(())
-    rpc.terminate(response, (), grpc.StatusCode.OK, "")
-
-    result = future_get.result(timeout=5.0)
-    assert isinstance(result, list)
-    assert len(result) == 1
-    assert isinstance(result[0], CostData)
-    assert result[0].name == name
-    assert result[0].quantity == quantity
-
-
-def test_get_cost_not_found(
-    client: GrpcCost,
-    test_channel: grpc_testing.Channel,
-    mock_servicer: MockCostServicer,
-    thread_pool: futures.ThreadPoolExecutor,
-) -> None:
-    """Test getting a cost that doesn't exist.
-
-    Args:
-        client: GrpcCost client for testing
-        test_channel: Mock gRPC channel
-        mock_servicer: Mock cost servicer
-    """
-    name = f"nonexistent_{secrets.token_hex(4)}"
-
-    future = thread_pool.submit(client.get, name)
-
-    service_desc = cost_service_pb2.DESCRIPTOR.services_by_name["CostService"]
-    method_desc = service_desc.methods_by_name["GetCost"]
-    _, request, rpc = test_channel.take_unary_unary(method_desc)
-
-    context = FakeContext()
-    response = mock_servicer.GetCost(request, context)
-
-    rpc.send_initial_metadata(())
-    rpc.terminate(response, (), grpc.StatusCode.OK, "")
-
-    result = future.result(timeout=5.0)
-    assert isinstance(result, list)
-    assert len(result) == 0
-
-
-def test_get_cost_multiple_with_same_name(
-    client: GrpcCost,
-    test_channel: grpc_testing.Channel,
-    mock_servicer: MockCostServicer,
-    thread_pool: futures.ThreadPoolExecutor,
-) -> None:
-    """Test getting multiple costs with the same name.
-
-    Args:
-        client: GrpcCost client for testing
-        test_channel: Mock gRPC channel
-        mock_servicer: Mock cost servicer
-    """
-    name = f"test_multi_{secrets.token_hex(4)}"
-
-    # Add multiple costs with the same name
-    quantities = [100.0, 200.0, 300.0]
-    service_desc = cost_service_pb2.DESCRIPTOR.services_by_name["CostService"]
-
-    for quantity in quantities:
-        future_add = thread_pool.submit(client.add, name, "gpt4_input", quantity)
-        method_desc = service_desc.methods_by_name["AddCost"]
+        method_desc = service_desc.methods_by_name["GetCosts"]
         _, request, rpc = test_channel.take_unary_unary(method_desc)
+
         context = FakeContext()
-        response = mock_servicer.AddCost(request, context)
+        response = mock_servicer.GetCosts(request, context)
+
         rpc.send_initial_metadata(())
         rpc.terminate(response, (), grpc.StatusCode.OK, "")
-        future_add.result(timeout=5.0)
 
-    # Get all costs with this name
-    future_get = thread_pool.submit(client.get, name)
+        result = future_get.result(timeout=5.0)
 
-    method_desc = service_desc.methods_by_name["GetCost"]
-    _, request, rpc = test_channel.take_unary_unary(method_desc)
-
-    context = FakeContext()
-    response = mock_servicer.GetCost(request, context)
-
-    rpc.send_initial_metadata(())
-    rpc.terminate(response, (), grpc.StatusCode.OK, "")
-
-    result = future_get.result(timeout=5.0)
-    assert isinstance(result, list)
-    assert len(result) == 3
-    assert all(isinstance(c, CostData) for c in result)
-    assert all(c.name == name for c in result)
-
-    # Verify quantities
-    result_quantities = sorted([c.quantity for c in result])
-    assert result_quantities == sorted(quantities)
+        # Should only see costs from original mission
+        assert len(result) == 1
+        assert result[0].name == name1
+        assert result[0].mission_id == client.mission_id
 
 
 # ============================================================================
-# Test: get_filtered() Method
+# Regression Tests
 # ============================================================================
-
-
-def test_get_filtered_by_names(
-    client: GrpcCost,
-    test_channel: grpc_testing.Channel,
-    mock_servicer: MockCostServicer,
-    thread_pool: futures.ThreadPoolExecutor,
-) -> None:
-    """Test filtering costs by names.
-
-    Args:
-        client: GrpcCost client for testing
-        test_channel: Mock gRPC channel
-        mock_servicer: Mock cost servicer
-    """
-    # Add multiple costs
-    names = [f"cost_{i}_{secrets.token_hex(4)}" for i in range(5)]
-    service_desc = cost_service_pb2.DESCRIPTOR.services_by_name["CostService"]
-
-    for name in names:
-        future_add = thread_pool.submit(client.add, name, "gpt4_input", 100.0)
-        method_desc = service_desc.methods_by_name["AddCost"]
-        _, request, rpc = test_channel.take_unary_unary(method_desc)
-        context = FakeContext()
-        response = mock_servicer.AddCost(request, context)
-        rpc.send_initial_metadata(())
-        rpc.terminate(response, (), grpc.StatusCode.OK, "")
-        future_add.result(timeout=5.0)
-
-    # Filter by subset of names
-    filter_names = names[:3]
-    future_get = thread_pool.submit(client.get_filtered, names=filter_names)
-
-    method_desc = service_desc.methods_by_name["GetCosts"]
-    _, request, rpc = test_channel.take_unary_unary(method_desc)
-
-    context = FakeContext()
-    response = mock_servicer.GetCosts(request, context)
-
-    rpc.send_initial_metadata(())
-    rpc.terminate(response, (), grpc.StatusCode.OK, "")
-
-    result = future_get.result(timeout=5.0)
-    assert isinstance(result, list)
-    assert len(result) == 3
-    assert all(c.name in filter_names for c in result)
-
-
-def test_get_filtered_by_cost_types(
-    client: GrpcCost,
-    test_channel: grpc_testing.Channel,
-    mock_servicer: MockCostServicer,
-    thread_pool: futures.ThreadPoolExecutor,
-) -> None:
-    """Test filtering costs by cost types.
-
-    Args:
-        client: GrpcCost client for testing
-        test_channel: Mock gRPC channel
-        mock_servicer: Mock cost servicer
-    """
-    # Add costs with different types
-    configs = [
-        ("gpt4_input", "TOKEN_INPUT"),
-        ("gpt4_output", "TOKEN_OUTPUT"),
-        ("api_call", "API_CALL"),
-        ("storage", "STORAGE"),
-    ]
-    service_desc = cost_service_pb2.DESCRIPTOR.services_by_name["CostService"]
-
-    for config_name, _ in configs:
-        name = f"test_{config_name}_{secrets.token_hex(4)}"
-        future_add = thread_pool.submit(client.add, name, config_name, 100.0)
-        method_desc = service_desc.methods_by_name["AddCost"]
-        _, request, rpc = test_channel.take_unary_unary(method_desc)
-        context = FakeContext()
-        response = mock_servicer.AddCost(request, context)
-        rpc.send_initial_metadata(())
-        rpc.terminate(response, (), grpc.StatusCode.OK, "")
-        future_add.result(timeout=5.0)
-
-    # Filter by token types only
-    future_get = thread_pool.submit(client.get_filtered, cost_types=["TOKEN_INPUT", "TOKEN_OUTPUT"])
-
-    method_desc = service_desc.methods_by_name["GetCosts"]
-    _, request, rpc = test_channel.take_unary_unary(method_desc)
-
-    context = FakeContext()
-    response = mock_servicer.GetCosts(request, context)
-
-    rpc.send_initial_metadata(())
-    rpc.terminate(response, (), grpc.StatusCode.OK, "")
-
-    result = future_get.result(timeout=5.0)
-    assert isinstance(result, list)
-    assert len(result) == 2
-    assert all(c.cost_type in {CostType.TOKEN_INPUT, CostType.TOKEN_OUTPUT} for c in result)
-
-
-def test_get_filtered_by_names_and_types(
-    client: GrpcCost,
-    test_channel: grpc_testing.Channel,
-    mock_servicer: MockCostServicer,
-    thread_pool: futures.ThreadPoolExecutor,
-) -> None:
-    """Test filtering costs by both names and types.
-
-    Args:
-        client: GrpcCost client for testing
-        test_channel: Mock gRPC channel
-        mock_servicer: Mock cost servicer
-    """
-    # Add various costs
-    test_data = [
-        ("cost_a", "gpt4_input", "TOKEN_INPUT"),
-        ("cost_b", "gpt4_output", "TOKEN_OUTPUT"),
-        ("cost_c", "api_call", "API_CALL"),
-        ("cost_d", "gpt4_input", "TOKEN_INPUT"),
-    ]
-    service_desc = cost_service_pb2.DESCRIPTOR.services_by_name["CostService"]
-
-    for name, config, _ in test_data:
-        future_add = thread_pool.submit(client.add, name, config, 100.0)
-        method_desc = service_desc.methods_by_name["AddCost"]
-        _, request, rpc = test_channel.take_unary_unary(method_desc)
-        context = FakeContext()
-        response = mock_servicer.AddCost(request, context)
-        rpc.send_initial_metadata(())
-        rpc.terminate(response, (), grpc.StatusCode.OK, "")
-        future_add.result(timeout=5.0)
-
-    # Filter by names and token input type
-    future_get = thread_pool.submit(client.get_filtered, names=["cost_a", "cost_d"], cost_types=["TOKEN_INPUT"])
-
-    method_desc = service_desc.methods_by_name["GetCosts"]
-    _, request, rpc = test_channel.take_unary_unary(method_desc)
-
-    context = FakeContext()
-    response = mock_servicer.GetCosts(request, context)
-
-    rpc.send_initial_metadata(())
-    rpc.terminate(response, (), grpc.StatusCode.OK, "")
-
-    result = future_get.result(timeout=5.0)
-    assert isinstance(result, list)
-    assert len(result) == 2
-    assert all(c.name in {"cost_a", "cost_d"} for c in result)
-    assert all(c.cost_type == CostType.TOKEN_INPUT for c in result)
-
-
-def test_get_filtered_empty_results(
-    client: GrpcCost,
-    test_channel: grpc_testing.Channel,
-    mock_servicer: MockCostServicer,
-    thread_pool: futures.ThreadPoolExecutor,
-) -> None:
-    """Test filtering with no matching results.
-
-    Args:
-        client: GrpcCost client for testing
-        test_channel: Mock gRPC channel
-        mock_servicer: Mock cost servicer
-    """
-    # Filter with non-existent names
-    future = thread_pool.submit(client.get_filtered, names=["nonexistent"])
-
-    service_desc = cost_service_pb2.DESCRIPTOR.services_by_name["CostService"]
-    method_desc = service_desc.methods_by_name["GetCosts"]
-    _, request, rpc = test_channel.take_unary_unary(method_desc)
-
-    context = FakeContext()
-    response = mock_servicer.GetCosts(request, context)
-
-    rpc.send_initial_metadata(())
-    rpc.terminate(response, (), grpc.StatusCode.OK, "")
-
-    result = future.result(timeout=5.0)
-    assert isinstance(result, list)
-    assert len(result) == 0
-
-
-def test_get_filtered_no_filters(
-    client: GrpcCost,
-    test_channel: grpc_testing.Channel,
-    mock_servicer: MockCostServicer,
-    thread_pool: futures.ThreadPoolExecutor,
-) -> None:
-    """Test get_filtered with no filters (returns all costs).
-
-    Args:
-        client: GrpcCost client for testing
-        test_channel: Mock gRPC channel
-        mock_servicer: Mock cost servicer
-    """
-    # Add some costs
-    service_desc = cost_service_pb2.DESCRIPTOR.services_by_name["CostService"]
-
-    for i in range(3):
-        name = f"cost_{i}"
-        future_add = thread_pool.submit(client.add, name, "gpt4_input", 100.0)
-        method_desc = service_desc.methods_by_name["AddCost"]
-        _, request, rpc = test_channel.take_unary_unary(method_desc)
-        context = FakeContext()
-        response = mock_servicer.AddCost(request, context)
-        rpc.send_initial_metadata(())
-        rpc.terminate(response, (), grpc.StatusCode.OK, "")
-        future_add.result(timeout=5.0)
-
-    # Get all costs (no filter)
-    future_get = thread_pool.submit(client.get_filtered)
-
-    method_desc = service_desc.methods_by_name["GetCosts"]
-    _, request, rpc = test_channel.take_unary_unary(method_desc)
-
-    context = FakeContext()
-    response = mock_servicer.GetCosts(request, context)
-
-    rpc.send_initial_metadata(())
-    rpc.terminate(response, (), grpc.StatusCode.OK, "")
-
-    result = future_get.result(timeout=5.0)
-    assert isinstance(result, list)
-    assert len(result) == 3
-
-
-# ============================================================================
-# Test: Edge Cases and Error Handling
-# ============================================================================
-
-
-def test_cost_with_special_characters_in_name(
-    client: GrpcCost,
-    test_channel: grpc_testing.Channel,
-    mock_servicer: MockCostServicer,
-    thread_pool: futures.ThreadPoolExecutor,
-) -> None:
-    """Test cost with special characters in name.
-
-    Args:
-        client: GrpcCost client for testing
-        test_channel: Mock gRPC channel
-        mock_servicer: Mock cost servicer
-    """
-    name = "test-cost_123.special@chars"
-
-    future = thread_pool.submit(client.add, name, "gpt4_input", 100.0)
-
-    service_desc = cost_service_pb2.DESCRIPTOR.services_by_name["CostService"]
-    method_desc = service_desc.methods_by_name["AddCost"]
-    _, request, rpc = test_channel.take_unary_unary(method_desc)
-
-    context = FakeContext()
-    response = mock_servicer.AddCost(request, context)
-
-    rpc.send_initial_metadata(())
-    rpc.terminate(response, (), grpc.StatusCode.OK, "")
-
-    result = future.result(timeout=5.0)
-    assert result is None
-
-    # Verify stored
-    stored_costs = mock_servicer.costs[client.mission_id]
-    assert any(c["name"] == name for c in stored_costs)
-
-
-def test_cost_with_very_large_quantity(
-    client: GrpcCost,
-    test_channel: grpc_testing.Channel,
-    mock_servicer: MockCostServicer,
-    thread_pool: futures.ThreadPoolExecutor,
-) -> None:
-    """Test cost with very large quantity.
-
-    Args:
-        client: GrpcCost client for testing
-        test_channel: Mock gRPC channel
-        mock_servicer: Mock cost servicer
-    """
-    name = "large_quantity_test"
-    quantity = 1_000_000_000.0  # 1 billion
-
-    future = thread_pool.submit(client.add, name, "gpt4_input", quantity)
-
-    service_desc = cost_service_pb2.DESCRIPTOR.services_by_name["CostService"]
-    method_desc = service_desc.methods_by_name["AddCost"]
-    _, request, rpc = test_channel.take_unary_unary(method_desc)
-
-    context = FakeContext()
-    response = mock_servicer.AddCost(request, context)
-
-    rpc.send_initial_metadata(())
-    rpc.terminate(response, (), grpc.StatusCode.OK, "")
-
-    result = future.result(timeout=5.0)
-    assert result is None
-
-    # Verify calculation
-    stored_costs = mock_servicer.costs[client.mission_id]
-    assert stored_costs[0]["quantity"] == quantity
-    assert stored_costs[0]["cost"] == 0.00003 * quantity
-
-
-def test_cost_with_fractional_quantity(
-    client: GrpcCost,
-    test_channel: grpc_testing.Channel,
-    mock_servicer: MockCostServicer,
-    thread_pool: futures.ThreadPoolExecutor,
-) -> None:
-    """Test cost with fractional quantity.
-
-    Args:
-        client: GrpcCost client for testing
-        test_channel: Mock gRPC channel
-        mock_servicer: Mock cost servicer
-    """
-    name = "fractional_test"
-    quantity = 123.456
-
-    future = thread_pool.submit(client.add, name, "gpt4_input", quantity)
-
-    service_desc = cost_service_pb2.DESCRIPTOR.services_by_name["CostService"]
-    method_desc = service_desc.methods_by_name["AddCost"]
-    _, request, rpc = test_channel.take_unary_unary(method_desc)
-
-    context = FakeContext()
-    response = mock_servicer.AddCost(request, context)
-
-    rpc.send_initial_metadata(())
-    rpc.terminate(response, (), grpc.StatusCode.OK, "")
-
-    result = future.result(timeout=5.0)
-    assert result is None
-
-    # Verify stored correctly
-    stored_costs = mock_servicer.costs[client.mission_id]
-    assert abs(stored_costs[0]["quantity"] - quantity) < 0.0001
-
-
-def test_multiple_missions_isolation(
-    client: GrpcCost,
-    test_channel: grpc_testing.Channel,
-    mock_servicer: MockCostServicer,
-    thread_pool: futures.ThreadPoolExecutor,
-) -> None:
-    """Test that costs for different missions are isolated.
-
-    Args:
-        client: GrpcCost client for testing
-        test_channel: Mock gRPC channel
-        mock_servicer: Mock cost servicer
-    """
-    # Add costs for the test client's mission
-    name1 = "mission1_cost"
-    future = thread_pool.submit(client.add, name1, "gpt4_input", 100.0)
-
-    service_desc = cost_service_pb2.DESCRIPTOR.services_by_name["CostService"]
-    method_desc = service_desc.methods_by_name["AddCost"]
-    _, request, rpc = test_channel.take_unary_unary(method_desc)
-
-    context = FakeContext()
-    response = mock_servicer.AddCost(request, context)
-
-    rpc.send_initial_metadata(())
-    rpc.terminate(response, (), grpc.StatusCode.OK, "")
-    future.result(timeout=5.0)
-
-    # Manually add cost for a different mission
-    different_mission_cost = {
-        "cost": 50.0,
-        "name": "mission2_cost",
-        "unit": "tokens",
-        "cost_type": CostType.TOKEN_INPUT,
-        "mission_id": "different_mission",
-        "rate": 0.00003,
-        "quantity": 1000.0,
-        "setup_version_id": "setup:2",
-    }
-    mock_servicer._validate_and_store_cost(different_mission_cost)
-
-    # Get costs for original mission
-    future_get = thread_pool.submit(client.get_filtered)
-
-    method_desc = service_desc.methods_by_name["GetCosts"]
-    _, request, rpc = test_channel.take_unary_unary(method_desc)
-
-    context = FakeContext()
-    response = mock_servicer.GetCosts(request, context)
-
-    rpc.send_initial_metadata(())
-    rpc.terminate(response, (), grpc.StatusCode.OK, "")
-
-    result = future_get.result(timeout=5.0)
-
-    # Should only see costs from original mission
-    assert len(result) == 1
-    assert result[0].name == name1
-    assert result[0].mission_id == client.mission_id
+# This section contains tests for previously identified bugs and edge cases
+# that were fixed. Each test should document the issue/PR that it addresses.
+#
+# Format:
+# @pytest.mark.grpc
+# @pytest.mark.integration
+# @pytest.mark.regression
+# def test_regression_issue_123(...):
+#     """Test for regression of issue #123.
+#
+#     Issue: [Brief description of the bug]
+#     Fixed in: PR #456 / commit abc123
+#
+#     Verifies: [What this test checks to prevent regression]
+#     """
+#
+# Add regression tests below as bugs are discovered and fixed.

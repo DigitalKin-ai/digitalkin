@@ -8,7 +8,6 @@ from pydantic import ValidationError
 
 from digitalkin.logger import logger
 from digitalkin.services.cost.cost_strategy import CostData, CostType
-from tests.fixtures.grpc_fixtures import FakeContext
 
 
 class MockCostServicer(cost_service_pb2_grpc.CostServiceServicer):

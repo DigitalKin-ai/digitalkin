@@ -14,7 +14,6 @@ from pydantic import ValidationError
 
 from digitalkin.logger import logger
 from digitalkin.services.setup.setup_strategy import SetupData, SetupVersionData
-from tests.fixtures.grpc_fixtures import FakeContext
 
 
 class MockSetupServicer(setup_service_pb2_grpc.SetupServiceServicer):
@@ -264,7 +263,7 @@ class MockSetupServicer(setup_service_pb2_grpc.SetupServiceServicer):
             total_count = len(filtered_setups)
 
             # Apply pagination
-            offset = request.offset if request.offset > 0 else 0
+            offset = max(0, request.offset)
             limit = request.limit if request.limit > 0 else len(filtered_setups)
             paginated_setups = filtered_setups[offset : offset + limit]
 

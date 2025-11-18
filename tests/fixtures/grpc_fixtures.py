@@ -1,6 +1,7 @@
 """Shared gRPC test fixtures and utilities."""
 
-from typing import Any, Callable, Optional
+from collections.abc import Callable
+from typing import Any
 
 import grpc
 
@@ -25,7 +26,7 @@ class FakeContext(grpc.ServicerContext):
 
     def __init__(
         self,
-        invocation_metadata: Optional[tuple[tuple[str, str], ...]] = None,
+        invocation_metadata: tuple[tuple[str, str], ...] | None = None,
         peer: str = "test-peer",
     ) -> None:
         """Initialize with default OK status and optional metadata.
@@ -75,7 +76,7 @@ class FakeContext(grpc.ServicerContext):
         """
         return self._peer
 
-    def time_remaining(self) -> Optional[float]:
+    def time_remaining(self) -> float | None:
         """Get the remaining time for the RPC.
 
         Returns:
@@ -126,7 +127,7 @@ class FakeContext(grpc.ServicerContext):
         """
         return {}
 
-    def peer_identities(self) -> Optional[list[bytes]]:
+    def peer_identities(self) -> list[bytes] | None:
         """Get peer identities from the authentication context.
 
         Returns:
@@ -134,7 +135,7 @@ class FakeContext(grpc.ServicerContext):
         """
         return None
 
-    def peer_identity_key(self) -> Optional[str]:
+    def peer_identity_key(self) -> str | None:
         """Get the peer identity key from the authentication context.
 
         Returns:
@@ -172,7 +173,8 @@ class FakeContext(grpc.ServicerContext):
         self._details = details
         self._is_active = False
         self._invoke_callbacks()
-        raise Exception(f"RPC aborted: {code} - {details}")
+        msg = f"RPC aborted: {code} - {details}"
+        raise Exception(msg)
 
     def abort_with_status(self, status: grpc.Status) -> None:
         """Abort the RPC with a status object.

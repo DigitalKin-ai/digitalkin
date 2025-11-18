@@ -19,7 +19,6 @@ from digitalkin.services.filesystem.filesystem_strategy import (
     FileFilter,
     FilesystemRecord,
 )
-from tests.fixtures.grpc_fixtures import FakeContext
 
 
 class MockFilesystemServicer(filesystem_service_pb2_grpc.FilesystemServiceServicer):

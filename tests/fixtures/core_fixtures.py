@@ -13,14 +13,14 @@ from unittest.mock import Mock
 
 import pytest
 import pytest_asyncio
+
+from digitalkin.modules._base_module import BaseModule
 from tests.mocks import (
     ConfigurableMockModule,
     SimpleMockModule,
     create_mock_surreal_connection,
     create_mock_task_session,
 )
-
-from digitalkin.modules._base_module import BaseModule
 
 
 @pytest_asyncio.fixture
