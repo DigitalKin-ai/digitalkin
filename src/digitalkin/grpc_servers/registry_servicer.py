@@ -344,7 +344,7 @@ class RegistryServicer(module_registry_service_pb2_grpc.ModuleRegistryServiceSer
             return status_pb2.ModuleStatusResponse()
 
         module = self.registered_modules[request.module_id]
-        return status_pb2.ModuleStatusResponse(module_id=module.module_id, status=module.status.name)
+        return status_pb2.ModuleStatusResponse(module_id=module.module_id, status=module.status.value)
 
     def ListModuleStatus(  # noqa: N802
         self,
@@ -379,7 +379,7 @@ class RegistryServicer(module_registry_service_pb2_grpc.ModuleRegistryServiceSer
             list_size = len(self.registered_modules)
 
         modules_statuses = [
-            status_pb2.ModuleStatusResponse(module_id=module.module_id, status=module.status.name)
+            status_pb2.ModuleStatusResponse(module_id=module.module_id, status=module.status.value)
             for module in list(self.registered_modules.values())[request.offset : request.offset + list_size]
         ]
 
@@ -409,7 +409,7 @@ class RegistryServicer(module_registry_service_pb2_grpc.ModuleRegistryServiceSer
         for module in self.registered_modules.values():
             yield status_pb2.ModuleStatusResponse(
                 module_id=module.module_id,
-                status=module.status.name,
+                status=module.status.value,
             )
 
     def UpdateModuleStatus(  # noqa: N802

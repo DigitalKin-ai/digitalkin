@@ -96,6 +96,8 @@ def module_registry_objs() -> list[RegistryModule]:
 
 
 # Test Module Registration
+@pytest.mark.grpc
+@pytest.mark.integration
 class TestModuleRegistration:
     """Tests for module registration functionality."""
 
@@ -181,6 +183,8 @@ class TestModuleRegistration:
 
 
 # Test Module Deregistration
+@pytest.mark.grpc
+@pytest.mark.integration
 class TestModuleDeregistration:
     """Tests for module deregistration functionality."""
 
@@ -256,6 +260,8 @@ class TestModuleDeregistration:
 
 
 # Test Module Discovery
+@pytest.mark.grpc
+@pytest.mark.integration
 class TestModuleDiscovery:
     """Tests for module discovery and information retrieval functionality."""
 
@@ -333,6 +339,8 @@ class TestModuleDiscovery:
 
 
 # Test Module Search
+@pytest.mark.grpc
+@pytest.mark.integration
 class TestModuleSearch:
     """Tests for module search functionality."""
 
@@ -445,6 +453,8 @@ class TestModuleSearch:
 
 
 # Test Module Status
+@pytest.mark.grpc
+@pytest.mark.integration
 class TestModuleStatus:
     """Tests for module status querying and listing functionality."""
 
@@ -650,6 +660,8 @@ class TestModuleStatus:
 
 
 # Test Module Status Update
+@pytest.mark.grpc
+@pytest.mark.integration
 class TestModuleStatusUpdate:
     """Tests for module status update functionality."""
 
@@ -734,7 +746,7 @@ class TestModuleStatusUpdate:
         assert response.success is True
         assert code == grpc.StatusCode.OK
 
-        request_update_module = status_pb2.UpdateStatusRequest(module_id=module.module_id, status=module.status.name)
+        request_update_module = status_pb2.UpdateStatusRequest(module_id=module.module_id, status=module.status.value)
         # Invoke the get module status method
         update_module_method = grpc_test_server.invoke_unary_unary(
             method_descriptor=(service_name.methods_by_name["UpdateModuleStatus"]),

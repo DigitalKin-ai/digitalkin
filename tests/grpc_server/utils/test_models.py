@@ -13,6 +13,7 @@ from digitalkin.models.grpc_servers.models import (
 )
 
 
+@pytest.mark.grpc
 class TestEnums:
     """Tests for server mode and security mode enumerations."""
 
@@ -51,6 +52,8 @@ class TestEnums:
             pytest.fail(f"Expected SecurityMode enum to have members {expected_members}, got {actual_members}")
 
 
+@pytest.mark.grpc
+@pytest.mark.validation
 class TestServerCredentials:
     """Tests for server credentials validation and error handling."""
 
@@ -108,6 +111,8 @@ class TestServerCredentials:
             )
 
 
+@pytest.mark.grpc
+@pytest.mark.validation
 class TestServerConfig:
     """Tests for server configuration validation and properties."""
 
@@ -282,6 +287,7 @@ class TestServerConfig:
             pytest.fail(f"Expected address to be '{expected_address}', got '{config.address}'")
 
 
+@pytest.mark.grpc
 class TestServerConfigSubclasses:
     """Tests for server configuration subclasses (ModuleServerConfig and RegistryServerConfig)."""
 

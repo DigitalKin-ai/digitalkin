@@ -30,6 +30,8 @@ class MockServer(BaseServer):
         # Actual servicer registration happens in tests
 
 
+@pytest.mark.grpc
+@pytest.mark.smoke
 class TestBaseServerInitialization:
     """Tests for BaseServer initialization."""
 
@@ -71,6 +73,7 @@ class TestBaseServerInitialization:
             pass
 
 
+@pytest.mark.grpc
 class TestServicerRegistration:
     """Tests for servicer registration functionality."""
 
@@ -213,6 +216,7 @@ class TestServicerRegistration:
             pytest.fail("_register_servicers implementation was not called properly")
 
 
+@pytest.mark.grpc
 class TestReflection:
     """Tests for gRPC reflection functionality."""
 
@@ -267,6 +271,8 @@ class TestReflection:
             server._add_reflection()
 
 
+@pytest.mark.grpc
+@pytest.mark.smoke
 class TestServerCreation:
     """Tests for gRPC server creation."""
 
@@ -303,6 +309,7 @@ class TestServerCreation:
                 pytest.fail(f"Expected result to be {mock_server.return_value}, got {result}")
 
 
+@pytest.mark.grpc
 class TestPortConfiguration:
     """Tests for port configuration (secure and insecure)."""
 
@@ -352,6 +359,8 @@ class TestPortConfiguration:
             server._add_secure_port(mock_grpc_server)
 
 
+@pytest.mark.grpc
+@pytest.mark.smoke
 class TestServerLifecycle:
     """Tests for server lifecycle management (start, stop)."""
 
@@ -425,6 +434,7 @@ class TestServerLifecycle:
         server.stop()
 
 
+@pytest.mark.grpc
 class TestAsyncOperations:
     """Tests for asynchronous server operations."""
 
@@ -508,6 +518,7 @@ class TestAsyncOperations:
             pytest.fail(f"Expected server.server to be None, got {server.server}")
 
 
+@pytest.mark.grpc
 class TestTermination:
     """Tests for server termination handling."""
 
@@ -541,6 +552,7 @@ class TestTermination:
         mock_grpc_server.wait_for_termination.assert_called_once()
 
 
+@pytest.mark.grpc
 class TestHealthService:
     """Tests for gRPC health service functionality."""
 
