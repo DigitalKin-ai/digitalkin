@@ -799,7 +799,9 @@ class TestConcurrencyStress:
                 await high_capacity_manager.create_task(task_id, "missions:race", mock_base_module, medium_task())
 
             # Immediately start cancelling randomly
-            cancel_tasks = [high_capacity_manager.cancel_task(task_id, "missions:race") for task_id in random.sample(task_ids, 10)]
+            cancel_tasks = [
+                high_capacity_manager.cancel_task(task_id, "missions:race") for task_id in random.sample(task_ids, 10)
+            ]
 
             # Should not raise
             await asyncio.gather(*cancel_tasks, return_exceptions=True)

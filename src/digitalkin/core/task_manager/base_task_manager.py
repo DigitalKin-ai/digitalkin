@@ -3,6 +3,7 @@
 import asyncio
 import contextlib
 import datetime
+import types
 from abc import ABC, abstractmethod
 from collections.abc import Coroutine
 from typing import Any
@@ -294,8 +295,9 @@ class BaseTaskManager(ABC):
         Args:
             task_id: The ID of the task
             mission_id: The ID of the mission
+
         Returns:
-            True if the task was cleaned successfully, False otherwise
+            True if the task session was cleaned successfully, False otherwise.
         """
         if task_id not in self.tasks_sessions:
             logger.warning(
@@ -346,7 +348,7 @@ class BaseTaskManager(ABC):
         """
         return await self.send_signal(task_id=task_id, mission_id=mission_id, signal_type="status", payload={})
 
-    async def cancel_all_tasks(self, mission_id: str, timeout: float | None = None) -> dict[str, bool]:
+    async def cancel_all_tasks(self, mission_id: str, timeout: float | None = None) -> dict[str, bool | BaseException]:
         """Cancel all running tasks.
 
         Args:
@@ -377,7 +379,7 @@ class BaseTaskManager(ABC):
         results_list = await asyncio.gather(*cancel_coros, return_exceptions=True)
 
         # Build results dictionary
-        results = {}
+        results: dict[str, bool | BaseException] = {}
         for task_id, result in zip(task_ids, results_list):
             if isinstance(result, Exception):
                 logger.error("Exception cancelling task %s: %s", task_id, result)
@@ -439,7 +441,12 @@ class BaseTaskManager(ABC):
         logger.debug("Entering %s context", self.__class__.__name__)
         return self
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: types.TracebackType | None,
+    ) -> None:
         """Exit async context manager and clean up resources.
 
         Args:

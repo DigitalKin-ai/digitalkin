@@ -171,6 +171,9 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
 
         Returns:
             SetupModelT: the SetupModelT object fully processed.
+
+        Raises:
+            asyncio.TimeoutError: If waiting for the setup response times out.
         """
         queue = QueueFactory.create_bounded_queue(maxsize=self.max_queue_size)
         self.job_queues[job_id] = queue
@@ -178,11 +181,12 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         try:
             # Add timeout to prevent indefinite blocking
             item = await asyncio.wait_for(queue.get(), timeout=30.0)
-            queue.task_done()
-            return item
         except asyncio.TimeoutError:
             logger.error("Timeout waiting for config setup response for job %s", job_id)
             raise
+        else:
+            queue.task_done()
+            return item
         finally:
             logger.info(f"generate_config_setup_module_response: {job_id=}: {self.job_queues[job_id].empty()}")
             self.job_queues.pop(job_id, None)
@@ -305,7 +309,7 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
                             queue.task_done()
                             yield item
                             batch_count += 1
-                        except asyncio.QueueEmpty:
+                        except asyncio.QueueEmpty:  # noqa: PERF203
                             # No more items immediately available, break to next blocking wait
                             break
 
@@ -329,7 +333,7 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
                                 item = queue.get_nowait()
                                 queue.task_done()
                                 yield item
-                            except asyncio.QueueEmpty:
+                            except asyncio.QueueEmpty:  # noqa: PERF203
                                 break
 
                         break
@@ -495,7 +499,7 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
                     "class": self.module_class.__name__,
                     "mission_id": task_record.get("mission_id") if task_record else "unknown",
                 }
-            except Exception:
+            except Exception:  # noqa: PERF203
                 logger.exception("Error getting info for job %s", job_id)
                 modules_info[job_id] = {
                     "name": self.module_class.__name__,

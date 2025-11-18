@@ -83,7 +83,6 @@ class TestTaskManagerMemoryLeaks:
             async def create_task_and_track(task_idx: int) -> None:
                 module = MockModule(f"job-{task_idx}", "mission", "setup", "version")
                 weak_refs.append(weakref.ref(module))
-                print(f"init: i={task_idx} | weak_refs[-1]={weak_refs[-1]}")
 
                 async def task_coro() -> None:
                     await asyncio.sleep(0.5)
@@ -108,7 +107,6 @@ class TestTaskManagerMemoryLeaks:
             # Verify all modules can be garbage collected
             # Since sessions are cleaned up, modules should be collectible
             for weak_ref in weak_refs:
-                print(f"{weak_ref=}, {weak_ref()=}")
                 assert weak_ref() is None, "Module not garbage collected after cancellation"
 
     @pytest.mark.asyncio
@@ -255,9 +253,12 @@ class TestJobManagerMemoryLeaks:
     @pytest.mark.asyncio
     async def test_single_job_manager_queue_cleanup(self):
         """Test that SingleJobManager cleans up queues properly."""
-        with patch("digitalkin.core.task_manager.base_task_manager.SurrealDBConnection") as mock_conn, patch(
-            "digitalkin.core.job_manager.single_job_manager.ConnectionFactory.create_surreal_connection"
-        ) as mock_conn_factory:
+        with (
+            patch("digitalkin.core.task_manager.base_task_manager.SurrealDBConnection") as mock_conn,
+            patch(
+                "digitalkin.core.job_manager.single_job_manager.ConnectionFactory.create_surreal_connection"
+            ) as mock_conn_factory,
+        ):
             mock_db = Mock(spec=SurrealDBConnection)
             mock_db.init_surreal_instance = AsyncMock()
             mock_db.close = AsyncMock()
@@ -295,11 +296,15 @@ class TestJobManagerMemoryLeaks:
     @pytest.mark.asyncio
     async def test_taskiq_job_manager_stream_consumer_cleanup(self):
         """Test that TaskiqJobManager cleans up stream consumers."""
-        with patch("digitalkin.core.job_manager.taskiq_job_manager.TASKIQ_BROKER") as mock_broker, patch(
-            "digitalkin.core.job_manager.taskiq_job_manager.TaskiqJobManager._define_consumer"
-        ) as mock_consumer_factory, patch(
-            "digitalkin.core.job_manager.taskiq_job_manager.ConnectionFactory.create_surreal_connection"
-        ) as mock_conn_factory:
+        with (
+            patch("digitalkin.core.job_manager.taskiq_job_manager.TASKIQ_BROKER") as mock_broker,
+            patch(
+                "digitalkin.core.job_manager.taskiq_job_manager.TaskiqJobManager._define_consumer"
+            ) as mock_consumer_factory,
+            patch(
+                "digitalkin.core.job_manager.taskiq_job_manager.ConnectionFactory.create_surreal_connection"
+            ) as mock_conn_factory,
+        ):
             mock_broker.startup = AsyncMock()
             mock_consumer = AsyncMock()
             mock_consumer_factory.return_value = mock_consumer
@@ -353,9 +358,7 @@ class TestJobManagerMemoryLeaks:
                     for i in range(10):
                         job_id = f"job-{i}"
                         mock_module = Mock(spec=BaseModule)
-                        manager.tasks_sessions[job_id] = TaskSession(
-                            job_id, "test_mission", mock_db, mock_module
-                        )
+                        manager.tasks_sessions[job_id] = TaskSession(job_id, "test_mission", mock_db, mock_module)
                         manager.job_queues[job_id] = asyncio.Queue()
 
                     # Track memory
@@ -541,9 +544,12 @@ class TestMemoryGrowthPrevention:
     @pytest.mark.asyncio
     async def test_queue_memory_growth_prevention(self):
         """Test that queues don't grow unbounded."""
-        with patch("digitalkin.core.task_manager.base_task_manager.SurrealDBConnection") as mock_conn, patch(
-            "digitalkin.core.job_manager.single_job_manager.ConnectionFactory.create_surreal_connection"
-        ) as mock_conn_factory:
+        with (
+            patch("digitalkin.core.task_manager.base_task_manager.SurrealDBConnection") as mock_conn,
+            patch(
+                "digitalkin.core.job_manager.single_job_manager.ConnectionFactory.create_surreal_connection"
+            ) as mock_conn_factory,
+        ):
             mock_db = Mock(spec=SurrealDBConnection)
             mock_db.init_surreal_instance = AsyncMock()
             mock_db.close = AsyncMock()

@@ -1,5 +1,6 @@
 """Mock UserProfile Servicer for testing the GrpcUserProfile service."""
 
+from datetime import datetime
 from typing import Any
 
 import grpc
@@ -7,34 +8,10 @@ from digitalkin_proto.agentic_mesh_protocol.user_profile.v1 import (
     user_profile_pb2,
     user_profile_service_pb2_grpc,
 )
+from google.protobuf import timestamp_pb2
 
 from digitalkin.logger import logger
-
-
-# --- Fake Context for Servicer ---
-class FakeContext:
-    """Fake gRPC context for testing."""
-
-    def __init__(self) -> None:
-        """Initialize with OK status."""
-        self._code = grpc.StatusCode.OK
-        self._details = ""
-
-    def set_code(self, code: grpc.StatusCode) -> None:
-        """Set the gRPC status code.
-
-        Args:
-            code: The status code to set
-        """
-        self._code = code
-
-    def set_details(self, details: str) -> None:
-        """Set the error details.
-
-        Args:
-            details: The error message
-        """
-        self._details = details
+from tests.fixtures.grpc_fixtures import FakeContext
 
 
 class MockUserProfileServicer(user_profile_service_pb2_grpc.UserProfileServiceServicer):
@@ -45,6 +22,25 @@ class MockUserProfileServicer(user_profile_service_pb2_grpc.UserProfileServiceSe
         super().__init__()
         # user_id -> user_profile_data
         self.user_profiles: dict[str, dict[str, Any]] = {}
+
+    @staticmethod
+    def _convert_to_timestamp(timestamp_str: str | None) -> timestamp_pb2.Timestamp | None:
+        """Convert ISO format timestamp string to protobuf Timestamp.
+
+        Args:
+            timestamp_str: ISO format timestamp string (e.g., "2024-01-01T00:00:00Z")
+
+        Returns:
+            Protobuf Timestamp object or None if input is None/empty
+        """
+        if not timestamp_str:
+            return None
+
+        # Parse ISO format timestamp
+        dt = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
+        ts = timestamp_pb2.Timestamp()
+        ts.FromDatetime(dt)
+        return ts
 
     def GetUserProfile(
         self, request: user_profile_pb2.GetUserProfileRequest, context: grpc.ServicerContext
@@ -73,9 +69,38 @@ class MockUserProfileServicer(user_profile_service_pb2_grpc.UserProfileServiceSe
                 return user_profile_pb2.GetUserProfileResponse(success=False)
 
             # Create user profile proto
-            subscription = user_profile_pb2.Subscription(**user_profile_data.get("subscription", {}))
-            credits = user_profile_pb2.Credits(**user_profile_data.get("credits", {}))
-            metadata = user_profile_pb2.Metadata(**user_profile_data.get("metadata", {}))
+            # Handle subscription with timestamp conversion
+            subscription_data = user_profile_data.get("subscription", {})
+            subscription_kwargs = {}
+            if "tier" in subscription_data:
+                subscription_kwargs["tier"] = subscription_data["tier"]
+            if "status" in subscription_data:
+                subscription_kwargs["status"] = subscription_data["status"]
+            if "start" in subscription_data:
+                start_ts = self._convert_to_timestamp(subscription_data["start"])
+                if start_ts:
+                    subscription_kwargs["start"] = start_ts
+            if "end" in subscription_data:
+                end_ts = self._convert_to_timestamp(subscription_data["end"])
+                if end_ts:
+                    subscription_kwargs["end"] = end_ts
+            subscription = user_profile_pb2.Subscription(**subscription_kwargs)
+
+            # Handle credits with timestamp conversion
+            credits_data = user_profile_data.get("credits", {})
+            credits_kwargs = {}
+            if "allocated" in credits_data:
+                credits_kwargs["allocated"] = credits_data["allocated"]
+            if "used" in credits_data:
+                credits_kwargs["used"] = credits_data["used"]
+            if "timestamp" in credits_data:
+                timestamp_ts = self._convert_to_timestamp(credits_data["timestamp"])
+                if timestamp_ts:
+                    credits_kwargs["timestamp"] = timestamp_ts
+            credits = user_profile_pb2.Credits(**credits_kwargs)
+
+            # Handle metadata - it's a google.protobuf.Struct, pass dict directly
+            metadata_dict = user_profile_data.get("metadata", {})
 
             user_profile = user_profile_pb2.UserProfile(
                 user_id=user_profile_data["user_id"],
@@ -86,7 +111,7 @@ class MockUserProfileServicer(user_profile_service_pb2_grpc.UserProfileServiceSe
                 locale=user_profile_data.get("locale", ""),
                 subscription=subscription,
                 credits=credits,
-                metadata=metadata,
+                metadata=metadata_dict,
             )
 
             logger.info(f"Retrieved user profile for user_id: {request.user_id}")

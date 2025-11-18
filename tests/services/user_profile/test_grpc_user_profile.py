@@ -9,23 +9,39 @@ This test suite validates the GrpcUserProfile service implementation, including:
 
 from concurrent import futures
 
+import grpc
 import grpc_testing
 import pytest
-from digitalkin_proto.agentic_mesh_protocol.user_profile.v1 import user_profile_service_pb2_grpc
+from digitalkin_proto.agentic_mesh_protocol.user_profile.v1 import (
+    user_profile_service_pb2,
+    user_profile_service_pb2_grpc,
+)
 from tests.services.user_profile.mock_user_profile_servicer import FakeContext, MockUserProfileServicer
 
+from digitalkin.grpc_servers.utils.exceptions import ServerError
 from digitalkin.models.grpc_servers.models import ClientConfig
-from digitalkin.services.user_profile.grpc_user_profile import GrpcUserProfile, UserProfileServiceError
+from digitalkin.services.user_profile.grpc_user_profile import GrpcUserProfile
 
 # --- Test Constants ---
 USER_ID = "users:test_user_123"
 ORGANISATION_ID = "organisations:test_org_456"
 
-# Thread pool for client execution
-client_execution_thread_pool = futures.ThreadPoolExecutor(max_workers=1)
-
 
 # --- Fixtures ---
+
+
+@pytest.fixture(scope="module")
+def thread_pool():
+    """Create thread pool and ensure cleanup.
+
+    Returns:
+        ThreadPoolExecutor instance
+    """
+    pool = futures.ThreadPoolExecutor(max_workers=1)
+    yield pool
+    pool.shutdown(wait=True, cancel_futures=True)
+
+
 @pytest.fixture
 def test_channel() -> grpc_testing.Channel:
     """Create a test gRPC channel.
@@ -34,7 +50,7 @@ def test_channel() -> grpc_testing.Channel:
         A testing channel for intercepting gRPC calls
     """
     return grpc_testing.channel(
-        service_descriptors=[user_profile_service_pb2_grpc.DESCRIPTOR.services_by_name["UserProfileService"]],
+        service_descriptors=[user_profile_service_pb2.DESCRIPTOR.services_by_name["UserProfileService"]],
         time=grpc_testing.strict_real_time(),
     )
 
@@ -56,7 +72,15 @@ def dummy_client_config() -> ClientConfig:
     Returns:
         ClientConfig instance with test values
     """
-    return ClientConfig(host="localhost", port=50051, secure=False)
+    from digitalkin.models.grpc_servers.models import SecurityMode, ServerMode
+
+    return ClientConfig(
+        host="localhost",
+        port=50051,
+        mode=ServerMode.ASYNC,
+        security=SecurityMode.INSECURE,
+        credentials=None,
+    )
 
 
 @pytest.fixture
@@ -73,7 +97,14 @@ def client(
     Returns:
         GrpcUserProfile client configured for testing
     """
-    client = GrpcUserProfile(USER_ID, dummy_client_config)
+    # Initialize with mission_id, setup_id, setup_version_id, client_config
+    # Using USER_ID as mission_id for backward compatibility with tests
+    client = GrpcUserProfile(
+        mission_id=USER_ID,
+        setup_id="setups:test_setup",
+        setup_version_id="setup_versions:test_version",
+        client_config=dummy_client_config,
+    )
     client.stub = user_profile_service_pb2_grpc.UserProfileServiceStub(test_channel)
     return client
 
@@ -93,20 +124,18 @@ def sample_user_profile_data() -> dict:
         "last_name": "User",
         "locale": "en_US",
         "subscription": {
-            "plan": "premium",
+            "tier": "premium",
             "status": "active",
-            "start_date": "2024-01-01T00:00:00Z",
-            "end_date": "2025-01-01T00:00:00Z",
+            "start": "2024-01-01T00:00:00Z",
+            "end": "2025-01-01T00:00:00Z",
         },
         "credits": {
-            "total": 1000,
+            "allocated": 1000,
             "used": 250,
-            "remaining": 750,
+            "timestamp": "2024-12-15T10:30:00Z",
         },
         "metadata": {
-            "last_login": "2024-12-15T10:30:00Z",
-            "login_count": 42,
-            "preferences": "{}",
+            "security_key": "test_security_key_123",
         },
     }
 
@@ -121,6 +150,7 @@ def test_get_user_profile_success(
     test_channel: grpc_testing.Channel,
     mock_servicer: MockUserProfileServicer,
     sample_user_profile_data: dict,
+    thread_pool: futures.ThreadPoolExecutor,
 ) -> None:
     """Test successfully retrieving a user profile.
 
@@ -132,12 +162,12 @@ def test_get_user_profile_success(
     mock_servicer.add_user_profile(sample_user_profile_data)
 
     # Get the method descriptor
-    method_desc = user_profile_service_pb2_grpc.DESCRIPTOR.services_by_name["UserProfileService"].methods_by_name[
+    method_desc = user_profile_service_pb2.DESCRIPTOR.services_by_name["UserProfileService"].methods_by_name[
         "GetUserProfile"
     ]
 
     # Execute client call in thread pool
-    future = client_execution_thread_pool.submit(client.get_user_profile)
+    future = thread_pool.submit(client.get_user_profile)
 
     # Intercept the call
     _, request, rpc = test_channel.take_unary_unary(method_desc)
@@ -170,6 +200,7 @@ def test_get_user_profile_with_subscription(
     test_channel: grpc_testing.Channel,
     mock_servicer: MockUserProfileServicer,
     sample_user_profile_data: dict,
+    thread_pool: futures.ThreadPoolExecutor,
 ) -> None:
     """Test retrieving a user profile with subscription data.
 
@@ -179,11 +210,11 @@ def test_get_user_profile_with_subscription(
     """
     mock_servicer.add_user_profile(sample_user_profile_data)
 
-    method_desc = user_profile_service_pb2_grpc.DESCRIPTOR.services_by_name["UserProfileService"].methods_by_name[
+    method_desc = user_profile_service_pb2.DESCRIPTOR.services_by_name["UserProfileService"].methods_by_name[
         "GetUserProfile"
     ]
 
-    future = client_execution_thread_pool.submit(client.get_user_profile)
+    future = thread_pool.submit(client.get_user_profile)
     _, request, rpc = test_channel.take_unary_unary(method_desc)
 
     context = FakeContext()
@@ -195,7 +226,7 @@ def test_get_user_profile_with_subscription(
     # Verify subscription data
     assert "subscription" in result
     subscription = result["subscription"]
-    assert subscription["plan"] == "premium"
+    assert subscription["tier"] == "premium"
     assert subscription["status"] == "active"
 
 
@@ -204,6 +235,7 @@ def test_get_user_profile_with_credits(
     test_channel: grpc_testing.Channel,
     mock_servicer: MockUserProfileServicer,
     sample_user_profile_data: dict,
+    thread_pool: futures.ThreadPoolExecutor,
 ) -> None:
     """Test retrieving a user profile with credits data.
 
@@ -213,11 +245,11 @@ def test_get_user_profile_with_credits(
     """
     mock_servicer.add_user_profile(sample_user_profile_data)
 
-    method_desc = user_profile_service_pb2_grpc.DESCRIPTOR.services_by_name["UserProfileService"].methods_by_name[
+    method_desc = user_profile_service_pb2.DESCRIPTOR.services_by_name["UserProfileService"].methods_by_name[
         "GetUserProfile"
     ]
 
-    future = client_execution_thread_pool.submit(client.get_user_profile)
+    future = thread_pool.submit(client.get_user_profile)
     _, request, rpc = test_channel.take_unary_unary(method_desc)
 
     context = FakeContext()
@@ -229,9 +261,9 @@ def test_get_user_profile_with_credits(
     # Verify credits data
     assert "credits" in result
     credits = result["credits"]
-    assert credits["total"] == 1000
-    assert credits["used"] == 250
-    assert credits["remaining"] == 750
+    # Protobuf int64 fields are converted to strings in JSON
+    assert credits["allocated"] == "1000"
+    assert credits["used"] == "250"
 
 
 def test_get_user_profile_with_metadata(
@@ -239,6 +271,7 @@ def test_get_user_profile_with_metadata(
     test_channel: grpc_testing.Channel,
     mock_servicer: MockUserProfileServicer,
     sample_user_profile_data: dict,
+    thread_pool: futures.ThreadPoolExecutor,
 ) -> None:
     """Test retrieving a user profile with metadata.
 
@@ -248,11 +281,11 @@ def test_get_user_profile_with_metadata(
     """
     mock_servicer.add_user_profile(sample_user_profile_data)
 
-    method_desc = user_profile_service_pb2_grpc.DESCRIPTOR.services_by_name["UserProfileService"].methods_by_name[
+    method_desc = user_profile_service_pb2.DESCRIPTOR.services_by_name["UserProfileService"].methods_by_name[
         "GetUserProfile"
     ]
 
-    future = client_execution_thread_pool.submit(client.get_user_profile)
+    future = thread_pool.submit(client.get_user_profile)
     _, request, rpc = test_channel.take_unary_unary(method_desc)
 
     context = FakeContext()
@@ -264,34 +297,35 @@ def test_get_user_profile_with_metadata(
     # Verify metadata
     assert "metadata" in result
     metadata = result["metadata"]
-    assert "last_login" in metadata
-    assert metadata["login_count"] == 42
+    assert "security_key" in metadata
+    assert metadata["security_key"] == "test_security_key_123"
 
 
 def test_get_user_profile_not_found(
     client: GrpcUserProfile,
     test_channel: grpc_testing.Channel,
     mock_servicer: MockUserProfileServicer,
+    thread_pool: futures.ThreadPoolExecutor,
 ) -> None:
     """Test getting a non-existent user profile raises error.
 
     Verifies:
-    - Attempting to get a non-existent user profile raises UserProfileServiceError
+    - Attempting to get a non-existent user profile raises ServerError
     - Error message is appropriate
     """
-    method_desc = user_profile_service_pb2_grpc.DESCRIPTOR.services_by_name["UserProfileService"].methods_by_name[
+    method_desc = user_profile_service_pb2.DESCRIPTOR.services_by_name["UserProfileService"].methods_by_name[
         "GetUserProfile"
     ]
 
-    future = client_execution_thread_pool.submit(client.get_user_profile)
+    future = thread_pool.submit(client.get_user_profile)
     _, request, rpc = test_channel.take_unary_unary(method_desc)
 
     context = FakeContext()
     response = mock_servicer.GetUserProfile(request, context)
     rpc.terminate(response, (), context._code, context._details)
 
-    # Verify error is raised
-    with pytest.raises(UserProfileServiceError):
+    # Verify error is raised - ServerError is raised when gRPC call fails
+    with pytest.raises(ServerError):
         future.result(timeout=5.0)
 
 
@@ -299,6 +333,7 @@ def test_get_user_profile_with_minimal_data(
     client: GrpcUserProfile,
     test_channel: grpc_testing.Channel,
     mock_servicer: MockUserProfileServicer,
+    thread_pool: futures.ThreadPoolExecutor,
 ) -> None:
     """Test retrieving a user profile with minimal required fields.
 
@@ -317,11 +352,11 @@ def test_get_user_profile_with_minimal_data(
 
     mock_servicer.add_user_profile(minimal_data)
 
-    method_desc = user_profile_service_pb2_grpc.DESCRIPTOR.services_by_name["UserProfileService"].methods_by_name[
+    method_desc = user_profile_service_pb2.DESCRIPTOR.services_by_name["UserProfileService"].methods_by_name[
         "GetUserProfile"
     ]
 
-    future = client_execution_thread_pool.submit(client.get_user_profile)
+    future = thread_pool.submit(client.get_user_profile)
     _, request, rpc = test_channel.take_unary_unary(method_desc)
 
     context = FakeContext()
@@ -338,19 +373,6 @@ def test_get_user_profile_with_minimal_data(
     assert "metadata" in result
 
 
-@pytest.mark.asyncio
-async def test_get_identity(
-    client: GrpcUserProfile,
-) -> None:
-    """Test get_identity method returns user_id.
-
-    Verifies:
-    - get_identity returns the correct user_id
-    """
-    identity = await client.get_identity()
-    assert identity == USER_ID
-
-
 # ============================================================================
 # Edge Cases
 # ============================================================================
@@ -360,6 +382,7 @@ def test_get_user_profile_with_special_characters_in_email(
     client: GrpcUserProfile,
     test_channel: grpc_testing.Channel,
     mock_servicer: MockUserProfileServicer,
+    thread_pool: futures.ThreadPoolExecutor,
 ) -> None:
     """Test retrieving a user profile with special characters in email.
 
@@ -377,11 +400,11 @@ def test_get_user_profile_with_special_characters_in_email(
 
     mock_servicer.add_user_profile(data)
 
-    method_desc = user_profile_service_pb2_grpc.DESCRIPTOR.services_by_name["UserProfileService"].methods_by_name[
+    method_desc = user_profile_service_pb2.DESCRIPTOR.services_by_name["UserProfileService"].methods_by_name[
         "GetUserProfile"
     ]
 
-    future = client_execution_thread_pool.submit(client.get_user_profile)
+    future = thread_pool.submit(client.get_user_profile)
     _, request, rpc = test_channel.take_unary_unary(method_desc)
 
     context = FakeContext()
@@ -396,6 +419,7 @@ def test_get_user_profile_with_unicode_names(
     client: GrpcUserProfile,
     test_channel: grpc_testing.Channel,
     mock_servicer: MockUserProfileServicer,
+    thread_pool: futures.ThreadPoolExecutor,
 ) -> None:
     """Test retrieving a user profile with Unicode characters in names.
 
@@ -415,11 +439,11 @@ def test_get_user_profile_with_unicode_names(
 
     mock_servicer.add_user_profile(data)
 
-    method_desc = user_profile_service_pb2_grpc.DESCRIPTOR.services_by_name["UserProfileService"].methods_by_name[
+    method_desc = user_profile_service_pb2.DESCRIPTOR.services_by_name["UserProfileService"].methods_by_name[
         "GetUserProfile"
     ]
 
-    future = client_execution_thread_pool.submit(client.get_user_profile)
+    future = thread_pool.submit(client.get_user_profile)
     _, request, rpc = test_channel.take_unary_unary(method_desc)
 
     context = FakeContext()
@@ -435,6 +459,7 @@ def test_get_user_profile_with_different_locales(
     test_channel: grpc_testing.Channel,
     mock_servicer: MockUserProfileServicer,
     dummy_client_config: ClientConfig,
+    thread_pool: futures.ThreadPoolExecutor,
 ) -> None:
     """Test retrieving user profiles with various locale settings.
 
@@ -443,7 +468,7 @@ def test_get_user_profile_with_different_locales(
     """
     locales = ["en_US", "fr_FR", "ja_JP", "pt_BR", "zh_CN"]
 
-    method_desc = user_profile_service_pb2_grpc.DESCRIPTOR.services_by_name["UserProfileService"].methods_by_name[
+    method_desc = user_profile_service_pb2.DESCRIPTOR.services_by_name["UserProfileService"].methods_by_name[
         "GetUserProfile"
     ]
 
@@ -461,10 +486,15 @@ def test_get_user_profile_with_different_locales(
 
         mock_servicer.add_user_profile(data)
 
-        client = GrpcUserProfile(user_id, dummy_client_config)
+        client = GrpcUserProfile(
+            mission_id=user_id,
+            setup_id="setups:test_setup",
+            setup_version_id="setup_versions:test_version",
+            client_config=dummy_client_config,
+        )
         client.stub = user_profile_service_pb2_grpc.UserProfileServiceStub(test_channel)
 
-        future = client_execution_thread_pool.submit(client.get_user_profile)
+        future = thread_pool.submit(client.get_user_profile)
         _, request, rpc = test_channel.take_unary_unary(method_desc)
 
         context = FakeContext()
@@ -479,6 +509,7 @@ def test_get_user_profile_with_zero_credits(
     client: GrpcUserProfile,
     test_channel: grpc_testing.Channel,
     mock_servicer: MockUserProfileServicer,
+    thread_pool: futures.ThreadPoolExecutor,
 ) -> None:
     """Test retrieving a user profile with zero credits.
 
@@ -491,20 +522,20 @@ def test_get_user_profile_with_zero_credits(
         "email": "test@example.com",
         "subscription": {},
         "credits": {
-            "total": 0,
+            "allocated": 0,
             "used": 0,
-            "remaining": 0,
+            "timestamp": "2024-12-15T10:30:00Z",
         },
         "metadata": {},
     }
 
     mock_servicer.add_user_profile(data)
 
-    method_desc = user_profile_service_pb2_grpc.DESCRIPTOR.services_by_name["UserProfileService"].methods_by_name[
+    method_desc = user_profile_service_pb2.DESCRIPTOR.services_by_name["UserProfileService"].methods_by_name[
         "GetUserProfile"
     ]
 
-    future = client_execution_thread_pool.submit(client.get_user_profile)
+    future = thread_pool.submit(client.get_user_profile)
     _, request, rpc = test_channel.take_unary_unary(method_desc)
 
     context = FakeContext()
@@ -513,14 +544,16 @@ def test_get_user_profile_with_zero_credits(
 
     result = future.result(timeout=5.0)
     credits = result["credits"]
-    assert credits["total"] == 0
-    assert credits["remaining"] == 0
+    # Protobuf int64 fields are converted to strings in JSON
+    assert credits["allocated"] == "0"
+    assert credits["used"] == "0"
 
 
 def test_get_user_profile_with_expired_subscription(
     client: GrpcUserProfile,
     test_channel: grpc_testing.Channel,
     mock_servicer: MockUserProfileServicer,
+    thread_pool: futures.ThreadPoolExecutor,
 ) -> None:
     """Test retrieving a user profile with expired subscription.
 
@@ -532,10 +565,10 @@ def test_get_user_profile_with_expired_subscription(
         "organisation_id": ORGANISATION_ID,
         "email": "test@example.com",
         "subscription": {
-            "plan": "premium",
+            "tier": "premium",
             "status": "expired",
-            "start_date": "2023-01-01T00:00:00Z",
-            "end_date": "2024-01-01T00:00:00Z",
+            "start": "2023-01-01T00:00:00Z",
+            "end": "2024-01-01T00:00:00Z",
         },
         "credits": {},
         "metadata": {},
@@ -543,11 +576,11 @@ def test_get_user_profile_with_expired_subscription(
 
     mock_servicer.add_user_profile(data)
 
-    method_desc = user_profile_service_pb2_grpc.DESCRIPTOR.services_by_name["UserProfileService"].methods_by_name[
+    method_desc = user_profile_service_pb2.DESCRIPTOR.services_by_name["UserProfileService"].methods_by_name[
         "GetUserProfile"
     ]
 
-    future = client_execution_thread_pool.submit(client.get_user_profile)
+    future = thread_pool.submit(client.get_user_profile)
     _, request, rpc = test_channel.take_unary_unary(method_desc)
 
     context = FakeContext()
@@ -563,6 +596,7 @@ def test_multiple_user_profiles_independence(
     test_channel: grpc_testing.Channel,
     mock_servicer: MockUserProfileServicer,
     dummy_client_config: ClientConfig,
+    thread_pool: futures.ThreadPoolExecutor,
 ) -> None:
     """Test that multiple user profiles are independent.
 
@@ -580,7 +614,7 @@ def test_multiple_user_profiles_independence(
         "first_name": "User",
         "last_name": "One",
         "subscription": {},
-        "credits": {"total": 100},
+        "credits": {"allocated": 100, "used": 0},
         "metadata": {},
     }
 
@@ -591,22 +625,27 @@ def test_multiple_user_profiles_independence(
         "first_name": "User",
         "last_name": "Two",
         "subscription": {},
-        "credits": {"total": 200},
+        "credits": {"allocated": 200, "used": 0},
         "metadata": {},
     }
 
     mock_servicer.add_user_profile(data1)
     mock_servicer.add_user_profile(data2)
 
-    method_desc = user_profile_service_pb2_grpc.DESCRIPTOR.services_by_name["UserProfileService"].methods_by_name[
+    method_desc = user_profile_service_pb2.DESCRIPTOR.services_by_name["UserProfileService"].methods_by_name[
         "GetUserProfile"
     ]
 
     # Get user 1 profile
-    client1 = GrpcUserProfile(user1_id, dummy_client_config)
+    client1 = GrpcUserProfile(
+        mission_id=user1_id,
+        setup_id="setups:test_setup",
+        setup_version_id="setup_versions:test_version",
+        client_config=dummy_client_config,
+    )
     client1.stub = user_profile_service_pb2_grpc.UserProfileServiceStub(test_channel)
 
-    future1 = client_execution_thread_pool.submit(client1.get_user_profile)
+    future1 = thread_pool.submit(client1.get_user_profile)
     _, request1, rpc1 = test_channel.take_unary_unary(method_desc)
     context1 = FakeContext()
     response1 = mock_servicer.GetUserProfile(request1, context1)
@@ -614,10 +653,15 @@ def test_multiple_user_profiles_independence(
     result1 = future1.result(timeout=5.0)
 
     # Get user 2 profile
-    client2 = GrpcUserProfile(user2_id, dummy_client_config)
+    client2 = GrpcUserProfile(
+        mission_id=user2_id,
+        setup_id="setups:test_setup",
+        setup_version_id="setup_versions:test_version",
+        client_config=dummy_client_config,
+    )
     client2.stub = user_profile_service_pb2_grpc.UserProfileServiceStub(test_channel)
 
-    future2 = client_execution_thread_pool.submit(client2.get_user_profile)
+    future2 = thread_pool.submit(client2.get_user_profile)
     _, request2, rpc2 = test_channel.take_unary_unary(method_desc)
     context2 = FakeContext()
     response2 = mock_servicer.GetUserProfile(request2, context2)
@@ -629,5 +673,6 @@ def test_multiple_user_profiles_independence(
     assert result2["user_id"] == user2_id
     assert result1["email"] == "user1@example.com"
     assert result2["email"] == "user2@example.com"
-    assert result1["credits"]["total"] == 100
-    assert result2["credits"]["total"] == 200
+    # Protobuf int64 fields are converted to strings in JSON
+    assert result1["credits"]["allocated"] == "100"
+    assert result2["credits"]["allocated"] == "200"

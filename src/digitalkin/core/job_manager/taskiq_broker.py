@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import pickle  # noqa: S403
+from typing import Any
 
 from rstream import Producer
 from rstream.exceptions import PreconditionFailed
@@ -197,7 +198,7 @@ async def run_start_module(
 
         # Execute the task using TaskExecutor
         # Create a proper done callback that handles errors
-        async def send_end_of_stream(_) -> None:
+        async def send_end_of_stream(_: Any) -> None:  # noqa: ANN401
             try:
                 await callback(StreamCodeModel(code="__END_OF_STREAM__"))
             except Exception as e:

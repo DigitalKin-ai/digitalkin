@@ -5,37 +5,11 @@ from typing import Any
 
 import grpc
 from digitalkin_proto.agentic_mesh_protocol.storage.v1 import data_pb2, storage_service_pb2_grpc
-from google.protobuf import json_format
+from google.protobuf import json_format, struct_pb2
 from pydantic import BaseModel, ValidationError
 
 from digitalkin.logger import logger
-from digitalkin.services.storage.storage_strategy import DataType
-
-
-# --- Fake Context for Servicer ---
-class FakeContext:
-    """Fake gRPC context for testing."""
-
-    def __init__(self) -> None:
-        """Initialize with OK status."""
-        self._code = grpc.StatusCode.OK
-        self._details = ""
-
-    def set_code(self, code: grpc.StatusCode) -> None:
-        """Set the gRPC status code.
-
-        Args:
-            code: The status code to set
-        """
-        self._code = code
-
-    def set_details(self, details: str) -> None:
-        """Set the error details.
-
-        Args:
-            details: The error message
-        """
-        self._details = details
+from tests.fixtures.grpc_fixtures import FakeContext
 
 
 class MockStorageServicer(storage_service_pb2_grpc.StorageServiceServicer):
@@ -91,16 +65,34 @@ class MockStorageServicer(storage_service_pb2_grpc.StorageServiceServicer):
             data_pb2.StorageRecord: Proto storage record
         """
         # Convert data dict to Struct
-        data_struct = json_format.ParseDict(record_data["data"], data_pb2.google_dot_protobuf_dot_struct__pb2.Struct())
+        data_struct = json_format.ParseDict(record_data["data"],             struct_pb2.Struct(),)
+
+        # Convert stored string name back to protobuf enum value
+        # "OUTPUT" -> data_pb2.OUTPUT (integer)
+        value = getattr(data_pb2, record_data["data_type"])
+
+        # Convert ISO timestamp strings to datetime objects for protobuf Timestamp
+        from google.protobuf.timestamp_pb2 import Timestamp
+
+        creation_ts = Timestamp()
+        update_ts = Timestamp()
+
+        if record_data.get("creation_date"):
+            creation_dt = datetime.datetime.fromisoformat(record_data["creation_date"])
+            creation_ts.FromDatetime(creation_dt)
+
+        if record_data.get("update_date"):
+            update_dt = datetime.datetime.fromisoformat(record_data["update_date"])
+            update_ts.FromDatetime(update_dt)
 
         return data_pb2.StorageRecord(
             mission_id=mission_id,
             collection=collection,
             record_id=record_id,
-            data_type=record_data["data_type"],
+            data_type=value,
             data=data_struct,
-            creation_date=record_data.get("creation_date", ""),
-            update_date=record_data.get("update_date", ""),
+            creation_date=creation_ts,
+            update_date=update_ts,
         )
 
     def StoreRecord(
@@ -132,9 +124,16 @@ class MockStorageServicer(storage_service_pb2_grpc.StorageServiceServicer):
                 context.set_details("Record ID is required")
                 return data_pb2.StoreRecordResponse()
 
-            # Validate data type
-            valid_data_types = [dt.name for dt in DataType]
-            if request.data_type not in valid_data_types:
+            # Validate data type (request.data_type is a protobuf enum integer value)
+            # Convert protobuf enum value to enum name for validation
+            # data_pb2.OUTPUT (int) -> need to check if it's valid
+            valid_values = [
+                data_pb2.OUTPUT,
+                data_pb2.VIEW,
+                data_pb2.LOGS,
+                data_pb2.OTHER,
+            ]
+            if request.data_type not in valid_values:
                 context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
                 context.set_details(f"Invalid data type: {request.data_type}")
                 return data_pb2.StoreRecordResponse()
@@ -161,10 +160,13 @@ class MockStorageServicer(storage_service_pb2_grpc.StorageServiceServicer):
                 return data_pb2.StoreRecordResponse()
 
             # Store the record
+            # Convert protobuf enum integer value to string name for storage
+            # data_pb2.OUTPUT -> "OUTPUT"
+            name = data_pb2.DataType.Name(request.data_type)
             now = datetime.datetime.now(datetime.timezone.utc).isoformat()
             record_data = {
                 "data": data_dict,
-                "data_type": request.data_type,
+                "data_type": name,
                 "creation_date": now,
                 "update_date": now,
             }

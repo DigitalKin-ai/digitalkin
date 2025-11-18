@@ -14,19 +14,7 @@ from pydantic import ValidationError
 
 from digitalkin.logger import logger
 from digitalkin.services.setup.setup_strategy import SetupData, SetupVersionData
-
-
-# --- Fake Context for Servicer ---
-class FakeContext:
-    def __init__(self) -> None:
-        self._code = grpc.StatusCode.OK
-        self._details = ""
-
-    def set_code(self, code) -> None:
-        self._code = code
-
-    def set_details(self, details) -> None:
-        self._details = details
+from tests.fixtures.grpc_fixtures import FakeContext
 
 
 class MockSetupServicer(setup_service_pb2_grpc.SetupServiceServicer):
@@ -96,14 +84,25 @@ class MockSetupServicer(setup_service_pb2_grpc.SetupServiceServicer):
             context.set_details(msg)
             return setup_pb2.UpdateSetupResponse(success=False)
 
-        if request.name is not None:
+        # Update only the fields that were explicitly set
+        # For string fields, check if they're non-empty (proto3 default is empty string)
+        if request.name:
             self.setups[request.setup_id].name = request.name
-        if request.owner_id is not None:
+        if request.owner_id:
             self.setups[request.setup_id].owner_id = request.owner_id
-        if request.current_setup_version is not None:
-            self.setups[request.setup_id].current_setup_version = SetupVersionData.model_validate(
-                request.current_setup_version
-            )
+        # For message fields, use HasField()
+        if request.HasField("current_setup_version"):
+            # Convert protobuf message to dict first, then validate
+            setup_version_dict = {
+                "id": request.current_setup_version.id,
+                "setup_id": request.current_setup_version.setup_id,
+                "version": request.current_setup_version.version,
+                "creation_date": request.current_setup_version.creation_date.ToDatetime()
+                if request.current_setup_version.HasField("creation_date")
+                else datetime.datetime.now(),  # noqa: DTZ005
+                "content": dict(request.current_setup_version.content),
+            }
+            self.setups[request.setup_id].current_setup_version = SetupVersionData.model_validate(setup_version_dict)
         logger.debug("UPDATE SETUP DATA %s succesfull", request.setup_id)
         return setup_pb2.UpdateSetupResponse(success=True)
 
@@ -149,13 +148,15 @@ class MockSetupServicer(setup_service_pb2_grpc.SetupServiceServicer):
     ) -> setup_pb2.GetSetupVersionResponse:
         logger.debug("GET SETUP VERSION setup_version_id = %s.", request.setup_version_id)
 
-        setup_version = next(
-            filter(
-                lambda value: value is not None,
-                (inner.get(request.setup_version_id) for inner in self.setup_versions.values()),
-            ),
-            None,
-        )
+        # Search for the setup version with the matching ID
+        setup_version = None
+        for setup_versions in self.setup_versions.values():
+            for version_data in setup_versions.values():
+                if version_data.id == request.setup_version_id:
+                    setup_version = version_data
+                    break
+            if setup_version:
+                break
 
         if setup_version is None:
             msg = f"GET SETUP VERSION setup_version_id = {request.setup_version_id} | name DOESN'T EXIST"
@@ -187,13 +188,15 @@ class MockSetupServicer(setup_service_pb2_grpc.SetupServiceServicer):
     def UpdateSetupVersion(
         self, request: setup_pb2.UpdateSetupVersionRequest, context: grpc.ServicerContext
     ) -> setup_pb2.UpdateSetupVersionResponse:
-        setup_version = next(
-            filter(
-                lambda value: value is not None,
-                (inner.get(request.setup_version_id) for inner in self.setup_versions.values()),
-            ),
-            None,
-        )
+        # Search for the setup version with the matching ID
+        setup_version = None
+        for setup_versions in self.setup_versions.values():
+            for version_data in setup_versions.values():
+                if version_data.id == request.setup_version_id:
+                    setup_version = version_data
+                    break
+            if setup_version:
+                break
 
         if setup_version is None:
             msg = "UPDATE setup_version_id = {request.setup_version_id}: setup_version_id DOESN'T EXIST"
@@ -210,13 +213,15 @@ class MockSetupServicer(setup_service_pb2_grpc.SetupServiceServicer):
     def DeleteSetupVersion(
         self, request: setup_pb2.DeleteSetupVersionRequest, context: grpc.ServicerContext
     ) -> setup_pb2.DeleteSetupVersionResponse:
-        setup_version = next(
-            filter(
-                lambda value: value is not None,
-                (inner.get(request.setup_version_id) for inner in self.setup_versions.values()),
-            ),
-            None,
-        )
+        # Search for the setup version with the matching ID
+        setup_version = None
+        for setup_versions in self.setup_versions.values():
+            for version_data in setup_versions.values():
+                if version_data.id == request.setup_version_id:
+                    setup_version = version_data
+                    break
+            if setup_version:
+                break
 
         if setup_version is None:
             msg = f"DELETE name = {request.setup_version_id} | name DOESN'T EXIST"
@@ -225,5 +230,52 @@ class MockSetupServicer(setup_service_pb2_grpc.SetupServiceServicer):
             context.set_details(msg)
             return setup_pb2.DeleteSetupVersionResponse(success=False)
 
-        del self.setup_versions[setup_version.setup_id]
+        # Delete only the specific version, not all versions for this setup
+        del self.setup_versions[setup_version.setup_id][setup_version.version]
+        # If this was the last version for this setup, remove the setup entry as well
+        if not self.setup_versions[setup_version.setup_id]:
+            del self.setup_versions[setup_version.setup_id]
         return setup_pb2.DeleteSetupVersionResponse(success=True)
+
+    def ListSetups(
+        self, request: setup_pb2.ListSetupsRequest, context: grpc.ServicerContext
+    ) -> setup_pb2.ListSetupsResponse:
+        """List setups with optional filtering and pagination.
+
+        Args:
+            request: ListSetupsRequest with organisation_id, owner_id, limit, offset
+            context: gRPC context
+
+        Returns:
+            ListSetupsResponse: Response containing setups and total_count
+        """
+        try:
+            # Start with all setups
+            filtered_setups = list(self.setups.values())
+
+            # Apply filters
+            if request.organisation_id:
+                filtered_setups = [s for s in filtered_setups if s.organisation_id == request.organisation_id]
+
+            if request.owner_id:
+                filtered_setups = [s for s in filtered_setups if s.owner_id == request.owner_id]
+
+            # Get total count before pagination
+            total_count = len(filtered_setups)
+
+            # Apply pagination
+            offset = request.offset if request.offset > 0 else 0
+            limit = request.limit if request.limit > 0 else len(filtered_setups)
+            paginated_setups = filtered_setups[offset : offset + limit]
+
+            # Convert to proto messages
+            setup_protos = [setup_pb2.Setup(**s.model_dump()) for s in paginated_setups]
+
+            logger.info(f"Listed {len(setup_protos)} setups (total: {total_count})")
+            return setup_pb2.ListSetupsResponse(setups=setup_protos, total_count=total_count)
+
+        except Exception as e:
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details(f"Internal error: {e!s}")
+            logger.error(f"Error in ListSetups: {e}", exc_info=True)
+            return setup_pb2.ListSetupsResponse(setups=[], total_count=0)

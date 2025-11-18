@@ -19,19 +19,7 @@ from digitalkin.services.filesystem.filesystem_strategy import (
     FileFilter,
     FilesystemRecord,
 )
-
-
-# --- Fake Context for Servicer ---
-class FakeContext:
-    def __init__(self) -> None:
-        self._code = grpc.StatusCode.OK
-        self._details = ""
-
-    def set_code(self, code) -> None:
-        self._code = code
-
-    def set_details(self, details) -> None:
-        self._details = details
+from tests.fixtures.grpc_fixtures import FakeContext
 
 
 class MockFilesystemServicer(filesystem_service_pb2_grpc.FilesystemServiceServicer):

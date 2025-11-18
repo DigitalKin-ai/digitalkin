@@ -239,12 +239,16 @@ class TestMemoryLeakRegressions:
         """REGRESSION: TaskiqJobManager didn't close SurrealDB connection
         Fix: Added connection cleanup in _stop().
         """
-        with patch("digitalkin.core.job_manager.taskiq_job_manager.TASKIQ_BROKER") as mock_broker, patch(
-            "digitalkin.core.job_manager.taskiq_job_manager.TaskiqJobManager._define_consumer"
-        ) as mock_consumer_factory, patch(
-            "digitalkin.core.job_manager.taskiq_job_manager.ConnectionFactory.create_surreal_connection",
-            new_callable=AsyncMock,
-        ) as mock_create_conn:
+        with (
+            patch("digitalkin.core.job_manager.taskiq_job_manager.TASKIQ_BROKER") as mock_broker,
+            patch(
+                "digitalkin.core.job_manager.taskiq_job_manager.TaskiqJobManager._define_consumer"
+            ) as mock_consumer_factory,
+            patch(
+                "digitalkin.core.job_manager.taskiq_job_manager.ConnectionFactory.create_surreal_connection",
+                new_callable=AsyncMock,
+            ) as mock_create_conn,
+        ):
             mock_broker.startup = AsyncMock()
             mock_consumer = AsyncMock()
             mock_consumer.create_stream = AsyncMock()
@@ -278,12 +282,16 @@ class TestFireAndForgetRegression:
         """REGRESSION: Stream consumer task in TaskiqJobManager was fire-and-forget
         Fix: Wrapped with error handling and proper task management.
         """
-        with patch("digitalkin.core.job_manager.taskiq_job_manager.TASKIQ_BROKER") as mock_broker, patch(
-            "digitalkin.core.job_manager.taskiq_job_manager.TaskiqJobManager._define_consumer"
-        ) as mock_consumer_factory, patch(
-            "digitalkin.core.job_manager.taskiq_job_manager.ConnectionFactory.create_surreal_connection",
-            new_callable=AsyncMock,
-        ) as mock_create_conn:
+        with (
+            patch("digitalkin.core.job_manager.taskiq_job_manager.TASKIQ_BROKER") as mock_broker,
+            patch(
+                "digitalkin.core.job_manager.taskiq_job_manager.TaskiqJobManager._define_consumer"
+            ) as mock_consumer_factory,
+            patch(
+                "digitalkin.core.job_manager.taskiq_job_manager.ConnectionFactory.create_surreal_connection",
+                new_callable=AsyncMock,
+            ) as mock_create_conn,
+        ):
             mock_broker.startup = AsyncMock()
 
             # Create consumer that will fail
@@ -408,7 +416,7 @@ class TestQueueTimeoutRegression:
 
                         # Stream should eventually detect job is gone
                         items_consumed.extend([item async for item in stream])
-                            # Should break due to timeout and job check
+                        # Should break due to timeout and job check
 
                     # Stream should have ended
                     assert "disappearing-job" not in manager.job_queues

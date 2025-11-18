@@ -116,9 +116,7 @@ class StrictAssertions:
             for keyword in exception_keywords:
                 if keyword in msg_lower and record.levelname == "ERROR":
                     msg = f"Potential exception in log at level {record.levelname}: {record.getMessage()}"
-                    raise AssertionError(
-                        msg
-                    )
+                    raise AssertionError(msg)
 
     @staticmethod
     async def assert_async_cleanup(setup_coro: Callable, cleanup_coro: Callable, check_coro: Callable) -> None:
@@ -169,7 +167,9 @@ class StrictAssertions:
                 pass  # Attributes might be instance-level
 
     @staticmethod
-    def assert_resource_limits(max_tasks: int | None = None, max_connections: int | None = None, max_memory_mb: int | None = None):
+    def assert_resource_limits(
+        max_tasks: int | None = None, max_connections: int | None = None, max_memory_mb: int | None = None
+    ):
         """Create assertions for resource limits."""
 
         class ResourceLimitChecker:
@@ -260,9 +260,7 @@ def strict_task_validator():
                             f"Task raised exception: {exc}\n"
                             f"Traceback: {''.join(traceback.format_exception(type(exc), exc, exc.__traceback__))}"
                         )
-                        raise AssertionError(
-                            msg
-                        )
+                        raise AssertionError(msg)
 
         def assert_no_running_tasks(self) -> None:
             """Assert no tasks are currently running."""

@@ -46,7 +46,7 @@ class ConnectionFactory:
             extra={"database": database, "timeout": str(timeout)},
         )
 
-        connection = SurrealDBConnection(database, timeout)
+        connection: SurrealDBConnection = SurrealDBConnection(database, timeout)
 
         if auto_init:
             await connection.init_surreal_instance()

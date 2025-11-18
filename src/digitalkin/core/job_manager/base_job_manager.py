@@ -1,14 +1,12 @@
 """Background module manager."""
 
 import abc
-import sys
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Coroutine
 from contextlib import asynccontextmanager
 from typing import Any, Generic
 
 from digitalkin.core.task_manager.base_task_manager import BaseTaskManager
 from digitalkin.core.task_manager.task_session import TaskSession
-from digitalkin.logger import logger
 from digitalkin.models.core.task_monitor import TaskStatus
 from digitalkin.models.module import InputModelT, OutputModelT, SetupModelT
 from digitalkin.models.module.module import ModuleCodeModel
@@ -81,6 +79,18 @@ class BaseJobManager(abc.ABC, Generic[InputModelT, OutputModelT, SetupModelT]):
             **kwargs: Additional arguments for task creation
         """
         await self._task_manager.create_task(task_id, mission_id, module, coro, **kwargs)
+
+    async def clean_session(self, task_id: str, mission_id: str) -> bool:
+        """Clean a task's session.
+
+        Args:
+            task_id: Unique identifier for the task.
+            mission_id: Mission identifier.
+
+        Returns:
+            bool: True if the task was successfully cancelled, False otherwise.
+        """
+        return await self._task_manager.clean_session(task_id, mission_id)
 
     async def cancel_task(self, task_id: str, mission_id: str, timeout: float | None = None) -> bool:
         """Cancel a task.
@@ -260,31 +270,3 @@ class BaseJobManager(abc.ABC, Generic[InputModelT, OutputModelT, SetupModelT]):
         Returns:
             dict[str, dict[str, Any]]: A dictionary containing information about all modules and their statuses.
         """
-
-    async def __aenter__(self) -> "BaseJobManager":
-        """Enter async context manager.
-
-        Starts the job manager and returns self for use in async with statements.
-
-        Returns:
-            Self for use in async with statements
-        """
-        logger.error("BaseJobManager __aenter__ called")
-        sys.exit()
-        await self.start()
-        return self
-
-    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
-        """Exit async context manager and clean up resources.
-
-        Stops all modules and shuts down the manager.
-
-        Args:
-            exc_type: Exception type if an exception occurred
-            exc_val: Exception value if an exception occurred
-            exc_tb: Exception traceback if an exception occurred
-        """
-        logger.error("BaseJobManager __aexit__ called")
-        sys.exit()
-        await self.stop_all_modules()
-        await self.shutdown(mission_id="context_manager_cleanup")

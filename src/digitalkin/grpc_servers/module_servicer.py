@@ -172,7 +172,8 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         )
         # Process the module input
         # TODO: Check failure of input data format
-        input_data = self.module_class.create_input_model(dict(request.input.items()))
+        input_data = self.module_class.create_input_model(json_format.MessageToDict(request.input))
+
         setup_data_class = self.setup.get_setup(
             setup_dict={
                 "setup_id": request.setup_id,

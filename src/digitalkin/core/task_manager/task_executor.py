@@ -18,8 +18,8 @@ class TaskExecutor:
     Used by workers to run distributed tasks or by TaskManager for local execution.
     """
 
-    async def execute_task(
-        self,
+    @staticmethod
+    async def execute_task(  # noqa: C901, PLR0915
         task_id: str,
         mission_id: str,
         coro: Coroutine[Any, Any, None],
