@@ -12,7 +12,7 @@
 
     keywords = [ "digitalkin", "kin", "agent", "gprc", "sdk" ]
 
-    version = "0.3.0-rc1"
+    version = "0.3.1.dev0"
     classifiers = [
         "Development Status :: 3 - Alpha",
         "Intended Audience :: Developers",
