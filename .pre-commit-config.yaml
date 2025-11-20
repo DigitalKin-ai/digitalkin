@@ -39,3 +39,4 @@ repos:
         always_run: true
         types: [python]
         verbose: true
+        files: \.py$
