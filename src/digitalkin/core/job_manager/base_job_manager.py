@@ -257,6 +257,22 @@ class BaseJobManager(abc.ABC, Generic[InputModelT, OutputModelT, SetupModelT]):
         """
 
     @abc.abstractmethod
+    async def wait_for_completion(self, job_id: str) -> None:
+        """Wait for a task to complete.
+
+        This method blocks until the specified job has reached a terminal state.
+        The implementation varies by job manager type:
+        - SingleJobManager: Awaits the asyncio.Task directly
+        - TaskiqJobManager: Polls task status from SurrealDB
+
+        Args:
+            job_id: The unique identifier of the job to wait for.
+
+        Raises:
+            KeyError: If the job_id is not found.
+        """
+
+    @abc.abstractmethod
     async def stop_all_modules(self) -> None:
         """Stop all currently running module jobs.
 

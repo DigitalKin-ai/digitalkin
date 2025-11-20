@@ -301,6 +301,20 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         session = self.tasks_sessions.get(job_id, None)
         return session.status if session is not None else TaskStatus.FAILED
 
+    async def wait_for_completion(self, job_id: str) -> None:
+        """Wait for a task to complete by awaiting its asyncio.Task.
+
+        Args:
+            job_id: The unique identifier of the job to wait for.
+
+        Raises:
+            KeyError: If the job_id is not found in tasks.
+        """
+        if job_id not in self._task_manager.tasks:
+            msg = f"Job {job_id} not found"
+            raise KeyError(msg)
+        await self._task_manager.tasks[job_id]
+
     async def stop_all_modules(self) -> None:
         """Stop all currently running module jobs.
 

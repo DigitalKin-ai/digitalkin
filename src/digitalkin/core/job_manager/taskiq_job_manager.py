@@ -295,7 +295,8 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             while True:
                 try:
                     # Block for first item with timeout to allow termination checks
-                    item = await asyncio.wait_for(queue.get(), timeout=5.0)
+                    # Increased to 15s to account for distributed system latencies
+                    item = await asyncio.wait_for(queue.get(), timeout=15.0)
                     queue.task_done()
                     yield item
 
@@ -440,11 +441,38 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             heartbeat_record = await self.channel.select_by_task_id("heartbeats", job_id)
             if heartbeat_record:
                 return TaskStatus.RUNNING
+            # No task or heartbeat record found - task may still be initializing
+            logger.debug("No task or heartbeat record found for job %s - task may still be initializing", job_id)
         except Exception:
             logger.exception("Error getting status for job %s", job_id)
             return TaskStatus.FAILED
         else:
             return TaskStatus.FAILED
+
+    async def wait_for_completion(self, job_id: str) -> None:
+        """Wait for a task to complete by polling its status from SurrealDB.
+
+        This method polls the task status until it reaches a terminal state.
+        Uses a 0.5 second polling interval to balance responsiveness and resource usage.
+
+        Args:
+            job_id: The unique identifier of the job to wait for.
+
+        Raises:
+            KeyError: If the job_id is not found in tasks_sessions.
+        """
+        if job_id not in self.tasks_sessions:
+            msg = f"Job {job_id} not found"
+            raise KeyError(msg)
+
+        # Poll task status until terminal state
+        terminal_states = {TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED}
+        while True:
+            status = await self.get_module_status(job_id)
+            if status in terminal_states:
+                logger.debug("Job %s reached terminal state: %s", job_id, status)
+                break
+            await asyncio.sleep(0.5)  # Poll interval
 
     async def stop_module(self, job_id: str) -> bool:
         """Stop a running module using TaskManager.

@@ -226,7 +226,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
                     proto = json_format.ParseDict(message, struct_pb2.Struct(), ignore_unknown_fields=True)
                     yield lifecycle_pb2.StartModuleResponse(success=True, output=proto, job_id=job_id)
         finally:
-            await self.job_manager.tasks[job_id]
+            await self.job_manager.wait_for_completion(job_id)
             await self.job_manager.clean_session(job_id, mission_id=request.mission_id)
 
         logger.info("Job %s finished", job_id)

@@ -33,11 +33,9 @@ repos:
     hooks:
       - id: pytest
         name: pytest
-        entry: docker compose run --rm tests
+        entry: docker compose run --rm -T tests -m 'not integration'
         language: system
         pass_filenames: false
         always_run: true
-        # Optional: add --cov to get coverage report
-        # args: ["-xvs", "--cov=digitalkin", "--cov-report=term-missing", "tests/"]
-        # You can make this hook only run when Python files change
         types: [python]
+        verbose: true

@@ -183,6 +183,7 @@ async def run_start_module(
     )
     setattr(module_class, "services_config", services_config)
     logger.debug("Services config: %s | Module config: %s", services_config, module_class.services_config)
+    module_class.discover()
 
     job_id = context.message.task_id
     callback = await BaseJobManager.job_specific_callback(send_message_to_stream, job_id)
@@ -204,12 +205,20 @@ async def run_start_module(
             except Exception as e:
                 logger.error("Error sending end of stream: %s", e, exc_info=True)
 
+        # Reconstruct Pydantic models from dicts for type safety
+        try:
+            input_model = module_class.create_input_model(input_data)
+            setup_model = module_class.create_setup_model(setup_data)
+        except Exception as e:
+            logger.error("Failed to reconstruct models for job %s: %s", job_id, e, exc_info=True)
+            raise
+
         supervisor_task = await executor.execute_task(
             task_id=job_id,
             mission_id=mission_id,
             coro=module.start(
-                input_data,
-                setup_data,
+                input_model,
+                setup_model,
                 callback,
                 done_callback=lambda result: asyncio.ensure_future(send_end_of_stream(result)),
             ),

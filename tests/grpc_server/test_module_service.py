@@ -4,7 +4,6 @@ This module contains comprehensive tests for the ModuleServicer class, which han
 module lifecycle, monitoring, and schema introspection operations.
 """
 
-import asyncio
 from collections.abc import AsyncGenerator
 from typing import Any
 from unittest.mock import AsyncMock, Mock, patch
@@ -37,47 +36,47 @@ class MockModule(BaseModule):
         """Mock discover method."""
 
     @classmethod
-    def create_input_model(cls, data: dict[str, Any]) -> dict[str, Any]:
+    def create_input_model(cls, input_data: dict[str, Any]) -> dict[str, Any]:
         """Mock input model creation."""
-        return data
+        return input_data
 
     @classmethod
-    def create_output_model(cls, data: dict[str, Any]) -> dict[str, Any]:
+    def create_output_model(cls, output_data: dict[str, Any]) -> dict[str, Any]:
         """Mock output model creation."""
-        return data
+        return output_data
 
     @classmethod
-    def create_setup_model(cls, data: dict[str, Any], config_fields: bool = False) -> dict[str, Any]:  # noqa: ARG003
+    def create_setup_model(cls, setup_data: dict[str, Any], *, config_fields: bool = False) -> dict[str, Any]:  # noqa: ARG003
         """Mock setup model creation."""
-        return data
+        return setup_data
 
     @classmethod
-    def create_config_setup_model(cls, data: dict[str, Any]) -> dict[str, Any]:
+    def create_config_setup_model(cls, config_setup_data: dict[str, Any]) -> dict[str, Any]:
         """Mock config setup model creation."""
-        return data
+        return config_setup_data
 
     @classmethod
-    def get_input_format(cls, llm_format: bool = False) -> str:  # noqa: ARG003
+    def get_input_format(cls, *, llm_format: bool = False) -> str:  # noqa: ARG003
         """Mock input format schema."""
         return '{"type": "object", "properties": {"message": {"type": "string"}}}'
 
     @classmethod
-    def get_output_format(cls, llm_format: bool = False) -> str:  # noqa: ARG003
+    def get_output_format(cls, *, llm_format: bool = False) -> str:  # noqa: ARG003
         """Mock output format schema."""
         return '{"type": "object", "properties": {"result": {"type": "string"}}}'
 
     @classmethod
-    def get_setup_format(cls, llm_format: bool = False) -> str:  # noqa: ARG003
+    def get_setup_format(cls, *, llm_format: bool = False) -> str:  # noqa: ARG003
         """Mock setup format schema."""
         return '{"type": "object", "properties": {"config": {"type": "string"}}}'
 
     @classmethod
-    def get_secret_format(cls, llm_format: bool = False) -> str:  # noqa: ARG003
+    def get_secret_format(cls, *, llm_format: bool = False) -> str:  # noqa: ARG003
         """Mock secret format schema."""
         return '{"type": "object", "properties": {"api_key": {"type": "string"}}}'
 
     @classmethod
-    def get_config_setup_format(cls, llm_format: bool = False) -> str:  # noqa: ARG003
+    def get_config_setup_format(cls, *, llm_format: bool = False) -> str:  # noqa: ARG003
         """Mock config setup format schema."""
         return '{"type": "object", "properties": {"setup_config": {"type": "string"}}}'
 
@@ -169,7 +168,7 @@ class TestStartModule:
         mock_job_manager.generate_stream_consumer = Mock(return_value=mock_context_manager)
 
         # Mock task completion
-        mock_job_manager.tasks = {"test-job-id": asyncio.create_task(asyncio.sleep(0))}
+        mock_job_manager.wait_for_completion = AsyncMock(return_value=None)
 
         # Execute
         responses = [response async for response in module_servicer.StartModule(request, fake_context)]
@@ -250,7 +249,7 @@ class TestStartModule:
         mock_context_manager.__aenter__ = AsyncMock(return_value=mock_stream_with_error())
         mock_context_manager.__aexit__ = AsyncMock(return_value=None)
         mock_job_manager.generate_stream_consumer = Mock(return_value=mock_context_manager)
-        mock_job_manager.tasks = {"test-job-id": asyncio.create_task(asyncio.sleep(0))}
+        mock_job_manager.wait_for_completion = AsyncMock(return_value=None)
 
         # Execute - expect KeyError due to logging bug
         with pytest.raises(KeyError, match="Attempt to overwrite 'message' in LogRecord"):
@@ -281,7 +280,7 @@ class TestStartModule:
         mock_context_manager.__aenter__ = AsyncMock(return_value=mock_stream_with_exception())
         mock_context_manager.__aexit__ = AsyncMock(return_value=None)
         mock_job_manager.generate_stream_consumer = Mock(return_value=mock_context_manager)
-        mock_job_manager.tasks = {"test-job-id": asyncio.create_task(asyncio.sleep(0))}
+        mock_job_manager.wait_for_completion = AsyncMock(return_value=None)
 
         # Execute - expect KeyError due to logging bug
         with pytest.raises(KeyError, match="Attempt to overwrite 'message' in LogRecord"):

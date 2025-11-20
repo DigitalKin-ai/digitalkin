@@ -8,6 +8,8 @@ on:
       - 'feat/*'
     tags:
       - 'v*'
+  delete:
+    # Trigger when branches are deleted
   workflow_dispatch:
     inputs:
       environment:
@@ -18,6 +20,10 @@ on:
           - production
           - staging
         default: 'staging'
+      cleanup_version:
+        description: 'Version to cleanup (optional - for manual cleanup)'
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -266,3 +272,118 @@ jobs:
                 body: message
               });
             }
+
+  cleanup:
+    name: Cleanup Documentation Version
+    runs-on: ubuntu-latest
+    if: github.event_name == 'delete' || github.event.inputs.cleanup_version != ''
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: gh-pages
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Install project and dependencies
+        run: uv pip install -e . --group docs --system
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Determine version to cleanup
+        id: cleanup_version
+        run: |
+          if [[ "${{ github.event_name }}" == "delete" ]]; then
+            # Branch was deleted
+            REF_NAME="${{ github.event.ref }}"
+            REF_TYPE="${{ github.event.ref_type }}"
+
+            echo "Deleted ref: $REF_NAME (type: $REF_TYPE)"
+
+            # Only cleanup branch documentation, not tags
+            if [[ "$REF_TYPE" == "branch" ]]; then
+              # Convert branch name to safe version (replace / with -)
+              SAFE_VERSION="${REF_NAME//\//-}"
+
+              # Only cleanup feature branches, not main/dev
+              if [[ "$REF_NAME" != "main" ]] && [[ "$REF_NAME" != "dev" ]]; then
+                echo "version=$SAFE_VERSION" >> $GITHUB_OUTPUT
+                echo "should_cleanup=true" >> $GITHUB_OUTPUT
+              else
+                echo "Skipping cleanup for protected branch: $REF_NAME"
+                echo "should_cleanup=false" >> $GITHUB_OUTPUT
+              fi
+            else
+              echo "Not a branch deletion, skipping"
+              echo "should_cleanup=false" >> $GITHUB_OUTPUT
+            fi
+          elif [[ "${{ github.event.inputs.cleanup_version }}" != "" ]]; then
+            # Manual cleanup via workflow_dispatch
+            VERSION="${{ github.event.inputs.cleanup_version }}"
+            SAFE_VERSION="${VERSION//\//-}"
+            echo "version=$SAFE_VERSION" >> $GITHUB_OUTPUT
+            echo "should_cleanup=true" >> $GITHUB_OUTPUT
+          else
+            echo "should_cleanup=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Check if version exists
+        id: check_version
+        if: steps.cleanup_version.outputs.should_cleanup == 'true'
+        run: |
+          VERSION="${{ steps.cleanup_version.outputs.version }}"
+
+          # List all versions
+          echo "Existing documentation versions:"
+          uv run mike list
+
+          # Check if version exists
+          if uv run mike list | grep -q "^$VERSION"; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "Version $VERSION found in documentation"
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "Version $VERSION not found in documentation"
+          fi
+
+      - name: Delete documentation version
+        if: steps.cleanup_version.outputs.should_cleanup == 'true' && steps.check_version.outputs.exists == 'true'
+        run: |
+          VERSION="${{ steps.cleanup_version.outputs.version }}"
+
+          echo "Deleting documentation version: $VERSION"
+          uv run mike delete --push "$VERSION"
+
+          echo "## 🗑️ Documentation Cleanup Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Deleted Version | $VERSION |" >> $GITHUB_STEP_SUMMARY
+          echo "| Trigger | ${{ github.event_name }} |" >> $GITHUB_STEP_SUMMARY
+          if [[ "${{ github.event_name }}" == "delete" ]]; then
+            echo "| Deleted Branch | ${{ github.event.ref }} |" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Documentation version deleted successfully!"
+
+      - name: Skip cleanup
+        if: steps.cleanup_version.outputs.should_cleanup != 'true' || steps.check_version.outputs.exists != 'true'
+        run: |
+          echo "## ℹ️ Documentation Cleanup Skipped" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [[ "${{ steps.cleanup_version.outputs.should_cleanup }}" != "true" ]]; then
+            echo "Reason: Protected branch or not a branch deletion" >> $GITHUB_STEP_SUMMARY
+          elif [[ "${{ steps.check_version.outputs.exists }}" != "true" ]]; then
+            echo "Reason: Version not found in documentation" >> $GITHUB_STEP_SUMMARY
+          fi
