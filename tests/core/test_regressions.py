@@ -385,6 +385,7 @@ class TestQueueTimeoutRegression:
                 # Queue should be cleaned up
                 assert "timeout-job" not in manager.job_queues
 
+    @pytest.mark.timeout(10)
     @pytest.mark.asyncio
     async def test_stream_consumer_periodic_timeout(self):
         """REGRESSION: Stream consumer could hang if job disappeared
@@ -396,7 +397,7 @@ class TestQueueTimeoutRegression:
                     from digitalkin.core.job_manager.taskiq_job_manager import TaskiqJobManager
                     from digitalkin.core.task_manager.task_session import TaskSession
 
-                    manager = TaskiqJobManager(MockModule, ServicesMode.REMOTE)
+                    manager = TaskiqJobManager(MockModule, ServicesMode.REMOTE, stream_timeout=1.0)
 
                     queue = asyncio.Queue()
                     manager.job_queues["disappearing-job"] = queue

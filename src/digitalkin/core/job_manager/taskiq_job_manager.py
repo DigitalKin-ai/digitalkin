@@ -140,6 +140,7 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         services_mode: ServicesMode,
         default_timeout: float = 10.0,
         max_concurrent_tasks: int = 100,
+        stream_timeout: float = 15.0,
     ) -> None:
         """Initialize the Taskiq job manager.
 
@@ -148,6 +149,7 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             services_mode: The mode of operation for the services
             default_timeout: Default timeout for task operations
             max_concurrent_tasks: Maximum number of concurrent tasks
+            stream_timeout: Timeout for stream consumer operations (default: 15.0s for distributed systems)
         """
         # Create remote task manager for distributed execution
         task_manager = RemoteTaskManager(default_timeout, max_concurrent_tasks)
@@ -158,6 +160,7 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         logger.warning("TaskiqJobManager initialized with app: %s", TASKIQ_BROKER)
         self.job_queues: dict[str, asyncio.Queue] = {}
         self.max_queue_size = 1000
+        self.stream_timeout = stream_timeout
 
     async def generate_config_setup_module_response(self, job_id: str) -> SetupModelT:
         """Generate a stream consumer for a module's output data.
@@ -295,8 +298,8 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             while True:
                 try:
                     # Block for first item with timeout to allow termination checks
-                    # Increased to 15s to account for distributed system latencies
-                    item = await asyncio.wait_for(queue.get(), timeout=15.0)
+                    # Configurable timeout (default 15s) to account for distributed system latencies
+                    item = await asyncio.wait_for(queue.get(), timeout=self.stream_timeout)
                     queue.task_done()
                     yield item
 
