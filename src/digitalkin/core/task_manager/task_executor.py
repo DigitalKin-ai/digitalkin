@@ -8,7 +8,12 @@ from typing import Any
 from digitalkin.core.task_manager.surrealdb_repository import SurrealDBConnection
 from digitalkin.core.task_manager.task_session import TaskSession
 from digitalkin.logger import logger
-from digitalkin.models.core.task_monitor import SignalMessage, SignalType, TaskStatus
+from digitalkin.models.core.task_monitor import (
+    CancellationReason,
+    SignalMessage,
+    SignalType,
+    TaskStatus,
+)
 
 
 class TaskExecutor:
@@ -82,7 +87,7 @@ class TaskExecutor:
             finally:
                 logger.info("Heartbeat task ended", extra={"mission_id": mission_id, "task_id": task_id})
 
-        async def supervisor() -> None:
+        async def supervisor() -> None:  # noqa: C901, PLR0912, PLR0915
             """Supervise the three concurrent tasks and handle outcomes.
 
             Raises:
@@ -96,6 +101,7 @@ class TaskExecutor:
             main_task = None
             hb_task = None
             sig_task = None
+            cleanup_reason = CancellationReason.UNKNOWN
 
             try:
                 main_task = asyncio.create_task(coro, name=f"{task_id}_main")
@@ -106,12 +112,37 @@ class TaskExecutor:
                     return_when=asyncio.FIRST_COMPLETED,
                 )
 
-                # One task completed -> cancel the others
-                for t in pending:
-                    t.cancel()
+                # Determine cleanup reason based on which task completed first
+                completed = next(iter(done))
+
+                if completed is main_task:
+                    # Main task finished - cleanup is due to success
+                    cleanup_reason = CancellationReason.SUCCESS_CLEANUP
+                elif completed is sig_task or (completed is hb_task and sig_task.done()):
+                    # Signal task finished - external cancellation
+                    cleanup_reason = CancellationReason.SIGNAL
+                elif completed is hb_task:
+                    # Heartbeat stopped - failure cleanup
+                    cleanup_reason = CancellationReason.FAILURE_CLEANUP
+
+                # Cancel pending tasks with proper reason logging
+                if pending:
+                    pending_names = [t.get_name() for t in pending]
+                    logger.debug(
+                        "Cancelling pending tasks: %s, reason: %s",
+                        pending_names,
+                        cleanup_reason.value,
+                        extra={
+                            "mission_id": mission_id,
+                            "task_id": task_id,
+                            "pending_tasks": pending_names,
+                            "cancellation_reason": cleanup_reason.value,
+                        },
+                    )
+                    for t in pending:
+                        t.cancel()
 
                 # Propagate exception/result from the finished task
-                completed = next(iter(done))
                 await completed
 
                 # Determine final status based on which task completed
@@ -122,50 +153,95 @@ class TaskExecutor:
                         extra={"mission_id": mission_id, "task_id": task_id},
                     )
                 elif completed is sig_task or (completed is hb_task and sig_task.done()):
-                    logger.debug(
-                        f"Task cancelled due to signal {sig_task=}",
-                        extra={"mission_id": mission_id, "task_id": task_id},
-                    )
                     session.status = TaskStatus.CANCELLED
+                    session.cancellation_reason = CancellationReason.SIGNAL
+                    logger.info(
+                        "Task cancelled via external signal",
+                        extra={
+                            "mission_id": mission_id,
+                            "task_id": task_id,
+                            "cancellation_reason": CancellationReason.SIGNAL.value,
+                        },
+                    )
                 elif completed is hb_task:
                     session.status = TaskStatus.FAILED
+                    session.cancellation_reason = CancellationReason.HEARTBEAT_FAILURE
                     logger.error(
-                        f"Heartbeat stopped for {task_id}",
-                        extra={"mission_id": mission_id, "task_id": task_id},
+                        "Heartbeat stopped unexpectedly for task: '%s'",
+                        task_id,
+                        extra={
+                            "mission_id": mission_id,
+                            "task_id": task_id,
+                            "cancellation_reason": CancellationReason.HEARTBEAT_FAILURE.value,
+                        },
                     )
                     msg = f"Heartbeat stopped for {task_id}"
                     raise RuntimeError(msg)  # noqa: TRY301
 
             except asyncio.CancelledError:
                 session.status = TaskStatus.CANCELLED
-                logger.info("Task cancelled", extra={"mission_id": mission_id, "task_id": task_id})
-                raise
-            except Exception:
-                session.status = TaskStatus.FAILED
-                logger.exception("Task failed", extra={"mission_id": mission_id, "task_id": task_id})
-                raise
-            finally:
-                session.completed_at = datetime.datetime.now(datetime.timezone.utc)
-                # Ensure all tasks are cleaned up
-                tasks_to_cleanup = [t for t in [main_task, hb_task, sig_task] if t is not None]
-                for t in tasks_to_cleanup:
-                    if not t.done():
-                        t.cancel()
-                if tasks_to_cleanup:
-                    await asyncio.gather(*tasks_to_cleanup, return_exceptions=True)
-
+                # Only set reason if not already set (preserve original reason)
                 logger.info(
-                    "Task execution completed with status: %s",
-                    session.status,
+                    "Task cancelled externally: '%s', reason: %s",
+                    task_id,
+                    session.cancellation_reason.value,
                     extra={
                         "mission_id": mission_id,
                         "task_id": task_id,
-                        "status": session.status,
-                        "duration": (
-                            (session.completed_at - session.started_at).total_seconds()
-                            if session.started_at and session.completed_at
-                            else None
-                        ),
+                        "cancellation_reason": session.cancellation_reason.value,
+                    },
+                )
+                cleanup_reason = CancellationReason.FAILURE_CLEANUP
+                raise
+            except Exception:
+                session.status = TaskStatus.FAILED
+                cleanup_reason = CancellationReason.FAILURE_CLEANUP
+                logger.exception(
+                    "Task failed with exception: '%s'",
+                    task_id,
+                    extra={"mission_id": mission_id, "task_id": task_id},
+                )
+                raise
+            finally:
+                session.completed_at = datetime.datetime.now(datetime.timezone.utc)
+                # Ensure all tasks are cleaned up with proper reason
+                tasks_to_cleanup = [t for t in [main_task, hb_task, sig_task] if t is not None and not t.done()]
+                if tasks_to_cleanup:
+                    cleanup_names = [t.get_name() for t in tasks_to_cleanup]
+                    logger.debug(
+                        "Final cleanup of %d remaining tasks: %s, reason: %s",
+                        len(tasks_to_cleanup),
+                        cleanup_names,
+                        cleanup_reason.value,
+                        extra={
+                            "mission_id": mission_id,
+                            "task_id": task_id,
+                            "cleanup_count": len(tasks_to_cleanup),
+                            "cleanup_tasks": cleanup_names,
+                            "cancellation_reason": cleanup_reason.value,
+                        },
+                    )
+                    for t in tasks_to_cleanup:
+                        t.cancel()
+                    await asyncio.gather(*tasks_to_cleanup, return_exceptions=True)
+
+                duration = (
+                    (session.completed_at - session.started_at).total_seconds()
+                    if session.started_at and session.completed_at
+                    else None
+                )
+                logger.info(
+                    "Task execution completed: '%s', status: %s, reason: %s, duration: %.2fs",
+                    task_id,
+                    session.status.value,
+                    session.cancellation_reason.value if session.status == TaskStatus.CANCELLED else "n/a",
+                    duration or 0,
+                    extra={
+                        "mission_id": mission_id,
+                        "task_id": task_id,
+                        "status": session.status.value,
+                        "cancellation_reason": session.cancellation_reason.value,
+                        "duration": duration,
                     },
                 )
 

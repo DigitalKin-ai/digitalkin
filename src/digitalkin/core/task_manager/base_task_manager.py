@@ -11,6 +11,7 @@ from typing import Any
 from digitalkin.core.task_manager.surrealdb_repository import SurrealDBConnection
 from digitalkin.core.task_manager.task_session import TaskSession
 from digitalkin.logger import logger
+from digitalkin.models.core.task_monitor import CancellationReason
 from digitalkin.modules._base_module import BaseModule
 
 
@@ -84,13 +85,32 @@ class BaseTaskManager(ABC):
             task_id: The ID of the task to clean up
             mission_id: The ID of the mission associated with the task
         """
+        session = self.tasks_sessions.get(task_id)
+        cancellation_reason = session.cancellation_reason.value if session else "no_session"
+        final_status = session.status.value if session else "unknown"
+
         logger.debug(
-            "Cleaning up resources for task: '%s'", task_id, extra={"mission_id": mission_id, "task_id": task_id}
+            "Cleaning up resources",
+            extra={
+                "mission_id": mission_id,
+                "task_id": task_id,
+                "final_status": final_status,
+                "cancellation_reason": cancellation_reason,
+            },
         )
-        if task_id in self.tasks_sessions:
-            session = self.tasks_sessions[task_id]
+
+        if session:
             await session.cleanup()
             self.tasks_sessions.pop(task_id, None)
+            logger.debug(
+                "Task session cleanup completed",
+                extra={
+                    "mission_id": mission_id,
+                    "task_id": task_id,
+                    "final_status": final_status,
+                    "cancellation_reason": cancellation_reason,
+                },
+            )
 
         self.tasks.pop(task_id, None)
 
@@ -261,10 +281,21 @@ class BaseTaskManager(ABC):
             )
 
         except asyncio.TimeoutError:
+            # Set timeout as cancellation reason
+            if task_id in self.tasks_sessions:
+                session = self.tasks_sessions[task_id]
+                if session.cancellation_reason == CancellationReason.UNKNOWN:
+                    session.cancellation_reason = CancellationReason.TIMEOUT
+
             logger.warning(
                 "Graceful cancellation timed out for task: '%s', forcing cancellation",
                 task_id,
-                extra={"mission_id": mission_id, "task_id": task_id, "timeout": timeout},
+                extra={
+                    "mission_id": mission_id,
+                    "task_id": task_id,
+                    "timeout": timeout,
+                    "cancellation_reason": CancellationReason.TIMEOUT.value,
+                },
             )
 
             # Phase 2: Force cancellation
@@ -272,8 +303,16 @@ class BaseTaskManager(ABC):
             with contextlib.suppress(asyncio.CancelledError):
                 await task
 
-            logger.warning("Task force-cancelled: '%s'", task_id, extra={"mission_id": mission_id, "task_id": task_id})
-            await self._cleanup_task(task_id, mission_id)
+            logger.warning(
+                "Task force-cancelled: '%s', reason: %s",
+                task_id,
+                CancellationReason.TIMEOUT.value,
+                extra={
+                    "mission_id": mission_id,
+                    "task_id": task_id,
+                    "cancellation_reason": CancellationReason.TIMEOUT.value,
+                },
+            )
             return True
 
         except Exception as e:
@@ -283,10 +322,9 @@ class BaseTaskManager(ABC):
                 extra={"mission_id": mission_id, "task_id": task_id, "error": str(e)},
                 exc_info=True,
             )
-            await self._cleanup_task(task_id, mission_id)
             return False
-
-        await self._cleanup_task(task_id, mission_id)
+        finally:
+            await self._cleanup_task(task_id, mission_id)
         return True
 
     async def clean_session(self, task_id: str, mission_id: str) -> bool:
@@ -382,7 +420,16 @@ class BaseTaskManager(ABC):
         results: dict[str, bool | BaseException] = {}
         for task_id, result in zip(task_ids, results_list):
             if isinstance(result, Exception):
-                logger.error("Exception cancelling task %s: %s", task_id, result)
+                logger.error(
+                    "Exception cancelling task: '%s', error: %s",
+                    task_id,
+                    result,
+                    extra={
+                        "mission_id": mission_id,
+                        "task_id": task_id,
+                        "error": str(result),
+                    },
+                )
                 results[task_id] = False
             else:
                 results[task_id] = result
@@ -403,6 +450,21 @@ class BaseTaskManager(ABC):
         )
 
         self._shutdown_event.set()
+
+        # Mark all sessions with shutdown reason before cancellation
+        for task_id, session in self.tasks_sessions.items():
+            if session.cancellation_reason == CancellationReason.UNKNOWN:
+                session.cancellation_reason = CancellationReason.SHUTDOWN
+                logger.debug(
+                    "Marking task for shutdown: '%s'",
+                    task_id,
+                    extra={
+                        "mission_id": mission_id,
+                        "task_id": task_id,
+                        "cancellation_reason": CancellationReason.SHUTDOWN.value,
+                    },
+                )
+
         results = await self.cancel_all_tasks(mission_id, timeout)
 
         failed_tasks = [task_id for task_id, success in results.items() if not success]
@@ -411,13 +473,26 @@ class BaseTaskManager(ABC):
                 "Failed to cancel %d tasks during shutdown: %s",
                 len(failed_tasks),
                 failed_tasks,
-                extra={"mission_id": mission_id, "failed_tasks": failed_tasks, "failed_count": len(failed_tasks)},
+                extra={
+                    "mission_id": mission_id,
+                    "failed_tasks": failed_tasks,
+                    "failed_count": len(failed_tasks),
+                    "cancellation_reason": CancellationReason.SHUTDOWN.value,
+                },
             )
 
         # Clean up any remaining sessions (in case cancellation didn't clean them)
         remaining_sessions = list(self.tasks_sessions.keys())
         if remaining_sessions:
-            logger.info("Cleaning up %d remaining task sessions", len(remaining_sessions))
+            logger.info(
+                "Cleaning up %d remaining task sessions after shutdown",
+                len(remaining_sessions),
+                extra={
+                    "mission_id": mission_id,
+                    "remaining_sessions": remaining_sessions,
+                    "remaining_count": len(remaining_sessions),
+                },
+            )
             cleanup_coros = [self._cleanup_task(task_id, mission_id) for task_id in remaining_sessions]
             await asyncio.gather(*cleanup_coros, return_exceptions=True)
 

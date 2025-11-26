@@ -20,7 +20,7 @@ import pytest_asyncio
 from digitalkin.core.task_manager.surrealdb_repository import SurrealDBConnection
 from digitalkin.core.task_manager.task_executor import TaskExecutor
 from digitalkin.core.task_manager.task_session import TaskSession
-from digitalkin.models.core.task_monitor import TaskStatus
+from digitalkin.models.core.task_monitor import CancellationReason, TaskStatus
 from digitalkin.modules._base_module import BaseModule
 
 # Set timeout for all tests in this file (30 seconds)
@@ -49,6 +49,7 @@ async def mock_task_session() -> Mock:
     session = Mock(spec=TaskSession)
     session.mission_id = "missions:mock"
     session.status = TaskStatus.PENDING
+    session.cancellation_reason = CancellationReason.UNKNOWN
     session.started_at = None
     session.completed_at = None
     session.db = Mock()
@@ -634,6 +635,7 @@ class TestConcurrentExecution:
 
         session = Mock(spec=TaskSession)
         session.status = TaskStatus.PENDING
+        session.cancellation_reason = CancellationReason.UNKNOWN
 
         async def heartbeat_with_logs() -> None:
             try:

@@ -24,7 +24,7 @@ import pytest_asyncio
 from digitalkin.core.task_manager.base_task_manager import BaseTaskManager
 from digitalkin.core.task_manager.surrealdb_repository import SurrealDBConnection
 from digitalkin.core.task_manager.task_session import TaskSession
-from digitalkin.models.core.task_monitor import SignalType, TaskStatus
+from digitalkin.models.core.task_monitor import CancellationReason, SignalType, TaskStatus
 from digitalkin.modules._base_module import BaseModule
 
 # Set timeout for all tests in this file (60 seconds)
@@ -91,6 +91,7 @@ async def mock_task_session() -> Mock:
     session = Mock(spec=TaskSession)
     session.mission_id = "missions:mock"
     session.status = TaskStatus.PENDING
+    session.cancellation_reason = CancellationReason.UNKNOWN
     session.started_at = None
     session.completed_at = None
     session.db = Mock()
@@ -319,6 +320,8 @@ class TestCleanup:
         # Create mock session with cleanup
         mock_session = Mock(spec=TaskSession)
         mock_session.cleanup = AsyncMock()
+        mock_session.status = TaskStatus.PENDING
+        mock_session.cancellation_reason = CancellationReason.UNKNOWN
 
         task_manager.tasks_sessions[task_id] = mock_session
         task_manager.tasks[task_id] = Mock()  # Mock task object
@@ -341,6 +344,8 @@ class TestCleanup:
         # Setup: Add to both dictionaries
         mock_session = Mock(spec=TaskSession)
         mock_session.cleanup = AsyncMock()
+        mock_session.status = TaskStatus.PENDING
+        mock_session.cancellation_reason = CancellationReason.UNKNOWN
         task_manager.tasks_sessions[task_id] = mock_session
         task_manager.tasks[task_id] = Mock()
 
@@ -385,6 +390,8 @@ class TestCleanup:
         # Only session exists, no task
         mock_session = Mock(spec=TaskSession)
         mock_session.cleanup = AsyncMock()
+        mock_session.status = TaskStatus.PENDING
+        mock_session.cancellation_reason = CancellationReason.UNKNOWN
         task_manager.tasks_sessions[task_id] = mock_session
 
         # Should not raise
@@ -406,6 +413,8 @@ class TestCleanup:
         # First cleanup with session
         mock_session = Mock(spec=TaskSession)
         mock_session.cleanup = AsyncMock()
+        mock_session.status = TaskStatus.PENDING
+        mock_session.cancellation_reason = CancellationReason.UNKNOWN
         task_manager.tasks_sessions[task_id] = mock_session
         task_manager.tasks[task_id] = Mock()
 
@@ -433,6 +442,8 @@ class TestCleanup:
         # Session exists but NO task
         mock_session = Mock(spec=TaskSession)
         mock_session.cleanup = AsyncMock()
+        mock_session.status = TaskStatus.PENDING
+        mock_session.cancellation_reason = CancellationReason.UNKNOWN
         task_manager.tasks_sessions[task_id] = mock_session
 
         # Execute cancel - task not found, but cleanup should still happen
@@ -469,6 +480,8 @@ class TestCleanup:
         # Add session
         mock_session = Mock(spec=TaskSession)
         mock_session.cleanup = AsyncMock()
+        mock_session.status = TaskStatus.RUNNING
+        mock_session.cancellation_reason = CancellationReason.UNKNOWN
         task_manager.tasks_sessions[task_id] = mock_session
 
         # Cancel with short timeout - will timeout and force cancel
@@ -496,6 +509,8 @@ class TestCleanup:
         execution_order = []
 
         mock_session = Mock(spec=TaskSession)
+        mock_session.status = TaskStatus.PENDING
+        mock_session.cancellation_reason = CancellationReason.UNKNOWN
 
         # Track when cleanup is called and when session is still in dict
         async def track_cleanup() -> None:
@@ -1066,6 +1081,8 @@ class TestAsyncContextManager:
                     mock_db.close = AsyncMock()
                     mock_session.db = mock_db
                     mock_session.queue = asyncio.Queue()
+                    mock_session.status = TaskStatus.RUNNING
+                    mock_session.cancellation_reason = CancellationReason.UNKNOWN
 
                     # Add cleanup method that calls db.close()
                     # Use default argument to capture current value
@@ -1244,6 +1261,8 @@ class TestCleanupIntegration:
             task_id = f"task_{i}"
             mock_session = Mock(spec=TaskSession)
             mock_session.cleanup = AsyncMock()
+            mock_session.status = TaskStatus.RUNNING
+            mock_session.cancellation_reason = CancellationReason.UNKNOWN
             sessions[task_id] = mock_session
             task_manager.tasks_sessions[task_id] = mock_session
 
@@ -1285,6 +1304,8 @@ class TestCleanupIntegration:
             # Create mock session
             mock_session = Mock(spec=TaskSession)
             mock_session.cleanup = AsyncMock()
+            mock_session.status = TaskStatus.RUNNING
+            mock_session.cancellation_reason = CancellationReason.UNKNOWN
             sessions[task_id] = mock_session
             task_manager.tasks_sessions[task_id] = mock_session
 

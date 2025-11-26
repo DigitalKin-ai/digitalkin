@@ -2076,14 +2076,14 @@ class TestLoggingValidation:
         # First cancellation
         await task_session._handle_cancel()
 
-        # Should log info about cancellation
-        assert any(call for call in mock_logger.info.call_args_list if "cancelling" in str(call).lower())
+        # Should log info about cancellation (new format: "Task cancelled:")
+        assert any(call for call in mock_logger.info.call_args_list if "cancelled" in str(call).lower())
 
         # Second cancellation (idempotent)
         await task_session._handle_cancel()
 
-        # Should log debug about already cancelled
-        assert any(call for call in mock_logger.debug.call_args_list if "already cancelled" in str(call).lower())
+        # Should log debug about already cancelled (new format: "Cancel ignored")
+        assert any(call for call in mock_logger.debug.call_args_list if "cancel ignored" in str(call).lower())
 
     @pytest.mark.asyncio
     async def test_signal_listener_logs_lifecycle(self, task_session, mock_db, mock_logger):

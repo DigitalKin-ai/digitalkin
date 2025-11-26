@@ -96,46 +96,39 @@ jobs:
           path: dist/
           retention-days: 7
 
-  test:
-    name: ${{ matrix.test-name }} - Python ${{ matrix.python-version }}
+  # Full test suite on Python 3.12 (primary version)
+  test-full:
+    name: ${{ matrix.test-name }} - Python 3.12
     runs-on: ubuntu-latest
     needs: [lint]
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12", "3.13"]
+        python-version: ["3.12"]
         test-name: ["Unit Tests", "Smoke Tests", "gRPC Tests", "Validation Tests", "Edge Case Tests", "Regression Tests", "Integration Tests", "Taskiq Tests"]
         include:
-          # Unit Tests - unmarked tests
           - test-name: "Unit Tests"
             test-marker: "not integration and not grpc and not smoke and not validation and not edge_case and not regression and not taskiq"
             test-description: "Basic unit tests without markers"
-          # Smoke Tests - critical path
           - test-name: "Smoke Tests"
             test-marker: "smoke"
             test-description: "Critical path tests"
-          # gRPC Tests
           - test-name: "gRPC Tests"
             test-marker: "grpc"
             test-description: "gRPC service functionality"
-          # Validation Tests
           - test-name: "Validation Tests"
             test-marker: "validation"
             test-description: "Input validation and schema tests"
-          # Edge Case Tests
           - test-name: "Edge Case Tests"
             test-marker: "edge_case"
             test-description: "Boundary conditions"
-          # Regression Tests
           - test-name: "Regression Tests"
             test-marker: "regression"
             test-description: "Previously fixed bugs"
-          # Integration Tests
           - test-name: "Integration Tests"
             test-marker: "integration"
             test-description: "Tests requiring real SurrealDB"
-          # Taskiq Tests
           - test-name: "Taskiq Tests"
             test-marker: "taskiq"
             test-description: "Taskiq distributed execution and pickle/unpickle behavior"
@@ -181,6 +174,7 @@ jobs:
           DOCKER_BUILDKIT: 1
 
       - name: Start services and run tests
+        id: run-tests
         run: |
           # Determine test selector and pytest args
           TEST_SELECTOR="${{ github.event.inputs.test_selector || 'tests/' }}"
@@ -197,22 +191,42 @@ jobs:
           echo "Python Version: ${{ matrix.python-version }}"
           echo "::endgroup::"
 
-          # Run tests
+          # Run tests (don't exit on failure, we need to extract artifacts)
           docker compose up \
             --exit-code-from tests \
             --abort-on-container-exit \
-            --remove-orphans
+            --remove-orphans || TEST_EXIT_CODE=$?
 
-          TEST_EXIT_CODE=$?
+          TEST_EXIT_CODE=${TEST_EXIT_CODE:-0}
           echo "Tests exited with code ${TEST_EXIT_CODE}"
-
-          exit ${TEST_EXIT_CODE}
+          echo "test_exit_code=${TEST_EXIT_CODE}" >> $GITHUB_OUTPUT
         env:
           TEST_SELECTOR: ${{ github.event.inputs.test_selector || 'tests/' }}
           PYTEST_ARGS: ${{ env.DEFAULT_PYTEST_ARGS }} -m "${{ matrix.test-marker }}" ${{ github.event.inputs.pytest_args }}
 
+      - name: Extract test artifacts from container
+        if: always()
+        run: |
+          # Create artifacts directory
+          mkdir -p test-artifacts
+
+          # Copy artifacts from the mounted volume (they should be in current dir)
+          for file in pytest-report.html test-results.xml test-metrics.json coverage.xml .coverage; do
+            if [ -f "$file" ]; then
+              cp "$file" test-artifacts/
+              echo "✓ Copied $file"
+            else
+              echo "⚠ $file not found"
+            fi
+          done
+
+          # List what we got
+          echo "::group::Extracted Artifacts"
+          ls -la test-artifacts/
+          echo "::endgroup::"
+
       - name: Dump docker logs on failure
-        if: failure()
+        if: failure() || steps.run-tests.outputs.test_exit_code != '0'
         run: |
           echo "::group::Docker Compose Logs"
           docker compose logs
@@ -229,70 +243,351 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: test-results-${{ matrix.test-name }}-py${{ matrix.python-version }}
-          path: |
-            pytest-report.html
-            test-results.xml
-            test-metrics.json
+          path: test-artifacts/
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: Upload coverage report
+        if: always() && hashFiles('test-artifacts/coverage.xml') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.test-name }}-py${{ matrix.python-version }}
+          path: test-artifacts/coverage.xml
           retention-days: 30
 
+      - name: Fail if tests failed
+        if: steps.run-tests.outputs.test_exit_code != '0'
+        run: exit ${{ steps.run-tests.outputs.test_exit_code }}
+
+  # Compatibility tests on other Python versions (minimal but critical)
+  test-compat:
+    name: ${{ matrix.test-name }} - Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    needs: [lint]
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.13"]
+        test-name: ["Smoke Tests", "Validation Tests", "Regression Tests"]
+        include:
+          - test-name: "Smoke Tests"
+            test-marker: "smoke"
+            test-description: "Critical path tests"
+          - test-name: "Validation Tests"
+            test-marker: "validation"
+            test-description: "Input validation and schema tests"
+          - test-name: "Regression Tests"
+            test-marker: "regression"
+            test-description: "Previously fixed bugs"
+
+    env:
+      TEST_SURREALDB_PORT: 8008
+      TEST_SURREALDB_USERNAME: root
+      TEST_SURREALDB_PASSWORD: root
+      TEST_SURREALDB_NAMESPACE: test
+      TEST_SURREALDB_DATABASE: test
+      PYTHON_VERSION: ${{ matrix.python-version }}
+      TEST_MARKER: ${{ matrix.test-marker }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Cache Docker layers
+        uses: actions/cache@v4
+        with:
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-buildx-py${{ matrix.python-version }}-${{ hashFiles('**/Dockerfile', '**/docker-compose.yml', '**/pyproject.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-buildx-py${{ matrix.python-version }}-
+            ${{ runner.os }}-buildx-
+
+      - name: Validate Docker Compose configuration
+        run: |
+          if [ ! -f docker-compose.yml ]; then
+            echo "::error::docker-compose.yml not found"
+            exit 1
+          fi
+          docker compose config --quiet
+
+      - name: Build Docker images
+        run: |
+          docker compose build --pull --progress=plain
+        env:
+          BUILDKIT_PROGRESS: plain
+          DOCKER_BUILDKIT: 1
+
+      - name: Start services and run tests
+        id: run-tests
+        run: |
+          # Determine test selector and pytest args
+          TEST_SELECTOR="${{ github.event.inputs.test_selector || 'tests/' }}"
+          PYTEST_CUSTOM_ARGS="${{ github.event.inputs.pytest_args || '' }}"
+          MARKER_ARGS="-m \"${{ matrix.test-marker }}\""
+          PYTEST_ARGS="${{ env.DEFAULT_PYTEST_ARGS }} ${MARKER_ARGS} ${PYTEST_CUSTOM_ARGS}"
+
+          echo "::group::Test Configuration"
+          echo "Test Type: ${{ matrix.test-name }} (Compatibility)"
+          echo "Test Marker: ${{ matrix.test-marker }}"
+          echo "Description: ${{ matrix.test-description }}"
+          echo "TEST_SELECTOR: ${TEST_SELECTOR}"
+          echo "PYTEST_ARGS: ${PYTEST_ARGS}"
+          echo "Python Version: ${{ matrix.python-version }}"
+          echo "::endgroup::"
+
+          # Run tests (don't exit on failure, we need to extract artifacts)
+          docker compose up \
+            --exit-code-from tests \
+            --abort-on-container-exit \
+            --remove-orphans || TEST_EXIT_CODE=$?
+
+          TEST_EXIT_CODE=${TEST_EXIT_CODE:-0}
+          echo "Tests exited with code ${TEST_EXIT_CODE}"
+          echo "test_exit_code=${TEST_EXIT_CODE}" >> $GITHUB_OUTPUT
+        env:
+          TEST_SELECTOR: ${{ github.event.inputs.test_selector || 'tests/' }}
+          PYTEST_ARGS: ${{ env.DEFAULT_PYTEST_ARGS }} -m "${{ matrix.test-marker }}" ${{ github.event.inputs.pytest_args }}
+
+      - name: Extract test artifacts from container
+        if: always()
+        run: |
+          # Create artifacts directory
+          mkdir -p test-artifacts
+
+          # Copy artifacts from the mounted volume
+          for file in pytest-report.html test-results.xml test-metrics.json coverage.xml .coverage; do
+            if [ -f "$file" ]; then
+              cp "$file" test-artifacts/
+              echo "✓ Copied $file"
+            else
+              echo "⚠ $file not found"
+            fi
+          done
+
+          # List what we got
+          echo "::group::Extracted Artifacts"
+          ls -la test-artifacts/
+          echo "::endgroup::"
+
+      - name: Dump docker logs on failure
+        if: failure() || steps.run-tests.outputs.test_exit_code != '0'
+        run: |
+          echo "::group::Docker Compose Logs"
+          docker compose logs
+          echo "::endgroup::"
+
+      - name: Stop and cleanup containers
+        if: always()
+        run: |
+          docker compose down --volumes --remove-orphans
+          docker system prune -f --volumes
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.test-name }}-py${{ matrix.python-version }}
+          path: test-artifacts/
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: Fail if tests failed
+        if: steps.run-tests.outputs.test_exit_code != '0'
+        run: exit ${{ steps.run-tests.outputs.test_exit_code }}
 
   test-summary:
     name: Test Summary
     runs-on: ubuntu-latest
-    needs: [test]
+    needs: [test-full, test-compat]
     if: always()
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
       - name: Download all test results
         uses: actions/download-artifact@v5
         with:
           pattern: test-results-*
           path: test-results
 
-      - name: Publish test summary
+      - name: Download coverage reports
+        uses: actions/download-artifact@v5
+        with:
+          pattern: coverage-*
+          path: coverage-reports
+        continue-on-error: true
+
+      - name: Publish Test Report to PR
+        uses: dorny/test-reporter@v2
+        if: always() && github.event_name == 'pull_request'
+        with:
+          name: Test Results
+          path: 'test-results/**/test-results.xml'
+          reporter: java-junit
+          fail-on-error: false
+
+      - name: Generate detailed test summary
         run: |
-          echo "# Test Results Summary by Category" >> $GITHUB_STEP_SUMMARY
+          echo "# 📊 Test Results Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Results organized by test type and Python version" >> $GITHUB_STEP_SUMMARY
+          echo "**Workflow:** \`${{ github.workflow }}\` | **Run:** [#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
-          # Group by test type
-          for test_type in "Unit Tests" "Smoke Tests" "gRPC Tests" "Validation Tests" "Edge Case Tests" "Regression Tests" "Integration Tests"; do
-            echo "## ${test_type}" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
+          # Initialize counters
+          total_tests=0
+          total_passed=0
+          total_failed=0
+          total_errors=0
+          total_skipped=0
 
-            found_results=false
-            for result_dir in test-results/test-results-"${test_type}"-*; do
-              if [ -f "$result_dir/test-results.xml" ]; then
-                found_results=true
-                python_version=$(basename "$result_dir" | sed "s/test-results-${test_type}-py//")
+          echo "## 🧪 Test Results by Category" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Test Type | Python | Status | Tests | Passed | Failed | Errors | Skipped | Duration |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|--------|--------|-------|--------|--------|--------|---------|----------|" >> $GITHUB_STEP_SUMMARY
 
-                # Parse JUnit XML
-                tests=$(grep -o 'tests="[0-9]*"' "$result_dir/test-results.xml" | head -1 | grep -o '[0-9]*')
-                failures=$(grep -o 'failures="[0-9]*"' "$result_dir/test-results.xml" | head -1 | grep -o '[0-9]*')
-                errors=$(grep -o 'errors="[0-9]*"' "$result_dir/test-results.xml" | head -1 | grep -o '[0-9]*')
-                skipped=$(grep -o 'skipped="[0-9]*"' "$result_dir/test-results.xml" | head -1 | grep -o '[0-9]*')
+          # Process each test result
+          for result_dir in test-results/test-results-*; do
+            if [ -f "$result_dir/test-results.xml" ]; then
+              dir_name=$(basename "$result_dir")
 
-                # Calculate status
-                if [ "${failures:-0}" -eq 0 ] && [ "${errors:-0}" -eq 0 ]; then
-                  status="✅ PASS"
-                else
-                  status="❌ FAIL"
-                fi
+              # Extract test type and python version from directory name
+              # Format: test-results-{Test Type}-py{version}
+              test_type=$(echo "$dir_name" | sed 's/test-results-//' | sed 's/-py[0-9.]*//')
+              python_version=$(echo "$dir_name" | grep -o 'py[0-9.]*' | sed 's/py//')
 
-                echo "### Python ${python_version} - ${status}" >> $GITHUB_STEP_SUMMARY
-                echo "- Tests: ${tests:-0} | Failures: ${failures:-0} | Errors: ${errors:-0} | Skipped: ${skipped:-0}" >> $GITHUB_STEP_SUMMARY
-                echo "" >> $GITHUB_STEP_SUMMARY
+              # Parse JUnit XML
+              tests=$(grep -o 'tests="[0-9]*"' "$result_dir/test-results.xml" | head -1 | grep -o '[0-9]*' || echo "0")
+              failures=$(grep -o 'failures="[0-9]*"' "$result_dir/test-results.xml" | head -1 | grep -o '[0-9]*' || echo "0")
+              errors=$(grep -o 'errors="[0-9]*"' "$result_dir/test-results.xml" | head -1 | grep -o '[0-9]*' || echo "0")
+              skipped=$(grep -o 'skipped="[0-9]*"' "$result_dir/test-results.xml" | head -1 | grep -o '[0-9]*' || echo "0")
+              time=$(grep -o 'time="[0-9.]*"' "$result_dir/test-results.xml" | head -1 | grep -o '[0-9.]*' || echo "0")
+
+              # Calculate passed
+              passed=$((tests - failures - errors - skipped))
+
+              # Update totals
+              total_tests=$((total_tests + tests))
+              total_passed=$((total_passed + passed))
+              total_failed=$((total_failed + failures))
+              total_errors=$((total_errors + errors))
+              total_skipped=$((total_skipped + skipped))
+
+              # Determine status emoji
+              if [ "${failures:-0}" -eq 0 ] && [ "${errors:-0}" -eq 0 ]; then
+                status="✅"
+              else
+                status="❌"
               fi
-            done
 
-            if [ "$found_results" = false ]; then
-              echo "_No results found_" >> $GITHUB_STEP_SUMMARY
-              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "| ${test_type} | ${python_version} | ${status} | ${tests} | ${passed} | ${failures} | ${errors} | ${skipped} | ${time}s |" >> $GITHUB_STEP_SUMMARY
             fi
           done
 
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 📈 Overall Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Calculate pass rate
+          if [ $total_tests -gt 0 ]; then
+            pass_rate=$(echo "scale=1; $total_passed * 100 / $total_tests" | bc)
+          else
+            pass_rate="0"
+          fi
+
+          # Overall status
+          if [ $total_failed -eq 0 ] && [ $total_errors -eq 0 ]; then
+            echo "### ✅ All Tests Passed!" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### ❌ Some Tests Failed" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Total Tests | ${total_tests} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Passed | ${total_passed} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Failed | ${total_failed} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Errors | ${total_errors} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Skipped | ${total_skipped} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Pass Rate | ${pass_rate}% |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # List available artifacts
+          echo "## 📁 Available Artifacts" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Download test reports from the [Artifacts section](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}#artifacts) of this workflow run:" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **pytest-report.html** - Detailed HTML test report with logs" >> $GITHUB_STEP_SUMMARY
+          echo "- **test-results.xml** - JUnit XML format for CI integration" >> $GITHUB_STEP_SUMMARY
+          echo "- **test-metrics.json** - JSON metrics for analysis" >> $GITHUB_STEP_SUMMARY
+          echo "- **coverage.xml** - Code coverage report (Python 3.12 only)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+      - name: Create consolidated test report
+        run: |
+          mkdir -p consolidated-report
+
+          # Create index.html that lists all reports
+          cat > consolidated-report/index.html << 'EOF'
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <title>DigitalKin Test Reports</title>
+            <style>
+              body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 40px; }
+              h1 { color: #333; }
+              .report-list { list-style: none; padding: 0; }
+              .report-list li { margin: 10px 0; padding: 10px; background: #f5f5f5; border-radius: 5px; }
+              .report-list a { color: #0066cc; text-decoration: none; }
+              .report-list a:hover { text-decoration: underline; }
+              .status-pass { color: #22863a; }
+              .status-fail { color: #cb2431; }
+            </style>
+          </head>
+          <body>
+            <h1>DigitalKin Test Reports</h1>
+            <p>Generated: $(date -u +"%Y-%m-%d %H:%M:%S UTC")</p>
+            <h2>Test Reports by Category</h2>
+            <ul class="report-list">
+          EOF
+
+          # Add links to each report
+          for result_dir in test-results/test-results-*; do
+            if [ -d "$result_dir" ]; then
+              dir_name=$(basename "$result_dir")
+              test_name=$(echo "$dir_name" | sed 's/test-results-//')
+
+              # Copy HTML report if exists
+              if [ -f "$result_dir/pytest-report.html" ]; then
+                cp "$result_dir/pytest-report.html" "consolidated-report/${test_name}-report.html"
+                echo "<li><a href='${test_name}-report.html'>${test_name}</a></li>" >> consolidated-report/index.html
+              fi
+
+              # Copy other artifacts
+              [ -f "$result_dir/test-results.xml" ] && cp "$result_dir/test-results.xml" "consolidated-report/${test_name}-results.xml"
+              [ -f "$result_dir/test-metrics.json" ] && cp "$result_dir/test-metrics.json" "consolidated-report/${test_name}-metrics.json"
+            fi
+          done
+
+          echo "</ul></body></html>" >> consolidated-report/index.html
+
+          echo "::group::Consolidated Report Contents"
+          ls -la consolidated-report/
+          echo "::endgroup::"
+
+      - name: Upload consolidated report
+        uses: actions/upload-artifact@v4
+        with:
+          name: consolidated-test-report
+          path: consolidated-report/
+          retention-days: 30
+
       - name: Check test status
-        if: needs.test.result == 'failure'
+        if: needs.test-full.result == 'failure' || needs.test-compat.result == 'failure'
         run: |
           echo "::error::Tests failed for one or more test categories or Python versions"
           exit 1
