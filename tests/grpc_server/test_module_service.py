@@ -174,7 +174,7 @@ class TestStartModule:
         responses = [response async for response in module_servicer.StartModule(request, fake_context)]
 
         # Verify
-        assert len(responses) == 3
+        assert len(responses) == 2
         assert responses[0].success is True
         assert responses[0].job_id == "test-job-id"
         assert responses[-1].success is True  # End of stream

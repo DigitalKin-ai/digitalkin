@@ -140,7 +140,7 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         services_mode: ServicesMode,
         default_timeout: float = 10.0,
         max_concurrent_tasks: int = 100,
-        stream_timeout: float = 15.0,
+        stream_timeout: float = 30.0,
     ) -> None:
         """Initialize the Taskiq job manager.
 
@@ -298,7 +298,6 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             while True:
                 try:
                     # Block for first item with timeout to allow termination checks
-                    # Configurable timeout (default 15s) to account for distributed system latencies
                     item = await asyncio.wait_for(queue.get(), timeout=self.stream_timeout)
                     queue.task_done()
                     yield item

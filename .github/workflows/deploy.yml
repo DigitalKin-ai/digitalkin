@@ -43,7 +43,7 @@ jobs:
       is_dev: ${{ steps.version.outputs.is_dev }}
       warning_message: ${{ steps.version.outputs.warning_message }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -123,7 +123,7 @@ jobs:
     if: needs.determine-version.outputs.should_deploy == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -201,7 +201,7 @@ jobs:
       name: ${{ needs.determine-version.outputs.environment }}
       url: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -278,7 +278,7 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'delete' || github.event.inputs.cleanup_version != ''
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
           ref: gh-pages
