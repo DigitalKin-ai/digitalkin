@@ -5,7 +5,7 @@ from collections.abc import AsyncGenerator
 from typing import Any
 
 import grpc
-from digitalkin_proto.digitalkin.module.v2 import (
+from digitalkin_proto.agentic_mesh_protocol.module.v1 import (
     information_pb2,
     lifecycle_pb2,
     module_service_pb2_grpc,
@@ -172,7 +172,8 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         )
         # Process the module input
         # TODO: Check failure of input data format
-        input_data = self.module_class.create_input_model(dict(request.input.items()))
+        input_data = self.module_class.create_input_model(json_format.MessageToDict(request.input))
+
         setup_data_class = self.setup.get_setup(
             setup_dict={
                 "setup_id": request.setup_id,
@@ -219,13 +220,17 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
                         break
 
                     if message.get("code", None) is not None and message.get("code") == "__END_OF_STREAM__":
-                        yield lifecycle_pb2.StartModuleResponse(success=True, job_id=job_id)
+                        logger.info(
+                            "End of stream via __END_OF_STREAM__",
+                            extra={"job_id": job_id, "mission_id": request.mission_id},
+                        )
                         break
 
+                    logger.info("Yielding message from job %s: %s", job_id, message)
                     proto = json_format.ParseDict(message, struct_pb2.Struct(), ignore_unknown_fields=True)
                     yield lifecycle_pb2.StartModuleResponse(success=True, output=proto, job_id=job_id)
         finally:
-            await self.job_manager.tasks[job_id]
+            await self.job_manager.wait_for_completion(job_id)
             await self.job_manager.clean_session(job_id, mission_id=request.mission_id)
 
         logger.info("Job %s finished", job_id)

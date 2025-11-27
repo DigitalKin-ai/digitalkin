@@ -7,8 +7,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from digitalkin.logger import logger
-from digitalkin.services.setup.grpc_setup import SetupData, SetupVersionData
-from digitalkin.services.setup.setup_strategy import SetupServiceError, SetupStrategy
+from digitalkin.services.setup.setup_strategy import SetupData, SetupServiceError, SetupStrategy, SetupVersionData
 
 
 class DefaultSetup(SetupStrategy):
@@ -47,7 +46,7 @@ class DefaultSetup(SetupStrategy):
         )
         valid_data.id = setup_id
         self.setups[setup_id] = valid_data
-        logger.debug("CREATE SETUP DATA %s:%s succesfull", setup_id, valid_data)
+        logger.debug("CREATE SETUP DATA %s:%s successful", setup_id, valid_data)
         return setup_id
 
     def get_setup(self, setup_dict: dict[str, Any]) -> SetupData:
@@ -131,7 +130,7 @@ class DefaultSetup(SetupStrategy):
         if setup_version_dict["setup_id"] not in self.setup_versions:
             self.setup_versions[setup_version_dict["setup_id"]] = {}
         self.setup_versions[setup_version_dict["setup_id"]][valid_data.version] = valid_data
-        logger.debug("CREATE SETUP VERSION DATA %s:%s succesfull", setup_version_dict["setup_id"], valid_data)
+        logger.debug("CREATE SETUP VERSION DATA %s:%s successful", setup_version_dict["setup_id"], valid_data)
         return valid_data.version
 
     def get_setup_version(self, setup_version_dict: dict[str, Any]) -> SetupVersionData:
@@ -173,7 +172,7 @@ class DefaultSetup(SetupStrategy):
 
         return [
             value
-            for value in setup_version_dict["setup_id"].values()
+            for value in self.setup_versions[setup_version_dict["setup_id"]].values()
             if setup_version_dict["query_versions"] in value.version or setup_version_dict["name"] in value.name
         ]
 
@@ -190,7 +189,7 @@ class DefaultSetup(SetupStrategy):
             logger.debug("UPDATE setup_id = %s: setup_id DOESN'T EXIST", setup_version_dict["setup_id"])
             return False
 
-        if setup_version_dict["version"] not in self.setup_versions["setup_id"]:
+        if setup_version_dict["version"] not in self.setup_versions[setup_version_dict["setup_id"]]:
             logger.debug("UPDATE setup_id = %s: setup_id DOESN'T EXIST", setup_version_dict["setup_id"])
             return False
 

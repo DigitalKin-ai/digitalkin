@@ -1,10 +1,12 @@
 """Taskiq broker & RSTREAM producer for the job manager."""
 
 import asyncio
+import datetime
 import json
 import logging
 import os
 import pickle  # noqa: S403
+from typing import Any
 
 from rstream import Producer
 from rstream.exceptions import PreconditionFailed
@@ -14,7 +16,10 @@ from taskiq.compat import model_validate
 from taskiq.message import BrokerMessage
 from taskiq_aio_pika import AioPikaBroker
 
+from digitalkin.core.common import ConnectionFactory, ModuleFactory
 from digitalkin.core.job_manager.base_job_manager import BaseJobManager
+from digitalkin.core.task_manager.task_executor import TaskExecutor
+from digitalkin.core.task_manager.task_session import TaskSession
 from digitalkin.logger import logger
 from digitalkin.models.core.job_manager_models import StreamCodeModel
 from digitalkin.models.module.module_types import OutputModelT
@@ -118,6 +123,24 @@ RSTREAM_PRODUCER = define_producer()
 TASKIQ_BROKER = define_broker()
 
 
+async def cleanup_global_resources() -> None:
+    """Clean up global resources (producer and broker connections).
+
+    This should be called during shutdown to prevent connection leaks.
+    """
+    try:
+        await RSTREAM_PRODUCER.close()
+        logger.info("RStream producer closed successfully")
+    except Exception as e:
+        logger.warning("Failed to close RStream producer: %s", e)
+
+    try:
+        await TASKIQ_BROKER.shutdown()
+        logger.info("Taskiq broker shut down successfully")
+    except Exception as e:
+        logger.warning("Failed to shutdown Taskiq broker: %s", e)
+
+
 async def send_message_to_stream(job_id: str, output_data: OutputModelT) -> None:  # type: ignore
     """Callback define to add a message frame to the Rstream.
 
@@ -152,27 +175,70 @@ async def run_start_module(
         setup_data: dict,
         context: Allow TaskIQ context access
     """
-    logger.warning("%s", services_mode)
+    logger.info("Starting module with services_mode: %s", services_mode)
     services_config = ServicesConfig(
         services_config_strategies=module_class.services_config_strategies,
         services_config_params=module_class.services_config_params,
         mode=services_mode,
     )
     setattr(module_class, "services_config", services_config)
-    logger.warning("%s | %s", services_config, module_class.services_config)
+    logger.debug("Services config: %s | Module config: %s", services_config, module_class.services_config)
+    module_class.discover()
 
     job_id = context.message.task_id
     callback = await BaseJobManager.job_specific_callback(send_message_to_stream, job_id)
-    module = module_class(job_id, mission_id=mission_id, setup_id=setup_id, setup_version_id=setup_version_id)
+    module = ModuleFactory.create_module_instance(module_class, job_id, mission_id, setup_id, setup_version_id)
 
-    await module.start(
-        input_data,
-        setup_data,
-        callback,
-        # ensure that the callback is called when the task is done + allow asyncio to run
-        # TODO: should define a BaseModel for stream code / error
-        done_callback=lambda _: asyncio.create_task(callback(StreamCodeModel(code="__END_OF_STREAM__"))),
-    )
+    channel = None
+    try:
+        # Create TaskExecutor and supporting components for worker execution
+        executor = TaskExecutor()
+        # SurrealDB env vars are expected to be set in env.
+        channel = await ConnectionFactory.create_surreal_connection("taskiq_worker", datetime.timedelta(seconds=5))
+        session = TaskSession(job_id, mission_id, channel, module, datetime.timedelta(seconds=2))
+
+        # Execute the task using TaskExecutor
+        # Create a proper done callback that handles errors
+        async def send_end_of_stream(_: Any) -> None:  # noqa: ANN401
+            try:
+                await callback(StreamCodeModel(code="__END_OF_STREAM__"))
+            except Exception as e:
+                logger.error("Error sending end of stream: %s", e, exc_info=True)
+
+        # Reconstruct Pydantic models from dicts for type safety
+        try:
+            input_model = module_class.create_input_model(input_data)
+            setup_model = module_class.create_setup_model(setup_data)
+        except Exception as e:
+            logger.error("Failed to reconstruct models for job %s: %s", job_id, e, exc_info=True)
+            raise
+
+        supervisor_task = await executor.execute_task(
+            task_id=job_id,
+            mission_id=mission_id,
+            coro=module.start(
+                input_model,
+                setup_model,
+                callback,
+                done_callback=lambda result: asyncio.ensure_future(send_end_of_stream(result)),
+            ),
+            session=session,
+            channel=channel,
+        )
+
+        # Wait for the supervisor task to complete
+        await supervisor_task
+        logger.info("Module task %s completed", job_id)
+    except Exception:
+        logger.exception("Error running module %s", job_id)
+        raise
+    finally:
+        # Cleanup channel
+        if channel is not None:
+            try:
+                await channel.close()
+            except Exception:
+                logger.exception("Error closing channel for job %s", job_id)
 
 
 @TASKIQ_BROKER.task
@@ -196,20 +262,49 @@ async def run_config_module(
         config_setup_data: dict,
         context: Allow TaskIQ context access
     """
-    logger.warning("%s", services_mode)
+    logger.info("Starting config module with services_mode: %s", services_mode)
     services_config = ServicesConfig(
         services_config_strategies=module_class.services_config_strategies,
         services_config_params=module_class.services_config_params,
         mode=services_mode,
     )
     setattr(module_class, "services_config", services_config)
-    logger.warning("%s | %s", services_config, module_class.services_config)
+    logger.debug("Services config: %s | Module config: %s", services_config, module_class.services_config)
 
     job_id = context.message.task_id
     callback = await BaseJobManager.job_specific_callback(send_message_to_stream, job_id)
-    module = module_class(job_id, mission_id=mission_id, setup_id=setup_id, setup_version_id=setup_version_id)
+    module = ModuleFactory.create_module_instance(module_class, job_id, mission_id, setup_id, setup_version_id)
 
-    await module.start_config_setup(
-        module_class.create_config_setup_model(config_setup_data),
-        callback,
-    )
+    # Override environment variables temporarily to use manager's SurrealDB
+    channel = None
+    try:
+        # Create TaskExecutor and supporting components for worker execution
+        executor = TaskExecutor()
+        # SurrealDB env vars are expected to be set in env.
+        channel = await ConnectionFactory.create_surreal_connection("taskiq_worker", datetime.timedelta(seconds=5))
+        session = TaskSession(job_id, mission_id, channel, module, datetime.timedelta(seconds=2))
+
+        # Create and run the config setup task with TaskExecutor
+        setup_model = module_class.create_config_setup_model(config_setup_data)
+
+        supervisor_task = await executor.execute_task(
+            task_id=job_id,
+            mission_id=mission_id,
+            coro=module.start_config_setup(setup_model, callback),
+            session=session,
+            channel=channel,
+        )
+
+        # Wait for the supervisor task to complete
+        await supervisor_task
+        logger.info("Config module task %s completed", job_id)
+    except Exception:
+        logger.exception("Error running config module %s", job_id)
+        raise
+    finally:
+        # Cleanup channel
+        if channel is not None:
+            try:
+                await channel.close()
+            except Exception:
+                logger.exception("Error closing channel for job %s", job_id)

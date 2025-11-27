@@ -17,6 +17,23 @@ class TaskStatus(Enum):
     FAILED = "failed"
 
 
+class CancellationReason(Enum):
+    """Reason for task cancellation - helps distinguish cleanup vs real cancellation."""
+
+    # Cleanup cancellations (not errors)
+    SUCCESS_CLEANUP = "success_cleanup"  # Main task completed, cleaning up helper tasks
+    FAILURE_CLEANUP = "failure_cleanup"  # Main task failed, cleaning up helper tasks
+
+    # Real cancellations
+    SIGNAL = "signal"  # External signal requested cancellation
+    HEARTBEAT_FAILURE = "heartbeat_failure"  # Heartbeat stopped working
+    TIMEOUT = "timeout"  # Task timed out
+    SHUTDOWN = "shutdown"  # Manager is shutting down
+
+    # Unknown/unset
+    UNKNOWN = "unknown"  # Reason not determined
+
+
 class SignalType(Enum):
     """Signal type enumeration."""
 

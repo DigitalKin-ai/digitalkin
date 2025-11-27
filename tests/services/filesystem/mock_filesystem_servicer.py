@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import grpc
-from digitalkin_proto.digitalkin.filesystem.v1 import (
+from digitalkin_proto.agentic_mesh_protocol.filesystem.v1 import (
     filesystem_pb2,
     filesystem_service_pb2_grpc,
 )
@@ -19,19 +19,6 @@ from digitalkin.services.filesystem.filesystem_strategy import (
     FileFilter,
     FilesystemRecord,
 )
-
-
-# --- Fake Context for Servicer ---
-class FakeContext:
-    def __init__(self) -> None:
-        self._code = grpc.StatusCode.OK
-        self._details = ""
-
-    def set_code(self, code) -> None:
-        self._code = code
-
-    def set_details(self, details) -> None:
-        self._details = details
 
 
 class MockFilesystemServicer(filesystem_service_pb2_grpc.FilesystemServiceServicer):
