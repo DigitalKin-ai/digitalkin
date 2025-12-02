@@ -49,8 +49,8 @@ class GrpcUserProfile(UserProfileStrategy, GrpcClientWrapper, GrpcErrorHandlerMi
             ServerError: If gRPC operation fails
         """
         with self.handle_grpc_errors("GetUserProfile", UserProfileServiceError):
-            # mission_id typically contains user context
-            request = user_profile_pb2.GetUserProfileRequest(user_id=self.mission_id)
+            # mission_id maps to the user context in the proto request
+            request = user_profile_pb2.GetUserProfileRequest(mission_id=self.mission_id)
             response = self.exec_grpc_query("GetUserProfile", request)
 
             if not response.success:

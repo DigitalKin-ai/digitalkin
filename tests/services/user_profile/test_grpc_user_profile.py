@@ -7,6 +7,7 @@ This test suite validates the GrpcUserProfile service implementation, including:
 - Error handling and edge cases
 """
 
+import logging
 from concurrent import futures
 
 import grpc
@@ -27,6 +28,12 @@ from digitalkin.services.user_profile.grpc_user_profile import GrpcUserProfile
 USER_ID = "users:test_user_123"
 ORGANISATION_ID = "organisations:test_org_456"
 
+# Module-level variables required by grpc_test_server fixture
+service_instance = MockUserProfileServicer()
+service_name = user_profile_service_pb2.DESCRIPTOR.services_by_name["UserProfileService"]
+
+test_logger = logging.getLogger(__name__)
+
 
 # --- Fixtures ---
 
@@ -38,9 +45,12 @@ def thread_pool():
     Returns:
         ThreadPoolExecutor instance
     """
-    pool = futures.ThreadPoolExecutor(max_workers=1)
+    test_logger.info("Creating thread pool...")
+    pool = futures.ThreadPoolExecutor(max_workers=10)
     yield pool
+    test_logger.info("Shutting down thread pool...")
     pool.shutdown(wait=True, cancel_futures=True)
+    test_logger.info("Thread pool shut down")
 
 
 @pytest.fixture
@@ -50,10 +60,11 @@ def test_channel() -> grpc_testing.Channel:
     Returns:
         A testing channel for intercepting gRPC calls
     """
-    return grpc_testing.channel(
-        service_descriptors=[user_profile_service_pb2.DESCRIPTOR.services_by_name["UserProfileService"]],
-        time=grpc_testing.strict_real_time(),
-    )
+    test_logger.info("Creating test channel...")
+    test_clock = grpc_testing.strict_real_time()
+    channel = grpc_testing.channel([service_name], test_clock)
+    test_logger.info("Test channel created")
+    return channel
 
 
 @pytest.fixture
@@ -63,7 +74,10 @@ def mock_servicer() -> MockUserProfileServicer:
     Returns:
         Mock servicer instance
     """
-    return MockUserProfileServicer()
+    test_logger.info("Creating mock servicer...")
+    servicer = MockUserProfileServicer()
+    test_logger.info("Mock servicer created")
+    return servicer
 
 
 @pytest.fixture
@@ -76,7 +90,7 @@ def dummy_client_config() -> ClientConfig:
     from digitalkin.models.grpc_servers.models import SecurityMode, ServerMode
 
     return ClientConfig(
-        host="localhost",
+        host="[::]",
         port=50051,
         mode=ServerMode.ASYNC,
         security=SecurityMode.INSECURE,
@@ -98,6 +112,7 @@ def client(
     Returns:
         GrpcUserProfile client configured for testing
     """
+    test_logger.info("Creating client...")
     # Initialize with mission_id, setup_id, setup_version_id, client_config
     # Using USER_ID as mission_id for backward compatibility with tests
     client = GrpcUserProfile(
@@ -106,7 +121,9 @@ def client(
         setup_version_id="setup_versions:test_version",
         client_config=dummy_client_config,
     )
+    # Override the channel and stub to use our test channel
     client.stub = user_profile_service_pb2_grpc.UserProfileServiceStub(test_channel)
+    test_logger.info("Client created")
     return client
 
 
@@ -130,11 +147,14 @@ def sample_user_profile_data() -> dict:
             "start": "2024-01-01T00:00:00Z",
             "end": "2025-01-01T00:00:00Z",
         },
-        "credits": {
-            "allocated": 1000,
-            "used": 250,
-            "timestamp": "2024-12-15T10:30:00Z",
-        },
+        "credits": [
+            {
+                "source": "subscription",
+                "total": 1000,
+                "remaining": 750,
+                "timestamp": "2024-12-15T10:30:00Z",
+            },
+        ],
         "metadata": {
             "security_key": "test_security_key_123",
         },
@@ -186,13 +206,14 @@ class TestGetUserProfileSuccess:
         _, request, rpc = test_channel.take_unary_unary(method_desc)
 
         # Verify request
-        assert request.user_id == USER_ID
+        assert request.mission_id == USER_ID
 
         # Mock servicer processes the request
         context = FakeContext()
         response = mock_servicer.GetUserProfile(request, context)
 
-        # Terminate the RPC
+        # Send initial metadata and terminate the RPC
+        rpc.send_initial_metadata(())
         rpc.terminate(response, (), grpc.StatusCode.OK, "")
 
         # Get result
@@ -235,6 +256,7 @@ class TestGetUserProfileSuccess:
 
         context = FakeContext()
         response = mock_servicer.GetUserProfile(request, context)
+        rpc.send_initial_metadata(())
         rpc.terminate(response, (), grpc.StatusCode.OK, "")
 
         result = future.result(timeout=5.0)
@@ -273,16 +295,19 @@ class TestGetUserProfileSuccess:
 
         context = FakeContext()
         response = mock_servicer.GetUserProfile(request, context)
+        rpc.send_initial_metadata(())
         rpc.terminate(response, (), grpc.StatusCode.OK, "")
 
         result = future.result(timeout=5.0)
 
-        # Verify credits data
+        # Verify credits data - now a repeated CreditLot field
         assert "credits" in result
         credits = result["credits"]
-        # Protobuf int64 fields are converted to strings in JSON
-        assert credits["allocated"] == "1000"
-        assert credits["used"] == "250"
+        assert len(credits) == 1
+        # Protobuf int64 fields are converted to strings in JSON, double fields stay as float
+        assert credits[0]["source"] == "subscription"
+        assert credits[0]["total"] == "1000"
+        assert credits[0]["remaining"] == 750.0
 
     @pytest.mark.grpc
     @pytest.mark.integration
@@ -312,6 +337,7 @@ class TestGetUserProfileSuccess:
 
         context = FakeContext()
         response = mock_servicer.GetUserProfile(request, context)
+        rpc.send_initial_metadata(())
         rpc.terminate(response, (), grpc.StatusCode.OK, "")
 
         result = future.result(timeout=5.0)
@@ -355,6 +381,7 @@ class TestGetUserProfileValidation:
 
         context = FakeContext()
         response = mock_servicer.GetUserProfile(request, context)
+        rpc.send_initial_metadata(())
         rpc.terminate(response, (), context._code, context._details)
 
         # Verify error is raised - ServerError is raised when gRPC call fails
@@ -382,7 +409,7 @@ class TestGetUserProfileValidation:
             "organisation_id": ORGANISATION_ID,
             "email": "minimal@example.com",
             "subscription": {},
-            "credits": {},
+            "credits": [],
             "metadata": {},
         }
 
@@ -397,6 +424,7 @@ class TestGetUserProfileValidation:
 
         context = FakeContext()
         response = mock_servicer.GetUserProfile(request, context)
+        rpc.send_initial_metadata(())
         rpc.terminate(response, (), grpc.StatusCode.OK, "")
 
         result = future.result(timeout=5.0)
@@ -436,7 +464,7 @@ class TestGetUserProfileEdgeCases:
             "organisation_id": ORGANISATION_ID,
             "email": "test.user+tag@example.co.uk",
             "subscription": {},
-            "credits": {},
+            "credits": [],
             "metadata": {},
         }
 
@@ -451,6 +479,7 @@ class TestGetUserProfileEdgeCases:
 
         context = FakeContext()
         response = mock_servicer.GetUserProfile(request, context)
+        rpc.send_initial_metadata(())
         rpc.terminate(response, (), grpc.StatusCode.OK, "")
 
         result = future.result(timeout=5.0)
@@ -478,7 +507,7 @@ class TestGetUserProfileEdgeCases:
             "first_name": "José",
             "last_name": "François-müller",
             "subscription": {},
-            "credits": {},
+            "credits": [],
             "metadata": {},
         }
 
@@ -493,6 +522,7 @@ class TestGetUserProfileEdgeCases:
 
         context = FakeContext()
         response = mock_servicer.GetUserProfile(request, context)
+        rpc.send_initial_metadata(())
         rpc.terminate(response, (), grpc.StatusCode.OK, "")
 
         result = future.result(timeout=5.0)
@@ -528,7 +558,7 @@ class TestGetUserProfileEdgeCases:
                 "email": f"user{i}@example.com",
                 "locale": locale,
                 "subscription": {},
-                "credits": {},
+                "credits": [],
                 "metadata": {},
             }
 
@@ -547,6 +577,7 @@ class TestGetUserProfileEdgeCases:
 
             context = FakeContext()
             response = mock_servicer.GetUserProfile(request, context)
+            rpc.send_initial_metadata(())
             rpc.terminate(response, (), grpc.StatusCode.OK, "")
 
             result = future.result(timeout=5.0)
@@ -572,11 +603,14 @@ class TestGetUserProfileEdgeCases:
             "organisation_id": ORGANISATION_ID,
             "email": "test@example.com",
             "subscription": {},
-            "credits": {
-                "allocated": 0,
-                "used": 0,
-                "timestamp": "2024-12-15T10:30:00Z",
-            },
+            "credits": [
+                {
+                    "source": "subscription",
+                    "total": 0,
+                    "remaining": 0,
+                    "timestamp": "2024-12-15T10:30:00Z",
+                },
+            ],
             "metadata": {},
         }
 
@@ -591,13 +625,15 @@ class TestGetUserProfileEdgeCases:
 
         context = FakeContext()
         response = mock_servicer.GetUserProfile(request, context)
+        rpc.send_initial_metadata(())
         rpc.terminate(response, (), grpc.StatusCode.OK, "")
 
         result = future.result(timeout=5.0)
         credits = result["credits"]
-        # Protobuf int64 fields are converted to strings in JSON
-        assert credits["allocated"] == "0"
-        assert credits["used"] == "0"
+        assert len(credits) == 1
+        # Protobuf int64 fields are converted to strings in JSON, double fields stay as float
+        assert credits[0]["total"] == "0"
+        assert credits[0]["remaining"] == 0.0
 
     @pytest.mark.grpc
     @pytest.mark.integration
@@ -624,7 +660,7 @@ class TestGetUserProfileEdgeCases:
                 "start": "2023-01-01T00:00:00Z",
                 "end": "2024-01-01T00:00:00Z",
             },
-            "credits": {},
+            "credits": [],
             "metadata": {},
         }
 
@@ -639,6 +675,7 @@ class TestGetUserProfileEdgeCases:
 
         context = FakeContext()
         response = mock_servicer.GetUserProfile(request, context)
+        rpc.send_initial_metadata(())
         rpc.terminate(response, (), grpc.StatusCode.OK, "")
 
         result = future.result(timeout=5.0)
@@ -671,7 +708,7 @@ class TestGetUserProfileEdgeCases:
             "first_name": "User",
             "last_name": "One",
             "subscription": {},
-            "credits": {"allocated": 100, "used": 0},
+            "credits": [{"source": "subscription", "total": 100, "remaining": 100}],
             "metadata": {},
         }
 
@@ -682,7 +719,7 @@ class TestGetUserProfileEdgeCases:
             "first_name": "User",
             "last_name": "Two",
             "subscription": {},
-            "credits": {"allocated": 200, "used": 0},
+            "credits": [{"source": "subscription", "total": 200, "remaining": 200}],
             "metadata": {},
         }
 
@@ -706,6 +743,7 @@ class TestGetUserProfileEdgeCases:
         _, request1, rpc1 = test_channel.take_unary_unary(method_desc)
         context1 = FakeContext()
         response1 = mock_servicer.GetUserProfile(request1, context1)
+        rpc1.send_initial_metadata(())
         rpc1.terminate(response1, (), grpc.StatusCode.OK, "")
         result1 = future1.result(timeout=5.0)
 
@@ -722,6 +760,7 @@ class TestGetUserProfileEdgeCases:
         _, request2, rpc2 = test_channel.take_unary_unary(method_desc)
         context2 = FakeContext()
         response2 = mock_servicer.GetUserProfile(request2, context2)
+        rpc2.send_initial_metadata(())
         rpc2.terminate(response2, (), grpc.StatusCode.OK, "")
         result2 = future2.result(timeout=5.0)
 
@@ -731,8 +770,8 @@ class TestGetUserProfileEdgeCases:
         assert result1["email"] == "user1@example.com"
         assert result2["email"] == "user2@example.com"
         # Protobuf int64 fields are converted to strings in JSON
-        assert result1["credits"]["allocated"] == "100"
-        assert result2["credits"]["allocated"] == "200"
+        assert result1["credits"][0]["total"] == "100"
+        assert result2["credits"][0]["total"] == "200"
 
 
 # ============================================================================

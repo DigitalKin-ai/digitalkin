@@ -208,7 +208,7 @@ async def run_start_module(
         # Reconstruct Pydantic models from dicts for type safety
         try:
             input_model = module_class.create_input_model(input_data)
-            setup_model = module_class.create_setup_model(setup_data)
+            setup_model = await module_class.create_setup_model(setup_data)
         except Exception as e:
             logger.error("Failed to reconstruct models for job %s: %s", job_id, e, exc_info=True)
             raise

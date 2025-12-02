@@ -107,14 +107,18 @@ class BaseModule(  # noqa: PLR0904
         return self._status
 
     @classmethod
-    def get_secret_format(cls, *, llm_format: bool) -> str:
+    async def get_secret_format(cls, *, llm_format: bool) -> str:
         """Get the JSON schema of the secret format model.
 
-        Raises:
-            NotImplementedError: If the `secret_format` is not defined.
+        Args:
+            llm_format: If True, return LLM-optimized schema format with inlined
+                references and simplified structure.
 
         Returns:
-            The JSON schema of the secret format as a string.
+            The JSON schema of the secret format as a JSON string.
+
+        Raises:
+            NotImplementedError: If the `secret_format` class attribute is not defined.
         """
         if cls.secret_format is not None:
             if llm_format:
@@ -124,14 +128,18 @@ class BaseModule(  # noqa: PLR0904
         raise NotImplementedError(msg)
 
     @classmethod
-    def get_input_format(cls, *, llm_format: bool) -> str:
+    async def get_input_format(cls, *, llm_format: bool) -> str:
         """Get the JSON schema of the input format model.
 
-        Raises:
-            NotImplementedError: If the `input_format` is not defined.
+        Args:
+            llm_format: If True, return LLM-optimized schema format with inlined
+                references and simplified structure.
 
         Returns:
-            The JSON schema of the input format as a string.
+            The JSON schema of the input format as a JSON string.
+
+        Raises:
+            NotImplementedError: If the `input_format` class attribute is not defined.
         """
         if cls.input_format is not None:
             if llm_format:
@@ -141,14 +149,18 @@ class BaseModule(  # noqa: PLR0904
         raise NotImplementedError(msg)
 
     @classmethod
-    def get_output_format(cls, *, llm_format: bool) -> str:
+    async def get_output_format(cls, *, llm_format: bool) -> str:
         """Get the JSON schema of the output format model.
 
-        Raises:
-            NotImplementedError: If the `output_format` is not defined.
+        Args:
+            llm_format: If True, return LLM-optimized schema format with inlined
+                references and simplified structure.
 
         Returns:
-            The JSON schema of the output format as a string.
+            The JSON schema of the output format as a JSON string.
+
+        Raises:
+            NotImplementedError: If the `output_format` class attribute is not defined.
         """
         if cls.output_format is not None:
             if llm_format:
@@ -158,20 +170,29 @@ class BaseModule(  # noqa: PLR0904
         raise NotImplementedError(msg)
 
     @classmethod
-    def get_config_setup_format(cls, *, llm_format: bool) -> str:
+    async def get_config_setup_format(cls, *, llm_format: bool) -> str:
         """Gets the JSON schema of the config setup format model.
 
-        The config setup format is used only to initialize the module with configuration data.
-        The setup format is used to initialize an run the module with setup data.
+        The config setup format is used only to initialize the module with configuration
+        data. It includes fields marked with `json_schema_extra={"config": True}` and
+        excludes hidden runtime fields.
 
-        Raises:
-            NotImplementedError: If the `setup_format` is not defined.
+        Dynamic schema fields are always resolved when generating the schema, as this
+        method is typically called during module discovery or schema generation where
+        fresh values are needed.
+
+        Args:
+            llm_format: If True, return LLM-optimized schema format with inlined
+                references and simplified structure.
 
         Returns:
-            The JSON schema of the config setup format as a string.
+            The JSON schema of the config setup format as a JSON string.
+
+        Raises:
+            NotImplementedError: If the `setup_format` class attribute is not defined.
         """
         if cls.setup_format is not None:
-            setup_format = cls.setup_format.get_clean_model(config_fields=True, hidden_fields=False)
+            setup_format = await cls.setup_format.get_clean_model(config_fields=True, hidden_fields=False, force=True)
             if llm_format:
                 return json.dumps(llm_ready_schema(setup_format), indent=2)
             return json.dumps(setup_format.model_json_schema(), indent=2)
@@ -179,17 +200,28 @@ class BaseModule(  # noqa: PLR0904
         raise NotImplementedError(msg)
 
     @classmethod
-    def get_setup_format(cls, *, llm_format: bool) -> str:
+    async def get_setup_format(cls, *, llm_format: bool) -> str:
         """Gets the JSON schema of the setup format model.
 
-        Raises:
-            NotImplementedError: If the `setup_format` is not defined.
+        The setup format is used at runtime and includes hidden fields but excludes
+        config-only fields. This is the schema used when running the module.
+
+        Dynamic schema fields are always resolved when generating the schema, as this
+        method is typically called during module discovery or schema generation where
+        fresh values are needed.
+
+        Args:
+            llm_format: If True, return LLM-optimized schema format with inlined
+                references and simplified structure.
 
         Returns:
-            The JSON schema of the setup format as a string.
+            The JSON schema of the setup format as a JSON string.
+
+        Raises:
+            NotImplementedError: If the `setup_format` class attribute is not defined.
         """
         if cls.setup_format is not None:
-            setup_format = cls.setup_format.get_clean_model(config_fields=False, hidden_fields=True)
+            setup_format = await cls.setup_format.get_clean_model(config_fields=False, hidden_fields=True, force=True)
             if llm_format:
                 return json.dumps(llm_ready_schema(setup_format), indent=2)
             return json.dumps(setup_format.model_json_schema(), indent=2)
@@ -221,17 +253,22 @@ class BaseModule(  # noqa: PLR0904
         return cls.input_format(**input_data)
 
     @classmethod
-    def create_setup_model(cls, setup_data: dict[str, Any], *, config_fields: bool = False) -> SetupModelT:
+    async def create_setup_model(cls, setup_data: dict[str, Any], *, config_fields: bool = False) -> SetupModelT:
         """Create the setup model from the setup data.
+
+        Creates a filtered setup model instance based on the provided data.
+        Uses `get_clean_model()` internally to get the appropriate model class
+        with field filtering applied.
 
         Args:
             setup_data: The setup data to create the model from.
             config_fields: If True, include only fields with json_schema_extra["config"] == True.
 
         Returns:
-            The setup model.
+            An instance of the setup model with the provided data.
         """
-        return cls.setup_format.get_clean_model(config_fields=config_fields, hidden_fields=True)(**setup_data)
+        model_cls = await cls.setup_format.get_clean_model(config_fields=config_fields, hidden_fields=True)
+        return model_cls(**setup_data)
 
     @classmethod
     def create_secret_model(cls, secret_data: dict[str, Any]) -> SecretModelT:
@@ -436,7 +473,8 @@ class BaseModule(  # noqa: PLR0904
 
             wrapper = config_setup_data.model_dump()
             wrapper["content"] = content.model_dump()
-            await callback(self.create_setup_model(wrapper))
+            setup_model = await self.create_setup_model(wrapper)
+            await callback(setup_model)
             self._status = ModuleStatus.STOPPING
         except Exception:
             logger.error("Error during module lifecyle")
