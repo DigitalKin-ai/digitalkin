@@ -25,6 +25,11 @@
     "aliases": []
   },
   {
+    "version": "feat-communication-service",
+    "title": "feat-communication-service",
+    "aliases": []
+  },
+  {
     "version": "dev",
     "title": "dev",
     "aliases": [
