@@ -99,6 +99,7 @@ class MockModuleForMemory(BaseModule):
         """Skip service initialization."""
         return {
             "agent": None,
+            "communication": None,
             "cost": None,
             "filesystem": None,
             "identity": None,

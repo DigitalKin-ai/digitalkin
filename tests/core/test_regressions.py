@@ -40,6 +40,7 @@ class MockModule(BaseModule):
         """Override to skip service initialization in tests."""
         return {
             "agent": None,
+            "communication": None,
             "cost": None,
             "filesystem": None,
             "identity": None,

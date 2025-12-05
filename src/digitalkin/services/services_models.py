@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 from digitalkin.logger import logger
 from digitalkin.services.agent import AgentStrategy
+from digitalkin.services.communication import CommunicationStrategy
 from digitalkin.services.cost import CostStrategy
 from digitalkin.services.filesystem import FilesystemStrategy
 from digitalkin.services.identity import IdentityStrategy
@@ -19,6 +20,7 @@ from digitalkin.services.user_profile import UserProfileStrategy
 T = TypeVar(
     "T",
     bound=AgentStrategy
+    | CommunicationStrategy
     | CostStrategy
     | FilesystemStrategy
     | IdentityStrategy
