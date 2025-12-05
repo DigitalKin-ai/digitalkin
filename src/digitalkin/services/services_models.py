@@ -13,6 +13,7 @@ from digitalkin.services.identity import IdentityStrategy
 from digitalkin.services.registry import RegistryStrategy
 from digitalkin.services.snapshot import SnapshotStrategy
 from digitalkin.services.storage import StorageStrategy
+from digitalkin.services.user_profile import UserProfileStrategy
 
 # Define type variables
 T = TypeVar(
@@ -23,7 +24,8 @@ T = TypeVar(
     | IdentityStrategy
     | RegistryStrategy
     | SnapshotStrategy
-    | StorageStrategy,
+    | StorageStrategy
+    | UserProfileStrategy,
 )
 
 

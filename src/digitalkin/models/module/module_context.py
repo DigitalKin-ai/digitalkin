@@ -10,6 +10,7 @@ from digitalkin.services.identity.identity_strategy import IdentityStrategy
 from digitalkin.services.registry.registry_strategy import RegistryStrategy
 from digitalkin.services.snapshot.snapshot_strategy import SnapshotStrategy
 from digitalkin.services.storage.storage_strategy import StorageStrategy
+from digitalkin.services.user_profile.user_profile_strategy import UserProfileStrategy
 
 
 class Session(SimpleNamespace):
@@ -89,6 +90,7 @@ class ModuleContext:
     registry: RegistryStrategy
     snapshot: SnapshotStrategy
     storage: StorageStrategy
+    user_profile: UserProfileStrategy
 
     session: Session
     callbacks: SimpleNamespace
@@ -105,6 +107,7 @@ class ModuleContext:
         registry: RegistryStrategy,
         snapshot: SnapshotStrategy,
         storage: StorageStrategy,
+        user_profile: UserProfileStrategy,
         session: dict[str, Any],
         metadata: dict[str, Any] = {},
         helpers: dict[str, Any] = {},
@@ -120,6 +123,7 @@ class ModuleContext:
             registry: RegistryStrategy.
             snapshot: SnapshotStrategy.
             storage: StorageStrategy.
+            user_profile: UserProfileStrategy.
             metadata: dict defining differents Module metadata.
             helpers: dict different user defined helpers.
             session: dict referring the session IDs or informations.
@@ -133,6 +137,7 @@ class ModuleContext:
         self.registry = registry
         self.snapshot = snapshot
         self.storage = storage
+        self.user_profile = user_profile
 
         self.metadata = SimpleNamespace(**metadata)
         self.session = Session(**session)

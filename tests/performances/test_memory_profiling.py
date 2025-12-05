@@ -139,6 +139,7 @@ class ImprovedMockModule(BaseModule):
             "registry": None,
             "snapshot": None,
             "storage": None,
+            "user_profile": None,
         }
 
     async def initialize(self, context: Any, setup_data: Any) -> None:
