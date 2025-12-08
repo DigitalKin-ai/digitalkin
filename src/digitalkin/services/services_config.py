@@ -12,6 +12,7 @@ from digitalkin.services.registry import DefaultRegistry, RegistryStrategy
 from digitalkin.services.services_models import ServicesMode, ServicesStrategy
 from digitalkin.services.snapshot import DefaultSnapshot, SnapshotStrategy
 from digitalkin.services.storage import DefaultStorage, GrpcStorage, StorageStrategy
+from digitalkin.services.user_profile import DefaultUserProfile, GrpcUserProfile, UserProfileStrategy
 
 
 class ServicesConfig(BaseModel):
@@ -53,6 +54,10 @@ class ServicesConfig(BaseModel):
         default_factory=lambda: ServicesStrategy(local=DefaultIdentity, remote=DefaultIdentity)
     )
     _config_identity: dict[str, Any | None] = PrivateAttr(default_factory=dict)
+    _user_profile: ServicesStrategy[UserProfileStrategy] = PrivateAttr(
+        default_factory=lambda: ServicesStrategy(local=DefaultUserProfile, remote=GrpcUserProfile)
+    )
+    _config_user_profile: dict[str, Any | None] = PrivateAttr(default_factory=dict)
 
     # List of valid strategy names for validation
     _valid_strategy_names: ClassVar[set[str]] = {
@@ -63,6 +68,7 @@ class ServicesConfig(BaseModel):
         "filesystem",
         "agent",
         "identity",
+        "user_profile",
     }
 
     def __init__(
@@ -168,6 +174,11 @@ class ServicesConfig(BaseModel):
     def identity(self) -> type[IdentityStrategy]:
         """Get the identity service strategy class based on the current mode."""
         return self._identity[self.mode.value]
+
+    @property
+    def user_profile(self) -> type[UserProfileStrategy]:
+        """Get the user_profile service strategy class based on the current mode."""
+        return self._user_profile[self.mode.value]
 
     def update_mode(self, mode: ServicesMode) -> None:
         """Update the strategy mode.

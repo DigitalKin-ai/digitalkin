@@ -75,7 +75,7 @@ tasks:
   run-tests:
     desc: "Run pytest tests"
     cmds:
-      - uv run pytest --cov=digitalkin
+      - docker compose run --rm -T tests -m 'not integration'
 
   linter:
     desc: "run linter on the project"

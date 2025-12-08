@@ -614,8 +614,8 @@ class TestErrorHandling:
         fake_id = RecordID(table_name, "nonexistent_id")
         result = await conn.merge(table_name, fake_id, {"task_id": "fake_task", "field": "value"})
         # Just verify no exception is raised
-        # Actual behavior depends on SurrealDB version
-        assert result is None
+        # Actual behavior depends on SurrealDB version (may return None or empty list)
+        assert result is None or result == []
 
     @pytest.mark.asyncio
     async def test_operation_timeout(self, conn):

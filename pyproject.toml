@@ -28,7 +28,7 @@
     ]
 
     dependencies = [
-        "digitalkin-proto==0.2.0.dev5",
+        "digitalkin-proto==0.2.0.dev6",
         "grpcio-health-checking>=1.76.0",
         "grpcio-reflection>=1.76.0",
         "grpcio-status>=1.76.0",
