@@ -1,5 +1,10 @@
 [
   {
+    "version": "feat-user-profile-service",
+    "title": "feat-user-profile-service",
+    "aliases": []
+  },
+  {
     "version": "feat-registry-client",
     "title": "feat-registry-client",
     "aliases": []
