@@ -1,5 +1,12 @@
 [
   {
+    "version": "main",
+    "title": "main",
+    "aliases": [
+      "stable"
+    ]
+  },
+  {
     "version": "feat-user-profile-service",
     "title": "feat-user-profile-service",
     "aliases": []
