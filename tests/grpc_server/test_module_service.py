@@ -46,7 +46,7 @@ class MockModule(BaseModule):
         return output_data
 
     @classmethod
-    def create_setup_model(cls, setup_data: dict[str, Any], *, config_fields: bool = False) -> dict[str, Any]:  # noqa: ARG003
+    async def create_setup_model(cls, setup_data: dict[str, Any], *, config_fields: bool = False) -> dict[str, Any]:  # noqa: ARG003
         """Mock setup model creation."""
         return setup_data
 
@@ -56,27 +56,27 @@ class MockModule(BaseModule):
         return config_setup_data
 
     @classmethod
-    def get_input_format(cls, *, llm_format: bool = False) -> str:  # noqa: ARG003
+    async def get_input_format(cls, *, llm_format: bool = False) -> str:  # noqa: ARG003
         """Mock input format schema."""
         return '{"type": "object", "properties": {"message": {"type": "string"}}}'
 
     @classmethod
-    def get_output_format(cls, *, llm_format: bool = False) -> str:  # noqa: ARG003
+    async def get_output_format(cls, *, llm_format: bool = False) -> str:  # noqa: ARG003
         """Mock output format schema."""
         return '{"type": "object", "properties": {"result": {"type": "string"}}}'
 
     @classmethod
-    def get_setup_format(cls, *, llm_format: bool = False) -> str:  # noqa: ARG003
+    async def get_setup_format(cls, *, llm_format: bool = False) -> str:  # noqa: ARG003
         """Mock setup format schema."""
         return '{"type": "object", "properties": {"config": {"type": "string"}}}'
 
     @classmethod
-    def get_secret_format(cls, *, llm_format: bool = False) -> str:  # noqa: ARG003
+    async def get_secret_format(cls, *, llm_format: bool = False) -> str:  # noqa: ARG003
         """Mock secret format schema."""
         return '{"type": "object", "properties": {"api_key": {"type": "string"}}}'
 
     @classmethod
-    def get_config_setup_format(cls, *, llm_format: bool = False) -> str:  # noqa: ARG003
+    async def get_config_setup_format(cls, *, llm_format: bool = False) -> str:  # noqa: ARG003
         """Mock config setup format schema."""
         return '{"type": "object", "properties": {"setup_config": {"type": "string"}}}'
 
@@ -495,30 +495,33 @@ class TestGetModuleSetup:
 class TestGetModuleSecret:
     """Tests for GetModuleSecret endpoint."""
 
-    def test_get_module_secret_success(self, module_servicer, fake_context):
+    @pytest.mark.asyncio
+    async def test_get_module_secret_success(self, module_servicer, fake_context):
         """Test successful retrieval of module secret schema."""
         request = information_pb2.GetModuleSecretRequest(llm_format=False)
 
-        response = module_servicer.GetModuleSecret(request, fake_context)
+        response = await module_servicer.GetModuleSecret(request, fake_context)
 
         assert response.success is True
         assert response.secret_schema is not None
 
-    def test_get_module_secret_llm_format(self, module_servicer, fake_context):
+    @pytest.mark.asyncio
+    async def test_get_module_secret_llm_format(self, module_servicer, fake_context):
         """Test retrieval of module secret schema in LLM format."""
         request = information_pb2.GetModuleSecretRequest(llm_format=True)
 
-        response = module_servicer.GetModuleSecret(request, fake_context)
+        response = await module_servicer.GetModuleSecret(request, fake_context)
 
         assert response.success is True
         assert response.secret_schema is not None
 
-    def test_get_module_secret_not_implemented(self, module_servicer, fake_context):
+    @pytest.mark.asyncio
+    async def test_get_module_secret_not_implemented(self, module_servicer, fake_context):
         """Test get module secret when format is not implemented."""
         with patch.object(MockModule, "get_secret_format", side_effect=NotImplementedError("Not implemented")):
             request = information_pb2.GetModuleSecretRequest(llm_format=False)
 
-            module_servicer.GetModuleSecret(request, fake_context)
+            await module_servicer.GetModuleSecret(request, fake_context)
 
             assert fake_context.get_code() == grpc.StatusCode.UNIMPLEMENTED
 

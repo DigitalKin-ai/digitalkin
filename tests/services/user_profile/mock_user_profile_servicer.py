@@ -44,27 +44,27 @@ class MockUserProfileServicer(user_profile_service_pb2_grpc.UserProfileServiceSe
     def GetUserProfile(
         self, request: user_profile_pb2.GetUserProfileRequest, context: grpc.ServicerContext
     ) -> user_profile_pb2.GetUserProfileResponse:
-        """Get a user profile by user_id.
+        """Get a user profile by mission_id.
 
         Args:
-            request: GetUserProfileRequest containing user_id
+            request: GetUserProfileRequest containing mission_id
             context: gRPC context
 
         Returns:
             GetUserProfileResponse: Response containing user profile or empty if not found
         """
         try:
-            if not request.user_id:
+            if not request.mission_id:
                 context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
-                context.set_details("User ID is required")
+                context.set_details("Mission ID is required")
                 return user_profile_pb2.GetUserProfileResponse(success=False)
 
-            # Try to find the user profile
-            user_profile_data = self.user_profiles.get(request.user_id)
+            # Try to find the user profile by mission_id (stored by user_id in mock)
+            user_profile_data = self.user_profiles.get(request.mission_id)
 
             if not user_profile_data:
                 context.set_code(grpc.StatusCode.NOT_FOUND)
-                context.set_details(f"User profile for user_id {request.user_id} not found")
+                context.set_details(f"User profile for mission_id {request.mission_id} not found")
                 return user_profile_pb2.GetUserProfileResponse(success=False)
 
             # Create user profile proto
@@ -85,18 +85,41 @@ class MockUserProfileServicer(user_profile_service_pb2_grpc.UserProfileServiceSe
                     subscription_kwargs["end"] = end_ts
             subscription = user_profile_pb2.Subscription(**subscription_kwargs)
 
-            # Handle credits with timestamp conversion
-            credits_data = user_profile_data.get("credits", {})
-            credits_kwargs = {}
-            if "allocated" in credits_data:
-                credits_kwargs["allocated"] = credits_data["allocated"]
-            if "used" in credits_data:
-                credits_kwargs["used"] = credits_data["used"]
-            if "timestamp" in credits_data:
-                timestamp_ts = self._convert_to_timestamp(credits_data["timestamp"])
-                if timestamp_ts:
-                    credits_kwargs["timestamp"] = timestamp_ts
-            credits = user_profile_pb2.Credits(**credits_kwargs)
+            # Handle credits - now a repeated CreditLot field
+            credits_data = user_profile_data.get("credits", [])
+            credit_lots = []
+            # Support both list format (new) and dict format (legacy test data)
+            if isinstance(credits_data, dict):
+                # Convert legacy dict format to new CreditLot format
+                if credits_data:
+                    credit_lot_kwargs = {}
+                    if "source" in credits_data:
+                        credit_lot_kwargs["source"] = credits_data["source"]
+                    if "total" in credits_data:
+                        credit_lot_kwargs["total"] = credits_data["total"]
+                    if "remaining" in credits_data:
+                        credit_lot_kwargs["remaining"] = credits_data["remaining"]
+                    if "timestamp" in credits_data:
+                        timestamp_ts = self._convert_to_timestamp(credits_data["timestamp"])
+                        if timestamp_ts:
+                            credit_lot_kwargs["timestamp"] = timestamp_ts
+                    if credit_lot_kwargs:
+                        credit_lots.append(user_profile_pb2.CreditLot(**credit_lot_kwargs))
+            else:
+                # New list format
+                for credit_item in credits_data:
+                    credit_lot_kwargs = {}
+                    if "source" in credit_item:
+                        credit_lot_kwargs["source"] = credit_item["source"]
+                    if "total" in credit_item:
+                        credit_lot_kwargs["total"] = credit_item["total"]
+                    if "remaining" in credit_item:
+                        credit_lot_kwargs["remaining"] = credit_item["remaining"]
+                    if "timestamp" in credit_item:
+                        timestamp_ts = self._convert_to_timestamp(credit_item["timestamp"])
+                        if timestamp_ts:
+                            credit_lot_kwargs["timestamp"] = timestamp_ts
+                    credit_lots.append(user_profile_pb2.CreditLot(**credit_lot_kwargs))
 
             # Handle metadata - it's a google.protobuf.Struct, pass dict directly
             metadata_dict = user_profile_data.get("metadata", {})
@@ -109,11 +132,11 @@ class MockUserProfileServicer(user_profile_service_pb2_grpc.UserProfileServiceSe
                 last_name=user_profile_data.get("last_name", ""),
                 locale=user_profile_data.get("locale", ""),
                 subscription=subscription,
-                credits=credits,
+                credits=credit_lots,
                 metadata=metadata_dict,
             )
 
-            logger.info(f"Retrieved user profile for user_id: {request.user_id}")
+            logger.info(f"Retrieved user profile for mission_id: {request.mission_id}")
             return user_profile_pb2.GetUserProfileResponse(success=True, user_profile=user_profile)
 
         except Exception as e:

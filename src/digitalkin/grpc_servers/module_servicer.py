@@ -112,7 +112,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         # TODO: Secret should be used here as well
         setup_version = request.setup_version
         config_setup_data = self.module_class.create_config_setup_model(json_format.MessageToDict(request.content))
-        setup_version_data = self.module_class.create_setup_model(
+        setup_version_data = await self.module_class.create_setup_model(
             json_format.MessageToDict(request.setup_version.content),
             config_fields=True,
         )
@@ -185,7 +185,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             msg = "No setup data returned."
             raise ServicerError(msg)
 
-        setup_data = self.module_class.create_setup_model(setup_data_class.current_setup_version.content)
+        setup_data = await self.module_class.create_setup_model(setup_data_class.current_setup_version.content)
 
         # create a task to run the module in background
         job_id = await self.job_manager.create_module_instance_job(
@@ -350,7 +350,9 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         # Get input schema if available
         try:
             # Convert schema to proto format
-            input_schema_proto = self.module_class.get_input_format(llm_format=request.llm_format)
+            input_schema_proto = await self.module_class.get_input_format(
+                llm_format=request.llm_format,
+            )
             input_format_struct = json_format.Parse(
                 text=input_schema_proto,
                 message=struct_pb2.Struct(),  # pylint: disable=no-member
@@ -386,7 +388,9 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         # Get output schema if available
         try:
             # Convert schema to proto format
-            output_schema_proto = self.module_class.get_output_format(llm_format=request.llm_format)
+            output_schema_proto = await self.module_class.get_output_format(
+                llm_format=request.llm_format,
+            )
             output_format_struct = json_format.Parse(
                 text=output_schema_proto,
                 message=struct_pb2.Struct(),  # pylint: disable=no-member
@@ -422,7 +426,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         # Get setup schema if available
         try:
             # Convert schema to proto format
-            setup_schema_proto = self.module_class.get_setup_format(llm_format=request.llm_format)
+            setup_schema_proto = await self.module_class.get_setup_format(llm_format=request.llm_format)
             setup_format_struct = json_format.Parse(
                 text=setup_schema_proto,
                 message=struct_pb2.Struct(),  # pylint: disable=no-member
@@ -439,7 +443,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             setup_schema=setup_format_struct,
         )
 
-    def GetModuleSecret(  # noqa: N802
+    async def GetModuleSecret(  # noqa: N802
         self,
         request: information_pb2.GetModuleSecretRequest,
         context: grpc.ServicerContext,
@@ -458,7 +462,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         # Get secret schema if available
         try:
             # Convert schema to proto format
-            secret_schema_proto = self.module_class.get_secret_format(llm_format=request.llm_format)
+            secret_schema_proto = await self.module_class.get_secret_format(llm_format=request.llm_format)
             secret_format_struct = json_format.Parse(
                 text=secret_schema_proto,
                 message=struct_pb2.Struct(),  # pylint: disable=no-member
@@ -494,7 +498,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         # Get setup schema if available
         try:
             # Convert schema to proto format
-            config_setup_schema_proto = self.module_class.get_config_setup_format(llm_format=request.llm_format)
+            config_setup_schema_proto = await self.module_class.get_config_setup_format(llm_format=request.llm_format)
             config_setup_format_struct = json_format.Parse(
                 text=config_setup_schema_proto,
                 message=struct_pb2.Struct(),  # pylint: disable=no-member
