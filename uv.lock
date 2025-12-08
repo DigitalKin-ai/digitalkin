@@ -825,7 +825,7 @@ tests = [
 
 [package.metadata]
 requires-dist = [
-    { name = "digitalkin-proto", specifier = "==0.2.0.dev6" },
+    { name = "digitalkin-proto", specifier = "==0.2.0" },
     { name = "grpcio-health-checking", specifier = ">=1.76.0" },
     { name = "grpcio-reflection", specifier = ">=1.76.0" },
     { name = "grpcio-status", specifier = ">=1.76.0" },
@@ -889,7 +889,7 @@ tests = [
 
 [[package]]
 name = "digitalkin-proto"
-version = "0.2.0.dev6"
+version = "0.2.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "bump-my-version" },
@@ -899,9 +899,9 @@ dependencies = [
     { name = "protobuf" },
     { name = "protovalidate" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/e6/49/9f1f39b5699f7a38375fb878e406a3d07bbd848ce303748f5f778ab732aa/digitalkin_proto-0.2.0.dev6.tar.gz", hash = "sha256:30fcaf02aa546b53a0c5eb339672999e6368b7f2fd836e84f1568be22bd35f8f", size = 132434 }
+sdist = { url = "https://files.pythonhosted.org/packages/58/df/3a87e3c95ed5bb1beea6c599bd2bdc259bd5a7d8e6fb77a0bed66a2d2165/digitalkin_proto-0.2.0.tar.gz", hash = "sha256:c2ed0d9ef10f5ee8d77689a072b11f7b46472da211eddafb5543ca5d18f3cbbd", size = 132174 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/8a/e5/a4f07e891b68c40599fecb749628865136bc53387be08b6d36f7b90fa617/digitalkin_proto-0.2.0.dev6-py3-none-any.whl", hash = "sha256:7044d120a8dd6ad77f64bcb70ee671c297b928aa680e3835cd5b7619b92bb40f", size = 206152 },
+    { url = "https://files.pythonhosted.org/packages/ba/c3/3c2f68963932d7d897dc27f7a5794b5c881f0fdd68c454864781d909dd64/digitalkin_proto-0.2.0-py3-none-any.whl", hash = "sha256:450aec3a70c46f3a48e537c322850eeba333762d809a1ddbc9ad853459a1e6fd", size = 206085 },
 ]
 
 [[package]]
