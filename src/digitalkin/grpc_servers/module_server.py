@@ -1,30 +1,29 @@
 """Module gRPC server implementation for DigitalKin."""
 
-from pathlib import Path
 import uuid
+from pathlib import Path
 
 import grpc
+from digitalkin_proto.agentic_mesh_protocol.module.v1 import (
+    module_service_pb2,
+    module_service_pb2_grpc,
+)
+from digitalkin_proto.agentic_mesh_protocol.module_registry.v1 import (
+    metadata_pb2,
+    module_registry_service_pb2_grpc,
+    registration_pb2,
+)
 
 from digitalkin.grpc_servers._base_server import BaseServer
 from digitalkin.grpc_servers.module_servicer import ModuleServicer
 from digitalkin.grpc_servers.utils.exceptions import ServerError
-from digitalkin.grpc_servers.utils.models import (
+from digitalkin.logger import logger
+from digitalkin.models.grpc_servers.models import (
     ClientConfig,
     ModuleServerConfig,
     SecurityMode,
 )
 from digitalkin.modules._base_module import BaseModule
-
-from digitalkin_proto.digitalkin.module.v2 import (
-    module_service_pb2,
-    module_service_pb2_grpc,
-)
-from digitalkin_proto.digitalkin.module_registry.v2 import (
-    metadata_pb2,
-    module_registry_service_pb2_grpc,
-    registration_pb2,
-)
-from digitalkin.logger import logger
 
 
 class ModuleServer(BaseServer):
@@ -50,7 +49,8 @@ class ModuleServer(BaseServer):
 
         Args:
             module_class: The module instance to be served.
-            config: Server configuration including registry address if auto-registration is desired.
+            server_config: Server configuration including registry address if auto-registration is desired.
+            client_config: Client configuration used by services.
         """
         super().__init__(server_config)
         self.module_class = module_class
@@ -79,10 +79,9 @@ class ModuleServer(BaseServer):
 
     def start(self) -> None:
         """Start the module server and register with the registry if configured."""
-        logger.info("Starting module server",extra={"server_config": self.server_config})
+        logger.info("Starting module server", extra={"server_config": self.server_config})
         super().start()
 
-        logger.debug("Starting module server",extra={"server_config": self.server_config})
         # If a registry address is provided, register the module
         if self.server_config.registry_address:
             try:
@@ -91,14 +90,12 @@ class ModuleServer(BaseServer):
                 logger.exception("Failed to register with registry")
 
         if self.module_servicer is not None:
-            logger.debug(
-                "Setup post init started",extra={"client_config": self.client_config}
-            )
+            logger.debug("Setup post init started", extra={"client_config": self.client_config})
             self.module_servicer.setup.__post_init__(self.client_config)
 
     async def start_async(self) -> None:
         """Start the module server and register with the registry if configured."""
-        logger.info("Starting module server",extra={"server_config": self.server_config})
+        logger.info("Starting module server", extra={"server_config": self.server_config})
         await super().start_async()
         # If a registry address is provided, register the module
         if self.server_config.registry_address:
@@ -108,10 +105,8 @@ class ModuleServer(BaseServer):
                 logger.exception("Failed to register with registry")
 
         if self.module_servicer is not None:
-            logger.info(
-                "Setup post init started",extra={"client_config": self.client_config}
-            )
-            await self.module_servicer.job_manager._start()
+            logger.info("Setup post init started", extra={"client_config": self.client_config})
+            await self.module_servicer.job_manager.start()
             self.module_servicer.setup.__post_init__(self.client_config)
 
     def stop(self, grace: float | None = None) -> None:
@@ -133,7 +128,8 @@ class ModuleServer(BaseServer):
         """
         logger.debug(
             "Registering module with registry at %s",
-            self.server_config.registry_address, extra={"server_config": self.server_config}
+            self.server_config.registry_address,
+            extra={"server_config": self.server_config},
         )
 
         # Create appropriate channel based on security mode
@@ -148,16 +144,11 @@ class ModuleServer(BaseServer):
 
             metadata = metadata_pb2.Metadata(
                 name=self.module_class.metadata["name"],
-                tags=[
-                    metadata_pb2.Tag(tag=tag)
-                    for tag in self.module_class.metadata["tags"]
-                ],
+                tags=[metadata_pb2.Tag(tag=tag) for tag in self.module_class.metadata["tags"]],
                 description=self.module_class.metadata["description"],
             )
 
-            self.module_class.metadata["module_id"] = (
-                f"{self.module_class.metadata['name']}:{uuid.uuid4()}"
-            )
+            self.module_class.metadata["module_id"] = f"{self.module_class.metadata['name']}:{uuid.uuid4()}"
             # Create registration request
             request = registration_pb2.RegisterRequest(
                 module_id=self.module_class.metadata["module_id"],
@@ -173,7 +164,7 @@ class ModuleServer(BaseServer):
                     "Request sent to registry for module: %s:%s",
                     self.module_class.metadata["name"],
                     self.module_class.metadata["module_id"],
-                    extra={"module_info": self.module_class.metadata}
+                    extra={"module_info": self.module_class.metadata},
                 )
                 response = stub.RegisterModule(request)
 
@@ -235,9 +226,7 @@ class ModuleServer(BaseServer):
         ):
             # Secure channel
             # Secure channel
-            root_certificates = Path(
-                self.client_config.credentials.root_cert_path
-            ).read_bytes()
+            root_certificates = Path(self.client_config.credentials.root_cert_path).read_bytes()
 
             # mTLS channel
             private_key = None
@@ -246,12 +235,8 @@ class ModuleServer(BaseServer):
                 self.client_config.credentials.client_cert_path is not None
                 and self.client_config.credentials.client_key_path is not None
             ):
-                private_key = Path(
-                    self.client_config.credentials.client_key_path
-                ).read_bytes()
-                certificate_chain = Path(
-                    self.client_config.credentials.client_cert_path
-                ).read_bytes()
+                private_key = Path(self.client_config.credentials.client_key_path).read_bytes()
+                certificate_chain = Path(self.client_config.credentials.client_cert_path).read_bytes()
 
             # Create channel credentials
             channel_credentials = grpc.ssl_channel_credentials(
@@ -259,9 +244,7 @@ class ModuleServer(BaseServer):
                 certificate_chain=certificate_chain,
                 private_key=private_key,
             )
-            return grpc.secure_channel(
-                self.server_config.registry_address, channel_credentials
-            )
+            return grpc.secure_channel(self.server_config.registry_address, channel_credentials)
         # Insecure channel
         return grpc.insecure_channel(self.server_config.registry_address)
 

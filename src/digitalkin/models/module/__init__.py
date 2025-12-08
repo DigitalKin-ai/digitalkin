@@ -5,6 +5,7 @@ from digitalkin.models.module.module_context import ModuleContext
 from digitalkin.models.module.module_types import (
     DataModel,
     DataTrigger,
+    DataTriggerT,
     InputModelT,
     OutputModelT,
     SecretModelT,
@@ -15,6 +16,7 @@ from digitalkin.models.module.module_types import (
 __all__ = [
     "DataModel",
     "DataTrigger",
+    "DataTriggerT",
     "InputModelT",
     "Module",
     "ModuleContext",

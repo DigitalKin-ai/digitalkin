@@ -1,17 +1,15 @@
 """gRPC filesystem implementation."""
 
-from collections.abc import Generator
-from contextlib import contextmanager
 from typing import Any, Literal
 
-from digitalkin_proto.digitalkin.filesystem.v1 import filesystem_pb2, filesystem_service_pb2_grpc
+from digitalkin_proto.agentic_mesh_protocol.filesystem.v1 import filesystem_pb2, filesystem_service_pb2_grpc
 from google.protobuf import struct_pb2
 from google.protobuf.json_format import MessageToDict
 
-from digitalkin.grpc_servers.utils.exceptions import ServerError
 from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
-from digitalkin.grpc_servers.utils.models import ClientConfig
+from digitalkin.grpc_servers.utils.grpc_error_handler import GrpcErrorHandlerMixin
 from digitalkin.logger import logger
+from digitalkin.models.grpc_servers.models import ClientConfig
 from digitalkin.services.filesystem.filesystem_strategy import (
     FileFilter,
     FilesystemRecord,
@@ -21,35 +19,8 @@ from digitalkin.services.filesystem.filesystem_strategy import (
 )
 
 
-class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper):
+class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
     """Default state filesystem strategy."""
-
-    @staticmethod
-    @contextmanager
-    def _handle_grpc_errors(operation: str) -> Generator[Any, Any, Any]:
-        """Context manager for consistent gRPC error handling.
-
-        Yields:
-            Allow error handling in context.
-
-        Args:
-            operation: Description of the operation being performed.
-
-        Raises:
-            ValueError: Error with the model validation.
-            ServerError: from gRPC Client.
-            FilesystemServiceError: Filesystem service internal.
-        """
-        try:
-            yield
-        except ServerError as e:
-            msg = f"gRPC {operation} failed: {e}"
-            logger.exception(msg)
-            raise ServerError(msg) from e
-        except Exception as e:
-            msg = f"Unexpected error in {operation}"
-            logger.exception(msg)
-            raise FilesystemServiceError(msg) from e
 
     @staticmethod
     def _file_type_to_enum(file_type: str) -> filesystem_pb2.FileType:
@@ -148,7 +119,7 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper):
         self.service_name = "FilesystemService"
         channel = self._init_channel(client_config)
         self.stub = filesystem_service_pb2_grpc.FilesystemServiceStub(channel)
-        logger.debug("Channel client 'Filesystem' initialized succesfully")
+        logger.debug("Channel client 'Filesystem' initialized successfully")
 
     def upload_files(
         self,
@@ -163,7 +134,7 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper):
             tuple[list[FilesystemRecord], int, int]: List of uploaded files, total uploaded count, total failed count
         """
         logger.debug("Uploading %d files", len(files))
-        with GrpcFilesystem._handle_grpc_errors("UploadFiles"):
+        with self.handle_grpc_errors("UploadFiles", FilesystemServiceError):
             upload_files: list[filesystem_pb2.UploadFileData] = []
             for file in files:
                 metadata_struct: struct_pb2.Struct | None = None
@@ -213,7 +184,7 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper):
                 context_id = self.setup_id
             case "mission":
                 context_id = self.mission_id
-        with GrpcFilesystem._handle_grpc_errors("GetFile"):
+        with self.handle_grpc_errors("GetFile", FilesystemServiceError):
             request = filesystem_pb2.GetFileRequest(
                 context=context_id,
                 file_id=file_id,
@@ -261,7 +232,7 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper):
         Raises:
             FilesystemServiceError: If there is an error during update
         """
-        with GrpcFilesystem._handle_grpc_errors("UpdateFile"):
+        with self.handle_grpc_errors("UpdateFile", FilesystemServiceError):
             request = filesystem_pb2.UpdateFileRequest(
                 context=self.mission_id,
                 file_id=file_id,
@@ -295,7 +266,7 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper):
         Returns:
             tuple[dict[str, bool], int, int]: Results per file, total deleted count, total failed count
         """
-        with GrpcFilesystem._handle_grpc_errors("DeleteFiles"):
+        with self.handle_grpc_errors("DeleteFiles", FilesystemServiceError):
             request = filesystem_pb2.DeleteFilesRequest(
                 context=self.mission_id,
                 filters=self._filter_to_proto(filters),
@@ -332,7 +303,7 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper):
                 context_id = self.setup_id
             case "mission":
                 context_id = self.mission_id
-        with GrpcFilesystem._handle_grpc_errors("GetFiles"):
+        with self.handle_grpc_errors("GetFiles", FilesystemServiceError):
             request = filesystem_pb2.GetFilesRequest(
                 context=context_id,
                 filters=self._filter_to_proto(filters),

@@ -1,13 +1,10 @@
 """BaseModule is the abstract base for all modules in the DigitalKin SDK."""
 
 import asyncio
-import contextlib
 import json
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Coroutine
 from typing import Any, ClassVar, Generic
-
-from pydantic import BaseModel
 
 from digitalkin.logger import logger
 from digitalkin.models.module import (
@@ -17,26 +14,12 @@ from digitalkin.models.module import (
     SecretModelT,
     SetupModelT,
 )
+from digitalkin.models.module.module import ModuleCodeModel
 from digitalkin.models.module.module_context import ModuleContext
 from digitalkin.modules.trigger_handler import TriggerHandler
-from digitalkin.services.agent.agent_strategy import AgentStrategy
-from digitalkin.services.cost.cost_strategy import CostStrategy
-from digitalkin.services.filesystem.filesystem_strategy import FilesystemStrategy
-from digitalkin.services.identity.identity_strategy import IdentityStrategy
-from digitalkin.services.registry.registry_strategy import RegistryStrategy
 from digitalkin.services.services_config import ServicesConfig, ServicesStrategy
-from digitalkin.services.snapshot.snapshot_strategy import SnapshotStrategy
-from digitalkin.services.storage.storage_strategy import StorageStrategy
 from digitalkin.utils.llm_ready_schema import llm_ready_schema
 from digitalkin.utils.package_discover import ModuleDiscoverer
-
-
-class ModuleCodeModel(BaseModel):
-    """typed error/code model."""
-
-    code: str
-    message: str
-    short_description: str
 
 
 class BaseModule(  # noqa: PLR0904
@@ -67,33 +50,29 @@ class BaseModule(  # noqa: PLR0904
     services_config_params: ClassVar[dict[str, dict[str, Any | None] | None]]
     services_config: ServicesConfig
 
-    # services list
-    agent: AgentStrategy
-    cost: CostStrategy
-    filesystem: FilesystemStrategy
-    identity: IdentityStrategy
-    registry: RegistryStrategy
-    snapshot: SnapshotStrategy
-    storage: StorageStrategy
+    def _init_strategies(self, mission_id: str, setup_id: str, setup_version_id: str) -> dict[str, Any]:
+        """Initialize the services configuration.
 
-    # runtime params
-    job_id: str
-    mission_id: str
-    setup_id: str
-    setup_version_id: str
-    _status: ModuleStatus
-    _task: asyncio.Task | None
-
-    def _init_strategies(self) -> None:
-        """Initialize the services configuration."""
-        for service_name in self.services_config.valid_strategy_names():
-            service = self.services_config.init_strategy(
+        Returns:
+            dict of services with name: Strategy
+                agent: AgentStrategy
+                cost: CostStrategy
+                filesystem: FilesystemStrategy
+                identity: IdentityStrategy
+                registry: RegistryStrategy
+                snapshot: SnapshotStrategy
+                storage: StorageStrategy
+        """
+        logger.debug("Service initialisation: %s", self.services_config_strategies.keys())
+        return {
+            service_name: self.services_config.init_strategy(
                 service_name,
-                self.mission_id,
-                self.setup_id,
-                self.setup_version_id,
+                mission_id,
+                setup_id,
+                setup_version_id,
             )
-            setattr(self, service_name, service)
+            for service_name in self.services_config.valid_strategy_names()
+        }
 
     def __init__(
         self,
@@ -103,22 +82,19 @@ class BaseModule(  # noqa: PLR0904
         setup_version_id: str,
     ) -> None:
         """Initialize the module."""
-        self.job_id: str = job_id
-        self.mission_id: str = mission_id
-        # Setup reference needed for the overall Kin scope as the filesystem context
-        self.setup_id: str = setup_id
-        # SetupVersion reference needed for the precise Kin scope as the cost
-        self.setup_version_id: str = setup_version_id
         self._status = ModuleStatus.CREATED
-        self._task: asyncio.Task | None = None
-        # Initialize services configuration
-        self._init_strategies()
 
         # Initialize minimum context
         self.context = ModuleContext(
-            storage=self.storage,
-            cost=self.cost,
-            filesystem=self.filesystem,
+            # Initialize services configuration
+            **self._init_strategies(mission_id, setup_id, setup_version_id),
+            session={
+                "setup_id": setup_id,
+                "mission_id": mission_id,
+                "setup_version_id": setup_version_id,
+                "job_id": job_id,
+            },
+            callbacks={"logger": logger},
         )
 
     @property
@@ -131,14 +107,18 @@ class BaseModule(  # noqa: PLR0904
         return self._status
 
     @classmethod
-    def get_secret_format(cls, *, llm_format: bool) -> str:
+    async def get_secret_format(cls, *, llm_format: bool) -> str:
         """Get the JSON schema of the secret format model.
 
-        Raises:
-            NotImplementedError: If the `secret_format` is not defined.
+        Args:
+            llm_format: If True, return LLM-optimized schema format with inlined
+                references and simplified structure.
 
         Returns:
-            The JSON schema of the secret format as a string.
+            The JSON schema of the secret format as a JSON string.
+
+        Raises:
+            NotImplementedError: If the `secret_format` class attribute is not defined.
         """
         if cls.secret_format is not None:
             if llm_format:
@@ -148,14 +128,18 @@ class BaseModule(  # noqa: PLR0904
         raise NotImplementedError(msg)
 
     @classmethod
-    def get_input_format(cls, *, llm_format: bool) -> str:
+    async def get_input_format(cls, *, llm_format: bool) -> str:
         """Get the JSON schema of the input format model.
 
-        Raises:
-            NotImplementedError: If the `input_format` is not defined.
+        Args:
+            llm_format: If True, return LLM-optimized schema format with inlined
+                references and simplified structure.
 
         Returns:
-            The JSON schema of the input format as a string.
+            The JSON schema of the input format as a JSON string.
+
+        Raises:
+            NotImplementedError: If the `input_format` class attribute is not defined.
         """
         if cls.input_format is not None:
             if llm_format:
@@ -165,14 +149,18 @@ class BaseModule(  # noqa: PLR0904
         raise NotImplementedError(msg)
 
     @classmethod
-    def get_output_format(cls, *, llm_format: bool) -> str:
+    async def get_output_format(cls, *, llm_format: bool) -> str:
         """Get the JSON schema of the output format model.
 
-        Raises:
-            NotImplementedError: If the `output_format` is not defined.
+        Args:
+            llm_format: If True, return LLM-optimized schema format with inlined
+                references and simplified structure.
 
         Returns:
-            The JSON schema of the output format as a string.
+            The JSON schema of the output format as a JSON string.
+
+        Raises:
+            NotImplementedError: If the `output_format` class attribute is not defined.
         """
         if cls.output_format is not None:
             if llm_format:
@@ -182,20 +170,29 @@ class BaseModule(  # noqa: PLR0904
         raise NotImplementedError(msg)
 
     @classmethod
-    def get_config_setup_format(cls, *, llm_format: bool) -> str:
+    async def get_config_setup_format(cls, *, llm_format: bool) -> str:
         """Gets the JSON schema of the config setup format model.
 
-        The config setup format is used only to initialize the module with configuration data.
-        The setup format is used to initialize an run the module with setup data.
+        The config setup format is used only to initialize the module with configuration
+        data. It includes fields marked with `json_schema_extra={"config": True}` and
+        excludes hidden runtime fields.
 
-        Raises:
-            NotImplementedError: If the `setup_format` is not defined.
+        Dynamic schema fields are always resolved when generating the schema, as this
+        method is typically called during module discovery or schema generation where
+        fresh values are needed.
+
+        Args:
+            llm_format: If True, return LLM-optimized schema format with inlined
+                references and simplified structure.
 
         Returns:
-            The JSON schema of the config setup format as a string.
+            The JSON schema of the config setup format as a JSON string.
+
+        Raises:
+            NotImplementedError: If the `setup_format` class attribute is not defined.
         """
         if cls.setup_format is not None:
-            setup_format = cls.setup_format.get_clean_model(config_fields=True, hidden_fields=False)
+            setup_format = await cls.setup_format.get_clean_model(config_fields=True, hidden_fields=False, force=True)
             if llm_format:
                 return json.dumps(llm_ready_schema(setup_format), indent=2)
             return json.dumps(setup_format.model_json_schema(), indent=2)
@@ -203,17 +200,28 @@ class BaseModule(  # noqa: PLR0904
         raise NotImplementedError(msg)
 
     @classmethod
-    def get_setup_format(cls, *, llm_format: bool) -> str:
+    async def get_setup_format(cls, *, llm_format: bool) -> str:
         """Gets the JSON schema of the setup format model.
 
-        Raises:
-            NotImplementedError: If the `setup_format` is not defined.
+        The setup format is used at runtime and includes hidden fields but excludes
+        config-only fields. This is the schema used when running the module.
+
+        Dynamic schema fields are always resolved when generating the schema, as this
+        method is typically called during module discovery or schema generation where
+        fresh values are needed.
+
+        Args:
+            llm_format: If True, return LLM-optimized schema format with inlined
+                references and simplified structure.
 
         Returns:
-            The JSON schema of the setup format as a string.
+            The JSON schema of the setup format as a JSON string.
+
+        Raises:
+            NotImplementedError: If the `setup_format` class attribute is not defined.
         """
         if cls.setup_format is not None:
-            setup_format = cls.setup_format.get_clean_model(config_fields=False, hidden_fields=True)
+            setup_format = await cls.setup_format.get_clean_model(config_fields=False, hidden_fields=True, force=True)
             if llm_format:
                 return json.dumps(llm_ready_schema(setup_format), indent=2)
             return json.dumps(setup_format.model_json_schema(), indent=2)
@@ -245,17 +253,22 @@ class BaseModule(  # noqa: PLR0904
         return cls.input_format(**input_data)
 
     @classmethod
-    def create_setup_model(cls, setup_data: dict[str, Any], *, config_fields: bool = False) -> SetupModelT:
+    async def create_setup_model(cls, setup_data: dict[str, Any], *, config_fields: bool = False) -> SetupModelT:
         """Create the setup model from the setup data.
+
+        Creates a filtered setup model instance based on the provided data.
+        Uses `get_clean_model()` internally to get the appropriate model class
+        with field filtering applied.
 
         Args:
             setup_data: The setup data to create the model from.
             config_fields: If True, include only fields with json_schema_extra["config"] == True.
 
         Returns:
-            The setup model.
+            An instance of the setup model with the provided data.
         """
-        return cls.setup_format.get_clean_model(config_fields=config_fields, hidden_fields=True)(**setup_data)
+        model_cls = await cls.setup_format.get_clean_model(config_fields=config_fields, hidden_fields=True)
+        return model_cls(**setup_data)
 
     @classmethod
     def create_secret_model(cls, secret_data: dict[str, Any]) -> SecretModelT:
@@ -307,7 +320,11 @@ class BaseModule(  # noqa: PLR0904
         """
         return cls.triggers_discoverer.register_trigger(handler_cls)
 
-    async def run_config_setup(self, config_setup_data: SetupModelT) -> SetupModelT:  # noqa: PLR6301
+    async def run_config_setup(  # noqa: PLR6301
+        self,
+        context: ModuleContext,  # noqa: ARG002
+        config_setup_data: SetupModelT,
+    ) -> SetupModelT:
         """Run config setup the module.
 
         The config setup is used to initialize the setup with configuration data.
@@ -323,7 +340,7 @@ class BaseModule(  # noqa: PLR0904
         return config_setup_data
 
     @abstractmethod
-    async def initialize(self, setup_data: SetupModelT) -> None:
+    async def initialize(self, context: ModuleContext, setup_data: SetupModelT) -> None:
         """Initialize the module."""
         raise NotImplementedError
 
@@ -331,7 +348,6 @@ class BaseModule(  # noqa: PLR0904
         self,
         input_data: InputModelT,
         setup_data: SetupModelT,
-        callback: Callable[[OutputModelT], Coroutine[Any, Any, None]],
     ) -> None:
         """Run the module with the given input and setup data.
 
@@ -346,7 +362,6 @@ class BaseModule(  # noqa: PLR0904
         Args:
             input_data (InputModelT): The input data to be processed by the module.
             setup_data (SetupModelT): The setup or configuration data required for the module.
-            callback (Callable[[OutputModelT], Coroutine[Any, Any, None]]): callback to be invoked to stream any result.
 
         Raises:
             ValueError: If no handler for the protocol is found.
@@ -360,7 +375,6 @@ class BaseModule(  # noqa: PLR0904
         await handler_instance.handle(
             input_instance.root,
             setup_data,
-            callback,
             self.context,
         )
 
@@ -373,7 +387,6 @@ class BaseModule(  # noqa: PLR0904
         self,
         input_data: InputModelT,
         setup_data: SetupModelT,
-        callback: Callable[[OutputModelT], Coroutine[Any, Any, None]],
     ) -> None:
         """Run the module lifecycle.
 
@@ -381,55 +394,17 @@ class BaseModule(  # noqa: PLR0904
             asyncio.CancelledError: If the module is cancelled
         """
         try:
-            logger.info(
-                "Starting module %s",
-                self.name,
-                extra={
-                    "mission_id": self.mission_id,
-                    "setup_id": self.setup_id,
-                    "setup_version_id": self.setup_version_id,
-                    "job_id": self.job_id,
-                },
-            )
-            await self.run(input_data, setup_data, callback)
-            logger.info(
-                "Module %s finished",
-                self.name,
-                extra={
-                    "mission_id": self.mission_id,
-                    "setup_id": self.setup_id,
-                    "setup_version_id": self.setup_version_id,
-                    "job_id": self.job_id,
-                },
-            )
+            logger.info("Starting module %s", self.name, extra=self.context.session.current_ids())
+            await self.run(input_data, setup_data)
+            logger.info("Module %s finished", self.name, extra=self.context.session.current_ids())
         except asyncio.CancelledError:
             self._status = ModuleStatus.CANCELLED
-            logger.error(
-                "Module %s cancelled",
-                self.name,
-                extra={
-                    "mission_id": self.mission_id,
-                    "setup_id": self.setup_id,
-                    "setup_version_id": self.setup_version_id,
-                    "job_id": self.job_id,
-                },
-            )
+            logger.error("Module %s cancelled", self.name, extra=self.context.session.current_ids())
         except Exception:
             self._status = ModuleStatus.FAILED
-            logger.exception(
-                "Error inside module %s",
-                self.name,
-                extra={
-                    "mission_id": self.mission_id,
-                    "setup_id": self.setup_id,
-                    "setup_version_id": self.setup_version_id,
-                    "job_id": self.job_id,
-                },
-            )
+            logger.exception("Error inside module %s", self.name, extra=self.context.session.current_ids())
         else:
             self._status = ModuleStatus.STOPPING
-        finally:
-            await self.stop()
 
     async def start(
         self,
@@ -440,15 +415,16 @@ class BaseModule(  # noqa: PLR0904
     ) -> None:
         """Start the module."""
         try:
-            logger.debug("Inititalize module")
-            await self.initialize(setup_data=setup_data)
+            self.context.callbacks.send_message = callback
+            logger.info(f"Inititalize module {self.context.session.job_id}")
+            await self.initialize(self.context, setup_data)
         except Exception as e:
             self._status = ModuleStatus.FAILED
             short_description = "Error initializing module"
             logger.exception("%s: %s", short_description, e)
             await callback(
                 ModuleCodeModel(
-                    code=str(self._status),
+                    code="Error",
                     short_description=short_description,
                     message=str(e),
                 )
@@ -461,32 +437,22 @@ class BaseModule(  # noqa: PLR0904
         try:
             logger.debug("Init the discovered input handlers.")
             self.triggers_discoverer.init_handlers(self.context)
-            logger.debug("Run lifecycle")
-            self._status = ModuleStatus.RUNNING
-            self._task = asyncio.create_task(
-                self._run_lifecycle(input_data, setup_data, callback),
-                name="module_lifecycle",
-            )
-            if done_callback is not None:
-                self._task.add_done_callback(done_callback)
+            logger.debug(f"Run lifecycle {self.context.session.job_id}")
+            await self._run_lifecycle(input_data, setup_data)
         except Exception:
             self._status = ModuleStatus.FAILED
             logger.exception("Error during module lifecyle")
+        finally:
+            await self.stop()
 
     async def stop(self) -> None:
         """Stop the module."""
-        logger.info("Stopping module %s with status %s", self.name, self._status)
-        if self._status not in {ModuleStatus.RUNNING, ModuleStatus.STOPPING}:
-            return
-
+        logger.info("Stopping module %s | job_id=%s", self.name, self.context.session.job_id)
         try:
             self._status = ModuleStatus.STOPPING
-            if self._task and not self._task.done():
-                self._task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await self._task
             logger.debug("Module %s stopped", self.name)
             await self.cleanup()
+            await self.context.callbacks.send_message(ModuleCodeModel(code="__END_OF_STREAM__"))
             self._status = ModuleStatus.STOPPED
             logger.debug("Module %s cleaned", self.name)
         except Exception:
@@ -500,30 +466,17 @@ class BaseModule(  # noqa: PLR0904
     ) -> None:
         """Start the module."""
         try:
-            logger.info(
-                "Run Config Setup lifecycle",
-                extra={
-                    "mission_id": self.mission_id,
-                    "setup_id": self.setup_id,
-                    "setup_version_id": self.setup_version_id,
-                    "job_id": self.job_id,
-                },
-            )
+            logger.info("Run Config Setup lifecycle", extra=self.context.session.current_ids())
             self._status = ModuleStatus.RUNNING
-            content = await self.run_config_setup(config_setup_data)
+            self.context.callbacks.set_config_setup = callback
+            content = await self.run_config_setup(self.context, config_setup_data)
 
             wrapper = config_setup_data.model_dump()
             wrapper["content"] = content.model_dump()
-            await callback(self.create_setup_model(wrapper))
+            setup_model = await self.create_setup_model(wrapper)
+            await callback(setup_model)
             self._status = ModuleStatus.STOPPING
         except Exception:
+            logger.error("Error during module lifecyle")
             self._status = ModuleStatus.FAILED
-            logger.exception(
-                "Error during module lifecyle",
-                extra={
-                    "mission_id": self.mission_id,
-                    "setup_id": self.setup_id,
-                    "setup_version_id": self.setup_version_id,
-                    "job_id": self.job_id,
-                },
-            )
+            logger.exception("Error during module lifecyle", extra=self.context.session.current_ids())

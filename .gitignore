@@ -51,6 +51,13 @@ coverage.xml
 .pytest_cache/
 cover/
 
+# Pytest HTML/JSON reports
+pytest-report.html
+test-results.xml
+test-metrics.json
+test-artifacts/
+consolidated-report/
+
 # Translations
 *.mo
 *.pot
@@ -173,3 +180,5 @@ cython_debug/
 .vscode/
 requirements.txt
 certs/
+
+CLAUDE.md

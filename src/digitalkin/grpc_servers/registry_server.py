@@ -1,14 +1,14 @@
 """Registry gRPC server implementation for DigitalKin."""
 
-from digitalkin_proto.digitalkin.module_registry.v2 import (
+from digitalkin_proto.agentic_mesh_protocol.module_registry.v1 import (
     module_registry_service_pb2,
     module_registry_service_pb2_grpc,
 )
 
 from digitalkin.grpc_servers._base_server import BaseServer
 from digitalkin.grpc_servers.registry_servicer import RegistryModule, RegistryServicer
-from digitalkin.grpc_servers.utils.models import RegistryServerConfig
 from digitalkin.logger import logger
+from digitalkin.models.grpc_servers.models import RegistryServerConfig
 
 
 class RegistryServer(BaseServer):

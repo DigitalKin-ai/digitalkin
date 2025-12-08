@@ -27,17 +27,18 @@ tasks:
   dev-deps:
     desc: "Install development dependencies"
     cmds:
-      - uv pip install -e ".[dev, taskiq]"
+      - uv pip install -e ".[taskiq]" --group dev --group docs
 
   examples-deps:
     desc: "Install examples dependencies"
     cmds:
-      - uv pip install -e ".[examples]"
+      - uv pip install --group examples
 
   tests-deps:
     desc: "Install tests dependencies"
     cmds:
-      - uv pip install -e ".[tests]"
+      - uv pip install --group tests
+
   setup-pre-commit:
     desc: "Install pre-commit hooks"
     cmds:
@@ -74,7 +75,7 @@ tasks:
   run-tests:
     desc: "Run pytest tests"
     cmds:
-      - uv run pytest --cov=digitalkin
+      - docker compose run --rm -T tests -m 'not integration'
 
   linter:
     desc: "run linter on the project"
@@ -104,9 +105,9 @@ tasks:
       - task: test-package
 
   bump-version:
-    desc: "Bump package version (type: major, minor, or patch)"
+    desc: "Bump package version (type: major, minor, patch, pre_l or pre_n)"
     cmds:
-      - SKIP=pytest bump2version {{.CLI_ARGS}}
+      - SKIP=pytest bump-my-version bump {{.CLI_ARGS}}
 
   setup-dev:
     desc: "Setup development environment"
@@ -120,4 +121,4 @@ tasks:
   start-taskiq:
     desc: "Start TaskIQ worker. be sure to enable rabbitMQ stream capability"
     cmds:
-      - taskiq worker digitalkin.modules.job_manager.taskiq_broker:TASKIQ_BROKER -w 1
+      - taskiq worker digitalkin.core.job_manager.taskiq_broker:TASKIQ_BROKER -w 1

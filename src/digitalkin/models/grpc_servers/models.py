@@ -175,8 +175,8 @@ class ClientConfig(ChannelConfig):
     credentials: ClientCredentials | None = Field(None, description="Client credentials for secure mode")
     channel_options: list[tuple[str, Any]] = Field(
         default_factory=lambda: [
-            ("grpc.max_receive_message_length", 50 * 1024 * 1024),  # 50MB
-            ("grpc.max_send_message_length", 50 * 1024 * 1024),  # 50MB
+            ("grpc.max_receive_message_length", 100 * 1024 * 1024),  # 100MB
+            ("grpc.max_send_message_length", 100 * 1024 * 1024),  # 100MB
         ],
         description="Additional channel options",
     )
@@ -223,8 +223,8 @@ class ServerConfig(ChannelConfig):
     credentials: ServerCredentials | None = Field(None, description="Server credentials for secure mode")
     server_options: list[tuple[str, Any]] = Field(
         default_factory=lambda: [
-            ("grpc.max_receive_message_length", 50 * 1024 * 1024),  # 50MB
-            ("grpc.max_send_message_length", 50 * 1024 * 1024),  # 50MB
+            ("grpc.max_receive_message_length", 100 * 1024 * 1024),  # 100MB
+            ("grpc.max_send_message_length", 100 * 1024 * 1024),  # 100MB
         ],
         description="Additional server options",
     )
@@ -262,7 +262,7 @@ class ModuleServerConfig(ServerConfig):
         registry_address: Address of the registry server
     """
 
-    registry_address: str | None = Field(None, description="Address of the registry server")
+    registry_address: str = Field(..., description="Address of the registry server")
 
 
 class RegistryServerConfig(ServerConfig):

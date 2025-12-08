@@ -1,13 +1,13 @@
 """This module implements the default storage strategy."""
 
-from digitalkin_proto.digitalkin.storage.v2 import data_pb2, storage_service_pb2_grpc
+from digitalkin_proto.agentic_mesh_protocol.storage.v1 import data_pb2, storage_service_pb2_grpc
 from google.protobuf import json_format
 from google.protobuf.struct_pb2 import Struct
 from pydantic import BaseModel
 
 from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
-from digitalkin.grpc_servers.utils.models import ClientConfig
 from digitalkin.logger import logger
+from digitalkin.models.grpc_servers.models import ClientConfig
 from digitalkin.services.storage.storage_strategy import (
     DataType,
     StorageRecord,
@@ -128,7 +128,7 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
             resp = self.exec_grpc_query("UpdateRecord", req)
             return self._build_record_from_proto(resp.stored_data)
         except Exception:
-            logger.exception("gRPC UpdateRecord failed for %s:%s", collection, record_id)
+            logger.warning("gRPC UpdateRecord failed for %s:%s", collection, record_id)
             return None
 
     def _remove(self, collection: str, record_id: str) -> bool:
@@ -211,4 +211,4 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
 
         channel = self._init_channel(client_config)
         self.stub = storage_service_pb2_grpc.StorageServiceStub(channel)
-        logger.debug("Channel client 'storage' initialized succesfully")
+        logger.debug("Channel client 'storage' initialized successfully")

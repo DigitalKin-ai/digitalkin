@@ -2,7 +2,15 @@
 
 from enum import Enum, auto
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+
+class ModuleCodeModel(BaseModel):
+    """typed error/code model."""
+
+    code: str = Field(...)
+    message: str | None = Field(default=None)
+    short_description: str | None = Field(default=None)
 
 
 class ModuleStatus(Enum):

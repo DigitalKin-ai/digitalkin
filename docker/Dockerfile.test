@@ -1,0 +1,33 @@
+# Dockerfile.test
+FROM python:3.10-slim
+
+WORKDIR /app
+
+# system deps (if some wheels require build)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential gcc wget curl libffi-dev \
+  && rm -rf /var/lib/apt/lists/*
+
+# install uv
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh && \
+    ln -s /root/.local/bin/uv /usr/local/bin/uv
+
+# copy project metadata for dependency caching
+COPY pyproject.toml uv.lock /app/
+
+# copy source & tests BEFORE running pip so editable install can see src
+COPY src/ /app/src/
+COPY tests/ /app/tests/
+
+# install project (editable) + extras; this layer installs heavy deps one time
+RUN uv pip install --system -e ".[taskiq]" && \
+    uv pip install --system --group dev --group tests
+
+# copy runtime script
+WORKDIR /app
+
+# ENTRYPOINT directly runs pytest with environment variables
+ENTRYPOINT ["sh", "-c", "pytest ${TEST_SELECTOR:-tests/} ${PYTEST_ARGS:-}"]
+
+# empty CMD, can be overridden by docker-compose
+CMD []

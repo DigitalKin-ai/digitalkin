@@ -9,7 +9,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: recursive
 
@@ -30,10 +30,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          uv pip install -e ".[tests,dev]" --system
-
-      - name: Run tests
-        run: pytest
+          uv pip install -e . --group dev --system
 
       - name: Build package
         run: task build-package

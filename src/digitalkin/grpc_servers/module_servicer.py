@@ -5,7 +5,7 @@ from collections.abc import AsyncGenerator
 from typing import Any
 
 import grpc
-from digitalkin_proto.digitalkin.module.v2 import (
+from digitalkin_proto.agentic_mesh_protocol.module.v1 import (
     information_pb2,
     lifecycle_pb2,
     module_service_pb2_grpc,
@@ -13,12 +13,12 @@ from digitalkin_proto.digitalkin.module.v2 import (
 )
 from google.protobuf import json_format, struct_pb2
 
+from digitalkin.core.job_manager.base_job_manager import BaseJobManager
 from digitalkin.grpc_servers.utils.exceptions import ServicerError
 from digitalkin.logger import logger
+from digitalkin.models.core.job_manager_models import JobManagerMode
 from digitalkin.models.module.module import ModuleStatus
 from digitalkin.modules._base_module import BaseModule
-from digitalkin.modules.job_manager.base_job_manager import BaseJobManager
-from digitalkin.modules.job_manager.job_manager_models import JobManagerMode
 from digitalkin.services.services_models import ServicesMode
 from digitalkin.services.setup.default_setup import DefaultSetup
 from digitalkin.services.setup.grpc_setup import GrpcSetup
@@ -112,7 +112,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         # TODO: Secret should be used here as well
         setup_version = request.setup_version
         config_setup_data = self.module_class.create_config_setup_model(json_format.MessageToDict(request.content))
-        setup_version_data = self.module_class.create_setup_model(
+        setup_version_data = await self.module_class.create_setup_model(
             json_format.MessageToDict(request.setup_version.content),
             config_fields=True,
         )
@@ -172,7 +172,8 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         )
         # Process the module input
         # TODO: Check failure of input data format
-        input_data = self.module_class.create_input_model(dict(request.input.items()))
+        input_data = self.module_class.create_input_model(json_format.MessageToDict(request.input))
+
         setup_data_class = self.setup.get_setup(
             setup_dict={
                 "setup_id": request.setup_id,
@@ -184,7 +185,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             msg = "No setup data returned."
             raise ServicerError(msg)
 
-        setup_data = self.module_class.create_setup_model(setup_data_class.current_setup_version.content)
+        setup_data = await self.module_class.create_setup_model(setup_data_class.current_setup_version.content)
 
         # create a task to run the module in background
         job_id = await self.job_manager.create_module_instance_job(
@@ -201,28 +202,37 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             yield lifecycle_pb2.StartModuleResponse(success=False)
             return
 
-        async with self.job_manager.generate_stream_consumer(job_id) as stream:  # type: ignore
-            async for message in stream:
-                if message.get("error", None) is not None:
-                    logger.error("Error in output_data", extra={"message": message})
-                    context.set_code(message["error"]["code"])
-                    context.set_details(message["error"]["error_message"])
-                    yield lifecycle_pb2.StartModuleResponse(success=False, job_id=job_id)
-                    break
+        try:
+            async with self.job_manager.generate_stream_consumer(job_id) as stream:  # type: ignore
+                async for message in stream:
+                    if message.get("error", None) is not None:
+                        logger.error("Error in output_data", extra={"message": message})
+                        context.set_code(message["error"]["code"])
+                        context.set_details(message["error"]["error_message"])
+                        yield lifecycle_pb2.StartModuleResponse(success=False, job_id=job_id)
+                        break
 
-                if message.get("exception", None) is not None:
-                    logger.error("Exception in output_data", extra={"message": message})
-                    context.set_code(message["short_description"])
-                    context.set_details(message["exception"])
-                    yield lifecycle_pb2.StartModuleResponse(success=False, job_id=job_id)
-                    break
+                    if message.get("exception", None) is not None:
+                        logger.error("Exception in output_data", extra={"message": message})
+                        context.set_code(message["short_description"])
+                        context.set_details(message["exception"])
+                        yield lifecycle_pb2.StartModuleResponse(success=False, job_id=job_id)
+                        break
 
-                if message.get("code", None) is not None and message.get("code") == "__END_OF_STREAM__":
-                    yield lifecycle_pb2.StartModuleResponse(success=True, job_id=job_id)
-                    break
+                    if message.get("code", None) is not None and message.get("code") == "__END_OF_STREAM__":
+                        logger.info(
+                            "End of stream via __END_OF_STREAM__",
+                            extra={"job_id": job_id, "mission_id": request.mission_id},
+                        )
+                        break
 
-                proto = json_format.ParseDict(message, struct_pb2.Struct(), ignore_unknown_fields=True)
-                yield lifecycle_pb2.StartModuleResponse(success=True, output=proto, job_id=job_id)
+                    logger.info("Yielding message from job %s: %s", job_id, message)
+                    proto = json_format.ParseDict(message, struct_pb2.Struct(), ignore_unknown_fields=True)
+                    yield lifecycle_pb2.StartModuleResponse(success=True, output=proto, job_id=job_id)
+        finally:
+            await self.job_manager.wait_for_completion(job_id)
+            await self.job_manager.clean_session(job_id, mission_id=request.mission_id)
+
         logger.info("Job %s finished", job_id)
 
     async def StopModule(  # noqa: N802
@@ -340,7 +350,9 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         # Get input schema if available
         try:
             # Convert schema to proto format
-            input_schema_proto = self.module_class.get_input_format(llm_format=request.llm_format)
+            input_schema_proto = await self.module_class.get_input_format(
+                llm_format=request.llm_format,
+            )
             input_format_struct = json_format.Parse(
                 text=input_schema_proto,
                 message=struct_pb2.Struct(),  # pylint: disable=no-member
@@ -376,7 +388,9 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         # Get output schema if available
         try:
             # Convert schema to proto format
-            output_schema_proto = self.module_class.get_output_format(llm_format=request.llm_format)
+            output_schema_proto = await self.module_class.get_output_format(
+                llm_format=request.llm_format,
+            )
             output_format_struct = json_format.Parse(
                 text=output_schema_proto,
                 message=struct_pb2.Struct(),  # pylint: disable=no-member
@@ -412,7 +426,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         # Get setup schema if available
         try:
             # Convert schema to proto format
-            setup_schema_proto = self.module_class.get_setup_format(llm_format=request.llm_format)
+            setup_schema_proto = await self.module_class.get_setup_format(llm_format=request.llm_format)
             setup_format_struct = json_format.Parse(
                 text=setup_schema_proto,
                 message=struct_pb2.Struct(),  # pylint: disable=no-member
@@ -429,7 +443,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             setup_schema=setup_format_struct,
         )
 
-    def GetModuleSecret(  # noqa: N802
+    async def GetModuleSecret(  # noqa: N802
         self,
         request: information_pb2.GetModuleSecretRequest,
         context: grpc.ServicerContext,
@@ -448,7 +462,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         # Get secret schema if available
         try:
             # Convert schema to proto format
-            secret_schema_proto = self.module_class.get_secret_format(llm_format=request.llm_format)
+            secret_schema_proto = await self.module_class.get_secret_format(llm_format=request.llm_format)
             secret_format_struct = json_format.Parse(
                 text=secret_schema_proto,
                 message=struct_pb2.Struct(),  # pylint: disable=no-member
@@ -484,7 +498,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         # Get setup schema if available
         try:
             # Convert schema to proto format
-            config_setup_schema_proto = self.module_class.get_config_setup_format(llm_format=request.llm_format)
+            config_setup_schema_proto = await self.module_class.get_config_setup_format(llm_format=request.llm_format)
             config_setup_format_struct = json_format.Parse(
                 text=config_setup_schema_proto,
                 message=struct_pb2.Struct(),  # pylint: disable=no-member
