@@ -1,6 +1,6 @@
 """Registry gRPC server implementation for DigitalKin."""
 
-from digitalkin_proto.agentic_mesh_protocol.module_registry.v1 import (
+from agentic_mesh_protocol.module_registry.v1 import (
     module_registry_service_pb2,
     module_registry_service_pb2_grpc,
 )

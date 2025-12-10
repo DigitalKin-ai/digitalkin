@@ -15,10 +15,10 @@ Marker:
 """
 
 import asyncio
+import contextlib
 import datetime
 import gc
 import os
-import sys
 import tracemalloc
 from collections.abc import AsyncGenerator
 from typing import Any, ClassVar
@@ -50,7 +50,6 @@ pytestmark = [
 # ============================================================================
 # Fixtures
 # ============================================================================
-
 
 
 @pytest.fixture
@@ -110,7 +109,6 @@ class MockModuleForMemory(BaseModule):
 
     async def initialize(self, context: Any, setup_data: Any) -> None:
         """Initialize module."""
-        pass
 
     async def run(self) -> None:
         """Run module."""
@@ -119,7 +117,6 @@ class MockModuleForMemory(BaseModule):
 
     async def cleanup(self) -> None:
         """Cleanup module."""
-        pass
 
 
 def get_memory_mb() -> float:
@@ -133,6 +130,7 @@ def get_memory_mb() -> float:
         Memory usage in megabytes.
     """
     import time
+
     import psutil
 
     # Force garbage collection
@@ -171,10 +169,8 @@ class TestRealDatabaseMemoryBehavior:
         tracemalloc.start()
 
         # Clean test table
-        try:
+        with contextlib.suppress(Exception):
             await conn.execute_query("DELETE test_memory_crud;")
-        except Exception:
-            pass
 
         gc.collect()
         baseline_memory = get_memory_mb()
@@ -208,8 +204,6 @@ class TestRealDatabaseMemoryBehavior:
 
         tracemalloc.stop()
 
-        print(f"\nCRUD Memory Samples: {[f'{m:.2f}MB' for m in memory_samples]}")
-
         # Verify no significant memory growth trend
         if len(memory_samples) >= 5:
             early_avg = sum(memory_samples[:3]) / 3
@@ -217,9 +211,7 @@ class TestRealDatabaseMemoryBehavior:
 
             if early_avg > 0:
                 growth_ratio = (late_avg - early_avg) / early_avg
-                assert growth_ratio < 2.0, (
-                    f"Memory leak in CRUD operations: {growth_ratio * 100:.1f}% growth"
-                )
+                assert growth_ratio < 2.0, f"Memory leak in CRUD operations: {growth_ratio * 100:.1f}% growth"
 
     @pytest.mark.asyncio
     async def test_live_query_subscription_memory(self, conn):
@@ -227,10 +219,8 @@ class TestRealDatabaseMemoryBehavior:
         tracemalloc.start()
 
         # Clean test table
-        try:
+        with contextlib.suppress(Exception):
             await conn.execute_query("DELETE test_memory_live;")
-        except Exception:
-            pass
 
         gc.collect()
         baseline_memory = get_memory_mb()
@@ -263,13 +253,9 @@ class TestRealDatabaseMemoryBehavior:
         memory_retained = memory_after_stop - baseline_memory
         memory_during = memory_with_live - baseline_memory
 
-        print(f"\nLive Query Memory: During={memory_during:.2f}MB, After={memory_retained:.2f}MB")
-
         if memory_during > 0:
             retention_ratio = memory_retained / memory_during
-            assert retention_ratio < 2.0, (
-                f"Live query excessive growth: {retention_ratio * 100:.1f}% retained"
-            )
+            assert retention_ratio < 2.0, f"Live query excessive growth: {retention_ratio * 100:.1f}% retained"
 
     @pytest.mark.asyncio
     async def test_concurrent_db_operations_memory(self, conn):
@@ -277,16 +263,14 @@ class TestRealDatabaseMemoryBehavior:
         tracemalloc.start()
 
         # Clean test table
-        try:
+        with contextlib.suppress(Exception):
             await conn.execute_query("DELETE test_memory_concurrent;")
-        except Exception:
-            pass
 
         gc.collect()
         baseline_memory = get_memory_mb()
 
         # Create tasks concurrently
-        async def create_task_data(task_idx: int):
+        async def create_task_data(task_idx: int) -> None:
             """Create task data in database."""
             await conn.create(
                 "test_memory_concurrent",
@@ -307,8 +291,6 @@ class TestRealDatabaseMemoryBehavior:
         tracemalloc.stop()
 
         memory_used = memory_after_operations - baseline_memory
-
-        print(f"\nConcurrent Operations Memory: {memory_used:.2f}MB for 20 operations")
 
         # Memory usage should be reasonable (less than 100MB for 20 x 5KB operations)
         assert memory_used < 100, f"Excessive memory for concurrent ops: {memory_used:.2f}MB"
@@ -348,13 +330,9 @@ class TestRealDatabaseScaling:
 
         memory_growth = final_memory - baseline_memory
 
-        print(f"\nConnection Pooling Memory: {memory_growth:.2f}MB for {operations_count} operations")
-
         # With connection reuse, memory should not grow excessively
         # Allow up to 50MB for 100 operations
-        assert memory_growth < 50, (
-            f"Excessive memory growth with connection pooling: {memory_growth:.2f}MB"
-        )
+        assert memory_growth < 50, f"Excessive memory growth with connection pooling: {memory_growth:.2f}MB"
 
     @pytest.mark.asyncio
     async def test_query_result_memory_scaling(self, conn):
@@ -401,8 +379,6 @@ class TestRealDatabaseScaling:
             results.clear()
 
         tracemalloc.stop()
-
-        print(f"\nQuery Result Memory Scaling: {memory_by_result_size}")
 
         # Memory should scale sub-linearly with result count
         if len(memory_by_result_size) >= 2:
@@ -463,19 +439,15 @@ class TestRealDatabaseLongRunning:
 
         tracemalloc.stop()
 
-        print(f"\nSustained Operations Memory Samples: {[f'{m:.2f}MB' for m in memory_samples]}")
-
         # Check for memory leak trend
         if len(memory_samples) >= 3:
             # Compare first third vs last third
-            early_avg = sum(memory_samples[:len(memory_samples) // 3]) / (len(memory_samples) // 3)
-            late_avg = sum(memory_samples[-(len(memory_samples) // 3):]) / (len(memory_samples) // 3)
+            early_avg = sum(memory_samples[: len(memory_samples) // 3]) / (len(memory_samples) // 3)
+            late_avg = sum(memory_samples[-(len(memory_samples) // 3) :]) / (len(memory_samples) // 3)
 
             if early_avg > 0:
                 growth_ratio = (late_avg - early_avg) / early_avg
-                assert growth_ratio < 2.0, (
-                    f"Memory leak in sustained operations: {growth_ratio * 100:.1f}% growth"
-                )
+                assert growth_ratio < 2.0, f"Memory leak in sustained operations: {growth_ratio * 100:.1f}% growth"
 
 
 # ============================================================================
@@ -497,10 +469,8 @@ class TestMemoryIntegrationSummary:
 
         # Clean all test tables
         for table in ["test_integration_crud", "test_integration_live", "test_integration_concurrent"]:
-            try:
+            with contextlib.suppress(Exception):
                 await conn.execute_query(f"DELETE {table};")
-            except Exception:
-                pass
 
         gc.collect()
         baseline_memory = get_memory_mb()
@@ -532,7 +502,7 @@ class TestMemoryIntegrationSummary:
         phase2_memory = get_memory_mb() - baseline_memory
 
         # Phase 3: Concurrent operations
-        async def create_concurrent(idx: int):
+        async def create_concurrent(idx: int) -> None:
             await conn.create(
                 "test_integration_concurrent",
                 {"task_id": f"concurrent-{idx}", "index": idx},
@@ -553,11 +523,6 @@ class TestMemoryIntegrationSummary:
         tracemalloc.stop()
 
         # Print summary
-        print("\nIntegration Memory Summary:")
-        print(f"  Phase 1 (CRUD): {phase1_memory:.2f}MB")
-        print(f"  Phase 2 (Live Queries): {phase2_memory:.2f}MB")
-        print(f"  Phase 3 (Concurrent): {phase3_memory:.2f}MB")
-        print(f"  Final (After Cleanup): {final_memory:.2f}MB")
 
         # Validation - allow reasonable memory usage for realistic operations
         assert phase1_memory < 50, f"CRUD used excessive memory: {phase1_memory:.2f}MB"
@@ -567,6 +532,4 @@ class TestMemoryIntegrationSummary:
         # Verify cleanup reduces memory (allowing for Python pooling)
         if phase3_memory > 0:
             cleanup_ratio = final_memory / phase3_memory
-            assert cleanup_ratio < 2.0, (
-                f"Excessive memory retention: {cleanup_ratio * 100:.1f}% of peak"
-            )
+            assert cleanup_ratio < 2.0, f"Excessive memory retention: {cleanup_ratio * 100:.1f}% of peak"

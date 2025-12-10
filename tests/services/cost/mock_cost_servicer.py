@@ -3,7 +3,7 @@
 from typing import Any
 
 import grpc
-from digitalkin_proto.agentic_mesh_protocol.cost.v1 import cost_pb2, cost_service_pb2_grpc
+from agentic_mesh_protocol.cost.v1 import cost_pb2, cost_service_pb2_grpc
 from pydantic import ValidationError
 
 from digitalkin.logger import logger

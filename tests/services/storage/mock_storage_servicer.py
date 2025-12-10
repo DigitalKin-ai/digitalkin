@@ -4,7 +4,7 @@ import datetime
 from typing import Any
 
 import grpc
-from digitalkin_proto.agentic_mesh_protocol.storage.v1 import data_pb2, storage_service_pb2_grpc
+from agentic_mesh_protocol.storage.v1 import data_pb2, storage_service_pb2_grpc
 from google.protobuf import json_format, struct_pb2
 from pydantic import BaseModel, ValidationError
 

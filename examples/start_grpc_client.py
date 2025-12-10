@@ -24,8 +24,8 @@ from typing import Any
 import grpc
 
 # Import gRPC protobuf generated classes
-from digitalkin_proto.agentic_mesh_protocol.module.v1 import information_pb2, lifecycle_pb2, module_service_pb2_grpc
-from digitalkin_proto.agentic_mesh_protocol.module_registry.v1 import discover_pb2, module_registry_service_pb2_grpc
+from agentic_mesh_protocol.module.v1 import information_pb2, lifecycle_pb2, module_service_pb2_grpc
+from agentic_mesh_protocol.module_registry.v1 import discover_pb2, module_registry_service_pb2_grpc
 from google.protobuf import json_format
 from google.protobuf.message import Message
 from pydantic import BaseModel, create_model

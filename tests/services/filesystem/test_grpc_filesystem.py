@@ -7,7 +7,7 @@ import string
 import grpc
 import grpc_testing
 import pytest
-from digitalkin_proto.agentic_mesh_protocol.filesystem.v1 import (
+from agentic_mesh_protocol.filesystem.v1 import (
     filesystem_pb2,
     filesystem_service_pb2,
     filesystem_service_pb2_grpc,

@@ -8,7 +8,7 @@ from concurrent import futures
 import grpc
 import grpc_testing
 import pytest
-from digitalkin_proto.agentic_mesh_protocol.setup.v1 import (
+from agentic_mesh_protocol.setup.v1 import (
     setup_pb2,
     setup_service_pb2,
     setup_service_pb2_grpc,

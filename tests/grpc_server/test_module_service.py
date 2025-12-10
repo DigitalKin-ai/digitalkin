@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import grpc
 import pytest
 from agentic_mesh_protocol.setup.v1 import setup_pb2
-from digitalkin_proto.agentic_mesh_protocol.module.v1 import (
+from agentic_mesh_protocol.module.v1 import (
     information_pb2,
     lifecycle_pb2,
     monitoring_pb2,
@@ -158,9 +158,9 @@ class TestStartModule:
 
         # Mock stream consumer
         async def mock_stream() -> AsyncGenerator[dict[str, Any], None]:  # noqa: RUF029
-            yield {"output": "message 1"}
-            yield {"output": "message 2"}
-            yield {"code": "__END_OF_STREAM__"}
+            yield {"root": {"output": "message 1"}, "annotations": {}}
+            yield {"root": {"output": "message 2"}, "annotations": {}}
+            yield {"root": {"protocol": "end_of_stream"}, "annotations": {}}
 
         mock_context_manager = AsyncMock()
         mock_context_manager.__aenter__ = AsyncMock(return_value=mock_stream())
@@ -173,8 +173,8 @@ class TestStartModule:
         # Execute
         responses = [response async for response in module_servicer.StartModule(request, fake_context)]
 
-        # Verify
-        assert len(responses) == 2
+        # Verify: 2 data messages + 1 end_of_stream message
+        assert len(responses) == 3
         assert responses[0].success is True
         assert responses[0].job_id == "test-job-id"
         assert responses[-1].success is True  # End of stream

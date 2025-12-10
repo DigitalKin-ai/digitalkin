@@ -413,6 +413,7 @@ jobs:
         with:
           pattern: test-results-*
           path: test-results
+        continue-on-error: true
 
       - name: Download coverage reports
         uses: actions/download-artifact@v5
@@ -449,7 +450,8 @@ jobs:
           echo "| Test Type | Python | Status | Tests | Passed | Failed | Errors | Skipped | Duration |" >> $GITHUB_STEP_SUMMARY
           echo "|-----------|--------|--------|-------|--------|--------|--------|---------|----------|" >> $GITHUB_STEP_SUMMARY
 
-          # Process each test result
+          # Process each test result (handle case where no results exist)
+          shopt -s nullglob
           for result_dir in test-results/test-results-*; do
             if [ -f "$result_dir/test-results.xml" ]; then
               dir_name=$(basename "$result_dir")
@@ -555,7 +557,8 @@ jobs:
             <ul class="report-list">
           EOF
 
-          # Add links to each report
+          # Add links to each report (handle case where no results exist)
+          shopt -s nullglob
           for result_dir in test-results/test-results-*; do
             if [ -d "$result_dir" ]; then
               dir_name=$(basename "$result_dir")

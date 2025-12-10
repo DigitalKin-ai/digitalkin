@@ -173,7 +173,7 @@ class DefaultSetup(SetupStrategy):
         return [
             value
             for value in self.setup_versions[setup_version_dict["setup_id"]].values()
-            if setup_version_dict["query_versions"] in value.version or setup_version_dict["name"] in value.name
+            if setup_version_dict["query_versions"] in value.version
         ]
 
     def update_setup_version(self, setup_version_dict: dict[str, Any]) -> bool:

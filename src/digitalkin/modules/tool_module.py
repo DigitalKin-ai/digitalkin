@@ -2,7 +2,12 @@
 
 from abc import ABC
 
-from digitalkin.models.module import InputModelT, OutputModelT, SecretModelT, SetupModelT
+from digitalkin.models.module.module_types import (
+    InputModelT,
+    OutputModelT,
+    SecretModelT,
+    SetupModelT,
+)
 from digitalkin.modules._base_module import BaseModule  # type: ignore
 
 

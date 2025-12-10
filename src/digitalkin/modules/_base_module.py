@@ -6,16 +6,19 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable, Coroutine
 from typing import Any, ClassVar, Generic
 
+from digitalkin.grpc_servers.utils.utility_schema_extender import UtilitySchemaExtender
 from digitalkin.logger import logger
-from digitalkin.models.module import (
+from digitalkin.models.module.module import ModuleCodeModel, ModuleStatus
+from digitalkin.models.module.module_context import ModuleContext
+from digitalkin.models.module.module_types import (
+    DataModel,
     InputModelT,
-    ModuleStatus,
     OutputModelT,
     SecretModelT,
     SetupModelT,
 )
-from digitalkin.models.module.module import ModuleCodeModel
-from digitalkin.models.module.module_context import ModuleContext
+from digitalkin.models.module.utility import EndOfStreamOutput
+from digitalkin.models.services.storage import BaseRole
 from digitalkin.modules.trigger_handler import TriggerHandler
 from digitalkin.services.services_config import ServicesConfig, ServicesStrategy
 from digitalkin.utils.llm_ready_schema import llm_ready_schema
@@ -141,12 +144,15 @@ class BaseModule(  # noqa: PLR0904
         Raises:
             NotImplementedError: If the `input_format` class attribute is not defined.
         """
-        if cls.input_format is not None:
-            if llm_format:
-                return json.dumps(llm_ready_schema(cls.input_format), indent=2)
-            return json.dumps(cls.input_format.model_json_schema(), indent=2)
-        msg = f"{cls.__name__}' class does not define an 'input_format'."
-        raise NotImplementedError(msg)
+        if cls.input_format is None:
+            msg = f"{cls.__name__}' class does not define an 'input_format'."
+            raise NotImplementedError(msg)
+
+        extended_model = UtilitySchemaExtender.create_extended_input_model(cls.input_format)
+
+        if llm_format:
+            return json.dumps(llm_ready_schema(extended_model), indent=2)
+        return json.dumps(extended_model.model_json_schema(), indent=2)
 
     @classmethod
     async def get_output_format(cls, *, llm_format: bool) -> str:
@@ -162,12 +168,15 @@ class BaseModule(  # noqa: PLR0904
         Raises:
             NotImplementedError: If the `output_format` class attribute is not defined.
         """
-        if cls.output_format is not None:
-            if llm_format:
-                return json.dumps(llm_ready_schema(cls.output_format), indent=2)
-            return json.dumps(cls.output_format.model_json_schema(), indent=2)
-        msg = "'%s' class does not define an 'output_format'."
-        raise NotImplementedError(msg)
+        if cls.output_format is None:
+            msg = f"'{cls.__name__}' class does not define an 'output_format'."
+            raise NotImplementedError(msg)
+
+        extended_model = UtilitySchemaExtender.create_extended_output_model(cls.output_format)
+
+        if llm_format:
+            return json.dumps(llm_ready_schema(extended_model), indent=2)
+        return json.dumps(extended_model.model_json_schema(), indent=2)
 
     @classmethod
     async def get_config_setup_format(cls, *, llm_format: bool) -> str:
@@ -304,8 +313,18 @@ class BaseModule(  # noqa: PLR0904
         If a package is provided, all .py files within its path are imported; otherwise, the current
         working directory is searched. For each imported module, any class matching the criteria is
         registered via cls.register(). Errors during import are logged at debug level.
+
+        Built-in healthcheck handlers (ping, services, status) are automatically registered
+        to provide standard healthcheck functionality for all modules.
         """
+        from digitalkin.models.module.utility import UtilityRegistry  # noqa: PLC0415
+
         cls.triggers_discoverer.discover_modules()
+
+        # Auto-register built-in SDK triggers (healthcheck, etc.)
+        for trigger_cls in UtilityRegistry.get_builtin_triggers():
+            cls.triggers_discoverer.register_trigger(trigger_cls)
+
         logger.debug("discovered: %s", cls.triggers_discoverer)
 
     @classmethod
@@ -452,7 +471,12 @@ class BaseModule(  # noqa: PLR0904
             self._status = ModuleStatus.STOPPING
             logger.debug("Module %s stopped", self.name)
             await self.cleanup()
-            await self.context.callbacks.send_message(ModuleCodeModel(code="__END_OF_STREAM__"))
+            await self.context.callbacks.send_message(
+                DataModel(
+                    root=EndOfStreamOutput(),
+                    annotations={"role": BaseRole.SYSTEM},
+                )
+            )
             self._status = ModuleStatus.STOPPED
             logger.debug("Module %s cleaned", self.name)
         except Exception:

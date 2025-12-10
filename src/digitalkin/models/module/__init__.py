@@ -1,28 +1,25 @@
 """This module contains the models for the modules."""
 
-from digitalkin.models.module.module import Module, ModuleStatus
 from digitalkin.models.module.module_context import ModuleContext
 from digitalkin.models.module.module_types import (
     DataModel,
     DataTrigger,
-    DataTriggerT,
-    InputModelT,
-    OutputModelT,
-    SecretModelT,
     SetupModel,
-    SetupModelT,
+)
+from digitalkin.models.module.utility import (
+    EndOfStreamOutput,
+    UtilityProtocol,
+    UtilityRegistry,
 )
 
 __all__ = [
+    # Core types (used by all SDK users)
     "DataModel",
     "DataTrigger",
-    "DataTriggerT",
-    "InputModelT",
-    "Module",
+    # Utility (commonly used)
+    "EndOfStreamOutput",
     "ModuleContext",
-    "ModuleStatus",
-    "OutputModelT",
-    "SecretModelT",
     "SetupModel",
-    "SetupModelT",
+    "UtilityProtocol",
+    "UtilityRegistry",
 ]

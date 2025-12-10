@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from digitalkin_proto.agentic_mesh_protocol.cost.v1 import cost_pb2, cost_service_pb2_grpc
+from agentic_mesh_protocol.cost.v1 import cost_pb2, cost_service_pb2_grpc
 from google.protobuf import json_format
 
 from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper

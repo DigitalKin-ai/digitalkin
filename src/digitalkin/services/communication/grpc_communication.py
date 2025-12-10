@@ -3,7 +3,7 @@
 import asyncio
 from collections.abc import AsyncGenerator, Awaitable, Callable
 
-from digitalkin_proto.agentic_mesh_protocol.module.v1 import (
+from agentic_mesh_protocol.module.v1 import (
     information_pb2,
     lifecycle_pb2,
     module_service_pb2_grpc,

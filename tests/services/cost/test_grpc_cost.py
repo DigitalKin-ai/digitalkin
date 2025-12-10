@@ -11,7 +11,7 @@ from concurrent import futures
 import grpc
 import grpc_testing
 import pytest
-from digitalkin_proto.agentic_mesh_protocol.cost.v1 import cost_service_pb2, cost_service_pb2_grpc
+from agentic_mesh_protocol.cost.v1 import cost_service_pb2, cost_service_pb2_grpc
 from mock_cost_servicer import MockCostServicer
 from tests.fixtures.grpc_fixtures import FakeContext
 
