@@ -136,7 +136,8 @@ class TestSetupModelGetCleanModel:
         """Test that fetcher errors are handled gracefully."""
 
         def failing_fetcher() -> list[str]:
-            raise RuntimeError("Fetcher failed")
+            msg = "Fetcher failed"
+            raise RuntimeError(msg)
 
         class TestSetup(SetupModel):
             field: Annotated[str, Dynamic(enum=failing_fetcher)] = Field(default="default")
@@ -229,9 +230,7 @@ class TestSetupModelSchema:
         """Test that the generated schema contains resolved enum values."""
 
         class TestSetup(SetupModel):
-            model_name: Annotated[str, Dynamic(enum=lambda: ["gpt-4", "gpt-3.5", "claude"])] = Field(
-                default="gpt-4"
-            )
+            model_name: Annotated[str, Dynamic(enum=lambda: ["gpt-4", "gpt-3.5", "claude"])] = Field(default="gpt-4")
 
         model = await TestSetup.get_clean_model(config_fields=False, hidden_fields=True, force=True)
 
@@ -274,9 +273,7 @@ class TestNestedSetupModels:
         """Test that nested models with dynamic fields work correctly."""
 
         class NestedConfig(BaseModel):
-            nested_option: Annotated[str, Dynamic(enum=lambda: ["opt1", "opt2"])] = Field(
-                default="opt1"
-            )
+            nested_option: Annotated[str, Dynamic(enum=lambda: ["opt1", "opt2"])] = Field(default="opt1")
 
         class TestSetup(SetupModel):
             name: str = Field(default="test")
@@ -309,9 +306,7 @@ class TestNestedSetupModels:
             return ["nested_a", "nested_b"]
 
         class NestedConfig(BaseModel):
-            nested_option: Annotated[str, Dynamic(enum=nested_fetcher)] = Field(
-                default="nested_a"
-            )
+            nested_option: Annotated[str, Dynamic(enum=nested_fetcher)] = Field(default="nested_a")
 
         class TestSetup(SetupModel):
             config: NestedConfig = Field(default_factory=NestedConfig)
@@ -422,7 +417,7 @@ class TestGenericTypeDetection:
         class TestSetup(SetupModel):
             items: list[ItemConfig] = Field(default_factory=list)
 
-        model = await TestSetup.get_clean_model(config_fields=False, hidden_fields=True, force=True)
+        await TestSetup.get_clean_model(config_fields=False, hidden_fields=True, force=True)
 
         # The nested fetcher should have been called
         assert call_count == 1
@@ -443,7 +438,7 @@ class TestGenericTypeDetection:
         class TestSetup(SetupModel):
             optional_config: OptionalConfig | None = Field(default=None)
 
-        model = await TestSetup.get_clean_model(config_fields=False, hidden_fields=True, force=True)
+        await TestSetup.get_clean_model(config_fields=False, hidden_fields=True, force=True)
 
         # The nested fetcher should have been called
         assert call_count == 1
@@ -464,7 +459,7 @@ class TestGenericTypeDetection:
         class TestSetup(SetupModel):
             configs: dict[str, ValueConfig] = Field(default_factory=dict)
 
-        model = await TestSetup.get_clean_model(config_fields=False, hidden_fields=True, force=True)
+        await TestSetup.get_clean_model(config_fields=False, hidden_fields=True, force=True)
 
         # The nested fetcher should have been called
         assert call_count == 1

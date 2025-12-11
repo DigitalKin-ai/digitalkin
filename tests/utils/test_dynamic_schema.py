@@ -25,7 +25,8 @@ class TestDynamicField:
 
     def test_creates_fetchers_dict(self) -> None:
         """Test that DynamicField stores fetchers correctly."""
-        fetcher = lambda: ["a", "b", "c"]
+        def fetcher():
+            return ["a", "b", "c"]
         meta = DynamicField(enum=fetcher)
 
         assert "enum" in meta.fetchers
@@ -33,8 +34,11 @@ class TestDynamicField:
 
     def test_multiple_fetchers(self) -> None:
         """Test that multiple fetchers are supported."""
-        enum_fetcher = lambda: ["opt1", "opt2"]
-        default_fetcher = lambda: "opt1"
+        def enum_fetcher():
+            return ["opt1", "opt2"]
+
+        def default_fetcher() -> str:
+            return "opt1"
 
         meta = DynamicField(enum=enum_fetcher, default=default_fetcher)
 
@@ -48,14 +52,15 @@ class TestDynamicField:
 
     def test_repr(self) -> None:
         """Test string representation."""
-        meta = DynamicField(enum=lambda: [], default=lambda: "x")
+        meta = DynamicField(enum=list, default=lambda: "x")
         repr_str = repr(meta)
         assert "DynamicField(" in repr_str
         assert "enum" in repr_str or "default" in repr_str
 
     def test_equality(self) -> None:
         """Test equality comparison."""
-        fetcher = lambda: ["a"]
+        def fetcher():
+            return ["a"]
         meta1 = DynamicField(enum=fetcher)
         meta2 = DynamicField(enum=fetcher)
         meta3 = DynamicField(other=fetcher)
@@ -65,7 +70,7 @@ class TestDynamicField:
 
     def test_hash(self) -> None:
         """Test that DynamicField is hashable."""
-        meta = DynamicField(enum=lambda: [])
+        meta = DynamicField(enum=list)
         # Should not raise
         hash(meta)
 
@@ -135,7 +140,8 @@ class TestGetFetchers:
 
     def test_extracts_fetchers(self) -> None:
         """Test extraction of fetchers."""
-        fetcher = lambda: ["a", "b"]
+        def fetcher():
+            return ["a", "b"]
 
         class Model(BaseModel):
             field: Annotated[str, Dynamic(enum=fetcher)] = "a"
@@ -155,8 +161,11 @@ class TestGetFetchers:
 
     def test_multiple_fetchers(self) -> None:
         """Test extraction of multiple fetchers."""
-        enum_fetcher = lambda: ["a", "b"]
-        default_fetcher = lambda: "a"
+        def enum_fetcher():
+            return ["a", "b"]
+
+        def default_fetcher() -> str:
+            return "a"
 
         class Model(BaseModel):
             field: Annotated[str, Dynamic(enum=enum_fetcher, default=default_fetcher)] = "a"

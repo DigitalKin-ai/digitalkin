@@ -215,6 +215,14 @@ All managers implement proper cleanup. Always close DB connections, stop tasks, 
 ### Schema Introspection
 Modules expose JSON schemas for all formats. Use `get_clean_model()` on SetupModel to filter fields for initial configuration.
 
+### Enums
+- Enums stay as enums - no mapping dictionaries
+- Initialize by name via bracket notation: `MyEnum[name]`
+- Initialize by value: `MyEnum(value)`
+- Compare via enum: `if status == MyEnum.VALUE`
+- For raw string value: use `.value` property
+- For raw name: use `.name` property
+
 ## Testing Patterns
 
 Tests are organized by component:

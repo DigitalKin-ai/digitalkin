@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import os
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Coroutine
 from typing import Any, ClassVar, Generic
@@ -49,9 +50,19 @@ class BaseModule(  # noqa: PLR0904
     triggers_discoverer: ClassVar[ModuleDiscoverer]
 
     # service config params
-    services_config_strategies: ClassVar[dict[str, ServicesStrategy | None]]
-    services_config_params: ClassVar[dict[str, dict[str, Any | None] | None]]
+    services_config_strategies: ClassVar[dict[str, ServicesStrategy | None]] = {}
+    services_config_params: ClassVar[dict[str, dict[str, Any | None] | None]] = {}
     services_config: ServicesConfig
+
+    @classmethod
+    def get_module_id(cls) -> str:
+        """Get the module ID from environment variable or metadata.
+
+        Returns:
+            The module_id from DIGITALKIN_MODULE_ID env var, or metadata module_id,
+            or "unknown" if neither exists.
+        """
+        return os.environ.get("DIGITALKIN_MODULE_ID") or cls.metadata.get("module_id", "unknown")
 
     def _init_strategies(self, mission_id: str, setup_id: str, setup_version_id: str) -> dict[str, Any]:
         """Initialize the services configuration.

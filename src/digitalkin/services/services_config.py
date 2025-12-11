@@ -9,7 +9,7 @@ from digitalkin.services.communication import CommunicationStrategy, DefaultComm
 from digitalkin.services.cost import CostStrategy, DefaultCost, GrpcCost
 from digitalkin.services.filesystem import DefaultFilesystem, FilesystemStrategy, GrpcFilesystem
 from digitalkin.services.identity import DefaultIdentity, IdentityStrategy
-from digitalkin.services.registry import DefaultRegistry, RegistryStrategy
+from digitalkin.services.registry import DefaultRegistry, GrpcRegistry, RegistryStrategy
 from digitalkin.services.services_models import ServicesMode, ServicesStrategy
 from digitalkin.services.snapshot import DefaultSnapshot, SnapshotStrategy
 from digitalkin.services.storage import DefaultStorage, GrpcStorage, StorageStrategy
@@ -40,9 +40,9 @@ class ServicesConfig(BaseModel):
     )
     _config_snapshot: dict[str, Any | None] = PrivateAttr(default_factory=dict)
     _registry: ServicesStrategy[RegistryStrategy] = PrivateAttr(
-        default_factory=lambda: ServicesStrategy(local=DefaultRegistry, remote=DefaultRegistry)
+        default_factory=lambda: ServicesStrategy(local=DefaultRegistry, remote=GrpcRegistry)
     )
-    _config__registry: dict[str, Any | None] = PrivateAttr(default_factory=dict)
+    _config_registry: dict[str, Any | None] = PrivateAttr(default_factory=dict)
     _filesystem: ServicesStrategy[FilesystemStrategy] = PrivateAttr(
         default_factory=lambda: ServicesStrategy(local=DefaultFilesystem, remote=GrpcFilesystem)
     )

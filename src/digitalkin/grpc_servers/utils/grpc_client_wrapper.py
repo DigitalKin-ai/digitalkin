@@ -58,15 +58,31 @@ class GrpcClientWrapper:
             corresponding gRPC reponse.
 
         Raises:
-            ServerError: gRPC error catching
+            ServerError: gRPC error catching with status code and details
         """
+        service_name = getattr(self, "service_name", "unknown")
         try:
-            # Call the register method
-            logger.debug("send request to %s", query_endpoint, extra={"request": request})
+            logger.debug(
+                "Sending gRPC request to %s",
+                query_endpoint,
+                extra={"request": str(request), "service": service_name},
+            )
             response = getattr(self.stub, query_endpoint)(request)
-            logger.debug("receive response from request to %s", query_endpoint, extra={"response": response})
+            logger.debug(
+                "Received gRPC response from %s",
+                query_endpoint,
+                extra={"response": str(response), "service": service_name},
+            )
         except grpc.RpcError as e:
-            logger.exception("RPC error during %s", query_endpoint, extra={"error": e.details()})
-            raise ServerError
+            status_code = e.code().name if hasattr(e, "code") else "UNKNOWN"
+            details = e.details() if hasattr(e, "details") else str(e)
+            msg = f"[{status_code}] {details}"
+            logger.error(
+                "gRPC %s failed: %s",
+                query_endpoint,
+                msg,
+                extra={"service": service_name},
+            )
+            raise ServerError(msg) from e
         else:
             return response
