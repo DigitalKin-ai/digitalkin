@@ -6,9 +6,9 @@ from collections.abc import Callable
 from typing import Any, ClassVar, Literal
 
 import openai
+from digitalkin.grpc_servers.utils.models import ClientConfig, SecurityMode, ServerMode
 from pydantic import BaseModel, Field
 
-from digitalkin.grpc_servers.utils.models import ClientConfig, SecurityMode, ServerMode
 from digitalkin.modules._base_module import BaseModule
 from digitalkin.services.services_models import ServicesStrategy
 

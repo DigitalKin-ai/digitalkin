@@ -8,8 +8,9 @@ from pathlib import Path
 # Add parent directory to path to enable imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
-from digitalkin.grpc_servers._base_server import BaseServer
 from digitalkin.grpc_servers.utils.models import SecurityMode, ServerConfig, ServerMode
+
+from digitalkin.grpc_servers._base_server import BaseServer
 from examples.base_server.mock.mock_pb2 import DESCRIPTOR, HelloReply  # type: ignore
 from examples.base_server.mock.mock_pb2_grpc import (
     Greeter,
@@ -29,7 +30,7 @@ class SyncGreeterServicer(Greeter):
 
     def SayHello(self, request, context):  # noqa: N802
         """Implementation of SayHello method."""
-        logger.info(f"Received request object: {request}")
+        logger.info("Received request object: %s", request)
         logger.info(f"Request attributes: {vars(request)}")
         logger.info(f"Received request with name: {request.name}")
 
@@ -39,7 +40,7 @@ class SyncGreeterServicer(Greeter):
             name = "unknown"
             # Check context metadata
             for key, value in context.invocation_metadata():
-                logger.info(f"Metadata: {key}={value}")
+                logger.info("Metadata: %s=%s", key, value)
                 if key.lower() == "name":
                     name = value
 
@@ -92,7 +93,7 @@ def main() -> int:
             server.stop()
 
     except Exception as e:
-        logger.exception(f"Error running server: {e}")
+        logger.exception("Error running server: %s", e)
         return 1
 
     return 0

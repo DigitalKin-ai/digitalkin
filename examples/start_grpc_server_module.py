@@ -21,16 +21,16 @@ import asyncio
 import logging
 import sys
 
-from modules.cpu_intensive_module import CPUIntensiveModule
-from modules.minimal_llm_module import OpenAIToolModule
-
-from digitalkin.grpc_servers.module_server import ModuleServer
 from digitalkin.grpc_servers.utils.models import (
     ClientConfig,
     ModuleServerConfig,
     SecurityMode,
     ServerMode,
 )
+from modules.cpu_intensive_module import CPUIntensiveModule
+from modules.minimal_llm_module import OpenAIToolModule
+
+from digitalkin.grpc_servers.module_server import ModuleServer
 
 # Configure logging with clear formatting
 logging.basicConfig(

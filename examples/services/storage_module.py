@@ -64,7 +64,7 @@ class ExampleModule(ArchetypeModule[ExampleInput, ExampleOutput, ExampleSetup, E
 
     # Define services_config_params with default values
     services_config_strategies = {}
-    services_config_params = {"storage": {"config": {"example": ExampleOutput}},"cost": {"config":{}}}
+    services_config_params = {"storage": {"config": {"example": ExampleOutput}}, "cost": {"config": {}}}
 
     def __init__(self, job_id: str, mission_id: str, setup_version_id: str) -> None:
         """Initialize the example module.
@@ -184,7 +184,9 @@ async def test_module() -> None:
 def test_storage_directly() -> None:
     """Test the storage service directly."""
     # Initialize storage service
-    storage = ServicesConfig().storage(mission_id="test-mission",setup_version_id="test-setup-123", config={"example": ExampleStorage})
+    storage = ServicesConfig().storage(
+        mission_id="test-mission", setup_version_id="test-setup-123", config={"example": ExampleStorage}
+    )
 
     # Create a test record
     storage.store("example", "test_table", {"test_key": "test_value"}, "OUTPUT")

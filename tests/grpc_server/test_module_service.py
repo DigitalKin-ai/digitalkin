@@ -10,12 +10,12 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import grpc
 import pytest
-from agentic_mesh_protocol.setup.v1 import setup_pb2
 from agentic_mesh_protocol.module.v1 import (
     information_pb2,
     lifecycle_pb2,
     monitoring_pb2,
 )
+from agentic_mesh_protocol.setup.v1 import setup_pb2
 from google.protobuf import json_format, struct_pb2
 
 from digitalkin.core.job_manager.base_job_manager import BaseJobManager

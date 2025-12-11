@@ -209,8 +209,6 @@ class DynamicModuleOutput(DataModel[MessageOutputTrigger]):
 class DynamicModuleSecret(BaseModel):
     """Secret model (empty for this example)."""
 
-    pass
-
 
 # =============================================================================
 # Module Implementation
@@ -285,13 +283,7 @@ class DynamicSetupModule(
 
 async def demonstrate_dynamic_schema() -> None:
     """Demonstrate the dynamic schema functionality."""
-    print("=" * 60)
-    print("Dynamic Schema Demonstration")
-    print("=" * 60)
-
     # 1. Show schema WITHOUT force (dynamic fields not resolved)
-    print("\n1. Schema without force=True (fetchers NOT called):")
-    print("-" * 40)
 
     model_no_force = await DynamicAgentSetup.get_clean_model(
         config_fields=True,
@@ -302,13 +294,10 @@ async def demonstrate_dynamic_schema() -> None:
 
     # Check if enum is present
     model_name_schema = schema_no_force.get("properties", {}).get("model_name", {})
-    print(f"model_name has enum: {'enum' in model_name_schema}")
     if "enum" in model_name_schema:
-        print(f"  enum values: {model_name_schema['enum']}")
+        pass
 
     # 2. Show schema WITH force (dynamic fields resolved)
-    print("\n2. Schema with force=True (fetchers called):")
-    print("-" * 40)
 
     model_with_force = await DynamicAgentSetup.get_clean_model(
         config_fields=True,
@@ -319,43 +308,30 @@ async def demonstrate_dynamic_schema() -> None:
 
     # Check enum values after force
     model_name_schema = schema_with_force.get("properties", {}).get("model_name", {})
-    print(f"model_name has enum: {'enum' in model_name_schema}")
     if "enum" in model_name_schema:
-        print(f"  enum values: {model_name_schema['enum']}")
+        pass
 
     language_schema = schema_with_force.get("properties", {}).get("language", {})
-    print(f"language has enum: {'enum' in language_schema}")
     if "enum" in language_schema:
-        print(f"  enum values: {language_schema['enum']}")
+        pass
 
     # 3. Show that static json_schema_extra is preserved
-    print("\n3. Static json_schema_extra preserved:")
-    print("-" * 40)
-    print(f"model_name ui:widget: {model_name_schema.get('ui:widget', 'NOT FOUND')}")
 
     # 4. Show field filtering
-    print("\n4. Field filtering demonstration:")
-    print("-" * 40)
 
     # Config fields only (hidden excluded)
-    config_model = await DynamicAgentSetup.get_clean_model(
+    await DynamicAgentSetup.get_clean_model(
         config_fields=True,
         hidden_fields=False,
         force=False,
     )
-    print(f"Config fields (hidden=False): {list(config_model.model_fields.keys())}")
 
     # All fields including hidden
-    all_model = await DynamicAgentSetup.get_clean_model(
+    await DynamicAgentSetup.get_clean_model(
         config_fields=True,
         hidden_fields=True,
         force=False,
     )
-    print(f"All fields (hidden=True): {list(all_model.model_fields.keys())}")
-
-    print("\n" + "=" * 60)
-    print("Demonstration complete!")
-    print("=" * 60)
 
 
 if __name__ == "__main__":

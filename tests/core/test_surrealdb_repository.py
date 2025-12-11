@@ -508,7 +508,7 @@ class TestLiveOperations:
     @pytest.mark.asyncio
     async def test_live_query_lifecycle(self, conn, clean_table):
         """Verify complete lifecycle of live query from start to stop."""
-        table_name = "test_live_lifecycle"
+        table_name = "test_live_lifecytest_merge_nonexistent_recordcle"
         await clean_table(table_name)
 
         # Start subscription
@@ -605,12 +605,12 @@ class TestErrorHandling:
 
     @pytest.mark.asyncio
     async def test_merge_nonexistent_record(self, conn, clean_table):
-        """Verify merging nonexistent record behavior."""
+        """Verify merging nonexistent record returns empty list."""
         table_name = "test_nonexistent"
         await clean_table(table_name)
 
         # Try to merge a record that doesn't exist
-        # Note: SurrealDB may create the record or return empty result
+        # SurrealDB 2.x returns empty list for nonexistent records
         fake_id = RecordID(table_name, "nonexistent_id")
         result = await conn.merge(table_name, fake_id, {"task_id": "fake_task", "field": "value"})
         # Just verify no exception is raised
