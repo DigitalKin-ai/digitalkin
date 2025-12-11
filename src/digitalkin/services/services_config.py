@@ -5,6 +5,7 @@ from typing import Any, ClassVar
 from pydantic import BaseModel, Field, PrivateAttr
 
 from digitalkin.services.agent import AgentStrategy, DefaultAgent
+from digitalkin.services.communication import CommunicationStrategy, DefaultCommunication, GrpcCommunication
 from digitalkin.services.cost import CostStrategy, DefaultCost, GrpcCost
 from digitalkin.services.filesystem import DefaultFilesystem, FilesystemStrategy, GrpcFilesystem
 from digitalkin.services.identity import DefaultIdentity, IdentityStrategy
@@ -54,6 +55,10 @@ class ServicesConfig(BaseModel):
         default_factory=lambda: ServicesStrategy(local=DefaultIdentity, remote=DefaultIdentity)
     )
     _config_identity: dict[str, Any | None] = PrivateAttr(default_factory=dict)
+    _communication: ServicesStrategy[CommunicationStrategy] = PrivateAttr(
+        default_factory=lambda: ServicesStrategy(local=DefaultCommunication, remote=GrpcCommunication)
+    )
+    _config_communication: dict[str, Any | None] = PrivateAttr(default_factory=dict)
     _user_profile: ServicesStrategy[UserProfileStrategy] = PrivateAttr(
         default_factory=lambda: ServicesStrategy(local=DefaultUserProfile, remote=GrpcUserProfile)
     )
@@ -68,6 +73,7 @@ class ServicesConfig(BaseModel):
         "filesystem",
         "agent",
         "identity",
+        "communication",
         "user_profile",
     }
 
@@ -174,6 +180,11 @@ class ServicesConfig(BaseModel):
     def identity(self) -> type[IdentityStrategy]:
         """Get the identity service strategy class based on the current mode."""
         return self._identity[self.mode.value]
+
+    @property
+    def communication(self) -> type[CommunicationStrategy]:
+        """Get the communication service strategy class based on the current mode."""
+        return self._communication[self.mode.value]
 
     @property
     def user_profile(self) -> type[UserProfileStrategy]:

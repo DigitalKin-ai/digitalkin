@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from digitalkin.services.agent.agent_strategy import AgentStrategy
+from digitalkin.services.communication.communication_strategy import CommunicationStrategy
 from digitalkin.services.cost.cost_strategy import CostStrategy
 from digitalkin.services.filesystem.filesystem_strategy import FilesystemStrategy
 from digitalkin.services.identity.identity_strategy import IdentityStrategy
@@ -84,6 +85,7 @@ class ModuleContext:
 
     # services list
     agent: AgentStrategy
+    communication: CommunicationStrategy
     cost: CostStrategy
     filesystem: FilesystemStrategy
     identity: IdentityStrategy
@@ -101,6 +103,7 @@ class ModuleContext:
     def __init__(  # noqa: PLR0913, PLR0917
         self,
         agent: AgentStrategy,
+        communication: CommunicationStrategy,
         cost: CostStrategy,
         filesystem: FilesystemStrategy,
         identity: IdentityStrategy,
@@ -117,6 +120,7 @@ class ModuleContext:
 
         Args:
             agent: AgentStrategy.
+            communication: CommunicationStrategy.
             cost: CostStrategy.
             filesystem: FilesystemStrategy.
             identity: IdentityStrategy.
@@ -131,6 +135,7 @@ class ModuleContext:
         """
         # Core services
         self.agent = agent
+        self.communication = communication
         self.cost = cost
         self.filesystem = filesystem
         self.identity = identity
