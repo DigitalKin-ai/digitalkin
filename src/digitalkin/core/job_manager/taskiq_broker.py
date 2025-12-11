@@ -21,8 +21,9 @@ from digitalkin.core.job_manager.base_job_manager import BaseJobManager
 from digitalkin.core.task_manager.task_executor import TaskExecutor
 from digitalkin.core.task_manager.task_session import TaskSession
 from digitalkin.logger import logger
-from digitalkin.models.core.job_manager_models import StreamCodeModel
-from digitalkin.models.module.module_types import OutputModelT
+from digitalkin.models.module.module import ModuleCodeModel
+from digitalkin.models.module.module_types import DataModel, OutputModelT
+from digitalkin.models.module.utility import EndOfStreamOutput
 from digitalkin.modules._base_module import BaseModule
 from digitalkin.services.services_config import ServicesConfig
 from digitalkin.services.services_models import ServicesMode
@@ -141,7 +142,7 @@ async def cleanup_global_resources() -> None:
         logger.warning("Failed to shutdown Taskiq broker: %s", e)
 
 
-async def send_message_to_stream(job_id: str, output_data: OutputModelT) -> None:  # type: ignore
+async def send_message_to_stream(job_id: str, output_data: OutputModelT | ModuleCodeModel) -> None:  # type: ignore[type-var]
     """Callback define to add a message frame to the Rstream.
 
     Args:
@@ -186,7 +187,7 @@ async def run_start_module(
     module_class.discover()
 
     job_id = context.message.task_id
-    callback = await BaseJobManager.job_specific_callback(send_message_to_stream, job_id)
+    callback = await BaseJobManager.job_specific_callback(send_message_to_stream, job_id)  # type: ignore[type-var]
     module = ModuleFactory.create_module_instance(module_class, job_id, mission_id, setup_id, setup_version_id)
 
     channel = None
@@ -201,7 +202,7 @@ async def run_start_module(
         # Create a proper done callback that handles errors
         async def send_end_of_stream(_: Any) -> None:  # noqa: ANN401
             try:
-                await callback(StreamCodeModel(code="__END_OF_STREAM__"))
+                await callback(DataModel(root=EndOfStreamOutput()))
             except Exception as e:
                 logger.error("Error sending end of stream: %s", e, exc_info=True)
 
@@ -272,7 +273,7 @@ async def run_config_module(
     logger.debug("Services config: %s | Module config: %s", services_config, module_class.services_config)
 
     job_id = context.message.task_id
-    callback = await BaseJobManager.job_specific_callback(send_message_to_stream, job_id)
+    callback = await BaseJobManager.job_specific_callback(send_message_to_stream, job_id)  # type: ignore[type-var]
     module = ModuleFactory.create_module_instance(module_class, job_id, mission_id, setup_id, setup_version_id)
 
     # Override environment variables temporarily to use manager's SurrealDB

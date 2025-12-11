@@ -15,8 +15,8 @@ from digitalkin.core.task_manager.local_task_manager import LocalTaskManager
 from digitalkin.core.task_manager.task_session import TaskSession
 from digitalkin.logger import logger
 from digitalkin.models.core.task_monitor import TaskStatus
-from digitalkin.models.module import InputModelT, OutputModelT, SetupModelT
 from digitalkin.models.module.module import ModuleCodeModel
+from digitalkin.models.module.module_types import InputModelT, OutputModelT, SetupModelT
 from digitalkin.modules._base_module import BaseModule
 from digitalkin.services.services_models import ServicesMode
 

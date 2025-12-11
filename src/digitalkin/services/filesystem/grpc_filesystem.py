@@ -2,7 +2,7 @@
 
 from typing import Any, Literal
 
-from digitalkin_proto.agentic_mesh_protocol.filesystem.v1 import filesystem_pb2, filesystem_service_pb2_grpc
+from agentic_mesh_protocol.filesystem.v1 import filesystem_pb2, filesystem_service_pb2_grpc
 from google.protobuf import struct_pb2
 from google.protobuf.json_format import MessageToDict
 

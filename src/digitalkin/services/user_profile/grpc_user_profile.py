@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from digitalkin_proto.agentic_mesh_protocol.user_profile.v1 import (
+from agentic_mesh_protocol.user_profile.v1 import (
     user_profile_pb2,
     user_profile_service_pb2_grpc,
 )
@@ -49,7 +49,7 @@ class GrpcUserProfile(UserProfileStrategy, GrpcClientWrapper, GrpcErrorHandlerMi
             ServerError: If gRPC operation fails
         """
         with self.handle_grpc_errors("GetUserProfile", UserProfileServiceError):
-            # mission_id maps to the user context in the proto request
+            # mission_id typically contains user context
             request = user_profile_pb2.GetUserProfileRequest(mission_id=self.mission_id)
             response = self.exec_grpc_query("GetUserProfile", request)
 

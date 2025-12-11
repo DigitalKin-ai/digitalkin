@@ -5,7 +5,7 @@ from collections.abc import AsyncGenerator
 from typing import Any
 
 import grpc
-from digitalkin_proto.agentic_mesh_protocol.module.v1 import (
+from agentic_mesh_protocol.module.v1 import (
     information_pb2,
     lifecycle_pb2,
     module_service_pb2_grpc,
@@ -219,16 +219,16 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
                         yield lifecycle_pb2.StartModuleResponse(success=False, job_id=job_id)
                         break
 
-                    if message.get("code", None) is not None and message.get("code") == "__END_OF_STREAM__":
-                        logger.info(
-                            "End of stream via __END_OF_STREAM__",
-                            extra={"job_id": job_id, "mission_id": request.mission_id},
-                        )
-                        break
-
                     logger.info("Yielding message from job %s: %s", job_id, message)
                     proto = json_format.ParseDict(message, struct_pb2.Struct(), ignore_unknown_fields=True)
                     yield lifecycle_pb2.StartModuleResponse(success=True, output=proto, job_id=job_id)
+
+                    if message.get("root", {}).get("protocol") == "end_of_stream":
+                        logger.info(
+                            "End of stream signal received",
+                            extra={"job_id": job_id, "mission_id": request.mission_id},
+                        )
+                        break
         finally:
             await self.job_manager.wait_for_completion(job_id)
             await self.job_manager.clean_session(job_id, mission_id=request.mission_id)

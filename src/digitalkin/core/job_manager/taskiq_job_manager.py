@@ -24,7 +24,7 @@ from digitalkin.core.job_manager.taskiq_broker import STREAM, STREAM_RETENTION, 
 from digitalkin.core.task_manager.remote_task_manager import RemoteTaskManager
 from digitalkin.logger import logger
 from digitalkin.models.core.task_monitor import TaskStatus
-from digitalkin.models.module import InputModelT, OutputModelT, SetupModelT
+from digitalkin.models.module.module_types import InputModelT, OutputModelT, SetupModelT
 from digitalkin.modules._base_module import BaseModule
 from digitalkin.services.services_models import ServicesMode
 

@@ -12,7 +12,7 @@ from concurrent import futures
 import grpc
 import grpc_testing
 import pytest
-from digitalkin_proto.agentic_mesh_protocol.storage.v1 import data_pb2, storage_service_pb2, storage_service_pb2_grpc
+from agentic_mesh_protocol.storage.v1 import data_pb2, storage_service_pb2, storage_service_pb2_grpc
 from pydantic import BaseModel, Field
 from tests.fixtures.grpc_fixtures import FakeContext
 from tests.services.storage.mock_storage_servicer import MockStorageServicer
@@ -196,7 +196,7 @@ class TestStoreData:
         assert request.collection == collection
         assert request.record_id == record_id
         # data_type is now a protobuf enum integer value
-        from digitalkin_proto.agentic_mesh_protocol.storage.v1 import data_pb2
+        from agentic_mesh_protocol.storage.v1 import data_pb2
 
         assert request.data_type == data_pb2.OUTPUT
 

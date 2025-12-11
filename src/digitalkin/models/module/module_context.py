@@ -1,7 +1,10 @@
 """Define the module context used in the triggers."""
 
+import os
+from datetime import tzinfo
 from types import SimpleNamespace
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from digitalkin.services.agent.agent_strategy import AgentStrategy
 from digitalkin.services.communication.communication_strategy import CommunicationStrategy
@@ -21,6 +24,7 @@ class Session(SimpleNamespace):
     mission_id: str
     setup_id: str
     setup_version_id: str
+    timezone: tzinfo
 
     def __init__(
         self,
@@ -28,37 +32,32 @@ class Session(SimpleNamespace):
         mission_id: str,
         setup_id: str,
         setup_version_id: str,
+        timezone: tzinfo | None = None,
         **kwargs: dict[str, Any],
     ) -> None:
         """Init Module Session.
 
-        Args:
-            job_id: current job_id.
-            mission_id: current mission_id.
-            setup_id: used setup config.
-            setup_version_id: used setup config.
-            kwargs: user defined session variables.
-
         Raises:
-            ValueError: If mandatory args are missing
+            ValueError: If mandatory args are missing.
         """
         if not setup_id:
-            msg = "setup_id is mandatory and cannot be empty"
+            msg = "setup_id is mandatory"
             raise ValueError(msg)
         if not setup_version_id:
-            msg = "setup_version_id is mandatory and cannot be empty"
+            msg = "setup_version_id is mandatory"
             raise ValueError(msg)
         if not mission_id:
-            msg = "mission_id is mandatory and cannot be empty"
+            msg = "mission_id is mandatory"
             raise ValueError(msg)
         if not job_id:
-            msg = "job_id is mandatory and cannot be empty"
+            msg = "job_id is mandatory"
             raise ValueError(msg)
 
         self.job_id = job_id
         self.mission_id = mission_id
         self.setup_id = setup_id
         self.setup_version_id = setup_version_id
+        self.timezone = timezone or ZoneInfo(os.environ.get("DIGITALKIN_TIMEZONE", "Europe/Paris"))
 
         super().__init__(**kwargs)
 

@@ -4,7 +4,7 @@ import asyncio
 import datetime
 import os
 from collections.abc import AsyncGenerator
-from typing import Any, Generic, TypeVar
+from typing import Any, Generic, TypeVar, cast
 from uuid import UUID
 
 from surrealdb import AsyncHttpSurrealConnection, AsyncSurreal, AsyncWsSurrealConnection, RecordID
@@ -91,7 +91,7 @@ class SurrealDBConnection(Generic[TSurreal]):
         logger.debug("Connecting to SurrealDB at %s", self.url)
         self.db = AsyncSurreal(self.url)  # type: ignore
         await self.db.signin({"username": self.username, "password": self.password})
-        await self.db.use(self.namespace, self.database)
+        await self.db.use(self.namespace, self.database)  # type: ignore[arg-type]
         logger.debug("Successfully connected to SurrealDB")
 
     async def close(self) -> None:
@@ -112,7 +112,7 @@ class SurrealDBConnection(Generic[TSurreal]):
             # Process results and track failures
             failed_queries = []
             for live_id, result in zip(live_query_ids, results):
-                if isinstance(result, (ConnectionError, TimeoutError, Exception)):
+                if isinstance(result, ConnectionError | TimeoutError | Exception):
                     failed_queries.append((live_id, str(result)))
                 else:
                     self._live_queries.discard(live_id)
@@ -146,7 +146,7 @@ class SurrealDBConnection(Generic[TSurreal]):
         logger.debug("Creating record in %s with data: %s", table_name, data)
         result = await self.db.create(table_name, data)
         logger.debug("create result: %s", result)
-        return result
+        return cast("list[dict[str, Any]] | dict[str, Any]", result)
 
     async def merge(
         self,
@@ -170,7 +170,7 @@ class SurrealDBConnection(Generic[TSurreal]):
         logger.debug("Updating record in %s with data: %s", record_id, data)
         result = await self.db.merge(record_id, data)
         logger.debug("update result: %s", result)
-        return result
+        return cast("list[dict[str, Any]] | dict[str, Any]", result)
 
     async def update(
         self,
@@ -194,7 +194,7 @@ class SurrealDBConnection(Generic[TSurreal]):
         logger.debug("Updating record in %s with data: %s", record_id, data)
         result = await self.db.update(record_id, data)
         logger.debug("update result: %s", result)
-        return result
+        return cast("list[dict[str, Any]] | dict[str, Any]", result)
 
     async def execute_query(self, query: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         """Execute a custom SurrealQL query.
@@ -209,7 +209,7 @@ class SurrealDBConnection(Generic[TSurreal]):
         logger.debug("execute_query: %s with params: %s", query, params)
         result = await self.db.query(query, params or {})
         logger.debug("execute_query result: %s", result)
-        return [result] if isinstance(result, dict) else result
+        return cast("list[dict[str, Any]]", [result] if isinstance(result, dict) else result)
 
     async def select_by_task_id(self, table: str, value: str) -> dict[str, Any]:
         """Fetch a record from a table by a unique field.

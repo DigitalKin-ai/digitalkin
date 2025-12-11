@@ -171,6 +171,23 @@ TaskSession
 
 ## Important Conventions
 
+### Code Philosophy (MANDATORY)
+Every code change must be evaluated against these principles:
+
+1. **Minimal Memory Footprint**: Write code as if every byte matters. No unnecessary variables, no redundant storage, no bloated data structures.
+2. **Minimal CPU Cycles**: Avoid unnecessary computation. No extra method calls, no redundant operations, no over-abstraction.
+3. **No Standalone Functions**: All functions must be methods inside classes. No module-level functions.
+4. **No Global Variables**: No module-level constants or variables. Hardcode defaults inline only when used once alongside an env var (e.g., `os.environ.get("VAR", "default")`).
+5. **No Over-Engineering**: No extra abstractions, no helper methods unless truly reused, no wrapper functions for single operations.
+6. **Direct Code**: Prefer inline code over method extraction when the code is used once. Keep the call stack shallow.
+
+Before writing any code, ask: "Is this the most minimal way to achieve this? Can I remove anything?"
+
+### Code Organization
+- **Encapsulation**: Keep related functionality together within classes
+- **Private methods**: Only create private methods (`_method_name`) if the code is reused within the class
+- **No ClassVar for single-use**: Don't create class attributes for values used only once
+
 ### IDs
 IDs flow through the entire system: `job_id`, `mission_id`, `setup_id`, `setup_version_id`. Always propagate these correctly.
 

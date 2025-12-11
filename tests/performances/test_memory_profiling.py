@@ -10,7 +10,6 @@ These tests validate actual memory management behavior without test infrastructu
 
 import asyncio
 import gc
-import sys
 import tracemalloc
 from typing import Any, ClassVar
 from unittest.mock import patch
@@ -19,7 +18,6 @@ import pytest
 
 from digitalkin.core.job_manager.single_job_manager import SingleJobManager
 from digitalkin.core.task_manager.local_task_manager import LocalTaskManager
-from digitalkin.core.task_manager.remote_task_manager import RemoteTaskManager
 from digitalkin.core.task_manager.task_session import TaskSession
 from digitalkin.modules._base_module import BaseModule
 from digitalkin.services.services_config import ServicesConfig
@@ -40,14 +38,13 @@ class FakeSurrealDBConnection:
     Replaces AsyncMock to avoid garbage collection issues with mock objects.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize fake connection."""
         self.closed = False
         self._live_queries = {}
 
     async def init_surreal_instance(self):
         """Fake initialization."""
-        pass
 
     async def close(self):
         """Fake close method."""
@@ -86,7 +83,7 @@ class FakeSurrealDBConnection:
 class FakeCallbacks:
     """Lightweight fake callbacks for MockModule context."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize fake callbacks."""
         self.messages = []
 
@@ -96,17 +93,15 @@ class FakeCallbacks:
 
     async def update_progress(self, progress: int):
         """Fake update_progress."""
-        pass
 
     async def stream_logs(self, log: str):
         """Fake stream_logs."""
-        pass
 
 
 class FakeModuleContext:
     """Lightweight fake module context."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize fake context."""
         self.callbacks = FakeCallbacks()
         self.services = {}
@@ -145,7 +140,6 @@ class ImprovedMockModule(BaseModule):
 
     async def initialize(self, context: Any, setup_data: Any) -> None:
         """Initialize the module."""
-        pass
 
     async def run(self) -> None:
         """Run the module."""
@@ -153,7 +147,6 @@ class ImprovedMockModule(BaseModule):
 
     async def cleanup(self) -> None:
         """Clean up the module."""
-        pass
 
 
 def get_memory_usage_reliable(max_attempts: int = 3) -> int:
@@ -170,6 +163,7 @@ def get_memory_usage_reliable(max_attempts: int = 3) -> int:
         Current memory usage in bytes.
     """
     import time
+
     import psutil
 
     process = psutil.Process()
@@ -180,7 +174,7 @@ def get_memory_usage_reliable(max_attempts: int = 3) -> int:
             gc.collect()
 
         # Wait for GC to complete (exponential backoff)
-        time.sleep(0.01 * (2 ** attempt))
+        time.sleep(0.01 * (2**attempt))
 
         # Prefer tracemalloc if available (more precise for Python allocations)
         if tracemalloc.is_tracing():
@@ -327,7 +321,9 @@ class TestImprovedJobManagerMemoryProfile:
 
         fake_conn = FakeSurrealDBConnection()
 
-        with patch("digitalkin.core.common.factories.ConnectionFactory.create_surreal_connection", return_value=fake_conn):
+        with patch(
+            "digitalkin.core.common.factories.ConnectionFactory.create_surreal_connection", return_value=fake_conn
+        ):
             gc.collect()
             baseline = get_memory_usage_reliable()
 
@@ -514,9 +510,7 @@ class TestImprovedMemoryOptimizations:
 
                 # Should free some memory (at least 10%)
                 # Note: May not be dramatic due to Python's memory pooling
-                assert memory_reduction >= -0.5, (
-                    f"Memory cleanup verification: {memory_reduction * 100:.1f}% change"
-                )
+                assert memory_reduction >= -0.5, f"Memory cleanup verification: {memory_reduction * 100:.1f}% change"
             else:
                 pytest.skip("Memory measurement before cleanup returned zero")
 
@@ -532,7 +526,9 @@ class TestImprovedMemoryOptimizations:
             connections.append(conn)
             return conn
 
-        with patch("digitalkin.core.common.factories.ConnectionFactory.create_surreal_connection", side_effect=create_fake_conn):
+        with patch(
+            "digitalkin.core.common.factories.ConnectionFactory.create_surreal_connection", side_effect=create_fake_conn
+        ):
             from digitalkin.core.common import ConnectionFactory
 
             gc.collect()
@@ -607,14 +603,9 @@ class TestImprovedMemoryBenchmarks:
             tracemalloc.stop()
 
             # Report results (informational)
-            print(f"\nMemory Benchmark (100 tasks):")
-            print(f"  Peak memory: {peak_memory / 1024 / 1024:.2f} MB")
-            print(f"  Final memory: {final_memory / 1024 / 1024:.2f} MB")
 
             # cleanup should work with proper timeout
             assert peak_memory > 0, f"Peak memory is {peak_memory}, expected > 0"
 
             cleanup_ratio = final_memory / peak_memory
-            assert cleanup_ratio < 0.5, (
-                f"Insufficient cleanup: {cleanup_ratio * 100:.1f}% memory retained"
-            )
+            assert cleanup_ratio < 0.5, f"Insufficient cleanup: {cleanup_ratio * 100:.1f}% memory retained"

@@ -2,15 +2,7 @@
 
 from enum import Enum
 
-from pydantic import BaseModel
-
 from digitalkin.core.job_manager.base_job_manager import BaseJobManager
-
-
-class StreamCodeModel(BaseModel):
-    """Typed error/code model."""
-
-    code: str
 
 
 class JobManagerMode(Enum):
