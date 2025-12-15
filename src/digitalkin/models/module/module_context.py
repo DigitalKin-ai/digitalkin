@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
+from digitalkin.models.module.module_helpers import ModuleHelpers
 from digitalkin.models.module.tool_cache import ToolCache
 from digitalkin.services.agent.agent_strategy import AgentStrategy
 from digitalkin.services.communication.communication_strategy import CommunicationStrategy
@@ -100,7 +101,7 @@ class ModuleContext:
     session: Session
     callbacks: SimpleNamespace
     metadata: SimpleNamespace
-    helpers: SimpleNamespace
+    helpers: ModuleHelpers
     state: SimpleNamespace = SimpleNamespace()
     tool_cache: ToolCache
 
@@ -152,7 +153,7 @@ class ModuleContext:
 
         self.metadata = SimpleNamespace(**metadata)
         self.session = Session(**session)
-        self.helpers = SimpleNamespace(**helpers)
+        self.helpers = ModuleHelpers(context=self, **helpers)
         self.callbacks = SimpleNamespace(**callbacks)
         self.tool_cache = tool_cache or ToolCache()
 

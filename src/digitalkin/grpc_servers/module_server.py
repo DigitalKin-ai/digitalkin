@@ -174,7 +174,7 @@ class ModuleServer(BaseServer):
             "Attempting to register module with registry",
             extra={
                 "module_id": module_id,
-                "address": self.server_config.address,
+                "address": self.server_config.host,
                 "port": self.server_config.port,
                 "version": version,
                 "registry_address": self.server_config.registry_address,
@@ -183,7 +183,7 @@ class ModuleServer(BaseServer):
 
         result = self.registry.register(
             module_id=module_id,
-            address=self.server_config.address,
+            address=self.server_config.host,
             port=self.server_config.port,
             version=version,
         )
@@ -193,7 +193,7 @@ class ModuleServer(BaseServer):
                 "Module registered successfully",
                 extra={
                     "module_id": result.module_id,
-                    "address": self.server_config.address,
+                    "address": self.server_config.host,
                     "port": self.server_config.port,
                     "registry_address": self.server_config.registry_address,
                 },
