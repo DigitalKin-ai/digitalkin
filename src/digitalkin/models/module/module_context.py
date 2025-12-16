@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
+from digitalkin.models.module.tool_cache import ToolCache
 from digitalkin.services.agent.agent_strategy import AgentStrategy
 from digitalkin.services.communication.communication_strategy import CommunicationStrategy
 from digitalkin.services.cost.cost_strategy import CostStrategy
@@ -101,7 +102,7 @@ class ModuleContext:
     metadata: SimpleNamespace
     helpers: SimpleNamespace
     state: SimpleNamespace = SimpleNamespace()
-    tool_cache: dict[str, "ModuleInfo"]
+    tool_cache: ToolCache
 
     def __init__(  # noqa: PLR0913, PLR0917
         self,
@@ -118,7 +119,7 @@ class ModuleContext:
         metadata: dict[str, Any] = {},
         helpers: dict[str, Any] = {},
         callbacks: dict[str, Any] = {},
-        tool_cache: dict[str, "ModuleInfo"] | None = None,
+        tool_cache: ToolCache | None = None,
     ) -> None:
         """Register mandatory services, session, metadata and callbacks.
 
@@ -136,7 +137,7 @@ class ModuleContext:
             helpers: dict different user defined helpers.
             session: dict referring the session IDs or informations.
             callbacks: Functions allowing user to agent interaction.
-            tool_cache: Pre-resolved tool references from setup.
+            tool_cache: ToolCache with pre-resolved tool references from setup.
         """
         # Core services
         self.agent = agent
@@ -153,15 +154,33 @@ class ModuleContext:
         self.session = Session(**session)
         self.helpers = SimpleNamespace(**helpers)
         self.callbacks = SimpleNamespace(**callbacks)
-        self.tool_cache = tool_cache or {}
+        self.tool_cache = tool_cache or ToolCache()
 
-    def get_tool(self, field_name: str) -> "ModuleInfo | None":
-        """Get resolved tool info by setup field name.
+    def get_tool(self, slug: str) -> "ModuleInfo | None":
+        """Get resolved tool info by slug.
+
+        Fast lookup from the pre-populated tool cache.
 
         Args:
-            field_name: The name of the ToolReference field in the setup model.
+            slug: The tool slug to look up.
+
+        Returns:
+            ModuleInfo if found and valid, None otherwise.
+        """
+        return self.tool_cache.get(slug)
+
+    def check_and_get_tool(self, slug: str) -> "ModuleInfo | None":
+        """Check cache first, then query registry if not found.
+
+        This is the primary method for LLMs to discover tools. It:
+        1. Checks the pre-populated cache (fast path)
+        2. If not in cache, queries the registry
+        3. If found via registry, caches the result
+
+        Args:
+            slug: The tool slug to look up.
 
         Returns:
             ModuleInfo if found, None otherwise.
         """
-        return self.tool_cache.get(field_name)
+        return self.tool_cache.check_and_get(slug, self.registry)

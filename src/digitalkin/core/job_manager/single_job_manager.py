@@ -143,7 +143,8 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             job_id: The unique identifier of the job.
             output_data: The output data produced by the job.
         """
-        await self.tasks_sessions[job_id].queue.put(output_data.model_dump())
+        session = self.tasks_sessions[job_id]
+        await session.queue.put(output_data.model_dump())
 
     @asynccontextmanager  # type: ignore
     async def generate_stream_consumer(self, job_id: str) -> AsyncIterator[AsyncGenerator[dict[str, Any], None]]:  # type: ignore
@@ -262,6 +263,18 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         logger.info("Managed task started: '%s'", job_id, extra={"task_id": job_id})
         return job_id
 
+    async def clean_session(self, task_id: str, mission_id: str) -> bool:
+        """Clean a task's session.
+
+        Args:
+            task_id: Unique identifier for the task.
+            mission_id: Mission identifier.
+
+        Returns:
+            bool: True if the task was successfully cleaned, False otherwise.
+        """
+        return await self._task_manager.clean_session(task_id, mission_id)
+
     async def stop_module(self, job_id: str) -> bool:
         """Stop a running module job.
 
@@ -287,7 +300,7 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
                 await self.cancel_task(job_id, session.mission_id)
                 logger.debug(
                     "Module stopped successfully",
-                    extra={"job_id": job_id, "mission_id": session.mission_id, "module_name": session.module.name},
+                    extra={"job_id": job_id, "mission_id": session.mission_id},
                 )
             except Exception:
                 logger.exception("Error stopping module", extra={"job_id": job_id})

@@ -18,9 +18,7 @@ from digitalkin.models.module.module_types import (
     SecretModelT,
     SetupModelT,
 )
-from digitalkin.models.module.tool_reference import ToolReference
 from digitalkin.models.module.utility import EndOfStreamOutput, ModuleStartInfoOutput
-from digitalkin.models.services.registry import ModuleInfo
 from digitalkin.models.services.storage import BaseRole
 from digitalkin.modules.trigger_handler import TriggerHandler
 from digitalkin.services.services_config import ServicesConfig, ServicesStrategy
@@ -439,22 +437,6 @@ class BaseModule(  # noqa: PLR0904
         else:
             self._status = ModuleStatus.STOPPING
 
-    @staticmethod
-    def _extract_tool_cache(setup_data: SetupModelT) -> dict[str, ModuleInfo]:
-        """Extract resolved ToolReference info from setup data.
-
-        Args:
-            setup_data: The setup model containing potential ToolReference fields.
-
-        Returns:
-            Dict mapping field names to resolved ModuleInfo.
-        """
-        cache: dict[str, ModuleInfo] = {}
-        for name, value in setup_data.__dict__.items():
-            if isinstance(value, ToolReference) and value.module_info:
-                cache[name] = value.module_info
-        return cache
-
     async def start(
         self,
         input_data: InputModelT,
@@ -466,8 +448,19 @@ class BaseModule(  # noqa: PLR0904
         try:
             self.context.callbacks.send_message = callback
 
-            # Populate tool cache from resolved ToolReference fields
-            self.context.tool_cache = self._extract_tool_cache(setup_data)
+            # Use tool cache from setup_data if available (populated during run_config_setup)
+            # Tool cache is optional - modules can work without it
+            if hasattr(setup_data, "tool_cache") and setup_data.tool_cache is not None:
+                self.context.tool_cache = setup_data.tool_cache
+
+                # Validate tool cache - ensure all cached tools are still available
+                if self.context.registry and hasattr(setup_data, "validate_tool_cache"):
+                    invalid_tools = setup_data.validate_tool_cache(self.context.registry)
+                    if invalid_tools:
+                        logger.warning(
+                            "Some cached tools are no longer available",
+                            extra={"invalid_tools": invalid_tools},
+                        )
 
             # Send module start info as first message
             await callback(

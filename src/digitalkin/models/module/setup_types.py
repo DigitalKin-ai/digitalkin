@@ -5,11 +5,12 @@ from __future__ import annotations
 import copy
 import types
 import typing
-from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast, get_args, get_origin
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, TypeVar, cast, get_args, get_origin
 
-from pydantic import BaseModel, ConfigDict, create_model
+from pydantic import BaseModel, ConfigDict, PrivateAttr, create_model
 
 from digitalkin.logger import logger
+from digitalkin.models.module.tool_cache import ToolCache
 from digitalkin.models.module.tool_reference import ToolReference
 from digitalkin.utils.dynamic_schema import (
     DynamicField,
@@ -33,6 +34,9 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
     to be used to initialize the Kin. Supports dynamic schema providers for
     runtime value generation.
 
+    The tool_cache is populated during run_config_setup and contains resolved
+    ModuleInfo indexed by slug. It is validated during initialize.
+
     Attributes:
         model_fields: Inherited from Pydantic BaseModel, contains field definitions.
 
@@ -40,6 +44,9 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
         - Documentation: docs/api/dynamic_schema.md
         - Tests: tests/modules/test_setup_model.py
     """
+
+    _clean_model_cache: ClassVar[dict[tuple[type, bool, bool], type]] = {}
+    _tool_cache: ToolCache = PrivateAttr(default_factory=ToolCache)
 
     @classmethod
     async def get_clean_model(
@@ -71,6 +78,11 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
         Returns:
             A new BaseModel subclass with filtered fields.
         """
+        # Check cache for non-forced requests
+        cache_key = (cls, config_fields, hidden_fields)
+        if not force and cache_key in cls._clean_model_cache:
+            return cast("type[SetupModelT]", cls._clean_model_cache[cache_key])
+
         clean_fields: dict[str, Any] = {}
 
         for name, field_info in cls.model_fields.items():
@@ -117,6 +129,11 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
             __config__=ConfigDict(arbitrary_types_allowed=True),
             **clean_fields,
         )
+
+        # Cache for non-forced requests
+        if not force:
+            cls._clean_model_cache[cache_key] = m
+
         return cast("type[SetupModelT]", m)
 
     @classmethod
@@ -461,3 +478,96 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
                 cls._resolve_single_tool_reference("dict_value", item, registry)
             elif isinstance(item, BaseModel):
                 cls._resolve_tool_references_recursive(item, registry)
+
+    @property
+    def tool_cache(self) -> ToolCache:
+        """Get the tool cache for this setup instance.
+
+        Returns:
+            The ToolCache containing resolved tools.
+        """
+        return self._tool_cache
+
+    def build_tool_cache(self) -> ToolCache:
+        """Build the tool cache from resolved ToolReferences.
+
+        This should be called during run_config_setup after resolve_tool_references.
+        It walks all ToolReference fields and adds resolved ones to the cache.
+
+        Returns:
+            The populated ToolCache.
+        """
+        self._build_tool_cache_recursive(self)
+        logger.debug(
+            "Tool cache built",
+            extra={"slugs": self._tool_cache.list_slugs()},
+        )
+        return self._tool_cache
+
+    def _build_tool_cache_recursive(self, model_instance: BaseModel) -> None:
+        """Recursively build tool cache from model fields.
+
+        Args:
+            model_instance: The model instance to process.
+        """
+        for field_name, field_value in model_instance.__dict__.items():
+            if field_value is None:
+                continue
+
+            if isinstance(field_value, ToolReference):
+                self._add_tool_reference_to_cache(field_name, field_value)
+            elif isinstance(field_value, BaseModel):
+                self._build_tool_cache_recursive(field_value)
+            elif isinstance(field_value, list):
+                self._build_tool_cache_from_list(field_value)
+            elif isinstance(field_value, dict):
+                self._build_tool_cache_from_dict(field_value)
+
+    def _add_tool_reference_to_cache(self, field_name: str, tool_ref: ToolReference) -> None:
+        """Add a resolved ToolReference to the cache.
+
+        Args:
+            field_name: Name of the field (used as fallback slug).
+            tool_ref: The ToolReference instance.
+        """
+        if tool_ref.module_info:
+            # Use slug from config, or field name as fallback
+            slug = tool_ref.slug or field_name
+            self._tool_cache.add(slug, tool_ref.module_info)
+
+    def _build_tool_cache_from_list(self, items: list) -> None:
+        """Build tool cache from list items.
+
+        Args:
+            items: List of items to process.
+        """
+        for idx, item in enumerate(items):
+            if isinstance(item, ToolReference):
+                self._add_tool_reference_to_cache(f"list_{idx}", item)
+            elif isinstance(item, BaseModel):
+                self._build_tool_cache_recursive(item)
+
+    def _build_tool_cache_from_dict(self, mapping: dict) -> None:
+        """Build tool cache from dict values.
+
+        Args:
+            mapping: Dict to process.
+        """
+        for key, item in mapping.items():
+            if isinstance(item, ToolReference):
+                self._add_tool_reference_to_cache(str(key), item)
+            elif isinstance(item, BaseModel):
+                self._build_tool_cache_recursive(item)
+
+    def validate_tool_cache(self, registry: RegistryStrategy) -> list[str]:
+        """Validate all cached tools are still available.
+
+        Should be called during initialize to ensure tools are still valid.
+
+        Args:
+            registry: Registry to validate against.
+
+        Returns:
+            List of slugs that are no longer valid.
+        """
+        return self._tool_cache.validate(registry)

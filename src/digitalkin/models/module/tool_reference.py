@@ -23,6 +23,7 @@ class ToolReferenceConfig(BaseModel):
     """Configuration for how a tool should be selected."""
 
     mode: ToolSelectionMode = Field(default=ToolSelectionMode.FIXED)
+    slug: str | None = Field(default=None, description="Unique slug for cache lookup")
     fixed_id: str | None = Field(default=None, description="Module ID for FIXED mode")
     tag: str | None = Field(default=None, description="Search tag for TAG mode")
     organization_id: str | None = Field(default=None, description="Filter by organization")
@@ -57,6 +58,20 @@ class ToolReference(BaseModel):
     config: ToolReferenceConfig
     selected_module_id: str | None = Field(default=None, description="Resolved module ID after resolution")
     _cached_info: ModuleInfo | None = PrivateAttr(default=None)
+
+    @property
+    def slug(self) -> str | None:
+        """Get the slug for cache lookup.
+
+        Returns config.slug if set, otherwise falls back to fixed_id or tag.
+        """
+        if self.config.slug:
+            return self.config.slug
+        if self.config.mode == ToolSelectionMode.FIXED and self.config.fixed_id:
+            return self.config.fixed_id
+        if self.config.mode == ToolSelectionMode.TAG and self.config.tag:
+            return self.config.tag
+        return None
 
     @property
     def module_info(self) -> ModuleInfo | None:

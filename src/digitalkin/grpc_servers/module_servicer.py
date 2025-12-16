@@ -41,6 +41,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
     args: Namespace
     setup: SetupStrategy
     job_manager: BaseJobManager
+    _registry_cache: RegistryStrategy | None = None
 
     def _add_parser_args(self, parser: ArgumentParser) -> None:
         super()._add_parser_args(parser)
@@ -84,11 +85,14 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         self.setup = GrpcSetup() if self.args.services_mode == ServicesMode.REMOTE else DefaultSetup()
 
     def _get_registry(self) -> RegistryStrategy | None:
-        """Get a registry instance if configured.
+        """Get a cached registry instance if configured.
 
         Returns:
-            GrpcRegistry instance if registry config exists, None otherwise.
+            Cached GrpcRegistry instance if registry config exists, None otherwise.
         """
+        if self._registry_cache is not None:
+            return self._registry_cache
+
         registry_config = self.module_class.services_config_params.get("registry")
         if not registry_config:
             return None
@@ -97,7 +101,8 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         if not client_config:
             return None
 
-        return GrpcRegistry("", "", "", client_config)
+        self._registry_cache = GrpcRegistry("", "", "", client_config)
+        return self._registry_cache
 
     async def ConfigSetupModule(  # noqa: N802
         self,
@@ -143,9 +148,13 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             raise ServicerError(msg)
 
         # Resolve tool references in config_setup_data if registry is configured
+        # This also builds the tool_cache for LLM access during execution
         registry = self._get_registry()
         if registry:
-            config_setup_data.resolve_tool_references(registry)
+            if hasattr(config_setup_data, "resolve_tool_references"):
+                config_setup_data.resolve_tool_references(registry)
+            if hasattr(config_setup_data, "build_tool_cache"):
+                config_setup_data.build_tool_cache()
 
         # create a task to run the module in background
         job_id = await self.job_manager.create_config_setup_instance_job(

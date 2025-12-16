@@ -4,7 +4,6 @@ from typing import Any, ClassVar
 
 from pydantic import BaseModel, Field, PrivateAttr
 
-from digitalkin import logger
 from digitalkin.services.agent import AgentStrategy, DefaultAgent
 from digitalkin.services.communication import CommunicationStrategy, DefaultCommunication, GrpcCommunication
 from digitalkin.services.cost import CostStrategy, DefaultCost, GrpcCost
@@ -144,9 +143,6 @@ class ServicesConfig(BaseModel):
             msg = f"Strategy {name} not found in ServicesConfig."
             raise ValueError(msg)
 
-        logger.logger.critical(
-            f"{name=}\n{mission_id=}, {setup_id=}, {setup_version_id=}, {self.get_strategy_config(name)=}"
-        )
         # Instantiate the strategy with the mission ID, setup version ID, and configuration
         return strategy_type(mission_id, setup_id, setup_version_id, **self.get_strategy_config(name) or {})
 
