@@ -12,6 +12,11 @@
     "aliases": []
   },
   {
+    "version": "feat-setup-tool-registry",
+    "title": "feat-setup-tool-registry",
+    "aliases": []
+  },
+  {
     "version": "feat-registry-client",
     "title": "feat-registry-client",
     "aliases": []
