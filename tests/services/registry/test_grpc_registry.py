@@ -169,7 +169,7 @@ class TestDiscoverById:
         assert result.module_type == RegistryModuleType.TOOL
         assert result.address == "localhost"
         assert result.port == 50051
-        assert result.name == "TestModule"
+        assert result.module_name == "TestModule"
 
     @pytest.mark.grpc
     @pytest.mark.integration
@@ -255,7 +255,7 @@ class TestSearch:
 
         assert len(results) == 1
         assert results[0].module_id == "mod1"
-        assert results[0].name == "SearchableModule"
+        assert results[0].module_name == "SearchableModule"
 
     @pytest.mark.grpc
     @pytest.mark.integration

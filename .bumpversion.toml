@@ -3,7 +3,7 @@
 # https://peps.python.org/pep-0440/
 
 [tool.bumpversion]
-    current_version = "0.3.2.dev2"
+    current_version = "0.3.2.a0"
     parse = """(?x)
     (?P<major>0|[1-9]\\d*)\\.
     (?P<minor>0|[1-9]\\d*)\\.
@@ -18,27 +18,39 @@
     # Serialization patterns (order matters - first matching pattern is used)
     serialize = [
         "{major}.{minor}.{patch}.{release_type}{release_num}", # Pre/post releases
-        "{major}.{minor}.{patch}",                             # Final releases
+
+        "{major}.{minor}.{patch}", # Final releases
     ]
 
     # Configuration for version parts
     [tool.bumpversion.parts.release_type]
         # Release progression: dev -> alpha -> beta -> rc -> final -> post
-        values         = [ "dev", "a", "b", "rc", "final", "post" ]
-        optional_value = "final"                                    # When "final", the release_type is omitted
+        optional_value = "final" # When "final", the release_type is omitted
+        values = [
+            "dev", # jump lines to avoid alphabetical reorder
 
+            "a",
+
+            "b",
+
+            "rc",
+
+            "final",
+
+            "post",
+        ]
     # Files to update when bumping version
     [[tool.bumpversion.files]]
         filename = "pyproject.toml"
         # Update the version field in [project] section
-        search  = 'version = "{current_version}"'
         replace = 'version = "{new_version}"'
+        search  = 'version = "{current_version}"'
 
     [[tool.bumpversion.files]]
         filename = "src/digitalkin/__version__.py"
         # Update the fallback version in the __version__.py file
-        search  = '__version__ = "{current_version}"'
         replace = '__version__ = "{new_version}"'
+        search  = '__version__ = "{current_version}"'
 
         # Command aliases for convenience (these work with: bump-my-version bump <alias>)
         # Examples:
@@ -57,7 +69,7 @@
         #   bump-my-version bump --new-version 0.3.0.post1   # Post release
 
         # Additional configuration options
-        commit      = false # Don't auto-commit (let user control git)
-        tag         = false # Don't auto-tag (let user control git tags)
-        sign_tags   = false # Don't sign tags
         allow_dirty = false # Require clean working directory
+        commit      = false # Don't auto-commit (let user control git)
+        sign_tags   = false # Don't sign tags
+        tag         = false # Don't auto-tag (let user control git tags)

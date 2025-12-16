@@ -17,8 +17,9 @@ from digitalkin.core.job_manager.base_job_manager import BaseJobManager
 from digitalkin.grpc_servers.utils.exceptions import ServicerError
 from digitalkin.logger import logger
 from digitalkin.models.core.job_manager_models import JobManagerMode
-from digitalkin.models.module.module import ModuleStatus
+from digitalkin.models.module.module import ModuleCodeModel, ModuleStatus
 from digitalkin.modules._base_module import BaseModule
+from digitalkin.services.registry import GrpcRegistry, RegistryStrategy
 from digitalkin.services.services_models import ServicesMode
 from digitalkin.services.setup.default_setup import DefaultSetup
 from digitalkin.services.setup.grpc_setup import GrpcSetup
@@ -40,6 +41,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
     args: Namespace
     setup: SetupStrategy
     job_manager: BaseJobManager
+    _registry_cache: RegistryStrategy | None = None
 
     def _add_parser_args(self, parser: ArgumentParser) -> None:
         super()._add_parser_args(parser)
@@ -82,6 +84,26 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         )
         self.setup = GrpcSetup() if self.args.services_mode == ServicesMode.REMOTE else DefaultSetup()
 
+    def _get_registry(self) -> RegistryStrategy | None:
+        """Get a cached registry instance if configured.
+
+        Returns:
+            Cached GrpcRegistry instance if registry config exists, None otherwise.
+        """
+        if self._registry_cache is not None:
+            return self._registry_cache
+
+        registry_config = self.module_class.services_config_params.get("registry")
+        if not registry_config:
+            return None
+
+        client_config = registry_config.get("client_config")
+        if not client_config:
+            return None
+
+        self._registry_cache = GrpcRegistry("", "", "", client_config)
+        return self._registry_cache
+
     async def ConfigSetupModule(  # noqa: N802
         self,
         request: lifecycle_pb2.ConfigSetupModuleRequest,
@@ -108,8 +130,6 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
                 "mission_id": request.mission_id,
             },
         )
-        # Process the module input
-        # TODO: Secret should be used here as well
         setup_version = request.setup_version
         config_setup_data = self.module_class.create_config_setup_model(json_format.MessageToDict(request.content))
         setup_version_data = await self.module_class.create_setup_model(
@@ -139,8 +159,33 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             return lifecycle_pb2.ConfigSetupModuleResponse(success=False)
 
         updated_setup_data = await self.job_manager.generate_config_setup_module_response(job_id)
-        logger.info("Setup updated")
-        logger.debug(f"Updated setup data: {updated_setup_data=}")
+        logger.info("Setup response received", extra={"job_id": job_id})
+
+        # Check if response is an error
+        if isinstance(updated_setup_data, ModuleCodeModel):
+            logger.error(
+                "Config setup failed",
+                extra={"job_id": job_id, "code": updated_setup_data.code, "error_message": updated_setup_data.message},
+            )
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details(updated_setup_data.message or "Config setup failed")
+            return lifecycle_pb2.ConfigSetupModuleResponse(success=False)
+
+        if isinstance(updated_setup_data, dict) and "code" in updated_setup_data:
+            # ModuleCodeModel was serialized to dict
+            logger.error(
+                "Config setup failed",
+                extra={
+                    "job_id": job_id,
+                    "code": updated_setup_data["code"],
+                    "error_message": updated_setup_data.get("message"),
+                },
+            )
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details(updated_setup_data.get("message") or "Config setup failed")
+            return lifecycle_pb2.ConfigSetupModuleResponse(success=False)
+
+        logger.debug("Updated setup data", extra={"job_id": job_id, "setup_data": updated_setup_data})
         setup_version.content = json_format.ParseDict(
             updated_setup_data,
             struct_pb2.Struct(),
@@ -249,17 +294,19 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         Returns:
             A response indicating success or failure.
         """
-        logger.debug("StopModule called for module: '%s'", self.module_class.__name__)
+        logger.debug(
+            "StopModule called",
+            extra={"module_class": self.module_class.__name__, "job_id": request.job_id},
+        )
 
         response: bool = await self.job_manager.stop_module(request.job_id)
         if not response:
-            message = f"Job {request.job_id} not found"
-            logger.warning(message)
+            logger.warning("Job not found for stop request", extra={"job_id": request.job_id})
             context.set_code(grpc.StatusCode.NOT_FOUND)
-            context.set_details(message)
+            context.set_details(f"Job {request.job_id} not found")
             return lifecycle_pb2.StopModuleResponse(success=False)
 
-        logger.debug("Job %s stopped successfully", request.job_id, extra={"job_id": request.job_id})
+        logger.debug("Job stopped successfully", extra={"job_id": request.job_id})
         return lifecycle_pb2.StopModuleResponse(success=True)
 
     async def GetModuleStatus(  # noqa: N802

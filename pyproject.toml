@@ -1,31 +1,31 @@
 [build-system]
-    requires      = [ "setuptools >= 75.8.2", "wheel" ]
     build-backend = "setuptools.build_meta"
+    requires      = ["setuptools >= 75.8.2", "wheel"]
 
 [project]
 
-    name            = "digitalkin"
     description     = "SDK to build kin used in DigitalKin"
+    license         = { file = "LICENSE" }
+    name            = "digitalkin"
     readme          = "README.md"
     requires-python = ">=3.10"
-    license         = { file = "LICENSE" }
 
-    keywords = [ "digitalkin", "kin", "agent", "gprc", "sdk" ]
+    keywords = ["agent", "digitalkin", "gprc", "kin", "sdk"]
 
-    version = "0.3.2.dev2"
     classifiers = [
         "Development Status :: 3 - Alpha",
         "Intended Audience :: Developers",
+        "License :: Other/Proprietary License",
         "Operating System :: OS Independent",
-        "Topic :: Software Development :: Libraries",
-        "Programming Language :: Python",
+        "Programming Language :: Python :: 3 :: Only",
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
         "Programming Language :: Python :: 3.12",
         "Programming Language :: Python :: 3.13",
-        "Programming Language :: Python :: 3 :: Only",
-        "License :: Other/Proprietary License",
+        "Programming Language :: Python",
+        "Topic :: Software Development :: Libraries",
     ]
+    version = "0.3.2.a0"
 
     dependencies = [
         "agentic-mesh-protocol==0.2.1.dev0",
@@ -45,74 +45,74 @@
         ]
 
     [project.urls]
-        Homepage      = "https://github.com/DigitalKin-ai/digitalkin"
         Documentation = "https://github.com/DigitalKin-ai/digitalkin"
+        Homepage      = "https://github.com/DigitalKin-ai/digitalkin"
         Issues        = "https://github.com/DigitalKin-ai/digitalkin/issues"
 
     [[project.authors]]
-        name  = "DigitalKin.ai"
         email = "contact@digitalkin.ai"
+        name  = "DigitalKin.ai"
 
 [dependency-groups]
     dev = [
-        "typos>=1.40.0",
-        "ruff>=0.14.8",
-        "mypy>=1.19.0",
-        "pyright>=1.1.407",
-        "pre-commit>=4.5.0",
-        "bump-my-version>=1.2.4",
         "build>=1.3.0",
-        "twine>=6.2.0",
+        "bump-my-version>=1.2.5",
         "cryptography>=46.0.3",
-    ]
-    tests = [
-        "freezegun>=1.5.5",
-        "hdrhistogram>=0.10.3",
-        "grpcio-testing>=1.76.0",
-        "psutil>=7.1.3",
-        "pytest>=9.0.2",
-        "pytest-asyncio>=1.3.0",
-        "pytest-cov>=7.0.0",
-        "pytest-html==4.1.1",
-        "pytest-json-report==1.5.0",
-        "pytest-timeout>=2.4.0",
+        "mypy>=1.19.1",
+        "pre-commit>=4.5.1",
+        "pyright>=1.1.407",
+        "ruff>=0.14.14",
+        "twine>=6.2.0",
+        "typos>=1.40.0",
     ]
     docs = [
-        "mike>=2.1.3",
+        "griffe-inherited-docstrings>=1.1.2",
         "markdown-callouts>=0.4.0",
         "markdown-exec>=1.12.1",
-        "mkdocs>=1.6.1",
-        "mkdocs-coverage>=2.0.0",
-        "mkdocs-llmstxt>=0.5.0",
-        "mkdocs-redirects>=1.2.2",
-        "mkdocstrings>=1.0.0",
-        "griffe-inherited-docstrings>=1.1.2",
+        "mike>=2.1.3",
         "mkdocs-autorefs>=1.4.3",
         "mkdocs-awesome-pages-plugin>=2.10.1",
+        "mkdocs-coverage>=2.0.0",
         "mkdocs-git-committers-plugin-2>=2.5.0",
         "mkdocs-git-revision-date-localized-plugin>=1.5.0",
         "mkdocs-glightbox>=0.5.2",
         "mkdocs-include-markdown-plugin>=7.2.0",
         "mkdocs-literate-nav>=0.6.2",
+        "mkdocs-llmstxt>=0.5.0",
         "mkdocs-material[imaging]>=9.7.0",
         "mkdocs-minify-plugin>=0.8.0",
-        "mkdocs-section-index>=0.3.10",
-        "mkdocstrings-python>=2.0.1",
         "mkdocs-open-in-new-tab>=1.0.8",
+        "mkdocs-redirects>=1.2.2",
+        "mkdocs-section-index>=0.3.10",
+        "mkdocs>=1.6.1",
+        "mkdocstrings-python>=2.0.1",
+        "mkdocstrings>=1.0.0",
         "tomli>=2.3.0",
+    ]
+    tests = [
+        "freezegun>=1.5.5",
+        "grpcio-testing>=1.76.0",
+        "hdrhistogram>=0.10.3",
+        "psutil>=7.1.3",
+        "pytest-asyncio>=1.3.0",
+        "pytest-cov>=7.0.0",
+        "pytest-html==4.1.1",
+        "pytest-json-report==1.5.0",
+        "pytest-timeout>=2.4.0",
+        "pytest>=9.0.2",
     ]
 [tool.setuptools]
     package-dir = { "" = "src" }
 
     [tool.setuptools.packages.find]
-        where = [ "src", "examples" ]
+        where = ["examples", "src"]
 
 [tool.ruff]
-    src            = [ "src" ]
-    target-version = "py310"
-    line-length    = 120
     indent-width   = 4
+    line-length    = 120
     show-fixes     = true
+    src            = ["src"]
+    target-version = "py310"
     unsafe-fixes   = true
     # Enable preview features.
     exclude = [
@@ -135,59 +135,59 @@
         "buck-out",
         "build",
         "dist",
-        "node_modules",
-        "venv",
+        "docs/*",
+        "examples/*",
         "factory.py",
         "generate_certificates.py",
-        "examples/*",
+        "node_modules",
         "tests/*",
-        "docs/*",
+        "venv",
     ]
     preview = true
 
     [tool.ruff.lint]
         select = [
-            "ANN",   # flake8-annotations
-            "ASYNC", # flake8-async
-            "S",     # flake8-bandit
-            "FBT",   # flake8-boolean-trap
             "A",     # flake8-builtins
-            "COM",   # flake8-commas
-            "C4",    # flake8-comprehensions
-            "DTZ",   # flake8-datetimez
-            "EM",    # flake8-errmsg
-            "ISC",   # flake8-implicit-str-concat
-            "ICN",   # flake8-import-conventions
-            "G",     # flake8-logging-format
-            "LOG",   # flake8-logging
-            "PIE",   # flake8-pie
-            "T20",   # flake8-print
-            "PYI",   # flake8-pyi
-            "PT",    # flake8-pytest-style
-            "Q",     # flake8-quotes
-            "RSE",   # flake8-raise
-            "RET",   # flake8-return
-            "SLF",   # flake8-self
-            "SIM",   # flake8-simplify
-            "TC",    # flake8-type-checking
+            "ANN",   # flake8-annotations
             "ARG",   # flake8-unused-arguments
-            "FLY",   # flynt
+            "ASYNC", # flake8-async
+            "C4",    # flake8-comprehensions
             "C90",   # mccabe (complex-structure)
-            "PL",    # Pylint
-            "TRY",   # tryceratops
-            "PERF",  # Perflint
-            "E",     # pycodestyle-errors
-            "W",     # pycodestyle-warnings
-            "F",     # pyflakes
-            "I",     # isort
+            "COM",   # flake8-commas
             "D",     # pydocstyle
-            "UP",    # pyupgrade
-            "N",     # pep8-naming
-            "ERA",   # eradicate
-            "RUF",   # Ruff-specific rules
             "DOC",   # pydoclint
+            "DTZ",   # flake8-datetimez
+            "E",     # pycodestyle-errors
+            "EM",    # flake8-errmsg
+            "ERA",   # eradicate
+            "F",     # pyflakes
+            "FBT",   # flake8-boolean-trap
+            "FLY",   # flynt
             "FURB",  # Refurb
+            "G",     # flake8-logging-format
+            "I",     # isort
+            "ICN",   # flake8-import-conventions
+            "ISC",   # flake8-implicit-str-concat
+            "LOG",   # flake8-logging
+            "N",     # pep8-naming
+            "PERF",  # Perflint
+            "PIE",   # flake8-pie
             "PL",    # Pylint
+            "PL",    # Pylint
+            "PT",    # flake8-pytest-style
+            "PYI",   # flake8-pyi
+            "Q",     # flake8-quotes
+            "RET",   # flake8-return
+            "RSE",   # flake8-raise
+            "RUF",   # Ruff-specific rules
+            "S",     # flake8-bandit
+            "SIM",   # flake8-simplify
+            "SLF",   # flake8-self
+            "T20",   # flake8-print
+            "TC",    # flake8-type-checking
+            "TRY",   # tryceratops
+            "UP",    # pyupgrade
+            "W",     # pycodestyle-warnings
         ]
 
         ignore = [
@@ -196,70 +196,70 @@
             "S105",   # Hardcoded-password
         ]
 
-        fixable = [ "ALL" ]
+        fixable = ["ALL"]
 
         [tool.ruff.lint.pydocstyle]
             convention = "google"
 
         [tool.ruff.lint.per-file-ignores]
             "tests/**/*.py" = [
-                "S101",
-                "SLF001",
-                "PLC2701",
-                "PLR6301",
-                "TRY002",
-                "FBT001",
-                "FBT002",
                 "ANN001",
-                "ANN003",
                 "ANN002",
-                "ARG002",
-                "PLR0914",
-                "PLR2004",
-                "PLR0915",
-                "PLR1702",
-                "D417",
+                "ANN003",
+                "ANN201",
+                "ANN401",
                 "ARG001",
-                "D103",
-                "D102",
+                "ARG002",
+                "C901",
+                "D100",
                 "D101",
+                "D102",
+                "D103",
                 "D107",
-                "N802",
+                "D417",
                 "DOC201",
                 "DOC501",
-                "PERF203",
-                "C901",
-                "PLR0911",
-                "G004",
-                "ERA001",
                 "E501",
-                "ANN401",
+                "ERA001",
+                "FBT001",
+                "FBT002",
+                "G004",
+                "N802",
+                "PERF203",
+                "PLC2701",
+                "PLR0911",
                 "PLR0912",
-                "ANN201",
-                "D100",
+                "PLR0914",
+                "PLR0915",
+                "PLR1702",
+                "PLR2004",
+                "PLR6301",
+                "S101",
+                "SLF001",
+                "TRY002",
             ]
 
         [tool.ruff.lint.pylint]
             max-args = 10
 
     [tool.ruff.format]
-        quote-style               = "double"
+        docstring-code-format     = true
         indent-style              = "space"
         line-ending               = "auto"
-        docstring-code-format     = true
+        quote-style               = "double"
         skip-magic-trailing-comma = false
 
 [tool.pyright]
-    include = [ "src" ]
-    exclude = [ "**/.venv", "**/__pycache__" ]
+    exclude = ["**/.venv", "**/__pycache__"]
+    include = ["src"]
 
 [tool.mypy]
-    exclude = [ "tests", "examples" ]
+    exclude = ["examples", "tests"]
 
 [tool.pytest.ini_options]
-    testpaths    = [ "tests" ]
-    python_files = "test_*.py"
     asyncio_mode = "auto"
+    python_files = "test_*.py"
+    testpaths    = ["tests"]
 
     log_cli   = false
     log_level = "ERROR"
@@ -270,10 +270,10 @@
 
     # Custom markers
     markers = [
-        "integration: marks tests that require real SurrealDB connection (deselect with '-m \"not integration\"')",
-        "grpc: marks tests for gRPC service functionality",
-        "smoke: marks critical path tests that should always pass",
         "edge_case: marks tests for boundary conditions and edge cases",
-        "validation: marks tests for input validation and schema checking",
+        "grpc: marks tests for gRPC service functionality",
+        "integration: marks tests that require real SurrealDB connection (deselect with '-m \"not integration\"')",
         "regression: marks tests for previously fixed bugs",
+        "smoke: marks critical path tests that should always pass",
+        "validation: marks tests for input validation and schema checking",
     ]

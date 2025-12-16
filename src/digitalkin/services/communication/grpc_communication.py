@@ -187,6 +187,17 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
                 # Convert protobuf Struct to dict
                 output_dict = json_format.MessageToDict(response.output)
 
+                # Check for end_of_stream signal
+                if output_dict.get("root", {}).get("protocol") == "end_of_stream":
+                    logger.debug(
+                        "End of stream received",
+                        extra={
+                            "module_address": module_address,
+                            "module_port": module_port,
+                        },
+                    )
+                    break
+
                 # Add job_id and success flag
                 response_dict = {
                     "success": response.success,

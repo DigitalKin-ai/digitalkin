@@ -3,6 +3,7 @@
 This module extends module schemas with SDK utility protocols for API responses.
 """
 
+import types
 from typing import Annotated, Union, get_args, get_origin
 
 from pydantic import Field, create_model
@@ -50,7 +51,7 @@ class UtilitySchemaExtender:
             inner_args = get_args(annotation)
             if inner_args:
                 return cls._extract_union_types(inner_args[0])
-        if get_origin(annotation) is Union:
+        if get_origin(annotation) is Union or isinstance(annotation, types.UnionType):
             return get_args(annotation)
         return (annotation,)
 
@@ -67,7 +68,8 @@ class UtilitySchemaExtender:
         original_annotation = base_model.model_fields["root"].annotation
         original_types = cls._extract_union_types(original_annotation)
         extended_types = (*original_types, *cls._output_protocols)
-        extended_root = Annotated[extended_types, Field(discriminator="protocol")]  # type: ignore[valid-type]
+        union_type = Union[extended_types]  # type: ignore[valid-type] # noqa: UP007
+        extended_root = Annotated[union_type, Field(discriminator="protocol")]  # type: ignore[valid-type]
         return create_model(
             f"{base_model.__name__}Utilities",
             __base__=DataModel,
@@ -88,7 +90,8 @@ class UtilitySchemaExtender:
         original_annotation = base_model.model_fields["root"].annotation
         original_types = cls._extract_union_types(original_annotation)
         extended_types = (*original_types, *cls._input_protocols)
-        extended_root = Annotated[extended_types, Field(discriminator="protocol")]  # type: ignore[valid-type]
+        union_type = Union[extended_types]  # type: ignore[valid-type] # noqa: UP007
+        extended_root = Annotated[union_type, Field(discriminator="protocol")]  # type: ignore[valid-type]
         return create_model(
             f"{base_model.__name__}Utilities",
             __base__=DataModel,

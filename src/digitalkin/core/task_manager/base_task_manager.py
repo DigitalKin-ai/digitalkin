@@ -8,6 +8,8 @@ from abc import ABC, abstractmethod
 from collections.abc import Coroutine
 from typing import Any
 
+from typing_extensions import Self
+
 from digitalkin.core.task_manager.surrealdb_repository import SurrealDBConnection
 from digitalkin.core.task_manager.task_session import TaskSession
 from digitalkin.logger import logger
@@ -507,7 +509,7 @@ class BaseTaskManager(ABC):
             },
         )
 
-    async def __aenter__(self) -> "BaseTaskManager":
+    async def __aenter__(self) -> Self:
         """Enter async context manager.
 
         Returns:

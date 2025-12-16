@@ -1,0 +1,12 @@
+apiVersion: 1
+
+providers:
+  - name: 'DigitalKin Dashboards'
+    orgId: 1
+    folder: 'DigitalKin'
+    folderUid: 'digitalkin'
+    type: file
+    disableDeletion: false
+    editable: true
+    options:
+      path: /var/lib/grafana/dashboards

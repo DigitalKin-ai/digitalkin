@@ -18,12 +18,12 @@ from digitalkin.models.module.module_types import (
     SecretModelT,
     SetupModelT,
 )
-from digitalkin.models.module.utility import EndOfStreamOutput
+from digitalkin.models.module.utility import EndOfStreamOutput, ModuleStartInfoOutput, UtilityProtocol
 from digitalkin.models.services.storage import BaseRole
 from digitalkin.modules.trigger_handler import TriggerHandler
 from digitalkin.services.services_config import ServicesConfig, ServicesStrategy
-from digitalkin.utils.llm_ready_schema import llm_ready_schema
 from digitalkin.utils.package_discover import ModuleDiscoverer
+from digitalkin.utils.schema_splitter import SchemaSplitter
 
 
 class BaseModule(  # noqa: PLR0904
@@ -76,6 +76,7 @@ class BaseModule(  # noqa: PLR0904
                 registry: RegistryStrategy
                 snapshot: SnapshotStrategy
                 storage: StorageStrategy
+                user_profile: UserProfileStrategy
         """
         logger.debug("Service initialisation: %s", self.services_config_strategies.keys())
         return {
@@ -136,7 +137,8 @@ class BaseModule(  # noqa: PLR0904
         """
         if cls.secret_format is not None:
             if llm_format:
-                return json.dumps(llm_ready_schema(cls.secret_format), indent=2)
+                result_json, result_ui = SchemaSplitter.split(cls.secret_format.model_json_schema())
+                return json.dumps({"json_schema": result_json, "ui_schema": result_ui}, indent=2)
             return json.dumps(cls.secret_format.model_json_schema(), indent=2)
         msg = f"{cls.__name__}' class does not define a 'secret_format'."
         raise NotImplementedError(msg)
@@ -162,7 +164,8 @@ class BaseModule(  # noqa: PLR0904
         extended_model = UtilitySchemaExtender.create_extended_input_model(cls.input_format)
 
         if llm_format:
-            return json.dumps(llm_ready_schema(extended_model), indent=2)
+            result_json, result_ui = SchemaSplitter.split(extended_model.model_json_schema())
+            return json.dumps({"json_schema": result_json, "ui_schema": result_ui}, indent=2)
         return json.dumps(extended_model.model_json_schema(), indent=2)
 
     @classmethod
@@ -186,7 +189,8 @@ class BaseModule(  # noqa: PLR0904
         extended_model = UtilitySchemaExtender.create_extended_output_model(cls.output_format)
 
         if llm_format:
-            return json.dumps(llm_ready_schema(extended_model), indent=2)
+            result_json, result_ui = SchemaSplitter.split(extended_model.model_json_schema())
+            return json.dumps({"json_schema": result_json, "ui_schema": result_ui}, indent=2)
         return json.dumps(extended_model.model_json_schema(), indent=2)
 
     @classmethod
@@ -214,7 +218,8 @@ class BaseModule(  # noqa: PLR0904
         if cls.setup_format is not None:
             setup_format = await cls.setup_format.get_clean_model(config_fields=True, hidden_fields=False, force=True)
             if llm_format:
-                return json.dumps(llm_ready_schema(setup_format), indent=2)
+                result_json, result_ui = SchemaSplitter.split(setup_format.model_json_schema())
+                return json.dumps({"json_schema": result_json, "ui_schema": result_ui}, indent=2)
             return json.dumps(setup_format.model_json_schema(), indent=2)
         msg = "'%s' class does not define an 'config_setup_format'."
         raise NotImplementedError(msg)
@@ -243,7 +248,8 @@ class BaseModule(  # noqa: PLR0904
         if cls.setup_format is not None:
             setup_format = await cls.setup_format.get_clean_model(config_fields=False, hidden_fields=True, force=True)
             if llm_format:
-                return json.dumps(llm_ready_schema(setup_format), indent=2)
+                result_json, result_ui = SchemaSplitter.split(setup_format.model_json_schema())
+                return json.dumps({"json_schema": result_json, "ui_schema": result_ui}, indent=2)
             return json.dumps(setup_format.model_json_schema(), indent=2)
         msg = "'%s' class does not define an 'setup_format'."
         raise NotImplementedError(msg)
@@ -350,25 +356,6 @@ class BaseModule(  # noqa: PLR0904
         """
         return cls.triggers_discoverer.register_trigger(handler_cls)
 
-    async def run_config_setup(  # noqa: PLR6301
-        self,
-        context: ModuleContext,  # noqa: ARG002
-        config_setup_data: SetupModelT,
-    ) -> SetupModelT:
-        """Run config setup the module.
-
-        The config setup is used to initialize the setup with configuration data.
-        This method is typically used to set up the module with necessary configuration before running it,
-        especially for processing data like files.
-        The function needs to save the setup in the storage.
-        The module will be initialize with the setup and not the config setup.
-        This method is optional, the config setup and setup can be the same.
-
-        Returns:
-            The updated setup model after running the config setup.
-        """
-        return config_setup_data
-
     @abstractmethod
     async def initialize(self, context: ModuleContext, setup_data: SetupModelT) -> None:
         """Initialize the module."""
@@ -379,19 +366,11 @@ class BaseModule(  # noqa: PLR0904
         input_data: InputModelT,
         setup_data: SetupModelT,
     ) -> None:
-        """Run the module with the given input and setup data.
-
-        This method validates the input data, determines the protocol from the input,
-        and dispatches the request to the corresponding trigger handler. The trigger handler
-        is responsible for processing the input and invoking the callback with the result.
-
-        Triggers:
-            - The method is triggered when a module run is requested with specific input and setup data.
-            - The protocol specified in the input determines which trigger handler is invoked.
+        """Run the module by dispatching to the appropriate trigger handler.
 
         Args:
-            input_data (InputModelT): The input data to be processed by the module.
-            setup_data (SetupModelT): The setup or configuration data required for the module.
+            input_data: Input data to process.
+            setup_data: Configuration data for the module.
 
         Raises:
             ValueError: If no handler for the protocol is found.
@@ -412,6 +391,25 @@ class BaseModule(  # noqa: PLR0904
     async def cleanup(self) -> None:
         """Run the module."""
         raise NotImplementedError
+
+    async def run_config_setup(  # noqa: PLR6301
+        self,
+        context: ModuleContext,  # noqa: ARG002
+        config_setup_data: SetupModelT,
+    ) -> SetupModelT:
+        """Run config setup the module.
+
+        The config setup is used to initialize the setup with configuration data.
+        This method is typically used to set up the module with necessary configuration before running it,
+        especially for processing data like files.
+        The function needs to save the setup in the storage.
+        The module will be initialize with the setup and not the config setup.
+        This method is optional, the config setup and setup can be the same.
+
+        Returns:
+            The updated setup model after running the config setup.
+        """
+        return config_setup_data
 
     async def _run_lifecycle(
         self,
@@ -440,13 +438,32 @@ class BaseModule(  # noqa: PLR0904
         self,
         input_data: InputModelT,
         setup_data: SetupModelT,
-        callback: Callable[[OutputModelT | ModuleCodeModel], Coroutine[Any, Any, None]],
+        callback: Callable[[OutputModelT | ModuleCodeModel | DataModel[UtilityProtocol]], Coroutine[Any, Any, None]],
         done_callback: Callable | None = None,
     ) -> None:
         """Start the module."""
         try:
             self.context.callbacks.send_message = callback
-            logger.info(f"Inititalize module {self.context.session.job_id}")
+
+            tool_cache = setup_data.build_tool_cache()
+            if tool_cache.entries:
+                self.context.tool_cache = tool_cache
+
+            await callback(
+                DataModel(
+                    root=ModuleStartInfoOutput(
+                        job_id=self.context.session.job_id,
+                        mission_id=self.context.session.mission_id,
+                        setup_id=self.context.session.setup_id,
+                        setup_version_id=self.context.session.setup_version_id,
+                        module_id=self.get_module_id(),
+                        module_name=self.name,
+                    ),
+                    annotations={"role": BaseRole.SYSTEM},
+                )
+            )
+
+            logger.info("Initialize module %s", self.context.session.job_id)
             await self.initialize(self.context, setup_data)
         except Exception as e:
             self._status = ModuleStatus.FAILED
@@ -467,7 +484,7 @@ class BaseModule(  # noqa: PLR0904
         try:
             logger.debug("Init the discovered input handlers.")
             self.triggers_discoverer.init_handlers(self.context)
-            logger.debug(f"Run lifecycle {self.context.session.job_id}")
+            logger.debug("Run lifecycle %s", self.context.session.job_id)
             await self._run_lifecycle(input_data, setup_data)
         except Exception:
             self._status = ModuleStatus.FAILED
@@ -494,24 +511,54 @@ class BaseModule(  # noqa: PLR0904
             self._status = ModuleStatus.FAILED
             logger.exception("Error stopping module")
 
+    async def _resolve_tools(self, config_setup_data: SetupModelT) -> None:
+        """Resolve tool references and build cache.
+
+        Args:
+            config_setup_data: Setup data containing tool references.
+        """
+        logger.info("Starting tool resolution", extra=self.context.session.current_ids())
+        if self.context.registry is not None and self.context.communication is not None:
+            await config_setup_data.resolve_tool_references(self.context.registry, self.context.communication)
+            logger.info("Tool references resolved", extra=self.context.session.current_ids())
+        else:
+            logger.warning(
+                "No registry or communication available, skipping tool resolution",
+                extra=self.context.session.current_ids(),
+            )
+
+        tool_cache = config_setup_data.build_tool_cache()
+        self.context.tool_cache = tool_cache
+        logger.info(
+            "Tool cache built with %d entries: %s",
+            len(tool_cache.entries),
+            list(tool_cache.entries.keys()),
+            extra=self.context.session.current_ids(),
+        )
+
     async def start_config_setup(
         self,
         config_setup_data: SetupModelT,
         callback: Callable[[SetupModelT | ModuleCodeModel], Coroutine[Any, Any, None]],
     ) -> None:
-        """Start the module."""
+        """Run config setup lifecycle with tool resolution in parallel.
+
+        Args:
+            config_setup_data: Initial setup data to configure.
+            callback: Callback to send the configured setup model.
+        """
         try:
             logger.info("Run Config Setup lifecycle", extra=self.context.session.current_ids())
             self._status = ModuleStatus.RUNNING
             self.context.callbacks.set_config_setup = callback
-            content = await self.run_config_setup(self.context, config_setup_data)
 
-            wrapper = config_setup_data.model_dump()
-            wrapper["content"] = content.model_dump()
-            setup_model = await self.create_setup_model(wrapper)
+            # Resolve tools first to populate companion fields, then run config setup
+            await self._resolve_tools(config_setup_data)
+            updated_config = await self.run_config_setup(self.context, config_setup_data)
+
+            setup_model = await self.create_setup_model(updated_config.model_dump())
             await callback(setup_model)
             self._status = ModuleStatus.STOPPING
         except Exception:
-            logger.error("Error during module lifecyle")
             self._status = ModuleStatus.FAILED
-            logger.exception("Error during module lifecyle", extra=self.context.session.current_ids())
+            logger.exception("Error during config setup lifecycle", extra=self.context.session.current_ids())

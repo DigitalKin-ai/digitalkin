@@ -43,9 +43,9 @@ class GrpcClientWrapper:
                 private_key=private_key,
             )
 
-            return grpc.secure_channel(config.address, channel_credentials, options=config.channel_options)
+            return grpc.secure_channel(config.address, channel_credentials, options=config.grpc_options)
         # Insecure channel
-        return grpc.insecure_channel(config.address, options=config.channel_options)
+        return grpc.insecure_channel(config.address, options=config.grpc_options)
 
     def exec_grpc_query(self, query_endpoint: str, request: Any) -> Any:  # noqa: ANN401
         """Execute a gRPC query with from the query's rpc endpoint name.

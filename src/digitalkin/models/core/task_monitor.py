@@ -55,6 +55,8 @@ class SignalMessage(BaseModel):
 
     task_id: str = Field(..., description="Unique identifier for the task")
     mission_id: str = Field(..., description="Identifier for the mission")
+    setup_id: str = Field(default="", description="Identifier for the setup")
+    setup_version_id: str = Field(default="", description="Identifier for the setup version")
     status: TaskStatus = Field(..., description="Current status of the task")
     action: SignalType = Field(..., description="Type of signal action")
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -67,4 +69,6 @@ class HeartbeatMessage(BaseModel):
 
     task_id: str = Field(..., description="Unique identifier for the task")
     mission_id: str = Field(..., description="Identifier for the mission")
+    setup_id: str = Field(default="", description="Identifier for the setup")
+    setup_version_id: str = Field(default="", description="Identifier for the setup version")
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
