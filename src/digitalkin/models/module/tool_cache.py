@@ -12,9 +12,9 @@ from typing import TYPE_CHECKING
 from pydantic import BaseModel, Field
 
 from digitalkin.logger import logger
+from digitalkin.models.services.registry import ModuleInfo
 
 if TYPE_CHECKING:
-    from digitalkin.models.services.registry import ModuleInfo
     from digitalkin.services.registry import RegistryStrategy
 
 
@@ -217,8 +217,6 @@ class ToolCache(BaseModel):
         Returns:
             ToolCache instance.
         """
-        from digitalkin.models.services.registry import ModuleInfo  # noqa: PLC0415
-
         cache = cls()
         for slug, entry_data in data.items():
             cache.entries[slug] = ToolCacheEntry(
