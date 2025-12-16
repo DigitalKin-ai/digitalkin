@@ -37,6 +37,10 @@ async def mock_base_module() -> Mock:
     """Mock BaseModule with async stop() method."""
     module = Mock(spec=BaseModule)
     module.stop = AsyncMock()
+    module.context = Mock()
+    module.context.session = Mock()
+    module.context.session.setup_id = "setup:test"
+    module.context.session.setup_version_id = "setup_version:test"
     return module
 
 
@@ -58,6 +62,8 @@ async def mock_task_session() -> Mock:
     session.mission_id = "missions:mock"
     session.status = TaskStatus.PENDING
     session.cancellation_reason = CancellationReason.UNKNOWN
+    session.setup_id = "setup:test"
+    session.setup_version_id = "setup_version:test"
     session.started_at = None
     session.completed_at = None
     session.db = Mock()

@@ -407,6 +407,10 @@ class TestQueueTimeoutRegression:
                     # Create a task session to simulate a registered job
                     mock_db = Mock()
                     mock_module = Mock(spec=BaseModule)
+                    mock_module.context = Mock()
+                    mock_module.context.session = Mock()
+                    mock_module.context.session.setup_id = "setup:test"
+                    mock_module.context.session.setup_version_id = "setup_version:test"
                     manager.tasks_sessions["disappearing-job"] = TaskSession(
                         "disappearing-job", "test_mission", mock_db, mock_module
                     )

@@ -102,3 +102,15 @@ class RegistryStrategy(BaseStrategy, ABC):
     def get_setup(self, setup_id: str) -> SetupInfo | None:
         """Get setup info."""
         raise NotImplementedError
+
+    @abstractmethod
+    async def deregister(self, module_id: str) -> bool:
+        """Deregister a module from the registry.
+
+        Args:
+            module_id: The module identifier to deregister.
+
+        Returns:
+            True if deregistration was successful, False otherwise.
+        """
+        raise NotImplementedError

@@ -3,6 +3,7 @@
 import asyncio
 from collections.abc import AsyncGenerator, Awaitable, Callable
 
+import grpc
 from agentic_mesh_protocol.module.v1 import (
     information_pb2,
     lifecycle_pb2,
@@ -41,11 +42,49 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
         """
         BaseStrategy.__init__(self, mission_id, setup_id, setup_version_id)
         self.client_config = client_config
+        self._channel_pool: dict[tuple[str, int], grpc.Channel] = {}
 
         logger.debug(
             "Initialized GrpcCommunication",
             extra={"security": client_config.security},
         )
+
+    def _get_or_create_channel(self, module_address: str, module_port: int) -> grpc.Channel:
+        """Get existing channel or create new one for the target module.
+
+        Args:
+            module_address: Module host address
+            module_port: Module port
+
+        Returns:
+            gRPC channel for the target module
+        """
+        key = (module_address, module_port)
+        if key not in self._channel_pool:
+            logger.debug(
+                "Creating new channel",
+                extra={"address": module_address, "port": module_port},
+            )
+            config = ClientConfig(
+                host=module_address,
+                port=module_port,
+                mode=self.client_config.mode,
+                security=self.client_config.security,
+                credentials=self.client_config.credentials,
+                channel_options=self.client_config.channel_options,
+            )
+            self._channel_pool[key] = self._init_channel(config)
+        return self._channel_pool[key]
+
+    def close_all_channels(self) -> None:
+        """Close all pooled gRPC channels."""
+        for channel in self._channel_pool.values():
+            channel.close()
+        self._channel_pool.clear()
+
+    async def cleanup(self) -> None:
+        """Clean up all gRPC channels."""
+        self.close_all_channels()
 
     def _create_stub(self, module_address: str, module_port: int) -> module_service_pb2_grpc.ModuleServiceStub:
         """Create a new stub for the target module.
@@ -57,21 +96,7 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
         Returns:
             ModuleServiceStub for the target module
         """
-        logger.debug(
-            "Creating connection",
-            extra={"address": module_address, "port": module_port},
-        )
-
-        config = ClientConfig(
-            host=module_address,
-            port=module_port,
-            mode=self.client_config.mode,
-            security=self.client_config.security,
-            credentials=self.client_config.credentials,
-            channel_options=self.client_config.channel_options,
-        )
-
-        channel = self._init_channel(config)
+        channel = self._get_or_create_channel(module_address, module_port)
         return module_service_pb2_grpc.ModuleServiceStub(channel)
 
     async def get_module_schemas(
@@ -89,23 +114,27 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
             llm_format: Return LLM-friendly format
 
         Returns:
-            Dictionary containing schemas
+            Dictionary containing schemas: input, output, setup, secret, cost
         """
         stub = self._create_stub(module_address, module_port)
 
         # Create requests
+        # Note: cost always uses llm_format=False to get actual config data (rates, units)
+        # No LLM are allowed to set costs
         input_request = information_pb2.GetModuleInputRequest(llm_format=llm_format)
         output_request = information_pb2.GetModuleOutputRequest(llm_format=llm_format)
         setup_request = information_pb2.GetModuleSetupRequest(llm_format=llm_format)
         secret_request = information_pb2.GetModuleSecretRequest(llm_format=llm_format)
+        cost_request = information_pb2.GetModuleCostRequest(llm_format=False)
 
         # Get all schemas in parallel
         try:
-            input_response, output_response, setup_response, secret_response = await asyncio.gather(
+            input_response, output_response, setup_response, secret_response, cost_response = await asyncio.gather(
                 asyncio.to_thread(stub.GetModuleInput, input_request),
                 asyncio.to_thread(stub.GetModuleOutput, output_request),
                 asyncio.to_thread(stub.GetModuleSetup, setup_request),
                 asyncio.to_thread(stub.GetModuleSecret, secret_request),
+                asyncio.to_thread(stub.GetModuleCost, cost_request),
             )
 
             logger.debug(
@@ -122,6 +151,7 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
                 "output": json_format.MessageToDict(output_response.output_schema),
                 "setup": json_format.MessageToDict(setup_response.setup_schema),
                 "secret": json_format.MessageToDict(secret_response.secret_schema),
+                "cost": json_format.MessageToDict(cost_response.cost_schema),
             }
         except Exception:
             logger.exception(

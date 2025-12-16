@@ -62,6 +62,8 @@ def create_mock_task_session(**overrides: Any) -> Mock:
     # Basic attributes
     session.mission_id = "missions:mock"
     session.status = TaskStatus.PENDING
+    session.setup_id = "setup:test"
+    session.setup_version_id = "setup_version:test"
     session.started_at = None
     session.completed_at = None
     session.error = None

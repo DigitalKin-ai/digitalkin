@@ -60,6 +60,8 @@ def mock_module():
             "setup_version_id": "setup_version:test_version",
         }
     )
+    # Mock context.cleanup() for cleanup flow
+    module.context.cleanup = AsyncMock()
     return module
 
 
@@ -1338,21 +1340,26 @@ class TestCleanup:
         # Assert CRITICAL INVARIANT: DB still closed
         mock_db.close.assert_awaited_once()
 
-        # Assert: Exception was logged
-        mock_logger.exception.assert_called_once()
-        assert "Error stopping module during cleanup" in str(mock_logger.exception.call_args)
+        # Assert: Exception was logged for module stop failure
+        exception_calls = [call for call in mock_logger.exception.call_args_list]
+        assert any("Error stopping module during cleanup" in str(call) for call in exception_calls)
 
     @pytest.mark.asyncio
     async def test_cleanup_idempotent(self, task_session, mock_db, mock_module):
-        """Test cleanup can be called multiple times safely."""
+        """Test cleanup can be called multiple times safely (now idempotent).
+
+        With the _cleanup_done guard, second call is a no-op.
+        """
         mock_module.stop = AsyncMock()
 
         # Call cleanup twice
         await task_session.cleanup()
         await task_session.cleanup()
 
-        # Should not raise, DB close called multiple times is acceptable
-        assert mock_db.close.await_count == 2
+        # With idempotent cleanup, DB close should only be called once
+        assert mock_db.close.await_count == 1
+        # Module stop should also only be called once
+        assert mock_module.stop.await_count == 1
 
     @pytest.mark.asyncio
     async def test_cleanup_with_full_queue_maxsize(self, task_session, mock_db, mock_module):
@@ -1409,8 +1416,9 @@ class TestCleanup:
         # Assert: DB still closed (invariant)
         mock_db.close.assert_awaited_once()
 
-        # Assert: Exception logged
-        mock_logger.exception.assert_called_once()
+        # Assert: Exception logged for module stop failure
+        exception_calls = [call for call in mock_logger.exception.call_args_list]
+        assert any("Error stopping module during cleanup" in str(call) for call in exception_calls)
 
     @pytest.mark.asyncio
     async def test_cleanup_db_close_failure_propagates(self, task_session, mock_db, mock_module):
@@ -1607,8 +1615,11 @@ class TestRegressionSnapshots:
         await task_session._handle_cancel()
 
         payload = mock_db.update.call_args[0][2]
-        # Snapshot of expected structure (updated with setup_id and setup_version_id)
-        expected_keys = {"task_id", "mission_id", "setup_id", "setup_version_id", "action", "status", "payload", "timestamp"}
+        # Snapshot of expected structure (updated with setup_id, setup_version_id, and enhanced logging fields)
+        expected_keys = {
+            "task_id", "mission_id", "setup_id", "setup_version_id", "action", "status", "payload", "timestamp",
+            "cancellation_reason", "error_message", "exception_traceback",
+        }
         assert set(payload.keys()) == expected_keys
         assert payload["mission_id"] == "missions:test_mission"
         assert payload["task_id"] == "test_task_123"

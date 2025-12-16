@@ -73,6 +73,9 @@ class FakeRegistry(RegistryStrategy):
     def heartbeat(self, module_id: str) -> RegistryModuleStatus:
         return RegistryModuleStatus.ACTIVE
 
+    async def deregister(self, module_id: str) -> bool:
+        return True
+
 
 def create_mock_communication() -> AsyncMock:
     """Create a mock communication strategy that returns tool schemas."""

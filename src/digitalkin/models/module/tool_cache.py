@@ -63,6 +63,7 @@ class ToolModuleInfo(ModuleInfo):
     tools: list[ToolDefinition] = Field(default_factory=list)
     tool_name: str = ""
     setup_id: str = ""
+    cost_config: dict[str, Any] = Field(default_factory=dict)
 
     @property
     def slug(self) -> str:
@@ -152,6 +153,7 @@ async def module_info_to_tool_module_info(
         input_schema = input_schema.get("json_schema", input_schema)
 
     tools = _extract_tools_from_schema(input_schema)
+    cost_config = schemas.get("cost", {})
 
     return ToolModuleInfo(
         module_id=module_info.module_id,
@@ -165,6 +167,7 @@ async def module_info_to_tool_module_info(
         tools=tools,
         setup_id=setup_id,
         tool_name=tool_name,
+        cost_config=cost_config,
     )
 
 

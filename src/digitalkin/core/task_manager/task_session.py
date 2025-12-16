@@ -1,7 +1,9 @@
 """Task session easing task lifecycle management."""
 
 import asyncio
+import contextlib
 import datetime
+import traceback
 from collections.abc import AsyncGenerator
 
 from digitalkin.core.task_manager.surrealdb_repository import SurrealDBConnection
@@ -39,8 +41,16 @@ class TaskSession:
     is_cancelled: asyncio.Event
     cancellation_reason: CancellationReason
     _paused: asyncio.Event
+    _stream_closed: asyncio.Event
     _heartbeat_interval: datetime.timedelta
     _last_heartbeat: datetime.datetime
+
+    # Exception tracking for enhanced DB logging
+    _last_exception: str | None
+    _last_traceback: str | None
+
+    # Cleanup guard for idempotent cleanup
+    _cleanup_done: bool
 
     def __init__(
         self,
@@ -81,7 +91,15 @@ class TaskSession:
         self.is_cancelled = asyncio.Event()
         self.cancellation_reason = CancellationReason.UNKNOWN
         self._paused = asyncio.Event()
+        self._stream_closed = asyncio.Event()
         self._heartbeat_interval = heartbeat_interval
+
+        # Exception tracking
+        self._last_exception = None
+        self._last_traceback = None
+
+        # Cleanup guard
+        self._cleanup_done = False
 
         logger.info(
             "TaskSession initialized",
@@ -103,6 +121,15 @@ class TaskSession:
         return self._paused.is_set()
 
     @property
+    def stream_closed(self) -> bool:
+        """Check if stream termination was signaled."""
+        return self._stream_closed.is_set()
+
+    def close_stream(self) -> None:
+        """Signal that the stream should terminate."""
+        self._stream_closed.set()
+
+    @property
     def setup_id(self) -> str:
         """Get setup_id from module context."""
         return self.module.context.session.setup_id
@@ -116,6 +143,15 @@ class TaskSession:
     def session_ids(self) -> dict[str, str]:
         """Get all session IDs from module context for structured logging."""
         return self.module.context.session.current_ids()
+
+    def record_exception(self, exc: Exception) -> None:
+        """Record exception details for DB logging.
+
+        Args:
+            exc: The exception that caused the task to fail.
+        """
+        self._last_exception = str(exc)
+        self._last_traceback = traceback.format_exc()
 
     async def send_heartbeat(self) -> bool:
         """Rate-limited heartbeat with connection resilience.
@@ -228,7 +264,8 @@ class TaskSession:
                 exc_info=True,
             )
         finally:
-            await self.db.stop_live(live_id)
+            with contextlib.suppress(Exception):  # Connection may already be closed
+                await self.db.stop_live(live_id)
             logger.info("Signal listener stopped", extra=self.session_ids)
 
     async def _handle_cancel(self, reason: CancellationReason = CancellationReason.UNKNOWN) -> None:
@@ -278,6 +315,7 @@ class TaskSession:
                 setup_version_id=self.setup_version_id,
                 action=SignalType.ACK_CANCEL,
                 status=self.status,
+                cancellation_reason=reason,
             ).model_dump(),
         )
 
@@ -339,18 +377,40 @@ class TaskSession:
     async def cleanup(self) -> None:
         """Clean up task session resources.
 
+        This method is idempotent - safe to call multiple times.
+        Second and subsequent calls are no-ops.
+
         This includes:
         - Clearing queue to free memory
+        - Cleaning up module context services
         - Stopping module
         - Closing database connection
         - Clearing module reference
         """
+        if self._cleanup_done:
+            logger.debug(
+                "Cleanup already done, skipping",
+                extra={"task_id": self.task_id, "mission_id": self.mission_id},
+            )
+            return
+        self._cleanup_done = True
+
         # Clear queue to free memory
         try:
             while not self.queue.empty():
                 self.queue.get_nowait()
         except asyncio.QueueEmpty:
             pass
+
+        # Clean up module context services (e.g., gRPC channel pool)
+        if self.module is not None and self.module.context is not None:
+            try:
+                await self.module.context.cleanup()
+            except Exception:
+                logger.exception(
+                    "Error cleaning up module context",
+                    extra={"mission_id": self.mission_id, "task_id": self.task_id},
+                )
 
         # Stop module
         try:
