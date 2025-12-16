@@ -4,11 +4,12 @@ These protocols are automatically available to all modules and don't need to be
 explicitly included in module output unions.
 """
 
+from datetime import datetime, timezone
 from typing import Any, ClassVar, Literal
 
 from pydantic import BaseModel, Field
 
-from digitalkin.models.module.module_types import DataTrigger
+from digitalkin.models.module.base_types import DataTrigger
 
 
 class UtilityProtocol(DataTrigger):
@@ -25,6 +26,26 @@ class EndOfStreamOutput(UtilityProtocol):
     """Signal that the stream has ended."""
 
     protocol: Literal["end_of_stream"] = "end_of_stream"  # type: ignore
+
+
+class ModuleStartInfoOutput(UtilityProtocol):
+    """Output sent when module starts with execution context.
+
+    This protocol is sent as the first message when a module starts,
+    providing the client with essential execution context information.
+    """
+
+    protocol: Literal["module_start_info"] = "module_start_info"  # type: ignore
+    job_id: str = Field(..., description="Unique job identifier")
+    mission_id: str = Field(..., description="Mission identifier")
+    setup_id: str = Field(..., description="Setup identifier")
+    setup_version_id: str = Field(..., description="Setup version identifier")
+    module_id: str = Field(..., description="Module identifier")
+    module_name: str = Field(..., description="Human-readable module name")
+    started_at: str = Field(
+        default_factory=lambda: datetime.now(tz=timezone.utc).isoformat(),
+        description="ISO timestamp when module started",
+    )
 
 
 class HealthcheckPingInput(UtilityProtocol):

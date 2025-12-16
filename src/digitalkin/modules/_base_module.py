@@ -18,7 +18,9 @@ from digitalkin.models.module.module_types import (
     SecretModelT,
     SetupModelT,
 )
-from digitalkin.models.module.utility import EndOfStreamOutput
+from digitalkin.models.module.tool_reference import ToolReference
+from digitalkin.models.module.utility import EndOfStreamOutput, ModuleStartInfoOutput
+from digitalkin.models.services.registry import ModuleInfo
 from digitalkin.models.services.storage import BaseRole
 from digitalkin.modules.trigger_handler import TriggerHandler
 from digitalkin.services.services_config import ServicesConfig, ServicesStrategy
@@ -76,6 +78,7 @@ class BaseModule(  # noqa: PLR0904
                 registry: RegistryStrategy
                 snapshot: SnapshotStrategy
                 storage: StorageStrategy
+                user_profile: UserProfileStrategy
         """
         logger.debug("Service initialisation: %s", self.services_config_strategies.keys())
         return {
@@ -436,6 +439,22 @@ class BaseModule(  # noqa: PLR0904
         else:
             self._status = ModuleStatus.STOPPING
 
+    @staticmethod
+    def _extract_tool_cache(setup_data: SetupModelT) -> dict[str, ModuleInfo]:
+        """Extract resolved ToolReference info from setup data.
+
+        Args:
+            setup_data: The setup model containing potential ToolReference fields.
+
+        Returns:
+            Dict mapping field names to resolved ModuleInfo.
+        """
+        cache: dict[str, ModuleInfo] = {}
+        for name, value in setup_data.__dict__.items():
+            if isinstance(value, ToolReference) and value.module_info:
+                cache[name] = value.module_info
+        return cache
+
     async def start(
         self,
         input_data: InputModelT,
@@ -446,7 +465,26 @@ class BaseModule(  # noqa: PLR0904
         """Start the module."""
         try:
             self.context.callbacks.send_message = callback
-            logger.info(f"Inititalize module {self.context.session.job_id}")
+
+            # Populate tool cache from resolved ToolReference fields
+            self.context.tool_cache = self._extract_tool_cache(setup_data)
+
+            # Send module start info as first message
+            await callback(
+                DataModel(
+                    root=ModuleStartInfoOutput(
+                        job_id=self.context.session.job_id,
+                        mission_id=self.context.session.mission_id,
+                        setup_id=self.context.session.setup_id,
+                        setup_version_id=self.context.session.setup_version_id,
+                        module_id=self.get_module_id(),
+                        module_name=self.name,
+                    ),
+                    annotations={"role": BaseRole.SYSTEM},
+                )
+            )
+
+            logger.info("Initialize module %s", self.context.session.job_id)
             await self.initialize(self.context, setup_data)
         except Exception as e:
             self._status = ModuleStatus.FAILED
@@ -467,7 +505,7 @@ class BaseModule(  # noqa: PLR0904
         try:
             logger.debug("Init the discovered input handlers.")
             self.triggers_discoverer.init_handlers(self.context)
-            logger.debug(f"Run lifecycle {self.context.session.job_id}")
+            logger.debug("Run lifecycle %s", self.context.session.job_id)
             await self._run_lifecycle(input_data, setup_data)
         except Exception:
             self._status = ModuleStatus.FAILED

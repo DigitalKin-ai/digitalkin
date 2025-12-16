@@ -15,8 +15,8 @@ from digitalkin.core.task_manager.local_task_manager import LocalTaskManager
 from digitalkin.core.task_manager.task_session import TaskSession
 from digitalkin.logger import logger
 from digitalkin.models.core.task_monitor import TaskStatus
+from digitalkin.models.module.base_types import InputModelT, OutputModelT, SetupModelT
 from digitalkin.models.module.module import ModuleCodeModel
-from digitalkin.models.module.module_types import InputModelT, OutputModelT, SetupModelT
 from digitalkin.modules._base_module import BaseModule
 from digitalkin.services.services_models import ServicesMode
 
@@ -86,7 +86,10 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
                 message=f"Module {job_id} did not respond within 30 seconds",
             )
         finally:
-            logger.info(f"{job_id=}: {session.queue.empty()}")
+            logger.debug(
+                "Config setup response retrieved",
+                extra={"job_id": job_id, "queue_empty": session.queue.empty()},
+            )
 
     async def create_config_setup_instance_job(
         self,
@@ -126,7 +129,7 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         except Exception:
             # Remove the module from the manager in case of an error.
             del self.tasks_sessions[job_id]
-            logger.exception("Failed to start module %s: %s", job_id)
+            logger.exception("Failed to start module", extra={"job_id": job_id})
             raise
         else:
             return job_id
@@ -271,20 +274,23 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         Raises:
             Exception: If an error occurs while stopping the module.
         """
-        logger.info(f"STOP required for {job_id=}")
+        logger.info("Stop module requested", extra={"job_id": job_id})
 
         async with self._lock:
             session = self.tasks_sessions.get(job_id)
 
             if not session:
-                logger.warning(f"session with id: {job_id} not found")
+                logger.warning("Session not found", extra={"job_id": job_id})
                 return False
             try:
                 await session.module.stop()
                 await self.cancel_task(job_id, session.mission_id)
-                logger.debug(f"session {job_id} ({session.module.name}) stopped successfully")
-            except Exception as e:
-                logger.error(f"Error while stopping module {job_id}: {e}")
+                logger.debug(
+                    "Module stopped successfully",
+                    extra={"job_id": job_id, "mission_id": session.mission_id, "module_name": session.module.name},
+                )
+            except Exception:
+                logger.exception("Error stopping module", extra={"job_id": job_id})
                 raise
             else:
                 return True

@@ -6,20 +6,28 @@ from digitalkin.models.module.module_types import (
     DataTrigger,
     SetupModel,
 )
+from digitalkin.models.module.tool_reference import (
+    ToolReference,
+    ToolReferenceConfig,
+    ToolSelectionMode,
+)
 from digitalkin.models.module.utility import (
     EndOfStreamOutput,
+    ModuleStartInfoOutput,
     UtilityProtocol,
     UtilityRegistry,
 )
 
 __all__ = [
-    # Core types (used by all SDK users)
     "DataModel",
     "DataTrigger",
-    # Utility (commonly used)
     "EndOfStreamOutput",
     "ModuleContext",
+    "ModuleStartInfoOutput",
     "SetupModel",
+    "ToolReference",
+    "ToolReferenceConfig",
+    "ToolSelectionMode",
     "UtilityProtocol",
     "UtilityRegistry",
 ]
