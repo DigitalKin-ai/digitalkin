@@ -18,7 +18,7 @@ from digitalkin.models.module.module_types import (
     SecretModelT,
     SetupModelT,
 )
-from digitalkin.models.module.utility import EndOfStreamOutput, ModuleStartInfoOutput
+from digitalkin.models.module.utility import EndOfStreamOutput, ModuleStartInfoOutput, UtilityProtocol
 from digitalkin.models.services.storage import BaseRole
 from digitalkin.modules.trigger_handler import TriggerHandler
 from digitalkin.services.services_config import ServicesConfig, ServicesStrategy
@@ -351,25 +351,6 @@ class BaseModule(  # noqa: PLR0904
         """
         return cls.triggers_discoverer.register_trigger(handler_cls)
 
-    async def run_config_setup(  # noqa: PLR6301
-        self,
-        context: ModuleContext,  # noqa: ARG002
-        config_setup_data: SetupModelT,
-    ) -> SetupModelT:
-        """Run config setup the module.
-
-        The config setup is used to initialize the setup with configuration data.
-        This method is typically used to set up the module with necessary configuration before running it,
-        especially for processing data like files.
-        The function needs to save the setup in the storage.
-        The module will be initialize with the setup and not the config setup.
-        This method is optional, the config setup and setup can be the same.
-
-        Returns:
-            The updated setup model after running the config setup.
-        """
-        return config_setup_data
-
     @abstractmethod
     async def initialize(self, context: ModuleContext, setup_data: SetupModelT) -> None:
         """Initialize the module."""
@@ -380,19 +361,11 @@ class BaseModule(  # noqa: PLR0904
         input_data: InputModelT,
         setup_data: SetupModelT,
     ) -> None:
-        """Run the module with the given input and setup data.
-
-        This method validates the input data, determines the protocol from the input,
-        and dispatches the request to the corresponding trigger handler. The trigger handler
-        is responsible for processing the input and invoking the callback with the result.
-
-        Triggers:
-            - The method is triggered when a module run is requested with specific input and setup data.
-            - The protocol specified in the input determines which trigger handler is invoked.
+        """Run the module by dispatching to the appropriate trigger handler.
 
         Args:
-            input_data (InputModelT): The input data to be processed by the module.
-            setup_data (SetupModelT): The setup or configuration data required for the module.
+            input_data: Input data to process.
+            setup_data: Configuration data for the module.
 
         Raises:
             ValueError: If no handler for the protocol is found.
@@ -413,6 +386,25 @@ class BaseModule(  # noqa: PLR0904
     async def cleanup(self) -> None:
         """Run the module."""
         raise NotImplementedError
+
+    async def run_config_setup(  # noqa: PLR6301
+        self,
+        context: ModuleContext,  # noqa: ARG002
+        config_setup_data: SetupModelT,
+    ) -> SetupModelT:
+        """Run config setup the module.
+
+        The config setup is used to initialize the setup with configuration data.
+        This method is typically used to set up the module with necessary configuration before running it,
+        especially for processing data like files.
+        The function needs to save the setup in the storage.
+        The module will be initialize with the setup and not the config setup.
+        This method is optional, the config setup and setup can be the same.
+
+        Returns:
+            The updated setup model after running the config setup.
+        """
+        return config_setup_data
 
     async def _run_lifecycle(
         self,
@@ -441,28 +433,17 @@ class BaseModule(  # noqa: PLR0904
         self,
         input_data: InputModelT,
         setup_data: SetupModelT,
-        callback: Callable[[OutputModelT | ModuleCodeModel], Coroutine[Any, Any, None]],
+        callback: Callable[[OutputModelT | ModuleCodeModel | DataModel[UtilityProtocol]], Coroutine[Any, Any, None]],
         done_callback: Callable | None = None,
     ) -> None:
         """Start the module."""
         try:
             self.context.callbacks.send_message = callback
 
-            # Use tool cache from setup_data if available (populated during run_config_setup)
-            # Tool cache is optional - modules can work without it
-            if hasattr(setup_data, "tool_cache") and setup_data.tool_cache is not None:
-                self.context.tool_cache = setup_data.tool_cache
+            tool_cache = setup_data.build_tool_cache()
+            if tool_cache.entries:
+                self.context.tool_cache = tool_cache
 
-                # Validate tool cache - ensure all cached tools are still available
-                if self.context.registry and hasattr(setup_data, "validate_tool_cache"):
-                    invalid_tools = setup_data.validate_tool_cache(self.context.registry)
-                    if invalid_tools:
-                        logger.warning(
-                            "Some cached tools are no longer available",
-                            extra={"invalid_tools": invalid_tools},
-                        )
-
-            # Send module start info as first message
             await callback(
                 DataModel(
                     root=ModuleStartInfoOutput(
@@ -525,24 +506,65 @@ class BaseModule(  # noqa: PLR0904
             self._status = ModuleStatus.FAILED
             logger.exception("Error stopping module")
 
+    async def _resolve_tools(self, config_setup_data: SetupModelT) -> None:
+        """Resolve tool references and build cache.
+
+        Args:
+            config_setup_data: Setup data containing tool references.
+        """
+        logger.info("Starting tool resolution", extra=self.context.session.current_ids())
+        if self.context.registry is not None:
+            config_setup_data.resolve_tool_references(self.context.registry)
+            logger.info("Tool references resolved", extra=self.context.session.current_ids())
+        else:
+            logger.warning("No registry available, skipping tool resolution", extra=self.context.session.current_ids())
+
+        tool_cache = config_setup_data.build_tool_cache()
+        self.context.tool_cache = tool_cache
+        logger.info(
+            "Tool cache built with %d entries: %s",
+            len(tool_cache.entries),
+            list(tool_cache.entries.keys()),
+            extra=self.context.session.current_ids(),
+        )
+
     async def start_config_setup(
         self,
         config_setup_data: SetupModelT,
         callback: Callable[[SetupModelT | ModuleCodeModel], Coroutine[Any, Any, None]],
     ) -> None:
-        """Start the module."""
+        """Run config setup lifecycle with tool resolution in parallel.
+
+        Args:
+            config_setup_data: Initial setup data to configure.
+            callback: Callback to send the configured setup model.
+        """
         try:
             logger.info("Run Config Setup lifecycle", extra=self.context.session.current_ids())
             self._status = ModuleStatus.RUNNING
             self.context.callbacks.set_config_setup = callback
-            content = await self.run_config_setup(self.context, config_setup_data)
 
+            # Resolve tools first to populate companion fields, then run config setup
+            await self._resolve_tools(config_setup_data)
+            updated_config = await self.run_config_setup(self.context, config_setup_data)
+
+            # Build wrapper: original structure with updated content
             wrapper = config_setup_data.model_dump()
-            wrapper["content"] = content.model_dump()
+            wrapper["content"] = updated_config.model_dump()
+
+            # Debug logging
+            content = wrapper.get("content", {})
+            logger.info(
+                "Config setup wrapper: keys=%s, content_keys=%s, tools_cache=%s",
+                list(wrapper.keys()),
+                list(content.keys()) if isinstance(content, dict) else "N/A",
+                content.get("tools_cache") if isinstance(content, dict) else "N/A",
+                extra=self.context.session.current_ids(),
+            )
+
             setup_model = await self.create_setup_model(wrapper)
             await callback(setup_model)
             self._status = ModuleStatus.STOPPING
         except Exception:
-            logger.error("Error during module lifecyle")
             self._status = ModuleStatus.FAILED
-            logger.exception("Error during module lifecyle", extra=self.context.session.current_ids())
+            logger.exception("Error during config setup lifecycle", extra=self.context.session.current_ids())

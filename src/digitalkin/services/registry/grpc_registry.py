@@ -20,7 +20,6 @@ from digitalkin.logger import logger
 from digitalkin.models.grpc_servers.models import ClientConfig
 from digitalkin.models.services.registry import (
     ModuleInfo,
-    ModuleStatusInfo,
     RegistryModuleStatus,
     RegistryModuleType,
 )
@@ -28,6 +27,7 @@ from digitalkin.services.registry.exceptions import (
     RegistryModuleNotFoundError,
     RegistryServiceError,
 )
+from digitalkin.services.registry.registry_models import ModuleStatusInfo
 from digitalkin.services.registry.registry_strategy import RegistryStrategy
 
 

@@ -117,10 +117,10 @@ def registry(
 class TestToolReferenceValidation:
     """Tests for ToolReferenceConfig validation."""
 
-    def test_fixed_mode_requires_fixed_id(self) -> None:
-        """FIXED mode without fixed_id raises ValueError."""
-        with pytest.raises(ValueError, match="fixed_id required"):
-            ToolReferenceConfig(mode=ToolSelectionMode.FIXED, fixed_id=None)
+    def test_fixed_mode_requires_module_id(self) -> None:
+        """FIXED mode without module_id raises ValueError."""
+        with pytest.raises(ValueError, match="module_id required"):
+            ToolReferenceConfig(mode=ToolSelectionMode.FIXED, module_id=None)
 
     def test_tag_mode_requires_tag(self) -> None:
         """TAG mode without tag raises ValueError."""
@@ -133,9 +133,9 @@ class TestToolReferenceValidation:
         assert config.mode == ToolSelectionMode.DISCOVERABLE
 
     def test_fixed_mode_valid(self) -> None:
-        """FIXED mode with fixed_id is valid."""
-        config = ToolReferenceConfig(mode=ToolSelectionMode.FIXED, fixed_id="tool-123")
-        assert config.fixed_id == "tool-123"
+        """FIXED mode with module_id is valid."""
+        config = ToolReferenceConfig(mode=ToolSelectionMode.FIXED, module_id="tool-123")
+        assert config.module_id == "tool-123"
 
     def test_tag_mode_valid(self) -> None:
         """TAG mode with tag is valid."""
@@ -151,11 +151,11 @@ class TestToolReferenceResolution:
         registry: FakeRegistry,
         search_tool_info: ModuleInfo,
     ) -> None:
-        """FIXED mode resolves module by fixed_id."""
+        """FIXED mode resolves module by module_id."""
         ref = ToolReference(
             config=ToolReferenceConfig(
                 mode=ToolSelectionMode.FIXED,
-                fixed_id="tool-search-001",
+                module_id="tool-search-001",
             ),
         )
 
@@ -164,7 +164,7 @@ class TestToolReferenceResolution:
         assert result is not None
         assert result.module_id == "tool-search-001"
         assert ref.module_info == search_tool_info
-        assert ref.selected_module_id == "tool-search-001"
+        assert ref.module_id == "tool-search-001"
         assert ref.is_resolved
 
     def test_fixed_mode_not_found_returns_none(self, registry: FakeRegistry) -> None:
@@ -172,7 +172,7 @@ class TestToolReferenceResolution:
         ref = ToolReference(
             config=ToolReferenceConfig(
                 mode=ToolSelectionMode.FIXED,
-                fixed_id="nonexistent-tool",
+                module_id="nonexistent-tool",
             ),
         )
 
@@ -180,7 +180,7 @@ class TestToolReferenceResolution:
 
         assert result is None
         assert ref.module_info is None
-        assert ref.selected_module_id is None
+        assert ref.module_id == "nonexistent-tool"
 
     def test_tag_mode_resolves_by_search(
         self,
@@ -200,7 +200,7 @@ class TestToolReferenceResolution:
         assert result is not None
         assert result.module_id == "tool-search-001"
         assert ref.module_info == search_tool_info
-        assert ref.selected_module_id == "tool-search-001"
+        assert ref.module_id == "tool-search-001"
 
     def test_tag_mode_not_found_returns_none(self, registry: FakeRegistry) -> None:
         """TAG mode returns None when no search results."""
@@ -243,7 +243,7 @@ class TestSetupModelToolResolution:
                 default_factory=lambda: ToolReference(
                     config=ToolReferenceConfig(
                         mode=ToolSelectionMode.FIXED,
-                        fixed_id="tool-search-001",
+                        module_id="tool-search-001",
                     ),
                 ),
             )
@@ -253,7 +253,7 @@ class TestSetupModelToolResolution:
 
         assert setup.search_tool.is_resolved
         assert setup.search_tool.module_info == search_tool_info
-        assert setup.search_tool.selected_module_id == "tool-search-001"
+        assert setup.search_tool.module_id == "tool-search-001"
 
     def test_multiple_tool_references_resolved(
         self,
@@ -268,7 +268,7 @@ class TestSetupModelToolResolution:
                 default_factory=lambda: ToolReference(
                     config=ToolReferenceConfig(
                         mode=ToolSelectionMode.FIXED,
-                        fixed_id="tool-search-001",
+                        module_id="tool-search-001",
                     ),
                 ),
             )
@@ -299,7 +299,7 @@ class TestSetupModelToolResolution:
                 default_factory=lambda: ToolReference(
                     config=ToolReferenceConfig(
                         mode=ToolSelectionMode.FIXED,
-                        fixed_id="tool-search-001",
+                        module_id="tool-search-001",
                     ),
                 ),
             )
@@ -349,7 +349,7 @@ class TestNestedToolReferenceResolution:
                 default_factory=lambda: ToolReference(
                     config=ToolReferenceConfig(
                         mode=ToolSelectionMode.FIXED,
-                        fixed_id="tool-search-001",
+                        module_id="tool-search-001",
                     ),
                 ),
             )
@@ -376,7 +376,7 @@ class TestNestedToolReferenceResolution:
                 default_factory=lambda: ToolReference(
                     config=ToolReferenceConfig(
                         mode=ToolSelectionMode.FIXED,
-                        fixed_id="tool-analyzer-002",
+                        module_id="tool-analyzer-002",
                     ),
                 ),
             )
@@ -407,13 +407,13 @@ class TestNestedToolReferenceResolution:
                     ToolReference(
                         config=ToolReferenceConfig(
                             mode=ToolSelectionMode.FIXED,
-                            fixed_id="tool-search-001",
+                            module_id="tool-search-001",
                         ),
                     ),
                     ToolReference(
                         config=ToolReferenceConfig(
                             mode=ToolSelectionMode.FIXED,
-                            fixed_id="tool-analyzer-002",
+                            module_id="tool-analyzer-002",
                         ),
                     ),
                 ],
@@ -446,7 +446,7 @@ class TestNestedToolReferenceResolution:
                         tool=ToolReference(
                             config=ToolReferenceConfig(
                                 mode=ToolSelectionMode.FIXED,
-                                fixed_id="tool-search-001",
+                                module_id="tool-search-001",
                             ),
                         ),
                     ),
@@ -455,7 +455,7 @@ class TestNestedToolReferenceResolution:
                         tool=ToolReference(
                             config=ToolReferenceConfig(
                                 mode=ToolSelectionMode.FIXED,
-                                fixed_id="tool-writer-003",
+                                module_id="tool-writer-003",
                             ),
                         ),
                     ),
@@ -482,13 +482,13 @@ class TestNestedToolReferenceResolution:
                     "search": ToolReference(
                         config=ToolReferenceConfig(
                             mode=ToolSelectionMode.FIXED,
-                            fixed_id="tool-search-001",
+                            module_id="tool-search-001",
                         ),
                     ),
                     "analyzer": ToolReference(
                         config=ToolReferenceConfig(
                             mode=ToolSelectionMode.FIXED,
-                            fixed_id="tool-analyzer-002",
+                            module_id="tool-analyzer-002",
                         ),
                     ),
                 },
@@ -518,7 +518,7 @@ class TestNestedToolReferenceResolution:
                         tool=ToolReference(
                             config=ToolReferenceConfig(
                                 mode=ToolSelectionMode.FIXED,
-                                fixed_id="tool-search-001",
+                                module_id="tool-search-001",
                             ),
                         ),
                     ),
@@ -526,7 +526,7 @@ class TestNestedToolReferenceResolution:
                         tool=ToolReference(
                             config=ToolReferenceConfig(
                                 mode=ToolSelectionMode.FIXED,
-                                fixed_id="tool-writer-003",
+                                module_id="tool-writer-003",
                             ),
                         ),
                     ),
@@ -558,7 +558,7 @@ class TestComplexArchetypeSetup:
                 default_factory=lambda: ToolReference(
                     config=ToolReferenceConfig(
                         mode=ToolSelectionMode.FIXED,
-                        fixed_id="tool-search-001",
+                        module_id="tool-search-001",
                     ),
                 ),
             )
@@ -569,7 +569,7 @@ class TestComplexArchetypeSetup:
                 default_factory=lambda: ToolReference(
                     config=ToolReferenceConfig(
                         mode=ToolSelectionMode.FIXED,
-                        fixed_id="tool-writer-003",
+                        module_id="tool-writer-003",
                     ),
                 ),
             )
@@ -608,7 +608,7 @@ class TestComplexArchetypeSetup:
                 default_factory=lambda: ToolReference(
                     config=ToolReferenceConfig(
                         mode=ToolSelectionMode.FIXED,
-                        fixed_id="tool-search-001",
+                        module_id="tool-search-001",
                     ),
                 ),
             )
@@ -616,7 +616,7 @@ class TestComplexArchetypeSetup:
                 default_factory=lambda: ToolReference(
                     config=ToolReferenceConfig(
                         mode=ToolSelectionMode.FIXED,
-                        fixed_id="nonexistent-tool",
+                        module_id="nonexistent-tool",
                     ),
                 ),
             )

@@ -1,12 +1,13 @@
 """Define the module context used in the triggers."""
 
 import os
+from collections.abc import AsyncGenerator, Callable, Coroutine
 from datetime import tzinfo
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any
+from typing import Any
 from zoneinfo import ZoneInfo
 
-from digitalkin.models.module.module_helpers import ModuleHelpers
+from digitalkin.logger import logger
 from digitalkin.models.module.tool_cache import ToolCache
 from digitalkin.services.agent.agent_strategy import AgentStrategy
 from digitalkin.services.communication.communication_strategy import CommunicationStrategy
@@ -17,9 +18,6 @@ from digitalkin.services.registry.registry_strategy import RegistryStrategy
 from digitalkin.services.snapshot.snapshot_strategy import SnapshotStrategy
 from digitalkin.services.storage.storage_strategy import StorageStrategy
 from digitalkin.services.user_profile.user_profile_strategy import UserProfileStrategy
-
-if TYPE_CHECKING:
-    from digitalkin.models.services.registry import ModuleInfo
 
 
 class Session(SimpleNamespace):
@@ -101,7 +99,7 @@ class ModuleContext:
     session: Session
     callbacks: SimpleNamespace
     metadata: SimpleNamespace
-    helpers: ModuleHelpers
+    helpers: SimpleNamespace
     state: SimpleNamespace = SimpleNamespace()
     tool_cache: ToolCache
 
@@ -140,7 +138,6 @@ class ModuleContext:
             callbacks: Functions allowing user to agent interaction.
             tool_cache: ToolCache with pre-resolved tool references from setup.
         """
-        # Core services
         self.agent = agent
         self.communication = communication
         self.cost = cost
@@ -153,35 +150,151 @@ class ModuleContext:
 
         self.metadata = SimpleNamespace(**metadata)
         self.session = Session(**session)
-        self.helpers = ModuleHelpers(context=self, **helpers)
+        self.helpers = SimpleNamespace(**helpers)
         self.callbacks = SimpleNamespace(**callbacks)
         self.tool_cache = tool_cache or ToolCache()
 
-    def get_tool(self, slug: str) -> "ModuleInfo | None":
-        """Get resolved tool info by slug.
-
-        Fast lookup from the pre-populated tool cache.
-
-        Args:
-            slug: The tool slug to look up.
-
-        Returns:
-            ModuleInfo if found and valid, None otherwise.
-        """
-        return self.tool_cache.get(slug)
-
-    def check_and_get_tool(self, slug: str) -> "ModuleInfo | None":
-        """Check cache first, then query registry if not found.
-
-        This is the primary method for LLMs to discover tools. It:
-        1. Checks the pre-populated cache (fast path)
-        2. If not in cache, queries the registry
-        3. If found via registry, caches the result
+    async def call_module_by_id(
+        self,
+        module_id: str,
+        input_data: dict,
+        setup_id: str,
+        mission_id: str,
+        callback: Callable[[dict], Coroutine[Any, Any, None]] | None = None,
+    ) -> AsyncGenerator[dict, None]:
+        """Call a module by ID, discovering address/port from registry.
 
         Args:
-            slug: The tool slug to look up.
+            module_id: Module identifier to look up in registry.
+            input_data: Input data as dictionary.
+            setup_id: Setup configuration ID.
+            mission_id: Mission context ID.
+            callback: Optional callback for each response.
+
+        Yields:
+            Streaming responses from module as dictionaries.
+        """
+        module_info = self.registry.discover_by_id(module_id)
+
+        logger.debug(
+            "Calling module by ID",
+            extra={
+                "module_id": module_id,
+                "address": module_info.address,
+                "port": module_info.port,
+            },
+        )
+
+        async for response in self.communication.call_module(
+            module_address=module_info.address,
+            module_port=module_info.port,
+            input_data=input_data,
+            setup_id=setup_id,
+            mission_id=mission_id,
+            callback=callback,
+        ):
+            yield response
+
+    async def get_module_schemas_by_id(
+        self,
+        module_id: str,
+        *,
+        llm_format: bool = False,
+    ) -> dict[str, dict]:
+        """Get module schemas by ID, discovering address/port from registry.
+
+        Args:
+            module_id: Module identifier to look up in registry.
+            llm_format: If True, return LLM-optimized schema format.
 
         Returns:
-            ModuleInfo if found, None otherwise.
+            Dictionary containing schemas: {"input": ..., "output": ..., "setup": ..., "secret": ...}
         """
-        return self.tool_cache.check_and_get(slug, self.registry)
+        module_info = self.registry.discover_by_id(module_id)
+
+        logger.debug(
+            "Getting module schemas by ID",
+            extra={
+                "module_id": module_id,
+                "address": module_info.address,
+                "port": module_info.port,
+            },
+        )
+
+        return await self.communication.get_module_schemas(
+            module_address=module_info.address,
+            module_port=module_info.port,
+            llm_format=llm_format,
+        )
+
+    async def create_openai_style_tool(self, tool_name: str) -> dict[str, Any] | None:
+        """Create OpenAI-style function calling schema for a tool.
+
+        Uses tool cache (fast path) with registry fallback. Fetches the tool's
+        input schema and wraps it in OpenAI function calling format.
+
+        Args:
+            tool_name: Module ID to look up (checks cache first, then registry).
+
+        Returns:
+            OpenAI-style tool schema if found, None otherwise.
+        """
+        module_info = self.tool_cache.get(tool_name, registry=self.registry)
+        if not module_info:
+            return None
+
+        schemas = await self.communication.get_module_schemas(
+            module_address=module_info.address,
+            module_port=module_info.port,
+            llm_format=True,
+        )
+
+        return {
+            "type": "function",
+            "function": {
+                "module_id": module_info.module_id,
+                "name": module_info.name or "undefined",
+                "description": module_info.documentation or "",
+                "parameters": schemas["input"],
+            },
+        }
+
+    def create_tool_function(
+        self,
+        module_id: str,
+    ) -> Callable[..., AsyncGenerator[dict, None]] | None:
+        """Create async generator function for a tool.
+
+        Returns an async generator that calls the remote tool module via gRPC
+        and yields each response as it arrives until end_of_stream or gRPC ends.
+
+        Args:
+            module_id: Module ID to look up (checks cache first, then registry).
+
+        Returns:
+            Async generator function if tool found, None otherwise.
+        """
+        module_info = self.tool_cache.get(module_id, registry=self.registry)
+        if not module_info:
+            return None
+
+        communication = self.communication
+        session = self.session
+        address = module_info.address
+        port = module_info.port
+
+        async def tool_function(**kwargs: Any) -> AsyncGenerator[dict, None]:  # noqa: ANN401
+            wrapped_input = {"root": kwargs}
+            async for response in communication.call_module(
+                module_address=address,
+                module_port=port,
+                input_data=wrapped_input,
+                setup_id=session.setup_id,
+                mission_id=session.mission_id,
+            ):
+                yield response
+
+        tool_function.__name__ = module_info.name or module_info.module_id
+        tool_function.__doc__ = module_info.documentation or ""
+
+        return tool_function

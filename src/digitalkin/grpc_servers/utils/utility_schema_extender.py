@@ -3,6 +3,7 @@
 This module extends module schemas with SDK utility protocols for API responses.
 """
 
+import types
 from typing import Annotated, Union, get_args, get_origin
 
 from pydantic import Field, create_model
@@ -50,7 +51,7 @@ class UtilitySchemaExtender:
             inner_args = get_args(annotation)
             if inner_args:
                 return cls._extract_union_types(inner_args[0])
-        if get_origin(annotation) is Union:
+        if get_origin(annotation) is Union or isinstance(annotation, types.UnionType):
             return get_args(annotation)
         return (annotation,)
 

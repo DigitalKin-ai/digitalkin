@@ -130,8 +130,6 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
                 "mission_id": request.mission_id,
             },
         )
-        # Process the module input
-        # TODO: Secret should be used here as well
         setup_version = request.setup_version
         config_setup_data = self.module_class.create_config_setup_model(json_format.MessageToDict(request.content))
         setup_version_data = await self.module_class.create_setup_model(
@@ -146,15 +144,6 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         if not config_setup_data:
             msg = "No config setup data returned."
             raise ServicerError(msg)
-
-        # Resolve tool references in config_setup_data if registry is configured
-        # This also builds the tool_cache for LLM access during execution
-        registry = self._get_registry()
-        if registry:
-            if hasattr(config_setup_data, "resolve_tool_references"):
-                config_setup_data.resolve_tool_references(registry)
-            if hasattr(config_setup_data, "build_tool_cache"):
-                config_setup_data.build_tool_cache()
 
         # create a task to run the module in background
         job_id = await self.job_manager.create_config_setup_instance_job(

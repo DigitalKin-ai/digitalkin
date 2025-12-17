@@ -33,10 +33,3 @@ class ModuleInfo(BaseModel):
     name: str = ""
     documentation: str | None = None
     status: RegistryModuleStatus | None = None
-
-
-class ModuleStatusInfo(BaseModel):
-    """Module status response."""
-
-    module_id: str
-    status: RegistryModuleStatus

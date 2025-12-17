@@ -5,10 +5,10 @@ from typing import Any
 
 from digitalkin.models.services.registry import (
     ModuleInfo,
-    ModuleStatusInfo,
     RegistryModuleStatus,
 )
 from digitalkin.services.base_strategy import BaseStrategy
+from digitalkin.services.registry.registry_models import ModuleStatusInfo
 
 
 class RegistryStrategy(BaseStrategy, ABC):

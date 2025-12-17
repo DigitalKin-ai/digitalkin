@@ -1,36 +1,32 @@
-"""Tool reference types for archetype module configuration."""
+"""Tool reference types for module configuration."""
 
 from enum import Enum
-from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field, PrivateAttr, model_validator
 
 from digitalkin.models.services.registry import ModuleInfo
-
-if TYPE_CHECKING:
-    from digitalkin.services.registry import RegistryStrategy
+from digitalkin.services.registry import RegistryStrategy
 
 
 class ToolSelectionMode(str, Enum):
-    """Mode for tool selection in archetype setup."""
+    """Tool selection mode."""
 
-    FIXED = "fixed"
     TAG = "tag"
+    FIXED = "fixed"
     DISCOVERABLE = "discoverable"
 
 
 class ToolReferenceConfig(BaseModel):
-    """Configuration for how a tool should be selected."""
+    """Tool selection configuration. The module_id serves as both identifier and cache key."""
 
     mode: ToolSelectionMode = Field(default=ToolSelectionMode.FIXED)
-    slug: str | None = Field(default=None, description="Unique slug for cache lookup")
-    fixed_id: str | None = Field(default=None, description="Module ID for FIXED mode")
-    tag: str | None = Field(default=None, description="Search tag for TAG mode")
-    organization_id: str | None = Field(default=None, description="Filter by organization")
+    module_id: str | None = Field(default=None)
+    tag: str | None = Field(default=None)
+    organization_id: str | None = Field(default=None)
 
     @model_validator(mode="after")
     def validate_config(self) -> "ToolReferenceConfig":
-        """Validate configuration based on mode.
+        """Validate required fields based on mode.
 
         Returns:
             Self if validation passes.
@@ -38,8 +34,8 @@ class ToolReferenceConfig(BaseModel):
         Raises:
             ValueError: If required field is missing for the mode.
         """
-        if self.mode == ToolSelectionMode.FIXED and not self.fixed_id:
-            msg = "fixed_id required when mode is FIXED"
+        if self.mode == ToolSelectionMode.FIXED and not self.module_id:
+            msg = "module_id required when mode is FIXED"
             raise ValueError(msg)
         if self.mode == ToolSelectionMode.TAG and not self.tag:
             msg = "tag required when mode is TAG"
@@ -48,62 +44,63 @@ class ToolReferenceConfig(BaseModel):
 
 
 class ToolReference(BaseModel):
-    """Reference to a tool module for archetype configuration.
-
-    Frontend sets config, backend resolves to actual ModuleInfo.
-    The resolved module_id is persisted in selected_module_id for
-    subsequent StartModule calls without re-resolution.
-    """
+    """Reference to a tool module, resolved via registry during config setup."""
 
     config: ToolReferenceConfig
-    selected_module_id: str | None = Field(default=None, description="Resolved module ID after resolution")
     _cached_info: ModuleInfo | None = PrivateAttr(default=None)
 
     @property
     def slug(self) -> str | None:
-        """Get the slug for cache lookup.
+        """Cache key (same as module_id).
 
-        Returns config.slug if set, otherwise falls back to fixed_id or tag.
+        Returns:
+            Module ID used as cache key.
         """
-        if self.config.slug:
-            return self.config.slug
-        if self.config.mode == ToolSelectionMode.FIXED and self.config.fixed_id:
-            return self.config.fixed_id
-        if self.config.mode == ToolSelectionMode.TAG and self.config.tag:
-            return self.config.tag
-        return None
+        return self.config.module_id
+
+    @property
+    def module_id(self) -> str | None:
+        """Module identifier.
+
+        Returns:
+            Module ID or None if not set.
+        """
+        return self.config.module_id
 
     @property
     def module_info(self) -> ModuleInfo | None:
-        """Get cached ModuleInfo if resolved."""
+        """Resolved module information.
+
+        Returns:
+            ModuleInfo if resolved, None otherwise.
+        """
         return self._cached_info
 
     @property
     def is_resolved(self) -> bool:
-        """Check if this reference has been resolved."""
-        return self._cached_info is not None or self.selected_module_id is not None
-
-    def resolve(self, registry: "RegistryStrategy") -> ModuleInfo | None:
-        """Resolve this reference using the provided registry.
-
-        For FIXED mode, looks up by fixed_id.
-        For TAG mode, searches by tag and takes first result.
-        For DISCOVERABLE mode, returns None (LLM handles at runtime).
-
-        Args:
-            registry: Registry service to use for resolution.
+        """Whether this reference has been resolved.
 
         Returns:
-            ModuleInfo if resolved, None if not resolvable or DISCOVERABLE mode.
+            True if resolved, False otherwise.
+        """
+        return self._cached_info is not None
+
+    def resolve(self, registry: RegistryStrategy) -> ModuleInfo | None:
+        """Resolve this reference using the registry.
+
+        Args:
+            registry: Registry service for module discovery.
+
+        Returns:
+            ModuleInfo if resolved, None for DISCOVERABLE mode or if not found.
         """
         if self.config.mode == ToolSelectionMode.DISCOVERABLE:
             return None
 
-        if self.config.mode == ToolSelectionMode.FIXED and self.config.fixed_id:
-            info = registry.discover_by_id(self.config.fixed_id)
+        if self.config.mode == ToolSelectionMode.FIXED and self.config.module_id:
+            info = registry.discover_by_id(self.config.module_id)
             if info:
                 self._cached_info = info
-                self.selected_module_id = self.config.fixed_id
             return info
 
         if self.config.mode == ToolSelectionMode.TAG and self.config.tag:
@@ -114,7 +111,7 @@ class ToolReference(BaseModel):
             )
             if results:
                 self._cached_info = results[0]
-                self.selected_module_id = results[0].module_id
+                self.config.module_id = results[0].module_id
                 return results[0]
 
         return None

@@ -1,17 +1,16 @@
-"""Setup model types with dynamic schema resolution."""
-
-from __future__ import annotations
+"""Setup model types with dynamic schema resolution and tool reference support."""
 
 import copy
 import types
 import typing
 from typing import TYPE_CHECKING, Any, ClassVar, Generic, TypeVar, cast, get_args, get_origin
 
-from pydantic import BaseModel, ConfigDict, PrivateAttr, create_model
+from pydantic import BaseModel, ConfigDict, Field, create_model
 
 from digitalkin.logger import logger
 from digitalkin.models.module.tool_cache import ToolCache
 from digitalkin.models.module.tool_reference import ToolReference
+from digitalkin.models.services.registry import ModuleInfo
 from digitalkin.utils.dynamic_schema import (
     DynamicField,
     get_fetchers,
@@ -28,25 +27,67 @@ SetupModelT = TypeVar("SetupModelT", bound="SetupModel")
 
 
 class SetupModel(BaseModel, Generic[SetupModelT]):
-    """Base definition of setup model showing mandatory root fields.
-
-    Optionally, the setup model can define a config option in json_schema_extra
-    to be used to initialize the Kin. Supports dynamic schema providers for
-    runtime value generation.
-
-    The tool_cache is populated during run_config_setup and contains resolved
-    ModuleInfo indexed by slug. It is validated during initialize.
-
-    Attributes:
-        model_fields: Inherited from Pydantic BaseModel, contains field definitions.
-
-    See Also:
-        - Documentation: docs/api/dynamic_schema.md
-        - Tests: tests/modules/test_setup_model.py
-    """
+    """Base setup model with dynamic schema and tool cache support."""
 
     _clean_model_cache: ClassVar[dict[tuple[type, bool, bool], type]] = {}
-    _tool_cache: ToolCache = PrivateAttr(default_factory=ToolCache)
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:  # noqa: ANN401
+        """Inject hidden companion fields for ToolReference annotations.
+
+        Args:
+            **kwargs: Keyword arguments passed to parent.
+        """
+        super().__init_subclass__(**kwargs)
+        cls._inject_tool_cache_fields()
+
+    @classmethod
+    def _inject_tool_cache_fields(cls) -> None:
+        """Inject hidden companion fields for ToolReference annotations."""
+        annotations = getattr(cls, "__annotations__", {})
+        new_annotations: dict[str, Any] = {}
+
+        for field_name, annotation in annotations.items():
+            if cls._is_tool_reference_annotation(annotation):
+                cache_field_name = f"{field_name}_cache"
+                if cache_field_name not in annotations:
+                    # Check if it's a list type
+                    origin = get_origin(annotation)
+                    if origin is list:
+                        new_annotations[cache_field_name] = list[ModuleInfo]
+                        setattr(
+                            cls,
+                            cache_field_name,
+                            Field(default_factory=list, json_schema_extra={"hidden": True}),
+                        )
+                    else:
+                        new_annotations[cache_field_name] = ModuleInfo | None
+                        setattr(
+                            cls,
+                            cache_field_name,
+                            Field(default=None, json_schema_extra={"hidden": True}),
+                        )
+
+        if new_annotations:
+            cls.__annotations__ = {**annotations, **new_annotations}
+
+    @classmethod
+    def _is_tool_reference_annotation(cls, annotation: object) -> bool:
+        """Check if annotation is ToolReference or Optional[ToolReference].
+
+        Args:
+            annotation: Type annotation to check.
+
+        Returns:
+            True if annotation is or contains ToolReference.
+        """
+        origin = get_origin(annotation)
+        if origin is typing.Union or origin is types.UnionType:
+            return any(
+                arg is ToolReference or (isinstance(arg, type) and issubclass(arg, ToolReference))
+                for arg in get_args(annotation)
+                if arg is not type(None)
+            )
+        return annotation is ToolReference or (isinstance(annotation, type) and issubclass(annotation, ToolReference))
 
     @classmethod
     async def get_clean_model(
@@ -55,30 +96,17 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
         config_fields: bool,
         hidden_fields: bool,
         force: bool = False,
-    ) -> type[SetupModelT]:
-        """Dynamically builds and returns a new BaseModel subclass with filtered fields.
-
-        This method filters fields based on their `json_schema_extra` metadata:
-        - Fields with `{"config": True}` are included only when `config_fields=True`
-        - Fields with `{"hidden": True}` are included only when `hidden_fields=True`
-
-        When `force=True`, fields with dynamic schema providers will have their
-        providers called to fetch fresh values for schema metadata like enums.
-        This includes recursively processing nested BaseModel fields.
+    ) -> "type[SetupModelT]":
+        """Build filtered model based on json_schema_extra metadata.
 
         Args:
-            config_fields: If True, include fields marked with `{"config": True}`.
-                These are typically initial configuration fields.
-            hidden_fields: If True, include fields marked with `{"hidden": True}`.
-                These are typically runtime-only fields not shown in initial config.
-            force: If True, refresh dynamic schema fields by calling their providers.
-                Use this when you need up-to-date values from external sources like
-                databases or APIs. Default is False for performance.
+            config_fields: Include fields with json_schema_extra["config"] = True.
+            hidden_fields: Include fields with json_schema_extra["hidden"] = True.
+            force: Refresh dynamic schema fields by calling providers.
 
         Returns:
-            A new BaseModel subclass with filtered fields.
+            New BaseModel subclass with filtered fields.
         """
-        # Check cache for non-forced requests
         cache_key = (cls, config_fields, hidden_fields)
         if not force and cache_key in cls._clean_model_cache:
             return cast("type[SetupModelT]", cls._clean_model_cache[cache_key])
@@ -90,68 +118,53 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
             is_config = bool(extra.get("config", False)) if isinstance(extra, dict) else False
             is_hidden = bool(extra.get("hidden", False)) if isinstance(extra, dict) else False
 
-            # Skip config unless explicitly included
             if is_config and not config_fields:
-                logger.debug("Skipping '%s' (config-only)", name)
                 continue
-
-            # Skip hidden unless explicitly included
             if is_hidden and not hidden_fields:
-                logger.debug("Skipping '%s' (hidden-only)", name)
                 continue
 
-            # Refresh dynamic schema fields when force=True
             current_field_info = field_info
             current_annotation = field_info.annotation
 
             if force:
-                # Check if this field has DynamicField metadata
                 if has_dynamic(field_info):
                     current_field_info = await cls._refresh_field_schema(name, field_info)
 
-                # Check if the annotation is a nested BaseModel that might have dynamic fields
                 nested_model = cls._get_base_model_type(current_annotation)
                 if nested_model is not None:
                     refreshed_nested = await cls._refresh_nested_model(nested_model)
                     if refreshed_nested is not nested_model:
-                        # Update annotation to use refreshed nested model
                         current_annotation = refreshed_nested
-                        # Create new field_info with updated annotation (deep copy for safety)
                         current_field_info = copy.deepcopy(current_field_info)
                         current_field_info.annotation = current_annotation
 
             clean_fields[name] = (current_annotation, current_field_info)
 
-        # Dynamically create a model e.g. "SetupModel"
         m = create_model(
             f"{cls.__name__}",
-            __base__=BaseModel,
+            __base__=SetupModel,
             __config__=ConfigDict(arbitrary_types_allowed=True),
             **clean_fields,
         )
 
-        # Cache for non-forced requests
         if not force:
             cls._clean_model_cache[cache_key] = m
 
         return cast("type[SetupModelT]", m)
 
     @classmethod
-    def _get_base_model_type(cls, annotation: type | None) -> type[BaseModel] | None:
-        """Extract BaseModel type from an annotation.
-
-        Handles direct types, Optional, Union, list, dict, set, tuple, and other generics.
+    def _get_base_model_type(cls, annotation: "type | None") -> "type[BaseModel] | None":
+        """Extract BaseModel type from annotation.
 
         Args:
-            annotation: The type annotation to inspect.
+            annotation: Type annotation to inspect.
 
         Returns:
-            The BaseModel subclass if found, None otherwise.
+            BaseModel subclass if found, None otherwise.
         """
         if annotation is None:
             return None
 
-        # Direct BaseModel subclass check
         if isinstance(annotation, type) and issubclass(annotation, BaseModel):
             return annotation
 
@@ -166,43 +179,41 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
     def _extract_base_model_from_args(
         cls,
         origin: type,
-        args: tuple[type, ...],
-    ) -> type[BaseModel] | None:
+        args: "tuple[type, ...]",
+    ) -> "type[BaseModel] | None":
         """Extract BaseModel from generic type arguments.
 
         Args:
-            origin: The generic origin type (list, dict, Union, etc.).
-            args: The type arguments.
+            origin: Generic origin type (list, dict, Union, etc.).
+            args: Type arguments.
 
         Returns:
-            The BaseModel subclass if found, None otherwise.
+            BaseModel subclass if found, None otherwise.
         """
-        # Union/Optional: check each arg (supports both typing.Union and types.UnionType)
-        # Python 3.10+ uses types.UnionType for X | Y syntax
         if origin is typing.Union or origin is types.UnionType:
             return cls._find_base_model_in_args(args)
 
-        # list, set, frozenset: check first arg
         if origin in {list, set, frozenset} and args:
             return cls._check_base_model(args[0])
 
-        # dict: check value type (second arg)
         dict_value_index = 1
         if origin is dict and len(args) > dict_value_index:
             return cls._check_base_model(args[dict_value_index])
 
-        # tuple: check first non-ellipsis arg
         if origin is tuple:
             return cls._find_base_model_in_args(args, skip_ellipsis=True)
 
         return None
 
     @classmethod
-    def _check_base_model(cls, arg: type) -> type[BaseModel] | None:
+    def _check_base_model(cls, arg: type) -> "type[BaseModel] | None":
         """Check if arg is a BaseModel subclass.
 
+        Args:
+            arg: Type to check.
+
         Returns:
-            The BaseModel subclass if arg is one, None otherwise.
+            The type if it's a BaseModel subclass, None otherwise.
         """
         if isinstance(arg, type) and issubclass(arg, BaseModel):
             return arg
@@ -211,14 +222,18 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
     @classmethod
     def _find_base_model_in_args(
         cls,
-        args: tuple[type, ...],
+        args: "tuple[type, ...]",
         *,
         skip_ellipsis: bool = False,
-    ) -> type[BaseModel] | None:
-        """Find first BaseModel in args.
+    ) -> "type[BaseModel] | None":
+        """Find first BaseModel in type args.
+
+        Args:
+            args: Type arguments to search.
+            skip_ellipsis: Skip ellipsis in tuple types.
 
         Returns:
-            The first BaseModel subclass found, None otherwise.
+            First BaseModel subclass found, None otherwise.
         """
         for arg in args:
             if arg is type(None):
@@ -231,16 +246,14 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
         return None
 
     @classmethod
-    async def _refresh_nested_model(cls, model_cls: type[BaseModel]) -> type[BaseModel]:
+    async def _refresh_nested_model(cls, model_cls: "type[BaseModel]") -> "type[BaseModel]":
         """Refresh dynamic fields in a nested BaseModel.
 
-        Creates a new model class with all DynamicField metadata resolved.
-
         Args:
-            model_cls: The nested model class to refresh.
+            model_cls: Nested model class to refresh.
 
         Returns:
-            A new model class with refreshed fields, or the original if no changes.
+            New model class with refreshed fields, or original if no changes.
         """
         has_changes = False
         clean_fields: dict[str, Any] = {}
@@ -249,12 +262,10 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
             current_field_info = field_info
             current_annotation = field_info.annotation
 
-            # Check if field has DynamicField metadata
             if has_dynamic(field_info):
                 current_field_info = await cls._refresh_field_schema(name, field_info)
                 has_changes = True
 
-            # Recursively check nested models
             nested_model = cls._get_base_model_type(current_annotation)
             if nested_model is not None:
                 refreshed_nested = await cls._refresh_nested_model(nested_model)
@@ -269,8 +280,6 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
         if not has_changes:
             return model_cls
 
-        # Create new model with refreshed fields
-        logger.debug("Creating refreshed nested model for '%s'", model_cls.__name__)
         return create_model(
             model_cls.__name__,
             __base__=BaseModel,
@@ -279,132 +288,84 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
         )
 
     @classmethod
-    async def _refresh_field_schema(cls, field_name: str, field_info: FieldInfo) -> FieldInfo:
-        """Refresh a field's json_schema_extra with fresh values from dynamic providers.
-
-        This method calls all dynamic providers registered for a field (via Annotated
-        metadata) and creates a new FieldInfo with the resolved values. The original
-        field_info is not modified.
-
-        Uses `resolve_safe()` for structured error handling, allowing partial success
-        when some fetchers fail. Successfully resolved values are still applied.
+    async def _refresh_field_schema(cls, field_name: str, field_info: "FieldInfo") -> "FieldInfo":
+        """Refresh field's json_schema_extra with values from dynamic providers.
 
         Args:
-            field_name: The name of the field being refreshed (used for logging).
-            field_info: The original FieldInfo object containing the dynamic providers.
+            field_name: Name of field being refreshed.
+            field_info: Original FieldInfo with dynamic providers.
 
         Returns:
-            A new FieldInfo object with the same attributes as the original, but with
-            `json_schema_extra` containing resolved values and Dynamic metadata removed.
-
-        Note:
-            If all fetchers fail, the original field_info is returned unchanged.
-            If some fetchers fail, successfully resolved values are still applied.
+            New FieldInfo with resolved values, or original if all fetchers fail.
         """
         fetchers = get_fetchers(field_info)
 
         if not fetchers:
             return field_info
 
-        fetcher_keys = list(fetchers.keys())
-        logger.debug(
-            "Refreshing dynamic schema for field '%s' with fetchers: %s",
-            field_name,
-            fetcher_keys,
-            extra={"field_name": field_name, "fetcher_keys": fetcher_keys},
-        )
-
-        # Resolve all fetchers with structured error handling
         result = await resolve_safe(fetchers)
 
-        # Log any errors that occurred with full details
         if result.errors:
             for key, error in result.errors.items():
                 logger.warning(
-                    "Failed to resolve '%s' for field '%s': %s: %s",
+                    "Failed to resolve '%s' for field '%s': %s",
                     key,
                     field_name,
-                    type(error).__name__,
-                    str(error) or "(no message)",
-                    extra={
-                        "field_name": field_name,
-                        "fetcher_key": key,
-                        "error_type": type(error).__name__,
-                        "error_message": str(error),
-                        "error_repr": repr(error),
-                    },
+                    error,
                 )
 
-        # If no values were resolved, return original field_info
         if not result.values:
-            logger.warning(
-                "All fetchers failed for field '%s', keeping original",
-                field_name,
-            )
             return field_info
 
-        # Build new json_schema_extra with resolved values merged
         extra = field_info.json_schema_extra or {}
         new_extra = {**extra, **result.values} if isinstance(extra, dict) else result.values
 
-        # Create a deep copy of the FieldInfo to avoid shared mutable state
         new_field_info = copy.deepcopy(field_info)
         new_field_info.json_schema_extra = new_extra
-
-        # Remove Dynamic from metadata (it's been resolved)
-        new_metadata = [m for m in new_field_info.metadata if not isinstance(m, DynamicField)]
-        new_field_info.metadata = new_metadata
-
-        logger.debug(
-            "Refreshed '%s' with dynamic values: %s",
-            field_name,
-            list(result.values.keys()),
-        )
+        new_field_info.metadata = [m for m in new_field_info.metadata if not isinstance(m, DynamicField)]
 
         return new_field_info
 
-    def resolve_tool_references(self, registry: RegistryStrategy) -> None:
-        """Resolve all ToolReference fields in this setup instance.
-
-        Recursively walks through all fields, including nested BaseModel instances,
-        and resolves any ToolReference fields using the provided registry.
+    def resolve_tool_references(self, registry: "RegistryStrategy") -> None:
+        """Resolve all ToolReference fields recursively.
 
         Args:
-            registry: Registry service to use for resolution.
+            registry: Registry service for module discovery.
         """
+        logger.info("Starting resolve_tool_references")
         self._resolve_tool_references_recursive(self, registry)
+        logger.info("Finished resolve_tool_references")
 
     @classmethod
     def _resolve_tool_references_recursive(
         cls,
         model_instance: BaseModel,
-        registry: RegistryStrategy,
+        registry: "RegistryStrategy",
     ) -> None:
-        """Recursively resolve ToolReference fields in a model instance.
+        """Recursively resolve ToolReference fields in a model.
 
         Args:
-            model_instance: The model instance to process.
-            registry: Registry service to use for resolution.
+            model_instance: Model instance to process.
+            registry: Registry service for resolution.
         """
         for field_name, field_value in model_instance.__dict__.items():
             if field_value is None:
                 continue
-
             cls._resolve_field_value(field_name, field_value, registry)
 
     @classmethod
     def _resolve_field_value(
         cls,
         field_name: str,
-        field_value: BaseModel | ToolReference | list | dict,
-        registry: RegistryStrategy,
+        field_value: "BaseModel | ToolReference | list | dict",
+        registry: "RegistryStrategy",
     ) -> None:
-        """Resolve a single field value, handling different types.
+        """Resolve a single field value based on its type.
 
         Args:
-            field_name: Name of the field for logging.
-            field_value: The value to process.
-            registry: Registry service to use for resolution.
+            field_name: Name of the field.
+            field_value: Value to process.
+            registry: Registry service for resolution.
         """
         if isinstance(field_value, ToolReference):
             cls._resolve_single_tool_reference(field_name, field_value, registry)
@@ -420,40 +381,29 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
         cls,
         field_name: str,
         tool_ref: ToolReference,
-        registry: RegistryStrategy,
+        registry: "RegistryStrategy",
     ) -> None:
-        """Resolve a single ToolReference instance.
+        """Resolve a single ToolReference.
 
         Args:
             field_name: Name of the field for logging.
-            tool_ref: The ToolReference instance.
-            registry: Registry service to use for resolution.
+            tool_ref: ToolReference to resolve.
+            registry: Registry service for resolution.
         """
+        logger.info("Resolving ToolReference '%s' with module_id='%s'", field_name, tool_ref.config.module_id)
         try:
             tool_ref.resolve(registry)
-            logger.debug(
-                "Resolved ToolReference field '%s'",
-                field_name,
-                extra={"field_name": field_name, "mode": tool_ref.config.mode.value},
-            )
+            logger.info("Resolved ToolReference '%s' -> %s", field_name, tool_ref.module_info)
         except Exception:
-            logger.exception(
-                "Failed to resolve ToolReference field '%s'",
-                field_name,
-                extra={"field_name": field_name, "config": tool_ref.config.model_dump()},
-            )
+            logger.exception("Failed to resolve ToolReference '%s'", field_name)
 
     @classmethod
-    def _resolve_list_items(
-        cls,
-        items: list,
-        registry: RegistryStrategy,
-    ) -> None:
+    def _resolve_list_items(cls, items: list, registry: "RegistryStrategy") -> None:
         """Resolve ToolReference instances in a list.
 
         Args:
             items: List of items to process.
-            registry: Registry service to use for resolution.
+            registry: Registry service for resolution.
         """
         for item in items:
             if isinstance(item, ToolReference):
@@ -462,16 +412,12 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
                 cls._resolve_tool_references_recursive(item, registry)
 
     @classmethod
-    def _resolve_dict_values(
-        cls,
-        mapping: dict,
-        registry: RegistryStrategy,
-    ) -> None:
-        """Resolve ToolReference instances in a dict's values.
+    def _resolve_dict_values(cls, mapping: dict, registry: "RegistryStrategy") -> None:
+        """Resolve ToolReference instances in dict values.
 
         Args:
             mapping: Dict to process.
-            registry: Registry service to use for resolution.
+            registry: Registry service for resolution.
         """
         for item in mapping.values():
             if isinstance(item, ToolReference):
@@ -479,95 +425,60 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
             elif isinstance(item, BaseModel):
                 cls._resolve_tool_references_recursive(item, registry)
 
-    @property
-    def tool_cache(self) -> ToolCache:
-        """Get the tool cache for this setup instance.
-
-        Returns:
-            The ToolCache containing resolved tools.
-        """
-        return self._tool_cache
-
     def build_tool_cache(self) -> ToolCache:
-        """Build the tool cache from resolved ToolReferences.
-
-        This should be called during run_config_setup after resolve_tool_references.
-        It walks all ToolReference fields and adds resolved ones to the cache.
+        """Build tool cache from resolved ToolReferences, populating companion fields.
 
         Returns:
-            The populated ToolCache.
+            ToolCache with field names as keys and ModuleInfo as values.
         """
-        self._build_tool_cache_recursive(self)
-        logger.debug(
-            "Tool cache built",
-            extra={"slugs": self._tool_cache.list_slugs()},
-        )
-        return self._tool_cache
+        logger.info("Building tool cache")
+        cache = ToolCache()
+        self._build_tool_cache_recursive(self, cache)
+        logger.info("Tool cache built: %d entries", len(cache.entries))
+        return cache
 
-    def _build_tool_cache_recursive(self, model_instance: BaseModel) -> None:
-        """Recursively build tool cache from model fields.
+    def _build_tool_cache_recursive(self, model_instance: BaseModel, cache: ToolCache) -> None:  # noqa: C901, PLR0912
+        """Recursively build tool cache and populate companion fields.
 
         Args:
-            model_instance: The model instance to process.
+            model_instance: Model instance to process.
+            cache: ToolCache to populate.
         """
         for field_name, field_value in model_instance.__dict__.items():
             if field_value is None:
                 continue
 
-            if isinstance(field_value, ToolReference):
-                self._add_tool_reference_to_cache(field_name, field_value)
+            if isinstance(field_value, ToolReference) and field_value.module_info:
+                cache_field_name = f"{field_name}_cache"
+                if cache_field_name in type(model_instance).model_fields:
+                    setattr(model_instance, cache_field_name, field_value.module_info)
+                cache.add(field_value.module_info.module_id, field_value.module_info)
+                logger.debug("Added tool to cache: %s", field_value.module_info.module_id)
             elif isinstance(field_value, BaseModel):
-                self._build_tool_cache_recursive(field_value)
+                self._build_tool_cache_recursive(field_value, cache)
             elif isinstance(field_value, list):
-                self._build_tool_cache_from_list(field_value)
+                cache_field_name = f"{field_name}_cache"
+                cached_infos = getattr(model_instance, cache_field_name, None) or []
+                resolved_infos: list[ModuleInfo] = []
+
+                for idx, item in enumerate(field_value):
+                    if isinstance(item, ToolReference):
+                        # Use resolved info or fallback to cached
+                        module_info = item.module_info or (cached_infos[idx] if idx < len(cached_infos) else None)
+                        if module_info:
+                            resolved_infos.append(module_info)
+                            cache.add(module_info.module_id, module_info)
+                            logger.debug("Added tool to cache: %s", module_info.module_id)
+                    elif isinstance(item, BaseModel):
+                        self._build_tool_cache_recursive(item, cache)
+
+                # Update companion field with resolved infos
+                if resolved_infos and cache_field_name in type(model_instance).model_fields:
+                    setattr(model_instance, cache_field_name, resolved_infos)
             elif isinstance(field_value, dict):
-                self._build_tool_cache_from_dict(field_value)
-
-    def _add_tool_reference_to_cache(self, field_name: str, tool_ref: ToolReference) -> None:
-        """Add a resolved ToolReference to the cache.
-
-        Args:
-            field_name: Name of the field (used as fallback slug).
-            tool_ref: The ToolReference instance.
-        """
-        if tool_ref.module_info:
-            # Use slug from config, or field name as fallback
-            slug = tool_ref.slug or field_name
-            self._tool_cache.add(slug, tool_ref.module_info)
-
-    def _build_tool_cache_from_list(self, items: list) -> None:
-        """Build tool cache from list items.
-
-        Args:
-            items: List of items to process.
-        """
-        for idx, item in enumerate(items):
-            if isinstance(item, ToolReference):
-                self._add_tool_reference_to_cache(f"list_{idx}", item)
-            elif isinstance(item, BaseModel):
-                self._build_tool_cache_recursive(item)
-
-    def _build_tool_cache_from_dict(self, mapping: dict) -> None:
-        """Build tool cache from dict values.
-
-        Args:
-            mapping: Dict to process.
-        """
-        for key, item in mapping.items():
-            if isinstance(item, ToolReference):
-                self._add_tool_reference_to_cache(str(key), item)
-            elif isinstance(item, BaseModel):
-                self._build_tool_cache_recursive(item)
-
-    def validate_tool_cache(self, registry: RegistryStrategy) -> list[str]:
-        """Validate all cached tools are still available.
-
-        Should be called during initialize to ensure tools are still valid.
-
-        Args:
-            registry: Registry to validate against.
-
-        Returns:
-            List of slugs that are no longer valid.
-        """
-        return self._tool_cache.validate(registry)
+                for item in field_value.values():
+                    if isinstance(item, ToolReference) and item.module_info:
+                        cache.add(item.module_info.module_id, item.module_info)
+                        logger.debug("Added tool to cache: %s", item.module_info.module_id)
+                    elif isinstance(item, BaseModel):
+                        self._build_tool_cache_recursive(item, cache)
