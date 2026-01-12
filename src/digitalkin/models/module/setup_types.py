@@ -437,7 +437,7 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
         logger.info("Tool cache built: %d entries", len(cache.entries))
         return cache
 
-    def _build_tool_cache_recursive(self, model_instance: BaseModel, cache: ToolCache) -> None:  # noqa: C901, PLR0912
+    def _build_tool_cache_recursive(self, model_instance: BaseModel, cache: ToolCache) -> None:  # noqa: C901
         """Recursively build tool cache and populate companion fields.
 
         Args:
@@ -447,13 +447,16 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
         for field_name, field_value in model_instance.__dict__.items():
             if field_value is None:
                 continue
-
-            if isinstance(field_value, ToolReference) and field_value.module_info:
+            if isinstance(field_value, ToolReference):
                 cache_field_name = f"{field_name}_cache"
-                if cache_field_name in type(model_instance).model_fields:
-                    setattr(model_instance, cache_field_name, field_value.module_info)
-                cache.add(field_value.module_info.module_id, field_value.module_info)
-                logger.debug("Added tool to cache: %s", field_value.module_info.module_id)
+
+                cached_info = getattr(model_instance, cache_field_name, None)
+                module_info = field_value.module_info or cached_info
+                if module_info:
+                    if not cached_info:
+                        setattr(model_instance, cache_field_name, module_info)
+                    cache.add(module_info.module_id, module_info)
+                    logger.debug("Added tool to cache: %s", module_info.module_id)
             elif isinstance(field_value, BaseModel):
                 self._build_tool_cache_recursive(field_value, cache)
             elif isinstance(field_value, list):
@@ -473,12 +476,5 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
                         self._build_tool_cache_recursive(item, cache)
 
                 # Update companion field with resolved infos
-                if resolved_infos and cache_field_name in type(model_instance).model_fields:
+                if resolved_infos:
                     setattr(model_instance, cache_field_name, resolved_infos)
-            elif isinstance(field_value, dict):
-                for item in field_value.values():
-                    if isinstance(item, ToolReference) and item.module_info:
-                        cache.add(item.module_info.module_id, item.module_info)
-                        logger.debug("Added tool to cache: %s", item.module_info.module_id)
-                    elif isinstance(item, BaseModel):
-                        self._build_tool_cache_recursive(item, cache)
