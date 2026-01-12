@@ -191,24 +191,24 @@ class ClientConfig(ChannelConfig):
             # Ensures rapid recovery for brief network glitches
             ("grpc.min_reconnect_backoff_ms", 500),
             # === Keepalive Settings (Detect Dead Connections) ===
-            # Send keepalive ping every 30 seconds when connection is idle
+            # Send keepalive ping every 60 seconds when connection is idle
             # Proactively detects dead connections before RPC calls fail
-            ("grpc.keepalive_time_ms", 30000),
-            # Wait 10 seconds for keepalive response before declaring connection dead
+            ("grpc.keepalive_time_ms", 60000),
+            # Wait 20 seconds for keepalive response before declaring connection dead
             # Triggers reconnection (with DNS re-resolution) if pong not received
-            ("grpc.keepalive_timeout_ms", 10000),
+            ("grpc.keepalive_timeout_ms", 20000),
             # Send keepalive pings even when no RPCs are in flight
             # Essential for long-lived connections that may sit idle
             ("grpc.keepalive_permit_without_calls", True),
-            # Minimum interval between HTTP/2 pings (10 seconds)
-            # Must be >= keepalive_time_ms / 2 to avoid server rejection
-            ("grpc.http2.min_time_between_pings_ms", 10000),
+            # Minimum interval between HTTP/2 pings (30 seconds)
+            # Must be >= server's grpc.http2.min_ping_interval_without_data_ms (10s)
+            ("grpc.http2.min_time_between_pings_ms", 30000),
             # === Retry Configuration ===
             # Enable automatic retry for failed RPCs (1 = enabled)
             # Works with retryable status codes: UNAVAILABLE, RESOURCE_EXHAUSTED
             ("grpc.enable_retries", 1),
         ],
-        description="Resilient gRPC channel options with DNS re-resolution and keepalive",
+        description="Resilient gRPC channel options with DNS re-resolution, keepalive, and retries",
     )
 
     @field_validator("credentials")
