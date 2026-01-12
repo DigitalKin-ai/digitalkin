@@ -144,12 +144,15 @@ class TestServerConfig:
         if config.credentials is not None:
             pytest.fail(f"Expected default credentials to be None, got {config.credentials}")
 
-        # Check server_options
-        if config.server_options != [
-            ("grpc.max_receive_message_length", 100 * 1024 * 1024),  # 100MB
-            ("grpc.max_send_message_length", 100 * 1024 * 1024),  # 100MB
-        ]:
-            pytest.fail(f"Expected default server_options to match 100MB limits, got {config.server_options}")
+        # Check server_options (message limits + keepalive support)
+        expected_server_options = [
+            ("grpc.max_receive_message_length", 100 * 1024 * 1024),
+            ("grpc.max_send_message_length", 100 * 1024 * 1024),
+            ("grpc.keepalive_permit_without_calls", True),
+            ("grpc.http2.min_ping_interval_without_data_ms", 10000),
+        ]
+        if config.server_options != expected_server_options:
+            pytest.fail(f"Expected default server_options to match resilient defaults, got {config.server_options}")
 
         # Check enable_reflection
         if config.enable_reflection is not True:

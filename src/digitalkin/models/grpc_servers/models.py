@@ -175,10 +175,40 @@ class ClientConfig(ChannelConfig):
     credentials: ClientCredentials | None = Field(None, description="Client credentials for secure mode")
     channel_options: list[tuple[str, Any]] = Field(
         default_factory=lambda: [
-            ("grpc.max_receive_message_length", 100 * 1024 * 1024),  # 100MB
-            ("grpc.max_send_message_length", 100 * 1024 * 1024),  # 100MB
+            ("grpc.max_receive_message_length", 100 * 1024 * 1024),
+            ("grpc.max_send_message_length", 100 * 1024 * 1024),
+            # === DNS Re-resolution (Critical for Container Environments) ===
+            # Minimum milliseconds between DNS re-resolution attempts (500 ms)
+            # When connection fails, gRPC will re-query DNS after this interval
+            # Solves: Container restarts with new IPs causing "No route to host"
+            ("grpc.dns_min_time_between_resolutions_ms", 500),
+            # Initial delay before first reconnection attempt (1 second)
+            ("grpc.initial_reconnect_backoff_ms", 1000),
+            # Maximum delay between reconnection attempts (10 seconds)
+            # Prevents overwhelming the network during extended outages
+            ("grpc.max_reconnect_backoff_ms", 10000),
+            # Minimum delay between reconnection attempts (500ms)
+            # Ensures rapid recovery for brief network glitches
+            ("grpc.min_reconnect_backoff_ms", 500),
+            # === Keepalive Settings (Detect Dead Connections) ===
+            # Send keepalive ping every 30 seconds when connection is idle
+            # Proactively detects dead connections before RPC calls fail
+            ("grpc.keepalive_time_ms", 30000),
+            # Wait 10 seconds for keepalive response before declaring connection dead
+            # Triggers reconnection (with DNS re-resolution) if pong not received
+            ("grpc.keepalive_timeout_ms", 10000),
+            # Send keepalive pings even when no RPCs are in flight
+            # Essential for long-lived connections that may sit idle
+            ("grpc.keepalive_permit_without_calls", True),
+            # Minimum interval between HTTP/2 pings (10 seconds)
+            # Must be >= keepalive_time_ms / 2 to avoid server rejection
+            ("grpc.http2.min_time_between_pings_ms", 10000),
+            # === Retry Configuration ===
+            # Enable automatic retry for failed RPCs (1 = enabled)
+            # Works with retryable status codes: UNAVAILABLE, RESOURCE_EXHAUSTED
+            ("grpc.enable_retries", 1),
         ],
-        description="Additional channel options",
+        description="Resilient gRPC channel options with DNS re-resolution and keepalive",
     )
 
     @field_validator("credentials")
@@ -223,10 +253,18 @@ class ServerConfig(ChannelConfig):
     credentials: ServerCredentials | None = Field(None, description="Server credentials for secure mode")
     server_options: list[tuple[str, Any]] = Field(
         default_factory=lambda: [
-            ("grpc.max_receive_message_length", 100 * 1024 * 1024),  # 100MB
-            ("grpc.max_send_message_length", 100 * 1024 * 1024),  # 100MB
+            ("grpc.max_receive_message_length", 100 * 1024 * 1024),
+            ("grpc.max_send_message_length", 100 * 1024 * 1024),
+            # === Keepalive Permission (Required for Client Keepalive) ===
+            # Allow clients to send keepalive pings without active RPCs
+            # Without this, server rejects client keepalives with GOAWAY
+            ("grpc.keepalive_permit_without_calls", True),
+            # Minimum interval server allows between client pings (10 seconds)
+            # Prevents "too_many_pings" GOAWAY errors
+            # Must match or be less than client's http2.min_time_between_pings_ms
+            ("grpc.http2.min_ping_interval_without_data_ms", 10000),
         ],
-        description="Additional server options",
+        description="gRPC server options with keepalive support",
     )
     enable_reflection: bool = Field(default=True, description="Enable reflection for the server")
     enable_health_check: bool = Field(default=True, description="Enable health check service")
