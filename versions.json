@@ -17,6 +17,11 @@
     "aliases": []
   },
   {
+    "version": "feat-setup_schema",
+    "title": "feat-setup_schema",
+    "aliases": []
+  },
+  {
     "version": "feat-registry-client",
     "title": "feat-registry-client",
     "aliases": []
