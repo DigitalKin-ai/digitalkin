@@ -27,17 +27,17 @@ tasks:
   dev-deps:
     desc: "Install development dependencies"
     cmds:
-      - uv pip install -e ".[taskiq]" --group dev --group docs
+      - uv sync --extra taskiq --group dev --group docs # uv pip install -e ".[taskiq]" --group dev --group docs
 
   examples-deps:
     desc: "Install examples dependencies"
     cmds:
-      - uv pip install --group examples
+      - uv sync --group examples
 
   tests-deps:
     desc: "Install tests dependencies"
     cmds:
-      - uv pip install --group tests
+      - uv sync --group tests
 
   setup-pre-commit:
     desc: "Install pre-commit hooks"

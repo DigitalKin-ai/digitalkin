@@ -140,10 +140,15 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
 
             clean_fields[name] = (current_annotation, current_field_info)
 
+        root_extra = cls.model_config.get("json_schema_extra", {})
+
         m = create_model(
             f"{cls.__name__}",
             __base__=SetupModel,
-            __config__=ConfigDict(arbitrary_types_allowed=True),
+            __config__=ConfigDict(
+                arbitrary_types_allowed=True,
+                json_schema_extra=copy.deepcopy(root_extra) if isinstance(root_extra, dict) else root_extra,
+            ),
             **clean_fields,
         )
 
@@ -280,10 +285,15 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
         if not has_changes:
             return model_cls
 
+        root_extra = cls.model_config.get("json_schema_extra", {})
+
         return create_model(
             model_cls.__name__,
             __base__=BaseModel,
-            __config__=ConfigDict(arbitrary_types_allowed=True),
+            __config__=ConfigDict(
+                arbitrary_types_allowed=True,
+                json_schema_extra=copy.deepcopy(root_extra) if isinstance(root_extra, dict) else root_extra,
+            ),
             **clean_fields,
         )
 

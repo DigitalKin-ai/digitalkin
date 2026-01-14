@@ -22,8 +22,8 @@ from digitalkin.models.module.utility import EndOfStreamOutput, ModuleStartInfoO
 from digitalkin.models.services.storage import BaseRole
 from digitalkin.modules.trigger_handler import TriggerHandler
 from digitalkin.services.services_config import ServicesConfig, ServicesStrategy
-from digitalkin.utils.llm_ready_schema import llm_ready_schema
 from digitalkin.utils.package_discover import ModuleDiscoverer
+from digitalkin.utils.schema_splitter import SchemaSplitter
 
 
 class BaseModule(  # noqa: PLR0904
@@ -137,7 +137,8 @@ class BaseModule(  # noqa: PLR0904
         """
         if cls.secret_format is not None:
             if llm_format:
-                return json.dumps(llm_ready_schema(cls.secret_format), indent=2)
+                result_json, result_ui = SchemaSplitter.split(cls.secret_format.model_json_schema())
+                return json.dumps({"json_schema": result_json, "ui_schema": result_ui}, indent=2)
             return json.dumps(cls.secret_format.model_json_schema(), indent=2)
         msg = f"{cls.__name__}' class does not define a 'secret_format'."
         raise NotImplementedError(msg)
@@ -163,7 +164,8 @@ class BaseModule(  # noqa: PLR0904
         extended_model = UtilitySchemaExtender.create_extended_input_model(cls.input_format)
 
         if llm_format:
-            return json.dumps(llm_ready_schema(extended_model), indent=2)
+            result_json, result_ui = SchemaSplitter.split(extended_model.model_json_schema())
+            return json.dumps({"json_schema": result_json, "ui_schema": result_ui}, indent=2)
         return json.dumps(extended_model.model_json_schema(), indent=2)
 
     @classmethod
@@ -187,7 +189,8 @@ class BaseModule(  # noqa: PLR0904
         extended_model = UtilitySchemaExtender.create_extended_output_model(cls.output_format)
 
         if llm_format:
-            return json.dumps(llm_ready_schema(extended_model), indent=2)
+            result_json, result_ui = SchemaSplitter.split(extended_model.model_json_schema())
+            return json.dumps({"json_schema": result_json, "ui_schema": result_ui}, indent=2)
         return json.dumps(extended_model.model_json_schema(), indent=2)
 
     @classmethod
@@ -215,7 +218,8 @@ class BaseModule(  # noqa: PLR0904
         if cls.setup_format is not None:
             setup_format = await cls.setup_format.get_clean_model(config_fields=True, hidden_fields=False, force=True)
             if llm_format:
-                return json.dumps(llm_ready_schema(setup_format), indent=2)
+                result_json, result_ui = SchemaSplitter.split(setup_format.model_json_schema())
+                return json.dumps({"json_schema": result_json, "ui_schema": result_ui}, indent=2)
             return json.dumps(setup_format.model_json_schema(), indent=2)
         msg = "'%s' class does not define an 'config_setup_format'."
         raise NotImplementedError(msg)
@@ -244,7 +248,8 @@ class BaseModule(  # noqa: PLR0904
         if cls.setup_format is not None:
             setup_format = await cls.setup_format.get_clean_model(config_fields=False, hidden_fields=True, force=True)
             if llm_format:
-                return json.dumps(llm_ready_schema(setup_format), indent=2)
+                result_json, result_ui = SchemaSplitter.split(setup_format.model_json_schema())
+                return json.dumps({"json_schema": result_json, "ui_schema": result_ui}, indent=2)
             return json.dumps(setup_format.model_json_schema(), indent=2)
         msg = "'%s' class does not define an 'setup_format'."
         raise NotImplementedError(msg)
