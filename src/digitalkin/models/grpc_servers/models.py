@@ -65,6 +65,42 @@ class ServerCredentials(BaseModel):
         return v
 
 
+class RetryPolicy(BaseModel):
+    """gRPC retry policy configuration for resilient connections.
+
+    Attributes:
+        max_attempts: Maximum retry attempts including the original call
+        initial_backoff: Initial backoff duration (e.g., "0.1s")
+        max_backoff: Maximum backoff duration (e.g., "10s")
+        backoff_multiplier: Multiplier for exponential backoff
+        retryable_status_codes: gRPC status codes that trigger retry
+    """
+
+    max_attempts: int = Field(default=5, ge=1, le=10, description="Maximum retry attempts including the original call")
+    initial_backoff: str = Field(default="0.1s", description="Initial backoff duration (e.g., '0.1s')")
+    max_backoff: str = Field(default="10s", description="Maximum backoff duration (e.g., '10s')")
+    backoff_multiplier: float = Field(default=2.0, ge=1.0, description="Multiplier for exponential backoff")
+    retryable_status_codes: list[str] = Field(
+        default_factory=lambda: ["UNAVAILABLE", "RESOURCE_EXHAUSTED"],
+        description="gRPC status codes that trigger retry",
+    )
+
+    model_config = {"extra": "forbid", "frozen": True}
+
+    def to_service_config_json(self) -> str:
+        """Serialize to gRPC service config JSON string.
+
+        Returns:
+            JSON string for grpc.service_config channel option.
+        """
+        codes = "[" + ",".join(f'"{c}"' for c in self.retryable_status_codes) + "]"
+        return (
+            f'{{"methodConfig":[{{"name":[{{}}],"retryPolicy":{{"maxAttempts":{self.max_attempts},'
+            f'"initialBackoff":"{self.initial_backoff}","maxBackoff":"{self.max_backoff}",'
+            f'"backoffMultiplier":{self.backoff_multiplier},"retryableStatusCodes":{codes}}}}}]}}'
+        )
+
+
 class ClientCredentials(BaseModel):
     """Model for client credentials in secure mode.
 
@@ -170,9 +206,11 @@ class ClientConfig(ChannelConfig):
         security: Security mode (secure/insecure)
         credentials: Client credentials for secure mode
         channel_options: Additional channel options
+        retry_policy: Retry policy for failed RPCs
     """
 
     credentials: ClientCredentials | None = Field(None, description="Client credentials for secure mode")
+    retry_policy: RetryPolicy = Field(default_factory=lambda: RetryPolicy(), description="Retry policy for failed RPCs")  # noqa: PLW0108
     channel_options: list[tuple[str, Any]] = Field(
         default_factory=lambda: [
             ("grpc.max_receive_message_length", 100 * 1024 * 1024),
@@ -233,6 +271,15 @@ class ClientConfig(ChannelConfig):
             msg = "Credentials must be provided when using secure mode"
             raise ConfigurationError(msg)
         return v
+
+    @property
+    def grpc_options(self) -> list[tuple[str, Any]]:
+        """Get channel options with retry policy service config.
+
+        Returns:
+            Full list of gRPC channel options.
+        """
+        return [*self.channel_options, ("grpc.service_config", self.retry_policy.to_service_config_json())]
 
 
 class ServerConfig(ChannelConfig):
