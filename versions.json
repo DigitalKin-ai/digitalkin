@@ -54,11 +54,16 @@
     ]
   },
   {
-    "version": "0.3.2.dev8",
-    "title": "0.3.2.dev8",
+    "version": "0.3.2.dev9",
+    "title": "0.3.2.dev9",
     "aliases": [
       "latest"
     ]
+  },
+  {
+    "version": "0.3.2.dev8",
+    "title": "0.3.2.dev8",
+    "aliases": []
   },
   {
     "version": "0.3.2.dev7",
