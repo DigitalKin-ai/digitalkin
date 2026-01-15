@@ -20,9 +20,9 @@ class ToolReferenceConfig(BaseModel):
     """Tool selection configuration. The module_id serves as both identifier and cache key."""
 
     mode: ToolSelectionMode = Field(default=ToolSelectionMode.FIXED)
-    module_id: str | None = Field(default=None)
-    tag: str | None = Field(default=None)
-    organization_id: str | None = Field(default=None)
+    module_id: str = Field(default="")
+    tag: str = Field(default="")
+    organization_id: str = Field(default="")
 
     @model_validator(mode="after")
     def validate_config(self) -> "ToolReferenceConfig":
@@ -50,7 +50,7 @@ class ToolReference(BaseModel):
     _cached_info: ModuleInfo | None = PrivateAttr(default=None)
 
     @property
-    def slug(self) -> str | None:
+    def slug(self) -> str:
         """Cache key (same as module_id).
 
         Returns:
@@ -59,11 +59,11 @@ class ToolReference(BaseModel):
         return self.config.module_id
 
     @property
-    def module_id(self) -> str | None:
+    def module_id(self) -> str:
         """Module identifier.
 
         Returns:
-            Module ID or None if not set.
+            Module ID or empty string if not set.
         """
         return self.config.module_id
 
