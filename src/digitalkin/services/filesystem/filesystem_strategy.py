@@ -33,7 +33,9 @@ class FilesystemRecord(BaseModel):
 class FileFilter(BaseModel):
     """Filter criteria for querying files."""
 
-    context: str = Field(default="unknown", description="The context of the files (mission or setup)")
+    context: Literal["mission", "setup"] = Field(
+        default="mission", description="The context of the files (mission or setup)"
+    )
     names: list[str] | None = Field(default=None, description="Filter by file names (exact matches)")
     file_ids: list[str] | None = Field(default=None, description="Filter by file IDs")
     file_types: (
@@ -131,7 +133,7 @@ class FilesystemStrategy(BaseStrategy, ABC):
     def get_file(
         self,
         file_id: str,
-        context: str = "mission",
+        context: Literal["mission", "setup"] = "mission",
         *,
         include_content: bool = False,
     ) -> FilesystemRecord:

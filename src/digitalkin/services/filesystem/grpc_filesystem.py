@@ -162,7 +162,7 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper, GrpcErrorHandlerMixi
     def get_file(
         self,
         file_id: str,
-        context: str = "mission",
+        context: Literal["mission", "setup"] = "mission",
         *,
         include_content: bool = False,
     ) -> FilesystemRecord:
@@ -298,7 +298,6 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper, GrpcErrorHandlerMixi
         Returns:
             tuple[list[FilesystemRecord], int]: List of files and total count
         """
-        context_id = "unspecified"
         match filters.context:
             case "setup":
                 context_id = self.setup_id
