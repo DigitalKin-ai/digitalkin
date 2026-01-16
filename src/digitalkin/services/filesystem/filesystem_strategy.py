@@ -33,9 +33,7 @@ class FilesystemRecord(BaseModel):
 class FileFilter(BaseModel):
     """Filter criteria for querying files."""
 
-    context: Literal["mission", "setup"] = Field(
-        default="mission", description="The context of the files (mission or setup)"
-    )
+    context: str = Field(default="unknown", description="The context of the files (mission or setup)")
     names: list[str] | None = Field(default=None, description="Filter by file names (exact matches)")
     file_ids: list[str] | None = Field(default=None, description="Filter by file IDs")
     file_types: (
