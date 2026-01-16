@@ -212,7 +212,7 @@ class DefaultFilesystem(FilesystemStrategy):
     def get_file(
         self,
         file_id: str,
-        context: Literal["mission", "setup"] = "mission",  # noqa: ARG002
+        context: str = "mission",  # noqa: ARG002
         *,
         include_content: bool = False,
     ) -> FilesystemRecord:

@@ -131,7 +131,7 @@ class FilesystemStrategy(BaseStrategy, ABC):
     def get_file(
         self,
         file_id: str,
-        context: Literal["mission", "setup"] = "mission",
+        context: str = "mission",
         *,
         include_content: bool = False,
     ) -> FilesystemRecord:
