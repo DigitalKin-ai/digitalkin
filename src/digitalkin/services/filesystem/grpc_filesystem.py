@@ -97,7 +97,7 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper, GrpcErrorHandlerMixi
             case "mission":
                 context_id = self.mission_id
         return filesystem_pb2.FileFilter(
-            **filters.model_dump(exclude={"file_types", "status"}),
+            **filters.model_dump(exclude={"file_types", "status", "context"}),
             file_types=[self._file_type_to_enum(file_type) for file_type in filters.file_types]
             if filters.file_types
             else None,
