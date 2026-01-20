@@ -2,6 +2,7 @@
 
 from digitalkin.utils.dynamic_schema import (
     DEFAULT_TIMEOUT,
+    Dynamic,
     DynamicField,
     Fetcher,
     ResolveResult,
@@ -11,9 +12,6 @@ from digitalkin.utils.dynamic_schema import (
     resolve,
     resolve_safe,
 )
-
-# Alias for cleaner API: `Dynamic` is shorter than `DynamicField`
-Dynamic = DynamicField
 
 __all__ = [
     "DEFAULT_TIMEOUT",

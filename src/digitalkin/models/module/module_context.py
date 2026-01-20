@@ -8,7 +8,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from digitalkin.logger import logger
-from digitalkin.models.module.tool_cache import ToolCache
+from digitalkin.models.module.tool_cache import ToolCache, ToolDefinition, ToolParameter
 from digitalkin.services.agent.agent_strategy import AgentStrategy
 from digitalkin.services.communication.communication_strategy import CommunicationStrategy
 from digitalkin.services.cost.cost_strategy import CostStrategy
@@ -227,63 +227,113 @@ class ModuleContext:
             llm_format=llm_format,
         )
 
-    async def create_openai_style_tool(self, tool_name: str) -> dict[str, Any] | None:
-        """Create OpenAI-style function calling schema for a tool.
+    async def create_openai_style_tools(self, tool_name: str) -> list[dict[str, Any]]:
+        """Create OpenAI-style function calling schemas for a tool module.
 
-        Uses tool cache (fast path) with registry fallback. Fetches the tool's
-        input schema and wraps it in OpenAI function calling format.
+        Uses tool cache (fast path) with registry fallback. Returns one schema
+        per ToolDefinition (protocol) in the module.
 
         Args:
             tool_name: Module ID to look up (checks cache first, then registry).
 
         Returns:
-            OpenAI-style tool schema if found, None otherwise.
+            List of OpenAI-style tool schemas, one per protocol. Empty if not found.
         """
-        module_info = self.tool_cache.get(tool_name, registry=self.registry)
-        if not module_info:
-            return None
-
-        schemas = await self.communication.get_module_schemas(
-            module_address=module_info.address,
-            module_port=module_info.port,
-            llm_format=True,
+        tool_module_info = await self.tool_cache.get(
+            tool_name, registry=self.registry, communication=self.communication
         )
+        if not tool_module_info:
+            return []
 
-        return {
-            "type": "function",
-            "function": {
-                "module_id": module_info.module_id,
-                "name": module_info.name or "undefined",
-                "description": module_info.documentation or "",
-                "parameters": schemas["input"],
-            },
-        }
+        return [
+            {
+                "type": "function",
+                "function": {
+                    "module_id": tool_module_info.module_id,
+                    "toolkit_name": tool_module_info.name or "undefined",
+                    "name": tool_def.name,
+                    "description": tool_def.description,
+                    "parameters": ModuleContext._build_parameters_schema(tool_def.parameters),
+                },
+            }
+            for tool_def in tool_module_info.tools
+        ]
 
-    def create_tool_function(
-        self,
-        module_id: str,
-    ) -> Callable[..., AsyncGenerator[dict, None]] | None:
-        """Create async generator function for a tool.
-
-        Returns an async generator that calls the remote tool module via gRPC
-        and yields each response as it arrives until end_of_stream or gRPC ends.
+    @staticmethod
+    def _build_parameters_schema(params: list[ToolParameter]) -> dict[str, Any]:
+        """Convert ToolParameter list to JSON Schema.
 
         Args:
-            module_id: Module ID to look up (checks cache first, then registry).
+            params: List of tool parameters.
 
         Returns:
-            Async generator function if tool found, None otherwise.
+            JSON Schema object with properties and required fields.
         """
-        module_info = self.tool_cache.get(module_id, registry=self.registry)
-        if not module_info:
-            return None
+        return {
+            "type": "object",
+            "properties": {p.name: {"type": p.type, "description": p.description or ""} for p in params},
+            "required": [p.name for p in params if p.required],
+        }
+
+    def create_tool_functions(
+        self,
+        module_id: str,
+    ) -> list[tuple[ToolDefinition, Callable[..., AsyncGenerator[dict, None]]]]:
+        """Create tool functions for all protocols in a tool module.
+
+        Returns an async generator per ToolDefinition that calls the remote tool
+        module via gRPC with the protocol auto-injected.
+
+        This method only uses the tool cache (no registry fallback). Use this
+        in sync contexts like __init__ methods.
+
+        Args:
+            module_id: Module ID to look up in cache.
+
+        Returns:
+            List of (ToolDefinition, async_generator_function) tuples. Empty if not found.
+        """
+        tool_module_info = self.tool_cache.entries.get(module_id)
+        if not tool_module_info:
+            return []
 
         communication = self.communication
         session = self.session
-        address = module_info.address
-        port = module_info.port
+        address = tool_module_info.address
+        port = tool_module_info.port
+
+        result = []
+        for tool_def in tool_module_info.tools:
+            # Capture tool_def in closure via separate method
+            fn = ModuleContext._create_single_tool_function(communication, session, address, port, tool_def)
+            result.append((tool_def, fn))
+
+        return result
+
+    @staticmethod
+    def _create_single_tool_function(
+        communication: CommunicationStrategy,
+        session: Session,
+        address: str,
+        port: int,
+        tool_def: ToolDefinition,
+    ) -> Callable[..., AsyncGenerator[dict, None]]:
+        """Create a single tool function for a specific protocol.
+
+        Args:
+            communication: Communication strategy for gRPC calls.
+            session: Current session with setup_id and mission_id.
+            address: Module address.
+            port: Module port.
+            tool_def: Tool definition with protocol name.
+
+        Returns:
+            Async generator function that calls the module with protocol injected.
+        """
+        protocol = tool_def.name
 
         async def tool_function(**kwargs: Any) -> AsyncGenerator[dict, None]:  # noqa: ANN401
+            kwargs["protocol"] = protocol
             wrapped_input = {"root": kwargs}
             async for response in communication.call_module(
                 module_address=address,
@@ -294,7 +344,7 @@ class ModuleContext:
             ):
                 yield response
 
-        tool_function.__name__ = module_info.name or module_info.module_id
-        tool_function.__doc__ = module_info.documentation or ""
+        tool_function.__name__ = tool_def.name
+        tool_function.__doc__ = tool_def.description
 
         return tool_function

@@ -6,6 +6,12 @@ from digitalkin.models.module.module_types import (
     DataTrigger,
     SetupModel,
 )
+from digitalkin.models.module.tool_cache import (
+    ToolCache,
+    ToolDefinition,
+    ToolModuleInfo,
+    ToolParameter,
+)
 from digitalkin.models.module.tool_reference import (
     ToolReference,
     ToolReferenceConfig,
@@ -25,6 +31,10 @@ __all__ = [
     "ModuleContext",
     "ModuleStartInfoOutput",
     "SetupModel",
+    "ToolCache",
+    "ToolDefinition",
+    "ToolModuleInfo",
+    "ToolParameter",
     "ToolReference",
     "ToolReferenceConfig",
     "ToolSelectionMode",

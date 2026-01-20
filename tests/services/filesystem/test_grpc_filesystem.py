@@ -991,6 +991,7 @@ class TestFilesystemEdgeCases:
 
         # Delete the file (soft delete)
         filters = FileFilter(
+            context="setup",
             file_types=[file_metadata["file_type"]],
             status="ACTIVE",
         )
@@ -1002,7 +1003,13 @@ class TestFilesystemEdgeCases:
             force=False,
         )
 
-        filters_proto = client._filter_to_proto(filters)
+        # Build proto filter manually to avoid context ID conversion
+        # The mock servicer expects raw context ("setup") not ID ("setup:1")
+        filters_proto = filesystem_pb2.FileFilter(
+            context=file_metadata["context"],
+            file_types=[GrpcFilesystem._file_type_to_enum(file_metadata["file_type"])],
+            status=GrpcFilesystem._file_status_to_enum("ACTIVE"),
+        )
 
         method_desc = service_desc.methods_by_name["DeleteFiles"]
         _, _, rpc = test_channel.take_unary_unary(method_desc)

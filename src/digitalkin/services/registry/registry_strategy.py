@@ -6,6 +6,7 @@ from typing import Any
 from digitalkin.models.services.registry import (
     ModuleInfo,
     RegistryModuleStatus,
+    SetupInfo,
 )
 from digitalkin.services.base_strategy import BaseStrategy
 from digitalkin.services.registry.registry_models import ModuleStatusInfo
@@ -95,4 +96,9 @@ class RegistryStrategy(BaseStrategy, ABC):
         Raises:
             RegistryModuleNotFoundError: If module not found.
         """
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_setup(self, setup_id: str) -> SetupInfo | None:
+        """Get setup info."""
         raise NotImplementedError

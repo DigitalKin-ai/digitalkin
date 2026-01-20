@@ -22,6 +22,9 @@ from digitalkin.models.services.registry import (
     ModuleInfo,
     RegistryModuleStatus,
     RegistryModuleType,
+    RegistrySetupStatus,
+    RegistryVisibility,
+    SetupInfo,
 )
 from digitalkin.services.registry.exceptions import (
     RegistryModuleNotFoundError,
@@ -73,6 +76,35 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
             version=descriptor.version,
             name=descriptor.name,
             documentation=descriptor.documentation or None,
+        )
+
+    @staticmethod
+    def _proto_to_setup_info(descriptor: registry_models_pb2.SetupDescriptor) -> SetupInfo | None:
+        """Convert proto SetupDescriptor to SetupInfo.
+
+        Args:
+            descriptor: Proto SetupDescriptor message.
+
+        Returns:
+            SetupInfo with mapped fields, or None if descriptor is empty.
+        """
+        if not descriptor.id:
+            return None
+        status_name = registry_enums_pb2.SetupStatus.Name(descriptor.status).removeprefix("SETUP_STATUS_")
+        visibility_name = registry_enums_pb2.Visibility.Name(descriptor.visibility).removeprefix("VISIBILITY_")
+        return SetupInfo(
+            setup_id=descriptor.id,
+            name=descriptor.name,
+            documentation=descriptor.documentation or None,
+            status=RegistrySetupStatus[status_name],
+            visibility=RegistryVisibility[visibility_name],
+            organization_id=descriptor.organization_id or None,
+            owner_id=descriptor.owner_id or None,
+            card_id=descriptor.card_id or None,
+            module_id=descriptor.module_id or None,
+            setup_version_id=descriptor.setup_version_id or None,
+            setup_version=descriptor.setup_version or None,
+            config=dict(descriptor.config) if descriptor.config else None,
         )
 
     def discover_by_id(self, module_id: str) -> ModuleInfo:
@@ -304,3 +336,28 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
                 extra={"module_id": module_id, "status": status_name},
             )
             return RegistryModuleStatus[status_name]
+
+    def get_setup(self, setup_id: str) -> SetupInfo | None:
+        """Get setup info.
+
+        Args:
+            setup_id: The setup identifier.
+
+        Returns:
+            SetupInfo if successful, None otherwise.
+
+        Raises:
+            RegistryServiceError: If gRPC call fails.
+        """
+        logger.debug("Getting setup", extra={"setup_id": setup_id})
+        with self.handle_grpc_errors("GetSetup", RegistryServiceError):
+            try:
+                response = self.exec_grpc_query(
+                    "GetSetup",
+                    registry_requests_pb2.GetSetupRequest(setup_id=setup_id),
+                )
+            except ServerError as e:
+                msg = f"Failed to get setup '{setup_id}': {e}"
+                logger.error(msg)
+                raise RegistryServiceError(msg) from e
+            return self._proto_to_setup_info(response)

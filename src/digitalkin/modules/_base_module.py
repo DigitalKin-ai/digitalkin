@@ -518,11 +518,14 @@ class BaseModule(  # noqa: PLR0904
             config_setup_data: Setup data containing tool references.
         """
         logger.info("Starting tool resolution", extra=self.context.session.current_ids())
-        if self.context.registry is not None:
-            config_setup_data.resolve_tool_references(self.context.registry)
+        if self.context.registry is not None and self.context.communication is not None:
+            await config_setup_data.resolve_tool_references(self.context.registry, self.context.communication)
             logger.info("Tool references resolved", extra=self.context.session.current_ids())
         else:
-            logger.warning("No registry available, skipping tool resolution", extra=self.context.session.current_ids())
+            logger.warning(
+                "No registry or communication available, skipping tool resolution",
+                extra=self.context.session.current_ids(),
+            )
 
         tool_cache = config_setup_data.build_tool_cache()
         self.context.tool_cache = tool_cache

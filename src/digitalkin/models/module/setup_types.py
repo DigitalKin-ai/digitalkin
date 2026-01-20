@@ -8,9 +8,8 @@ from typing import TYPE_CHECKING, Any, ClassVar, Generic, TypeVar, cast, get_arg
 from pydantic import BaseModel, ConfigDict, Field, create_model
 
 from digitalkin.logger import logger
-from digitalkin.models.module.tool_cache import ToolCache
+from digitalkin.models.module.tool_cache import ToolCache, ToolModuleInfo
 from digitalkin.models.module.tool_reference import ToolReference
-from digitalkin.models.services.registry import ModuleInfo
 from digitalkin.utils.dynamic_schema import (
     DynamicField,
     get_fetchers,
@@ -21,6 +20,7 @@ from digitalkin.utils.dynamic_schema import (
 if TYPE_CHECKING:
     from pydantic.fields import FieldInfo
 
+    from digitalkin.services.communication import CommunicationStrategy
     from digitalkin.services.registry import RegistryStrategy
 
 SetupModelT = TypeVar("SetupModelT", bound="SetupModel")
@@ -53,14 +53,14 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
                     # Check if it's a list type
                     origin = get_origin(annotation)
                     if origin is list:
-                        new_annotations[cache_field_name] = list[ModuleInfo]
+                        new_annotations[cache_field_name] = list[ToolModuleInfo]
                         setattr(
                             cls,
                             cache_field_name,
                             Field(default_factory=list, json_schema_extra={"hidden": True}),
                         )
                     else:
-                        new_annotations[cache_field_name] = ModuleInfo | None
+                        new_annotations[cache_field_name] = ToolModuleInfo | None
                         setattr(
                             cls,
                             cache_field_name,
@@ -336,39 +336,45 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
 
         return new_field_info
 
-    def resolve_tool_references(self, registry: "RegistryStrategy") -> None:
+    async def resolve_tool_references(
+        self, registry: "RegistryStrategy", communication: "CommunicationStrategy"
+    ) -> None:
         """Resolve all ToolReference fields recursively.
 
         Args:
             registry: Registry service for module discovery.
+            communication: Communication service for module schemas.
         """
         logger.info("Starting resolve_tool_references")
-        self._resolve_tool_references_recursive(self, registry)
+        await self._resolve_tool_references_recursive(self, registry, communication)
         logger.info("Finished resolve_tool_references")
 
     @classmethod
-    def _resolve_tool_references_recursive(
+    async def _resolve_tool_references_recursive(
         cls,
         model_instance: BaseModel,
         registry: "RegistryStrategy",
+        communication: "CommunicationStrategy",
     ) -> None:
         """Recursively resolve ToolReference fields in a model.
 
         Args:
             model_instance: Model instance to process.
             registry: Registry service for resolution.
+            communication: Communication service for module schemas.
         """
         for field_name, field_value in model_instance.__dict__.items():
             if field_value is None:
                 continue
-            cls._resolve_field_value(field_name, field_value, registry)
+            await cls._resolve_field_value(field_name, field_value, registry, communication)
 
     @classmethod
-    def _resolve_field_value(
+    async def _resolve_field_value(
         cls,
         field_name: str,
         field_value: "BaseModel | ToolReference | list | dict",
         registry: "RegistryStrategy",
+        communication: "CommunicationStrategy",
     ) -> None:
         """Resolve a single field value based on its type.
 
@@ -376,22 +382,24 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
             field_name: Name of the field.
             field_value: Value to process.
             registry: Registry service for resolution.
+            communication: Communication service for module schemas.
         """
         if isinstance(field_value, ToolReference):
-            cls._resolve_single_tool_reference(field_name, field_value, registry)
+            await cls._resolve_single_tool_reference(field_name, field_value, registry, communication)
         elif isinstance(field_value, BaseModel):
-            cls._resolve_tool_references_recursive(field_value, registry)
+            await cls._resolve_tool_references_recursive(field_value, registry, communication)
         elif isinstance(field_value, list):
-            cls._resolve_list_items(field_value, registry)
+            await cls._resolve_list_items(field_value, registry, communication)
         elif isinstance(field_value, dict):
-            cls._resolve_dict_values(field_value, registry)
+            await cls._resolve_dict_values(field_value, registry, communication)
 
     @classmethod
-    def _resolve_single_tool_reference(
+    async def _resolve_single_tool_reference(
         cls,
         field_name: str,
         tool_ref: ToolReference,
         registry: "RegistryStrategy",
+        communication: "CommunicationStrategy",
     ) -> None:
         """Resolve a single ToolReference.
 
@@ -399,47 +407,54 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
             field_name: Name of the field for logging.
             tool_ref: ToolReference to resolve.
             registry: Registry service for resolution.
+            communication: Communication service for module schemas.
         """
-        logger.info("Resolving ToolReference '%s' with module_id='%s'", field_name, tool_ref.config.module_id)
+        logger.info("Resolving ToolReference '%s' with setup_id='%s'", field_name, tool_ref.config.setup_id)
         try:
-            tool_ref.resolve(registry)
-            logger.info("Resolved ToolReference '%s' -> %s", field_name, tool_ref.module_info)
+            await tool_ref.resolve(registry, communication)
+            logger.info("Resolved ToolReference '%s' -> %s", field_name, tool_ref.tool_module_info)
         except Exception:
             logger.exception("Failed to resolve ToolReference '%s'", field_name)
 
     @classmethod
-    def _resolve_list_items(cls, items: list, registry: "RegistryStrategy") -> None:
+    async def _resolve_list_items(
+        cls, items: list, registry: "RegistryStrategy", communication: "CommunicationStrategy"
+    ) -> None:
         """Resolve ToolReference instances in a list.
 
         Args:
             items: List of items to process.
             registry: Registry service for resolution.
+            communication: Communication service for module schemas.
         """
         for item in items:
             if isinstance(item, ToolReference):
-                cls._resolve_single_tool_reference("list_item", item, registry)
+                await cls._resolve_single_tool_reference("list_item", item, registry, communication)
             elif isinstance(item, BaseModel):
-                cls._resolve_tool_references_recursive(item, registry)
+                await cls._resolve_tool_references_recursive(item, registry, communication)
 
     @classmethod
-    def _resolve_dict_values(cls, mapping: dict, registry: "RegistryStrategy") -> None:
+    async def _resolve_dict_values(
+        cls, mapping: dict, registry: "RegistryStrategy", communication: "CommunicationStrategy"
+    ) -> None:
         """Resolve ToolReference instances in dict values.
 
         Args:
             mapping: Dict to process.
             registry: Registry service for resolution.
+            communication: Communication service for module schemas.
         """
         for item in mapping.values():
             if isinstance(item, ToolReference):
-                cls._resolve_single_tool_reference("dict_value", item, registry)
+                await cls._resolve_single_tool_reference("dict_value", item, registry, communication)
             elif isinstance(item, BaseModel):
-                cls._resolve_tool_references_recursive(item, registry)
+                await cls._resolve_tool_references_recursive(item, registry, communication)
 
     def build_tool_cache(self) -> ToolCache:
         """Build tool cache from resolved ToolReferences, populating companion fields.
 
         Returns:
-            ToolCache with field names as keys and ModuleInfo as values.
+            ToolCache with field names as keys and ToolModuleInfo as values.
         """
         logger.info("Building tool cache")
         cache = ToolCache()
@@ -461,7 +476,7 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
                 cache_field_name = f"{field_name}_cache"
 
                 cached_info = getattr(model_instance, cache_field_name, None)
-                module_info = field_value.module_info or cached_info
+                module_info = field_value.tool_module_info or cached_info
                 if module_info:
                     if not cached_info:
                         setattr(model_instance, cache_field_name, module_info)
@@ -472,12 +487,12 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
             elif isinstance(field_value, list):
                 cache_field_name = f"{field_name}_cache"
                 cached_infos = getattr(model_instance, cache_field_name, None) or []
-                resolved_infos: list[ModuleInfo] = []
+                resolved_infos: list[ToolModuleInfo] = []
 
                 for idx, item in enumerate(field_value):
                     if isinstance(item, ToolReference):
                         # Use resolved info or fallback to cached
-                        module_info = item.module_info or (cached_infos[idx] if idx < len(cached_infos) else None)
+                        module_info = item.tool_module_info or (cached_infos[idx] if idx < len(cached_infos) else None)
                         if module_info:
                             resolved_infos.append(module_info)
                             cache.add(module_info.module_id, module_info)

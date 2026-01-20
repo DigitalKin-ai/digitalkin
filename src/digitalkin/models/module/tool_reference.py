@@ -4,7 +4,8 @@ from enum import Enum
 
 from pydantic import BaseModel, Field, PrivateAttr, model_validator
 
-from digitalkin.models.services.registry import ModuleInfo
+from digitalkin.models.module.tool_cache import ToolModuleInfo, module_info_to_tool_module_info
+from digitalkin.services.communication.communication_strategy import CommunicationStrategy
 from digitalkin.services.registry import RegistryStrategy
 
 
@@ -20,6 +21,7 @@ class ToolReferenceConfig(BaseModel):
     """Tool selection configuration. The module_id serves as both identifier and cache key."""
 
     mode: ToolSelectionMode = Field(default=ToolSelectionMode.FIXED)
+    setup_id: str = Field(default="")
     module_id: str = Field(default="")
     tag: str = Field(default="")
     organization_id: str = Field(default="")
@@ -34,8 +36,8 @@ class ToolReferenceConfig(BaseModel):
         Raises:
             ValueError: If required field is missing for the mode.
         """
-        if self.mode == ToolSelectionMode.FIXED and not self.module_id:
-            msg = "module_id required when mode is FIXED"
+        if self.mode == ToolSelectionMode.FIXED and not self.setup_id:
+            msg = "setup_id required when mode is FIXED"
             raise ValueError(msg)
         if self.mode == ToolSelectionMode.TAG and not self.tag:
             msg = "tag required when mode is TAG"
@@ -47,7 +49,7 @@ class ToolReference(BaseModel):
     """Reference to a tool module, resolved via registry during config setup."""
 
     config: ToolReferenceConfig
-    _cached_info: ModuleInfo | None = PrivateAttr(default=None)
+    _cached_info: ToolModuleInfo | None = PrivateAttr(default=None)
 
     @property
     def slug(self) -> str:
@@ -56,7 +58,7 @@ class ToolReference(BaseModel):
         Returns:
             Module ID used as cache key.
         """
-        return self.config.module_id
+        return self.config.setup_id
 
     @property
     def module_id(self) -> str:
@@ -68,11 +70,20 @@ class ToolReference(BaseModel):
         return self.config.module_id
 
     @property
-    def module_info(self) -> ModuleInfo | None:
+    def setup_id(self) -> str:
+        """Setup identifier.
+
+        Returns:
+            Setup ID or empty string if not set.
+        """
+        return self.config.setup_id
+
+    @property
+    def tool_module_info(self) -> ToolModuleInfo | None:
         """Resolved module information.
 
         Returns:
-            ModuleInfo if resolved, None otherwise.
+            ToolModuleInfo if resolved, None otherwise.
         """
         return self._cached_info
 
@@ -85,23 +96,28 @@ class ToolReference(BaseModel):
         """
         return self._cached_info is not None
 
-    def resolve(self, registry: RegistryStrategy) -> ModuleInfo | None:
+    async def resolve(self, registry: RegistryStrategy, communication: CommunicationStrategy) -> ToolModuleInfo | None:
         """Resolve this reference using the registry.
 
         Args:
             registry: Registry service for module discovery.
+            communication: Communication service for module schemas.
 
         Returns:
-            ModuleInfo if resolved, None for DISCOVERABLE mode or if not found.
+            ToolModuleInfo if resolved, None for DISCOVERABLE mode or if not found.
         """
         if self.config.mode == ToolSelectionMode.DISCOVERABLE:
             return None
 
-        if self.config.mode == ToolSelectionMode.FIXED and self.config.module_id:
-            info = registry.discover_by_id(self.config.module_id)
-            if info:
-                self._cached_info = info
-            return info
+        if self.config.mode == ToolSelectionMode.FIXED and self.config.setup_id:
+            setup = registry.get_setup(self.config.setup_id)
+            if setup and setup.module_id:
+                self.config.module_id = setup.module_id
+                info = registry.discover_by_id(self.config.module_id)
+                if info:
+                    tool_module_info = await module_info_to_tool_module_info(info, communication)
+                    self._cached_info = tool_module_info
+                    return tool_module_info
 
         if self.config.mode == ToolSelectionMode.TAG and self.config.tag:
             results = registry.search(
@@ -110,8 +126,9 @@ class ToolReference(BaseModel):
                 organization_id=self.config.organization_id,
             )
             if results:
-                self._cached_info = results[0]
-                self.config.module_id = results[0].module_id
-                return results[0]
+                tool_module_info = await module_info_to_tool_module_info(results[0], communication)
+                self._cached_info = tool_module_info
+                self.config.module_id = tool_module_info.module_id
+                return tool_module_info
 
         return None
