@@ -81,6 +81,9 @@ class SchemaSplitter:
                 json_target["properties"] = {}
                 for prop_name, prop_value in value.items():
                     if isinstance(prop_value, dict):
+                        # Skip hidden fields
+                        if prop_value.get("hidden") is True:
+                            continue
                         json_target["properties"][prop_name] = {}
                         prop_ui: dict[str, Any] = {}
                         cls._process_property(prop_value, json_target["properties"][prop_name], prop_ui, defs_ui)
@@ -118,6 +121,9 @@ class SchemaSplitter:
                 cls._strip_ui_properties(value, json_target[key])
                 # Extract UI properties from conditional
                 cls._extract_ui_properties(value, ui_target)
+            elif key == "hidden":
+                # Strip hidden key from json schema
+                continue
             else:
                 json_target[key] = value
 
@@ -151,6 +157,9 @@ class SchemaSplitter:
                 json_target["properties"] = {}
                 for prop_name, prop_value in value.items():
                     if isinstance(prop_value, dict):
+                        # Skip hidden fields
+                        if prop_value.get("hidden") is True:
+                            continue
                         json_target["properties"][prop_name] = {}
                         prop_ui: dict[str, Any] = {}
                         cls._process_property(prop_value, json_target["properties"][prop_name], prop_ui, defs_ui)
@@ -164,6 +173,9 @@ class SchemaSplitter:
                 cls._process_property(value, json_target["items"], items_ui, defs_ui)
                 if items_ui:
                     ui_target["items"] = items_ui
+            elif key == "hidden":
+                # Strip hidden key from json schema
+                continue
             else:
                 json_target[key] = value
 
@@ -176,12 +188,15 @@ class SchemaSplitter:
             json_target: Target dict without ui:* properties.
         """
         for key, value in source.items():
-            if key.startswith("ui:"):
+            if key.startswith("ui:") or key == "hidden":
                 continue
             if key == "properties" and isinstance(value, dict):
                 json_target["properties"] = {}
                 for prop_name, prop_value in value.items():
                     if isinstance(prop_value, dict):
+                        # Skip hidden fields
+                        if prop_value.get("hidden") is True:
+                            continue
                         json_target["properties"][prop_name] = {}
                         cls._strip_ui_properties(prop_value, json_target["properties"][prop_name])
                     else:
