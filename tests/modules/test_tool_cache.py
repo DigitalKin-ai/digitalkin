@@ -21,6 +21,7 @@ def sample_tool_module_info() -> ToolModuleInfo:
         version="1.0.0",
         name="TestTool",
         documentation="Test tool documentation",
+        setup_id="setup-123",
         tools=[
             ToolDefinition(
                 name="search",
@@ -44,6 +45,7 @@ def sample_tool_module_info_2() -> ToolModuleInfo:
         version="2.0.0",
         name="AnotherTool",
         documentation="Another test tool",
+        setup_id="setup-456",
         tools=[
             ToolDefinition(
                 name="analyze",

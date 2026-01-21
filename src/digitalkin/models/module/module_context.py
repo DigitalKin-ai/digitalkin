@@ -8,7 +8,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from digitalkin.logger import logger
-from digitalkin.models.module.tool_cache import ToolCache, ToolDefinition, ToolParameter
+from digitalkin.models.module.tool_cache import ToolCache, ToolDefinition, ToolModuleInfo, ToolParameter
 from digitalkin.services.agent.agent_strategy import AgentStrategy
 from digitalkin.services.communication.communication_strategy import CommunicationStrategy
 from digitalkin.services.cost.cost_strategy import CostStrategy
@@ -227,20 +227,20 @@ class ModuleContext:
             llm_format=llm_format,
         )
 
-    async def create_openai_style_tools(self, tool_name: str) -> list[dict[str, Any]]:
+    async def create_openai_style_tools(self, module_id: str) -> list[dict[str, Any]]:
         """Create OpenAI-style function calling schemas for a tool module.
 
         Uses tool cache (fast path) with registry fallback. Returns one schema
         per ToolDefinition (protocol) in the module.
 
         Args:
-            tool_name: Module ID to look up (checks cache first, then registry).
+            module_id: Module ID to look up (checks cache first, then registry).
 
         Returns:
             List of OpenAI-style tool schemas, one per protocol. Empty if not found.
         """
         tool_module_info = await self.tool_cache.get(
-            tool_name, registry=self.registry, communication=self.communication
+            module_id, registry=self.registry, communication=self.communication
         )
         if not tool_module_info:
             return []
@@ -299,13 +299,11 @@ class ModuleContext:
 
         communication = self.communication
         session = self.session
-        address = tool_module_info.address
-        port = tool_module_info.port
 
         result = []
         for tool_def in tool_module_info.tools:
             # Capture tool_def in closure via separate method
-            fn = ModuleContext._create_single_tool_function(communication, session, address, port, tool_def)
+            fn = ModuleContext._create_single_tool_function(communication, session, tool_module_info, tool_def)
             result.append((tool_def, fn))
 
         return result
@@ -314,8 +312,7 @@ class ModuleContext:
     def _create_single_tool_function(
         communication: CommunicationStrategy,
         session: Session,
-        address: str,
-        port: int,
+        tool_module_info: ToolModuleInfo,
         tool_def: ToolDefinition,
     ) -> Callable[..., AsyncGenerator[dict, None]]:
         """Create a single tool function for a specific protocol.
@@ -323,8 +320,7 @@ class ModuleContext:
         Args:
             communication: Communication strategy for gRPC calls.
             session: Current session with setup_id and mission_id.
-            address: Module address.
-            port: Module port.
+            tool_module_info: Tool module information containing address and port.
             tool_def: Tool definition with protocol name.
 
         Returns:
@@ -336,10 +332,10 @@ class ModuleContext:
             kwargs["protocol"] = protocol
             wrapped_input = {"root": kwargs}
             async for response in communication.call_module(
-                module_address=address,
-                module_port=port,
+                module_address=tool_module_info.address,
+                module_port=tool_module_info.port,
                 input_data=wrapped_input,
-                setup_id=session.setup_id,
+                setup_id=tool_module_info.setup_id,
                 mission_id=session.mission_id,
             ):
                 yield response

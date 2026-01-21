@@ -115,7 +115,7 @@ class ToolReference(BaseModel):
                 self.config.module_id = setup.module_id
                 info = registry.discover_by_id(self.config.module_id)
                 if info:
-                    tool_module_info = await module_info_to_tool_module_info(info, communication)
+                    tool_module_info = await module_info_to_tool_module_info(info, self.config.setup_id, communication)
                     self._cached_info = tool_module_info
                     return tool_module_info
 
@@ -126,7 +126,9 @@ class ToolReference(BaseModel):
                 organization_id=self.config.organization_id,
             )
             if results:
-                tool_module_info = await module_info_to_tool_module_info(results[0], communication)
+                tool_module_info = await module_info_to_tool_module_info(
+                    results[0], self.config.setup_id, communication
+                )
                 self._cached_info = tool_module_info
                 self.config.module_id = tool_module_info.module_id
                 return tool_module_info

@@ -100,7 +100,7 @@ def create_mock_communication() -> AsyncMock:
     return mock
 
 
-def create_tool_module_info(module_id: str, name: str, port: int = 50051) -> ToolModuleInfo:
+def create_tool_module_info(module_id: str, name: str, port: int = 50051, setup_id: str = "") -> ToolModuleInfo:
     """Create a ToolModuleInfo for testing."""
     return ToolModuleInfo(
         module_id=module_id,
@@ -109,6 +109,7 @@ def create_tool_module_info(module_id: str, name: str, port: int = 50051) -> Too
         port=port,
         version="1.0.0",
         name=name,
+        setup_id=setup_id,
         tools=[
             ToolDefinition(
                 name="search",

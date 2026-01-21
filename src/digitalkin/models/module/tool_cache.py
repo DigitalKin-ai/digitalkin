@@ -52,6 +52,7 @@ class ToolModuleInfo(ModuleInfo):
     """Module info for tool modules."""
 
     tools: list[ToolDefinition]
+    setup_id: str
 
 
 class ToolCache(BaseModel):
@@ -59,22 +60,22 @@ class ToolCache(BaseModel):
 
     entries: dict[str, ToolModuleInfo] = Field(default_factory=dict)
 
-    def add(self, setup_tool_name: str, tool_module_info: ToolModuleInfo) -> None:
+    def add(self, setup_id: str, tool_module_info: ToolModuleInfo) -> None:
         """Add a tool to the cache.
 
         Args:
-            setup_tool_name: Field name from SetupModel used as cache key.
+            setup_id: Field name from SetupModel used as cache key.
             tool_module_info: Resolved tool module information.
         """
-        self.entries[setup_tool_name] = tool_module_info
+        self.entries[setup_id] = tool_module_info
         logger.debug(
             "Tool cached",
-            extra={"setup_tool_name": setup_tool_name, "module_id": tool_module_info.module_id},
+            extra={"setup_id": setup_id, "module_id": tool_module_info.module_id},
         )
 
     async def get(
         self,
-        setup_tool_name: str,
+        setup_id: str,
         *,
         registry: RegistryStrategy | None = None,
         communication: "CommunicationStrategy | None" = None,
@@ -82,28 +83,28 @@ class ToolCache(BaseModel):
         """Get a tool from cache, optionally querying registry on miss.
 
         Args:
-            setup_tool_name: Field name to look up.
+            setup_id: Field name to look up.
             registry: Optional registry to query on cache miss.
             communication: Optional communication strategy for schema fetching.
 
         Returns:
             ToolModuleInfo if found, None otherwise.
         """
-        cached = self.entries.get(setup_tool_name)
+        cached = self.entries.get(setup_id)
         if cached:
             return cached
 
         if registry and communication:
             try:
-                setup_info = registry.get_setup(setup_tool_name)
+                setup_info = registry.get_setup(setup_id)
                 if setup_info and setup_info.module_id:
                     info = registry.discover_by_id(setup_info.module_id)
                     if info:
-                        tool_info = await module_info_to_tool_module_info(info, communication)
-                        self.add(setup_tool_name, tool_info)
+                        tool_info = await module_info_to_tool_module_info(info, setup_id, communication)
+                        self.add(setup_id, tool_info)
                         return tool_info
             except Exception:
-                logger.exception("Registry lookup failed", extra={"setup_tool_name": setup_tool_name})
+                logger.exception("Registry lookup failed", extra={"setup_id": setup_id})
 
         return None
 
@@ -122,6 +123,7 @@ class ToolCache(BaseModel):
 
 async def module_info_to_tool_module_info(
     module_info: ModuleInfo,
+    setup_id: str,
     communication: "CommunicationStrategy",
     *,
     llm_format: bool = True,
@@ -133,6 +135,7 @@ async def module_info_to_tool_module_info(
 
     Args:
         module_info: Module info from registry.
+        setup_id: Setup ID from tool configuration.
         communication: Communication strategy for gRPC calls.
         llm_format: Use LLM-friendly schema format.
 
@@ -161,6 +164,7 @@ async def module_info_to_tool_module_info(
         documentation=module_info.documentation,
         status=module_info.status,
         tools=tools,
+        setup_id=setup_id,
     )
 
 
