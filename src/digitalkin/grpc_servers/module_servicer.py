@@ -17,7 +17,7 @@ from digitalkin.core.job_manager.base_job_manager import BaseJobManager
 from digitalkin.grpc_servers.utils.exceptions import ServicerError
 from digitalkin.logger import logger
 from digitalkin.models.core.job_manager_models import JobManagerMode
-from digitalkin.models.module.module import ModuleStatus
+from digitalkin.models.module.module import ModuleCodeModel, ModuleStatus
 from digitalkin.modules._base_module import BaseModule
 from digitalkin.services.registry import GrpcRegistry, RegistryStrategy
 from digitalkin.services.services_models import ServicesMode
@@ -159,7 +159,32 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             return lifecycle_pb2.ConfigSetupModuleResponse(success=False)
 
         updated_setup_data = await self.job_manager.generate_config_setup_module_response(job_id)
-        logger.info("Setup updated", extra={"job_id": job_id})
+        logger.info("Setup response received", extra={"job_id": job_id})
+
+        # Check if response is an error
+        if isinstance(updated_setup_data, ModuleCodeModel):
+            logger.error(
+                "Config setup failed",
+                extra={"job_id": job_id, "code": updated_setup_data.code, "message": updated_setup_data.message},
+            )
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details(updated_setup_data.message or "Config setup failed")
+            return lifecycle_pb2.ConfigSetupModuleResponse(success=False)
+
+        if isinstance(updated_setup_data, dict) and "code" in updated_setup_data:
+            # ModuleCodeModel was serialized to dict
+            logger.error(
+                "Config setup failed",
+                extra={
+                    "job_id": job_id,
+                    "code": updated_setup_data["code"],
+                    "message": updated_setup_data.get("message"),
+                },
+            )
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details(updated_setup_data.get("message") or "Config setup failed")
+            return lifecycle_pb2.ConfigSetupModuleResponse(success=False)
+
         logger.debug("Updated setup data", extra={"job_id": job_id, "setup_data": updated_setup_data})
         setup_version.content = json_format.ParseDict(
             updated_setup_data,
