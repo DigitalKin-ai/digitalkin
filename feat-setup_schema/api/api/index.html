@@ -9789,10 +9789,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#digitalkin.models.module.ModuleContext.create_openai_style_tools(tool_name)" class="md-nav__link">
+  <a href="#digitalkin.models.module.ModuleContext.create_openai_style_tools(module_id)" class="md-nav__link">
     <span class="md-ellipsis">
       
-        <code class="doc-symbol doc-symbol-toc doc-symbol-parameter"></code>&nbsp;tool_name
+        <code class="doc-symbol doc-symbol-toc doc-symbol-parameter"></code>&nbsp;module_id
       
     </span>
   </a>
@@ -10057,10 +10057,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#digitalkin.models.module.ToolCache.add(setup_tool_name)" class="md-nav__link">
+  <a href="#digitalkin.models.module.ToolCache.add(setup_id)" class="md-nav__link">
     <span class="md-ellipsis">
       
-        <code class="doc-symbol doc-symbol-toc doc-symbol-parameter"></code>&nbsp;setup_tool_name
+        <code class="doc-symbol doc-symbol-toc doc-symbol-parameter"></code>&nbsp;setup_id
       
     </span>
   </a>
@@ -10107,10 +10107,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#digitalkin.models.module.ToolCache.get(setup_tool_name)" class="md-nav__link">
+  <a href="#digitalkin.models.module.ToolCache.get(setup_id)" class="md-nav__link">
     <span class="md-ellipsis">
       
-        <code class="doc-symbol doc-symbol-toc doc-symbol-parameter"></code>&nbsp;setup_tool_name
+        <code class="doc-symbol doc-symbol-toc doc-symbol-parameter"></code>&nbsp;setup_id
       
     </span>
   </a>
@@ -11066,6 +11066,17 @@
     <span class="md-ellipsis">
       
         <code class="doc-symbol doc-symbol-toc doc-symbol-parameter"></code>&nbsp;module_info
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#digitalkin.models.module.tool_cache.module_info_to_tool_module_info(setup_id)" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        <code class="doc-symbol doc-symbol-toc doc-symbol-parameter"></code>&nbsp;setup_id
       
     </span>
   </a>
@@ -57241,12 +57252,6 @@ access to shared strategies and resources. Additional attributes may be set dyna
       </li>
       <li class="doc doc-backlink">
             <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.TriggerHandler.append_files_history"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;append_files_history</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
       <a href="#digitalkin.modules.TriggerHandler.get_cost"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;get_cost</a>
   </span>
 
@@ -57272,6 +57277,12 @@ access to shared strategies and resources. Additional attributes may be set dyna
       <li class="doc doc-backlink">
             <span class="doc doc-backlink-crumb last">
       <a href="#digitalkin.modules.TriggerHandler.load_file_history"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;load_file_history</a>
+  </span>
+
+      </li>
+      <li class="doc doc-backlink">
+            <span class="doc doc-backlink-crumb last">
+      <a href="#digitalkin.modules.TriggerHandler.log_debug"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;log_debug</a>
   </span>
 
       </li>
@@ -57394,19 +57405,7 @@ access to shared strategies and resources. Additional attributes may be set dyna
       </li>
       <li class="doc doc-backlink">
             <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.trigger_handler.TriggerHandler.append_chat_history_message"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;append_chat_history_message</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
       <a href="#digitalkin.modules.trigger_handler.TriggerHandler.append_files_history"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;append_files_history</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.trigger_handler.TriggerHandler.get_cost"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;get_cost</a>
   </span>
 
       </li>
@@ -57418,43 +57417,7 @@ access to shared strategies and resources. Additional attributes may be set dyna
       </li>
       <li class="doc doc-backlink">
             <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.trigger_handler.TriggerHandler.load_chat_history"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;load_chat_history</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.trigger_handler.TriggerHandler.load_file_history"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;load_file_history</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.trigger_handler.TriggerHandler.log_debug"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;log_debug</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.trigger_handler.TriggerHandler.log_error"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;log_error</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.trigger_handler.TriggerHandler.log_info"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;log_info</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
       <a href="#digitalkin.modules.trigger_handler.TriggerHandler.log_warning"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;log_warning</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.trigger_handler.TriggerHandler.read_storage"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;read_storage</a>
   </span>
 
       </li>
@@ -57466,19 +57429,7 @@ access to shared strategies and resources. Additional attributes may be set dyna
       </li>
       <li class="doc doc-backlink">
             <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.trigger_handler.TriggerHandler.send_message"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;send_message</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
       <a href="#digitalkin.modules.trigger_handler.TriggerHandler.store_storage"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;store_storage</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.trigger_handler.TriggerHandler.update_storage"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;update_storage</a>
   </span>
 
       </li>
@@ -57503,60 +57454,6 @@ access to shared strategies and resources. Additional attributes may be set dyna
             <ul class="doc doc-backlink-list">
       <li class="doc doc-backlink">
             <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.triggers.healthcheck_ping_trigger.HealthcheckPingTrigger.add_cost"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;add_cost</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.triggers.healthcheck_ping_trigger.HealthcheckPingTrigger.append_chat_history_message"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;append_chat_history_message</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.triggers.healthcheck_ping_trigger.HealthcheckPingTrigger.append_files_history"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;append_files_history</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.triggers.healthcheck_ping_trigger.HealthcheckPingTrigger.get_cost"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;get_cost</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.triggers.healthcheck_ping_trigger.HealthcheckPingTrigger.get_costs"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;get_costs</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.triggers.healthcheck_ping_trigger.HealthcheckPingTrigger.handle"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;handle</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.triggers.healthcheck_ping_trigger.HealthcheckPingTrigger.load_chat_history"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;load_chat_history</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.triggers.healthcheck_ping_trigger.HealthcheckPingTrigger.load_file_history"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;load_file_history</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.triggers.healthcheck_ping_trigger.HealthcheckPingTrigger.log_debug"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;log_debug</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
       <a href="#digitalkin.modules.triggers.healthcheck_ping_trigger.HealthcheckPingTrigger.log_error"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;log_error</a>
   </span>
 
@@ -57564,42 +57461,6 @@ access to shared strategies and resources. Additional attributes may be set dyna
       <li class="doc doc-backlink">
             <span class="doc doc-backlink-crumb last">
       <a href="#digitalkin.modules.triggers.healthcheck_ping_trigger.HealthcheckPingTrigger.log_info"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;log_info</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.triggers.healthcheck_ping_trigger.HealthcheckPingTrigger.log_warning"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;log_warning</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.triggers.healthcheck_ping_trigger.HealthcheckPingTrigger.read_storage"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;read_storage</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.triggers.healthcheck_ping_trigger.HealthcheckPingTrigger.save_send_message"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;save_send_message</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.triggers.healthcheck_ping_trigger.HealthcheckPingTrigger.send_message"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;send_message</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.triggers.healthcheck_ping_trigger.HealthcheckPingTrigger.store_storage"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;store_storage</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.triggers.healthcheck_ping_trigger.HealthcheckPingTrigger.update_storage"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;update_storage</a>
   </span>
 
       </li>
@@ -57618,31 +57479,7 @@ access to shared strategies and resources. Additional attributes may be set dyna
             <ul class="doc doc-backlink-list">
       <li class="doc doc-backlink">
             <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.triggers.healthcheck_services_trigger.HealthcheckServicesTrigger.add_cost"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;add_cost</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
       <a href="#digitalkin.modules.triggers.healthcheck_services_trigger.HealthcheckServicesTrigger.append_chat_history_message"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;append_chat_history_message</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.triggers.healthcheck_services_trigger.HealthcheckServicesTrigger.append_files_history"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;append_files_history</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.triggers.healthcheck_services_trigger.HealthcheckServicesTrigger.get_cost"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;get_cost</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.triggers.healthcheck_services_trigger.HealthcheckServicesTrigger.get_costs"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;get_costs</a>
   </span>
 
       </li>
@@ -57654,61 +57491,13 @@ access to shared strategies and resources. Additional attributes may be set dyna
       </li>
       <li class="doc doc-backlink">
             <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.triggers.healthcheck_services_trigger.HealthcheckServicesTrigger.load_chat_history"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;load_chat_history</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.triggers.healthcheck_services_trigger.HealthcheckServicesTrigger.load_file_history"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;load_file_history</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.triggers.healthcheck_services_trigger.HealthcheckServicesTrigger.log_error"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;log_error</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
       <a href="#digitalkin.modules.triggers.healthcheck_services_trigger.HealthcheckServicesTrigger.log_info"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;log_info</a>
   </span>
 
       </li>
       <li class="doc doc-backlink">
             <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.triggers.healthcheck_services_trigger.HealthcheckServicesTrigger.log_warning"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;log_warning</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.triggers.healthcheck_services_trigger.HealthcheckServicesTrigger.read_storage"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;read_storage</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.triggers.healthcheck_services_trigger.HealthcheckServicesTrigger.save_send_message"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;save_send_message</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
       <a href="#digitalkin.modules.triggers.healthcheck_services_trigger.HealthcheckServicesTrigger.send_message"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;send_message</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.triggers.healthcheck_services_trigger.HealthcheckServicesTrigger.store_storage"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;store_storage</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.triggers.healthcheck_services_trigger.HealthcheckServicesTrigger.update_storage"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;update_storage</a>
   </span>
 
       </li>
@@ -57727,7 +57516,31 @@ access to shared strategies and resources. Additional attributes may be set dyna
             <ul class="doc doc-backlink-list">
       <li class="doc doc-backlink">
             <span class="doc doc-backlink-crumb last">
+      <a href="#digitalkin.modules.triggers.healthcheck_status_trigger.HealthcheckStatusTrigger.add_cost"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;add_cost</a>
+  </span>
+
+      </li>
+      <li class="doc doc-backlink">
+            <span class="doc doc-backlink-crumb last">
+      <a href="#digitalkin.modules.triggers.healthcheck_status_trigger.HealthcheckStatusTrigger.append_chat_history_message"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;append_chat_history_message</a>
+  </span>
+
+      </li>
+      <li class="doc doc-backlink">
+            <span class="doc doc-backlink-crumb last">
       <a href="#digitalkin.modules.triggers.healthcheck_status_trigger.HealthcheckStatusTrigger.append_files_history"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;append_files_history</a>
+  </span>
+
+      </li>
+      <li class="doc doc-backlink">
+            <span class="doc doc-backlink-crumb last">
+      <a href="#digitalkin.modules.triggers.healthcheck_status_trigger.HealthcheckStatusTrigger.get_cost"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;get_cost</a>
+  </span>
+
+      </li>
+      <li class="doc doc-backlink">
+            <span class="doc doc-backlink-crumb last">
+      <a href="#digitalkin.modules.triggers.healthcheck_status_trigger.HealthcheckStatusTrigger.get_costs"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;get_costs</a>
   </span>
 
       </li>
@@ -57745,7 +57558,19 @@ access to shared strategies and resources. Additional attributes may be set dyna
       </li>
       <li class="doc doc-backlink">
             <span class="doc doc-backlink-crumb last">
+      <a href="#digitalkin.modules.triggers.healthcheck_status_trigger.HealthcheckStatusTrigger.load_file_history"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;load_file_history</a>
+  </span>
+
+      </li>
+      <li class="doc doc-backlink">
+            <span class="doc doc-backlink-crumb last">
       <a href="#digitalkin.modules.triggers.healthcheck_status_trigger.HealthcheckStatusTrigger.log_debug"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;log_debug</a>
+  </span>
+
+      </li>
+      <li class="doc doc-backlink">
+            <span class="doc doc-backlink-crumb last">
+      <a href="#digitalkin.modules.triggers.healthcheck_status_trigger.HealthcheckStatusTrigger.log_error"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;log_error</a>
   </span>
 
       </li>
@@ -57770,6 +57595,12 @@ access to shared strategies and resources. Additional attributes may be set dyna
       <li class="doc doc-backlink">
             <span class="doc doc-backlink-crumb last">
       <a href="#digitalkin.modules.triggers.healthcheck_status_trigger.HealthcheckStatusTrigger.save_send_message"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;save_send_message</a>
+  </span>
+
+      </li>
+      <li class="doc doc-backlink">
+            <span class="doc doc-backlink-crumb last">
+      <a href="#digitalkin.modules.triggers.healthcheck_status_trigger.HealthcheckStatusTrigger.send_message"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;send_message</a>
   </span>
 
       </li>
@@ -57974,7 +57805,7 @@ access to shared strategies and resources. Additional attributes may be set dyna
   </span>
 
 <a href="#digitalkin.models.module.ModuleContext.create_openai_style_tools" class="headerlink" title="Permanent link">¤</a></h5>
-<div class="language-python doc-signature highlight"><pre><span></span><code><span class="nf">create_openai_style_tools</span><span class="p">(</span><span class="n"><a class="autorefs autorefs-internal" href="#digitalkin.models.module.ModuleContext.create_openai_style_tools(tool_name)">tool_name</a></span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a></span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n"><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#list">list</a></span><span class="p">[</span><span class="n"><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#dict">dict</a></span><span class="p">[</span><span class="n"><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a></span><span class="p">,</span> <span class="n"><a class="autorefs autorefs-external" title="&lt;code&gt;typing.Any&lt;/code&gt;" href="https://docs.python.org/3/library/typing.html#typing.Any">Any</a></span><span class="p">]]</span>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span class="nf">create_openai_style_tools</span><span class="p">(</span><span class="n"><a class="autorefs autorefs-internal" href="#digitalkin.models.module.ModuleContext.create_openai_style_tools(module_id)">module_id</a></span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a></span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n"><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#list">list</a></span><span class="p">[</span><span class="n"><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#dict">dict</a></span><span class="p">[</span><span class="n"><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a></span><span class="p">,</span> <span class="n"><a class="autorefs autorefs-external" title="&lt;code&gt;typing.Any&lt;/code&gt;" href="https://docs.python.org/3/library/typing.html#typing.Any">Any</a></span><span class="p">]]</span>
 </code></pre></div>
 
     <div class="doc doc-contents ">
@@ -57987,8 +57818,8 @@ per ToolDefinition (protocol) in the module.</p>
 <p><span class="doc-section-title">Parameters:</span></p>
     <ul>
         <li class="doc-section-item field-body">
-<h6 id="digitalkin.models.module.ModuleContext.create_openai_style_tools(tool_name)" class="doc doc-heading doc-heading-parameter">              <b><code>tool_name</code></b>
-<a href="#digitalkin.models.module.ModuleContext.create_openai_style_tools(tool_name)" class="headerlink" title="Permanent link">¤</a></h6>              (<code><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a></code>)
+<h6 id="digitalkin.models.module.ModuleContext.create_openai_style_tools(module_id)" class="doc doc-heading doc-heading-parameter">              <b><code>module_id</code></b>
+<a href="#digitalkin.models.module.ModuleContext.create_openai_style_tools(module_id)" class="headerlink" title="Permanent link">¤</a></h6>              (<code><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a></code>)
           –
           <div class="doc-md-description">
             <p>Module ID to look up (checks cache first, then registry).</p>
@@ -58717,7 +58548,7 @@ providing the client with essential execution context information.</p>
 
 
 <a href="#digitalkin.models.module.ToolCache.add" class="headerlink" title="Permanent link">¤</a></h5>
-<div class="language-python doc-signature highlight"><pre><span></span><code><span class="nf">add</span><span class="p">(</span><span class="n"><a class="autorefs autorefs-internal" href="#digitalkin.models.module.ToolCache.add(setup_tool_name)">setup_tool_name</a></span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a></span><span class="p">,</span> <span class="n"><a class="autorefs autorefs-internal" href="#digitalkin.models.module.ToolCache.add(tool_module_info)">tool_module_info</a></span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-internal" href="#digitalkin.models.module.tool_cache.ToolModuleInfo">ToolModuleInfo</a></span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span class="nf">add</span><span class="p">(</span><span class="n"><a class="autorefs autorefs-internal" href="#digitalkin.models.module.ToolCache.add(setup_id)">setup_id</a></span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a></span><span class="p">,</span> <span class="n"><a class="autorefs autorefs-internal" href="#digitalkin.models.module.ToolCache.add(tool_module_info)">tool_module_info</a></span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-internal" href="#digitalkin.models.module.tool_cache.ToolModuleInfo">ToolModuleInfo</a></span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
 </code></pre></div>
 
     <div class="doc doc-contents ">
@@ -58728,8 +58559,8 @@ providing the client with essential execution context information.</p>
 <p><span class="doc-section-title">Parameters:</span></p>
     <ul>
         <li class="doc-section-item field-body">
-<h6 id="digitalkin.models.module.ToolCache.add(setup_tool_name)" class="doc doc-heading doc-heading-parameter">              <b><code>setup_tool_name</code></b>
-<a href="#digitalkin.models.module.ToolCache.add(setup_tool_name)" class="headerlink" title="Permanent link">¤</a></h6>              (<code><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a></code>)
+<h6 id="digitalkin.models.module.ToolCache.add(setup_id)" class="doc doc-heading doc-heading-parameter">              <b><code>setup_id</code></b>
+<a href="#digitalkin.models.module.ToolCache.add(setup_id)" class="headerlink" title="Permanent link">¤</a></h6>              (<code><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a></code>)
           –
           <div class="doc-md-description">
             <p>Field name from SetupModel used as cache key.</p>
@@ -58784,7 +58615,7 @@ providing the client with essential execution context information.</p>
   </span>
 
 <a href="#digitalkin.models.module.ToolCache.get" class="headerlink" title="Permanent link">¤</a></h5>
-<div class="language-python doc-signature highlight"><pre><span></span><code><span class="nf">get</span><span class="p">(</span><span class="n"><a class="autorefs autorefs-internal" href="#digitalkin.models.module.ToolCache.get(setup_tool_name)">setup_tool_name</a></span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a></span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n"><a class="autorefs autorefs-internal" href="#digitalkin.models.module.ToolCache.get(registry)">registry</a></span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-internal" href="#digitalkin.services.registry.RegistryStrategy">RegistryStrategy</a></span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n"><a class="autorefs autorefs-internal" href="#digitalkin.models.module.ToolCache.get(communication)">communication</a></span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-internal" href="#digitalkin.services.communication.CommunicationStrategy">CommunicationStrategy</a></span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n"><a class="autorefs autorefs-internal" href="#digitalkin.models.module.tool_cache.ToolModuleInfo">ToolModuleInfo</a></span> <span class="o">|</span> <span class="kc">None</span>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span class="nf">get</span><span class="p">(</span><span class="n"><a class="autorefs autorefs-internal" href="#digitalkin.models.module.ToolCache.get(setup_id)">setup_id</a></span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a></span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n"><a class="autorefs autorefs-internal" href="#digitalkin.models.module.ToolCache.get(registry)">registry</a></span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-internal" href="#digitalkin.services.registry.RegistryStrategy">RegistryStrategy</a></span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n"><a class="autorefs autorefs-internal" href="#digitalkin.models.module.ToolCache.get(communication)">communication</a></span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-internal" href="#digitalkin.services.communication.CommunicationStrategy">CommunicationStrategy</a></span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n"><a class="autorefs autorefs-internal" href="#digitalkin.models.module.tool_cache.ToolModuleInfo">ToolModuleInfo</a></span> <span class="o">|</span> <span class="kc">None</span>
 </code></pre></div>
 
     <div class="doc doc-contents ">
@@ -58795,8 +58626,8 @@ providing the client with essential execution context information.</p>
 <p><span class="doc-section-title">Parameters:</span></p>
     <ul>
         <li class="doc-section-item field-body">
-<h6 id="digitalkin.models.module.ToolCache.get(setup_tool_name)" class="doc doc-heading doc-heading-parameter">              <b><code>setup_tool_name</code></b>
-<a href="#digitalkin.models.module.ToolCache.get(setup_tool_name)" class="headerlink" title="Permanent link">¤</a></h6>              (<code><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a></code>)
+<h6 id="digitalkin.models.module.ToolCache.get(setup_id)" class="doc doc-heading doc-heading-parameter">              <b><code>setup_id</code></b>
+<a href="#digitalkin.models.module.ToolCache.get(setup_id)" class="headerlink" title="Permanent link">¤</a></h6>              (<code><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a></code>)
           –
           <div class="doc-md-description">
             <p>Field name to look up.</p>
@@ -62336,12 +62167,6 @@ access to shared strategies and resources. Additional attributes may be set dyna
       </li>
       <li class="doc doc-backlink">
             <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.TriggerHandler.append_files_history"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;append_files_history</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
       <a href="#digitalkin.modules.TriggerHandler.get_cost"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;get_cost</a>
   </span>
 
@@ -62367,6 +62192,12 @@ access to shared strategies and resources. Additional attributes may be set dyna
       <li class="doc doc-backlink">
             <span class="doc doc-backlink-crumb last">
       <a href="#digitalkin.modules.TriggerHandler.load_file_history"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;load_file_history</a>
+  </span>
+
+      </li>
+      <li class="doc doc-backlink">
+            <span class="doc doc-backlink-crumb last">
+      <a href="#digitalkin.modules.TriggerHandler.log_debug"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;log_debug</a>
   </span>
 
       </li>
@@ -62489,19 +62320,7 @@ access to shared strategies and resources. Additional attributes may be set dyna
       </li>
       <li class="doc doc-backlink">
             <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.trigger_handler.TriggerHandler.append_chat_history_message"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;append_chat_history_message</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
       <a href="#digitalkin.modules.trigger_handler.TriggerHandler.append_files_history"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;append_files_history</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.trigger_handler.TriggerHandler.get_cost"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;get_cost</a>
   </span>
 
       </li>
@@ -62513,43 +62332,7 @@ access to shared strategies and resources. Additional attributes may be set dyna
       </li>
       <li class="doc doc-backlink">
             <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.trigger_handler.TriggerHandler.load_chat_history"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;load_chat_history</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.trigger_handler.TriggerHandler.load_file_history"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;load_file_history</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.trigger_handler.TriggerHandler.log_debug"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;log_debug</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.trigger_handler.TriggerHandler.log_error"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;log_error</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.trigger_handler.TriggerHandler.log_info"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;log_info</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
       <a href="#digitalkin.modules.trigger_handler.TriggerHandler.log_warning"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;log_warning</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.trigger_handler.TriggerHandler.read_storage"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;read_storage</a>
   </span>
 
       </li>
@@ -62561,19 +62344,7 @@ access to shared strategies and resources. Additional attributes may be set dyna
       </li>
       <li class="doc doc-backlink">
             <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.trigger_handler.TriggerHandler.send_message"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;send_message</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
       <a href="#digitalkin.modules.trigger_handler.TriggerHandler.store_storage"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;store_storage</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.trigger_handler.TriggerHandler.update_storage"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;update_storage</a>
   </span>
 
       </li>
@@ -62598,60 +62369,6 @@ access to shared strategies and resources. Additional attributes may be set dyna
             <ul class="doc doc-backlink-list">
       <li class="doc doc-backlink">
             <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.triggers.healthcheck_ping_trigger.HealthcheckPingTrigger.add_cost"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;add_cost</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.triggers.healthcheck_ping_trigger.HealthcheckPingTrigger.append_chat_history_message"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;append_chat_history_message</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.triggers.healthcheck_ping_trigger.HealthcheckPingTrigger.append_files_history"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;append_files_history</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.triggers.healthcheck_ping_trigger.HealthcheckPingTrigger.get_cost"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;get_cost</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.triggers.healthcheck_ping_trigger.HealthcheckPingTrigger.get_costs"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;get_costs</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.triggers.healthcheck_ping_trigger.HealthcheckPingTrigger.handle"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;handle</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.triggers.healthcheck_ping_trigger.HealthcheckPingTrigger.load_chat_history"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;load_chat_history</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.triggers.healthcheck_ping_trigger.HealthcheckPingTrigger.load_file_history"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;load_file_history</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.triggers.healthcheck_ping_trigger.HealthcheckPingTrigger.log_debug"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;log_debug</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
       <a href="#digitalkin.modules.triggers.healthcheck_ping_trigger.HealthcheckPingTrigger.log_error"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;log_error</a>
   </span>
 
@@ -62659,42 +62376,6 @@ access to shared strategies and resources. Additional attributes may be set dyna
       <li class="doc doc-backlink">
             <span class="doc doc-backlink-crumb last">
       <a href="#digitalkin.modules.triggers.healthcheck_ping_trigger.HealthcheckPingTrigger.log_info"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;log_info</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.triggers.healthcheck_ping_trigger.HealthcheckPingTrigger.log_warning"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;log_warning</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.triggers.healthcheck_ping_trigger.HealthcheckPingTrigger.read_storage"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;read_storage</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.triggers.healthcheck_ping_trigger.HealthcheckPingTrigger.save_send_message"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;save_send_message</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.triggers.healthcheck_ping_trigger.HealthcheckPingTrigger.send_message"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;send_message</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.triggers.healthcheck_ping_trigger.HealthcheckPingTrigger.store_storage"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;store_storage</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.triggers.healthcheck_ping_trigger.HealthcheckPingTrigger.update_storage"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;update_storage</a>
   </span>
 
       </li>
@@ -62713,31 +62394,7 @@ access to shared strategies and resources. Additional attributes may be set dyna
             <ul class="doc doc-backlink-list">
       <li class="doc doc-backlink">
             <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.triggers.healthcheck_services_trigger.HealthcheckServicesTrigger.add_cost"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;add_cost</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
       <a href="#digitalkin.modules.triggers.healthcheck_services_trigger.HealthcheckServicesTrigger.append_chat_history_message"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;append_chat_history_message</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.triggers.healthcheck_services_trigger.HealthcheckServicesTrigger.append_files_history"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;append_files_history</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.triggers.healthcheck_services_trigger.HealthcheckServicesTrigger.get_cost"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;get_cost</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.triggers.healthcheck_services_trigger.HealthcheckServicesTrigger.get_costs"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;get_costs</a>
   </span>
 
       </li>
@@ -62749,61 +62406,13 @@ access to shared strategies and resources. Additional attributes may be set dyna
       </li>
       <li class="doc doc-backlink">
             <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.triggers.healthcheck_services_trigger.HealthcheckServicesTrigger.load_chat_history"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;load_chat_history</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.triggers.healthcheck_services_trigger.HealthcheckServicesTrigger.load_file_history"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;load_file_history</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.triggers.healthcheck_services_trigger.HealthcheckServicesTrigger.log_error"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;log_error</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
       <a href="#digitalkin.modules.triggers.healthcheck_services_trigger.HealthcheckServicesTrigger.log_info"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;log_info</a>
   </span>
 
       </li>
       <li class="doc doc-backlink">
             <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.triggers.healthcheck_services_trigger.HealthcheckServicesTrigger.log_warning"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;log_warning</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.triggers.healthcheck_services_trigger.HealthcheckServicesTrigger.read_storage"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;read_storage</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.triggers.healthcheck_services_trigger.HealthcheckServicesTrigger.save_send_message"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;save_send_message</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
       <a href="#digitalkin.modules.triggers.healthcheck_services_trigger.HealthcheckServicesTrigger.send_message"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;send_message</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.triggers.healthcheck_services_trigger.HealthcheckServicesTrigger.store_storage"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;store_storage</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.triggers.healthcheck_services_trigger.HealthcheckServicesTrigger.update_storage"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;update_storage</a>
   </span>
 
       </li>
@@ -62822,7 +62431,31 @@ access to shared strategies and resources. Additional attributes may be set dyna
             <ul class="doc doc-backlink-list">
       <li class="doc doc-backlink">
             <span class="doc doc-backlink-crumb last">
+      <a href="#digitalkin.modules.triggers.healthcheck_status_trigger.HealthcheckStatusTrigger.add_cost"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;add_cost</a>
+  </span>
+
+      </li>
+      <li class="doc doc-backlink">
+            <span class="doc doc-backlink-crumb last">
+      <a href="#digitalkin.modules.triggers.healthcheck_status_trigger.HealthcheckStatusTrigger.append_chat_history_message"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;append_chat_history_message</a>
+  </span>
+
+      </li>
+      <li class="doc doc-backlink">
+            <span class="doc doc-backlink-crumb last">
       <a href="#digitalkin.modules.triggers.healthcheck_status_trigger.HealthcheckStatusTrigger.append_files_history"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;append_files_history</a>
+  </span>
+
+      </li>
+      <li class="doc doc-backlink">
+            <span class="doc doc-backlink-crumb last">
+      <a href="#digitalkin.modules.triggers.healthcheck_status_trigger.HealthcheckStatusTrigger.get_cost"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;get_cost</a>
+  </span>
+
+      </li>
+      <li class="doc doc-backlink">
+            <span class="doc doc-backlink-crumb last">
+      <a href="#digitalkin.modules.triggers.healthcheck_status_trigger.HealthcheckStatusTrigger.get_costs"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;get_costs</a>
   </span>
 
       </li>
@@ -62840,7 +62473,19 @@ access to shared strategies and resources. Additional attributes may be set dyna
       </li>
       <li class="doc doc-backlink">
             <span class="doc doc-backlink-crumb last">
+      <a href="#digitalkin.modules.triggers.healthcheck_status_trigger.HealthcheckStatusTrigger.load_file_history"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;load_file_history</a>
+  </span>
+
+      </li>
+      <li class="doc doc-backlink">
+            <span class="doc doc-backlink-crumb last">
       <a href="#digitalkin.modules.triggers.healthcheck_status_trigger.HealthcheckStatusTrigger.log_debug"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;log_debug</a>
+  </span>
+
+      </li>
+      <li class="doc doc-backlink">
+            <span class="doc doc-backlink-crumb last">
+      <a href="#digitalkin.modules.triggers.healthcheck_status_trigger.HealthcheckStatusTrigger.log_error"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;log_error</a>
   </span>
 
       </li>
@@ -62865,6 +62510,12 @@ access to shared strategies and resources. Additional attributes may be set dyna
       <li class="doc doc-backlink">
             <span class="doc doc-backlink-crumb last">
       <a href="#digitalkin.modules.triggers.healthcheck_status_trigger.HealthcheckStatusTrigger.save_send_message"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;save_send_message</a>
+  </span>
+
+      </li>
+      <li class="doc doc-backlink">
+            <span class="doc doc-backlink-crumb last">
+      <a href="#digitalkin.modules.triggers.healthcheck_status_trigger.HealthcheckStatusTrigger.send_message"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;send_message</a>
   </span>
 
       </li>
@@ -63069,7 +62720,7 @@ access to shared strategies and resources. Additional attributes may be set dyna
   </span>
 
 <a href="#digitalkin.models.module.module_context.ModuleContext.create_openai_style_tools" class="headerlink" title="Permanent link">¤</a></h6>
-<div class="language-python doc-signature highlight"><pre><span></span><code><span class="nf">create_openai_style_tools</span><span class="p">(</span><span class="n"><a class="autorefs autorefs-internal" href="#digitalkin.models.module.module_context.ModuleContext.create_openai_style_tools(tool_name)">tool_name</a></span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a></span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n"><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#list">list</a></span><span class="p">[</span><span class="n"><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#dict">dict</a></span><span class="p">[</span><span class="n"><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a></span><span class="p">,</span> <span class="n"><a class="autorefs autorefs-external" title="&lt;code&gt;typing.Any&lt;/code&gt;" href="https://docs.python.org/3/library/typing.html#typing.Any">Any</a></span><span class="p">]]</span>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span class="nf">create_openai_style_tools</span><span class="p">(</span><span class="n"><a class="autorefs autorefs-internal" href="#digitalkin.models.module.module_context.ModuleContext.create_openai_style_tools(module_id)">module_id</a></span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a></span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n"><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#list">list</a></span><span class="p">[</span><span class="n"><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#dict">dict</a></span><span class="p">[</span><span class="n"><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a></span><span class="p">,</span> <span class="n"><a class="autorefs autorefs-external" title="&lt;code&gt;typing.Any&lt;/code&gt;" href="https://docs.python.org/3/library/typing.html#typing.Any">Any</a></span><span class="p">]]</span>
 </code></pre></div>
 
     <div class="doc doc-contents ">
@@ -63082,8 +62733,8 @@ per ToolDefinition (protocol) in the module.</p>
 <p><span class="doc-section-title">Parameters:</span></p>
     <ul>
         <li class="doc-section-item field-body">
-<h7 id="digitalkin.models.module.module_context.ModuleContext.create_openai_style_tools(tool_name)" class="doc doc-heading doc-heading-parameter">              <b><code>tool_name</code></b>
-<a href="#digitalkin.models.module.module_context.ModuleContext.create_openai_style_tools(tool_name)" class="headerlink" title="Permanent link">¤</a></h7>              (<code><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a></code>)
+<h7 id="digitalkin.models.module.module_context.ModuleContext.create_openai_style_tools(module_id)" class="doc doc-heading doc-heading-parameter">              <b><code>module_id</code></b>
+<a href="#digitalkin.models.module.module_context.ModuleContext.create_openai_style_tools(module_id)" class="headerlink" title="Permanent link">¤</a></h7>              (<code><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a></code>)
           –
           <div class="doc-md-description">
             <p>Module ID to look up (checks cache first, then registry).</p>
@@ -64727,7 +64378,7 @@ print(my_input.root.protocol)  # Output: message</p>
 
 
 <a href="#digitalkin.models.module.tool_cache.ToolCache.add" class="headerlink" title="Permanent link">¤</a></h6>
-<div class="language-python doc-signature highlight"><pre><span></span><code><span class="nf">add</span><span class="p">(</span><span class="n"><a class="autorefs autorefs-internal" href="#digitalkin.models.module.tool_cache.ToolCache.add(setup_tool_name)">setup_tool_name</a></span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a></span><span class="p">,</span> <span class="n"><a class="autorefs autorefs-internal" href="#digitalkin.models.module.tool_cache.ToolCache.add(tool_module_info)">tool_module_info</a></span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-internal" href="#digitalkin.models.module.tool_cache.ToolModuleInfo">ToolModuleInfo</a></span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span class="nf">add</span><span class="p">(</span><span class="n"><a class="autorefs autorefs-internal" href="#digitalkin.models.module.tool_cache.ToolCache.add(setup_id)">setup_id</a></span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a></span><span class="p">,</span> <span class="n"><a class="autorefs autorefs-internal" href="#digitalkin.models.module.tool_cache.ToolCache.add(tool_module_info)">tool_module_info</a></span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-internal" href="#digitalkin.models.module.tool_cache.ToolModuleInfo">ToolModuleInfo</a></span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
 </code></pre></div>
 
     <div class="doc doc-contents ">
@@ -64738,8 +64389,8 @@ print(my_input.root.protocol)  # Output: message</p>
 <p><span class="doc-section-title">Parameters:</span></p>
     <ul>
         <li class="doc-section-item field-body">
-<h7 id="digitalkin.models.module.tool_cache.ToolCache.add(setup_tool_name)" class="doc doc-heading doc-heading-parameter">              <b><code>setup_tool_name</code></b>
-<a href="#digitalkin.models.module.tool_cache.ToolCache.add(setup_tool_name)" class="headerlink" title="Permanent link">¤</a></h7>              (<code><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a></code>)
+<h7 id="digitalkin.models.module.tool_cache.ToolCache.add(setup_id)" class="doc doc-heading doc-heading-parameter">              <b><code>setup_id</code></b>
+<a href="#digitalkin.models.module.tool_cache.ToolCache.add(setup_id)" class="headerlink" title="Permanent link">¤</a></h7>              (<code><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a></code>)
           –
           <div class="doc-md-description">
             <p>Field name from SetupModel used as cache key.</p>
@@ -64794,7 +64445,7 @@ print(my_input.root.protocol)  # Output: message</p>
   </span>
 
 <a href="#digitalkin.models.module.tool_cache.ToolCache.get" class="headerlink" title="Permanent link">¤</a></h6>
-<div class="language-python doc-signature highlight"><pre><span></span><code><span class="nf">get</span><span class="p">(</span><span class="n"><a class="autorefs autorefs-internal" href="#digitalkin.models.module.tool_cache.ToolCache.get(setup_tool_name)">setup_tool_name</a></span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a></span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n"><a class="autorefs autorefs-internal" href="#digitalkin.models.module.tool_cache.ToolCache.get(registry)">registry</a></span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-internal" href="#digitalkin.services.registry.RegistryStrategy">RegistryStrategy</a></span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n"><a class="autorefs autorefs-internal" href="#digitalkin.models.module.tool_cache.ToolCache.get(communication)">communication</a></span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-internal" href="#digitalkin.services.communication.CommunicationStrategy">CommunicationStrategy</a></span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n"><a class="autorefs autorefs-internal" href="#digitalkin.models.module.tool_cache.ToolModuleInfo">ToolModuleInfo</a></span> <span class="o">|</span> <span class="kc">None</span>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span class="nf">get</span><span class="p">(</span><span class="n"><a class="autorefs autorefs-internal" href="#digitalkin.models.module.tool_cache.ToolCache.get(setup_id)">setup_id</a></span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a></span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n"><a class="autorefs autorefs-internal" href="#digitalkin.models.module.tool_cache.ToolCache.get(registry)">registry</a></span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-internal" href="#digitalkin.services.registry.RegistryStrategy">RegistryStrategy</a></span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n"><a class="autorefs autorefs-internal" href="#digitalkin.models.module.tool_cache.ToolCache.get(communication)">communication</a></span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-internal" href="#digitalkin.services.communication.CommunicationStrategy">CommunicationStrategy</a></span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n"><a class="autorefs autorefs-internal" href="#digitalkin.models.module.tool_cache.ToolModuleInfo">ToolModuleInfo</a></span> <span class="o">|</span> <span class="kc">None</span>
 </code></pre></div>
 
     <div class="doc doc-contents ">
@@ -64805,8 +64456,8 @@ print(my_input.root.protocol)  # Output: message</p>
 <p><span class="doc-section-title">Parameters:</span></p>
     <ul>
         <li class="doc-section-item field-body">
-<h7 id="digitalkin.models.module.tool_cache.ToolCache.get(setup_tool_name)" class="doc doc-heading doc-heading-parameter">              <b><code>setup_tool_name</code></b>
-<a href="#digitalkin.models.module.tool_cache.ToolCache.get(setup_tool_name)" class="headerlink" title="Permanent link">¤</a></h7>              (<code><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a></code>)
+<h7 id="digitalkin.models.module.tool_cache.ToolCache.get(setup_id)" class="doc doc-heading doc-heading-parameter">              <b><code>setup_id</code></b>
+<a href="#digitalkin.models.module.tool_cache.ToolCache.get(setup_id)" class="headerlink" title="Permanent link">¤</a></h7>              (<code><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a></code>)
           –
           <div class="doc-md-description">
             <p>Field name to look up.</p>
@@ -65425,7 +65076,7 @@ print(my_input.root.protocol)  # Output: message</p>
   </span>
 
 <a href="#digitalkin.models.module.tool_cache.module_info_to_tool_module_info" class="headerlink" title="Permanent link">¤</a></h5>
-<div class="language-python doc-signature highlight"><pre><span></span><code><span class="nf">module_info_to_tool_module_info</span><span class="p">(</span><span class="n"><a class="autorefs autorefs-internal" href="#digitalkin.models.module.tool_cache.module_info_to_tool_module_info(module_info)">module_info</a></span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-internal" href="#digitalkin.models.services.registry.ModuleInfo">ModuleInfo</a></span><span class="p">,</span> <span class="n"><a class="autorefs autorefs-internal" href="#digitalkin.models.module.tool_cache.module_info_to_tool_module_info(communication)">communication</a></span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-internal" href="#digitalkin.services.communication.CommunicationStrategy">CommunicationStrategy</a></span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n"><a class="autorefs autorefs-internal" href="#digitalkin.models.module.tool_cache.module_info_to_tool_module_info(llm_format)">llm_format</a></span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/functions.html#bool">bool</a></span> <span class="o">=</span> <span class="kc">True</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n"><a class="autorefs autorefs-internal" href="#digitalkin.models.module.tool_cache.ToolModuleInfo">ToolModuleInfo</a></span>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span class="nf">module_info_to_tool_module_info</span><span class="p">(</span><span class="n"><a class="autorefs autorefs-internal" href="#digitalkin.models.module.tool_cache.module_info_to_tool_module_info(module_info)">module_info</a></span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-internal" href="#digitalkin.models.services.registry.ModuleInfo">ModuleInfo</a></span><span class="p">,</span> <span class="n"><a class="autorefs autorefs-internal" href="#digitalkin.models.module.tool_cache.module_info_to_tool_module_info(setup_id)">setup_id</a></span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a></span><span class="p">,</span> <span class="n"><a class="autorefs autorefs-internal" href="#digitalkin.models.module.tool_cache.module_info_to_tool_module_info(communication)">communication</a></span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-internal" href="#digitalkin.services.communication.CommunicationStrategy">CommunicationStrategy</a></span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n"><a class="autorefs autorefs-internal" href="#digitalkin.models.module.tool_cache.module_info_to_tool_module_info(llm_format)">llm_format</a></span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/functions.html#bool">bool</a></span> <span class="o">=</span> <span class="kc">True</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n"><a class="autorefs autorefs-internal" href="#digitalkin.models.module.tool_cache.ToolModuleInfo">ToolModuleInfo</a></span>
 </code></pre></div>
 
     <div class="doc doc-contents ">
@@ -65443,6 +65094,14 @@ the discriminated union structure.</p>
           –
           <div class="doc-md-description">
             <p>Module info from registry.</p>
+          </div>
+        </li>
+        <li class="doc-section-item field-body">
+<h6 id="digitalkin.models.module.tool_cache.module_info_to_tool_module_info(setup_id)" class="doc doc-heading doc-heading-parameter">              <b><code>setup_id</code></b>
+<a href="#digitalkin.models.module.tool_cache.module_info_to_tool_module_info(setup_id)" class="headerlink" title="Permanent link">¤</a></h6>              (<code><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a></code>)
+          –
+          <div class="doc-md-description">
+            <p>Setup ID from tool configuration.</p>
           </div>
         </li>
         <li class="doc-section-item field-body">
@@ -111205,12 +110864,8 @@ allowing them to be switched between local and remote modes.</p>
       <a href="#digitalkin.services.services_config"><code class="doc-symbol doc-symbol-toc doc-symbol-module"></code>&nbsp;services_config</a>
   </span>
 
-            <span class="doc doc-backlink-crumb">
-      <a href="#digitalkin.services.services_config.ServicesConfig"><code class="doc-symbol doc-symbol-toc doc-symbol-class"></code>&nbsp;ServicesConfig</a>
-  </span>
-
             <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.services.services_config.ServicesConfig.update_mode"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;update_mode</a>
+      <a href="#digitalkin.services.services_config.ServicesConfig"><code class="doc-symbol doc-symbol-toc doc-symbol-class"></code>&nbsp;ServicesConfig</a>
   </span>
 
       </li>
