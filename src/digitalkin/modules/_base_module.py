@@ -556,21 +556,7 @@ class BaseModule(  # noqa: PLR0904
             await self._resolve_tools(config_setup_data)
             updated_config = await self.run_config_setup(self.context, config_setup_data)
 
-            # Build wrapper: original structure with updated content
-            wrapper = config_setup_data.model_dump()
-            wrapper["content"] = updated_config.model_dump()
-
-            # Debug logging
-            content = wrapper.get("content", {})
-            logger.info(
-                "Config setup wrapper: keys=%s, content_keys=%s, tools_cache=%s",
-                list(wrapper.keys()),
-                list(content.keys()) if isinstance(content, dict) else "N/A",
-                content.get("tools_cache") if isinstance(content, dict) else "N/A",
-                extra=self.context.session.current_ids(),
-            )
-
-            setup_model = await self.create_setup_model(wrapper)
+            setup_model = await self.create_setup_model(updated_config.model_dump())
             await callback(setup_model)
             self._status = ModuleStatus.STOPPING
         except Exception:
