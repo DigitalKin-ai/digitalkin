@@ -285,7 +285,7 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
         if not has_changes:
             return model_cls
 
-        root_extra = cls.model_config.get("json_schema_extra", {})
+        root_extra = model_cls.model_config.get("json_schema_extra", {})
 
         return create_model(
             model_cls.__name__,
