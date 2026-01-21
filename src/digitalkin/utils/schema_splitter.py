@@ -55,6 +55,8 @@ class SchemaSplitter:
                 for item in value:
                     if isinstance(item, dict):
                         cls._extract_ui_properties(item, ui_target)
+            elif key in {"if", "then", "else"} and isinstance(value, dict):
+                cls._extract_ui_properties(value, ui_target)
 
     @classmethod
     def _process_object(  # noqa: C901, PLR0912
@@ -107,11 +109,15 @@ class SchemaSplitter:
                         item_json: dict[str, Any] = {}
                         cls._strip_ui_properties(item, item_json)
                         json_target["allOf"].append(item_json)
+                        # Extract UI properties from allOf item
+                        cls._extract_ui_properties(item, ui_target)
                     else:
                         json_target["allOf"].append(item)
             elif key in {"if", "then", "else"} and isinstance(value, dict):
                 json_target[key] = {}
                 cls._strip_ui_properties(value, json_target[key])
+                # Extract UI properties from conditional
+                cls._extract_ui_properties(value, ui_target)
             else:
                 json_target[key] = value
 
