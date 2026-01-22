@@ -161,7 +161,7 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             logger.debug("Queue write rejected - session not found", extra={"job_id": job_id})
             return
 
-        async with session._write_lock:  # noqa: SLF001
+        async with session._write_lock:
             # Re-check after acquiring lock — session may have been cleaned up
             if self.tasks_sessions.get(job_id) is None:
                 logger.debug("Queue write rejected - session removed during lock wait", extra={"job_id": job_id})

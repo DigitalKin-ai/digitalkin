@@ -22,7 +22,7 @@ def _make_context(mission_id: str = "test_mission") -> MagicMock:
     ctx = MagicMock()
     ctx.session.mission_id = mission_id
     ctx.storage = AsyncMock()
-    ctx.storage.read = AsyncMock(return_value=None)
+    ctx.storage.get = AsyncMock(return_value=None)
     ctx.storage.upsert = AsyncMock(return_value=MagicMock(spec=StorageRecord))
     ctx.storage.update = AsyncMock(return_value=MagicMock(spec=StorageRecord))
     return ctx
@@ -44,28 +44,28 @@ class TestChatHistoryCache:
         mixin = _ConcreteMixin()
         ctx = _make_context()
         existing = _storage_record_with_history([{"role": "user", "content": "hello"}])
-        ctx.storage.read = AsyncMock(return_value=existing)
+        ctx.storage.get = AsyncMock(return_value=existing)
 
         first = await mixin.load_chat_history(ctx)
         second = await mixin.load_chat_history(ctx)
 
         if first is not second:
             pytest.fail("Expected cached ChatHistory object on second call")
-        ctx.storage.read.assert_awaited_once()
+        ctx.storage.get.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_load_returns_empty_on_cache_miss(self) -> None:
         """When storage has no record, returns empty ChatHistory and caches it."""
         mixin = _ConcreteMixin()
         ctx = _make_context()
-        ctx.storage.read = AsyncMock(return_value=None)
+        ctx.storage.get = AsyncMock(return_value=None)
 
         history = await mixin.load_chat_history(ctx)
 
         if len(history.messages) != 0:
             pytest.fail(f"Expected empty messages, got {len(history.messages)}")
         await mixin.load_chat_history(ctx)
-        ctx.storage.read.assert_awaited_once()
+        ctx.storage.get.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_different_missions_cached_independently(self) -> None:
@@ -157,7 +157,7 @@ class TestAppendStorageOptimization:
         mixin = _ConcreteMixin()
         ctx = _make_context()
         existing = _storage_record_with_history([{"role": "user", "content": "old"}])
-        ctx.storage.read = AsyncMock(return_value=existing)
+        ctx.storage.get = AsyncMock(return_value=existing)
 
         await mixin.load_chat_history(ctx)
         await mixin.append_chat_history_message(ctx, BaseRole.ASSISTANT, "new")
@@ -179,7 +179,7 @@ class TestAppendStorageOptimization:
         history = await mixin.load_chat_history(ctx)
         if len(history.messages) != 3:
             pytest.fail(f"Expected 3 messages in cache, got {len(history.messages)}")
-        ctx.storage.read.assert_awaited_once()
+        ctx.storage.get.assert_awaited_once()
 
 
 class TestBatchingBehavior:
@@ -308,7 +308,7 @@ def _make_mock_context() -> MagicMock:
     ctx = MagicMock()
     ctx.session.mission_id = "test_mission"
     ctx.storage = AsyncMock()
-    ctx.storage.read = AsyncMock(return_value=None)
+    ctx.storage.get = AsyncMock(return_value=None)
     ctx.storage.upsert = AsyncMock(return_value=MagicMock(spec=StorageRecord))
     ctx.storage.update = AsyncMock(return_value=MagicMock(spec=StorageRecord))
     return ctx

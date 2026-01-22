@@ -18,16 +18,16 @@ class DefaultTaskManager(TaskManagerStrategy):
 
     def __init__(
         self,
-        mission_id: str = "",  # noqa: ARG002
-        setup_id: str = "",  # noqa: ARG002
-        setup_version_id: str = "",  # noqa: ARG002
+        _mission_id: str = "",
+        _setup_id: str = "",
+        _setup_version_id: str = "",
     ) -> None:
         """Initialize in-memory signal store.
 
         Args:
-            mission_id: Mission identifier (unused, required by init_strategy convention).
-            setup_id: Setup identifier (unused, required by init_strategy convention).
-            setup_version_id: Setup version identifier (unused, required by init_strategy convention).
+            _mission_id: Mission identifier (unused, required by init_strategy convention).
+            _setup_id: Setup identifier (unused, required by init_strategy convention).
+            _setup_version_id: Setup version identifier (unused, required by init_strategy convention).
         """
         self._signals = {}
         self._subscribers = {}
@@ -49,11 +49,11 @@ class DefaultTaskManager(TaskManagerStrategy):
                 queue.put_nowait(data)
         return data
 
-    async def subscribe_signals(self, task_id: str = "") -> tuple[str, AsyncGenerator[dict[str, Any], None]]:  # noqa: ARG002
+    async def subscribe_signals(self, _task_id: str = "") -> tuple[str, AsyncGenerator[dict[str, Any], None]]:
         """Subscribe to signal updates via an in-memory queue.
 
         Args:
-            task_id: Task identifier (unused in local mode, broadcasts all signals).
+            _task_id: Task identifier (unused in local mode, broadcasts all signals).
 
         Returns:
             Tuple of (subscription_id, async generator of signal dicts).

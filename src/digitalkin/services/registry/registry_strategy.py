@@ -3,13 +3,9 @@
 from abc import ABC, abstractmethod
 from typing import Any
 
-from digitalkin.models.services.registry import (
-    ModuleInfo,
-    RegistryModuleStatus,
-    SetupInfo,
-)
-from digitalkin.services.base_strategy import BaseStrategy
-from digitalkin.services.registry.registry_models import ModuleStatusInfo
+from digitalkin.models.base_strategy import BaseStrategy
+from digitalkin.models.services.modules import ModuleInfo, ModuleStatus, ModuleType
+from digitalkin.models.services.setup import SetupInfo
 
 
 class RegistryStrategy(BaseStrategy, ABC):
@@ -30,16 +26,13 @@ class RegistryStrategy(BaseStrategy, ABC):
         super().__init__(mission_id, setup_id, setup_version_id)
         self.config = config
 
-    @abstractmethod
-    async def discover_by_id(self, module_id: str) -> ModuleInfo:
-        """Get module info by ID."""
-        ...
+    # ════════════════════════════════ Overriding Methods ════════════════════════════════ #
 
     @abstractmethod
     async def search(
         self,
         name: str | None = None,
-        module_type: str | None = None,
+        module_type: ModuleType | None = None,
         organization_id: str | None = None,
     ) -> list[ModuleInfo]:
         """Search for modules by criteria.
@@ -50,14 +43,26 @@ class RegistryStrategy(BaseStrategy, ABC):
             organization_id: Filter by organization.
 
         Returns:
-            List of matching modules.
+            list[ModuleInfo]: List of matching modules.
         """
-        ...
+        return await super().search()
 
     @abstractmethod
-    async def get_status(self, module_id: str) -> ModuleStatusInfo:
-        """Get module status."""
-        ...
+    async def get(self, module_id: str) -> ModuleInfo:
+        """Get module information by its unique identifier.
+
+        Args:
+            module_id: Unique module identifier.
+
+        Returns:
+            ModuleInfo: If module with the given ID is found in the registry.
+
+        Raises:
+             RegistryModuleNotFoundError: If module with the given ID is not found in the registry.
+        """
+        return await super().get()
+
+    # ════════════════════════════════ Abstracts Methods ═════════════════════════════════ #
 
     @abstractmethod
     async def register(
@@ -79,38 +84,114 @@ class RegistryStrategy(BaseStrategy, ABC):
             version: Module version.
 
         Returns:
-            ModuleInfo if successful, None otherwise.
+            ModuleInfo: If registration successful
         """
-        ...
+        msg = "Register method not implemented yet."
+        raise NotImplementedError(msg)
 
     @abstractmethod
-    async def heartbeat(self, module_id: str) -> RegistryModuleStatus:
+    async def heartbeat(self, module_id: str) -> ModuleStatus:
         """Send heartbeat to keep module active.
 
         Args:
             module_id: The module identifier.
 
         Returns:
-            Current module status after heartbeat.
+            ModuleStatus: Current module status after heartbeat.
 
         Raises:
             RegistryModuleNotFoundError: If module not found.
         """
-        ...
+        msg = "Heartbeat method not implemented yet."
+        raise NotImplementedError(msg)
+
+    @abstractmethod
+    async def get_status(self, module_id: str) -> ModuleInfo:
+        """Get the current status of a module.
+
+        Args:
+            module_id: The module identifier.
+
+        Returns:
+            ModuleInfo: Current module information including status.
+
+        Raises:
+            RegistryModuleNotFoundError: If module not found.
+        """
+        msg = "Get status method not implemented yet."
+        raise NotImplementedError(msg)
 
     @abstractmethod
     async def get_setup(self, setup_id: str) -> SetupInfo | None:
-        """Get setup info."""
-        ...
+        """Get setup info.
+
+        Args:
+            setup_id: The setup identifier.
+
+        Returns:
+            SetupInfo if successful, None otherwise.
+
+        Raises:
+            RegistryServiceError: If gRPC call fails.
+        """
+        msg = "Get setup method not implemented yet."
+        raise NotImplementedError(msg)
 
     @abstractmethod
     async def deregister(self, module_id: str) -> bool:
         """Deregister a module from the registry.
 
+        Note: The registry protocol uses heartbeat expiration for deregistration.
+        When a module stops sending heartbeats, it becomes inactive. This method
+        logs the deregistration intent for observability.
+
         Args:
             module_id: The module identifier to deregister.
 
         Returns:
-            True if deregistration was successful, False otherwise.
+            True always (heartbeat expiration handles actual deregistration).
         """
-        ...
+        msg = "Deregister method not implemented yet."
+        raise NotImplementedError(msg)
+
+    # ════════════════════════════ Unimplemented Methods ═════════════════════════════ #
+
+    async def create(self, *args: Any, **kwargs: Any) -> Any:
+        """Not implemented.
+
+        Returns:
+            NotImplementedError from base class.
+        """
+        return await super().create(args, kwargs)
+
+    async def list(self, *args: Any, **kwargs: Any) -> Any:
+        """Not implemented.
+
+        Returns:
+            NotImplementedError from base class.
+        """
+        return await super().list(args, kwargs)
+
+    async def delete(self, *args: Any, **kwargs: Any) -> Any:
+        """Not implemented.
+
+        Returns:
+            NotImplementedError from base class.
+        """
+        return await super().delete(args, kwargs)
+
+    async def update(self, *args: Any, **kwargs: Any) -> Any:
+        """Not implemented.
+
+        Returns:
+            NotImplementedError from base class.
+        """
+        return await super().update(args, kwargs)
+
+    async def upload(self, *args: Any, **kwargs: Any) -> Any:
+        """Not implemented.
+
+        Returns:
+            NotImplementedError from base class.
+        """
+        return await super().upload(args, kwargs)

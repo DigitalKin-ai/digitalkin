@@ -7,30 +7,22 @@ the Service Provider's Registry service.
 from typing import Any
 
 from agentic_mesh_protocol.registry.v1 import (
-    registry_enums_pb2,
-    registry_models_pb2,
-    registry_requests_pb2,
+    registry_dto_pb2,
+    registry_messages_pb2,
     registry_service_pb2_grpc,
 )
 
+from digitalkin.exception.registry import (
+    RegistryModuleNotFoundError,
+    RegistryServiceError,
+)
 from digitalkin.grpc_servers.utils.exceptions import ServerError
 from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
 from digitalkin.grpc_servers.utils.grpc_error_handler import GrpcErrorHandlerMixin
 from digitalkin.logger import logger
 from digitalkin.models.grpc_servers.models import ClientConfig
-from digitalkin.models.services.registry import (
-    ModuleInfo,
-    RegistryModuleStatus,
-    RegistryModuleType,
-    RegistrySetupStatus,
-    RegistryVisibility,
-    SetupInfo,
-)
-from digitalkin.services.registry.exceptions import (
-    RegistryModuleNotFoundError,
-    RegistryServiceError,
-)
-from digitalkin.services.registry.registry_models import ModuleStatusInfo
+from digitalkin.models.services.modules import ModuleInfo, ModuleStatus, ModuleType
+from digitalkin.models.services.setup import SetupInfo, SetupStatus, Visibility
 from digitalkin.services.registry.registry_strategy import RegistryStrategy
 
 
@@ -57,9 +49,11 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
         self.stub = registry_service_pb2_grpc.RegistryServiceStub(self._init_channel(client_config))
         logger.debug("Channel client 'Registry' initialized successfully")
 
+    # ════════════════════════════════ Private Methods ═════════════════════════════════ #
+
     @staticmethod
-    def _proto_to_module_info(
-        descriptor: registry_models_pb2.ModuleDescriptor,
+    def __proto_to_module_info(
+        descriptor: registry_messages_pb2.ModuleDescriptor,
     ) -> ModuleInfo:
         """Convert proto ModuleDescriptor to ModuleInfo.
 
@@ -69,19 +63,19 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
         Returns:
             ModuleInfo with mapped fields.
         """
-        type_name = registry_enums_pb2.ModuleType.Name(descriptor.module_type).removeprefix("MODULE_TYPE_")
         return ModuleInfo(
-            module_id=descriptor.id,
-            module_type=RegistryModuleType[type_name],
+            id=descriptor.id,
+            type=ModuleType.from_proto(descriptor.type),
             address=descriptor.address,
             port=descriptor.port,
             version=descriptor.version,
-            module_name=descriptor.name,
+            name=descriptor.name,
             documentation=descriptor.documentation or None,
+            status=ModuleStatus.from_proto(descriptor.status),
         )
 
     @staticmethod
-    def _proto_to_setup_info(descriptor: registry_models_pb2.SetupDescriptor) -> SetupInfo | None:
+    def __proto_to_setup_info(descriptor: registry_messages_pb2.SetupDescriptor) -> SetupInfo | None:
         """Convert proto SetupDescriptor to SetupInfo.
 
         Args:
@@ -92,14 +86,12 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
         """
         if not descriptor.id:
             return None
-        status_name = registry_enums_pb2.SetupStatus.Name(descriptor.status).removeprefix("SETUP_STATUS_")
-        visibility_name = registry_enums_pb2.Visibility.Name(descriptor.visibility).removeprefix("VISIBILITY_")
         return SetupInfo(
             setup_id=descriptor.id,
             name=descriptor.name,
             documentation=descriptor.documentation or None,
-            status=RegistrySetupStatus[status_name],
-            visibility=RegistryVisibility[visibility_name],
+            status=SetupStatus.from_proto(descriptor.status),
+            visibility=Visibility.from_proto(descriptor.visibility),
             organization_id=descriptor.organization_id or None,
             owner_id=descriptor.owner_id or None,
             card_id=descriptor.card_id or None,
@@ -109,64 +101,21 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
             config=dict(descriptor.config) if descriptor.config else None,
         )
 
-    async def discover_by_id(self, module_id: str) -> ModuleInfo:
-        """Get module info by ID.
-
-        Args:
-            module_id: The module identifier.
-
-        Returns:
-            ModuleInfo with module details.
-
-        Raises:
-            RegistryModuleNotFoundError: If module not found.
-            RegistryServiceError: If gRPC call fails.
-        """
-        logger.debug("Discovering module by ID", extra={"module_id": module_id})
-
-        async with self.handle_grpc_errors("GetModule", RegistryServiceError):
-            try:
-                response = await self.exec_grpc_query(
-                    "GetModule",
-                    registry_requests_pb2.GetModuleRequest(module_id=module_id),
-                )
-            except ServerError as e:
-                msg = f"Failed to discover module '{module_id}': {e}"
-                logger.error(msg)
-                raise RegistryServiceError(msg) from e
-
-            if not response.id:
-                logger.warning("Module not found in registry", extra={"module_id": module_id})
-                raise RegistryModuleNotFoundError(module_id)
-
-            logger.debug(
-                "Module discovered",
-                extra={
-                    "module_id": response.id,
-                    "address": response.address,
-                    "port": response.port,
-                },
-            )
-            return self._proto_to_module_info(response)
+    # ══════════════════════════════════ Public Methods ══════════════════════════════════ #
 
     async def search(
         self,
         name: str | None = None,
-        module_type: str | None = None,
+        module_type: ModuleType | None = None,
         organization_id: str | None = None,
     ) -> list[ModuleInfo]:
-        """Search for modules by criteria.
-
-        Args:
-            name: Filter by name (partial match via query).
-            module_type: Filter by type (archetype, tool).
-            organization_id: Filter by organization.
+        """Search modules via gRPC registry.
 
         Returns:
-            List of matching modules.
+            Registration response.
 
         Raises:
-            RegistryServiceError: If gRPC call fails.
+            RegistryServiceError: If gRPC error.
         """
         logger.debug(
             "Searching modules",
@@ -177,16 +126,15 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
             },
         )
 
-        async with self.handle_grpc_errors("DiscoverModules", RegistryServiceError):
-            module_types: list[str] = []
+        async with self.handle_grpc_errors("SearchModules", RegistryServiceError):
+            module_types = []
             if module_type:
-                enum_val = RegistryModuleType[module_type.upper()]
-                module_types.append(f"MODULE_TYPE_{enum_val.name}")
+                module_types.append(module_type.to_proto())
 
             try:
                 response = await self.exec_grpc_query(
-                    "DiscoverModules",
-                    registry_requests_pb2.DiscoverModulesRequest(
+                    "SearchModules",
+                    registry_dto_pb2.SearchModulesRequest(
                         query=name or "",
                         organization_id=organization_id or "",
                         module_types=module_types,
@@ -197,48 +145,79 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
                 logger.error(msg)
                 raise RegistryServiceError(msg) from e
 
-            logger.debug("Search returned %d modules", len(response.modules))
-            return [self._proto_to_module_info(m) for m in response.modules]
+            logger.debug("Search returned %d modules", len(response.result))
+            return [self.__proto_to_module_info(m.module_descriptor) for m in response.result]
 
-    async def get_status(self, module_id: str) -> ModuleStatusInfo:
-        """Get module status by fetching the module.
-
-        Args:
-            module_id: The module identifier.
+    async def get(self, module_id: str) -> ModuleInfo:
+        """Get module info by ID via gRPC.
 
         Returns:
-            ModuleStatusInfo with current status.
+            The module stub.
 
         Raises:
             RegistryModuleNotFoundError: If module not found.
-            RegistryServiceError: If gRPC call fails.
+            RegistryServiceError: If gRPC error.
         """
-        logger.debug("Getting module status", extra={"module_id": module_id})
+        logger.debug("Getting module by ID", extra={"id": module_id})
 
         async with self.handle_grpc_errors("GetModule", RegistryServiceError):
             try:
                 response = await self.exec_grpc_query(
                     "GetModule",
-                    registry_requests_pb2.GetModuleRequest(module_id=module_id),
+                    registry_dto_pb2.GetModuleRequest(module_id=module_id),
+                )
+            except ServerError as e:
+                msg = f"Failed to discover module '{module_id}': {e}"
+                logger.error(msg)
+                raise RegistryServiceError(msg) from e
+
+            if not response.result.success:
+                logger.warning("Module not found in registry", extra={"module_id": module_id})
+                raise RegistryModuleNotFoundError(module_id)
+
+            logger.debug(
+                "Module discovered",
+                extra={
+                    "module_id": response.result.module_descriptor.id,
+                    "address": response.result.module_descriptor.address,
+                    "port": response.result.module_descriptor.port,
+                },
+            )
+            return self.__proto_to_module_info(response.result.module_descriptor)
+
+    async def get_status(self, module_id: str) -> ModuleStatus:
+        """Get module status via gRPC.
+
+        Returns:
+            The module stub.
+
+        Raises:
+            RegistryModuleNotFoundError: If module not found.
+            RegistryServiceError: If gRPC error.
+        """
+        logger.debug("Getting module status", extra={"module_id": module_id})
+
+        async with self.handle_grpc_errors("GetStatus", RegistryServiceError):
+            try:
+                response = await self.exec_grpc_query(
+                    "GetModuleStatus",
+                    registry_dto_pb2.GetModuleRequest(module_id=module_id),
                 )
             except ServerError as e:
                 msg = f"Failed to get module status for '{module_id}': {e}"
                 logger.error(msg)
                 raise RegistryServiceError(msg) from e
 
-            if not response.id:
+            if not response.result.success:
                 logger.warning("Module not found in registry", extra={"module_id": module_id})
                 raise RegistryModuleNotFoundError(module_id)
 
-            status_name = registry_enums_pb2.ModuleStatus.Name(response.status).removeprefix("MODULE_STATUS_")
+            status_name = ModuleStatus.from_proto(response.result.module_descriptor.status)
             logger.debug(
                 "Module status retrieved",
-                extra={"module_id": response.id, "status": status_name},
+                extra={"module_id": response.result.module_descriptor.id, "status": status_name},
             )
-            return ModuleStatusInfo(
-                module_id=response.id,
-                status=RegistryModuleStatus[status_name],
-            )
+            return status_name
 
     async def register(
         self,
@@ -247,22 +226,13 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
         port: int,
         version: str,
     ) -> ModuleInfo | None:
-        """Register a module with the registry.
-
-        Note: The new proto only updates address/port/version for an existing module.
-        The module must already exist in the registry database.
-
-        Args:
-            module_id: Unique module identifier.
-            address: Network address.
-            port: Network port.
-            version: Module version.
+        """Register a module via gRPC.
 
         Returns:
-            ModuleInfo if successful, None if module not found.
+            The module address.
 
         Raises:
-            RegistryServiceError: If gRPC call fails.
+            RegistryServiceError: If gRPC error.
         """
         logger.info(
             "Registering module with registry",
@@ -278,7 +248,7 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
             try:
                 response = await self.exec_grpc_query(
                     "RegisterModule",
-                    registry_requests_pb2.RegisterModuleRequest(
+                    registry_dto_pb2.RegisterModuleRequest(
                         module_id=module_id,
                         address=address,
                         port=port,
@@ -290,7 +260,7 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
                 logger.error(msg)
                 raise RegistryServiceError(msg) from e
 
-            if not response.module or not response.module.id:
+            if not response.result.success:
                 logger.warning(
                     "Registry returned empty response for module registration",
                     extra={"module_id": module_id},
@@ -300,24 +270,21 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
             logger.info(
                 "Module registered successfully",
                 extra={
-                    "module_id": response.module.id,
-                    "address": response.module.address,
-                    "port": response.module.port,
+                    "module_id": response.result.module_descriptor.id,
+                    "address": response.result.module_descriptor.address,
+                    "port": response.result.module_descriptor.port,
                 },
             )
-            return self._proto_to_module_info(response.module)
+            return self.__proto_to_module_info(response.result.module_descriptor)
 
-    async def heartbeat(self, module_id: str) -> RegistryModuleStatus:
-        """Send heartbeat to keep module active.
-
-        Args:
-            module_id: The module identifier.
+    async def heartbeat(self, module_id: str) -> ModuleStatus:
+        """Send heartbeat via gRPC and return module status.
 
         Returns:
-            Current module status after heartbeat.
+            Module class instance.
 
         Raises:
-            RegistryServiceError: If gRPC call fails.
+            RegistryServiceError: If gRPC error.
         """
         logger.debug("Sending heartbeat", extra={"module_id": module_id})
 
@@ -325,59 +292,49 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
             try:
                 response = await self.exec_grpc_query(
                     "Heartbeat",
-                    registry_requests_pb2.HeartbeatRequest(module_id=module_id),
+                    registry_dto_pb2.HeartbeatRequest(module_id=module_id),
                 )
             except ServerError as e:
                 msg = f"Failed to send heartbeat for '{module_id}': {e}"
                 logger.error(msg)
                 raise RegistryServiceError(msg) from e
 
-            status_name = registry_enums_pb2.ModuleStatus.Name(response.status).removeprefix("MODULE_STATUS_")
+            status_name = ModuleStatus.from_proto(response.status)
             logger.debug(
                 "Heartbeat response",
                 extra={"module_id": module_id, "status": status_name},
             )
-            return RegistryModuleStatus[status_name]
+            return status_name
 
     async def get_setup(self, setup_id: str) -> SetupInfo | None:
-        """Get setup info.
-
-        Args:
-            setup_id: The setup identifier.
+        """Get setup info via gRPC.
 
         Returns:
-            SetupInfo if successful, None otherwise.
+            List of registered modules.
 
         Raises:
-            RegistryServiceError: If gRPC call fails.
+            RegistryServiceError: If gRPC error.
         """
         logger.debug("Getting setup", extra={"setup_id": setup_id})
         async with self.handle_grpc_errors("GetSetup", RegistryServiceError):
             try:
                 response = await self.exec_grpc_query(
                     "GetSetup",
-                    registry_requests_pb2.GetSetupRequest(setup_id=setup_id),
+                    registry_dto_pb2.GetSetupRequest(setup_id=setup_id),
                 )
             except ServerError as e:
                 msg = f"Failed to get setup '{setup_id}': {e}"
                 logger.error(msg)
                 raise RegistryServiceError(msg) from e
-            return self._proto_to_setup_info(response)
+            return self.__proto_to_setup_info(response)
 
-    async def deregister(  # noqa: PLR6301
+    async def deregister(
         self, module_id: str
-    ) -> bool:  # Protocol uses heartbeat expiration; self available for future override
-        """Deregister a module from the registry.
-
-        Note: The registry protocol uses heartbeat expiration for deregistration.
-        When a module stops sending heartbeats, it becomes inactive. This method
-        logs the deregistration intent for observability.
-
-        Args:
-            module_id: The module identifier to deregister.
+    ) -> bool:
+        """Log deregistration intent (heartbeat expiration handles actual removal).
 
         Returns:
-            True always (heartbeat expiration handles actual deregistration).
+            True after successful deletion.
         """
         logger.info(
             "Module deregistration initiated (will become inactive via heartbeat expiration)",

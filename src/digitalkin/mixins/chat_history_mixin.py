@@ -79,7 +79,7 @@ class ChatHistoryMixin(UserMessageMixin, StorageMixin, LoggerMixin, Generic[Inpu
         if history_key in self._ch_cache:
             return self._ch_cache[history_key]
 
-        raw = await self.read_storage(context, self.CHAT_HISTORY_COLLECTION, history_key)
+        raw = await self.get_storage(context, self.CHAT_HISTORY_COLLECTION, history_key)
         if raw is not None:
             history = ChatHistory.model_validate(raw.data)
             self._ch_persisted.add(history_key)

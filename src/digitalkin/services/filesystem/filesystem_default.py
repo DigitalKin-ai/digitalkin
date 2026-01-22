@@ -6,16 +6,13 @@ import tempfile
 import uuid
 from typing import Any, Literal
 
+from agentic_mesh_protocol.pagination.v1.pagination_pb2 import PaginationRequest
 from anyio import Path as AsyncPath
 
+from digitalkin.exception.filesystem import FilesystemServiceError
 from digitalkin.logger import logger
-from digitalkin.services.filesystem.filesystem_strategy import (
-    FileFilter,
-    FilesystemRecord,
-    FilesystemServiceError,
-    FilesystemStrategy,
-    UploadFileData,
-)
+from digitalkin.models.services.filesystem import FileFilter, FileStatus, FilesystemRecord, FileType, UploadFileData
+from digitalkin.services.filesystem.filesystem_strategy import FilesystemStrategy
 
 
 class DefaultFilesystem(FilesystemStrategy):
@@ -40,22 +37,10 @@ class DefaultFilesystem(FilesystemStrategy):
         self.db: dict[str, FilesystemRecord] = {}
         logger.debug("DefaultFilesystem initialized with temp_root: %s", self.temp_root)
 
-    def _get_context_temp_dir(self, context: str) -> str:
-        """Get the temporary directory path for a specific context.
-
-        Args:
-            context: The mission ID or setup ID.
-
-        Returns:
-            str: Path to the context's temporary directory
-        """
-        # Create a context-specific directory to organize files
-        context_dir = os.path.join(self.temp_root, context.replace(":", "_"))
-        os.makedirs(context_dir, exist_ok=True)
-        return context_dir
+    # ═════════════════════════════════ Private Methods ══════════════════════════════════ #
 
     @staticmethod
-    def _calculate_checksum(content: bytes) -> str:
+    def __calculate_checksum(content: bytes) -> str:
         """Calculate SHA-256 checksum of content.
 
         Args:
@@ -66,7 +51,7 @@ class DefaultFilesystem(FilesystemStrategy):
         """
         return hashlib.sha256(content).hexdigest()
 
-    def _filter_db(
+    def __filter_db(
         self,
         filters: FileFilter,
     ) -> list[FilesystemRecord]:
@@ -83,8 +68,8 @@ class DefaultFilesystem(FilesystemStrategy):
             f
             for f in self.db.values()
             if (not filters.names or f.name in filters.names)
-            and (not filters.file_ids or f.id in filters.file_ids)
-            and (not filters.file_types or f.file_type in filters.file_types)
+            and (not filters.ids or f.id in filters.ids)
+            and (not filters.types or f.type in filters.types)
             and (not filters.status or f.status == filters.status)
             and (not filters.content_type_prefix or f.content_type.startswith(filters.content_type_prefix))
             and (not filters.min_size_bytes or f.size_bytes >= filters.min_size_bytes)
@@ -93,24 +78,33 @@ class DefaultFilesystem(FilesystemStrategy):
             and (not filters.content_type or f.content_type == filters.content_type)
         ]
 
-    async def upload_files(
+    # ══════════════════════════════ Protected Methods ═══════════════════════════════ #
+
+    def _get_context_temp_dir(self, context: str) -> str:
+        """Get the temporary directory path for a specific context.
+
+        Args:
+            context: The mission ID or setup ID.
+
+        Returns:
+            str: Path to the context's temporary directory
+        """
+        # Create a context-specific directory to organize files
+        context_dir = os.path.join(self.temp_root, context.replace(":", "_"))
+        os.makedirs(context_dir, exist_ok=True)
+        return context_dir
+
+    async def upload(
         self,
         files: list[UploadFileData],
     ) -> tuple[list[FilesystemRecord], int, int]:
-        """Upload multiple files to the system.
-
-        This method allows batch uploading of files with validation and
-        error handling for each individual file. Files are processed
-        atomically - if one fails, others may still succeed.
-
-        Args:
-            files: List of files to upload
+        """Upload files to the local filesystem.
 
         Returns:
-            tuple[list[FilesystemRecord], int, int]: List of uploaded files, total uploaded count, total failed count
+            Tuple of (uploaded files, upload count, failure count).
 
         Raises:
-            FilesystemServiceError: If there is an error uploading the files
+            FilesystemServiceError: If a single file upload fails.
         """
         uploaded_files: list[FilesystemRecord] = []
         total_uploaded = 0
@@ -124,7 +118,7 @@ class DefaultFilesystem(FilesystemStrategy):
                 if await AsyncPath(file_path).exists() and not file.replace_if_exists:
                     msg = f"File with name {file.name} already exists."
                     logger.error(msg)
-                    raise FilesystemServiceError(msg)  # Intentional: wrap in domain exception for caller # noqa: TRY301
+                    raise FilesystemServiceError(msg)  # noqa: TRY301
 
                 await AsyncPath(file_path).write_bytes(file.content)
                 storage_uri = str(await AsyncPath(file_path).resolve())
@@ -132,21 +126,21 @@ class DefaultFilesystem(FilesystemStrategy):
                     id=str(uuid.uuid4()),
                     context=self.setup_id,
                     name=file.name,
-                    file_type=file.file_type,
+                    type=file.type,
                     content_type=file.content_type or "application/octet-stream",
                     size_bytes=len(file.content),
-                    checksum=self._calculate_checksum(file.content),
+                    checksum=self.__calculate_checksum(file.content),
                     metadata=file.metadata,
                     storage_uri=storage_uri,
-                    file_url=storage_uri,
-                    status="ACTIVE",
+                    url=storage_uri,
+                    status=FileStatus.ACTIVE,
                 )
 
                 self.db[file_data.id] = file_data
                 uploaded_files.append(file_data)
                 total_uploaded += 1
                 logger.debug("Uploaded file %s", file_data)
-            except Exception as e:  # Exception in loop: per-file error isolation in batch upload # noqa: PERF203
+            except Exception as e:  # noqa: PERF203
                 logger.exception("Error uploading file %s: %s", file.name, e)
                 total_failed += 1
                 # If only one file and it failed, propagate the error for pytest.raises
@@ -155,83 +149,20 @@ class DefaultFilesystem(FilesystemStrategy):
 
         return uploaded_files, total_uploaded, total_failed
 
-    async def get_files(
-        self,
-        filters: FileFilter,
-        *,
-        list_size: int = 100,
-        offset: int = 0,
-        order: str | None = None,  # API interface parameter, not implemented in local filesystem # noqa: ARG002
-        include_content: bool = False,
-    ) -> tuple[list[FilesystemRecord], int]:
-        """List files with filtering, sorting, and pagination.
-
-        This method provides flexible file querying capabilities with support for:
-        - Multiple filter criteria (name, type, dates, size, etc.)
-        - Pagination for large result sets
-        - Sorting by various fields
-        - Scoped access by context
-
-        Args:
-            filters: Filter criteria for the files
-            list_size: Number of files to return per page
-            offset: Offset to start listing files from
-            order: Fields to order results by (example: "created_at:asc,name:desc")
-            include_content: Whether to include file content in response
-
-        Returns:
-            tuple[list[FilesystemRecord], int]: List of files, total count
-
-        Raises:
-            FilesystemServiceError: If there is an error listing the files
-        """
-        try:
-            logger.debug("Listing files with filters: %s", filters)
-            # Filter files based on provided criteria
-            filtered_files = self._filter_db(filters)
-            if not filtered_files:
-                return [], 0
-            # Sorting not implemented for local filesystem (only used in development)
-
-            # Apply pagination
-            start_idx = offset
-            end_idx = start_idx + list_size
-            paginated_files = filtered_files[start_idx:end_idx]
-
-            if include_content:
-                for file in paginated_files:
-                    file.content = await AsyncPath(file.storage_uri).read_bytes()
-
-        except Exception as e:
-            msg = f"Error listing files: {e!s}"
-            logger.exception(msg)
-            raise FilesystemServiceError(msg)
-        else:
-            return paginated_files, len(filtered_files)
-
-    async def get_file(
+    async def get(
         self,
         file_id: str,
-        context: Literal["mission", "setup"] = "mission",  # noqa: ARG002
+        _context: Literal["mission", "setup"] = "mission",
         *,
         include_content: bool = False,
     ) -> FilesystemRecord:
-        """Get a specific file by ID or name.
-
-        This method fetches detailed information about a single file,
-        with optional content inclusion. Supports lookup by either
-        unique ID or name within a context.
-
-        Args:
-            file_id: The ID of the file to be retrieved
-            context: The context of the files (mission or setup)
-            include_content: Whether to include file content in response
+        """Retrieve a file by ID from local storage.
 
         Returns:
-            FilesystemRecord: Metadata about the retrieved file
+            The requested file record.
 
         Raises:
-            FilesystemServiceError: If there is an error retrieving the file
+            FilesystemServiceError: If file not found or retrieval error.
         """
         try:
             logger.debug("Getting file with id: %s", file_id)
@@ -242,7 +173,7 @@ class DefaultFilesystem(FilesystemStrategy):
             if not file_data:
                 msg = f"File not found with id {file_id}"
                 logger.error(msg)
-                raise FilesystemServiceError(msg)  # Intentional: wrap in domain exception for caller # noqa: TRY301
+                raise FilesystemServiceError(msg)  # noqa: TRY301
 
             if include_content:
                 file_path = file_data.storage_uri
@@ -256,48 +187,63 @@ class DefaultFilesystem(FilesystemStrategy):
         else:
             return file_data
 
-    async def update_file(
+    async def list(
+        self,
+        filters: FileFilter,
+        *,
+        pagination: PaginationRequest = PaginationRequest(limit=100, offset=0, order=None),
+        include_content: bool = False,
+    ) -> tuple[list[FilesystemRecord], int]:
+        """List files matching filters with pagination.
+
+        Returns:
+            Tuple of (paginated files, total count).
+
+        Raises:
+            FilesystemServiceError: If listing error occurs.
+        """
+        try:
+            logger.debug("Listing files with filters: %s", filters)
+            # Filter files based on provided criteria
+            filtered_files = self.__filter_db(filters)
+            if not filtered_files:
+                return [], 0
+            # Sort if order is specified
+            # TODO
+
+            # Apply pagination
+            start_idx = pagination.offset
+            end_idx = start_idx + pagination.limit
+            paginated_files = filtered_files[start_idx:end_idx]
+
+            if include_content:
+                for file in paginated_files:
+                    file.content = await AsyncPath(file.storage_uri).read_bytes()
+
+        except Exception as e:
+            msg = f"Error listing files: {e!s}"
+            logger.exception(msg)
+            raise FilesystemServiceError(msg)
+        else:
+            return paginated_files, len(filtered_files)
+
+    async def update(
         self,
         file_id: str,
         content: bytes | None = None,
-        file_type: Literal[
-            "UNSPECIFIED",
-            "DOCUMENT",
-            "IMAGE",
-            "VIDEO",
-            "AUDIO",
-            "ARCHIVE",
-            "CODE",
-            "OTHER",
-        ]
-        | None = None,
+        type: FileType | None = None,  # noqa: A002
         content_type: str | None = None,
         metadata: dict[str, Any] | None = None,
         new_name: str | None = None,
-        status: str | None = None,
+        status: FileStatus | None = None,
     ) -> FilesystemRecord:
-        """Update file metadata, content, or both.
-
-        This method allows updating various aspects of a file:
-        - Rename files
-        - Update content and content type
-        - Modify metadata
-        - Create new versions
-
-        Args:
-            file_id: The id of the file to be updated
-            content: Optional new content of the file
-            file_type: Optional new type of data
-            content_type: Optional new MIME type
-            metadata: Optional new metadata (will merge with existing)
-            new_name: Optional new name for the file
-            status: Optional new status for the file
+        """Update file metadata, content, or both in local storage.
 
         Returns:
-            FilesystemRecord: Metadata about the updated file
+            The updated file record.
 
         Raises:
-            FilesystemServiceError: If there is an error during update
+            FilesystemServiceError: If file not found or update error.
         """
         logger.debug("Updating file with id: %s", file_id)
         if file_id not in self.db:
@@ -313,10 +259,10 @@ class DefaultFilesystem(FilesystemStrategy):
             if content is not None:
                 await AsyncPath(file_path).write_bytes(content)
                 existing_file.size_bytes = len(content)
-                existing_file.checksum = self._calculate_checksum(content)
+                existing_file.checksum = self.__calculate_checksum(content)
 
-            if file_type is not None:
-                existing_file.file_type = file_type
+            if type is not None:
+                existing_file.type = type
 
             if content_type is not None:
                 existing_file.content_type = content_type
@@ -342,31 +288,20 @@ class DefaultFilesystem(FilesystemStrategy):
         else:
             return existing_file
 
-    async def delete_files(
+    async def delete(
         self,
         filters: FileFilter,
         *,
         permanent: bool = False,
-        force: bool = False,  # API interface parameter, not used in local filesystem # noqa: ARG002
+        _force: bool = False,  # API interface parameter, not used in local filesystem
     ) -> tuple[dict[str, bool], int, int]:
-        """Delete multiple files.
-
-        This method supports batch deletion of files with options for:
-        - Soft deletion (marking as deleted)
-        - Permanent deletion
-        - Force deletion of files in use
-        - Individual error reporting per file
-
-        Args:
-            filters: Filter criteria for the files to delete
-            permanent: Whether to permanently delete the files
-            force: Whether to force delete even if files are in use
+        """Delete files matching filters from local storage.
 
         Returns:
-            tuple[dict[str, bool], int, int]: Results per file, total deleted count, total failed count
+            Tuple of (results dict, deleted count, failed count).
 
         Raises:
-            FilesystemServiceError: If there is an error deleting the files
+            FilesystemServiceError: If deletion error occurs.
         """
         logger.debug("Deleting files with filters: %s", filters)
         results: dict[str, bool] = {}  # id -> success
@@ -375,7 +310,7 @@ class DefaultFilesystem(FilesystemStrategy):
 
         try:
             # Determine which files to delete
-            files_to_delete = [f.id for f in self._filter_db(filters)]
+            files_to_delete = [f.id for f in self.__filter_db(filters)]
 
             if not files_to_delete:
                 logger.info("No files match the deletion criteria.")
@@ -395,7 +330,7 @@ class DefaultFilesystem(FilesystemStrategy):
                             await AsyncPath(file_path).unlink()
                             del self.db[file_id]
                         else:
-                            file_data.status = "DELETED"
+                            file_data.status = FileStatus.DELETED
                             self.db[file_id] = file_data
                         results[file_id] = True
                         total_deleted += 1

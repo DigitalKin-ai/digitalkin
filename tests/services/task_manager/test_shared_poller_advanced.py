@@ -62,9 +62,9 @@ def _proto(task_id: str, action: str, ts: int | None = None) -> task_manager_mes
 def _client(poll_interval: float = 0.1, initial: float = 0.05) -> GrpcTaskManager:
     cfg = ClientConfig(host="[::]", port=50051, mode=ServerMode.ASYNC, security=SecurityMode.INSECURE)
     c = GrpcTaskManager(
-        mission_id=_MISSION,
-        setup_id=_SETUP,
-        setup_version_id=_VERSION,
+        _MISSION,
+        _SETUP,
+        _VERSION,
         client_config=cfg,
         poll_interval=poll_interval,
         initial_poll_interval=initial,

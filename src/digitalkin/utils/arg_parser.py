@@ -65,15 +65,15 @@ class ArgParser:
         def __call__(
             self,
             parser: ArgumentParser,
-            namespace: Namespace,  # argparse _HelpAction.__call__ signature # noqa: ARG002
-            values: str | Sequence[Any] | None,  # argparse _HelpAction.__call__ signature # noqa: ARG002
-            option_string: str | None = None,  # argparse _HelpAction.__call__ signature # noqa: ARG002
+            _namespace: Namespace,  # argparse _HelpAction.__call__ signature
+            _values: str | Sequence[Any] | None,  # argparse _HelpAction.__call__ signature
+            _option_string: str | None = None,  # argparse _HelpAction.__call__ signature
         ) -> None:
             """Override the HelpActions as it doesn't handle subparser well."""
             parser.print_help()
             subparsers_actions = [
                 action
-                for action in parser._actions  # noqa: SLF001
+                for action in parser._actions
                 if isinstance(action, _SubParsersAction)
             ]  # Private argparse API needed for subparser enumeration
             for subparsers_action in subparsers_actions:

@@ -27,7 +27,7 @@ from digitalkin.utils.package_discover import ModuleDiscoverer
 from digitalkin.utils.schema_splitter import SchemaSplitter
 
 
-class BaseModule(  # Module SDK base class requires many public methods # noqa: PLR0904
+class BaseModule(  # noqa: PLR0904
     ABC,
     Generic[
         InputModelT,
@@ -322,8 +322,8 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
         # Convert CostConfig objects to serializable dict
         cost_schema = {
             name: {
-                "name": cost_config.cost_name,
-                "type": cost_config.cost_type,
+                "name": cost_config.name,
+                "type": cost_config.type.to_proto(),
                 "description": cost_config.description,
                 "unit": cost_config.unit,
                 "rate": cost_config.rate,
@@ -491,9 +491,9 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
         """Run the module."""
         ...
 
-    async def run_config_setup(  # Default implementation; subclasses may use self # noqa: PLR6301
+    async def run_config_setup(
         self,
-        context: ModuleContext,  # Available for subclass overrides # noqa: ARG002
+        _context: ModuleContext,  # Available for subclass overrides
         config_setup_data: SetupModelT,
     ) -> SetupModelT:
         """Run config setup the module.

@@ -28,7 +28,7 @@ class TaskExecutor:
     _profile_output_dir: str = os.environ.get("DIGITALKIN_PROFILE_OUTPUT_DIR", "./profiles")
 
     @staticmethod
-    async def execute_task(  # noqa: C901, PLR0915 — supervisor pattern
+    async def execute_task(  # noqa: C901, PLR0915
         task_id: str,
         mission_id: str,
         coro: Coroutine[Any, Any, None],
@@ -86,8 +86,8 @@ class TaskExecutor:
                             setup_version_id=session.setup_version_id,
                             action=SignalType.STOP,
                             cancellation_reason=session.cancellation_reason,
-                            error_message=session._last_exception,  # noqa: SLF001
-                            exception_traceback=session._last_traceback,  # noqa: SLF001
+                            error_message=session._last_exception,
+                            exception_traceback=session._last_traceback,
                         ).model_dump(exclude_none=True),
                     )
                 logger.info("Signal listener ended", extra={"mission_id": mission_id, "task_id": task_id})
@@ -122,7 +122,7 @@ class TaskExecutor:
                 if completed is main_task:
                     cleanup_reason = CancellationReason.SUCCESS_CLEANUP
                 elif completed is sig_task:
-                    if session._signal_listener_failed:  # noqa: SLF001
+                    if session._signal_listener_failed:
                         cleanup_reason = CancellationReason.FAILURE_CLEANUP
                     else:
                         cleanup_reason = CancellationReason.SIGNAL_SERVICE_CANCEL
@@ -161,7 +161,7 @@ class TaskExecutor:
                         extra={"mission_id": mission_id, "task_id": task_id},
                     )
                 elif completed is sig_task:
-                    if session._signal_listener_failed:  # noqa: SLF001
+                    if session._signal_listener_failed:
                         session.status = "failed"
                         session.cancellation_reason = CancellationReason.GRPC_SERVICE_ERROR
                         logger.error(

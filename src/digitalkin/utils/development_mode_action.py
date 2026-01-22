@@ -18,7 +18,7 @@ class DevelopmentModeMappingAction(Action):
     def __init__(
         self,
         env_var: str,
-        required: bool = True,  # argparse Action API convention # noqa: FBT001, FBT002
+        required: bool = True,  # noqa: FBT001, FBT002
         default: str | None = None,
         **kwargs: Any,
     ) -> None:
@@ -35,10 +35,10 @@ class DevelopmentModeMappingAction(Action):
 
     def __call__(
         self,
-        parser: ArgumentParser,  # argparse Action.__call__ signature # noqa: ARG002
+        _parser: ArgumentParser,  # argparse Action.__call__ signature
         namespace: Namespace,
         values: str | Sequence[Any] | None,
-        option_string: str | None = None,  # argparse Action.__call__ signature # noqa: ARG002
+        _option_string: str | None = None,  # argparse Action.__call__ signature
     ) -> None:
         """Set the attribute to the corresponding class.
 

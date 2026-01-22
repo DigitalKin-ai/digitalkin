@@ -1,0 +1,1 @@
+"""Setup version service strategies."""

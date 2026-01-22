@@ -40,7 +40,7 @@ class PickleFormatter(TaskiqFormatter):
     by first converting to JSON-safe primitives, then pickling that string.
     """
 
-    def dumps(self, message: TaskiqMessage) -> BrokerMessage:  # Required by TaskiqFormatter interface # noqa: PLR6301
+    def dumps(self, message: TaskiqMessage) -> BrokerMessage:
         """Dumps message from python complex object to JSON.
 
         Args:
@@ -58,7 +58,7 @@ class PickleFormatter(TaskiqFormatter):
             labels=message.labels,
         )
 
-    def loads(self, message: bytes) -> TaskiqMessage:  # Required by TaskiqFormatter interface # noqa: PLR6301
+    def loads(self, message: bytes) -> TaskiqMessage:
         """Recreate Python object from bytes.
 
         Args:

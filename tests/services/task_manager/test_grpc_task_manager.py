@@ -108,9 +108,9 @@ def client(test_channel: grpc_testing.Channel) -> GrpcTaskManager:
     )
 
     client = GrpcTaskManager(
-        mission_id=MISSION_ID,
-        setup_id=SETUP_ID,
-        setup_version_id=SETUP_VERSION_ID,
+        MISSION_ID,
+        SETUP_ID,
+        SETUP_VERSION_ID,
         client_config=dummy_config,
         poll_interval=0.1,
     )
@@ -569,8 +569,8 @@ class TestSubscription:
             mode=ServerMode.ASYNC, security=SecurityMode.INSECURE,
         )
         client = GrpcTaskManager(
-            mission_id=MISSION_ID, setup_id=SETUP_ID,
-            setup_version_id=SETUP_VERSION_ID, client_config=dummy_config,
+            MISSION_ID, SETUP_ID,
+            SETUP_VERSION_ID, client_config=dummy_config,
             poll_interval=0.1,
         )
         # Mock stub.GetSignals (SharedPoller calls stub directly)
@@ -596,8 +596,8 @@ class TestSubscription:
             mode=ServerMode.ASYNC, security=SecurityMode.INSECURE,
         )
         client = GrpcTaskManager(
-            mission_id=MISSION_ID, setup_id=SETUP_ID,
-            setup_version_id=SETUP_VERSION_ID, client_config=dummy_config,
+            MISSION_ID, SETUP_ID,
+            SETUP_VERSION_ID, client_config=dummy_config,
             poll_interval=0.05,
         )
 
@@ -632,8 +632,8 @@ class TestSubscription:
             mode=ServerMode.ASYNC, security=SecurityMode.INSECURE,
         )
         client = GrpcTaskManager(
-            mission_id=MISSION_ID, setup_id=SETUP_ID,
-            setup_version_id=SETUP_VERSION_ID, client_config=dummy_config,
+            MISSION_ID, SETUP_ID,
+            SETUP_VERSION_ID, client_config=dummy_config,
             poll_interval=0.05,
         )
 
@@ -854,8 +854,8 @@ class TestOverloadResilience:
             mode=ServerMode.ASYNC, security=SecurityMode.INSECURE,
         )
         client = GrpcTaskManager(
-            mission_id=MISSION_ID, setup_id=SETUP_ID,
-            setup_version_id=SETUP_VERSION_ID, client_config=dummy_config,
+            MISSION_ID, SETUP_ID,
+            SETUP_VERSION_ID, client_config=dummy_config,
             poll_interval=0.05,
         )
 
@@ -896,8 +896,8 @@ class TestClose:
             mode=ServerMode.ASYNC, security=SecurityMode.INSECURE,
         )
         client = GrpcTaskManager(
-            mission_id=MISSION_ID, setup_id=SETUP_ID,
-            setup_version_id=SETUP_VERSION_ID, client_config=dummy_config,
+            MISSION_ID, SETUP_ID,
+            SETUP_VERSION_ID, client_config=dummy_config,
             poll_interval=0.05,
         )
 
@@ -931,8 +931,8 @@ class TestClose:
             mode=ServerMode.ASYNC, security=SecurityMode.INSECURE,
         )
         client = GrpcTaskManager(
-            mission_id=MISSION_ID, setup_id=SETUP_ID,
-            setup_version_id=SETUP_VERSION_ID, client_config=dummy_config,
+            MISSION_ID, SETUP_ID,
+            SETUP_VERSION_ID, client_config=dummy_config,
             poll_interval=0.05,
         )
 

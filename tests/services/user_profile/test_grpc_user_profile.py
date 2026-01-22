@@ -16,15 +16,16 @@ import grpc
 import grpc_testing
 import pytest
 from agentic_mesh_protocol.user_profile.v1 import (
-    user_profile_pb2,
+    user_profile_dto_pb2,
+    user_profile_messages_pb2,
     user_profile_service_pb2,
     user_profile_service_pb2_grpc,
 )
-from tests.fixtures.grpc_fixtures import FakeContext
-from tests.services.user_profile.mock_user_profile_servicer import MockUserProfileServicer
 
 from digitalkin.models.grpc_servers.models import ClientConfig
-from digitalkin.services.user_profile.grpc_user_profile import GrpcUserProfile
+from digitalkin.services.user_profile.user_profile_grpc import GrpcUserProfile
+from tests.fixtures.grpc_fixtures import FakeContext
+from tests.services.user_profile.mock_user_profile_servicer import MockUserProfileServicer
 
 # Set timeout for all tests in this file (20 seconds)
 pytestmark = pytest.mark.timeout(20)
@@ -32,7 +33,7 @@ pytestmark = pytest.mark.timeout(20)
 # --- Test Constants ---
 MISSION_ID = "missions:test_mission_123"
 USER_ID = "users:test_user_123"
-ORGANISATION_ID = "organisations:test_org_456"
+organization_id = "organizations:test_org_456"
 
 # Module-level variables required by grpc_test_server fixture
 service_instance = MockUserProfileServicer()
@@ -140,25 +141,25 @@ def client(
 
 
 @pytest.fixture
-def sample_user_profile_response() -> user_profile_pb2.GetUserProfileResponse:
+def sample_user_profile_response() -> user_profile_dto_pb2.GetUserProfileResponse:
     """Create a sample user profile response proto for testing.
 
     Returns:
         GetUserProfileResponse proto
     """
-    user_profile = user_profile_pb2.UserProfile(
+    user_profile = user_profile_messages_pb2.UserProfile(
         user_id=USER_ID,
-        organisation_id=ORGANISATION_ID,
+        organization_id=organization_id,
         email="test.user@example.com",
         first_name="Test",
         last_name="User",
         locale="en_US",
-        subscription=user_profile_pb2.Subscription(
+        subscription=user_profile_messages_pb2.Subscription(
             tier="premium",
             status="active",
         ),
         credits=[
-            user_profile_pb2.CreditLot(
+            user_profile_messages_pb2.CreditLot(
                 source="subscription",
                 total=1000,
                 remaining=750.0,
@@ -166,7 +167,8 @@ def sample_user_profile_response() -> user_profile_pb2.GetUserProfileResponse:
         ],
         metadata={"security_key": "test_security_key_123"},
     )
-    return user_profile_pb2.GetUserProfileResponse(success=True, user_profile=user_profile)
+    result = user_profile_messages_pb2.UserProfileResult(profile=user_profile, success=True)
+    return user_profile_dto_pb2.GetUserProfileResponse(result=result)
 
 
 # ============================================================================
@@ -185,7 +187,7 @@ class TestGetUserProfileSuccess:
         client: GrpcUserProfile,
         test_channel: grpc_testing.Channel,
         mock_servicer: MockUserProfileServicer,
-        sample_user_profile_response: user_profile_pb2.GetUserProfileResponse,
+            sample_user_profile_response: user_profile_dto_pb2.GetUserProfileResponse,
         thread_pool: futures.ThreadPoolExecutor,
     ) -> None:
         """Test successfully retrieving a user profile."""
@@ -195,7 +197,7 @@ class TestGetUserProfileSuccess:
             "GetUserProfile"
         ]
 
-        future = thread_pool.submit(asyncio.run, client.get_user_profile())
+        future = thread_pool.submit(asyncio.run, client.get())
         _, request, rpc = test_channel.take_unary_unary(method_desc)
 
         assert request.mission_id == MISSION_ID
@@ -208,7 +210,7 @@ class TestGetUserProfileSuccess:
 
         assert result is not None
         assert result["user_id"] == USER_ID
-        assert result["organisation_id"] == ORGANISATION_ID
+        assert result["organization_id"] == organization_id
         assert result["email"] == "test.user@example.com"
         assert result["first_name"] == "Test"
         assert result["last_name"] == "User"
@@ -222,7 +224,7 @@ class TestGetUserProfileSuccess:
         client: GrpcUserProfile,
         test_channel: grpc_testing.Channel,
         mock_servicer: MockUserProfileServicer,
-        sample_user_profile_response: user_profile_pb2.GetUserProfileResponse,
+            sample_user_profile_response: user_profile_dto_pb2.GetUserProfileResponse,
         thread_pool: futures.ThreadPoolExecutor,
     ) -> None:
         """Test retrieving a user profile with subscription data."""
@@ -232,7 +234,7 @@ class TestGetUserProfileSuccess:
             "GetUserProfile"
         ]
 
-        future = thread_pool.submit(asyncio.run, client.get_user_profile())
+        future = thread_pool.submit(asyncio.run, client.get())
         _, request, rpc = test_channel.take_unary_unary(method_desc)
 
         context = FakeContext()
@@ -255,7 +257,7 @@ class TestGetUserProfileSuccess:
         client: GrpcUserProfile,
         test_channel: grpc_testing.Channel,
         mock_servicer: MockUserProfileServicer,
-        sample_user_profile_response: user_profile_pb2.GetUserProfileResponse,
+            sample_user_profile_response: user_profile_dto_pb2.GetUserProfileResponse,
         thread_pool: futures.ThreadPoolExecutor,
     ) -> None:
         """Test retrieving a user profile with credits data."""
@@ -265,7 +267,7 @@ class TestGetUserProfileSuccess:
             "GetUserProfile"
         ]
 
-        future = thread_pool.submit(asyncio.run, client.get_user_profile())
+        future = thread_pool.submit(asyncio.run, client.get())
         _, request, rpc = test_channel.take_unary_unary(method_desc)
 
         context = FakeContext()
@@ -289,7 +291,7 @@ class TestGetUserProfileSuccess:
         client: GrpcUserProfile,
         test_channel: grpc_testing.Channel,
         mock_servicer: MockUserProfileServicer,
-        sample_user_profile_response: user_profile_pb2.GetUserProfileResponse,
+            sample_user_profile_response: user_profile_dto_pb2.GetUserProfileResponse,
         thread_pool: futures.ThreadPoolExecutor,
     ) -> None:
         """Test retrieving a user profile with metadata."""
@@ -299,7 +301,7 @@ class TestGetUserProfileSuccess:
             "GetUserProfile"
         ]
 
-        future = thread_pool.submit(asyncio.run, client.get_user_profile())
+        future = thread_pool.submit(asyncio.run, client.get())
         _, request, rpc = test_channel.take_unary_unary(method_desc)
 
         context = FakeContext()
@@ -333,7 +335,7 @@ class TestGetUserProfileValidation:
             "GetUserProfile"
         ]
 
-        future = thread_pool.submit(asyncio.run, client.get_user_profile())
+        future = thread_pool.submit(asyncio.run, client.get())
         _, request, rpc = test_channel.take_unary_unary(method_desc)
 
         context = FakeContext()
@@ -355,19 +357,20 @@ class TestGetUserProfileValidation:
         thread_pool: futures.ThreadPoolExecutor,
     ) -> None:
         """Test retrieving a user profile with minimal required fields."""
-        minimal_profile = user_profile_pb2.UserProfile(
+        minimal_profile = user_profile_messages_pb2.UserProfile(
             user_id=USER_ID,
-            organisation_id=ORGANISATION_ID,
+            organization_id=organization_id,
             email="minimal@example.com",
         )
-        minimal_response = user_profile_pb2.GetUserProfileResponse(success=True, user_profile=minimal_profile)
+        result = user_profile_messages_pb2.UserProfileResult(profile=minimal_profile, success=True)
+        minimal_response = user_profile_dto_pb2.GetUserProfileResponse(result=result)
         mock_servicer.add_user_profile(MISSION_ID, minimal_response)
 
         method_desc = user_profile_service_pb2.DESCRIPTOR.services_by_name["UserProfileService"].methods_by_name[
             "GetUserProfile"
         ]
 
-        future = thread_pool.submit(asyncio.run, client.get_user_profile())
+        future = thread_pool.submit(asyncio.run, client.get())
         _, request, rpc = test_channel.take_unary_unary(method_desc)
 
         context = FakeContext()
@@ -395,19 +398,20 @@ class TestGetUserProfileEdgeCases:
         thread_pool: futures.ThreadPoolExecutor,
     ) -> None:
         """Test retrieving a user profile with special characters in email."""
-        profile = user_profile_pb2.UserProfile(
+        profile = user_profile_messages_pb2.UserProfile(
             user_id=USER_ID,
-            organisation_id=ORGANISATION_ID,
+            organization_id=organization_id,
             email="test.user+tag@example.co.uk",
         )
-        response = user_profile_pb2.GetUserProfileResponse(success=True, user_profile=profile)
+        result = user_profile_messages_pb2.UserProfileResult(profile=profile, success=True)
+        response = user_profile_dto_pb2.GetUserProfileResponse(result=result)
         mock_servicer.add_user_profile(MISSION_ID, response)
 
         method_desc = user_profile_service_pb2.DESCRIPTOR.services_by_name["UserProfileService"].methods_by_name[
             "GetUserProfile"
         ]
 
-        future = thread_pool.submit(asyncio.run, client.get_user_profile())
+        future = thread_pool.submit(asyncio.run, client.get())
         _, request, rpc = test_channel.take_unary_unary(method_desc)
 
         context = FakeContext()
@@ -428,21 +432,22 @@ class TestGetUserProfileEdgeCases:
         thread_pool: futures.ThreadPoolExecutor,
     ) -> None:
         """Test retrieving a user profile with Unicode characters in names."""
-        profile = user_profile_pb2.UserProfile(
+        profile = user_profile_messages_pb2.UserProfile(
             user_id=USER_ID,
-            organisation_id=ORGANISATION_ID,
+            organization_id=organization_id,
             email="test@example.com",
             first_name="José",
             last_name="François-müller",
         )
-        response = user_profile_pb2.GetUserProfileResponse(success=True, user_profile=profile)
+        result = user_profile_messages_pb2.UserProfileResult(profile=profile, success=True)
+        response = user_profile_dto_pb2.GetUserProfileResponse(result=result)
         mock_servicer.add_user_profile(MISSION_ID, response)
 
         method_desc = user_profile_service_pb2.DESCRIPTOR.services_by_name["UserProfileService"].methods_by_name[
             "GetUserProfile"
         ]
 
-        future = thread_pool.submit(asyncio.run, client.get_user_profile())
+        future = thread_pool.submit(asyncio.run, client.get())
         _, request, rpc = test_channel.take_unary_unary(method_desc)
 
         context = FakeContext()
@@ -472,13 +477,14 @@ class TestGetUserProfileEdgeCases:
 
         for i, locale in enumerate(locales):
             mission_id = f"missions:mission_{i}"
-            profile = user_profile_pb2.UserProfile(
+            profile = user_profile_messages_pb2.UserProfile(
                 user_id=f"users:user_{i}",
-                organisation_id=ORGANISATION_ID,
+                organization_id=organization_id,
                 email=f"user{i}@example.com",
                 locale=locale,
             )
-            response = user_profile_pb2.GetUserProfileResponse(success=True, user_profile=profile)
+            result = user_profile_messages_pb2.UserProfileResult(profile=profile, success=True)
+            response = user_profile_dto_pb2.GetUserProfileResponse(result=result)
             mock_servicer.add_user_profile(mission_id, response)
 
             test_client = GrpcUserProfile(
@@ -490,7 +496,7 @@ class TestGetUserProfileEdgeCases:
             test_client.stub = user_profile_service_pb2_grpc.UserProfileServiceStub(test_channel)
             test_client.exec_grpc_query = types.MethodType(_test_exec_grpc_query, test_client)
 
-            future = thread_pool.submit(asyncio.run, test_client.get_user_profile())
+            future = thread_pool.submit(asyncio.run, test_client.get())
             _, request, rpc = test_channel.take_unary_unary(method_desc)
 
             context = FakeContext()
@@ -511,26 +517,27 @@ class TestGetUserProfileEdgeCases:
         thread_pool: futures.ThreadPoolExecutor,
     ) -> None:
         """Test retrieving a user profile with zero credits."""
-        profile = user_profile_pb2.UserProfile(
+        profile = user_profile_messages_pb2.UserProfile(
             user_id=USER_ID,
-            organisation_id=ORGANISATION_ID,
+            organization_id=organization_id,
             email="test@example.com",
             credits=[
-                user_profile_pb2.CreditLot(
+                user_profile_messages_pb2.CreditLot(
                     source="subscription",
                     total=0,
                     remaining=0.0,
                 )
             ],
         )
-        response = user_profile_pb2.GetUserProfileResponse(success=True, user_profile=profile)
+        result = user_profile_messages_pb2.UserProfileResult(profile=profile, success=True)
+        response = user_profile_dto_pb2.GetUserProfileResponse(result=result)
         mock_servicer.add_user_profile(MISSION_ID, response)
 
         method_desc = user_profile_service_pb2.DESCRIPTOR.services_by_name["UserProfileService"].methods_by_name[
             "GetUserProfile"
         ]
 
-        future = thread_pool.submit(asyncio.run, client.get_user_profile())
+        future = thread_pool.submit(asyncio.run, client.get())
         _, request, rpc = test_channel.take_unary_unary(method_desc)
 
         context = FakeContext()
@@ -554,23 +561,24 @@ class TestGetUserProfileEdgeCases:
         thread_pool: futures.ThreadPoolExecutor,
     ) -> None:
         """Test retrieving a user profile with expired subscription."""
-        profile = user_profile_pb2.UserProfile(
+        profile = user_profile_messages_pb2.UserProfile(
             user_id=USER_ID,
-            organisation_id=ORGANISATION_ID,
+            organization_id=organization_id,
             email="test@example.com",
-            subscription=user_profile_pb2.Subscription(
+            subscription=user_profile_messages_pb2.Subscription(
                 tier="premium",
                 status="expired",
             ),
         )
-        response = user_profile_pb2.GetUserProfileResponse(success=True, user_profile=profile)
+        result = user_profile_messages_pb2.UserProfileResult(profile=profile, success=True)
+        response = user_profile_dto_pb2.GetUserProfileResponse(result=result)
         mock_servicer.add_user_profile(MISSION_ID, response)
 
         method_desc = user_profile_service_pb2.DESCRIPTOR.services_by_name["UserProfileService"].methods_by_name[
             "GetUserProfile"
         ]
 
-        future = thread_pool.submit(asyncio.run, client.get_user_profile())
+        future = thread_pool.submit(asyncio.run, client.get())
         _, request, rpc = test_channel.take_unary_unary(method_desc)
 
         context = FakeContext()
@@ -595,26 +603,28 @@ class TestGetUserProfileEdgeCases:
         mission1_id = "missions:mission_1"
         mission2_id = "missions:mission_2"
 
-        profile1 = user_profile_pb2.UserProfile(
+        profile1 = user_profile_messages_pb2.UserProfile(
             user_id="users:user_1",
-            organisation_id=ORGANISATION_ID,
+            organization_id=organization_id,
             email="user1@example.com",
             first_name="User",
             last_name="One",
-            credits=[user_profile_pb2.CreditLot(source="subscription", total=100, remaining=100.0)],
+            credits=[user_profile_messages_pb2.CreditLot(source="subscription", total=100, remaining=100.0)],
         )
-        response1 = user_profile_pb2.GetUserProfileResponse(success=True, user_profile=profile1)
+        result = user_profile_messages_pb2.UserProfileResult(profile=profile1, success=True)
+        response1 = user_profile_dto_pb2.GetUserProfileResponse(result=result)
         mock_servicer.add_user_profile(mission1_id, response1)
 
-        profile2 = user_profile_pb2.UserProfile(
+        profile2 = user_profile_messages_pb2.UserProfile(
             user_id="users:user_2",
-            organisation_id=ORGANISATION_ID,
+            organization_id=organization_id,
             email="user2@example.com",
             first_name="User",
             last_name="Two",
-            credits=[user_profile_pb2.CreditLot(source="subscription", total=200, remaining=200.0)],
+            credits=[user_profile_messages_pb2.CreditLot(source="subscription", total=200, remaining=200.0)],
         )
-        response2 = user_profile_pb2.GetUserProfileResponse(success=True, user_profile=profile2)
+        result = user_profile_messages_pb2.UserProfileResult(profile=profile2, success=True)
+        response2 = user_profile_dto_pb2.GetUserProfileResponse(result=result)
         mock_servicer.add_user_profile(mission2_id, response2)
 
         method_desc = user_profile_service_pb2.DESCRIPTOR.services_by_name["UserProfileService"].methods_by_name[
@@ -631,7 +641,7 @@ class TestGetUserProfileEdgeCases:
         client1.stub = user_profile_service_pb2_grpc.UserProfileServiceStub(test_channel)
         client1.exec_grpc_query = types.MethodType(_test_exec_grpc_query, client1)
 
-        future1 = thread_pool.submit(asyncio.run, client1.get_user_profile())
+        future1 = thread_pool.submit(asyncio.run, client1.get())
         _, request1, rpc1 = test_channel.take_unary_unary(method_desc)
         context1 = FakeContext()
         resp1 = mock_servicer.GetUserProfile(request1, context1)
@@ -648,7 +658,7 @@ class TestGetUserProfileEdgeCases:
         client2.stub = user_profile_service_pb2_grpc.UserProfileServiceStub(test_channel)
         client2.exec_grpc_query = types.MethodType(_test_exec_grpc_query, client2)
 
-        future2 = thread_pool.submit(asyncio.run, client2.get_user_profile())
+        future2 = thread_pool.submit(asyncio.run, client2.get())
         _, request2, rpc2 = test_channel.take_unary_unary(method_desc)
         context2 = FakeContext()
         resp2 = mock_servicer.GetUserProfile(request2, context2)

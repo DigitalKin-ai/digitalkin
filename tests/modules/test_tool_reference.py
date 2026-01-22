@@ -9,28 +9,30 @@ from unittest.mock import AsyncMock
 import pytest
 from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 
+from digitalkin.models.module import ToolDefinition, ToolParameter, ToolModuleInfo
 from digitalkin.models.module.setup_types import SetupModel
-from digitalkin.models.module.tool_cache import ToolDefinition, ToolModuleInfo, ToolParameter
-from digitalkin.models.module.tool_reference import ToolReference, ToolSelection, tool_reference_input
-from digitalkin.models.services.registry import (
-    ModuleInfo,
-    RegistryModuleStatus,
-    RegistryModuleType,
-    SetupInfo,
+from digitalkin.models.module.tool_reference import (
+    ToolReference,
+    ToolSelection, tool_reference_input,
 )
+from digitalkin.models.services.setup import SetupInfo
+from digitalkin.services.registry import ModuleStatus, ModuleType, ModuleInfo
 from digitalkin.services.registry import RegistryStrategy
 
 
 class FakeRegistry(RegistryStrategy):
     """Fake registry for testing tool resolution."""
 
-    def __init__(self, modules: dict[str, ModuleInfo] | None = None) -> None:
+    def __init__(self, mission_id: str = None, setup_id: str = None, setup_version_id: str = None, modules: dict[str, ModuleInfo] | None = None) -> \
+            None:
+        super().__init__(mission_id, setup_id, setup_version_id)
         self._modules = modules or {}
         self._setups: dict[str, SetupInfo] = {}
         self._search_results: dict[str, list[ModuleInfo]] = {}
 
+
     def add_module(self, info: ModuleInfo) -> None:
-        self._modules[info.module_id] = info
+        self._modules[info.id] = info
 
     def add_setup(self, setup_id: str, module_id: str, name: str = "") -> None:
         self._setups[setup_id] = SetupInfo(
@@ -42,7 +44,7 @@ class FakeRegistry(RegistryStrategy):
     def add_search_result(self, tag: str, results: list[ModuleInfo]) -> None:
         self._search_results[tag] = results
 
-    async def discover_by_id(self, module_id: str) -> ModuleInfo | None:
+    async def get(self, module_id: str) -> ModuleInfo | None:
         return self._modules.get(module_id)
 
     async def get_setup(self, setup_id: str) -> SetupInfo | None:
@@ -51,7 +53,7 @@ class FakeRegistry(RegistryStrategy):
     async def search(
         self,
         name: str | None = None,
-        module_type: str | None = None,
+            module_type: ModuleType | None = None,
         organization_id: str | None = None,
     ) -> list[ModuleInfo]:
         if name and name in self._search_results:
@@ -70,8 +72,8 @@ class FakeRegistry(RegistryStrategy):
     ) -> ModuleInfo | None:
         return None
 
-    async def heartbeat(self, module_id: str) -> RegistryModuleStatus:
-        return RegistryModuleStatus.ACTIVE
+    def heartbeat(self, module_id: str) -> ModuleStatus:
+        return ModuleStatus.ACTIVE
 
     async def deregister(self, module_id: str) -> bool:
         return True
@@ -108,12 +110,12 @@ def create_tool_module_info(
 ) -> ToolModuleInfo:
     """Create a ToolModuleInfo for testing."""
     return ToolModuleInfo(
-        module_id=module_id,
-        module_type=RegistryModuleType.TOOL,
+        id=module_id,
+        type=ModuleType.TOOL,
         address="localhost",
         port=port,
         version="1.0.0",
-        module_name=name,
+        name=name,
         setup_id=setup_id,
         tool_name=tool_name,
         tools=[
@@ -131,36 +133,39 @@ def create_tool_module_info(
 @pytest.fixture
 def search_tool_info() -> ModuleInfo:
     return ModuleInfo(
-        module_id="tool-search-001",
-        module_type=RegistryModuleType.TOOL,
+        id="tool-search-001",
+        type=ModuleType.TOOL,
         address="localhost",
         port=50051,
         version="1.0.0",
-        module_name="SearchTool",
+        name="SearchTool",
+        status=ModuleStatus.ACTIVE
     )
 
 
 @pytest.fixture
 def analyzer_tool_info() -> ModuleInfo:
     return ModuleInfo(
-        module_id="tool-analyzer-002",
-        module_type=RegistryModuleType.TOOL,
+        id="tool-analyzer-002",
+        type=ModuleType.TOOL,
         address="localhost",
         port=50052,
         version="2.0.0",
-        module_name="AnalyzerTool",
+        name="AnalyzerTool",
+        status=ModuleStatus.ACTIVE
     )
 
 
 @pytest.fixture
 def writer_tool_info() -> ModuleInfo:
     return ModuleInfo(
-        module_id="tool-writer-003",
-        module_type=RegistryModuleType.TOOL,
+        id="tool-writer-003",
+        type=ModuleType.TOOL,
         address="localhost",
         port=50053,
         version="1.5.0",
-        module_name="WriterTool",
+        name="WriterTool",
+        status=ModuleStatus.ACTIVE
     )
 
 
@@ -239,7 +244,7 @@ class TestToolReferenceResolution:
         result = await ref.resolve(registry, communication)
 
         assert len(result) == 1
-        assert result[0].module_id == "tool-search-001"
+        assert result[0].id == "tool-search-001"
         assert len(result[0].tools) == 1
         assert result[0].tools[0].name == "search"
 
@@ -258,7 +263,7 @@ class TestToolReferenceResolution:
         result = await ref.resolve(registry, communication)
 
         assert len(result) == 2
-        module_ids = {r.module_id for r in result}
+        module_ids = {r.id for r in result}
         assert "tool-search-001" in module_ids
         assert "tool-analyzer-002" in module_ids
 
@@ -305,7 +310,7 @@ class TestSetupModelToolResolution:
 
         assert len(setup.resolved_tools) == 1
         tool_info = next(iter(setup.resolved_tools.values()))
-        assert tool_info.module_id == "tool-search-001"
+        assert tool_info.id == "tool-search-001"
 
     @pytest.mark.asyncio
     async def test_multiple_tool_references_resolved(
@@ -329,7 +334,7 @@ class TestSetupModelToolResolution:
         await setup.build_tool_cache(registry, communication)
 
         assert len(setup.resolved_tools) == 2
-        module_ids = {info.module_id for info in setup.resolved_tools.values()}
+        module_ids = {info.id for info in setup.resolved_tools.values()}
         assert "tool-search-001" in module_ids
         assert "tool-analyzer-002" in module_ids
 
@@ -387,7 +392,7 @@ class TestNestedToolReferenceResolution:
 
         assert len(setup.resolved_tools) == 1
         tool_info = next(iter(setup.resolved_tools.values()))
-        assert tool_info.module_id == "tool-search-001"
+        assert tool_info.id == "tool-search-001"
 
     @pytest.mark.asyncio
     async def test_deeply_nested_tool_resolved(
@@ -414,7 +419,7 @@ class TestNestedToolReferenceResolution:
 
         assert len(setup.resolved_tools) == 1
         tool_info = next(iter(setup.resolved_tools.values()))
-        assert tool_info.module_id == "tool-analyzer-002"
+        assert tool_info.id == "tool-analyzer-002"
 
     @pytest.mark.asyncio
     async def test_list_of_tool_references_resolved(
@@ -439,7 +444,7 @@ class TestNestedToolReferenceResolution:
 
         assert len(setup.tools) == 2
         assert len(setup.resolved_tools) == 2
-        module_ids = {info.module_id for info in setup.resolved_tools.values()}
+        module_ids = {info.id for info in setup.resolved_tools.values()}
         assert "tool-search-001" in module_ids
         assert "tool-analyzer-002" in module_ids
 
@@ -475,7 +480,7 @@ class TestNestedToolReferenceResolution:
         await setup.build_tool_cache(registry, communication)
 
         assert len(setup.resolved_tools) == 2
-        module_ids = {info.module_id for info in setup.resolved_tools.values()}
+        module_ids = {info.id for info in setup.resolved_tools.values()}
         assert "tool-search-001" in module_ids
         assert "tool-writer-003" in module_ids
 
@@ -501,7 +506,7 @@ class TestNestedToolReferenceResolution:
         await setup.build_tool_cache(registry, communication)
 
         assert len(setup.resolved_tools) == 2
-        module_ids = {info.module_id for info in setup.resolved_tools.values()}
+        module_ids = {info.id for info in setup.resolved_tools.values()}
         assert "tool-search-001" in module_ids
         assert "tool-analyzer-002" in module_ids
 
@@ -530,7 +535,7 @@ class TestNestedToolReferenceResolution:
         await setup.build_tool_cache(registry, communication)
 
         assert len(setup.resolved_tools) == 2
-        module_ids = {info.module_id for info in setup.resolved_tools.values()}
+        module_ids = {info.id for info in setup.resolved_tools.values()}
         assert "tool-search-001" in module_ids
         assert "tool-writer-003" in module_ids
 
@@ -575,7 +580,7 @@ class TestComplexArchetypeSetup:
 
         # All tools resolved correctly
         assert len(setup.resolved_tools) == 3
-        module_ids = {info.module_id for info in setup.resolved_tools.values()}
+        module_ids = {info.id for info in setup.resolved_tools.values()}
         assert "tool-search-001" in module_ids
         assert "tool-writer-003" in module_ids
         assert "tool-analyzer-002" in module_ids
@@ -604,7 +609,7 @@ class TestComplexArchetypeSetup:
         # Only existing_tool resolved
         assert len(setup.resolved_tools) == 1
         tool_info = next(iter(setup.resolved_tools.values()))
-        assert tool_info.module_id == "tool-search-001"
+        assert tool_info.id == "tool-search-001"
 
 
 class TestToolReferenceJsonSchema:

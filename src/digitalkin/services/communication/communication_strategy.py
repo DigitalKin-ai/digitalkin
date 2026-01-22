@@ -2,21 +2,39 @@
 
 from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator, Awaitable, Callable
+from typing import Any
 
-from digitalkin.services.base_strategy import BaseStrategy
+from digitalkin.models.base_strategy import BaseStrategy
 
 
 class CommunicationStrategy(BaseStrategy, ABC):
     """Abstract base class for module-to-module communication.
 
     This service enables:
-    - Archetype → Tool communication
-    - Archetype → Archetype communication
-    - Tool → Tool communication
-    - Any module → Any module communication
+    - Archetype -> Tool communication
+    - Archetype -> Archetype communication
+    - Tool -> Tool communication
+    - Any module -> Any module communication
 
     The service wraps the Module Service protocol from agentic-mesh-protocol.
     """
+
+    def __init__(
+        self,
+        mission_id: str,
+        setup_id: str,
+        setup_version_id: str,
+    ) -> None:
+        """Initialize the default communication service.
+
+        Args:
+            mission_id: Mission identifier
+            setup_id: Setup identifier
+            setup_version_id: Setup version identifier
+        """
+        super().__init__(mission_id, setup_id, setup_version_id)
+
+    # ══════════════════════════════════ Public Methods ══════════════════════════════════ #
 
     @abstractmethod
     async def close(self) -> None:
@@ -82,3 +100,62 @@ class CommunicationStrategy(BaseStrategy, ABC):
         # Make this an actual async generator to satisfy type checkers
         if False:  # pragma: no cover
             yield {}
+        raise NotImplementedError
+
+    # ══════════════════════════════ Unimplemented Methods ═══════════════════════════════ #
+
+    async def create(self, *args: Any, **kwargs: Any) -> Any:
+        """Not implemented.
+
+        Returns:
+            NotImplementedError from base class.
+        """
+        return await super().create(args, kwargs)
+
+    async def get(self, *args: Any, **kwargs: Any) -> Any:
+        """Not implemented.
+
+        Returns:
+            NotImplementedError from base class.
+        """
+        return await super().get(args, kwargs)
+
+    async def list(self, *args: Any, **kwargs: Any) -> Any:
+        """Not implemented.
+
+        Returns:
+            NotImplementedError from base class.
+        """
+        return await super().list(args, kwargs)
+
+    async def search(self, *args: Any, **kwargs: Any) -> Any:
+        """Not implemented.
+
+        Returns:
+            NotImplementedError from base class.
+        """
+        return await super().search(args, kwargs)
+
+    async def delete(self, *args: Any, **kwargs: Any) -> Any:
+        """Not implemented.
+
+        Returns:
+            NotImplementedError from base class.
+        """
+        return await super().delete(args, kwargs)
+
+    async def update(self, *args: Any, **kwargs: Any) -> Any:
+        """Not implemented.
+
+        Returns:
+            NotImplementedError from base class.
+        """
+        return await super().update(args, kwargs)
+
+    async def upload(self, *args: Any, **kwargs: Any) -> Any:
+        """Not implemented.
+
+        Returns:
+            NotImplementedError from base class.
+        """
+        return await super().upload(args, kwargs)

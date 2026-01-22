@@ -226,7 +226,7 @@ class ChannelConfig(BaseModel):
         Raises:
             ConfigurationError: If port is outside valid range
         """
-        if not 0 < v < 65536:  # TCP port range constant # noqa: PLR2004
+        if not 0 < v < 65536:  # noqa: PLR2004
             msg = f"Port must be between 1 and 65535, got {v}"
             raise ConfigurationError(msg)
         return v

@@ -1,6 +1,9 @@
 #!/bin/sh
 set -e
 
+#reinstall amp
+uv pip install --system /app/agentic_mesh_protocol-*.whl 2>/dev/null || uv pip install --system /app/dist/agentic_mesh_protocol-*.tar.gz
+
 if [ -n "$TEST_MARKER" ]; then
     pytest "${TEST_SELECTOR:-tests/}" -m "$TEST_MARKER" ${PYTEST_ARGS:-} || exit_code=$?
 else

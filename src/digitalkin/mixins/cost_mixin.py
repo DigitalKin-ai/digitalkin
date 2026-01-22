@@ -4,7 +4,7 @@ from typing import Literal
 
 from digitalkin.logger import logger
 from digitalkin.models.module.module_context import ModuleContext
-from digitalkin.services.cost.cost_strategy import CostData
+from digitalkin.models.services.cost import CostData
 
 
 class CostMixin:
@@ -16,7 +16,7 @@ class CostMixin:
     """
 
     @staticmethod
-    async def add_cost(context: ModuleContext, name: str, cost_config_name: str, quantity: float) -> None:
+    async def create_cost(context: ModuleContext, name: str, cost_config_name: str, quantity: float) -> None:
         """Add a cost entry using the cost strategy.
 
         Args:
@@ -26,12 +26,12 @@ class CostMixin:
             quantity: Quantity of units consumed.
         """
         try:
-            await context.cost.add(name, cost_config_name, quantity)
+            await context.cost.create(name, cost_config_name, quantity)
         except Exception:
-            logger.error("Failed to add cost '%s' (config=%s), continuing", name, cost_config_name, exc_info=True)
+            logger.error("Failed to create cost '%s' (config=%s), continuing", name, cost_config_name, exc_info=True)
 
     @staticmethod
-    async def get_cost(context: ModuleContext, name: str) -> list[CostData]:
+    async def list_cost(context: ModuleContext, name: str) -> list[CostData]:
         """Get cost entries for a specific name.
 
         Args:
@@ -42,9 +42,9 @@ class CostMixin:
             List of cost data entries, empty on failure.
         """
         try:
-            return await context.cost.get(name)
+            return await context.cost.list(name)
         except Exception:
-            logger.warning("Failed to get cost '%s', returning empty", name, exc_info=True)
+            logger.warning("Failed to list cost '%s', returning empty", name, exc_info=True)
             return []
 
     @staticmethod
@@ -74,7 +74,7 @@ class CostMixin:
             List of filtered cost data entries, empty on failure.
         """
         try:
-            return await context.cost.get_filtered(names, cost_types)
+            return await context.cost.list(names, cost_types)
         except Exception:
             logger.warning("Failed to get filtered costs, returning empty", exc_info=True)
             return []

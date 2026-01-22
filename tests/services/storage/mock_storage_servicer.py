@@ -4,11 +4,13 @@ import datetime
 from typing import Any
 
 import grpc
-from agentic_mesh_protocol.storage.v1 import data_pb2, storage_service_pb2_grpc
+from agentic_mesh_protocol.pagination.v1 import bulk_pb2
+from agentic_mesh_protocol.storage.v1 import storage_dto_pb2, storage_service_pb2_grpc, storage_messages_pb2
 from google.protobuf import json_format, struct_pb2
 from pydantic import BaseModel, ValidationError
 
 from digitalkin.logger import logger
+from digitalkin.models.services.storage import DataType
 
 
 class MockStorageServicer(storage_service_pb2_grpc.StorageServiceServicer):
@@ -45,13 +47,13 @@ class MockStorageServicer(storage_service_pb2_grpc.StorageServiceServicer):
         # This will raise ValidationError if invalid
         model_cls.model_validate(data)
 
-    def _create_proto_record(
-        self,
-        mission_id: str,
+    @staticmethod
+    def __create_proto_record(
+            mission_id: str,
         collection: str,
         record_id: str,
         record_data: dict[str, Any],
-    ) -> data_pb2.StorageRecord:
+    ) -> storage_messages_pb2.StorageRecord:
         """Convert internal record data to proto StorageRecord.
 
         Args:
@@ -61,7 +63,7 @@ class MockStorageServicer(storage_service_pb2_grpc.StorageServiceServicer):
             record_data: The record data dictionary
 
         Returns:
-            data_pb2.StorageRecord: Proto storage record
+            storage_pb2.StorageRecord: Proto storage record
         """
         # Convert data dict to Struct
         data_struct = json_format.ParseDict(
@@ -69,76 +71,67 @@ class MockStorageServicer(storage_service_pb2_grpc.StorageServiceServicer):
             struct_pb2.Struct(),
         )
 
-        # Convert stored string name back to protobuf enum value
-        # "OUTPUT" -> data_pb2.OUTPUT (integer)
-        value = getattr(data_pb2, record_data["data_type"])
-
         # Convert ISO timestamp strings to datetime objects for protobuf Timestamp
         from google.protobuf.timestamp_pb2 import Timestamp
 
         creation_ts = Timestamp()
         update_ts = Timestamp()
 
-        if record_data.get("creation_date"):
-            creation_dt = datetime.datetime.fromisoformat(record_data["creation_date"])
+        if record_data.get("created_at"):
+            creation_dt = datetime.datetime.fromisoformat(record_data["created_at"])
             creation_ts.FromDatetime(creation_dt)
 
-        if record_data.get("update_date"):
-            update_dt = datetime.datetime.fromisoformat(record_data["update_date"])
+        if record_data.get("updated_at"):
+            update_dt = datetime.datetime.fromisoformat(record_data["updated_at"])
             update_ts.FromDatetime(update_dt)
 
-        return data_pb2.StorageRecord(
+        return storage_messages_pb2.StorageRecord(
             mission_id=mission_id,
             collection=collection,
             record_id=record_id,
-            data_type=value,
+            data_type=record_data["data_type"],
             data=data_struct,
-            creation_date=creation_ts,
-            update_date=update_ts,
+            created_at=creation_ts,
+            updated_at=update_ts,
         )
 
-    def StoreRecord(
-        self, request: data_pb2.StoreRecordRequest, context: grpc.ServicerContext
-    ) -> data_pb2.StoreRecordResponse:
+    def CreateRecord(
+            self, request: storage_dto_pb2.CreateRecordRequest, context: grpc.ServicerContext
+    ) -> storage_dto_pb2.CreateRecordResponse:
         """Store a new record in the mock database.
 
         Args:
-            request: StoreRecordRequest containing record data
+            request: CreateRecordRequest containing record data
             context: gRPC context
 
         Returns:
-            StoreRecordResponse: Response containing stored record
+            CreateRecordResponse: Response containing stored record
         """
         try:
             # Validate required fields
             if not request.mission_id:
                 context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
                 context.set_details("Mission ID is required")
-                return data_pb2.StoreRecordResponse()
+                result = storage_messages_pb2.StorageResult(error=bulk_pb2.OperationError(code=str(grpc.StatusCode.INVALID_ARGUMENT)), success=False)
+                return storage_dto_pb2.CreateRecordResponse(result=result)
 
             if not request.collection:
                 context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
                 context.set_details("Collection is required")
-                return data_pb2.StoreRecordResponse()
+                result = storage_messages_pb2.StorageResult(error=bulk_pb2.OperationError(code=str(grpc.StatusCode.INVALID_ARGUMENT)), success=False)
+                return storage_dto_pb2.CreateRecordResponse(result=result)
 
             if not request.record_id:
                 context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
                 context.set_details("Record ID is required")
-                return data_pb2.StoreRecordResponse()
+                result = storage_messages_pb2.StorageResult(error=bulk_pb2.OperationError(code=str(grpc.StatusCode.INVALID_ARGUMENT)), success=False)
+                return storage_dto_pb2.CreateRecordResponse(result=result)
 
-            # Validate data type (request.data_type is a protobuf enum integer value)
-            # Convert protobuf enum value to enum name for validation
-            # data_pb2.OUTPUT (int) -> need to check if it's valid
-            valid_values = [
-                data_pb2.OUTPUT,
-                data_pb2.VIEW,
-                data_pb2.LOGS,
-                data_pb2.OTHER,
-            ]
-            if request.data_type not in valid_values:
+            if DataType.from_proto(request.data_type) not in DataType:
                 context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
                 context.set_details(f"Invalid data type: {request.data_type}")
-                return data_pb2.StoreRecordResponse()
+                result = storage_messages_pb2.StorageResult(error=bulk_pb2.OperationError(code=str(grpc.StatusCode.INVALID_ARGUMENT)), success=False)
+                return storage_dto_pb2.CreateRecordResponse(result=result)
 
             # Convert Struct to dict
             data_dict = json_format.MessageToDict(request.data, preserving_proto_field_name=True)
@@ -150,7 +143,9 @@ class MockStorageServicer(storage_service_pb2_grpc.StorageServiceServicer):
                 except (ValidationError, ValueError) as e:
                     context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
                     context.set_details(f"Schema validation failed: {e!s}")
-                    return data_pb2.StoreRecordResponse()
+                    result = storage_messages_pb2.StorageResult(error=bulk_pb2.OperationError(code=str(grpc.StatusCode.INVALID_ARGUMENT)),
+                                                                success=False)
+                    return storage_dto_pb2.CreateRecordResponse(result=result)
 
             # Check if record already exists
             mission_records = self.records.setdefault(request.mission_id, {})
@@ -159,62 +154,68 @@ class MockStorageServicer(storage_service_pb2_grpc.StorageServiceServicer):
             if request.record_id in collection_records:
                 context.set_code(grpc.StatusCode.ALREADY_EXISTS)
                 context.set_details(f"Record {request.record_id} already exists in collection {request.collection}")
-                return data_pb2.StoreRecordResponse()
+                result = storage_messages_pb2.StorageResult(error=bulk_pb2.OperationError(code=str(grpc.StatusCode.ALREADY_EXISTS)), success=False)
+                return storage_dto_pb2.CreateRecordResponse(result=result)
 
             # Store the record
             # Convert protobuf enum integer value to string name for storage
-            # data_pb2.OUTPUT -> "OUTPUT"
-            name = data_pb2.DataType.Name(request.data_type)
+            # storage_pb2.OUTPUT -> "OUTPUT"
+            data_type = request.data_type
             now = datetime.datetime.now(datetime.timezone.utc).isoformat()
             record_data = {
                 "data": data_dict,
-                "data_type": name,
-                "creation_date": now,
-                "update_date": now,
+                "data_type": data_type,
+                "created_at": now,
+                "updated_at": now,
             }
             collection_records[request.record_id] = record_data
 
             # Create response
-            stored_record = self._create_proto_record(
+            stored_record = self.__create_proto_record(
                 request.mission_id, request.collection, request.record_id, record_data
             )
 
             logger.info(f"Stored record: {request.record_id} in {request.collection} for mission {request.mission_id}")
-            return data_pb2.StoreRecordResponse(stored_data=stored_record)
+            result = storage_messages_pb2.StorageResult(record=stored_record, success=True)
+            return storage_dto_pb2.CreateRecordResponse(result=result)
 
         except Exception as e:
             context.set_code(grpc.StatusCode.INTERNAL)
             context.set_details(f"Internal error: {e!s}")
             logger.error(f"Error in StoreRecord: {e}", exc_info=True)
-            return data_pb2.StoreRecordResponse()
+            result = storage_messages_pb2.StorageResult(error=bulk_pb2.OperationError(code=str(grpc.StatusCode.INTERNAL)), success=False)
+            return storage_dto_pb2.CreateRecordResponse(result=result)
 
-    def ReadRecord(
-        self, request: data_pb2.ReadRecordRequest, context: grpc.ServicerContext
-    ) -> data_pb2.ReadRecordResponse:
+    def GetRecord(
+            self, request: storage_dto_pb2.GetRecordRequest, context: grpc.ServicerContext
+    ) -> storage_dto_pb2.GetRecordResponse:
         """Read a record from the mock database.
 
         Args:
-            request: ReadRecordRequest containing mission_id, collection, record_id
+            request: GetRecordRequest containing mission_id, collection, record_id
             context: gRPC context
 
         Returns:
-            ReadRecordResponse: Response containing the record or empty if not found
+            GetRecordResponse: Response containing the record or empty if not found
         """
         try:
             if not request.mission_id:
                 context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
                 context.set_details("Mission ID is required")
-                return data_pb2.ReadRecordResponse()
+                result = storage_messages_pb2.StorageResult(error=bulk_pb2.OperationError(code=str(grpc.StatusCode.INVALID_ARGUMENT)), success=False)
+                return storage_dto_pb2.GetRecordResponse(result=result)
 
             if not request.collection:
                 context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
                 context.set_details("Collection is required")
-                return data_pb2.ReadRecordResponse()
+                result = storage_messages_pb2.StorageResult(error=bulk_pb2.OperationError(code=str(grpc.StatusCode.INVALID_ARGUMENT)), success=False)
+                return storage_dto_pb2.GetRecordResponse(result=result)
 
             if not request.record_id:
                 context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
                 context.set_details("Record ID is required")
-                return data_pb2.ReadRecordResponse()
+                result = storage_messages_pb2.StorageResult(error=bulk_pb2.OperationError(code=str(grpc.StatusCode.INVALID_ARGUMENT)), success=False)
+                return storage_dto_pb2.GetRecordResponse(result=result)
 
             # Try to find the record
             mission_records = self.records.get(request.mission_id, {})
@@ -224,25 +225,28 @@ class MockStorageServicer(storage_service_pb2_grpc.StorageServiceServicer):
             if not record_data:
                 context.set_code(grpc.StatusCode.NOT_FOUND)
                 context.set_details(f"Record {request.record_id} not found in collection {request.collection}")
-                return data_pb2.ReadRecordResponse()
+                result = storage_messages_pb2.StorageResult(error=bulk_pb2.OperationError(code=str(grpc.StatusCode.NOT_FOUND)), success=False)
+                return storage_dto_pb2.GetRecordResponse(result=result)
 
             # Create response
-            stored_record = self._create_proto_record(
+            stored_record = self.__create_proto_record(
                 request.mission_id, request.collection, request.record_id, record_data
             )
 
             logger.info(f"Read record: {request.record_id} from {request.collection}")
-            return data_pb2.ReadRecordResponse(stored_data=stored_record)
+            result = storage_messages_pb2.StorageResult(record=stored_record, success=True)
+            return storage_dto_pb2.GetRecordResponse(result=result)
 
         except Exception as e:
             context.set_code(grpc.StatusCode.INTERNAL)
             context.set_details(f"Internal error: {e!s}")
             logger.error(f"Error in ReadRecord: {e}", exc_info=True)
-            return data_pb2.ReadRecordResponse()
+            result = storage_messages_pb2.StorageResult(error=bulk_pb2.OperationError(code=str(grpc.StatusCode.INTERNAL)), success=False)
+            return storage_dto_pb2.GetRecordResponse(result=result)
 
     def UpdateRecord(
-        self, request: data_pb2.UpdateRecordRequest, context: grpc.ServicerContext
-    ) -> data_pb2.UpdateRecordResponse:
+            self, request: storage_dto_pb2.UpdateRecordRequest, context: grpc.ServicerContext
+    ) -> storage_dto_pb2.UpdateRecordResponse:
         """Update an existing record in the mock database.
 
         Args:
@@ -256,17 +260,20 @@ class MockStorageServicer(storage_service_pb2_grpc.StorageServiceServicer):
             if not request.mission_id:
                 context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
                 context.set_details("Mission ID is required")
-                return data_pb2.UpdateRecordResponse()
+                result = storage_messages_pb2.StorageResult(error=bulk_pb2.OperationError(code=str(grpc.StatusCode.INVALID_ARGUMENT)), success=False)
+                return storage_dto_pb2.UpdateRecordResponse(result=result)
 
             if not request.collection:
                 context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
                 context.set_details("Collection is required")
-                return data_pb2.UpdateRecordResponse()
+                result = storage_messages_pb2.StorageResult(error=bulk_pb2.OperationError(code=str(grpc.StatusCode.INVALID_ARGUMENT)), success=False)
+                return storage_dto_pb2.UpdateRecordResponse(result=result)
 
             if not request.record_id:
                 context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
                 context.set_details("Record ID is required")
-                return data_pb2.UpdateRecordResponse()
+                result = storage_messages_pb2.StorageResult(error=bulk_pb2.OperationError(code=str(grpc.StatusCode.INVALID_ARGUMENT)), success=False)
+                return storage_dto_pb2.UpdateRecordResponse(result=result)
 
             # Try to find the record
             mission_records = self.records.get(request.mission_id, {})
@@ -276,7 +283,8 @@ class MockStorageServicer(storage_service_pb2_grpc.StorageServiceServicer):
             if not record_data:
                 context.set_code(grpc.StatusCode.NOT_FOUND)
                 context.set_details(f"Record {request.record_id} not found in collection {request.collection}")
-                return data_pb2.UpdateRecordResponse()
+                result = storage_messages_pb2.StorageResult(error=bulk_pb2.OperationError(code=str(grpc.StatusCode.NOT_FOUND)), success=False)
+                return storage_dto_pb2.UpdateRecordResponse(result=result)
 
             # Convert Struct to dict
             data_dict = json_format.MessageToDict(request.data, preserving_proto_field_name=True)
@@ -288,54 +296,61 @@ class MockStorageServicer(storage_service_pb2_grpc.StorageServiceServicer):
                 except (ValidationError, ValueError) as e:
                     context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
                     context.set_details(f"Schema validation failed: {e!s}")
-                    return data_pb2.UpdateRecordResponse()
+                    result = storage_messages_pb2.StorageResult(error=bulk_pb2.OperationError(code=str(grpc.StatusCode.INVALID_ARGUMENT)),
+                                                                success=False)
+                    return storage_dto_pb2.UpdateRecordResponse(result=result)
 
             # Update the record
             now = datetime.datetime.now(datetime.timezone.utc).isoformat()
             record_data["data"] = data_dict
-            record_data["update_date"] = now
+            record_data["updated_at"] = now
 
             # Create response
-            stored_record = self._create_proto_record(
+            stored_record = self.__create_proto_record(
                 request.mission_id, request.collection, request.record_id, record_data
             )
 
             logger.info(f"Updated record: {request.record_id} in {request.collection}")
-            return data_pb2.UpdateRecordResponse(stored_data=stored_record)
+            result = storage_messages_pb2.StorageResult(record=stored_record, success=True)
+            return storage_dto_pb2.UpdateRecordResponse(result=result)
 
         except Exception as e:
             context.set_code(grpc.StatusCode.INTERNAL)
             context.set_details(f"Internal error: {e!s}")
             logger.error(f"Error in UpdateRecord: {e}", exc_info=True)
-            return data_pb2.UpdateRecordResponse()
+            result = storage_messages_pb2.StorageResult(error=bulk_pb2.OperationError(code=str(grpc.StatusCode.INTERNAL)), success=False)
+            return storage_dto_pb2.UpdateRecordResponse(result=result)
 
-    def RemoveRecord(
-        self, request: data_pb2.RemoveRecordRequest, context: grpc.ServicerContext
-    ) -> data_pb2.RemoveRecordResponse:
+    def DeleteRecord(
+            self, request: storage_dto_pb2.DeleteRecordRequest, context: grpc.ServicerContext
+    ) -> storage_dto_pb2.DeleteRecordResponse:
         """Remove a record from the mock database.
 
         Args:
-            request: RemoveRecordRequest containing mission_id, collection, record_id
+            request: DeleteRecordRequest containing mission_id, collection, record_id
             context: gRPC context
 
         Returns:
-            RemoveRecordResponse: Empty response
+            DeleteRecordResponse: Empty response
         """
         try:
             if not request.mission_id:
                 context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
                 context.set_details("Mission ID is required")
-                return data_pb2.RemoveRecordResponse()
+                result = storage_messages_pb2.StorageResult(error=bulk_pb2.OperationError(code=str(grpc.StatusCode.INVALID_ARGUMENT)), success=False)
+                return storage_dto_pb2.DeleteRecordResponse(result=result)
 
             if not request.collection:
                 context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
                 context.set_details("Collection is required")
-                return data_pb2.RemoveRecordResponse()
+                result = storage_messages_pb2.StorageResult(error=bulk_pb2.OperationError(code=str(grpc.StatusCode.INVALID_ARGUMENT)), success=False)
+                return storage_dto_pb2.DeleteRecordResponse(result=result)
 
             if not request.record_id:
                 context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
                 context.set_details("Record ID is required")
-                return data_pb2.RemoveRecordResponse()
+                result = storage_messages_pb2.StorageResult(error=bulk_pb2.OperationError(code=str(grpc.StatusCode.INVALID_ARGUMENT)), success=False)
+                return storage_dto_pb2.DeleteRecordResponse(result=result)
 
             # Try to find and remove the record
             mission_records = self.records.get(request.mission_id, {})
@@ -343,23 +358,28 @@ class MockStorageServicer(storage_service_pb2_grpc.StorageServiceServicer):
 
             if request.record_id not in collection_records:
                 # Not an error - idempotent delete
-                logger.debug(f"Record {request.record_id} not found for removal, already removed or never existed")
-                return data_pb2.RemoveRecordResponse()
+                msg = f"Record {request.record_id} not found for removal, already removed or never existed"
+                logger.debug(msg)
+                result = storage_messages_pb2.StorageResult(error=bulk_pb2.OperationError(code=str(grpc.StatusCode.CANCELLED), message=msg),
+                                                            success=False)
+                return storage_dto_pb2.DeleteRecordResponse(result=result)
 
             del collection_records[request.record_id]
 
             logger.info(f"Removed record: {request.record_id} from {request.collection}")
-            return data_pb2.RemoveRecordResponse()
+            result = storage_messages_pb2.StorageResult(success=True)
+            return storage_dto_pb2.DeleteRecordResponse(result=result)
 
         except Exception as e:
             context.set_code(grpc.StatusCode.INTERNAL)
             context.set_details(f"Internal error: {e!s}")
             logger.error(f"Error in RemoveRecord: {e}", exc_info=True)
-            return data_pb2.RemoveRecordResponse()
+            result = storage_messages_pb2.StorageResult(error=bulk_pb2.OperationError(code=str(grpc.StatusCode.INTERNAL)), success=False)
+            return storage_dto_pb2.DeleteRecordResponse(result=result)
 
     def ListRecords(
-        self, request: data_pb2.ListRecordsRequest, context: grpc.ServicerContext
-    ) -> data_pb2.ListRecordsResponse:
+            self, request: storage_dto_pb2.ListRecordsRequest, context: grpc.ServicerContext
+    ) -> storage_dto_pb2.ListRecordsResponse:
         """List all records in a collection.
 
         Args:
@@ -373,12 +393,14 @@ class MockStorageServicer(storage_service_pb2_grpc.StorageServiceServicer):
             if not request.mission_id:
                 context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
                 context.set_details("Mission ID is required")
-                return data_pb2.ListRecordsResponse(records=[])
+                result = storage_messages_pb2.StorageResult(error=bulk_pb2.OperationError(code=str(grpc.StatusCode.INVALID_ARGUMENT)), success=False)
+                return storage_dto_pb2.ListRecordsResponse(result=result)
 
             if not request.collection:
                 context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
                 context.set_details("Collection is required")
-                return data_pb2.ListRecordsResponse(records=[])
+                result = storage_messages_pb2.StorageResult(error=bulk_pb2.OperationError(code=str(grpc.StatusCode.INVALID_ARGUMENT)), success=False)
+                return storage_dto_pb2.ListRecordsResponse(result=result)
 
             # Get all records in the collection
             mission_records = self.records.get(request.mission_id, {})
@@ -387,40 +409,44 @@ class MockStorageServicer(storage_service_pb2_grpc.StorageServiceServicer):
             # Convert to proto records
             proto_records = []
             for record_id, record_data in collection_records.items():
-                proto_record = self._create_proto_record(request.mission_id, request.collection, record_id, record_data)
+                proto_record = self.__create_proto_record(request.mission_id, request.collection, record_id, record_data)
                 proto_records.append(proto_record)
 
             logger.info(f"Listed {len(proto_records)} records from {request.collection}")
-            return data_pb2.ListRecordsResponse(records=proto_records)
+            result = [storage_messages_pb2.StorageResult(record=r, success=True) for r in proto_records]
+            return storage_dto_pb2.ListRecordsResponse(result=result)
 
         except Exception as e:
             context.set_code(grpc.StatusCode.INTERNAL)
             context.set_details(f"Internal error: {e!s}")
             logger.error(f"Error in ListRecords: {e}", exc_info=True)
-            return data_pb2.ListRecordsResponse(records=[])
+            result = storage_messages_pb2.StorageResult(error=bulk_pb2.OperationError(code=str(grpc.StatusCode.INTERNAL)), success=False)
+            return storage_dto_pb2.ListRecordsResponse(result=[result])
 
-    def RemoveCollection(
-        self, request: data_pb2.RemoveCollectionRequest, context: grpc.ServicerContext
-    ) -> data_pb2.RemoveCollectionResponse:
+    def DeleteCollection(
+            self, request: storage_dto_pb2.DeleteCollectionRequest, context: grpc.ServicerContext
+    ) -> storage_dto_pb2.DeleteCollectionResponse:
         """Remove all records in a collection.
 
         Args:
-            request: RemoveCollectionRequest containing mission_id and collection
+            request: DeleteCollectionRequest containing mission_id and collection
             context: gRPC context
 
         Returns:
-            RemoveCollectionResponse: Empty response
+            DeleteCollectionResponse: Empty response
         """
         try:
             if not request.mission_id:
                 context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
                 context.set_details("Mission ID is required")
-                return data_pb2.RemoveCollectionResponse()
+                result = storage_messages_pb2.StorageResult(error=bulk_pb2.OperationError(code=str(grpc.StatusCode.INVALID_ARGUMENT)), success=False)
+                return storage_dto_pb2.DeleteCollectionResponse(result=result)
 
             if not request.collection:
                 context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
                 context.set_details("Collection is required")
-                return data_pb2.RemoveCollectionResponse()
+                result = storage_messages_pb2.StorageResult(error=bulk_pb2.OperationError(code=str(grpc.StatusCode.INVALID_ARGUMENT)), success=False)
+                return storage_dto_pb2.DeleteCollectionResponse(result=result)
 
             # Remove the entire collection
             mission_records = self.records.get(request.mission_id, {})
@@ -430,10 +456,12 @@ class MockStorageServicer(storage_service_pb2_grpc.StorageServiceServicer):
             else:
                 logger.debug(f"Collection {request.collection} not found, already removed or never existed")
 
-            return data_pb2.RemoveCollectionResponse()
+            result = storage_messages_pb2.StorageResult(success=True)
+            return storage_dto_pb2.DeleteCollectionResponse(result=result)
 
         except Exception as e:
             context.set_code(grpc.StatusCode.INTERNAL)
             context.set_details(f"Internal error: {e!s}")
             logger.error(f"Error in RemoveCollection: {e}", exc_info=True)
-            return data_pb2.RemoveCollectionResponse()
+            result = storage_messages_pb2.StorageResult(error=bulk_pb2.OperationError(code=str(grpc.StatusCode.INTERNAL)), success=False)
+            return storage_dto_pb2.DeleteCollectionResponse(result=result)

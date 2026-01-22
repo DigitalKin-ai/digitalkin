@@ -21,7 +21,7 @@ class TriggerHandler(ABC, BaseMixin, Generic[InputModelT, SetupModelT, OutputMod
     input_format: type[InputModelT]
     output_format: type[OutputModelT]
 
-    def __init__(self, context: ModuleContext) -> None:  # noqa: ARG002
+    def __init__(self, _context: ModuleContext) -> None:  # context available for subclass overrides
         """Initialize the TriggerHandler with the given context."""
         super().__init__()
 

@@ -15,9 +15,8 @@ These tests validate production cost control requirements:
 
 import pytest
 
-from digitalkin.models.services.cost import AmountLimit, CostTypeEnum, QuantityLimit
-from digitalkin.services.cost.cost_strategy import CostConfig
-from digitalkin.services.cost.default_cost import DefaultCost
+from digitalkin.models.services.cost import AmountLimit, CostType, QuantityLimit, CostConfig
+from digitalkin.services import DefaultCost
 
 # Set timeout for all tests in this file
 pytestmark = pytest.mark.timeout(10)
@@ -33,36 +32,36 @@ def sample_config() -> dict[str, CostConfig]:
     """Create sample cost configuration."""
     return {
         "gpt4_input": CostConfig(
-            cost_name="gpt4_input",
-            cost_type="TOKEN_INPUT",
+            name="gpt4_input",
+            type=CostType.TOKEN_INPUT,
             description="GPT-4 input tokens",
             unit="tokens",
             rate=0.00003,  # $0.03 per 1k tokens
         ),
         "gpt4_output": CostConfig(
-            cost_name="gpt4_output",
-            cost_type="TOKEN_OUTPUT",
+            name="gpt4_output",
+            type=CostType.TOKEN_OUTPUT,
             description="GPT-4 output tokens",
             unit="tokens",
             rate=0.00006,  # $0.06 per 1k tokens
         ),
         "api_call": CostConfig(
-            cost_name="api_call",
-            cost_type="API_CALL",
+            name="api_call",
+            type=CostType.API_CALL,
             description="API call",
             unit="calls",
             rate=0.001,  # $0.001 per call
         ),
         "storage": CostConfig(
-            cost_name="storage",
-            cost_type="STORAGE",
+            name="storage",
+            type=CostType.STORAGE,
             description="Storage",
             unit="GB",
             rate=0.02,  # $0.02 per GB
         ),
         "compute_time": CostConfig(
-            cost_name="compute_time",
-            cost_type="TIME",
+            name="compute_time",
+            type=CostType.TIME,
             description="Compute time",
             unit="hours",
             rate=0.05,  # $0.05 per hour
@@ -93,12 +92,12 @@ class TestCostLimitModel:
         """Test QuantityLimit creation."""
         limit = QuantityLimit(
             name="gpt4_input",
-            type=CostTypeEnum.TOKEN_INPUT,
+            type=CostType.TOKEN_INPUT,
             max_value=10000.0,
         )
 
         assert limit.name == "gpt4_input"
-        assert limit.type == CostTypeEnum.TOKEN_INPUT
+        assert limit.type == CostType.TOKEN_INPUT
         assert limit.max_value == 10000.0
         assert limit.limit_type == "quantity"
 
@@ -106,12 +105,12 @@ class TestCostLimitModel:
         """Test AmountLimit creation."""
         limit = AmountLimit(
             name="api_call",
-            type=CostTypeEnum.API_CALL,
+            type=CostType.API_CALL,
             max_value=1.0,
         )
 
         assert limit.name == "api_call"
-        assert limit.type == CostTypeEnum.API_CALL
+        assert limit.type == CostType.API_CALL
         assert limit.max_value == 1.0
         assert limit.limit_type == "amount"
 
@@ -119,14 +118,14 @@ class TestCostLimitModel:
         """Test QuantityLimit serializes correctly."""
         limit = QuantityLimit(
             name="storage",
-            type=CostTypeEnum.STORAGE,
+            type=CostType.STORAGE,
             max_value=100.0,
         )
 
         data = limit.model_dump()
 
         assert data["name"] == "storage"
-        assert data["type"] == CostTypeEnum.STORAGE
+        assert data["type"] == CostType.STORAGE
         assert data["max_value"] == 100.0
         assert data["limit_type"] == "quantity"
 
@@ -134,14 +133,14 @@ class TestCostLimitModel:
         """Test AmountLimit serializes correctly."""
         limit = AmountLimit(
             name="gpt4_output",
-            type=CostTypeEnum.TOKEN_OUTPUT,
+            type=CostType.TOKEN_OUTPUT,
             max_value=5.0,
         )
 
         data = limit.model_dump()
 
         assert data["name"] == "gpt4_output"
-        assert data["type"] == CostTypeEnum.TOKEN_OUTPUT
+        assert data["type"] == CostType.TOKEN_OUTPUT
         assert data["max_value"] == 5.0
         assert data["limit_type"] == "amount"
 
@@ -157,7 +156,7 @@ class TestSetLimits:
     async def test_set_single_quantity_limit(self, cost_service: DefaultCost) -> None:
         """Test setting a single quantity limit."""
         limits = [
-            QuantityLimit(name="gpt4_input", type=CostTypeEnum.TOKEN_INPUT, max_value=10000.0),
+            QuantityLimit(name="gpt4_input", type=CostType.TOKEN_INPUT, max_value=10000.0),
         ]
 
         await cost_service.set_limits(limits)
@@ -168,7 +167,7 @@ class TestSetLimits:
     async def test_set_single_amount_limit(self, cost_service: DefaultCost) -> None:
         """Test setting a single amount limit."""
         limits = [
-            AmountLimit(name="gpt4_input", type=CostTypeEnum.TOKEN_INPUT, max_value=1.0),
+            AmountLimit(name="gpt4_input", type=CostType.TOKEN_INPUT, max_value=1.0),
         ]
 
         await cost_service.set_limits(limits)
@@ -179,9 +178,9 @@ class TestSetLimits:
     async def test_set_multiple_limits(self, cost_service: DefaultCost) -> None:
         """Test setting multiple limits of different types."""
         limits = [
-            QuantityLimit(name="gpt4_input", type=CostTypeEnum.TOKEN_INPUT, max_value=10000.0),
-            AmountLimit(name="gpt4_output", type=CostTypeEnum.TOKEN_OUTPUT, max_value=5.0),
-            QuantityLimit(name="api_call", type=CostTypeEnum.API_CALL, max_value=1000.0),
+            QuantityLimit(name="gpt4_input", type=CostType.TOKEN_INPUT, max_value=10000.0),
+            AmountLimit(name="gpt4_output", type=CostType.TOKEN_OUTPUT, max_value=5.0),
+            QuantityLimit(name="api_call", type=CostType.API_CALL, max_value=1000.0),
         ]
 
         await cost_service.set_limits(limits)
@@ -199,7 +198,7 @@ class TestSetLimits:
 
         # Set new limits
         limits = [
-            QuantityLimit(name="gpt4_input", type=CostTypeEnum.TOKEN_INPUT, max_value=10000.0),
+            QuantityLimit(name="gpt4_input", type=CostType.TOKEN_INPUT, max_value=10000.0),
         ]
 
         await cost_service.set_limits(limits)
@@ -211,14 +210,14 @@ class TestSetLimits:
         """Test that set_limits replaces existing limits."""
         # Set initial limits
         await cost_service.set_limits([
-            QuantityLimit(name="gpt4_input", type=CostTypeEnum.TOKEN_INPUT, max_value=10000.0),
+            QuantityLimit(name="gpt4_input", type=CostType.TOKEN_INPUT, max_value=10000.0),
         ])
 
         assert cost_service._limits["gpt4_input"].max_value == 10000.0
 
         # Replace with new limits
         await cost_service.set_limits([
-            QuantityLimit(name="gpt4_input", type=CostTypeEnum.TOKEN_INPUT, max_value=20000.0),
+            QuantityLimit(name="gpt4_input", type=CostType.TOKEN_INPUT, max_value=20000.0),
         ])
 
         assert cost_service._limits["gpt4_input"].max_value == 20000.0
@@ -239,7 +238,7 @@ class TestCheckLimit:
     async def test_check_limit_quantity_under_limit(self, cost_service: DefaultCost) -> None:
         """Test check_limit returns True when quantity is under limit."""
         await cost_service.set_limits([
-            QuantityLimit(name="gpt4_input", type=CostTypeEnum.TOKEN_INPUT, max_value=10000.0),
+            QuantityLimit(name="gpt4_input", type=CostType.TOKEN_INPUT, max_value=10000.0),
         ])
 
         assert await cost_service.check_limit("gpt4_input", 5000.0) is True
@@ -247,7 +246,7 @@ class TestCheckLimit:
     async def test_check_limit_quantity_exceeds_limit(self, cost_service: DefaultCost) -> None:
         """Test check_limit returns False when quantity exceeds limit."""
         await cost_service.set_limits([
-            QuantityLimit(name="gpt4_input", type=CostTypeEnum.TOKEN_INPUT, max_value=10000.0),
+            QuantityLimit(name="gpt4_input", type=CostType.TOKEN_INPUT, max_value=10000.0),
         ])
 
         assert await cost_service.check_limit("gpt4_input", 15000.0) is False
@@ -255,7 +254,7 @@ class TestCheckLimit:
     async def test_check_limit_amount_under_limit(self, cost_service: DefaultCost) -> None:
         """Test check_limit returns True when projected amount is under limit."""
         await cost_service.set_limits([
-            AmountLimit(name="gpt4_input", type=CostTypeEnum.TOKEN_INPUT, max_value=1.0),
+            AmountLimit(name="gpt4_input", type=CostType.TOKEN_INPUT, max_value=1.0),
         ])
 
         # 10000 tokens * $0.00003/token = $0.30
@@ -264,7 +263,7 @@ class TestCheckLimit:
     async def test_check_limit_amount_exceeds_limit(self, cost_service: DefaultCost) -> None:
         """Test check_limit returns False when projected amount exceeds limit."""
         await cost_service.set_limits([
-            AmountLimit(name="gpt4_input", type=CostTypeEnum.TOKEN_INPUT, max_value=0.10),
+            AmountLimit(name="gpt4_input", type=CostType.TOKEN_INPUT, max_value=0.10),
         ])
 
         # 10000 tokens * $0.00003/token = $0.30, which exceeds $0.10 limit
@@ -273,7 +272,7 @@ class TestCheckLimit:
     async def test_check_limit_with_accumulated_quantity(self, cost_service: DefaultCost) -> None:
         """Test check_limit considers accumulated quantity."""
         await cost_service.set_limits([
-            QuantityLimit(name="gpt4_input", type=CostTypeEnum.TOKEN_INPUT, max_value=10000.0),
+            QuantityLimit(name="gpt4_input", type=CostType.TOKEN_INPUT, max_value=10000.0),
         ])
 
         # Simulate previous usage
@@ -285,7 +284,7 @@ class TestCheckLimit:
     async def test_check_limit_with_accumulated_amount(self, cost_service: DefaultCost) -> None:
         """Test check_limit considers accumulated amount."""
         await cost_service.set_limits([
-            AmountLimit(name="gpt4_input", type=CostTypeEnum.TOKEN_INPUT, max_value=0.50),
+            AmountLimit(name="gpt4_input", type=CostType.TOKEN_INPUT, max_value=0.50),
         ])
 
         # Simulate previous usage: $0.30 already spent
@@ -300,7 +299,7 @@ class TestCheckLimit:
     async def test_check_limit_exact_boundary(self, cost_service: DefaultCost) -> None:
         """Test check_limit at exact boundary (equal to limit)."""
         await cost_service.set_limits([
-            QuantityLimit(name="gpt4_input", type=CostTypeEnum.TOKEN_INPUT, max_value=10000.0),
+            QuantityLimit(name="gpt4_input", type=CostType.TOKEN_INPUT, max_value=10000.0),
         ])
 
         # Exactly at limit should pass
@@ -309,7 +308,7 @@ class TestCheckLimit:
     async def test_check_limit_config_not_found(self, cost_service: DefaultCost) -> None:
         """Test check_limit returns True when config doesn't exist."""
         await cost_service.set_limits([
-            QuantityLimit(name="nonexistent", type=CostTypeEnum.CUSTOM, max_value=100.0),
+            QuantityLimit(name="nonexistent", type=CostType.CUSTOM, max_value=100.0),
         ])
 
         # Returns True - config doesn't exist, can't calculate
@@ -327,17 +326,17 @@ class TestAccumulatedTracking:
     async def test_accumulated_quantity_tracking(self, cost_service: DefaultCost) -> None:
         """Test that quantity is tracked correctly via manual accumulation."""
         await cost_service.set_limits([
-            QuantityLimit(name="api_call", type=CostTypeEnum.API_CALL, max_value=100.0),
+            QuantityLimit(name="api_call", type=CostType.API_CALL, max_value=100.0),
         ])
 
         # Simulate tracking by adding costs and manually updating accumulated
-        await cost_service.add("call_1", "api_call", 25.0)
+        await cost_service.create("call_1", "api_call", 25.0)
         cost_service._accumulated["api_call_quantity"] = 25.0
 
-        await cost_service.add("call_2", "api_call", 30.0)
+        await cost_service.create("call_2", "api_call", 30.0)
         cost_service._accumulated["api_call_quantity"] = 55.0
 
-        await cost_service.add("call_3", "api_call", 20.0)
+        await cost_service.create("call_3", "api_call", 20.0)
         cost_service._accumulated["api_call_quantity"] = 75.0
 
         assert cost_service._accumulated["api_call_quantity"] == 75.0
@@ -345,7 +344,7 @@ class TestAccumulatedTracking:
     async def test_accumulated_affects_check_limit(self, cost_service: DefaultCost) -> None:
         """Test that accumulated values affect check_limit results."""
         await cost_service.set_limits([
-            QuantityLimit(name="api_call", type=CostTypeEnum.API_CALL, max_value=100.0),
+            QuantityLimit(name="api_call", type=CostType.API_CALL, max_value=100.0),
         ])
 
         # Initially should allow 50
@@ -363,14 +362,14 @@ class TestAccumulatedTracking:
     async def test_accumulated_reset_on_new_limits(self, cost_service: DefaultCost) -> None:
         """Test that accumulated values reset when limits are re-set."""
         await cost_service.set_limits([
-            QuantityLimit(name="api_call", type=CostTypeEnum.API_CALL, max_value=100.0),
+            QuantityLimit(name="api_call", type=CostType.API_CALL, max_value=100.0),
         ])
 
         cost_service._accumulated["api_call_quantity"] = 50.0
 
         # Re-set limits (simulating new session)
         await cost_service.set_limits([
-            QuantityLimit(name="api_call", type=CostTypeEnum.API_CALL, max_value=100.0),
+            QuantityLimit(name="api_call", type=CostType.API_CALL, max_value=100.0),
         ])
 
         # Accumulated should be reset
@@ -388,7 +387,7 @@ class TestLimitEdgeCases:
     async def test_zero_quantity(self, cost_service: DefaultCost) -> None:
         """Test handling of zero quantity."""
         await cost_service.set_limits([
-            QuantityLimit(name="gpt4_input", type=CostTypeEnum.TOKEN_INPUT, max_value=10000.0),
+            QuantityLimit(name="gpt4_input", type=CostType.TOKEN_INPUT, max_value=10000.0),
         ])
 
         # Zero quantity should pass check
@@ -397,7 +396,7 @@ class TestLimitEdgeCases:
     async def test_very_small_quantities(self, cost_service: DefaultCost) -> None:
         """Test handling of very small quantities."""
         await cost_service.set_limits([
-            QuantityLimit(name="gpt4_input", type=CostTypeEnum.TOKEN_INPUT, max_value=1.0),
+            QuantityLimit(name="gpt4_input", type=CostType.TOKEN_INPUT, max_value=1.0),
         ])
 
         # Accumulate many small quantities
@@ -418,7 +417,7 @@ class TestLimitEdgeCases:
     async def test_floating_point_precision(self, cost_service: DefaultCost) -> None:
         """Test floating point precision in limit calculations."""
         await cost_service.set_limits([
-            AmountLimit(name="api_call", type=CostTypeEnum.API_CALL, max_value=0.001),
+            AmountLimit(name="api_call", type=CostType.API_CALL, max_value=0.001),
         ])
 
         # rate = 0.001 per call, limit = 0.001
@@ -434,7 +433,7 @@ class TestLimitEdgeCases:
     async def test_very_large_limit(self, cost_service: DefaultCost) -> None:
         """Test handling of very large limits."""
         await cost_service.set_limits([
-            QuantityLimit(name="gpt4_input", type=CostTypeEnum.TOKEN_INPUT, max_value=1e12),
+            QuantityLimit(name="gpt4_input", type=CostType.TOKEN_INPUT, max_value=1e12),
         ])
 
         # Large but valid usage should pass
@@ -444,8 +443,8 @@ class TestLimitEdgeCases:
         """Test limit checking with zero rate config."""
         # Add a zero-rate config
         sample_config["free_tier"] = CostConfig(
-            cost_name="free_tier",
-            cost_type="OTHER",
+            name="free_tier",
+            type=CostType.OTHER,
             description="Free tier",
             unit="requests",
             rate=0.0,
@@ -459,7 +458,7 @@ class TestLimitEdgeCases:
         )
 
         await cost_service.set_limits([
-            QuantityLimit(name="free_tier", type=CostTypeEnum.CUSTOM, max_value=100.0),
+            QuantityLimit(name="free_tier", type=CostType.CUSTOM, max_value=100.0),
         ])
 
         # Should work with zero rate - quantity check still applies
@@ -478,8 +477,8 @@ class TestIndependentLimits:
     async def test_independent_quantity_limits(self, cost_service: DefaultCost) -> None:
         """Test that quantity limits for different configs are independent."""
         await cost_service.set_limits([
-            QuantityLimit(name="gpt4_input", type=CostTypeEnum.TOKEN_INPUT, max_value=10000.0),
-            QuantityLimit(name="gpt4_output", type=CostTypeEnum.TOKEN_OUTPUT, max_value=5000.0),
+            QuantityLimit(name="gpt4_input", type=CostType.TOKEN_INPUT, max_value=10000.0),
+            QuantityLimit(name="gpt4_output", type=CostType.TOKEN_OUTPUT, max_value=5000.0),
         ])
 
         # Use up gpt4_input limit via accumulated
@@ -494,8 +493,8 @@ class TestIndependentLimits:
     async def test_mixed_limit_types(self, cost_service: DefaultCost) -> None:
         """Test mixing quantity and amount limits on different configs."""
         await cost_service.set_limits([
-            QuantityLimit(name="gpt4_input", type=CostTypeEnum.TOKEN_INPUT, max_value=10000.0),
-            AmountLimit(name="api_call", type=CostTypeEnum.API_CALL, max_value=0.50),
+            QuantityLimit(name="gpt4_input", type=CostType.TOKEN_INPUT, max_value=10000.0),
+            AmountLimit(name="api_call", type=CostType.API_CALL, max_value=0.50),
         ])
 
         # gpt4_input uses quantity tracking
@@ -519,7 +518,7 @@ class TestConcurrentUsageSimulation:
     async def test_burst_usage_pattern(self, cost_service: DefaultCost) -> None:
         """Test burst usage pattern checking against limits."""
         await cost_service.set_limits([
-            QuantityLimit(name="api_call", type=CostTypeEnum.API_CALL, max_value=100.0),
+            QuantityLimit(name="api_call", type=CostType.API_CALL, max_value=100.0),
         ])
 
         # Simulate checking before 50 calls
@@ -541,9 +540,9 @@ class TestConcurrentUsageSimulation:
     async def test_mixed_config_burst(self, cost_service: DefaultCost) -> None:
         """Test burst usage across multiple configs."""
         await cost_service.set_limits([
-            QuantityLimit(name="gpt4_input", type=CostTypeEnum.TOKEN_INPUT, max_value=50000.0),
-            QuantityLimit(name="gpt4_output", type=CostTypeEnum.TOKEN_OUTPUT, max_value=25000.0),
-            QuantityLimit(name="api_call", type=CostTypeEnum.API_CALL, max_value=100.0),
+            QuantityLimit(name="gpt4_input", type=CostType.TOKEN_INPUT, max_value=50000.0),
+            QuantityLimit(name="gpt4_output", type=CostType.TOKEN_OUTPUT, max_value=25000.0),
+            QuantityLimit(name="api_call", type=CostType.API_CALL, max_value=100.0),
         ])
 
         input_total = 0.0

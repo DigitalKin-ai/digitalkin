@@ -56,7 +56,7 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
     async def _on_message(
         self,
         message: bytes,
-        message_context: MessageContext,  # noqa: ARG002 #TODO
+        _message_context: MessageContext,  # RStream callback signature
     ) -> None:  # RStream callback signature
         """Internal callback: parse JSON and route to the correct job queue."""
         try:

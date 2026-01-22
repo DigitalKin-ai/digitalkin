@@ -29,15 +29,15 @@ class HealthcheckStatusTrigger(TriggerHandler, BaseMixin):
 
     async def handle(
         self,
-        input_data: HealthcheckStatusInput,  # Healthcheck needs no input data # noqa: ARG002
-        setup_data: Any,  # Module-agnostic setup; healthcheck ignores it # noqa: ARG002
+        _input_data: HealthcheckStatusInput,  # Healthcheck needs no input data
+        _setup_data: Any,  # Module-agnostic setup; healthcheck ignores it
         context: ModuleContext,
     ) -> None:
         """Handle status healthcheck request.
 
         Args:
-            input_data: The input trigger data (unused for healthcheck).
-            setup_data: The setup configuration (unused for healthcheck).
+            _input_data: The input trigger data (unused for healthcheck).
+            _setup_data: The setup configuration (unused for healthcheck).
             context: The module context.
         """
         output = HealthcheckStatusOutput(

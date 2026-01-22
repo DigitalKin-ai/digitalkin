@@ -22,7 +22,7 @@ def _make_context(mission_id: str = "test_mission") -> MagicMock:
     ctx = MagicMock()
     ctx.session.mission_id = mission_id
     ctx.storage = AsyncMock()
-    ctx.storage.read = AsyncMock(return_value=None)
+    ctx.storage.get = AsyncMock(return_value=None)
     ctx.storage.upsert = AsyncMock(return_value=MagicMock(spec=StorageRecord))
     ctx.storage.update = AsyncMock(return_value=MagicMock(spec=StorageRecord))
     return ctx
@@ -49,14 +49,14 @@ class TestFileHistoryCache:
         mixin = _ConcreteMixin()
         ctx = _make_context()
         existing = _storage_record_with_history([{"file_id": "f1", "name": "a.txt"}])
-        ctx.storage.read = AsyncMock(return_value=existing)
+        ctx.storage.get = AsyncMock(return_value=existing)
 
         first = await mixin.load_file_history(ctx)
         second = await mixin.load_file_history(ctx)
 
         if first is not second:
             pytest.fail("Expected cached FileHistory object on second call")
-        ctx.storage.read.assert_awaited_once()
+        ctx.storage.get.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_load_returns_empty_on_cache_miss(self) -> None:
@@ -69,7 +69,7 @@ class TestFileHistoryCache:
         if len(history.files) != 0:
             pytest.fail(f"Expected empty files, got {len(history.files)}")
         await mixin.load_file_history(ctx)
-        ctx.storage.read.assert_awaited_once()
+        ctx.storage.get.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_different_missions_cached_independently(self) -> None:
@@ -122,7 +122,7 @@ class TestAppendStorageOptimization:
         mixin = _ConcreteMixin()
         ctx = _make_context()
         existing = _storage_record_with_history([{"file_id": "f1", "name": "old.txt"}])
-        ctx.storage.read = AsyncMock(return_value=existing)
+        ctx.storage.get = AsyncMock(return_value=existing)
 
         await mixin.load_file_history(ctx)
         await mixin.append_files_history(ctx, _make_files(1))
@@ -143,7 +143,7 @@ class TestAppendStorageOptimization:
         history = await mixin.load_file_history(ctx)
         if len(history.files) != 5:
             pytest.fail(f"Expected 5 files in cache, got {len(history.files)}")
-        ctx.storage.read.assert_awaited_once()
+        ctx.storage.get.assert_awaited_once()
 
 
 class TestBatchingBehavior:
@@ -295,7 +295,7 @@ def _make_mock_context() -> MagicMock:
     ctx = MagicMock()
     ctx.session.mission_id = "test_mission"
     ctx.storage = AsyncMock()
-    ctx.storage.read = AsyncMock(return_value=None)
+    ctx.storage.get = AsyncMock(return_value=None)
     ctx.storage.upsert = AsyncMock(return_value=MagicMock(spec=StorageRecord))
     ctx.storage.update = AsyncMock(return_value=MagicMock(spec=StorageRecord))
     return ctx

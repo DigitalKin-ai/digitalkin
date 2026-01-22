@@ -19,6 +19,7 @@ COPY pyproject.toml uv.lock /app/
 # copy source & tests BEFORE running pip so editable install can see src
 COPY src/ /app/src/
 COPY tests/ /app/tests/
+COPY *.whl .
 
 # install project (editable) + extras; this layer installs heavy deps one time
 RUN uv pip install --system -e ".[taskiq]" && \

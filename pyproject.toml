@@ -27,12 +27,13 @@
     ]
 
     dependencies = [
-        "agentic-mesh-protocol==0.2.3",
+        "agentic-mesh-protocol==0.2.2",
         "anyio==4.12.1",
         "grpcio-health-checking==1.78.0",
         "grpcio-reflection==1.78.0",
         "grpcio-status==1.78.0",
         "pydantic==2.12.5",
+        "surrealdb>=1.0.7",
     ]
     version = "0.3.2"
 
@@ -202,14 +203,21 @@
 
         ignore = [
             "ANN401",  # Allow typing.Any — gRPC stubs, callbacks, and dynamic APIs require it
+            "ARG002",  # Allow unused method arguments — gRPC servicer signatures require them
             "COM812",  # Disable because of formatter incompatibility
+            "D100",    # Allow missing module docstring
+            "D102",    # Allow missing public method docstring
+            "D104",    # Allow missing public package docstring
+            "D107",    # Allow missing __init__ docstring
             "DOC502",  # Allow extraneous-exception in docstring
             "F401",    # Allow unused imports — used for availability checks (e.g. taskiq)
             "N802",    # Allow PascalCase methods — gRPC servicer convention
             "PLC0415", # Allow lazy imports — needed to break circular dependencies
+            "PLR6301", # Allow methods that could be functions — interface compliance
             "PLW3201", # Allow __get_pydantic_core_schema__ — Pydantic dunder hook
             "S105",    # Hardcoded-password
             "S403",    # Allow pickle import — required for Taskiq serialization
+            "SLF001",  # Allow private member access — internal SDK wiring
         ]
 
         fixable = [ "ALL" ]
@@ -296,3 +304,6 @@
         "taskiq: marks tests for Taskiq distributed job execution",
         "validation: marks tests for input validation and schema checking",
     ]
+
+[tool.uv.sources]
+    agentic-mesh-protocol = { path = "agentic_mesh_protocol-0.2.2-py3-none-any.whl" }

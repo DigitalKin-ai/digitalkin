@@ -76,7 +76,7 @@ class FileHistoryMixin(StorageMixin, LoggerMixin):
         if history_key in self._fh_cache:
             return self._fh_cache[history_key]
 
-        raw = await self.read_storage(context, self.FILE_HISTORY_COLLECTION, history_key)
+        raw = await self.get_storage(context, self.FILE_HISTORY_COLLECTION, history_key)
         if raw is not None:
             history = FileHistory.model_validate(raw.data)
             self._fh_persisted.add(history_key)

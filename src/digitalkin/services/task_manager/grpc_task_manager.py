@@ -72,8 +72,8 @@ class _SharedChannelResource:
         inst = cls._instances.get(key)  # type: ignore[attr-defined]
         if inst is None:
             return
-        inst._refcount -= 1  # noqa: SLF001
-        if inst._refcount <= 0:  # noqa: SLF001
+        inst._refcount -= 1
+        if inst._refcount <= 0:
             cls._instances.pop(key, None)  # type: ignore[attr-defined]
             await inst.close()
 
@@ -118,7 +118,7 @@ class _SharedPoller(_SharedChannelResource):
         if key not in cls._instances:
             cls._instances[key] = cls(poll_fn, poll_interval, initial_poll_interval)
         inst = cls._instances[key]
-        inst._refcount += 1  # noqa: SLF001
+        inst._refcount += 1
         return inst
 
     @classmethod
@@ -306,7 +306,7 @@ class _SharedSendBuffer(_SharedChannelResource):
         if key not in cls._instances:
             cls._instances[key] = cls(stub, grpc_timeout)
         inst = cls._instances[key]
-        inst._refcount += 1  # noqa: SLF001
+        inst._refcount += 1
         return inst
 
     def __init__(self, stub: Any, grpc_timeout: float) -> None:
@@ -435,9 +435,9 @@ class GrpcTaskManager(TaskManagerStrategy, GrpcClientWrapper, GrpcErrorHandlerMi
 
     def __init__(
         self,
-        mission_id: str,  # noqa: ARG002
-        setup_id: str,  # noqa: ARG002
-        setup_version_id: str,  # noqa: ARG002
+        _mission_id: str,
+        _setup_id: str,
+        _setup_version_id: str,
         client_config: ClientConfig,
         *,
         poll_interval: float = float(os.environ.get("DIGITALKIN_SIGNAL_POLL_INTERVAL", "1.0")),
@@ -446,9 +446,9 @@ class GrpcTaskManager(TaskManagerStrategy, GrpcClientWrapper, GrpcErrorHandlerMi
         """Initialize with client config.
 
         Args:
-            mission_id: Mission identifier (unused, required by init_strategy convention).
-            setup_id: Setup identifier (unused, required by init_strategy convention).
-            setup_version_id: Setup version identifier (unused, required by init_strategy convention).
+            _mission_id: Mission identifier (unused, required by init_strategy convention).
+            _setup_id: Setup identifier (unused, required by init_strategy convention).
+            _setup_version_id: Setup version identifier (unused, required by init_strategy convention).
             client_config: gRPC client configuration.
             poll_interval: Maximum seconds between GetSignals polls.
             initial_poll_interval: Starting poll interval before exponential ramp-up.
@@ -565,7 +565,7 @@ class GrpcTaskManager(TaskManagerStrategy, GrpcClientWrapper, GrpcErrorHandlerMi
             signal = SignalMessage.model_validate(data)
             logger.debug("SendSignals queued: task_id=%s action=%s", task_id, signal.action.value)
             if self._send_buffer_acquired:
-                buffer = _SharedSendBuffer._instances.get(self._send_buffer_key)  # noqa: SLF001
+                buffer = _SharedSendBuffer._instances.get(self._send_buffer_key)
             else:
                 self._send_buffer_acquired = True
                 buffer = None

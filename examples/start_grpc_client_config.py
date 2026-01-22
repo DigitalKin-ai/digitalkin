@@ -22,11 +22,10 @@ from functools import lru_cache
 from typing import Any
 
 import grpc
-
 # Import gRPC protobuf generated classes
-from agentic_mesh_protocol.module.v1 import information_pb2, lifecycle_pb2, module_service_pb2_grpc
-from agentic_mesh_protocol.module_registry.v1 import discover_pb2, module_registry_service_pb2_grpc
-from agentic_mesh_protocol.setup.v1 import setup_pb2
+from agentic_mesh_protocol.module.v1 import module_dto_pb2, module_service_pb2_grpc
+from agentic_mesh_protocol.registry.v1 import registry_dto_pb2, registry_service_pb2_grpc
+from agentic_mesh_protocol.setup.v1 import setup_messages_pb2
 from google.protobuf import json_format, struct_pb2
 from google.protobuf.message import Message
 from pydantic import BaseModel, create_model
@@ -87,12 +86,12 @@ def dict_to_pydantic(data: str, model_name: str = "DynamicModel") -> type[BaseMo
         raise ValueError(msg)
 
     properties = data_dict["properties"]
-    required_fields = set(data_dict.get("required", []))
+    required_fields = set(data_dict.list("required", []))
     field_definitions = {}
 
     # Create field definitions for the Pydantic model
     for field_name, field_info in properties.items():
-        field_type_str = field_info.get("type", "string")
+        field_type_str = field_info.list("type", "string")
         python_type = TYPE_MAPPING.get(field_type_str, Any)
 
         # Mark required fields with ellipsis (...) as required
@@ -120,9 +119,9 @@ def dict_to_pydantic_cached(
     return dict_to_pydantic(data_str, model_name)
 
 
-async def discover_module(
+async def get_module(
     registry_channel: grpc.aio.Channel, module_name: str
-) -> discover_pb2.DiscoverInfoResponse | None:
+) -> registry_dto_pb2.GetModuleResponse | None:
     """Discover a module by name from the registry.
 
     Args:
@@ -132,11 +131,12 @@ async def discover_module(
     Returns:
         Module information or None if not found
     """
+    # todo: a check
     # Create registry service stub
-    registry_stub = module_registry_service_pb2_grpc.ModuleRegistryServiceStub(registry_channel)
+    registry_stub = registry_service_pb2_grpc.RegistryServiceStub(registry_channel)
 
     # Create discover request
-    request = discover_pb2.DiscoverSearchRequest(name=module_name)
+    request = registry_dto_pb2.SearchModulesRequest(name=module_name)
 
     try:
         # Send request to registry
@@ -168,9 +168,9 @@ async def get_module_schemas(
         Tuple of (input_class, output_class, setup_class) Pydantic models
     """
     # Create requests for each schema
-    input_request = information_pb2.GetModuleInputRequest(module_id=module_id)
-    output_request = information_pb2.GetModuleOutputRequest(module_id=module_id)
-    setup_request = information_pb2.GetModuleSetupRequest(module_id=module_id)
+    input_request = module_dto_pb2.GetModuleInputRequest(id=module_id)
+    output_request = module_dto_pb2.GetModuleOutputRequest(id=module_id)
+    setup_request = module_dto_pb2.GetModuleSetupRequest(id=module_id)
 
     # Get schemas from module
     input_response = await module_stub.GetModuleInput(input_request)
@@ -192,12 +192,13 @@ async def run_client_llm() -> None:
         logger.info("Connecting to registry server at localhost:50052")
 
         # Find the module
-        module = await discover_module(registry_channel, "OpenAIToolModule")
+        module = await get_module(registry_channel, "OpenAIToolModule")
         if not module:
             logger.error("Module not found. Make sure the module server is running.")
             return
 
-        logger.info("Found module: %s (ID: %s)", module.metadata.name, module.module_id, extra={"module_info": module})
+        logger.info("Found module: %s (ID: %s)", module.result.module_descriptor.name, module.result.module_descriptor.id, extra={"module_info":
+                                                                                                                                      module})
 
         # Connect to module server
         async with grpc.aio.insecure_channel("localhost:50055") as module_channel:
@@ -207,7 +208,7 @@ async def run_client_llm() -> None:
             module_stub = module_service_pb2_grpc.ModuleServiceStub(module_channel)
 
             # Get module schemas
-            input_class, output_class, setup_class = await get_module_schemas(module_stub, module.module_id)
+            input_class, output_class, setup_class = await get_module_schemas(module_stub, module.result.module_descriptor.id)
 
             logger.info(
                 "Retrieved module schemas: %s, %s and %s",
@@ -232,7 +233,7 @@ async def run_client_llm() -> None:
                 max_tokens=1000,
             )
 
-            config_setup_request = information_pb2.GetConfigSetupModuleRequest(module_id=module.module_id)
+            config_setup_request = module_dto_pb2.GetConfigSetupModuleRequest(id=module.result.module_descriptor.id)
             config_setup_response = await module_stub.GetConfigSetupModule(config_setup_request)
             config_setup_class = json_to_pydantic(config_setup_response.config_setup_schema)
 
@@ -243,8 +244,8 @@ async def run_client_llm() -> None:
                 ]
             ).model_dump()
 
-            request = lifecycle_pb2.ConfigSetupModuleRequest(
-                setup_version=setup_pb2.SetupVersion(
+            request = module_dto_pb2.ConfigSetupModuleRequest(
+                setup_version=setup_messages_pb2.SetupVersion(
                     id="setup_versions:0",
                     setup_id="setups:0",
                     version="0.1.0",

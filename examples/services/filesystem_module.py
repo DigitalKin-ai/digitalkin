@@ -5,12 +5,12 @@ import datetime
 from collections.abc import Callable
 from typing import Any
 
+from digitalkin.services.filesystem.filesystem_models import FileFilter, UploadFileData
 from pydantic import BaseModel, Field
 
 from digitalkin.logger import logger
 from digitalkin.models.module import ModuleStatus
 from digitalkin.modules.archetype_module import ArchetypeModule
-from digitalkin.services.filesystem.filesystem_strategy import FileFilter, UploadFileData
 from digitalkin.services.services_config import ServicesConfig
 from digitalkin.services.services_models import ServicesMode
 
@@ -118,13 +118,13 @@ class ExampleModule(ArchetypeModule[ExampleInput, ExampleOutput, ExampleSetup, E
         file = UploadFileData(
             content=b"%s\n%s" % (processed_message.encode(), str(processed_number).encode()),
             name="example_output.txt",
-            file_type="text/plain",
+            type="text/plain",
             content_type="text/plain",
             metadata={"example_key": "example_value"},
             replace_if_exists=True,
         )
 
-        records, uploaded, failed = await self.filesystem.upload_files(files=[file])
+        records, uploaded, failed = await self.filesystem.upload(files=[file])
         for record in records:
             logger.info("Uploaded file: %s, uploaded: %d, failed: %d", record, uploaded, failed)
             logger.info("Stored file with ID: %s", record.id)
@@ -175,20 +175,20 @@ async def test_module() -> None:
 
     # Check the storage
     if module.status == ModuleStatus.STOPPED:
-        files, _nb_results = await module.filesystem.get_files(
+        files, _nb_results = await module.filesystem.list(
             filters=FileFilter(name="example_output.txt", context="test-mission-123"),
         )
         for file in files:
-            await module.filesystem.update_file(file.id, file_type="updated")
+            await module.filesystem.update(file.id, type="updated")
             # module.filesystem.delete_files(filters=FileFilter(name="example_output.txt", context="test-mission-123"), permanent=True)
 
             logger.info("Retrieved file: %s with ID: %s", file.name, file.id)
             try:
-                file_record = await module.filesystem.get_file(file_id=file.id, include_content=True)
+                file_record = await module.filesystem.list(file_id=file.id, include_content=True)
                 if file_record:
                     logger.info("File ID: %s", file_record.id)
                     logger.info("File name: %s", file_record.name)
-                    logger.info("File type: %s", file_record.file_type)
+                    logger.info("File type: %s", file_record.type)
                     logger.info("File status: %s", file_record.status)
                     logger.info("File content: %s", file_record.content.decode())
             except Exception:

@@ -14,8 +14,8 @@ from pydantic import BaseModel, Field
 from digitalkin.models.module.base_types import DataModel, DataTrigger
 from digitalkin.models.module.module_types import SetupModel
 from digitalkin.models.module.select_schema import SelectSchema
+from digitalkin.models.services.cost import CostConfig, CostType
 from digitalkin.modules._base_module import BaseModule
-from digitalkin.services.cost.cost_strategy import CostConfig
 from digitalkin.utils.package_discover import ModuleDiscoverer
 
 
@@ -277,8 +277,8 @@ class TestGetCostFormat:
     async def test_cost_format_with_config(self) -> None:
         """Returns cost schema when config is present."""
         cost_config = CostConfig(
-            cost_name="api_call",
-            cost_type="API_CALL",
+            name="api_call",
+            type=CostType.API_CALL,
             description="Cost per API call",
             unit="USD",
             rate=0.01,
@@ -297,8 +297,8 @@ class TestGetCostFormat:
     async def test_cost_format_llm(self) -> None:
         """LLM format returns json_schema + ui_schema."""
         cost_config = CostConfig(
-            cost_name="tokens",
-            cost_type="TOKEN_INPUT",
+            name="tokens",
+            type=CostType.TOKEN_INPUT,
             description="Cost per token",
             unit="USD",
             rate=0.001,

@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any
 from pydantic import BaseModel, Field
 
 from digitalkin.logger import logger
-from digitalkin.models.services.registry import ModuleInfo
+from digitalkin.models.services.modules import ModuleInfo
 
 
 class SelectedTool(BaseModel):
@@ -109,7 +109,7 @@ class ToolCache(BaseModel):
             "Tool cached",
             extra={
                 "setup_id": setup_id,
-                "module_id": tool_module_info.module_id,
+                "module_id": tool_module_info.id,
             },
         )
 
@@ -177,12 +177,12 @@ async def module_info_to_tool_module_info(
     cost_config = schemas.get("cost", {})
 
     return ToolModuleInfo(
-        module_id=module_info.module_id,
-        module_type=module_info.module_type,
+        id=module_info.id,
+        type=module_info.type,
         address=module_info.address,
         port=module_info.port,
         version=module_info.version,
-        module_name=module_info.module_name,
+        name=module_info.name,
         documentation=module_info.documentation,
         status=module_info.status,
         tools=tools,

@@ -29,7 +29,7 @@ class SchemaSplitter:
         return json_schema, ui_schema
 
     @classmethod
-    def _extract_ui_properties(  # Complex: recursive traversal of nested JSON schema structures # noqa: C901, PLR0912
+    def _extract_ui_properties(  # noqa: C901, PLR0912
         cls,
         source: dict[str, Any],
         ui_target: dict[str, Any],
@@ -79,7 +79,7 @@ class SchemaSplitter:
                     cls._extract_ui_properties(defs[def_name], ui_target, defs)
 
     @classmethod
-    def _process_object(  # Complex: JSON schema node splitting into json/ui # noqa: C901, PLR0912, PLR0915
+    def _process_object(  # noqa: C901, PLR0912, PLR0915
         cls,
         source: dict[str, Any],
         json_target: dict[str, Any],
@@ -158,7 +158,7 @@ class SchemaSplitter:
                 json_target[key] = value
 
     @classmethod
-    def _process_property(  # Complex: recursive property splitting with $ref resolution # noqa: C901, PLR0912
+    def _process_property(  # noqa: C901, PLR0912
         cls,
         source: dict[str, Any],
         json_target: dict[str, Any],
@@ -222,7 +222,7 @@ class SchemaSplitter:
     @classmethod
     def _strip_ui_properties(  # noqa: C901, PLR0912
         cls, source: dict[str, Any], json_target: dict[str, Any]
-    ) -> None:  # Complex: recursive traversal of nested JSON schema structures
+    ) -> None:
         """Copy source to json_target, stripping ui:* properties.
 
         Args:

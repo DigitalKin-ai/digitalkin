@@ -204,7 +204,7 @@ class ModuleServer(BaseServer):
             logger.info(
                 "Module registered successfully",
                 extra={
-                    "module_id": result.module_id,
+                    "module_id": result.id,
                     "address": advertise_address,
                     "port": self.server_config.port,
                 },

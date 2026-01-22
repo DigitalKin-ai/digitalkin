@@ -107,7 +107,7 @@ class ModuleContext:
     tool_cache: ToolCache
     request_metadata: RequestMetadata
 
-    def __init__(  # All service strategies are mandatory constructor args # noqa: PLR0913, PLR0917
+    def __init__(  # noqa: PLR0913, PLR0917
         self,
         agent: AgentStrategy,
         communication: CommunicationStrategy,

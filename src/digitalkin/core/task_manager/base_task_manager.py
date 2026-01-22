@@ -104,7 +104,7 @@ class BaseTaskManager(ABC):
         if session is not None:
             # Close stream under write lock so pending writes finish first,
             # then see stream_closed on their next attempt.
-            async with session._write_lock:  # noqa: SLF001
+            async with session._write_lock:
                 session.close_stream()
 
         # Atomic pop — second concurrent caller gets None and returns
@@ -312,7 +312,7 @@ class BaseTaskManager(ABC):
             return
 
         try:
-            await asyncio.wait_for(session._stream_closed.wait(), timeout=self._stream_drain_timeout)  # noqa: SLF001
+            await asyncio.wait_for(session._stream_closed.wait(), timeout=self._stream_drain_timeout)
         except asyncio.TimeoutError:
             logger.warning(
                 "Stream drain timeout, proceeding with cleanup",

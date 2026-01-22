@@ -7,9 +7,9 @@ from typing import Any, ClassVar, Literal
 from digitalkin.grpc_servers.utils.models import ClientConfig, SecurityMode, ServerConfig, ServerMode
 from pydantic import BaseModel, Field
 
+from digitalkin.models.services.setup import SetupData
 from digitalkin.modules._base_module import BaseModule
 from digitalkin.services.services_models import ServicesStrategy
-from digitalkin.services.setup.setup_strategy import SetupData
 
 # Configure logging with clear formatting
 logging.basicConfig(

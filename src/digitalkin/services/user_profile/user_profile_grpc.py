@@ -3,16 +3,16 @@
 from typing import Any
 
 from agentic_mesh_protocol.user_profile.v1 import (
-    user_profile_pb2,
+    user_profile_dto_pb2,
     user_profile_service_pb2_grpc,
 )
+from google.protobuf import json_format
 
 from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
 from digitalkin.grpc_servers.utils.grpc_error_handler import GrpcErrorHandlerMixin
 from digitalkin.logger import logger
 from digitalkin.models.grpc_servers.models import ClientConfig
 from digitalkin.services.user_profile.user_profile_strategy import UserProfileServiceError, UserProfileStrategy
-from digitalkin.utils.proto_utils import proto_to_dict
 
 
 class GrpcUserProfile(UserProfileStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
@@ -35,12 +35,16 @@ class GrpcUserProfile(UserProfileStrategy, GrpcClientWrapper, GrpcErrorHandlerMi
             setup_version_id: The ID of the setup version
             client_config: Client configuration for gRPC connection
         """
-        super().__init__(mission_id=mission_id, setup_id=setup_id, setup_version_id=setup_version_id)
+        super().__init__(
+            mission_id=mission_id, setup_id=setup_id, setup_version_id=setup_version_id, client_config=client_config
+        )
         channel = self._init_channel(client_config)
         self.stub = user_profile_service_pb2_grpc.UserProfileServiceStub(channel)
         logger.debug("Channel client 'UserProfile' initialized successfully")
 
-    async def get_user_profile(self) -> dict[str, Any] | None:
+    # ══════════════════════════════════ Public Methods ══════════════════════════════════ #
+
+    async def get(self) -> dict[str, Any]:
         """Get user profile by mission_id (which maps to user_id).
 
         Returns:
@@ -50,14 +54,21 @@ class GrpcUserProfile(UserProfileStrategy, GrpcClientWrapper, GrpcErrorHandlerMi
             UserProfileServiceError: If the gRPC operation fails.
         """
         async with self.handle_grpc_errors("GetUserProfile", UserProfileServiceError):
-            request = user_profile_pb2.GetUserProfileRequest(mission_id=self.mission_id)
+            # mission_id typically contains user context
+            request = user_profile_dto_pb2.GetUserProfileRequest(mission_id=self.mission_id)
             response = await self.exec_grpc_query("GetUserProfile", request)
 
-            if not response.success:
-                logger.warning("No user profile found for mission_id: %s", self.mission_id)
-                return None
+            if not response.result.success:
+                msg = f"Failed to get user profile for mission_id: {self.mission_id}"
+                logger.error(msg)
+                raise UserProfileServiceError(msg)
 
-            user_profile_dict = proto_to_dict(response.user_profile, with_defaults=True)
+            # Convert proto to dict
+            user_profile_dict = json_format.MessageToDict(
+                response.result.profile,
+                preserving_proto_field_name=True,
+                always_print_fields_with_no_presence=True,
+            )
 
             logger.debug("Retrieved user profile for mission_id: %s", self.mission_id)
             return user_profile_dict

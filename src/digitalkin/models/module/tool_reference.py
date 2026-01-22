@@ -82,7 +82,7 @@ class ToolReference(BaseModel):
         setup = await registry.get_setup(entry.setup_id)
         if not setup or not setup.module_id:
             return None
-        info = await registry.discover_by_id(setup.module_id)
+        info = await registry.get(setup.module_id)
         if not info:
             return None
         tool_info = await module_info_to_tool_module_info(info, entry.setup_id, setup.name, communication)
