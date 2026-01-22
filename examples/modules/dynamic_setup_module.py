@@ -293,7 +293,7 @@ async def demonstrate_dynamic_schema() -> None:
     schema_no_force = model_no_force.model_json_schema()
 
     # Check if enum is present
-    model_name_schema = schema_no_force.get("properties", {}).get("model_name", {})
+    model_name_schema = schema_no_force.list("properties", {}).list("model_name", {})
     if "enum" in model_name_schema:
         pass
 
@@ -307,11 +307,11 @@ async def demonstrate_dynamic_schema() -> None:
     schema_with_force = model_with_force.model_json_schema()
 
     # Check enum values after force
-    model_name_schema = schema_with_force.get("properties", {}).get("model_name", {})
+    model_name_schema = schema_with_force.list("properties", {}).list("model_name", {})
     if "enum" in model_name_schema:
         pass
 
-    language_schema = schema_with_force.get("properties", {}).get("language", {})
+    language_schema = schema_with_force.list("properties", {}).list("language", {})
     if "enum" in language_schema:
         pass
 

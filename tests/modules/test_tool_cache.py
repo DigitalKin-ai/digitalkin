@@ -7,20 +7,21 @@ import pytest
 from digitalkin.models.module.setup_types import SetupModel
 from digitalkin.models.module.tool_cache import ToolCache
 from digitalkin.models.module.tool_reference import ToolReference, ToolReferenceConfig, ToolSelectionMode
-from digitalkin.models.services.registry import ModuleInfo, RegistryModuleType
+from digitalkin.services.registry import ModuleType, ModuleInfo, ModuleStatus
 
 
 @pytest.fixture
 def sample_module_info() -> ModuleInfo:
     """Create a sample ModuleInfo for testing."""
     return ModuleInfo(
-        module_id="tool-123",
-        module_type=RegistryModuleType.TOOL,
+        id="tool-123",
+        type=ModuleType.TOOL,
         address="localhost",
         port=50051,
         version="1.0.0",
         name="TestTool",
         documentation="Test tool documentation",
+        status=ModuleStatus.ACTIVE
     )
 
 
@@ -28,13 +29,14 @@ def sample_module_info() -> ModuleInfo:
 def sample_module_info_2() -> ModuleInfo:
     """Create a second sample ModuleInfo for testing."""
     return ModuleInfo(
-        module_id="tool-456",
-        module_type=RegistryModuleType.TOOL,
+        id="tool-456",
+        type=ModuleType.TOOL,
         address="localhost",
         port=50052,
         version="2.0.0",
         name="AnotherTool",
         documentation="Another test tool",
+        status=ModuleStatus.ACTIVE
     )
 
 
@@ -92,12 +94,12 @@ class TestToolCache:
         """Test get queries registry on cache miss."""
         cache = ToolCache()
         mock_registry = Mock()
-        mock_registry.discover_by_id.return_value = sample_module_info
+        mock_registry.get.return_value = sample_module_info
 
         result = cache.get("tool-123", registry=mock_registry)
-
+        print(f"{type(result)}, {result=}")
         assert result == sample_module_info
-        mock_registry.discover_by_id.assert_called_once_with("tool-123")
+        mock_registry.get.assert_called_once_with("tool-123")
         # Should be cached now
         assert cache.get("tool-123") == sample_module_info
 

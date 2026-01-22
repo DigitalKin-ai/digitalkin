@@ -8,8 +8,8 @@ from digitalkin.grpc_servers.utils.models import ClientConfig, SecurityMode, Ser
 from pydantic import BaseModel
 
 from digitalkin.modules._base_module import BaseModule
-from digitalkin.services.setup.setup_strategy import SetupData
-from digitalkin.services.storage.storage_strategy import DataType, StorageRecord
+from digitalkin.services.setup.setup_models import SetupData
+from digitalkin.services.storage.storage_models import DataType, StorageRecord
 
 # Configure logging with clear formatting
 logging.basicConfig(
@@ -114,7 +114,7 @@ class TextTransformModule(BaseModule[TextTransformInput, TextTransformOutput, Te
             self.capabilities,
         )
 
-        self.db_id = self.storage.store(
+        self.db_id = self.storage.create(
             "monitor",
             {
                 "module": self.metadata["name"],
@@ -173,7 +173,7 @@ class TextTransformModule(BaseModule[TextTransformInput, TextTransformOutput, Te
                 transformed,
             )
 
-            monitor_obj: StorageRecord | None = self.storage.read("monitor")
+            monitor_obj: StorageRecord | None = self.storage.get("monitor")
             if monitor_obj is None:
                 logger.error("Monitor object not found in storage.")
                 break
@@ -194,7 +194,7 @@ class TextTransformModule(BaseModule[TextTransformInput, TextTransformOutput, Te
         Use it to close connections, free resources, etc.
         """
         logger.info(f"Cleaning up module {self.metadata['name']}")
-        monitor_obj = self.storage.read("monitor")
+        monitor_obj = self.storage.get("monitor")
         if monitor_obj is None:
             logger.error("Monitor object not found in storage.")
             return

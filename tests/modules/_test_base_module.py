@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from digitalkin.models.module import ModuleStatus, StrategyConfig
+from digitalkin.models.module.module import ModuleStatus, StrategyConfig
 from digitalkin.modules._base_module import BaseModule
 
 

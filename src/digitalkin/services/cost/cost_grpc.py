@@ -1,20 +1,18 @@
 """This module implements the gRPC Cost strategy."""
 
-from typing import Literal
-
-from agentic_mesh_protocol.cost.v1 import cost_pb2, cost_service_pb2_grpc
+from agentic_mesh_protocol.cost.v1 import cost_dto_pb2
+from agentic_mesh_protocol.cost.v1.cost_messages_pb2 import CostFilter as CostFilterProto
+from agentic_mesh_protocol.cost.v1.cost_service_pb2_grpc import CostServiceStub
 from google.protobuf import json_format
 
 from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
 from digitalkin.grpc_servers.utils.grpc_error_handler import GrpcErrorHandlerMixin
 from digitalkin.logger import logger
 from digitalkin.models.grpc_servers.models import ClientConfig
+from digitalkin.services.cost.cost_models import CostConfig, CostData, CostType
 from digitalkin.services.cost.cost_strategy import (
-    CostConfig,
-    CostData,
     CostServiceError,
     CostStrategy,
-    CostType,
 )
 
 
@@ -29,29 +27,20 @@ class GrpcCost(CostStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
         config: dict[str, CostConfig],
         client_config: ClientConfig,
     ) -> None:
-        """Initialize the cost."""
         super().__init__(mission_id=mission_id, setup_id=setup_id, setup_version_id=setup_version_id, config=config)
         channel = self._init_channel(client_config)
-        self.stub = cost_service_pb2_grpc.CostServiceStub(channel)
+        self.stub = CostServiceStub(channel)
         logger.debug("Channel client 'Cost' initialized successfully")
 
-    def add(
+    # ══════════════════════════════════ Publics Methods ═══════════════════════════════════ #
+
+    def create(
         self,
         name: str,
         cost_config_name: str,
         quantity: float,
     ) -> None:
-        """Create a new record in the cost database.
-
-        Args:
-            name: The name of the cost
-            cost_config_name: The name of the cost config
-            quantity: The quantity of the cost
-
-        Raises:
-            CostServiceError: If the cost config is invalid
-        """
-        with self.handle_grpc_errors("AddCost", CostServiceError):
+        with self.handle_grpc_errors("CreateCost", CostServiceError):
             cost_config = self.config.get(cost_config_name)
             if cost_config is None:
                 msg = f"Cost config {cost_config_name} not found in the configuration."
@@ -61,78 +50,46 @@ class GrpcCost(CostStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
                 "name": name,
                 "cost": cost_config.rate * quantity,
                 "unit": cost_config.unit,
-                "cost_type": CostType[cost_config.cost_type],
+                "type": cost_config.type,
                 "mission_id": self.mission_id,
                 "rate": cost_config.rate,
                 "quantity": quantity,
                 "setup_version_id": self.setup_version_id,
             })
-            request = cost_pb2.AddCostRequest(
+            request = cost_dto_pb2.CreateCostRequest(
                 cost=valid_data.cost,
                 name=valid_data.name,
                 unit=valid_data.unit,
-                cost_type=valid_data.cost_type.name,
+                type=valid_data.type.name,
                 mission_id=valid_data.mission_id,
                 rate=valid_data.rate,
                 quantity=valid_data.quantity,
                 setup_version_id=valid_data.setup_version_id,
             )
-            self.exec_grpc_query("AddCost", request)
+            self.exec_grpc_query("CreateCost", request)
             logger.debug("Cost added with cost_dict: %s", valid_data.model_dump())
 
-    def get(self, name: str) -> list[CostData]:
-        """Get a record from the database.
-
-        Args:
-            name: The name of the cost
-
-        Returns:
-            CostData: The cost data
-        """
-        with self.handle_grpc_errors("GetCost", CostServiceError):
-            request = cost_pb2.GetCostRequest(name=name, mission_id=self.mission_id)
-            response: cost_pb2.GetCostResponse = self.exec_grpc_query("GetCost", request)
-            cost_data_list = [
-                json_format.MessageToDict(
-                    cost,
-                    preserving_proto_field_name=True,
-                    always_print_fields_with_no_presence=True,
-                )
-                for cost in response.costs
-            ]
-            logger.debug("Costs retrieved with cost_dict: %s", cost_data_list)
-            return [CostData.model_validate(cost_data) for cost_data in cost_data_list]
-
-    def get_filtered(
+    def list(
         self,
         names: list[str] | None = None,
-        cost_types: list[Literal["TOKEN_INPUT", "TOKEN_OUTPUT", "API_CALL", "STORAGE", "TIME", "OTHER"]] | None = None,
+            cost_types: list[CostType] | None = None,
     ) -> list[CostData]:
-        """Get a list of records from the database.
-
-        Args:
-            names: The names of the costs
-            cost_types: The types of the costs
-
-        Returns:
-            list[CostData]: The cost data
-        """
-        with self.handle_grpc_errors("GetCosts", CostServiceError):
-            request = cost_pb2.GetCostsRequest(
+        with self.handle_grpc_errors("ListCosts", CostServiceError):
+            request = cost_dto_pb2.ListCostsRequest(
                 mission_id=self.mission_id,
-                filter=cost_pb2.CostFilter(
+                filter=CostFilterProto(
                     names=names or [],
-                    cost_types=cost_types or [],
+                    types=[cost_type.to_proto() for cost_type in (cost_types or [])],
                 ),
             )
-            response: cost_pb2.GetCostsResponse = self.exec_grpc_query("GetCosts", request)
+            response: cost_dto_pb2.ListCostsResponse = self.exec_grpc_query("ListCosts", request)
             cost_data_list = [
                 json_format.MessageToDict(
-                    cost,
+                    cost_result.cost,
                     preserving_proto_field_name=True,
                     always_print_fields_with_no_presence=True,
                 )
-                for cost in response.costs
+                for cost_result in response.result
             ]
             logger.debug("Filtered costs retrieved with cost_dict: %s", cost_data_list)
             return [CostData.model_validate(cost_data) for cost_data in cost_data_list]

@@ -4,8 +4,8 @@ from enum import Enum
 
 from pydantic import BaseModel, Field, PrivateAttr, model_validator
 
-from digitalkin.models.services.registry import ModuleInfo
 from digitalkin.services.registry import RegistryStrategy
+from digitalkin.services.registry.registry_models import ModuleInfo
 
 
 class ToolSelectionMode(str, Enum):
@@ -98,7 +98,7 @@ class ToolReference(BaseModel):
             return None
 
         if self.config.mode == ToolSelectionMode.FIXED and self.config.module_id:
-            info = registry.discover_by_id(self.config.module_id)
+            info = registry.get(self.config.module_id)
             if info:
                 self._cached_info = info
             return info
@@ -111,7 +111,7 @@ class ToolReference(BaseModel):
             )
             if results:
                 self._cached_info = results[0]
-                self.config.module_id = results[0].module_id
+                self.config.module_id = results[0].id
                 return results[0]
 
         return None

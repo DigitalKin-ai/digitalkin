@@ -28,15 +28,9 @@ class DefaultUserProfile(UserProfileStrategy):
         super().__init__(mission_id=mission_id, setup_id=setup_id, setup_version_id=setup_version_id)
         self.db: dict[str, dict[str, Any]] = {}
 
-    def get_user_profile(self) -> dict[str, Any]:
-        """Get user profile from in-memory storage.
+    # ══════════════════════════════════ Public Methods ══════════════════════════════════ #
 
-        Returns:
-            dict[str, Any]: User profile data
-
-        Raises:
-            UserProfileServiceError: If the user profile is not found
-        """
+    def get(self) -> dict[str, Any]:
         if self.mission_id not in self.db:
             msg = f"User profile for mission {self.mission_id} not found in the database."
             logger.warning(msg)

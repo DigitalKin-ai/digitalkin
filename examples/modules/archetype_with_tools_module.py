@@ -196,9 +196,9 @@ class ArchetypeWithToolsModule(
         # Get search tool from cache and call via call_module_by_id
         search_info = self.context.tool_cache.get("search_tool")
         if search_info:
-            tools_used.append(f"search:{search_info.module_id}")
+            tools_used.append(f"search:{search_info.id}")
             async for response in self.context.call_module_by_id(
-                module_id=search_info.module_id,
+                    module_id=search_info.id,
                 input_data={"query": input_data.payload.user_prompt},
                 setup_id=self.context.session.setup_id,
                 mission_id=self.context.session.mission_id,
@@ -208,9 +208,9 @@ class ArchetypeWithToolsModule(
         # Get calculator tool from cache
         calc_info = self.context.tool_cache.get("calculator_tool")
         if calc_info:
-            tools_used.append(f"calculator:{calc_info.module_id}")
+            tools_used.append(f"calculator:{calc_info.id}")
             async for response in self.context.call_module_by_id(
-                module_id=calc_info.module_id,
+                    module_id=calc_info.id,
                 input_data={"expression": "2 + 2"},
                 setup_id=self.context.session.setup_id,
                 mission_id=self.context.session.mission_id,
@@ -223,9 +223,9 @@ class ArchetypeWithToolsModule(
             registry=self.context.registry,
         )
         if dynamic_info:
-            tools_used.append(f"dynamic:{dynamic_info.module_id}")
+            tools_used.append(f"dynamic:{dynamic_info.id}")
             async for response in self.context.call_module_by_id(
-                module_id=dynamic_info.module_id,
+                    module_id=dynamic_info.id,
                 input_data={"prompt": input_data.payload.user_prompt},
                 setup_id=self.context.session.setup_id,
                 mission_id=self.context.session.mission_id,

@@ -180,5 +180,7 @@ cython_debug/
 .vscode/
 requirements.txt
 certs/
+.idea/
+.DS_Store
 
 CLAUDE.md

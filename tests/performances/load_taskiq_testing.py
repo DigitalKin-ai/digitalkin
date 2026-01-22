@@ -11,8 +11,8 @@ from typing import Any, Union
 
 import grpc
 import psutil
-from agentic_mesh_protocol.module.v1 import information_pb2, lifecycle_pb2, module_service_pb2_grpc
-from agentic_mesh_protocol.module_registry.v1 import discover_pb2, module_registry_service_pb2_grpc
+from agentic_mesh_protocol.module.v1 import module_dto_pb2, module_service_pb2_grpc
+from agentic_mesh_protocol.registry.v1 import registry_dto_pb2, registry_service_pb2_grpc
 from google.protobuf import json_format
 from hdrh.histogram import HdrHistogram
 from pydantic import BaseModel, Field, create_model
@@ -105,7 +105,7 @@ def _create_model_from_schema(
 
             for schema_item in field_info["anyOf"]:
                 if "type" in schema_item:
-                    item_type = schema_item.get("type", "string")
+                    item_type = schema_item.list("type", "string")
                     type_class = TYPE_MAPPING.get(item_type, Any)
                     union_types.append(type_class)
 
@@ -116,7 +116,7 @@ def _create_model_from_schema(
                 field_type = Any
 
         # Handle array type
-        elif field_info.get("type") == "array" and "items" in field_info:
+        elif field_info.list("type") == "array" and "items" in field_info:
             items = field_info["items"]
             if "$ref" in items:
                 ref_path = items["$ref"]
@@ -136,19 +136,19 @@ def _create_model_from_schema(
                     else:
                         item_type = Any
             else:
-                item_type_str = items.get("type", "string")
+                item_type_str = items.list("type", "string")
                 item_type = TYPE_MAPPING.get(item_type_str, Any)
 
             field_type = list[item_type]
         else:
             # Handle regular types
-            field_type_str = field_info.get("type", "string")
+            field_type_str = field_info.list("type", "string")
             field_type = TYPE_MAPPING.get(field_type_str, Any)
 
         # Create Field with metadata
-        field_title = field_info.get("title", field_name)
-        field_description = field_info.get("description", "")
-        field_default = field_info.get("default")
+        field_title = field_info.list("title", field_name)
+        field_description = field_info.list("description", "")
+        field_default = field_info.list("default")
 
         # Handle discriminator fields
         field_kwargs: dict[Any, Any] = {}
@@ -248,7 +248,7 @@ def dict_to_pydantic_cached(
 
 async def discover_module(
     registry_channel: grpc.aio.Channel, module_name: str
-) -> discover_pb2.DiscoverInfoResponse | None:
+) -> registry_dto_pb2.DiscoverInfoResponse | None:
     """Discover a module by name from the registry.
 
     Args:
@@ -259,10 +259,10 @@ async def discover_module(
         Module information or None if not found
     """
     # Create registry service stub
-    registry_stub = module_registry_service_pb2_grpc.ModuleRegistryServiceStub(registry_channel)
+    registry_stub = registry_service_pb2_grpc.RegistryServiceStub(registry_channel)
 
     # Create discover request
-    request = discover_pb2.DiscoverSearchRequest(name=module_name)
+    request = registry_dto_pb2.DiscoverSearchRequest(name=module_name)
 
     try:
         # Send request to registry
@@ -294,9 +294,9 @@ async def get_module_schemas(
         Tuple of (input_class, output_class, setup_class) Pydantic models
     """
     # Create requests for each schema
-    input_request = information_pb2.GetModuleInputRequest(module_id=module_id)
-    output_request = information_pb2.GetModuleOutputRequest(module_id=module_id)
-    setup_request = information_pb2.GetModuleSetupRequest(module_id=module_id)
+    input_request = module_dto_pb2.GetModuleInputRequest(module_id=module_id)
+    output_request = module_dto_pb2.GetModuleOutputRequest(module_id=module_id)
+    setup_request = module_dto_pb2.GetModuleSetupRequest(module_id=module_id)
 
     # Get schemas from module
     input_response = await module_stub.GetModuleInput(input_request)
@@ -333,7 +333,7 @@ async def worker(
             "user_prompt": "Give me details about agentic mesh current advancement",
         }
     )
-    request = lifecycle_pb2.StartModuleRequest(
+    request = module_dto_pb2.StartModuleRequest(
         input=input_data.model_dump(),
         setup_id=setup_id,
         mission_id=mission_id,
@@ -378,7 +378,7 @@ async def worker(
 
 async def fire_one(
     module_stub: Any,
-    request: lifecycle_pb2.StartModuleRequest,
+        request: module_dto_pb2.StartModuleRequest,
 ) -> float:
     """Send a single StartModule RPC and return latency."""
     start = time.perf_counter()
@@ -422,7 +422,7 @@ async def sustained_load(
         input_data = input_class(
             payload={"payload_type": "message", "user_prompt": "Give me details about agentic mesh current advancement"}
         )
-        request = lifecycle_pb2.StartModuleRequest(
+        request = module_dto_pb2.StartModuleRequest(
             input=input_data.model_dump(), setup_id=setup_id, mission_id=mission_id
         )
         while True:
@@ -465,7 +465,7 @@ async def sustained_load(
 async def burst_load(
     parallelism: int,
     module_stub: Any,
-    request: lifecycle_pb2.StartModuleRequest,
+        request: module_dto_pb2.StartModuleRequest,
 ) -> list[float]:
     """Burst load: fire `parallelism` requests simultaneously and gather latencies."""
     coros = [fire_one(module_stub, request) for _ in range(parallelism)]
@@ -501,7 +501,7 @@ async def main() -> None:
             logger.error("Module not found")
             return
         module_stub = module_service_pb2_grpc.ModuleServiceStub(grpc.aio.insecure_channel(args.target))
-        input_class, output_class, _ = await get_module_schemas(module_stub, module.module_id)
+        input_class, output_class, _ = await get_module_schemas(module_stub, module.id)
 
     # Pre-build shared request for burst
     setup_id = "setups:cortex_setup"
@@ -512,7 +512,7 @@ async def main() -> None:
             "user_prompt": "100000",
         }
     )
-    shared_request = lifecycle_pb2.StartModuleRequest(
+    shared_request = module_dto_pb2.StartModuleRequest(
         input=input_data.model_dump(), setup_id=setup_id, mission_id=mission_id
     )
 

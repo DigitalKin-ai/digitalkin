@@ -1,17 +1,58 @@
 version: "3"
 
 vars:
-  # could use env var
   PACKAGE_NAME: "digitalkin"
   PACKAGE_DIR: "src/{{.PACKAGE_NAME}}"
+  PYTHON_VERSION: "3.10"
+
 
 tasks:
-  venv:
-    desc: "Install project venv"
+  # =============================================================================
+  # DEFAULT - Shortcuts for common tasks
+  # =============================================================================
+  default:
+    desc: "Show available tasks"
     cmds:
-      - uv venv --python 3.10
+      - task --list
+    silent: true
 
-  install-deps:
+  # =============================================================================
+  # SETUP - Environment and initial configuration
+  # =============================================================================
+  setup:
+    desc: "Setup project environment (usage: task setup[:venv|:dev|:pre-commit])"
+    cmds:
+      - task: setup:dev
+
+  setup:venv:
+    desc: "Create virtual environment"
+    cmds:
+      - uv venv --python {{.PYTHON_VERSION}}
+
+  setup:pre-commit:
+    desc: "Install pre-commit hooks"
+    cmds:
+      - uv run pre-commit install
+
+  setup:dev:
+    desc: "Setup complete development environment"
+    cmds:
+      - task: setup:venv
+      - task: install:deps
+      - task: install:dev
+      - task: install:tests
+      - task: setup:pre-commit
+
+  # =============================================================================
+  # INSTALL - Dependencies installation
+  # =============================================================================
+  install:
+    desc: "Install project dependencies (usage: task install[:deps|:dev|:tests|:examples|:all])"
+    aliases: [ i ]
+    cmds:
+      - task: install:dev
+
+  install:deps:
     desc: "Install project dependencies from pyproject.toml"
     cmds:
       - uv pip compile pyproject.toml -o requirements.txt
@@ -24,101 +65,165 @@ tasks:
           uv pip install -e . --system
         fi
 
-  dev-deps:
+  install:dev:
     desc: "Install development dependencies"
     cmds:
       - uv pip install -e ".[taskiq]" --group dev --group docs
 
-  examples-deps:
-    desc: "Install examples dependencies"
-    cmds:
-      - uv pip install --group examples
-
-  tests-deps:
+  install:tests:
     desc: "Install tests dependencies"
     cmds:
       - uv pip install --group tests
 
-  setup-pre-commit:
-    desc: "Install pre-commit hooks"
+  install:examples:
+    desc: "Install examples dependencies"
     cmds:
-      - uv run pre-commit install
+      - uv pip install --group examples
 
-  build-package:
-    desc: "Build the PyPI package (runs your build script)"
+  install:all:
+    desc: "Install all dependencies (deps + dev + tests + examples)"
+    cmds:
+      - task: install:deps
+      - task: install:dev
+      - task: install:tests
+      - task: install:examples
+
+  # =============================================================================
+  # BUILD - Package building
+  # =============================================================================
+  build:
+    desc: "Build the project (usage: task build[:package|:verify])"
+    cmds:
+      - task: build:package
+
+  build:package:
+    desc: "Build the PyPI package"
     cmds:
       - uv build
 
-  generate-certificates:
-    desc: "Generate certificates"
-    # You can customize the certificate generation with various options:
-    # python generate_certificates.py --output-dir ./my-certs --key-size 4096 --dns-names localhost myserver.example.com --ip-addresses 127.0.0.1 192.168.1.100
+  build:verify:
+    desc: "Build and verify the package can be imported"
     cmds:
-      - uv run python scripts/generate_certificates.py
+      - task: build:package
+      - uv run --with {{.PACKAGE_NAME}} --no-project -- python -c 'import {{.PACKAGE_NAME}}; print({{.PACKAGE_NAME}}.__version__)'
 
-  publish-package-test:
-    desc: "Publish the package to the PyPI's test env"
+  # =============================================================================
+  # TEST - Testing
+  # =============================================================================
+  test:
+    desc: "Run tests (usage: task test[:unit|:all])"
+    aliases: [ tests ]
+    cmds:
+      - task: test:all
+
+  test:unit:
+    desc: "Run unit tests (usage: task test:unit [-- tests/path/to/test])"
+    vars:
+      TEST_PATH: '{{if .CLI_ARGS}}{{.CLI_ARGS}}{{else}}tests{{end}}'
+    cmds:
+      - docker compose run --rm -T -e TEST_SELECTOR="{{.TEST_PATH}}" tests
+
+  test:all:
+    desc: "Run all tests"
+    cmds:
+      - docker compose run --rm -T tests
+
+  # =============================================================================
+  # LINT - Code quality and formatting
+  # =============================================================================
+  lint:
+    desc: "Run all linting tasks"
+    cmds:
+      - task: lint:check
+
+  lint:format:
+    desc: "Format code with ruff"
+    cmds:
+      - uv run ruff format .
+
+  lint:check:
+    desc: "Check code with ruff"
+    cmds:
+      - uv run ruff check .
+
+  lint:fix:
+    desc: "Fix linting issues with ruff"
+    cmds:
+      - uv run ruff check --select I --fix .
+      - uv run ruff check . --fix
+
+  lint:all:
+    desc: "Format and fix all linting issues"
+    cmds:
+      - task: lint:format
+      - task: lint:fix
+
+  # =============================================================================
+  # PUBLISH - Package publishing
+  # =============================================================================
+  publish:test:
+    desc: "Publish the package to PyPI test repository"
     cmds:
       - uv publish --repository-url https://test.pypi.org/legacy/
 
-  publish-package:
+  publish:prod:
     desc: "Publish the package to PyPI"
     cmds:
       - uv publish
 
-  test-package:
-    desc: "Test if the PyPI package is well published"
+  publish:verify:
+    desc: "Publish to test PyPI and verify the package"
     cmds:
-      - task: build-package
-      - uv run --with {{.PACKAGE_NAME}} --no-project -- python -c 'import {{.PACKAGE_NAME}}; print({{.PACKAGE_NAME}}.__version__)'
+      - task: publish:test
+      - task: build:verify
 
-  run-tests:
-    desc: "Run pytest tests"
-    cmds:
-      - docker compose run --rm -T tests -m 'not integration'
-
-  linter:
-    desc: "run linter on the project"
-    cmds:
-      - |
-        uv run ruff format . && uv run ruff check --select I --fix . && uv run ruff check . --fix
-
+  # =============================================================================
+  # CLEAN - Cleanup tasks
+  # =============================================================================
   clean:
+    desc: "Clean build artifacts and cache"
+    cmds:
+      - task: clean:build
+
+  clean:build:
     desc: "Remove build artifacts and cache directories"
     cmds:
       - rm -rf dist src/{{.PACKAGE_NAME}}.egg-info
       - find . -type d -name "__pycache__" -exec rm -rf {} +
       - find . -type d -name "*.egg-info" -exec rm -rf {} +
 
-  clean-all:
-    desc: "Deep clean venv and dist"
+  clean:all:
+    desc: "Deep clean: build artifacts, cache, and virtual environment"
     cmds:
-      - task: clean
-      # Clean up virtual environment
+      - task: clean:build
       - rm -rf .venv
       - rm -rf dist
 
-  test-publish:
-    desc: "push and test the package in a test env"
-    cmds:
-      - task: publish-package-test
-      - task: test-package
-
-  bump-version:
-    desc: "Bump package version (type: major, minor, patch, pre_l or pre_n)"
+  # =============================================================================
+  # VERSION - Version management
+  # =============================================================================
+  version:bump:
+    desc: "Bump package version (usage: task version:bump -- patch|minor|major|pre_l|pre_n)"
     cmds:
       - SKIP=pytest bump-my-version bump {{.CLI_ARGS}}
 
-  setup-dev:
-    desc: "Setup development environment"
-    cmds:
-      - task: venv
-      - task: install-deps
-      - task: dev-deps
-      - task: tests-deps
-      - task: setup-pre-commit
+  # =============================================================================
+  # GEN - Generation tasks
+  # =============================================================================
+  gen:certs:
+    desc: "Generate SSL certificates"
+    summary: |
+      Generate SSL certificates for secure communication.
 
-  start-taskiq:
-    desc: "Start TaskIQ worker. be sure to enable rabbitMQ stream capability"
+      Customize with: python generate_certificates.py --output-dir ./my-certs --key-size 4096
+                      --dns-names localhost myserver.example.com --ip-addresses 127.0.0.1 192.168.1.100
+    cmds:
+      - uv run python scripts/generate_certificates.py
+
+  # =============================================================================
+  # RUN - Runtime services
+  # =============================================================================
+  run:taskiq:
+    desc: "Start TaskIQ worker (requires RabbitMQ stream capability)"
     cmds:
       - taskiq worker digitalkin.core.job_manager.taskiq_broker:TASKIQ_BROKER -w 1

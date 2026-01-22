@@ -14,7 +14,7 @@ from digitalkin.services.services_config import ServicesConfig
 from digitalkin.services.services_models import ServicesMode
 
 if TYPE_CHECKING:
-    from digitalkin.services.storage.storage_strategy import StorageRecord
+    from digitalkin.services.storage.storage_models import StorageRecord
 
 
 class ExampleInput(BaseModel):
@@ -134,7 +134,7 @@ class ExampleModule(ArchetypeModule[ExampleInput, ExampleOutput, ExampleSetup, E
         )
 
         # Store the output data in storage
-        storage_id = self.storage.store(
+        storage_id = self.storage.create(
             collection="example", record_id="example_outputs", data=output_data.model_dump(), data_type="OUTPUT"
         )
 
@@ -176,7 +176,7 @@ async def test_module() -> None:
 
     # Check the storage
     if module.status == ModuleStatus.STOPPED:
-        result: StorageRecord = module.storage.read("example", "example_outputs")
+        result: StorageRecord = module.storage.get("example", "example_outputs")
         if result:
             pass
 
@@ -189,10 +189,10 @@ def test_storage_directly() -> None:
     )
 
     # Create a test record
-    storage.store("example", "test_table", {"test_key": "test_value"}, "OUTPUT")
+    storage.create("example", "test_table", {"test_key": "test_value"}, "OUTPUT")
 
     # Retrieve the record
-    retrieved = storage.read("example", "test_table")
+    retrieved = storage.get("example", "test_table")
 
     if retrieved:
         pass

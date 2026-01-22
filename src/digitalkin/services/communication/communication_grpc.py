@@ -4,8 +4,7 @@ import asyncio
 from collections.abc import AsyncGenerator, Awaitable, Callable
 
 from agentic_mesh_protocol.module.v1 import (
-    information_pb2,
-    lifecycle_pb2,
+    module_dto_pb2,
     module_service_pb2_grpc,
 )
 from google.protobuf import json_format, struct_pb2
@@ -31,14 +30,6 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
         setup_version_id: str,
         client_config: ClientConfig,
     ) -> None:
-        """Initialize the gRPC communication client.
-
-        Args:
-            mission_id: Mission identifier
-            setup_id: Setup identifier
-            setup_version_id: Setup version identifier
-            client_config: Client configuration for gRPC connection
-        """
         BaseStrategy.__init__(self, mission_id, setup_id, setup_version_id)
         self.client_config = client_config
 
@@ -47,7 +38,9 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
             extra={"security": client_config.security},
         )
 
-    def _create_stub(self, module_address: str, module_port: int) -> module_service_pb2_grpc.ModuleServiceStub:
+    # ═════════════════════════════════ Private Methods ══════════════════════════════════ #
+
+    def __create_stub(self, module_address: str, module_port: int) -> module_service_pb2_grpc.ModuleServiceStub:
         """Create a new stub for the target module.
 
         Args:
@@ -74,6 +67,8 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
         channel = self._init_channel(config)
         return module_service_pb2_grpc.ModuleServiceStub(channel)
 
+    # ══════════════════════════════════ Public Methods ══════════════════════════════════ #
+
     async def get_module_schemas(
         self,
         module_address: str,
@@ -91,13 +86,13 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
         Returns:
             Dictionary containing schemas
         """
-        stub = self._create_stub(module_address, module_port)
+        stub = self.__create_stub(module_address, module_port)
 
         # Create requests
-        input_request = information_pb2.GetModuleInputRequest(llm_format=llm_format)
-        output_request = information_pb2.GetModuleOutputRequest(llm_format=llm_format)
-        setup_request = information_pb2.GetModuleSetupRequest(llm_format=llm_format)
-        secret_request = information_pb2.GetModuleSecretRequest(llm_format=llm_format)
+        input_request = module_dto_pb2.GetModuleInputRequest(llm_format=llm_format)
+        output_request = module_dto_pb2.GetModuleOutputRequest(llm_format=llm_format)
+        setup_request = module_dto_pb2.GetModuleSetupRequest(llm_format=llm_format)
+        secret_request = module_dto_pb2.GetModuleSecretRequest(llm_format=llm_format)
 
         # Get all schemas in parallel
         try:
@@ -155,14 +150,14 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
         Yields:
             Streaming responses from module as dictionaries
         """
-        stub = self._create_stub(module_address, module_port)
+        stub = self.__create_stub(module_address, module_port)
 
         # Convert input data to protobuf Struct
         input_struct = struct_pb2.Struct()
         input_struct.update(input_data)
 
         # Create request
-        request = lifecycle_pb2.StartModuleRequest(
+        request = module_dto_pb2.StartModuleRequest(
             input=input_struct,
             setup_id=setup_id,
             mission_id=mission_id,
@@ -188,7 +183,7 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
                 output_dict = json_format.MessageToDict(response.output)
 
                 # Check for end_of_stream signal
-                if output_dict.get("root", {}).get("protocol") == "end_of_stream":
+                if output_dict.get("root", {}).list("protocol") == "end_of_stream":
                     logger.debug(
                         "End of stream received",
                         extra={

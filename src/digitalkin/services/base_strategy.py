@@ -1,6 +1,7 @@
 """This module contains the abstract base class for storage strategies."""
 
-from abc import ABC
+from abc import ABC, abstractmethod
+from typing import Any
 
 
 class BaseStrategy(ABC):
@@ -20,3 +21,87 @@ class BaseStrategy(ABC):
         self.mission_id: str = mission_id
         self.setup_id: str = setup_id
         self.setup_version_id: str = setup_version_id
+
+    @abstractmethod
+    def create(self, *args: Any, **kwargs: Any) -> Any:
+        """Add a new resource.
+
+        This method must be implemented by subclasses with their specific signature.
+
+        Raises:
+            NotImplementedError: This function is not implemented yet.
+        """
+        msg = "Create method not implemented yet."
+        raise NotImplementedError(msg)
+
+    @abstractmethod
+    def get(self, *args: Any, **kwargs: Any) -> Any:
+        """Get one resources.
+
+        This method must be implemented by subclasses with their specific signature.
+
+        Raises:
+            NotImplementedError: This function is not implemented yet.
+        """
+        msg = "Get method not implemented yet."
+        raise NotImplementedError(msg)
+
+    @abstractmethod
+    def list(self, *args: Any, **kwargs: Any) -> Any:
+        """List one or more resources.
+
+        This method must be implemented by subclasses with their specific signature.
+
+        Raises:
+            NotImplementedError: This function is not implemented yet.
+        """
+        msg = "List method not implemented yet."
+        raise NotImplementedError(msg)
+
+    @abstractmethod
+    def search(self, *args: Any, **kwargs: Any) -> Any:
+        """Search resources.
+
+        This method must be implemented by subclasses with their specific signature.
+
+        Raises:
+            NotImplementedError: This function is not implemented yet.
+        """
+        msg = "Search method not implemented yet."
+        raise NotImplementedError(msg)
+
+    @abstractmethod
+    def delete(self, *args: Any, **kwargs: Any) -> Any:
+        """Delete one or more resources.
+
+        This method must be implemented by subclasses with their specific signature.
+
+        Raises:
+            NotImplementedError: This function is not implemented yet.
+        """
+        msg = "Delete method not implemented yet."
+        raise NotImplementedError(msg)
+
+    @abstractmethod
+    def update(self, *args: Any, **kwargs: Any) -> Any:
+        """Update a resource.
+
+        This method must be implemented by subclasses with their specific signature.
+
+        Raises:
+            NotImplementedError: This function is not implemented yet.
+        """
+        msg = "Update method not implemented yet."
+        raise NotImplementedError(msg)
+
+    @abstractmethod
+    def upload(self, *args: Any, **kwargs: Any) -> Any:
+        """Upload one or more resources.
+
+        This method must be implemented by subclasses with their specific signature.
+
+        Raises:
+            NotImplementedError: This function is not implemented yet.
+        """
+        msg = "Upload method not implemented yet."
+        raise NotImplementedError(msg)

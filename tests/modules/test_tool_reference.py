@@ -13,11 +13,7 @@ from digitalkin.models.module.tool_reference import (
     ToolReferenceConfig,
     ToolSelectionMode,
 )
-from digitalkin.models.services.registry import (
-    ModuleInfo,
-    RegistryModuleStatus,
-    RegistryModuleType,
-)
+from digitalkin.services.registry import ModuleStatus, ModuleType, ModuleInfo
 from digitalkin.services.registry import RegistryStrategy
 
 
@@ -29,18 +25,18 @@ class FakeRegistry(RegistryStrategy):
         self._search_results: dict[str, list[ModuleInfo]] = {}
 
     def add_module(self, info: ModuleInfo) -> None:
-        self._modules[info.module_id] = info
+        self._modules[info.id] = info
 
     def add_search_result(self, tag: str, results: list[ModuleInfo]) -> None:
         self._search_results[tag] = results
 
-    def discover_by_id(self, module_id: str) -> ModuleInfo | None:
+    def get(self, module_id: str) -> ModuleInfo | None:
         return self._modules.get(module_id)
 
     def search(
         self,
         name: str | None = None,
-        module_type: str | None = None,
+            module_type: ModuleType | None = None,
         organization_id: str | None = None,
     ) -> list[ModuleInfo]:
         if name and name in self._search_results:
@@ -59,43 +55,46 @@ class FakeRegistry(RegistryStrategy):
     ) -> ModuleInfo | None:
         return None
 
-    def heartbeat(self, module_id: str) -> RegistryModuleStatus:
-        return RegistryModuleStatus.ACTIVE
+    def heartbeat(self, module_id: str) -> ModuleStatus:
+        return ModuleStatus.ACTIVE
 
 
 @pytest.fixture
 def search_tool_info() -> ModuleInfo:
     return ModuleInfo(
-        module_id="tool-search-001",
-        module_type=RegistryModuleType.TOOL,
+        id="tool-search-001",
+        type=ModuleType.TOOL,
         address="localhost",
         port=50051,
         version="1.0.0",
         name="SearchTool",
+        status=ModuleStatus.ACTIVE
     )
 
 
 @pytest.fixture
 def analyzer_tool_info() -> ModuleInfo:
     return ModuleInfo(
-        module_id="tool-analyzer-002",
-        module_type=RegistryModuleType.TOOL,
+        id="tool-analyzer-002",
+        type=ModuleType.TOOL,
         address="localhost",
         port=50052,
         version="2.0.0",
         name="AnalyzerTool",
+        status=ModuleStatus.ACTIVE
     )
 
 
 @pytest.fixture
 def writer_tool_info() -> ModuleInfo:
     return ModuleInfo(
-        module_id="tool-writer-003",
-        module_type=RegistryModuleType.TOOL,
+        id="tool-writer-003",
+        type=ModuleType.TOOL,
         address="localhost",
         port=50053,
         version="1.5.0",
         name="WriterTool",
+        status=ModuleStatus.ACTIVE
     )
 
 
@@ -162,7 +161,7 @@ class TestToolReferenceResolution:
         result = ref.resolve(registry)
 
         assert result is not None
-        assert result.module_id == "tool-search-001"
+        assert result.id == "tool-search-001"
         assert ref.module_info == search_tool_info
         assert ref.module_id == "tool-search-001"
         assert ref.is_resolved
@@ -198,7 +197,7 @@ class TestToolReferenceResolution:
         result = ref.resolve(registry)
 
         assert result is not None
-        assert result.module_id == "tool-search-001"
+        assert result.id == "tool-search-001"
         assert ref.module_info == search_tool_info
         assert ref.module_id == "tool-search-001"
 

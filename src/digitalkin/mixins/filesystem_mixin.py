@@ -3,7 +3,7 @@
 from typing import Any
 
 from digitalkin.models.module.module_context import ModuleContext
-from digitalkin.services.filesystem.filesystem_strategy import FilesystemRecord
+from digitalkin.services.filesystem.filesystem_models import FilesystemRecord
 
 
 class FilesystemMixin:
@@ -27,7 +27,7 @@ class FilesystemMixin:
         Raises:
             FilesystemServiceError: If upload operation fails
         """
-        return context.filesystem.upload_files(files)
+        return context.filesystem.create(files)
 
     @staticmethod
     def get_file(context: ModuleContext, file_id: str) -> FilesystemRecord:
@@ -43,4 +43,4 @@ class FilesystemMixin:
         Raises:
             FilesystemServiceError: If file retrieval fails
         """
-        return context.filesystem.get_file(file_id, include_content=True)
+        return context.filesystem.list(file_id, include_content=True)

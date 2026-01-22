@@ -174,7 +174,7 @@ class ModuleContext:
         Yields:
             Streaming responses from module as dictionaries.
         """
-        module_info = self.registry.discover_by_id(module_id)
+        module_info = self.registry.get(module_id)
 
         logger.debug(
             "Calling module by ID",
@@ -210,7 +210,7 @@ class ModuleContext:
         Returns:
             Dictionary containing schemas: {"input": ..., "output": ..., "setup": ..., "secret": ...}
         """
-        module_info = self.registry.discover_by_id(module_id)
+        module_info = self.registry.get(module_id)
 
         logger.debug(
             "Getting module schemas by ID",
@@ -252,7 +252,7 @@ class ModuleContext:
         return {
             "type": "function",
             "function": {
-                "module_id": module_info.module_id,
+                "module_id": module_info.id,
                 "name": module_info.name or "undefined",
                 "description": module_info.documentation or "",
                 "parameters": schemas["input"],
@@ -294,7 +294,7 @@ class ModuleContext:
             ):
                 yield response
 
-        tool_function.__name__ = module_info.name or module_info.module_id
+        tool_function.__name__ = module_info.name or module_info.id
         tool_function.__doc__ = module_info.documentation or ""
 
         return tool_function

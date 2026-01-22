@@ -2,6 +2,7 @@
 
 from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator, Awaitable, Callable
+from typing import Any
 
 from digitalkin.services.base_strategy import BaseStrategy
 
@@ -17,6 +18,23 @@ class CommunicationStrategy(BaseStrategy, ABC):
 
     The service wraps the Module Service protocol from agentic-mesh-protocol.
     """
+
+    def __init__(
+            self,
+            mission_id: str,
+            setup_id: str,
+            setup_version_id: str,
+    ) -> None:
+        """Initialize the default communication service.
+
+        Args:
+            mission_id: Mission identifier
+            setup_id: Setup identifier
+            setup_version_id: Setup version identifier
+        """
+        super().__init__(mission_id, setup_id, setup_version_id)
+
+    # ══════════════════════════════════ Public Methods ══════════════════════════════════ #
 
     @abstractmethod
     async def get_module_schemas(
@@ -74,3 +92,26 @@ class CommunicationStrategy(BaseStrategy, ABC):
         if False:  # pragma: no cover
             yield {}
         raise NotImplementedError
+
+    # ══════════════════════════════ Unimplemented Methods ═══════════════════════════════ #
+
+    def create(self, *args: Any, **kwargs: Any) -> Any:
+        return super().create()
+
+    def get(self, *args: Any, **kwargs: Any) -> Any:
+        return super().get()
+
+    def list(self, *args: Any, **kwargs: Any) -> Any:
+        return super().list()
+
+    def search(self, *args: Any, **kwargs: Any) -> Any:
+        return super().search()
+
+    def delete(self, *args: Any, **kwargs: Any) -> Any:
+        return super().delete()
+
+    def update(self, *args: Any, **kwargs: Any) -> Any:
+        return super().update()
+
+    def upload(self, *args: Any, **kwargs: Any) -> Any:
+        return super().upload()

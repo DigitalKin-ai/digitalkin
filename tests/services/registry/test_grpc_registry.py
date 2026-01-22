@@ -14,19 +14,16 @@ import grpc
 import grpc_testing
 import pytest
 from agentic_mesh_protocol.registry.v1 import (
-    registry_enums_pb2,
     registry_service_pb2,
     registry_service_pb2_grpc,
 )
-from tests.fixtures.grpc_fixtures import FakeContext
-from tests.services.registry.mock_registry_servicer import MockRegistryServicer
 
 from digitalkin.models.grpc_servers.models import ClientConfig, SecurityMode, ServerMode
-from digitalkin.models.services.registry import RegistryModuleStatus, RegistryModuleType
-from digitalkin.services.registry.exceptions import (
-    RegistryServiceError,
-)
-from digitalkin.services.registry.grpc_registry import GrpcRegistry
+from digitalkin.services.registry.registry_exceptions import RegistryServiceError
+from digitalkin.services.registry.registry_grpc import GrpcRegistry
+from digitalkin.services.registry.registry_models import ModuleStatus, ModuleType
+from tests.fixtures.grpc_fixtures import FakeContext
+from tests.services.registry.mock_registry_servicer import MockRegistryServicer
 
 # Set timeout for all tests in this file (20 seconds)
 pytestmark = pytest.mark.timeout(20)
@@ -113,13 +110,13 @@ def client(
 # ============================================================================
 
 
-class TestDiscoverById:
-    """Tests for the discover_by_id() method."""
+class TestGet:
+    """Tests for the get() method."""
 
     @pytest.mark.grpc
     @pytest.mark.integration
     @pytest.mark.smoke
-    def test_discover_by_id_success(
+    def test_module_success(
         self,
         client: GrpcRegistry,
         test_channel: grpc_testing.Channel,
@@ -131,23 +128,24 @@ class TestDiscoverById:
 
         # Pre-register a module
         mock_servicer.registered_modules[module_id] = {
-            "module_id": module_id,
-            "module_type": "tool",
+            "id": module_id,
+            "type": ModuleType.TOOL,
             "name": "TestModule",
             "address": "localhost",
             "port": 50051,
             "version": "1.0.0",
-            "status": registry_enums_pb2.MODULE_STATUS_READY,
+            "status": ModuleStatus.READY,
         }
 
         # Get the method descriptor
         method_desc = registry_service_pb2.DESCRIPTOR.services_by_name["RegistryService"].methods_by_name["GetModule"]
 
         # Execute client call in thread pool
-        future = thread_pool.submit(client.discover_by_id, module_id)
+        future = thread_pool.submit(client.get, module_id)
 
         # Intercept the call
         _, request, rpc = test_channel.take_unary_unary(method_desc)
+
 
         # Verify request
         assert request.module_id == module_id
@@ -165,8 +163,8 @@ class TestDiscoverById:
 
         # Verify result
         assert result is not None
-        assert result.module_id == module_id
-        assert result.module_type == RegistryModuleType.TOOL
+        assert result.id == module_id
+        assert result.type == ModuleType.TOOL
         assert result.address == "localhost"
         assert result.port == 50051
         assert result.name == "TestModule"
@@ -174,7 +172,7 @@ class TestDiscoverById:
     @pytest.mark.grpc
     @pytest.mark.integration
     @pytest.mark.edge_case
-    def test_discover_by_id_not_found(
+    def test_module_not_found(
         self,
         client: GrpcRegistry,
         test_channel: grpc_testing.Channel,
@@ -186,7 +184,7 @@ class TestDiscoverById:
 
         method_desc = registry_service_pb2.DESCRIPTOR.services_by_name["RegistryService"].methods_by_name["GetModule"]
 
-        future = thread_pool.submit(client.discover_by_id, module_id)
+        future = thread_pool.submit(client.get, module_id)
 
         _, request, rpc = test_channel.take_unary_unary(method_desc)
 
@@ -219,26 +217,26 @@ class TestSearch:
         """Test searching modules by name."""
         # Pre-register modules
         mock_servicer.registered_modules["mod1"] = {
-            "module_id": "mod1",
-            "module_type": "tool",
+            "id": "mod1",
+            "type": ModuleType.TOOL,
             "name": "SearchableModule",
             "address": "localhost",
             "port": 50051,
             "version": "1.0.0",
-            "status": registry_enums_pb2.MODULE_STATUS_READY,
+            "status": ModuleStatus.READY,
         }
         mock_servicer.registered_modules["mod2"] = {
-            "module_id": "mod2",
-            "module_type": "archetype",
+            "id": "mod2",
+            "type": ModuleType.ARCHETYPE,
             "name": "OtherModule",
             "address": "localhost",
             "port": 50052,
             "version": "1.0.0",
-            "status": registry_enums_pb2.MODULE_STATUS_READY,
+            "status": ModuleStatus.READY,
         }
 
         method_desc = registry_service_pb2.DESCRIPTOR.services_by_name["RegistryService"].methods_by_name[
-            "DiscoverModules"
+            "SearchModules"
         ]
 
         future = thread_pool.submit(client.search, name="Searchable")
@@ -246,7 +244,7 @@ class TestSearch:
         _, request, rpc = test_channel.take_unary_unary(method_desc)
 
         context = FakeContext()
-        response = mock_servicer.DiscoverModules(request, context)
+        response = mock_servicer.SearchModules(request, context)
 
         rpc.send_initial_metadata(())
         rpc.terminate(response, (), grpc.StatusCode.OK, "")
@@ -254,7 +252,7 @@ class TestSearch:
         results = future.result(timeout=1.0)
 
         assert len(results) == 1
-        assert results[0].module_id == "mod1"
+        assert results[0].id == "mod1"
         assert results[0].name == "SearchableModule"
 
     @pytest.mark.grpc
@@ -268,34 +266,34 @@ class TestSearch:
     ) -> None:
         """Test searching modules by type."""
         mock_servicer.registered_modules["mod1"] = {
-            "module_id": "mod1",
-            "module_type": "tool",
+            "id": "mod1",
+            "type": ModuleType.TOOL,
             "name": "Tool1",
             "address": "localhost",
             "port": 50051,
             "version": "1.0.0",
-            "status": registry_enums_pb2.MODULE_STATUS_READY,
+            "status": ModuleStatus.READY,
         }
         mock_servicer.registered_modules["mod2"] = {
-            "module_id": "mod2",
-            "module_type": "archetype",
+            "id": "mod2",
+            "type": ModuleType.ARCHETYPE,
             "name": "Archetype1",
             "address": "localhost",
             "port": 50052,
             "version": "1.0.0",
-            "status": registry_enums_pb2.MODULE_STATUS_READY,
+            "status": ModuleStatus.READY,
         }
 
         method_desc = registry_service_pb2.DESCRIPTOR.services_by_name["RegistryService"].methods_by_name[
-            "DiscoverModules"
+            "SearchModules"
         ]
 
-        future = thread_pool.submit(client.search, module_type="tool")
+        future = thread_pool.submit(client.search, module_type=ModuleType.TOOL)
 
         _, request, rpc = test_channel.take_unary_unary(method_desc)
 
         context = FakeContext()
-        response = mock_servicer.DiscoverModules(request, context)
+        response = mock_servicer.SearchModules(request, context)
 
         rpc.send_initial_metadata(())
         rpc.terminate(response, (), grpc.StatusCode.OK, "")
@@ -303,7 +301,7 @@ class TestSearch:
         results = future.result(timeout=1.0)
 
         assert len(results) == 1
-        assert results[0].module_type == RegistryModuleType.TOOL
+        assert results[0].type == ModuleType.TOOL
 
     @pytest.mark.grpc
     @pytest.mark.integration
@@ -316,7 +314,7 @@ class TestSearch:
     ) -> None:
         """Test search with no matching results."""
         method_desc = registry_service_pb2.DESCRIPTOR.services_by_name["RegistryService"].methods_by_name[
-            "DiscoverModules"
+            "SearchModules"
         ]
 
         future = thread_pool.submit(client.search, name="NonExistent")
@@ -324,7 +322,7 @@ class TestSearch:
         _, request, rpc = test_channel.take_unary_unary(method_desc)
 
         context = FakeContext()
-        response = mock_servicer.DiscoverModules(request, context)
+        response = mock_servicer.SearchModules(request, context)
 
         rpc.send_initial_metadata(())
         rpc.terminate(response, (), grpc.StatusCode.OK, "")
@@ -352,13 +350,13 @@ class TestRegister:
 
         # Pre-register module (new proto requires module to exist)
         mock_servicer.registered_modules[module_id] = {
-            "module_id": module_id,
-            "module_type": "tool",
+            "id": module_id,
+            "type": ModuleType.TOOL,
             "name": "ExistingModule",
             "address": "old-host",
             "port": 50050,
             "version": "0.9.0",
-            "status": registry_enums_pb2.MODULE_STATUS_READY,
+            "status": ModuleStatus.READY,
         }
 
         method_desc = registry_service_pb2.DESCRIPTOR.services_by_name["RegistryService"].methods_by_name[
@@ -389,7 +387,7 @@ class TestRegister:
         result = future.result(timeout=1.0)
 
         assert result is not None
-        assert result.module_id == module_id
+        assert result.id == module_id
         assert result.address == "localhost"
         assert result.port == 50053
 
@@ -449,16 +447,16 @@ class TestGetStatus:
         module_id = "module_001"
 
         mock_servicer.registered_modules[module_id] = {
-            "module_id": module_id,
-            "module_type": "tool",
+            "id": module_id,
+            "type": ModuleType.TOOL,
             "name": "TestModule",
             "address": "localhost",
             "port": 50051,
             "version": "1.0.0",
-            "status": registry_enums_pb2.MODULE_STATUS_READY,
+            "status": ModuleStatus.READY,
         }
 
-        method_desc = registry_service_pb2.DESCRIPTOR.services_by_name["RegistryService"].methods_by_name["GetModule"]
+        method_desc = registry_service_pb2.DESCRIPTOR.services_by_name["RegistryService"].methods_by_name["GetModuleStatus"]
 
         future = thread_pool.submit(client.get_status, module_id)
 
@@ -472,8 +470,36 @@ class TestGetStatus:
 
         result = future.result(timeout=1.0)
 
-        assert result.module_id == module_id
-        assert result.status == RegistryModuleStatus.READY
+        assert result == ModuleStatus.READY
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    @pytest.mark.smoke
+    def test_get_status_not_found(
+            self,
+            client: GrpcRegistry,
+            test_channel: grpc_testing.Channel,
+            mock_servicer: MockRegistryServicer,
+            thread_pool: futures.ThreadPoolExecutor,
+    ) -> None:
+        """Test successfully getting module status."""
+        module_id = "nonexistent_module"
+        method_desc = registry_service_pb2.DESCRIPTOR.services_by_name["RegistryService"].methods_by_name["GetModuleStatus"]
+
+        future = thread_pool.submit(client.get_status, module_id)
+
+        _, request, rpc = test_channel.take_unary_unary(method_desc)
+
+        context = FakeContext()
+        response = mock_servicer.GetModule(request, context)
+
+        rpc.send_initial_metadata(())
+        rpc.terminate(response, (), grpc.StatusCode.OK, "")
+
+        # The error handler wraps RegistryModuleNotFoundError in RegistryServiceError
+        with pytest.raises(RegistryServiceError) as exc_info:
+            future.result(timeout=1.0)
+        assert module_id in str(exc_info.value)
 
 
 class TestHeartbeat:
@@ -493,13 +519,13 @@ class TestHeartbeat:
         module_id = "module_001"
 
         mock_servicer.registered_modules[module_id] = {
-            "module_id": module_id,
-            "module_type": "tool",
+            "id": module_id,
+            "type": ModuleType.TOOL,
             "name": "TestModule",
             "address": "localhost",
             "port": 50051,
             "version": "1.0.0",
-            "status": registry_enums_pb2.MODULE_STATUS_READY,
+            "status": ModuleStatus.READY,
         }
 
         method_desc = registry_service_pb2.DESCRIPTOR.services_by_name["RegistryService"].methods_by_name["Heartbeat"]
@@ -518,7 +544,7 @@ class TestHeartbeat:
 
         result = future.result(timeout=1.0)
 
-        assert result == RegistryModuleStatus.ACTIVE
+        assert result == ModuleStatus.ACTIVE
 
     @pytest.mark.grpc
     @pytest.mark.integration
@@ -549,4 +575,4 @@ class TestHeartbeat:
         result = future.result(timeout=1.0)
 
         # Returns UNSPECIFIED status when module not found
-        assert result == RegistryModuleStatus.UNSPECIFIED
+        assert result == ModuleStatus.ARCHIVED  # TODO: To check

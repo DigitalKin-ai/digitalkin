@@ -3,8 +3,8 @@
 from pydantic import BaseModel, Field
 
 from digitalkin.logger import logger
-from digitalkin.models.services.registry import ModuleInfo
 from digitalkin.services.registry import RegistryStrategy
+from digitalkin.services.registry.registry_models import ModuleInfo
 
 
 class ToolCache(BaseModel):
@@ -22,7 +22,7 @@ class ToolCache(BaseModel):
         self.entries[setup_tool_name] = module_info
         logger.debug(
             "Tool cached",
-            extra={"setup_tool_name": setup_tool_name, "module_id": module_info.module_id},
+            extra={"setup_tool_name": setup_tool_name, "module_id": module_info.id},
         )
 
     def get(
@@ -46,7 +46,7 @@ class ToolCache(BaseModel):
 
         if registry:
             try:
-                info = registry.discover_by_id(setup_tool_name)
+                info = registry.get(setup_tool_name)
                 if info:
                     self.add(setup_tool_name, info)
                     return info

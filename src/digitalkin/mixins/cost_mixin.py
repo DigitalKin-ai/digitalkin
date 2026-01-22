@@ -3,7 +3,7 @@
 from typing import Literal
 
 from digitalkin.models.module.module_context import ModuleContext
-from digitalkin.services.cost.cost_strategy import CostData
+from digitalkin.services.cost import CostData
 
 
 class CostMixin:
@@ -26,7 +26,7 @@ class CostMixin:
         Raises:
             CostServiceError: If cost addition fails
         """
-        return context.cost.add(name, cost_config_name, quantity)
+        return context.cost.create(name, cost_config_name, quantity)
 
     @staticmethod
     def get_cost(context: ModuleContext, name: str) -> list[CostData]:
@@ -42,7 +42,7 @@ class CostMixin:
         Raises:
             CostServiceError: If cost retrieval fails
         """
-        return context.cost.get(name)
+        return context.cost.list(name)
 
     @staticmethod
     def get_costs(
@@ -73,4 +73,4 @@ class CostMixin:
         Raises:
             CostServiceError: If cost retrieval fails
         """
-        return context.cost.get_filtered(names, cost_types)
+        return context.cost.list(names, cost_types)

@@ -1,53 +1,10 @@
 """This module contains the abstract base class for cost strategies."""
 
 from abc import ABC, abstractmethod
-from enum import Enum
-from typing import Literal
-
-from pydantic import BaseModel
+from typing import Any
 
 from digitalkin.services.base_strategy import BaseStrategy
-
-
-class CostType(Enum):
-    """Enum defining the types of costs that can be registered."""
-
-    OTHER = "OTHER"
-    TOKEN_INPUT = "TOKEN_INPUT"
-    TOKEN_OUTPUT = "TOKEN_OUTPUT"
-    API_CALL = "API_CALL"
-    STORAGE = "STORAGE"
-    TIME = "TIME"
-
-
-class CostConfig(BaseModel):
-    """Pydantic model that defines a cost configuration.
-
-    :param cost_name: Name of the cost (unique identifier in the service).
-    :param cost_type: The type/category of the cost.
-    :param description: A short description of the cost.
-    :param unit: The unit of measurement (e.g. token, call, MB).
-    :param rate: The cost per unit (e.g. dollars per token).
-    """
-
-    cost_name: str
-    cost_type: Literal["TOKEN_INPUT", "TOKEN_OUTPUT", "API_CALL", "STORAGE", "TIME", "OTHER"]
-    description: str | None = None
-    unit: str
-    rate: float
-
-
-class CostData(BaseModel):
-    """Data model for cost operations."""
-
-    cost: float
-    mission_id: str
-    name: str
-    cost_type: CostType
-    unit: str
-    rate: float
-    setup_version_id: str
-    quantity: float
+from digitalkin.services.cost.cost_models import CostConfig, CostData, CostType
 
 
 class CostServiceError(Exception):
@@ -75,26 +32,60 @@ class CostStrategy(BaseStrategy, ABC):
         super().__init__(mission_id, setup_id, setup_version_id)
         self.config = config
 
+    # ════════════════════════════════ Overriding Methods ════════════════════════════════ #
+
     @abstractmethod
-    def add(
+    def create(
         self,
         name: str,
         cost_config_name: str,
         quantity: float,
     ) -> None:
-        """Register a new cost."""
+        """Create a new record in the cost database.
+
+        Args:
+            name: The name of the cost
+            cost_config_name: The name of the cost config
+            quantity: The quantity of the cost
+
+        Raises:
+            CostServiceError: If the cost data is invalid or if the cost already exists
+        """
+        return super().create()
 
     @abstractmethod
-    def get(
-        self,
-        name: str,
-    ) -> list[CostData]:
-        """Get a cost."""
-
-    @abstractmethod
-    def get_filtered(
+    def list(
         self,
         names: list[str] | None = None,
-        cost_types: list[Literal["TOKEN_INPUT", "TOKEN_OUTPUT", "API_CALL", "STORAGE", "TIME", "OTHER"]] | None = None,
+            cost_types: list[CostType] | None = None,
     ) -> list[CostData]:
-        """Get filtered costs."""
+        """Get records from the database.
+
+        Args:
+            names: The names of the costs
+            cost_types: The types of the costs
+
+        Returns:
+            list[CostData]: The list of records
+
+        Raises:
+            CostServiceError: If the cost data is invalid or if the cost does not exist
+        """
+        return super().list()
+
+    # ══════════════════════════════ Unimplemented Methods ═══════════════════════════════ #
+
+    def get(self, *args: Any, **kwargs: Any) -> Any:
+        return super().get()
+
+    def search(self, *args: Any, **kwargs: Any) -> Any:
+        return super().search()
+
+    def delete(self, *args: Any, **kwargs: Any) -> Any:
+        return super().delete()
+
+    def update(self, *args: Any, **kwargs: Any) -> Any:
+        return super().update()
+
+    def upload(self, *args: Any, **kwargs: Any) -> Any:
+        return super().upload()

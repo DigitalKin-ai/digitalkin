@@ -3,7 +3,7 @@
 from typing import Any, Literal
 
 from digitalkin.models.module.module_context import ModuleContext
-from digitalkin.services.storage.storage_strategy import StorageRecord
+from digitalkin.services.storage.storage_models import StorageRecord
 
 
 class StorageMixin:
@@ -36,7 +36,7 @@ class StorageMixin:
         Raises:
             StorageServiceError: If storage operation fails
         """
-        return context.storage.store(collection, record_id, data, data_type=data_type)
+        return context.storage.create(collection, record_id, data, data_type=data_type)
 
     @staticmethod
     def read_storage(context: ModuleContext, collection: str, record_id: str) -> StorageRecord | None:
@@ -53,7 +53,7 @@ class StorageMixin:
         Raises:
             StorageServiceError: If read operation fails
         """
-        return context.storage.read(collection, record_id)
+        return context.storage.get(collection, record_id)
 
     @staticmethod
     def update_storage(

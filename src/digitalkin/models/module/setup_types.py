@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, create_model
 from digitalkin.logger import logger
 from digitalkin.models.module.tool_cache import ToolCache
 from digitalkin.models.module.tool_reference import ToolReference
-from digitalkin.models.services.registry import ModuleInfo
+from digitalkin.services.registry.registry_models import ModuleInfo
 from digitalkin.utils.dynamic_schema import (
     DynamicField,
     get_fetchers,
@@ -455,8 +455,8 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
                 if module_info:
                     if not cached_info:
                         setattr(model_instance, cache_field_name, module_info)
-                    cache.add(module_info.module_id, module_info)
-                    logger.debug("Added tool to cache: %s", module_info.module_id)
+                    cache.add(module_info.id, module_info)
+                    logger.debug("Added tool to cache: %s", module_info.id)
             elif isinstance(field_value, BaseModel):
                 self._build_tool_cache_recursive(field_value, cache)
             elif isinstance(field_value, list):
@@ -470,8 +470,8 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
                         module_info = item.module_info or (cached_infos[idx] if idx < len(cached_infos) else None)
                         if module_info:
                             resolved_infos.append(module_info)
-                            cache.add(module_info.module_id, module_info)
-                            logger.debug("Added tool to cache: %s", module_info.module_id)
+                            cache.add(module_info.id, module_info)
+                            logger.debug("Added tool to cache: %s", module_info.id)
                     elif isinstance(item, BaseModel):
                         self._build_tool_cache_recursive(item, cache)
 

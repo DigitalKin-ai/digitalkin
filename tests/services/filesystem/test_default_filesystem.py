@@ -3,14 +3,11 @@
 from pathlib import Path
 
 import pytest
+from agentic_mesh_protocol.pagination.v1.pagination_pb2 import PaginationRequest
 
 from digitalkin.services.filesystem import DefaultFilesystem
-from digitalkin.services.filesystem.filesystem_strategy import (
-    FileFilter,
-    FilesystemRecord,
-    FilesystemServiceError,
-    UploadFileData,
-)
+from digitalkin.services.filesystem.filesystem_models import FilesystemRecord, FileFilter, UploadFileData, FileType, FileStatus
+from digitalkin.services.filesystem.filesystem_strategy import FilesystemServiceError
 
 
 @pytest.fixture
@@ -39,10 +36,10 @@ def file_metadata() -> dict:
     return {
         "context": "test_setup",
         "name": "test_file.txt",
-        "file_type": "DOCUMENT",
+        "type": FileType.DOCUMENT,
         "content_type": "text/plain",
         "metadata": {"key": "value"},
-        "status": "ACTIVE",
+        "status": FileStatus.ACTIVE,
     }
 
 
@@ -69,14 +66,14 @@ class TestDefaultFilesystem:
         upload_file = UploadFileData(
             content=sample_file_data,
             name=file_metadata["name"],
-            file_type=file_metadata["file_type"],
+            type=file_metadata["type"],
             content_type=file_metadata["content_type"],
             metadata=file_metadata["metadata"],
             replace_if_exists=False,
         )
 
         # Upload the file
-        files, total_uploaded, total_failed = filesystem.upload_files([upload_file])
+        files, total_uploaded, total_failed = filesystem.upload([upload_file])
         assert len(files) == 1
         assert total_uploaded == 1
         assert total_failed == 0
@@ -86,12 +83,12 @@ class TestDefaultFilesystem:
         assert isinstance(file_data, FilesystemRecord)
         assert file_data.context == file_metadata["context"]
         assert file_data.name == file_metadata["name"]
-        assert file_data.file_type == file_metadata["file_type"]
+        assert file_data.type == file_metadata["type"]
         assert file_data.content_type == file_metadata["content_type"]
         assert file_data.metadata == file_metadata["metadata"]
         assert file_data.status == file_metadata["status"]
         assert file_data.storage_uri is not None
-        assert file_data.file_url is not None
+        assert file_data.url is not None
 
         # Verify the file exists on disk
         file_path = Path(filesystem._get_context_temp_dir(file_metadata["context"]), file_metadata["name"])
@@ -112,26 +109,26 @@ class TestDefaultFilesystem:
         upload_file = UploadFileData(
             content=sample_file_data,
             name=file_metadata["name"],
-            file_type=file_metadata["file_type"],
+            type=file_metadata["type"],
             content_type=file_metadata["content_type"],
             metadata=file_metadata["metadata"],
             replace_if_exists=False,
         )
-        files, _, _ = filesystem.upload_files([upload_file])
+        files, _, _ = filesystem.upload([upload_file])
         file_id = files[0].id
 
         # Get the file
-        file_data = filesystem.get_file(file_id)
+        file_data = filesystem.get(file_id)
         assert isinstance(file_data, FilesystemRecord)
         assert file_data.id == file_id
         assert file_data.context == file_metadata["context"]
         assert file_data.name == file_metadata["name"]
-        assert file_data.file_type == file_metadata["file_type"]
+        assert file_data.type == file_metadata["type"]
         assert file_data.content_type == file_metadata["content_type"]
         assert file_data.metadata == file_metadata["metadata"]
         assert file_data.status == file_metadata["status"]
         assert file_data.storage_uri is not None
-        assert file_data.file_url is not None
+        assert file_data.url is not None
 
     def test_get_files_success(
         self, filesystem: DefaultFilesystem, sample_file_data: bytes, file_metadata: dict
@@ -149,7 +146,7 @@ class TestDefaultFilesystem:
             UploadFileData(
                 content=sample_file_data,
                 name=name,
-                file_type=file_metadata["file_type"],
+                type=file_metadata["type"],
                 content_type=file_metadata["content_type"],
                 metadata=file_metadata["metadata"],
                 replace_if_exists=False,
@@ -157,19 +154,13 @@ class TestDefaultFilesystem:
             for name in file_names
         ]
 
-        _files, _, _ = filesystem.upload_files(upload_files)
+        _files, _, _ = filesystem.upload(upload_files)
 
         # Create filter criteria
-        filters = FileFilter(file_types=[file_metadata["file_type"]])
+        filters = FileFilter(types=[file_metadata["type"]])
 
         # Get the files
-        result_files, total_count = filesystem.get_files(
-            filters,
-            list_size=10,
-            offset=0,
-            order="created_at:desc",
-            include_content=False,
-        )
+        result_files, total_count = filesystem.list(filters, include_content=False)
 
         assert len(result_files) == 3
         assert total_count == 3
@@ -178,12 +169,12 @@ class TestDefaultFilesystem:
             assert isinstance(file_data, FilesystemRecord)
             assert file_data.context == file_metadata["context"]
             assert file_data.name in file_names
-            assert file_data.file_type == file_metadata["file_type"]
+            assert file_data.type == file_metadata["type"]
             assert file_data.content_type == file_metadata["content_type"]
             assert file_data.metadata == file_metadata["metadata"]
             assert file_data.status == file_metadata["status"]
             assert file_data.storage_uri is not None
-            assert file_data.file_url is not None
+            assert file_data.url is not None
 
     def test_update_file_success(
         self, filesystem: DefaultFilesystem, sample_file_data: bytes, file_metadata: dict
@@ -199,36 +190,36 @@ class TestDefaultFilesystem:
         upload_file = UploadFileData(
             content=sample_file_data,
             name=file_metadata["name"],
-            file_type=file_metadata["file_type"],
+            type=file_metadata["type"],
             content_type=file_metadata["content_type"],
             metadata=file_metadata["metadata"],
             replace_if_exists=False,
         )
-        files, _, _ = filesystem.upload_files([upload_file])
+        files, _, _ = filesystem.upload([upload_file])
         file_id = files[0].id
 
         # Update the file
         updated_content = b"Updated content"
-        updated_file = filesystem.update_file(
+        updated_file = filesystem.update(
             file_id,
             content=updated_content,
-            file_type="DOCUMENT",
+            type=FileType.DOCUMENT,
             content_type="text/plain",
             metadata={"new_key": "new_value"},
             new_name="updated_file.txt",
-            status="ACTIVE",
+            status=FileStatus.ACTIVE,
         )
 
         assert isinstance(updated_file, FilesystemRecord)
         assert updated_file.id == file_id
         assert updated_file.context == file_metadata["context"]
         assert updated_file.name == "updated_file.txt"
-        assert updated_file.file_type == "DOCUMENT"
+        assert updated_file.type == FileType.DOCUMENT
         assert updated_file.content_type == "text/plain"
         assert updated_file.metadata == {"new_key": "new_value"}
-        assert updated_file.status == "ACTIVE"
+        assert updated_file.status == FileStatus.ACTIVE
         assert updated_file.storage_uri is not None
-        assert updated_file.file_url is not None
+        assert updated_file.url is not None
 
         # Verify the file content was updated
         file_path = Path(filesystem._get_context_temp_dir(file_metadata["context"]), "updated_file.txt")
@@ -251,7 +242,7 @@ class TestDefaultFilesystem:
             UploadFileData(
                 content=sample_file_data,
                 name=name,
-                file_type=file_metadata["file_type"],
+                type=file_metadata["type"],
                 content_type=file_metadata["content_type"],
                 metadata=file_metadata["metadata"],
                 replace_if_exists=False,
@@ -259,14 +250,14 @@ class TestDefaultFilesystem:
             for name in file_names
         ]
 
-        files, _, _ = filesystem.upload_files(upload_files)
+        files, _, _ = filesystem.upload(upload_files)
         file_ids = [file_data.id for file_data in files]
 
         # Create filter criteria
-        filters = FileFilter(file_types=[file_metadata["file_type"]])
+        filters = FileFilter(types=[file_metadata["type"]])
 
         # Delete the files
-        results, total_deleted, total_failed = filesystem.delete_files(
+        results, total_deleted, total_failed = filesystem.delete(
             filters,
             permanent=True,
             force=False,
@@ -291,7 +282,7 @@ class TestDefaultFilesystem:
             filesystem: DefaultFilesystem instance
         """
         with pytest.raises(FilesystemServiceError):
-            filesystem.get_file("nonexistent_file_id")
+            filesystem.get("nonexistent_file_id")
 
     def test_update_file_nonexistent(self, filesystem: DefaultFilesystem, sample_file_data: bytes) -> None:
         """Test updating a non-existent file.
@@ -301,14 +292,14 @@ class TestDefaultFilesystem:
             sample_file_data: Sample file data
         """
         with pytest.raises(FilesystemServiceError):
-            filesystem.update_file(
+            filesystem.update(
                 "nonexistent_file_id",
                 content=sample_file_data,
-                file_type="DOCUMENT",
+                type=FileType.DOCUMENT,
                 content_type="text/plain",
                 metadata={"key": "value"},
                 new_name="updated_file.txt",
-                status="ACTIVE",
+                status=FileStatus.ACTIVE,
             )
 
     def test_delete_files_nonexistent(self, filesystem: DefaultFilesystem) -> None:
@@ -319,12 +310,12 @@ class TestDefaultFilesystem:
         """
         # Create filter criteria for non-existent files
         filters = FileFilter(
-            file_types=["DOCUMENT"],
-            status="ACTIVE",
+            types=[FileType.DOCUMENT],
+            status=FileStatus.ACTIVE,
         )
 
         # Attempt to delete the files
-        results, total_deleted, total_failed = filesystem.delete_files(
+        results, total_deleted, total_failed = filesystem.delete(
             filters,
             permanent=True,
             force=False,
@@ -348,16 +339,16 @@ class TestDefaultFilesystem:
         upload_file = UploadFileData(
             content=sample_file_data,
             name=file_metadata["name"],
-            file_type=file_metadata["file_type"],
+            type=file_metadata["type"],
             content_type=file_metadata["content_type"],
             metadata=file_metadata["metadata"],
             replace_if_exists=False,
         )
-        filesystem.upload_files([upload_file])
+        filesystem.upload([upload_file])
 
         # Try to upload the same file again
         with pytest.raises(FilesystemServiceError):
-            filesystem.upload_files([upload_file])
+            filesystem.upload([upload_file])
 
     def test_upload_files_replace_existing(
         self, filesystem: DefaultFilesystem, sample_file_data: bytes, file_metadata: dict
@@ -373,24 +364,24 @@ class TestDefaultFilesystem:
         upload_file = UploadFileData(
             content=sample_file_data,
             name=file_metadata["name"],
-            file_type=file_metadata["file_type"],
+            type=file_metadata["type"],
             content_type=file_metadata["content_type"],
             metadata=file_metadata["metadata"],
             replace_if_exists=False,
         )
-        filesystem.upload_files([upload_file])
+        filesystem.upload([upload_file])
 
         # Upload the same file with replace_if_exists=True
         new_content = b"New content"
         upload_file_replace = UploadFileData(
             content=new_content,
             name=file_metadata["name"],
-            file_type=file_metadata["file_type"],
+            type=file_metadata["type"],
             content_type=file_metadata["content_type"],
             metadata=file_metadata["metadata"],
             replace_if_exists=True,
         )
-        files, total_uploaded, total_failed = filesystem.upload_files([upload_file_replace])
+        files, total_uploaded, total_failed = filesystem.upload([upload_file_replace])
         assert len(files) == 1
         assert total_uploaded == 1
         assert total_failed == 0
@@ -415,7 +406,7 @@ class TestDefaultFilesystem:
             UploadFileData(
                 content=sample_file_data,
                 name="file1.txt",
-                file_type="DOCUMENT",
+                type=FileType.DOCUMENT,
                 content_type="text/plain",
                 metadata={"key": "value1"},
                 replace_if_exists=False,
@@ -423,7 +414,7 @@ class TestDefaultFilesystem:
             UploadFileData(
                 content=sample_file_data,
                 name="file2.txt",
-                file_type="IMAGE",
+                type=FileType.IMAGE,
                 content_type="image/png",
                 metadata={"key": "value2"},
                 replace_if_exists=False,
@@ -431,41 +422,41 @@ class TestDefaultFilesystem:
             UploadFileData(
                 content=sample_file_data,
                 name="file3.txt",
-                file_type="DOCUMENT",
+                type=FileType.DOCUMENT,
                 content_type="text/plain",
                 metadata={"key": "value3"},
                 replace_if_exists=False,
             ),
         ]
-        files, _, _ = filesystem.upload_files(files_to_upload)
+        files, _, _ = filesystem.upload(files_to_upload)
 
         # Update one file to ARCHIVED status
-        filesystem.update_file(files[1].id, status="ARCHIVED")
+        filesystem.update(files[1].id, status=FileStatus.ARCHIVED)
 
         # Test filtering by type
-        filters = FileFilter(file_types=["DOCUMENT"])
-        result_files, total_count = filesystem.get_files(filters)
+        filters = FileFilter(types=[FileType.DOCUMENT])
+        result_files, total_count = filesystem.list(filters)
         assert len(result_files) == 2
         assert total_count == 2
-        assert all(f.file_type == "DOCUMENT" for f in result_files)
+        assert all(f.type == FileType.DOCUMENT for f in result_files)
 
         # Test filtering by status
-        filters = FileFilter(status="ARCHIVED")
-        result_files, total_count = filesystem.get_files(filters)
+        filters = FileFilter(status=FileStatus.ARCHIVED)
+        result_files, total_count = filesystem.list(filters)
         assert len(result_files) == 1
         assert total_count == 1
-        assert result_files[0].status == "ARCHIVED"
+        assert result_files[0].status == FileStatus.ARCHIVED
 
         # Test filtering by content type
         filters = FileFilter(content_type="image/png")
-        result_files, total_count = filesystem.get_files(filters)
+        result_files, total_count = filesystem.list(filters)
         assert len(result_files) == 1
         assert total_count == 1
         assert result_files[0].content_type == "image/png"
 
         # Test filtering by name prefix
         filters = FileFilter(prefix="file1")
-        result_files, total_count = filesystem.get_files(filters)
+        result_files, total_count = filesystem.list(filters)
         assert len(result_files) == 1
         assert total_count == 1
         assert result_files[0].name == "file1.txt"
@@ -485,30 +476,30 @@ class TestDefaultFilesystem:
             UploadFileData(
                 content=sample_file_data,
                 name=f"file{i}.txt",
-                file_type=file_metadata["file_type"],
+                type=file_metadata["type"],
                 content_type=file_metadata["content_type"],
                 metadata=file_metadata["metadata"],
                 replace_if_exists=False,
             )
             for i in range(5)
         ]
-        filesystem.upload_files(files_to_upload)
+        filesystem.upload(files_to_upload)
 
         # Test pagination with list_size=2
         filters = FileFilter()
 
         # First page
-        result_files, total_count = filesystem.get_files(filters, list_size=2, offset=0)
+        result_files, total_count = filesystem.list(filters, pagination=PaginationRequest(limit=2, offset=0))
         assert len(result_files) == 2
         assert total_count == 5
 
         # Second page
-        result_files, total_count = filesystem.get_files(filters, list_size=2, offset=2)
+        result_files, total_count = filesystem.list(filters, pagination=PaginationRequest(limit=2, offset=2))
         assert len(result_files) == 2
         assert total_count == 5
 
         # Last page
-        result_files, total_count = filesystem.get_files(filters, list_size=2, offset=4)
+        result_files, total_count = filesystem.list(filters, pagination=PaginationRequest(limit=2, offset=4))
         assert len(result_files) == 1
         assert total_count == 5
 
@@ -526,24 +517,24 @@ class TestDefaultFilesystem:
         upload_file = UploadFileData(
             content=sample_file_data,
             name=file_metadata["name"],
-            file_type=file_metadata["file_type"],
+            type=file_metadata["type"],
             content_type=file_metadata["content_type"],
             metadata=file_metadata["metadata"],
             replace_if_exists=False,
         )
-        files, _, _ = filesystem.upload_files([upload_file])
+        files, _, _ = filesystem.upload([upload_file])
         file_id = files[0].id
 
         # Soft delete the file
-        filters = FileFilter(file_ids=[file_id])
-        results, total_deleted, total_failed = filesystem.delete_files(filters, permanent=False)
+        filters = FileFilter(ids=[file_id])
+        results, total_deleted, total_failed = filesystem.delete(filters, permanent=False)
         assert len(results) == 1
         assert total_deleted == 1
         assert total_failed == 0
         assert results[file_id] is True
 
         # Verify the file still exists but is marked as deleted
-        file_data = filesystem.get_file(file_id)
-        assert file_data.status == "DELETED"
+        file_data = filesystem.get(file_id)
+        assert file_data.status == FileStatus.DELETED
         file_path = Path(filesystem._get_context_temp_dir(file_metadata["context"]), file_metadata["name"])
         assert file_path.exists()
