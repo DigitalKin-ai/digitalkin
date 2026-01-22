@@ -2,8 +2,9 @@
 
 from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator, Awaitable, Callable
+from typing import Any
 
-from digitalkin.services.base_strategy import BaseStrategy
+from digitalkin.models.base_strategy import BaseStrategy
 
 
 class CommunicationStrategy(BaseStrategy, ABC):
@@ -17,6 +18,23 @@ class CommunicationStrategy(BaseStrategy, ABC):
 
     The service wraps the Module Service protocol from agentic-mesh-protocol.
     """
+
+    def __init__(
+            self,
+            mission_id: str,
+            setup_id: str,
+            setup_version_id: str,
+    ) -> None:
+        """Initialize the default communication service.
+
+        Args:
+            mission_id: Mission identifier
+            setup_id: Setup identifier
+            setup_version_id: Setup version identifier
+        """
+        super().__init__(mission_id, setup_id, setup_version_id)
+
+    # ══════════════════════════════════ Public Methods ══════════════════════════════════ #
 
     @abstractmethod
     async def cleanup(self) -> None:
@@ -85,3 +103,26 @@ class CommunicationStrategy(BaseStrategy, ABC):
         if False:  # pragma: no cover
             yield {}
         raise NotImplementedError
+
+    # ══════════════════════════════ Unimplemented Methods ═══════════════════════════════ #
+
+    async def create(self, *args: Any, **kwargs: Any) -> Any:
+        return await super().create()
+
+    async def get(self, *args: Any, **kwargs: Any) -> Any:
+        return await super().get()
+
+    async def list(self, *args: Any, **kwargs: Any) -> Any:
+        return await super().list()
+
+    async def search(self, *args: Any, **kwargs: Any) -> Any:
+        return await super().search()
+
+    async def delete(self, *args: Any, **kwargs: Any) -> Any:
+        return await super().delete()
+
+    async def update(self, *args: Any, **kwargs: Any) -> Any:
+        return await super().update()
+
+    async def upload(self, *args: Any, **kwargs: Any) -> Any:
+        return await super().upload()

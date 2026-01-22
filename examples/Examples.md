@@ -232,7 +232,7 @@ Create input data and start module execution:
 
 ```python
 # Get module schemas
-input_class, output_class, setup_class = await get_module_schemas(module_stub, module.module_id)
+input_class, output_class, setup_class = await get_module_schemas(module_stub, module.id)
 
 # Create input data using the schema
 input_data = input_class(
@@ -283,7 +283,7 @@ The system includes utilities to convert between protocol buffer schema definiti
 def json_to_pydantic(json_schema: Message) -> type[BaseModel]:
     """Convert a protobuf JSON schema message to a Pydantic model."""
     model_dict = json_format.MessageToDict(json_schema)
-    return dict_to_pydantic_cached(model_dict, model_dict.get("title", "DynamicModel"))
+    return dict_to_pydantic_cached(model_dict, model_dict.list("title", "DynamicModel"))
 ```
 
 This allows dynamic creation of appropriate models for interacting with modules.

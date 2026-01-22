@@ -1,62 +1,98 @@
 """This module contains the abstract base class for cost strategies."""
 
 from abc import ABC, abstractmethod
-from enum import Enum
-from typing import Literal
+from typing import Any
 
-from pydantic import BaseModel
-
-from digitalkin.models.services.cost import AmountLimit, QuantityLimit
-from digitalkin.services.base_strategy import BaseStrategy
-
-
-class CostType(Enum):
-    """Enum defining the types of costs that can be registered."""
-
-    OTHER = "OTHER"
-    TOKEN_INPUT = "TOKEN_INPUT"
-    TOKEN_OUTPUT = "TOKEN_OUTPUT"
-    API_CALL = "API_CALL"
-    STORAGE = "STORAGE"
-    TIME = "TIME"
-
-
-class CostConfig(BaseModel):
-    """Pydantic model that defines a cost configuration.
-
-    :param cost_name: Name of the cost (unique identifier in the service).
-    :param cost_type: The type/category of the cost.
-    :param description: A short description of the cost.
-    :param unit: The unit of measurement (e.g. token, call, MB).
-    :param rate: The cost per unit (e.g. dollars per token).
-    """
-
-    cost_name: str
-    cost_type: Literal["TOKEN_INPUT", "TOKEN_OUTPUT", "API_CALL", "STORAGE", "TIME", "OTHER"]
-    description: str | None = None
-    unit: str
-    rate: float
-
-
-class CostData(BaseModel):
-    """Data model for cost operations."""
-
-    cost: float
-    mission_id: str
-    name: str
-    cost_type: CostType
-    unit: str
-    rate: float
-    setup_version_id: str
-    quantity: float
-
-
-class CostServiceError(Exception):
-    """Custom exception for CostService errors."""
+from digitalkin.models.base_strategy import BaseStrategy
+from digitalkin.models.services.cost import AmountLimit, CostConfig, CostData, CostType, QuantityLimit
 
 
 class CostStrategy(BaseStrategy, ABC):
     """Abstract base class for cost strategies."""
+
+    def __init__(
+            self,
+            mission_id: str,
+            setup_id: str,
+            setup_version_id: str,
+            config: dict[str, CostConfig],
+    ) -> None:
+        """Initialize the strategy.
+
+        Args:
+            mission_id: The ID of the mission this strategy is associated with
+            setup_id: The ID of the setup
+            setup_version_id: The ID of the setup version this strategy is associated with
+            config: Configuration dictionary for the strategy
+        """
+        super().__init__(mission_id, setup_id, setup_version_id)
+        self.config = config
+
+    # ════════════════════════════════ Overriding Methods ════════════════════════════════ #
+
+    @abstractmethod
+    async def create(
+        self,
+        name: str,
+        cost_config_name: str,
+        quantity: float,
+    ) -> None:
+        """Create a new record in the cost database.
+
+        Args:
+            name: The name of the cost
+            cost_config_name: The name of the cost config
+            quantity: The quantity of the cost
+
+        Raises:
+            CostServiceError: If the cost data is invalid or if the cost already exists
+        """
+        return await super().create()
+
+    @abstractmethod
+    async def list(
+        self,
+        names: list[str] | None = None,
+            cost_types: list[CostType] | None = None,
+    ) -> list[CostData]:
+        """Get records from the database.
+
+        Args:
+            names: The names of the costs
+            cost_types: The types of the costs
+
+        Returns:
+            list[CostData]: The list of records
+
+        Raises:
+            CostServiceError: If the cost data is invalid or if the cost does not exist
+        """
+        return await super().list()
+
+    # ════════════════════════════════ Public Methods ════════════════════════════════ #
+
+    @abstractmethod
+    async def list_config(self) -> list[CostConfig]:
+        """Get cost configuration from the database.
+
+        Returns:
+            List of CostConfig objects from the database.
+        """
+        msg = "List cost config method not implemented yet."
+        raise NotImplementedError(msg)
+
+    @abstractmethod
+    async def set_config(self, configs: list[CostConfig]) -> bool:
+        """Store cost configuration in the database.
+
+        Args:
+            configs: List of CostConfig objects to store.
+
+        Returns:
+            True if successfully stored.
+        """
+        msg = "Set cost config method not implemented yet."
+        raise NotImplementedError(msg)
 
     @abstractmethod
     async def set_limits(self, limits: list[QuantityLimit | AmountLimit]) -> None:
@@ -65,6 +101,8 @@ class CostStrategy(BaseStrategy, ABC):
         Args:
             limits: List of CostLimit objects to enforce.
         """
+        msg = "Set limits method not implemented yet."
+        raise NotImplementedError(msg)
 
     @abstractmethod
     async def check_limit(self, cost_config_name: str, quantity: float) -> bool:
@@ -77,46 +115,22 @@ class CostStrategy(BaseStrategy, ABC):
         Returns:
             True if within limits, False if would exceed.
         """
+        msg = "Check limit method not implemented yet."
+        raise NotImplementedError(msg)
 
-    @abstractmethod
-    async def add(
-        self,
-        name: str,
-        cost_config_name: str,
-        quantity: float,
-    ) -> None:
-        """Register a new cost."""
+    # ══════════════════════════════ Unimplemented Methods ═══════════════════════════════ #
 
-    @abstractmethod
-    async def get(
-        self,
-        name: str,
-    ) -> list[CostData]:
-        """Get a cost."""
+    async def get(self, *args: Any, **kwargs: Any) -> Any:
+        return await super().get()
 
-    @abstractmethod
-    async def get_filtered(
-        self,
-        names: list[str] | None = None,
-        cost_types: list[Literal["TOKEN_INPUT", "TOKEN_OUTPUT", "API_CALL", "STORAGE", "TIME", "OTHER"]] | None = None,
-    ) -> list[CostData]:
-        """Get filtered costs."""
+    async def search(self, *args: Any, **kwargs: Any) -> Any:
+        return await super().search()
 
-    @abstractmethod
-    async def get_cost_config(self) -> list[CostConfig]:
-        """Get cost configuration for the current setup version.
+    async def delete(self, *args: Any, **kwargs: Any) -> Any:
+        return await super().delete()
 
-        Returns:
-            List of CostConfig objects from the database.
-        """
+    async def update(self, *args: Any, **kwargs: Any) -> Any:
+        return await super().update()
 
-    @abstractmethod
-    async def set_cost_config(self, configs: list[CostConfig]) -> bool:
-        """Store cost configuration for the current setup version.
-
-        Args:
-            configs: List of CostConfig objects to store.
-
-        Returns:
-            True if successfully stored.
-        """
+    async def upload(self, *args: Any, **kwargs: Any) -> Any:
+        return await super().upload()

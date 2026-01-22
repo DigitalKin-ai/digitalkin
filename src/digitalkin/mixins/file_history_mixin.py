@@ -46,7 +46,7 @@ class FileHistoryMixin(StorageMixin, LoggerMixin):
 
         if self.file_history_front is None:
             try:
-                record = await self.read_storage(
+                record = await self.get_storage(
                     context,
                     self.FILE_HISTORY_COLLECTION,
                     history_key,
@@ -74,7 +74,7 @@ class FileHistoryMixin(StorageMixin, LoggerMixin):
         if len(file_history.files) == len(files):
             # Create new record
             self.log_debug(context, f"Creating new file history for session: {history_key}")
-            await self.store_storage(
+            await self.create_storage(
                 context,
                 self.FILE_HISTORY_COLLECTION,
                 history_key,

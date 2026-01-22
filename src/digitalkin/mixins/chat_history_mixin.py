@@ -47,7 +47,7 @@ class ChatHistoryMixin(UserMessageMixin, StorageMixin, LoggerMixin, Generic[Inpu
         """
         history_key = self._get_history_key(context)
 
-        if (raw_history := await self.read_storage(context, self.CHAT_HISTORY_COLLECTION, history_key)) is not None:
+        if (raw_history := await self.get_storage(context, self.CHAT_HISTORY_COLLECTION, history_key)) is not None:
             return ChatHistory.model_validate(raw_history.data)
         return ChatHistory(messages=[])
 
@@ -74,7 +74,7 @@ class ChatHistoryMixin(UserMessageMixin, StorageMixin, LoggerMixin, Generic[Inpu
         if len(chat_history.messages) == 1:
             # Create new record
             self.log_debug(context, f"Creating new chat history for session: {history_key}")
-            await self.store_storage(
+            await self.create_storage(
                 context,
                 self.CHAT_HISTORY_COLLECTION,
                 history_key,

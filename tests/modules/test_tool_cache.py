@@ -5,21 +5,22 @@ from unittest.mock import AsyncMock
 import pytest
 
 from digitalkin.models.module.setup_types import SetupModel
-from digitalkin.models.module.tool_cache import ToolCache, ToolDefinition, ToolModuleInfo, ToolParameter
+from digitalkin.models.module.tool_cache import ToolCache, ToolModuleInfo, ToolDefinition, ToolParameter
 from digitalkin.models.module.tool_reference import ToolReference, ToolSelection
-from digitalkin.models.services.registry import ModuleInfo, RegistryModuleType, SetupInfo
+from digitalkin.models.services.setup import SetupInfo
+from digitalkin.services.registry import ModuleType, ModuleInfo
 
 
 @pytest.fixture
 def sample_tool_module_info() -> ToolModuleInfo:
     """Create a sample ToolModuleInfo for testing."""
     return ToolModuleInfo(
-        module_id="tool-123",
-        module_type=RegistryModuleType.TOOL,
+        id="tool-123",
+        type=ModuleType.TOOL,
         address="localhost",
         port=50051,
         version="1.0.0",
-        module_name="TestTool",
+        name="TestTool",
         documentation="Test tool documentation",
         setup_id="setup-123",
         tool_name="TestTool",
@@ -39,12 +40,12 @@ def sample_tool_module_info() -> ToolModuleInfo:
 def sample_tool_module_info_2() -> ToolModuleInfo:
     """Create a second sample ToolModuleInfo for testing."""
     return ToolModuleInfo(
-        module_id="tool-456",
-        module_type=RegistryModuleType.TOOL,
+        id="tool-456",
+        type=ModuleType.TOOL,
         address="localhost",
         port=50052,
         version="2.0.0",
-        module_name="AnotherTool",
+        name="AnotherTool",
         documentation="Another test tool",
         setup_id="setup-456",
         tool_name="AnotherTool",
@@ -259,12 +260,12 @@ class TestResolvedToolsCacheBehavior:
             module_id="tool-123",
         )
         mock_registry.discover_by_id.return_value = ModuleInfo(
-            module_id="tool-123",
-            module_type=RegistryModuleType.TOOL,
+            id="tool-123",
+            type=ModuleType.TOOL,
             address="localhost",
             port=50051,
             version="1.0.0",
-            module_name="TestTool",
+            name="TestTool",
             documentation="Test tool documentation",
         )
 
@@ -298,12 +299,12 @@ class TestResolvedToolsCacheBehavior:
             module_id="tool-123",
         )
         mock_registry.discover_by_id.return_value = ModuleInfo(
-            module_id="tool-123",
-            module_type=RegistryModuleType.TOOL,
+            id="tool-123",
+            type=ModuleType.TOOL,
             address="localhost",
             port=50051,
             version="1.0.0",
-            module_name="TestTool",
+            name="TestTool",
             documentation="Test tool documentation",
         )
 
@@ -377,22 +378,22 @@ class TestResolvedToolsCacheBehavior:
         )
         mock_registry.discover_by_id.side_effect = lambda module_id: (
             ModuleInfo(
-                module_id="tool-123",
-                module_type=RegistryModuleType.TOOL,
+                id="tool-123",
+                type=ModuleType.TOOL,
                 address="localhost",
                 port=50051,
                 version="1.0.0",
-                module_name="ToolA",
+                name="ToolA",
                 documentation="Tool A",
             )
             if module_id == "tool-123"
             else ModuleInfo(
-                module_id="tool-456",
-                module_type=RegistryModuleType.TOOL,
+                id="tool-456",
+                type=ModuleType.TOOL,
                 address="localhost",
                 port=50052,
                 version="1.0.0",
-                module_name="ToolB",
+                name="ToolB",
                 documentation="Tool B",
             )
         )
@@ -441,12 +442,12 @@ class TestResolvedToolsCacheBehavior:
             module_id="tool-456",
         )
         mock_registry.discover_by_id.return_value = ModuleInfo(
-            module_id="tool-456",
-            module_type=RegistryModuleType.TOOL,
+            id="tool-456",
+            type=ModuleType.TOOL,
             address="localhost",
             port=50052,
             version="1.0.0",
-            module_name="ToolB",
+            name="ToolB",
             documentation="Tool B",
         )
 
@@ -493,7 +494,7 @@ class TestSlugify:
     def test_slug_property_uses_tool_name(self) -> None:
         """Test slug property returns slugified tool_name."""
         info = ToolModuleInfo(
-            module_id="m1",
+            id="m1",
             setup_id="setup-abc",
             tool_name="Google Search",
         )
@@ -502,7 +503,7 @@ class TestSlugify:
     def test_slug_no_setup_id(self) -> None:
         """Test slug does not contain setup_id."""
         info = ToolModuleInfo(
-            module_id="m1",
+            id="m1",
             setup_id="setup-abc-123",
             tool_name="My Tool",
         )
@@ -519,7 +520,7 @@ class TestToolCacheCollision:
         cache.add(sample_tool_module_info)
 
         other = ToolModuleInfo(
-            module_id="tool-other",
+            id="tool-other",
             setup_id="setup-other",
             tool_name="TestTool",
             tools=[],

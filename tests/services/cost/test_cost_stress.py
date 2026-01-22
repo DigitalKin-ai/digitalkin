@@ -21,14 +21,14 @@ import grpc
 import grpc_testing
 import pytest
 from agentic_mesh_protocol.cost.v1 import cost_service_pb2, cost_service_pb2_grpc
+
+from digitalkin.exception.cost import CostServiceError
+from digitalkin.models.grpc_servers.models import ClientConfig, SecurityMode, ServerMode
+from digitalkin.models.services.cost import AmountLimit, CostType, QuantityLimit, CostConfig
+from digitalkin.services import DefaultCost
+from digitalkin.services.cost import GrpcCost
 from tests.fixtures.grpc_fixtures import AsyncStubWrapper, FakeContext
 from tests.services.cost.mock_cost_servicer import MockCostServicer
-
-from digitalkin.models.grpc_servers.models import ClientConfig, SecurityMode, ServerMode
-from digitalkin.models.services.cost import AmountLimit, CostTypeEnum, QuantityLimit
-from digitalkin.services.cost.cost_strategy import CostConfig, CostServiceError
-from digitalkin.services.cost.default_cost import DefaultCost
-from digitalkin.services.cost.grpc_cost import GrpcCost
 
 # Set timeout for stress tests
 pytestmark = pytest.mark.timeout(60)
@@ -44,29 +44,29 @@ def sample_config() -> dict[str, CostConfig]:
     """Create sample cost configuration."""
     return {
         "gpt4_input": CostConfig(
-            cost_name="gpt4_input",
-            cost_type="TOKEN_INPUT",
+            name="gpt4_input",
+            type=CostType.TOKEN_INPUT,
             description="GPT-4 input tokens",
             unit="tokens",
             rate=0.00003,
         ),
         "gpt4_output": CostConfig(
-            cost_name="gpt4_output",
-            cost_type="TOKEN_OUTPUT",
+            name="gpt4_output",
+            type=CostType.TOKEN_OUTPUT,
             description="GPT-4 output tokens",
             unit="tokens",
             rate=0.00006,
         ),
         "api_call": CostConfig(
-            cost_name="api_call",
-            cost_type="API_CALL",
+            name="api_call",
+            type=CostType.API_CALL,
             description="API call",
             unit="calls",
             rate=0.001,
         ),
         "storage": CostConfig(
-            cost_name="storage",
-            cost_type="STORAGE",
+            name="storage",
+            type=CostType.STORAGE,
             description="Storage",
             unit="GB",
             rate=0.02,
@@ -143,11 +143,11 @@ class TestHighVolumeCostAddition:
     async def test_add_thousand_costs(self, cost_service: DefaultCost) -> None:
         """Test adding 1000 costs sequentially."""
         for i in range(1000):
-            await cost_service.add(f"cost_{i}", "gpt4_input", 100.0)
+            await cost_service.create(f"cost_{i}", "gpt4_input", 100.0)
 
-        # Verify all costs were stored - use get_filtered with names
+        # Verify all costs were stored - use list with names
         names = [f"cost_{i}" for i in range(1000)]
-        costs = await cost_service.get_filtered(names=names)
+        costs = await cost_service.list(names=names)
         assert len(costs) == 1000
 
     async def test_add_costs_different_configs(self, cost_service: DefaultCost) -> None:
@@ -156,7 +156,7 @@ class TestHighVolumeCostAddition:
 
         for config_name in configs:
             for i in range(250):
-                await cost_service.add(f"{config_name}_{i}", config_name, 10.0)
+                await cost_service.create(f"{config_name}_{i}", config_name, 10.0)
 
         # Verify counts per type - use names filter
         input_names = [f"gpt4_input_{i}" for i in range(250)]
@@ -164,10 +164,10 @@ class TestHighVolumeCostAddition:
         api_names = [f"api_call_{i}" for i in range(250)]
         storage_names = [f"storage_{i}" for i in range(250)]
 
-        input_costs = await cost_service.get_filtered(names=input_names)
-        output_costs = await cost_service.get_filtered(names=output_names)
-        api_costs = await cost_service.get_filtered(names=api_names)
-        storage_costs = await cost_service.get_filtered(names=storage_names)
+        input_costs = await cost_service.list(names=input_names)
+        output_costs = await cost_service.list(names=output_names)
+        api_costs = await cost_service.list(names=api_names)
+        storage_costs = await cost_service.list(names=storage_names)
 
         assert len(input_costs) == 250
         assert len(output_costs) == 250
@@ -180,7 +180,7 @@ class TestHighVolumeCostAddition:
 
         for i in range(500):
             quantity = i * 10.0  # Increasing quantities
-            await cost_service.add(f"scaled_cost_{i}", "gpt4_input", quantity)
+            await cost_service.create(f"scaled_cost_{i}", "gpt4_input", quantity)
             total_quantity += quantity
 
         # Calculate expected total cost
@@ -188,7 +188,7 @@ class TestHighVolumeCostAddition:
 
         # Sum actual costs - use names filter
         names = [f"scaled_cost_{i}" for i in range(500)]
-        costs = await cost_service.get_filtered(names=names)
+        costs = await cost_service.list(names=names)
         actual_total = sum(c.cost for c in costs)
 
         # Should be accurate to floating point precision
@@ -219,12 +219,12 @@ class TestMissionIsolationUnderLoad:
         # Add costs to each mission
         for i, service in enumerate(services):
             for j in range(100):
-                await service.add(f"cost_{i}_{j}", "gpt4_input", float(i * 100 + j))
+                await service.create(f"cost_{i}_{j}", "gpt4_input", float(i * 100 + j))
 
         # Verify isolation using names filter
         for i, service in enumerate(services):
             names = [f"cost_{i}_{j}" for j in range(100)]
-            costs = await service.get_filtered(names=names)
+            costs = await service.list(names=names)
             assert len(costs) == 100
 
             # Verify quantities are correct for this mission
@@ -251,8 +251,8 @@ class TestMissionIsolationUnderLoad:
         )
 
         # Add cost with same name to both missions
-        await service1.add("shared_name_cost", "gpt4_input", 1000.0)
-        await service2.add("shared_name_cost", "gpt4_input", 2000.0)
+        await service1.create("shared_name_cost", "gpt4_input", 1000.0)
+        await service2.create("shared_name_cost", "gpt4_input", 2000.0)
 
         # Each mission should have its own cost
         costs1 = await service1.get("shared_name_cost")
@@ -276,7 +276,7 @@ class TestLargeQuantityHandling:
         """Test handling of very large quantities (billions)."""
         large_quantity = 1_000_000_000_000.0  # 1 trillion
 
-        await cost_service.add("huge_usage", "gpt4_input", large_quantity)
+        await cost_service.create("huge_usage", "gpt4_input", large_quantity)
 
         costs = await cost_service.get("huge_usage")
         assert len(costs) == 1
@@ -290,7 +290,7 @@ class TestLargeQuantityHandling:
         """Test handling of very small quantities."""
         small_quantity = 0.000001
 
-        await cost_service.add("tiny_usage", "gpt4_input", small_quantity)
+        await cost_service.create("tiny_usage", "gpt4_input", small_quantity)
 
         costs = await cost_service.get("tiny_usage")
         assert len(costs) == 1
@@ -301,7 +301,7 @@ class TestLargeQuantityHandling:
         await cost_service.set_limits([
             QuantityLimit(
                 name="gpt4_input",
-                type=CostTypeEnum.TOKEN_INPUT,
+                type=CostType.TOKEN_INPUT,
                 max_value=1e15,  # 1 quadrillion
             ),
         ])
@@ -335,7 +335,7 @@ class TestMemoryEfficiency:
 
         # Add many costs
         for i in range(10000):
-            await cost_service.add(f"memory_test_{i}", "gpt4_input", float(i))
+            await cost_service.create(f"memory_test_{i}", "gpt4_input", float(i))
 
         # Check db size grew as expected (not exponentially)
         # Each CostData is roughly the same size
@@ -352,13 +352,13 @@ class TestMemoryEfficiency:
         # Add many costs of different types
         for i in range(5000):
             config = ["gpt4_input", "gpt4_output", "api_call", "storage"][i % 4]
-            await cost_service.add(f"perf_test_{i}", config, float(i))
+            await cost_service.create(f"perf_test_{i}", config, float(i))
 
         # Time the filter operation - use names filter for gpt4_input costs
         gpt4_input_names = [f"perf_test_{i}" for i in range(0, 5000, 4)]  # Every 4th starting at 0
 
         start = time.perf_counter()
-        results = await cost_service.get_filtered(names=gpt4_input_names)
+        results = await cost_service.list(names=gpt4_input_names)
         elapsed = time.perf_counter() - start
 
         assert len(results) == 1250  # 5000 / 4
@@ -377,7 +377,7 @@ class TestGrpcStress:
 
     @pytest.mark.grpc
     @pytest.mark.stress
-    async def test_rapid_sequential_adds(
+    async def test_rapid_sequential_create(
         self,
         grpc_client: GrpcCost,
         test_channel: grpc_testing.Channel,
@@ -386,17 +386,17 @@ class TestGrpcStress:
     ) -> None:
         """Test rapid sequential cost additions."""
         service_desc = cost_service_pb2.DESCRIPTOR.services_by_name["CostService"]
-        method_desc = service_desc.methods_by_name["AddCost"]
+        method_desc = service_desc.methods_by_name["CreateCost"]
 
         for i in range(50):
             name = f"rapid_{i}_{secrets.token_hex(4)}"
 
-            future = thread_pool.submit(asyncio.run, grpc_client.add(name, "gpt4_input", 100.0))
+            future = thread_pool.submit(asyncio.run, grpc_client.create(name, "gpt4_input", 100.0))
 
             _, request, rpc = test_channel.take_unary_unary(method_desc)
 
             context = FakeContext()
-            response = mock_servicer.AddCost(request, context)
+            response = mock_servicer.CreateCost(request, context)
 
             rpc.send_initial_metadata(())
             rpc.terminate(response, (), grpc.StatusCode.OK, "")
@@ -419,14 +419,14 @@ class TestGrpcStress:
         service_desc = cost_service_pb2.DESCRIPTOR.services_by_name["CostService"]
 
         # First, add a batch of costs
-        add_method = service_desc.methods_by_name["AddCost"]
+        add_method = service_desc.methods_by_name["CreateCost"]
         for i in range(20):
             name = f"mixed_{i}"
-            future = thread_pool.submit(asyncio.run, grpc_client.add(name, "gpt4_input", 100.0))
+            future = thread_pool.submit(asyncio.run, grpc_client.create(name, "gpt4_input", 100.0))
 
             _, request, rpc = test_channel.take_unary_unary(add_method)
             context = FakeContext()
-            response = mock_servicer.AddCost(request, context)
+            response = mock_servicer.CreateCost(request, context)
             rpc.send_initial_metadata(())
             rpc.terminate(response, (), grpc.StatusCode.OK, "")
             future.result(timeout=5.0)
@@ -437,10 +437,10 @@ class TestGrpcStress:
         for i in range(10):
             # Add
             name = f"mixed_extra_{i}"
-            future_add = thread_pool.submit(asyncio.run, grpc_client.add(name, "gpt4_output", 50.0))
+            future_add = thread_pool.submit(asyncio.run, grpc_client.create(name, "gpt4_output", 50.0))
             _, request, rpc = test_channel.take_unary_unary(add_method)
             context = FakeContext()
-            response = mock_servicer.AddCost(request, context)
+            response = mock_servicer.CreateCost(request, context)
             rpc.send_initial_metadata(())
             rpc.terminate(response, (), grpc.StatusCode.OK, "")
             future_add.result(timeout=5.0)
@@ -449,7 +449,7 @@ class TestGrpcStress:
             future_get = thread_pool.submit(asyncio.run, grpc_client.get(f"mixed_{i}"))
             _, request, rpc = test_channel.take_unary_unary(get_method)
             context = FakeContext()
-            response = mock_servicer.GetCost(request, context)
+            response = mock_servicer.CreateCost(request, context)
             rpc.send_initial_metadata(())
             rpc.terminate(response, (), grpc.StatusCode.OK, "")
             future_get.result(timeout=5.0)
@@ -470,14 +470,14 @@ class TestLimitEnforcementUnderStress:
     async def test_limit_enforcement_high_frequency(self, cost_service: DefaultCost) -> None:
         """Test that limits are correctly enforced under high-frequency checks."""
         await cost_service.set_limits([
-            QuantityLimit(name="api_call", type=CostTypeEnum.API_CALL, max_value=1000.0),
+            QuantityLimit(name="api_call", type=CostType.API_CALL, max_value=1000.0),
         ])
 
         # Rapid check and accumulate pattern
         total = 0.0
         for i in range(1000):
             assert await cost_service.check_limit("api_call", 1.0) is True
-            await cost_service.add(f"freq_{i}", "api_call", 1.0)
+            await cost_service.create(f"freq_{i}", "api_call", 1.0)
             total += 1.0
             cost_service._accumulated["api_call_quantity"] = total
 
@@ -486,7 +486,7 @@ class TestLimitEnforcementUnderStress:
 
         # Verify exactly 1000 costs using names filter
         names = [f"freq_{i}" for i in range(1000)]
-        costs = await cost_service.get_filtered(names=names)
+        costs = await cost_service.list(names=names)
         assert len(costs) == 1000
 
     async def test_amount_limit_precision_under_stress(self, cost_service: DefaultCost) -> None:
@@ -497,14 +497,14 @@ class TestLimitEnforcementUnderStress:
         """
         # Set a limit with buffer for floating point precision
         await cost_service.set_limits([
-            AmountLimit(name="api_call", type=CostTypeEnum.API_CALL, max_value=1.01),  # Slight buffer
+            AmountLimit(name="api_call", type=CostType.API_CALL, max_value=1.01),  # Slight buffer
         ])
 
         # rate = 0.001, so 1000 calls = $1.00
         total_amount = 0.0
         for i in range(1000):
             assert await cost_service.check_limit("api_call", 1.0) is True
-            await cost_service.add(f"precise_{i}", "api_call", 1.0)
+            await cost_service.create(f"precise_{i}", "api_call", 1.0)
             total_amount += 0.001  # rate * 1.0
             cost_service._accumulated["api_call_amount"] = total_amount
 
@@ -515,9 +515,9 @@ class TestLimitEnforcementUnderStress:
     async def test_multiple_limits_stress(self, cost_service: DefaultCost) -> None:
         """Test multiple limits under stress conditions."""
         await cost_service.set_limits([
-            QuantityLimit(name="gpt4_input", type=CostTypeEnum.TOKEN_INPUT, max_value=50000.0),
-            QuantityLimit(name="gpt4_output", type=CostTypeEnum.TOKEN_OUTPUT, max_value=25000.0),
-            QuantityLimit(name="api_call", type=CostTypeEnum.API_CALL, max_value=100.0),
+            QuantityLimit(name="gpt4_input", type=CostType.TOKEN_INPUT, max_value=50000.0),
+            QuantityLimit(name="gpt4_output", type=CostType.TOKEN_OUTPUT, max_value=25000.0),
+            QuantityLimit(name="api_call", type=CostType.API_CALL, max_value=100.0),
         ])
 
         input_total = 0.0
@@ -527,17 +527,17 @@ class TestLimitEnforcementUnderStress:
         # Stress test all limits simultaneously
         for i in range(100):
             assert await cost_service.check_limit("gpt4_input", 500.0) is True
-            await cost_service.add(f"input_{i}", "gpt4_input", 500.0)
+            await cost_service.create(f"input_{i}", "gpt4_input", 500.0)
             input_total += 500.0
             cost_service._accumulated["gpt4_input_quantity"] = input_total
 
             assert await cost_service.check_limit("gpt4_output", 250.0) is True
-            await cost_service.add(f"output_{i}", "gpt4_output", 250.0)
+            await cost_service.create(f"output_{i}", "gpt4_output", 250.0)
             output_total += 250.0
             cost_service._accumulated["gpt4_output_quantity"] = output_total
 
             assert await cost_service.check_limit("api_call", 1.0) is True
-            await cost_service.add(f"call_{i}", "api_call", 1.0)
+            await cost_service.create(f"call_{i}", "api_call", 1.0)
             call_total += 1.0
             cost_service._accumulated["api_call_quantity"] = call_total
 
@@ -558,8 +558,8 @@ class TestErrorRecovery:
     async def test_continue_after_limit_check_fails(self, cost_service: DefaultCost) -> None:
         """Test that service continues to work after limit check returns False."""
         await cost_service.set_limits([
-            QuantityLimit(name="gpt4_input", type=CostTypeEnum.TOKEN_INPUT, max_value=1000.0),
-            QuantityLimit(name="gpt4_output", type=CostTypeEnum.TOKEN_OUTPUT, max_value=1000.0),
+            QuantityLimit(name="gpt4_input", type=CostType.TOKEN_INPUT, max_value=1000.0),
+            QuantityLimit(name="gpt4_output", type=CostType.TOKEN_OUTPUT, max_value=1000.0),
         ])
 
         # Use up gpt4_input limit
@@ -570,33 +570,33 @@ class TestErrorRecovery:
 
         # But gpt4_output should still work
         assert await cost_service.check_limit("gpt4_output", 500.0) is True
-        await cost_service.add("output_1", "gpt4_output", 500.0)
+        await cost_service.create("output_1", "gpt4_output", 500.0)
         cost_service._accumulated["gpt4_output_quantity"] = 500.0
 
         assert await cost_service.check_limit("gpt4_output", 500.0) is True
-        await cost_service.add("output_2", "gpt4_output", 500.0)
+        await cost_service.create("output_2", "gpt4_output", 500.0)
         cost_service._accumulated["gpt4_output_quantity"] = 1000.0
 
         # Verify costs were added
-        output_costs = await cost_service.get_filtered(names=["output_1", "output_2"])
+        output_costs = await cost_service.list(names=["output_1", "output_2"])
         assert len(output_costs) == 2
 
     async def test_invalid_config_doesnt_corrupt_state(self, cost_service: DefaultCost) -> None:
         """Test that invalid config errors don't corrupt service state."""
         # Add some valid costs
         for i in range(10):
-            await cost_service.add(f"valid_{i}", "gpt4_input", 100.0)
+            await cost_service.create(f"valid_{i}", "gpt4_input", 100.0)
 
         # Try invalid config
         with pytest.raises(CostServiceError):
-            await cost_service.add("invalid", "nonexistent_config", 100.0)
+            await cost_service.create("invalid", "nonexistent_config", 100.0)
 
         # Service should still work
-        await cost_service.add("after_error", "gpt4_input", 100.0)
+        await cost_service.create("after_error", "gpt4_input", 100.0)
 
         # All valid costs should be present - use names filter
         names = [f"valid_{i}" for i in range(10)] + ["after_error"]
-        costs = await cost_service.get_filtered(names=names)
+        costs = await cost_service.list(names=names)
         assert len(costs) == 11
 
 
@@ -610,7 +610,7 @@ class TestDataIntegrity:
 
     async def test_cost_data_immutability(self, cost_service: DefaultCost) -> None:
         """Test that retrieved cost data can't corrupt internal state."""
-        await cost_service.add("original", "gpt4_input", 1000.0)
+        await cost_service.create("original", "gpt4_input", 1000.0)
 
         # Get the cost
         costs = await cost_service.get("original")
@@ -628,7 +628,7 @@ class TestDataIntegrity:
         """Test that concurrent reads return consistent data."""
         # Add costs
         for i in range(100):
-            await cost_service.add(f"concurrent_{i}", "gpt4_input", float(i))
+            await cost_service.create(f"concurrent_{i}", "gpt4_input", float(i))
 
         # Use names filter for consistent results
         names = [f"concurrent_{i}" for i in range(100)]
@@ -636,7 +636,7 @@ class TestDataIntegrity:
         # Multiple reads should return same data
         results = []
         for _ in range(10):
-            results.append(await cost_service.get_filtered(names=names))
+            results.append(await cost_service.list(names=names))
 
         # All should have same length and data
         first_len = len(results[0])

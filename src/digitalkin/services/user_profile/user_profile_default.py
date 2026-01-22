@@ -25,18 +25,14 @@ class DefaultUserProfile(UserProfileStrategy):
             setup_id: The ID of the setup
             setup_version_id: The ID of the setup version
         """
-        super().__init__(mission_id=mission_id, setup_id=setup_id, setup_version_id=setup_version_id)
+        super().__init__(
+            mission_id=mission_id, setup_id=setup_id, setup_version_id=setup_version_id, client_config=None
+        )
         self.db: dict[str, dict[str, Any]] = {}
 
-    async def get_user_profile(self) -> dict[str, Any]:
-        """Get user profile from in-memory storage.
+    # ══════════════════════════════════ Public Methods ══════════════════════════════════ #
 
-        Returns:
-            dict[str, Any]: User profile data
-
-        Raises:
-            UserProfileServiceError: If the user profile is not found
-        """
+    async def get(self) -> dict[str, Any]:
         if self.mission_id not in self.db:
             msg = f"User profile for mission {self.mission_id} not found in the database."
             logger.warning(msg)
@@ -45,7 +41,7 @@ class DefaultUserProfile(UserProfileStrategy):
         logger.debug(f"Retrieved user profile for mission_id: {self.mission_id}")
         return self.db[self.mission_id]
 
-    def add_user_profile(self, user_profile_data: dict[str, Any]) -> None:
+    async def add_user_profile(self, user_profile_data: dict[str, Any]) -> None:
         """Add a user profile to the in-memory database (helper for testing).
 
         Args:

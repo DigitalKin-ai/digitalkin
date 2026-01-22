@@ -5,7 +5,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from digitalkin.models.module import ModuleStatus, StrategyConfig
+from digitalkin import ModuleContext
+from digitalkin.models.module.base_types import SetupModelT
+from digitalkin.models.module.module import ModuleStatus, StrategyConfig
 from digitalkin.modules._base_module import BaseModule
 
 
@@ -47,6 +49,12 @@ class MockModule(BaseModule):
         if self.cleanup_error:
             msg = "Test cleanup error"
             raise Exception(msg)
+
+    async def initialize(self, context: ModuleContext, setup_data: SetupModelT) -> None:
+        pass
+
+    async def cleanup(self) -> None:
+        pass
 
 
 @pytest.fixture

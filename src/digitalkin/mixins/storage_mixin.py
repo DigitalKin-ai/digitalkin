@@ -1,9 +1,9 @@
 """Storage Mixin to ease storage access in Triggers."""
 
-from typing import Any, Literal
+from typing import Any
 
 from digitalkin.models.module.module_context import ModuleContext
-from digitalkin.services.storage.storage_strategy import StorageRecord
+from digitalkin.models.services.storage import DataType, StorageRecord
 
 
 class StorageMixin:
@@ -14,12 +14,12 @@ class StorageMixin:
     """
 
     @staticmethod
-    async def store_storage(
+    async def create_storage(
         context: ModuleContext,
         collection: str,
         record_id: str | None,
         data: dict[str, Any],
-        data_type: Literal["OUTPUT", "VIEW", "LOGS", "OTHER"] = "OUTPUT",
+            data_type: DataType = DataType.OUTPUT,
     ) -> StorageRecord:
         """Store data using the storage strategy.
 
@@ -36,10 +36,10 @@ class StorageMixin:
         Raises:
             StorageServiceError: If storage operation fails
         """
-        return await context.storage.store(collection, record_id, data, data_type=data_type)
+        return await context.storage.create(collection, record_id, data, data_type=data_type)
 
     @staticmethod
-    async def read_storage(context: ModuleContext, collection: str, record_id: str) -> StorageRecord | None:
+    async def get_storage(context: ModuleContext, collection: str, record_id: str) -> StorageRecord | None:
         """Read data from storage.
 
         Args:
@@ -53,7 +53,7 @@ class StorageMixin:
         Raises:
             StorageServiceError: If read operation fails
         """
-        return await context.storage.read(collection, record_id)
+        return await context.storage.get(collection, record_id)
 
     @staticmethod
     async def update_storage(

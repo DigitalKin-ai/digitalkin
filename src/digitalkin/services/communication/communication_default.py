@@ -19,33 +19,18 @@ class DefaultCommunication(CommunicationStrategy):
         setup_id: str,
         setup_version_id: str,
     ) -> None:
-        """Initialize the default communication service.
-
-        Args:
-            mission_id: Mission identifier
-            setup_id: Setup identifier
-            setup_version_id: Setup version identifier
-        """
         super().__init__(mission_id, setup_id, setup_version_id)
         logger.debug("Initialized DefaultCommunication (local)")
 
-    async def get_module_schemas(  # Default stub implementation; self available for subclass overrides # noqa: PLR6301
+    # ══════════════════════════════════ Public Methods ══════════════════════════════════ #
+
+    async def get_module_schemas(  # noqa: PLR6301
         self,
         module_address: str,
         module_port: int,
         *,
         llm_format: bool = False,
     ) -> dict[str, dict]:
-        """Get module schemas (local implementation returns empty schemas).
-
-        Args:
-            module_address: Target module address
-            module_port: Target module port
-            llm_format: Return LLM-friendly format
-
-        Returns:
-            Empty schemas dictionary
-        """
         logger.debug(
             "DefaultCommunication.get_module_schemas called (returns empty)",
             extra={
@@ -70,19 +55,6 @@ class DefaultCommunication(CommunicationStrategy):
         mission_id: str,
         callback: Callable[[dict], Awaitable[None]] | None = None,
     ) -> AsyncGenerator[dict, None]:
-        """Call module (local implementation yields empty response).
-
-        Args:
-            module_address: Target module address
-            module_port: Target module port
-            input_data: Input data
-            setup_id: Setup ID
-            mission_id: Mission ID
-            callback: Optional callback
-
-        Yields:
-            Empty response dictionary
-        """
         logger.debug(
             "DefaultCommunication.call_module called (returns empty)",
             extra={

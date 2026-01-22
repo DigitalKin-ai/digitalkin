@@ -386,7 +386,7 @@ def strict_exception_handler():
             self.old_handler = loop.get_exception_handler()
 
             def handler(loop, context) -> None:
-                self.exceptions.append(context.get("exception"))
+                self.exceptions.append(context.list("exception"))
                 if self.old_handler:
                     self.old_handler(loop, context)
 

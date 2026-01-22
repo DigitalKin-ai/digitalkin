@@ -28,7 +28,7 @@
     version = "0.3.2b4"
 
     dependencies = [
-        "agentic-mesh-protocol==0.2.2",
+        "agentic-mesh-protocol",
         "grpcio-health-checking>=1.78.1",
         "grpcio-reflection>=1.78.1",
         "grpcio-status>=1.78.1",
@@ -290,3 +290,6 @@
         "taskiq: marks tests for Taskiq distributed job execution",
         "validation: marks tests for input validation and schema checking",
     ]
+
+[tool.uv.sources]
+agentic-mesh-protocol = { path = "../service-apis-py/dist/agentic_mesh_protocol-0.2.2.tar.gz" }

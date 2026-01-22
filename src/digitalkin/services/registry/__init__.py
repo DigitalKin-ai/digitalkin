@@ -1,27 +1,21 @@
 """This module is responsible for handling the registry service."""
 
-from digitalkin.models.services.registry import (
-    ModuleInfo,
-    RegistryModuleStatus,
-    RegistryModuleType,
-)
-from digitalkin.services.registry.default_registry import DefaultRegistry
-from digitalkin.services.registry.exceptions import (
+from digitalkin.exception.registry import (
     RegistryModuleNotFoundError,
     RegistryServiceError,
 )
-from digitalkin.services.registry.grpc_registry import GrpcRegistry
-from digitalkin.services.registry.registry_models import ModuleStatusInfo
+from digitalkin.models.services.modules import ModuleInfo, ModuleStatus, ModuleType
+from digitalkin.services.registry.registry_default import DefaultRegistry
+from digitalkin.services.registry.registry_grpc import GrpcRegistry
 from digitalkin.services.registry.registry_strategy import RegistryStrategy
 
 __all__ = [
     "DefaultRegistry",
     "GrpcRegistry",
     "ModuleInfo",
-    "ModuleStatusInfo",
+    "ModuleStatus",
+    "ModuleType",
     "RegistryModuleNotFoundError",
-    "RegistryModuleStatus",
-    "RegistryModuleType",
     "RegistryServiceError",
     "RegistryStrategy",
 ]

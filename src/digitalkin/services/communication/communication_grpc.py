@@ -5,16 +5,15 @@ from collections.abc import AsyncGenerator, Awaitable, Callable
 
 import grpc.aio
 from agentic_mesh_protocol.module.v1 import (
-    information_pb2,
-    lifecycle_pb2,
+    module_dto_pb2,
     module_service_pb2_grpc,
 )
 from google.protobuf import json_format, struct_pb2
 
 from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
 from digitalkin.logger import logger
+from digitalkin.models.base_strategy import BaseStrategy
 from digitalkin.models.grpc_servers.models import ClientConfig
-from digitalkin.services.base_strategy import BaseStrategy
 from digitalkin.services.communication.communication_strategy import CommunicationStrategy
 
 
@@ -34,14 +33,6 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
         setup_version_id: str,
         client_config: ClientConfig,
     ) -> None:
-        """Initialize the gRPC communication client.
-
-        Args:
-            mission_id: Mission identifier
-            setup_id: Setup identifier
-            setup_version_id: Setup version identifier
-            client_config: Client configuration for gRPC connection
-        """
         BaseStrategy.__init__(self, mission_id, setup_id, setup_version_id)
         self.client_config = client_config
         self._channel_pool: dict[tuple[str, int], grpc.aio.Channel] = {}
@@ -51,7 +42,38 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
             extra={"security": client_config.security},
         )
 
-    def _get_or_create_channel(self, module_address: str, module_port: int) -> grpc.aio.Channel:
+    # ═════════════════════════════════ Private Methods ══════════════════════════════════ #
+
+    def __create_stub(self, module_address: str, module_port: int) -> module_service_pb2_grpc.ModuleServiceStub:
+        """Create a new stub for the target module.
+
+        Args:
+            module_address: Module host address
+            module_port: Module port
+
+        Returns:
+            ModuleServiceStub for the target module
+        """
+        logger.debug(
+            "Creating connection",
+            extra={"address": module_address, "port": module_port},
+        )
+
+        config = ClientConfig(
+            host=module_address,
+            port=module_port,
+            mode=self.client_config.mode,
+            security=self.client_config.security,
+            credentials=self.client_config.credentials,
+            channel_options=self.client_config.channel_options,
+        )
+
+        channel = self._init_channel(config)
+        return module_service_pb2_grpc.ModuleServiceStub(channel)
+
+    # ══════════════════════════════════ Public Methods ══════════════════════════════════ #
+
+    def get_or_create_channel(self, module_address: str, module_port: int) -> grpc.aio.Channel:
         """Get existing channel or create new one for the target module.
 
         Args:
@@ -88,19 +110,6 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
         """Clean up all gRPC channels."""
         await self.close_all_channels()
 
-    def _create_stub(self, module_address: str, module_port: int) -> module_service_pb2_grpc.ModuleServiceStub:
-        """Create a new stub for the target module.
-
-        Args:
-            module_address: Module host address
-            module_port: Module port
-
-        Returns:
-            ModuleServiceStub for the target module
-        """
-        channel = self._get_or_create_channel(module_address, module_port)
-        return module_service_pb2_grpc.ModuleServiceStub(channel)
-
     async def get_module_schemas(
         self,
         module_address: str,
@@ -118,16 +127,14 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
         Returns:
             Dictionary containing schemas: input, output, setup, secret, cost
         """
-        stub = self._create_stub(module_address, module_port)
+        stub = self.__create_stub(module_address, module_port)
 
         # Create requests
-        # Note: cost always uses llm_format=False to get actual config data (rates, units)
-        # No LLM are allowed to set costs
-        input_request = information_pb2.GetModuleInputRequest(llm_format=llm_format)
-        output_request = information_pb2.GetModuleOutputRequest(llm_format=llm_format)
-        setup_request = information_pb2.GetModuleSetupRequest(llm_format=llm_format)
-        secret_request = information_pb2.GetModuleSecretRequest(llm_format=llm_format)
-        cost_request = information_pb2.GetModuleCostRequest(llm_format=False)
+        input_request = module_dto_pb2.GetModuleInputRequest(llm_format=llm_format)
+        output_request = module_dto_pb2.GetModuleOutputRequest(llm_format=llm_format)
+        setup_request = module_dto_pb2.GetModuleSetupRequest(llm_format=llm_format)
+        secret_request = module_dto_pb2.GetModuleSecretRequest(llm_format=llm_format)
+        cost_request = module_dto_pb2.GetModuleCostRequest(llm_format=llm_format)
 
         # Get all schemas in parallel
         try:
@@ -187,14 +194,14 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
         Yields:
             Streaming responses from module as dictionaries
         """
-        stub = self._create_stub(module_address, module_port)
+        stub = self.__create_stub(module_address, module_port)
 
         # Convert input data to protobuf Struct
         input_struct = struct_pb2.Struct()
         input_struct.update(input_data)
 
         # Create request
-        request = lifecycle_pb2.StartModuleRequest(
+        request = module_dto_pb2.StartModuleRequest(
             input=input_struct,
             setup_id=setup_id,
             mission_id=mission_id,

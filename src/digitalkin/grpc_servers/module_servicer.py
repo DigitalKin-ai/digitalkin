@@ -6,26 +6,23 @@ from collections.abc import AsyncGenerator
 from typing import Any
 
 import grpc
-from agentic_mesh_protocol.module.v1 import (
-    information_pb2,
-    lifecycle_pb2,
-    module_service_pb2_grpc,
-    monitoring_pb2,
-)
+from agentic_mesh_protocol.module.v1 import module_dto_pb2, module_messages_pb2, module_service_pb2_grpc
+from agentic_mesh_protocol.pagination.v1.bulk_pb2 import OperationError
 from google.protobuf import json_format, struct_pb2
 from pydantic import ValidationError
 
 from digitalkin.core.job_manager.base_job_manager import BaseJobManager
+from digitalkin.exception.setup import SetupServiceError
 from digitalkin.grpc_servers.utils.exceptions import ServerError, ServicerError
 from digitalkin.logger import logger
 from digitalkin.models.core.job_manager_models import JobManagerMode
-from digitalkin.models.module.module import ModuleCodeModel, ModuleStatus
+from digitalkin.models.module.module import ModuleCodeModel
 from digitalkin.modules._base_module import BaseModule
 from digitalkin.services.registry import GrpcRegistry, RegistryStrategy
 from digitalkin.services.services_models import ServicesMode
-from digitalkin.services.setup.default_setup import DefaultSetup
-from digitalkin.services.setup.grpc_setup import GrpcSetup
-from digitalkin.services.setup.setup_strategy import SetupServiceError, SetupStrategy
+from digitalkin.services.setup.setup_default import DefaultSetup
+from digitalkin.services.setup.setup_grpc import GrpcSetup
+from digitalkin.services.setup.setup_strategy import SetupStrategy
 from digitalkin.utils.arg_parser import ArgParser
 from digitalkin.utils.development_mode_action import DevelopmentModeMappingAction
 
@@ -35,9 +32,6 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
 
     This servicer handles interactions with a DigitalKin module.
 
-    Attributes:
-        module: The module instance being served.
-        active_jobs: Dictionary tracking active module jobs.
     """
 
     args: Namespace
@@ -108,9 +102,9 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
 
     async def ConfigSetupModule(
         self,
-        request: lifecycle_pb2.ConfigSetupModuleRequest,
+            request: module_dto_pb2.ConfigSetupModuleRequest,
         context: grpc.aio.ServicerContext,
-    ) -> lifecycle_pb2.ConfigSetupModuleResponse:
+    ) -> module_dto_pb2.ConfigSetupModuleResponse:
         """Configure the module setup.
 
         Args:
@@ -158,7 +152,8 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         if job_id is None:
             context.set_code(grpc.StatusCode.NOT_FOUND)
             context.set_details("Failed to create module instance")
-            return lifecycle_pb2.ConfigSetupModuleResponse(success=False)
+            result = module_messages_pb2.ModuleResult(success=False)
+            return module_dto_pb2.ConfigSetupModuleResponse(result=result)
 
         updated_setup_data = await self.job_manager.generate_config_setup_module_response(job_id)
         logger.info("Setup response received", extra={"job_id": job_id})
@@ -171,7 +166,10 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             )
             context.set_code(grpc.StatusCode.INTERNAL)
             context.set_details(updated_setup_data.message or "Config setup failed")
-            return lifecycle_pb2.ConfigSetupModuleResponse(success=False)
+            result = module_messages_pb2.ModuleResult(
+                error=OperationError(code=str(grpc.StatusCode.INTERNAL)), success=False
+            )
+            return module_dto_pb2.ConfigSetupModuleResponse(result=result)
 
         if isinstance(updated_setup_data, dict) and "code" in updated_setup_data:
             # ModuleCodeModel was serialized to dict
@@ -185,7 +183,10 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             )
             context.set_code(grpc.StatusCode.INTERNAL)
             context.set_details(updated_setup_data.get("message") or "Config setup failed")
-            return lifecycle_pb2.ConfigSetupModuleResponse(success=False)
+            result = module_messages_pb2.ModuleResult(
+                error=OperationError(code=str(grpc.StatusCode.INTERNAL)), success=False
+            )
+            return module_dto_pb2.ConfigSetupModuleResponse(result=result)
 
         logger.debug("Updated setup data", extra={"job_id": job_id, "setup_data": updated_setup_data})
         setup_version.content = json_format.ParseDict(  # type: ignore[misc]  # proto __slots__ not fully typed
@@ -193,13 +194,14 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             struct_pb2.Struct(),
             ignore_unknown_fields=True,
         )
-        return lifecycle_pb2.ConfigSetupModuleResponse(success=True, setup_version=setup_version)
+        result = module_messages_pb2.ModuleResult(setup_version=setup_version, success=True)
+        return module_dto_pb2.ConfigSetupModuleResponse(result=result)
 
     async def StartModule(  # noqa: C901, PLR0912, PLR0915
         self,
-        request: lifecycle_pb2.StartModuleRequest,
+            request: module_dto_pb2.StartModuleRequest,
         context: grpc.aio.ServicerContext,
-    ) -> AsyncGenerator[lifecycle_pb2.StartModuleResponse, Any]:
+    ) -> AsyncGenerator[module_dto_pb2.StartModuleResponse, Any]:
         """Start a module execution.
 
         Args:
@@ -223,7 +225,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
 
         # Fetch setup configuration with comprehensive error handling
         try:
-            setup_data_class = await self.setup.get_setup(
+            setup_data_class = await self.setup.get(
                 setup_dict={
                     "setup_id": request.setup_id,
                     "mission_id": request.mission_id,
@@ -249,7 +251,10 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
                 f"[gRPC-server:ModuleService.StartModule] (setup_id={request.setup_id}, "
                 f"mission_id={request.mission_id}) Setup service unavailable: {e}"
             )
-            yield lifecycle_pb2.StartModuleResponse(success=False)
+            result = module_messages_pb2.ModuleResult(
+                error=OperationError(code=str(grpc.StatusCode.UNAVAILABLE)), success=False
+            )
+            yield module_dto_pb2.StartModuleResponse(job_id=None, result=result)
             return
         except ServerError as e:
             logger.error(
@@ -270,7 +275,10 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
                 f"[gRPC-server:ModuleService.StartModule] (setup_id={request.setup_id}, "
                 f"mission_id={request.mission_id}) gRPC communication error with Setup service: {e}"
             )
-            yield lifecycle_pb2.StartModuleResponse(success=False)
+            result = module_messages_pb2.ModuleResult(
+                error=OperationError(code=str(grpc.StatusCode.UNAVAILABLE)), success=False
+            )
+            yield module_dto_pb2.StartModuleResponse(result=result)
             return
         except ValidationError as e:
             logger.error(
@@ -291,7 +299,10 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
                 f"[gRPC-server:ModuleService.StartModule] (setup_id={request.setup_id}, "
                 f"mission_id={request.mission_id}) Setup data validation failed: {e}"
             )
-            yield lifecycle_pb2.StartModuleResponse(success=False)
+            result = module_messages_pb2.ModuleResult(
+                error=OperationError(code=str(grpc.StatusCode.INVALID_ARGUMENT)), success=False
+            )
+            yield module_dto_pb2.StartModuleResponse(result=result)
             return
         except Exception as e:
             error_type = type(e).__name__
@@ -314,7 +325,10 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
                 f"[gRPC-server:ModuleService.StartModule] (setup_id={request.setup_id}, "
                 f"mission_id={request.mission_id}) Unexpected {error_type} during setup fetch: {e}"
             )
-            yield lifecycle_pb2.StartModuleResponse(success=False)
+            result = module_messages_pb2.ModuleResult(
+                error=OperationError(code=str(grpc.StatusCode.UNKNOWN)), success=False
+            )
+            yield module_dto_pb2.StartModuleResponse(result=result)
             return
 
         if not setup_data_class:
@@ -333,7 +347,10 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
                 f"[gRPC-server:ModuleService.StartModule] (setup_id={request.setup_id}, "
                 f"mission_id={request.mission_id}) No setup data found for setup_id"
             )
-            yield lifecycle_pb2.StartModuleResponse(success=False)
+            result = module_messages_pb2.ModuleResult(
+                error=OperationError(code=str(grpc.StatusCode.NOT_FOUND)), success=False
+            )
+            yield module_dto_pb2.StartModuleResponse(result=result)
             return
 
         setup_data = await self.module_class.create_setup_model(setup_data_class.current_setup_version.content)
@@ -350,7 +367,10 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         if job_id is None:
             context.set_code(grpc.StatusCode.NOT_FOUND)
             context.set_details("Failed to create module instance")
-            yield lifecycle_pb2.StartModuleResponse(success=False)
+            result = module_messages_pb2.ModuleResult(
+                error=OperationError(code=str(grpc.StatusCode.NOT_FOUND)), success=False
+            )
+            yield module_dto_pb2.StartModuleResponse(result=result)
             return
 
         try:
@@ -365,19 +385,26 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
                         logger.error("Error in output_data", extra={"message": message})
                         context.set_code(message["error"]["code"])
                         context.set_details(message["error"]["error_message"])
-                        yield lifecycle_pb2.StartModuleResponse(success=False, job_id=job_id)
+                        result = module_messages_pb2.ModuleResult(
+                            error=OperationError(code=str(message["error"]["code"])), success=False
+                        )
+                        yield module_dto_pb2.StartModuleResponse(result=result, job_id=job_id)
                         break
 
                     if message.get("exception", None) is not None:
                         logger.error("Exception in output_data", extra={"message": message})
                         context.set_code(message["short_description"])
                         context.set_details(message["exception"])
-                        yield lifecycle_pb2.StartModuleResponse(success=False, job_id=job_id)
+                        result = module_messages_pb2.ModuleResult(
+                            error=OperationError(code=str(message["error"]["code"])), success=False
+                        )
+                        yield module_dto_pb2.StartModuleResponse(result=result, job_id=job_id)
                         break
 
                     logger.debug("Yielding message from job %s", job_id)
                     proto = json_format.ParseDict(message, struct_pb2.Struct(), ignore_unknown_fields=True)
-                    yield lifecycle_pb2.StartModuleResponse(success=True, output=proto, job_id=job_id)
+                    result = module_messages_pb2.ModuleResult(success=True, output=proto)
+                    yield module_dto_pb2.StartModuleResponse(result=result, job_id=job_id)
 
                     if message.get("root", {}).get("protocol") == "end_of_stream":
                         logger.debug(
@@ -408,9 +435,9 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
 
     async def StopModule(
         self,
-        request: lifecycle_pb2.StopModuleRequest,
+            request: module_dto_pb2.StopModuleRequest,
         context: grpc.ServicerContext,
-    ) -> lifecycle_pb2.StopModuleResponse:
+    ) -> module_dto_pb2.StopModuleResponse:
         """Stop a running module execution.
 
         Args:
@@ -430,85 +457,20 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             logger.warning("Job not found for stop request", extra={"job_id": request.job_id})
             context.set_code(grpc.StatusCode.NOT_FOUND)
             context.set_details(f"Job {request.job_id} not found")
-            return lifecycle_pb2.StopModuleResponse(success=False)
+            result = module_messages_pb2.ModuleResult(
+                error=OperationError(code=str(grpc.StatusCode.NOT_FOUND)), success=False
+            )
+            return module_dto_pb2.StopModuleResponse(result=result)
 
         logger.debug("Job stopped successfully", extra={"job_id": request.job_id})
-        return lifecycle_pb2.StopModuleResponse(success=True)
-
-    async def GetModuleStatus(
-        self,
-        request: monitoring_pb2.GetModuleStatusRequest,
-        context: grpc.ServicerContext,
-    ) -> monitoring_pb2.GetModuleStatusResponse:
-        """Get the status of a module.
-
-        Args:
-            request: The get module status request.
-            context: The gRPC context.
-
-        Returns:
-            A response with the module status.
-        """
-        logger.debug("GetModuleStatus called for module: '%s'", self.module_class.__name__)
-
-        if not request.job_id:
-            logger.debug("Job %s status: '%s'", request.job_id, ModuleStatus.NOT_FOUND)
-            return monitoring_pb2.GetModuleStatusResponse(
-                success=False,
-                status=ModuleStatus.NOT_FOUND.name,
-                job_id=request.job_id,
-            )
-
-        status = await self.job_manager.get_module_status(request.job_id)
-
-        if status is None:
-            message = f"Job {request.job_id} not found"
-            logger.warning(message)
-            context.set_code(grpc.StatusCode.NOT_FOUND)
-            context.set_details(message)
-            return monitoring_pb2.GetModuleStatusResponse()
-
-        logger.debug("Job %s status: '%s'", request.job_id, status)
-        return monitoring_pb2.GetModuleStatusResponse(
-            success=True,
-            status=status.name,
-            job_id=request.job_id,
-        )
-
-    async def GetModuleJobs(
-        self,
-        request: monitoring_pb2.GetModuleJobsRequest,  # gRPC servicer signature # noqa: ARG002
-        context: grpc.ServicerContext,  # gRPC servicer signature # noqa: ARG002
-    ) -> monitoring_pb2.GetModuleJobsResponse:
-        """Get information about the module's jobs.
-
-        Args:
-            request: The get module jobs request.
-            context: The gRPC context.
-
-        Returns:
-            A response with information about active jobs.
-        """
-        logger.debug("GetModuleJobs called for module: '%s'", self.module_class.__name__)
-
-        modules = await self.job_manager.list_modules()
-
-        # Create job info objects for each active job
-        return monitoring_pb2.GetModuleJobsResponse(
-            jobs=[
-                monitoring_pb2.JobInfo(
-                    job_id=job_id,
-                    job_status=job_data["status"].name,
-                )
-                for job_id, job_data in modules.items()
-            ],
-        )
+        result = module_messages_pb2.ModuleResult(success=True)
+        return module_dto_pb2.StopModuleResponse(result=result)
 
     async def GetModuleInput(
         self,
-        request: information_pb2.GetModuleInputRequest,
+            request: module_dto_pb2.GetModuleInputRequest,
         context: grpc.ServicerContext,
-    ) -> information_pb2.GetModuleInputResponse:
+    ) -> module_dto_pb2.GetModuleInputResponse:
         """Get information about the module's expected input.
 
         Args:
@@ -535,18 +497,19 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             logger.warning(e)
             context.set_code(grpc.StatusCode.UNIMPLEMENTED)
             context.set_details(str(e))
-            return information_pb2.GetModuleInputResponse()
+            result = module_messages_pb2.ModuleResult(
+                error=OperationError(code=str(grpc.StatusCode.UNIMPLEMENTED)), success=False
+            )
+            return module_dto_pb2.GetModuleInputResponse(result=result)
 
-        return information_pb2.GetModuleInputResponse(
-            success=True,
-            input_schema=input_format_struct,
-        )
+        result = module_messages_pb2.ModuleResult(input_schema=input_format_struct, success=True)
+        return module_dto_pb2.GetModuleInputResponse(result=result)
 
     async def GetModuleSelectInput(
         self,
-        request: information_pb2.GetModuleSelectInputRequest,  # gRPC servicer signature # noqa: ARG002
+            request: module_dto_pb2.GetModuleSelectInputRequest,  # gRPC servicer signature # noqa: ARG002
         context: grpc.ServicerContext,  # gRPC servicer signature # noqa: ARG002
-    ) -> information_pb2.GetModuleSelectInputResponse:
+    ) -> module_dto_pb2.GetModuleSelectInputResponse:
         """Get the trigger selection schema for the module.
 
         Args:
@@ -564,17 +527,14 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             message=struct_pb2.Struct(),
             ignore_unknown_fields=True,
         )
-
-        return information_pb2.GetModuleSelectInputResponse(
-            success=True,
-            select_input_schema=select_input_format_struct,
-        )
+        result = module_messages_pb2.ModuleResult(select_input_schema=select_input_format_struct, success=True)
+        return module_dto_pb2.GetModuleSelectInputResponse(result=result)
 
     async def GetModuleOutput(
         self,
-        request: information_pb2.GetModuleOutputRequest,
+            request: module_dto_pb2.GetModuleOutputRequest,
         context: grpc.ServicerContext,
-    ) -> information_pb2.GetModuleOutputResponse:
+    ) -> module_dto_pb2.GetModuleOutputResponse:
         """Get information about the module's expected output.
 
         Args:
@@ -601,18 +561,19 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             logger.warning(e)
             context.set_code(grpc.StatusCode.UNIMPLEMENTED)
             context.set_details(str(e))
-            return information_pb2.GetModuleOutputResponse()
+            result = module_messages_pb2.ModuleResult(
+                error=OperationError(code=str(grpc.StatusCode.UNIMPLEMENTED), message=str(e)), success=False
+            )
+            return module_dto_pb2.GetModuleOutputResponse(result=result)
 
-        return information_pb2.GetModuleOutputResponse(
-            success=True,
-            output_schema=output_format_struct,
-        )
+        result = module_messages_pb2.ModuleResult(output_schema=output_format_struct, success=True)
+        return module_dto_pb2.GetModuleOutputResponse(result=result)
 
     async def GetModuleSetup(
         self,
-        request: information_pb2.GetModuleSetupRequest,
+            request: module_dto_pb2.GetModuleSetupRequest,
         context: grpc.ServicerContext,
-    ) -> information_pb2.GetModuleSetupResponse:
+    ) -> module_dto_pb2.GetModuleSetupResponse:
         """Get information about the module's setup and configuration.
 
         Args:
@@ -637,18 +598,19 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             logger.warning(e)
             context.set_code(grpc.StatusCode.UNIMPLEMENTED)
             context.set_details(str(e))
-            return information_pb2.GetModuleSetupResponse()
+            result = module_messages_pb2.ModuleResult(
+                error=OperationError(code=str(grpc.StatusCode.UNIMPLEMENTED), message=str(e)), success=False
+            )
+            return module_dto_pb2.GetModuleSetupResponse(result=result)
 
-        return information_pb2.GetModuleSetupResponse(
-            success=True,
-            setup_schema=setup_format_struct,
-        )
+        result = module_messages_pb2.ModuleResult(secret_schema=setup_format_struct, success=True)
+        return module_dto_pb2.GetModuleSetupResponse(result=result)
 
     async def GetModuleSecret(
         self,
-        request: information_pb2.GetModuleSecretRequest,
+            request: module_dto_pb2.GetModuleSecretRequest,
         context: grpc.ServicerContext,
-    ) -> information_pb2.GetModuleSecretResponse:
+    ) -> module_dto_pb2.GetModuleSecretResponse:
         """Get information about the module's secrets.
 
         Args:
@@ -673,18 +635,19 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             logger.warning(e)
             context.set_code(grpc.StatusCode.UNIMPLEMENTED)
             context.set_details(str(e))
-            return information_pb2.GetModuleSecretResponse()
+            result = module_messages_pb2.ModuleResult(
+                error=OperationError(code=str(grpc.StatusCode.UNIMPLEMENTED), message=str(e)), success=False
+            )
+            return module_dto_pb2.GetModuleSecretResponse(result=result)
 
-        return information_pb2.GetModuleSecretResponse(
-            success=True,
-            secret_schema=secret_format_struct,
-        )
+        result = module_messages_pb2.ModuleResult(secret_schema=secret_format_struct, success=True)
+        return module_dto_pb2.GetModuleSecretResponse(result=result)
 
     async def GetConfigSetupModule(
         self,
-        request: information_pb2.GetConfigSetupModuleRequest,
+            request: module_dto_pb2.GetConfigSetupModuleRequest,
         context: grpc.ServicerContext,
-    ) -> information_pb2.GetConfigSetupModuleResponse:
+    ) -> module_dto_pb2.GetConfigSetupModuleResponse:
         """Get information about the module's setup and configuration.
 
         Args:
@@ -709,18 +672,19 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             logger.warning(e)
             context.set_code(grpc.StatusCode.UNIMPLEMENTED)
             context.set_details(str(e))
-            return information_pb2.GetConfigSetupModuleResponse()
+            result = module_messages_pb2.ModuleResult(
+                error=OperationError(code=str(grpc.StatusCode.UNIMPLEMENTED), message=str(e)), success=False
+            )
+            return module_dto_pb2.GetConfigSetupModuleResponse(result=result)
 
-        return information_pb2.GetConfigSetupModuleResponse(
-            success=True,
-            config_setup_schema=config_setup_format_struct,
-        )
+        result = module_messages_pb2.ModuleResult(config_setup_schema=config_setup_format_struct, success=True)
+        return module_dto_pb2.GetConfigSetupModuleResponse(result=result)
 
     async def GetModuleCost(
         self,
-        request: information_pb2.GetModuleCostRequest,
+            request: module_dto_pb2.GetModuleCostRequest,
         context: grpc.ServicerContext,
-    ) -> information_pb2.GetModuleCostResponse:
+    ) -> module_dto_pb2.GetModuleCostResponse:
         """Get information about the module's cost configuration.
 
         Args:
@@ -743,9 +707,10 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             logger.warning(e)
             context.set_code(grpc.StatusCode.UNIMPLEMENTED)
             context.set_details(str(e))
-            return information_pb2.GetModuleCostResponse()
+            result = module_messages_pb2.ModuleResult(
+                error=OperationError(code=str(grpc.StatusCode.UNIMPLEMENTED), message=str(e)), success=False
+            )
+            return module_dto_pb2.GetModuleCostResponse(result=result)
 
-        return information_pb2.GetModuleCostResponse(
-            success=True,
-            cost_schema=cost_format_struct,
-        )
+        result = module_messages_pb2.ModuleResult(cost_schema=cost_format_struct, success=True)
+        return module_dto_pb2.GetModuleCostResponse(result=result)

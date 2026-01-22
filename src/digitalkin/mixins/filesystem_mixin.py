@@ -3,7 +3,7 @@
 from typing import Any
 
 from digitalkin.models.module.module_context import ModuleContext
-from digitalkin.services.filesystem.filesystem_strategy import FilesystemRecord
+from digitalkin.models.services.filesystem import FilesystemRecord
 
 
 class FilesystemMixin:
@@ -14,7 +14,7 @@ class FilesystemMixin:
     """
 
     @staticmethod
-    async def upload_files(context: ModuleContext, files: list[Any]) -> tuple[list[FilesystemRecord], int, int]:
+    async def create_files(context: ModuleContext, files: list[Any]) -> tuple[list[FilesystemRecord], int, int]:
         """Upload files using the filesystem strategy.
 
         Args:
@@ -27,10 +27,10 @@ class FilesystemMixin:
         Raises:
             FilesystemServiceError: If upload operation fails
         """
-        return await context.filesystem.upload_files(files)
+        return context.filesystem.create(files)
 
     @staticmethod
-    async def get_file(context: ModuleContext, file_id: str) -> FilesystemRecord:
+    async def list_file(context: ModuleContext, file_id: str) -> FilesystemRecord:
         """Retrieve a file by ID with the content.
 
         Args:
@@ -43,4 +43,4 @@ class FilesystemMixin:
         Raises:
             FilesystemServiceError: If file retrieval fails
         """
-        return await context.filesystem.get_file(file_id, include_content=True)
+        return context.filesystem.list(file_id, include_content=True)

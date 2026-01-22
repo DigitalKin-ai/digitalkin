@@ -6,9 +6,9 @@ from digitalkin.services.identity.identity_strategy import IdentityStrategy
 class DefaultIdentity(IdentityStrategy):
     """DefaultIdentity is the default identity strategy."""
 
-    async def get_identity(  # noqa: PLR6301
-        self,
-    ) -> str:  # Default stub implementation; self available for subclass overrides
+    # ══════════════════════════════════ Public Methods ══════════════════════════════════ #
+
+    async def get(self) -> str:  # noqa: PLR6301
         """Get the identity.
 
         Returns:

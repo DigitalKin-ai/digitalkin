@@ -1,88 +1,12 @@
 """This module contains the abstract base class for filesystem strategies."""
 
 from abc import ABC, abstractmethod
-from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from agentic_mesh_protocol.pagination.v1.pagination_pb2 import PaginationRequest
 
-from digitalkin.services.base_strategy import BaseStrategy
-
-
-class FilesystemServiceError(Exception):
-    """Base exception for Filesystem service errors."""
-
-
-class FilesystemRecord(BaseModel):
-    """Data model for filesystem operations."""
-
-    id: str = Field(description="Unique identifier for the file (UUID)")
-    context: str = Field(description="The context of the file in the filesystem")
-    name: str = Field(description="The name of the file")
-    file_type: str = Field(default="UNSPECIFIED", description="The type of data stored")
-    content_type: str = Field(default="application/octet-stream", description="The MIME type of the file")
-    size_bytes: int = Field(default=0, description="Size of the file in bytes")
-    checksum: str = Field(default="", description="SHA-256 checksum of the file content")
-    metadata: dict[str, Any] | None = Field(default=None, description="Additional metadata for the file")
-    storage_uri: str = Field(description="Internal URI for accessing the file content")
-    file_url: str = Field(description="Public URL for accessing the file content")
-    status: str = Field(default="UNSPECIFIED", description="Current status of the file")
-    content: bytes | None = Field(default=None, description="The content of the file")
-
-
-class FileFilter(BaseModel):
-    """Filter criteria for querying files."""
-
-    context: Literal["mission", "setup"] = Field(
-        default="mission", description="The context of the files (mission or setup)"
-    )
-    names: list[str] | None = Field(default=None, description="Filter by file names (exact matches)")
-    file_ids: list[str] | None = Field(default=None, description="Filter by file IDs")
-    file_types: (
-        list[
-            Literal[
-                "UNSPECIFIED",
-                "DOCUMENT",
-                "IMAGE",
-                "AUDIO",
-                "VIDEO",
-                "ARCHIVE",
-                "CODE",
-                "OTHER",
-            ]
-        ]
-        | None
-    ) = Field(default=None, description="Filter by file types")
-    created_after: datetime | None = Field(default=None, description="Filter files created after this timestamp")
-    created_before: datetime | None = Field(default=None, description="Filter files created before this timestamp")
-    updated_after: datetime | None = Field(default=None, description="Filter files updated after this timestamp")
-    updated_before: datetime | None = Field(default=None, description="Filter files updated before this timestamp")
-    status: str | None = Field(default=None, description="Filter by file status")
-    content_type_prefix: str | None = Field(default=None, description="Filter by content type prefix (e.g., 'image/')")
-    min_size_bytes: int | None = Field(default=None, description="Filter files with minimum size")
-    max_size_bytes: int | None = Field(default=None, description="Filter files with maximum size")
-    prefix: str | None = Field(default=None, description="Filter by path prefix (e.g., 'folder1/')")
-    content_type: str | None = Field(default=None, description="Filter by content type")
-
-
-class UploadFileData(BaseModel):
-    """Data model for uploading a file."""
-
-    content: bytes = Field(description="The content of the file")
-    name: str = Field(description="The name of the file")
-    file_type: Literal[
-        "UNSPECIFIED",
-        "DOCUMENT",
-        "IMAGE",
-        "AUDIO",
-        "VIDEO",
-        "ARCHIVE",
-        "CODE",
-        "OTHER",
-    ] = Field(description="The type of the file")
-    content_type: str | None = Field(default=None, description="The content type of the file")
-    metadata: dict[str, Any] | None = Field(default=None, description="The metadata of the file")
-    replace_if_exists: bool = Field(default=False, description="Whether to replace the file if it already exists")
+from digitalkin.models.base_strategy import BaseStrategy
+from digitalkin.models.services.filesystem import FileFilter, FileStatus, FilesystemRecord, FileType, UploadFileData
 
 
 class FilesystemStrategy(BaseStrategy, ABC):
@@ -100,7 +24,7 @@ class FilesystemStrategy(BaseStrategy, ABC):
         setup_version_id: str,
         config: dict[str, Any] | None = None,
     ) -> None:
-        """Initialize the strategy.
+        """Initialize the gRPC filesystem strategy.
 
         Args:
             mission_id: The ID of the mission this strategy is associated with
@@ -111,8 +35,10 @@ class FilesystemStrategy(BaseStrategy, ABC):
         super().__init__(mission_id, setup_id, setup_version_id)
         self.config = config
 
+    # ════════════════════════════════ Overriding Methods ════════════════════════════════ #
+
     @abstractmethod
-    async def upload_files(
+    async def upload(
         self,
         files: list[UploadFileData],
     ) -> tuple[list[FilesystemRecord], int, int]:
@@ -128,9 +54,10 @@ class FilesystemStrategy(BaseStrategy, ABC):
         Returns:
             tuple[list[FilesystemRecord], int, int]: List of uploaded files, total uploaded count, total failed count
         """
+        return await super().upload()
 
     @abstractmethod
-    async def get_file(
+    async def get(
         self,
         file_id: str,
         context: Literal["mission", "setup"] = "mission",
@@ -149,17 +76,16 @@ class FilesystemStrategy(BaseStrategy, ABC):
             include_content: Whether to include file content in response
 
         Returns:
-            tuple[FilesystemRecord, bytes | None]: Metadata about the retrieved file and optional content
+            FilesystemRecord: Metadata about the retrieved file
         """
+        return await super().get()
 
     @abstractmethod
-    async def get_files(
+    async def list(
         self,
         filters: FileFilter,
         *,
-        list_size: int = 100,
-        offset: int = 0,
-        order: str | None = None,
+            pagination=PaginationRequest(limit=100, offset=0, order=None),
         include_content: bool = False,
     ) -> tuple[list[FilesystemRecord], int]:
         """Get multiple files by various criteria.
@@ -175,64 +101,21 @@ class FilesystemStrategy(BaseStrategy, ABC):
 
         Args:
             filters: Filter criteria for the files
-            list_size: Number of files to return per page
-            offset: Offset to start listing files from
-            order: Field to order results by
             include_content: Whether to include file content in response
+            pagination: Pagination settings for result set
 
         Returns:
             tuple[list[FilesystemRecord], int]: List of files and total count
         """
+        return await super().list()
 
     @abstractmethod
-    async def update_file(
-        self,
-        file_id: str,
-        content: bytes | None = None,
-        file_type: Literal[
-            "UNSPECIFIED",
-            "DOCUMENT",
-            "IMAGE",
-            "VIDEO",
-            "AUDIO",
-            "ARCHIVE",
-            "CODE",
-            "OTHER",
-        ]
-        | None = None,
-        content_type: str | None = None,
-        metadata: dict[str, Any] | None = None,
-        new_name: str | None = None,
-        status: str | None = None,
-    ) -> FilesystemRecord:
-        """Update file metadata, content, or both.
-
-        This method allows updating various aspects of a file:
-        - Rename files
-        - Update content and content type
-        - Modify metadata
-        - Create new versions
-
-        Args:
-            file_id: The ID of the file to be updated
-            content: Optional new content of the file
-            file_type: Optional new type of data
-            content_type: Optional new MIME type
-            metadata: Optional new metadata (will merge with existing)
-            new_name: Optional new name for the file
-            status: Optional new status for the file
-
-        Returns:
-            FilesystemRecord: Metadata about the updated file
-        """
-
-    @abstractmethod
-    async def delete_files(
-        self,
-        filters: FileFilter,
-        *,
-        permanent: bool = False,
-        force: bool = False,
+    async def delete(
+            self,
+            filters: FileFilter,
+            *,
+            permanent: bool = False,
+            force: bool = False,
     ) -> tuple[dict[str, bool], int, int]:
         """Delete multiple files.
 
@@ -250,3 +133,45 @@ class FilesystemStrategy(BaseStrategy, ABC):
         Returns:
             tuple[dict[str, bool], int, int]: Results per file, total deleted count, total failed count
         """
+        return await super().delete()
+
+    @abstractmethod
+    async def update(
+        self,
+        file_id: str,
+        content: bytes | None = None,
+            type: FileType | None = None,
+        content_type: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        new_name: str | None = None,
+            status: FileStatus | None = None,
+    ) -> FilesystemRecord:
+        """Update file metadata, content, or both.
+
+        This method allows updating various aspects of a file:
+        - Rename files
+        - Update content and content type
+        - Modify metadata
+        - Create new versions
+
+        Args:
+            file_id: The ID of the file to be updated
+            content: Optional new content of the file
+            type: Optional new type of data
+            content_type: Optional new MIME type
+            metadata: Optional new metadata (will merge with existing)
+            new_name: Optional new name for the file
+            status: Optional new status for the file
+
+        Returns:
+            FilesystemRecord: Metadata about the updated file
+        """
+        return await super().update()
+
+    # ══════════════════════════════ Unimplemented Methods ═══════════════════════════════ #
+
+    async def create(self, *args: Any, **kwargs: Any) -> Any:
+        return await super().create()
+
+    async def search(self, *args: Any, **kwargs: Any) -> Any:
+        return await super().search()
