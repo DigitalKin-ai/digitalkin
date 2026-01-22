@@ -26,12 +26,12 @@ class RegistryModuleType(str, Enum):
 class ModuleInfo(BaseModel):
     """Module information from registry."""
 
-    module_id: str
-    module_type: RegistryModuleType
-    address: str
-    port: int
-    version: str
-    name: str = ""
+    module_id: str = ""
+    module_type: RegistryModuleType = RegistryModuleType.UNSPECIFIED
+    address: str = ""
+    port: int = 0
+    version: str = ""
+    module_name: str = ""
     documentation: str | None = None
     status: RegistryModuleStatus | None = None
 

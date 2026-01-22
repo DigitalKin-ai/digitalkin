@@ -165,7 +165,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         if isinstance(updated_setup_data, ModuleCodeModel):
             logger.error(
                 "Config setup failed",
-                extra={"job_id": job_id, "code": updated_setup_data.code, "message": updated_setup_data.message},
+                extra={"job_id": job_id, "code": updated_setup_data.code, "error_message": updated_setup_data.message},
             )
             context.set_code(grpc.StatusCode.INTERNAL)
             context.set_details(updated_setup_data.message or "Config setup failed")
@@ -178,7 +178,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
                 extra={
                     "job_id": job_id,
                     "code": updated_setup_data["code"],
-                    "message": updated_setup_data.get("message"),
+                    "error_message": updated_setup_data.get("message"),
                 },
             )
             context.set_code(grpc.StatusCode.INTERNAL)

@@ -227,21 +227,19 @@ class ModuleContext:
             llm_format=llm_format,
         )
 
-    async def create_openai_style_tools(self, module_id: str) -> list[dict[str, Any]]:
+    def create_openai_style_tools(self, slug: str) -> list[dict[str, Any]]:
         """Create OpenAI-style function calling schemas for a tool module.
 
         Uses tool cache (fast path) with registry fallback. Returns one schema
         per ToolDefinition (protocol) in the module.
 
         Args:
-            module_id: Module ID to look up (checks cache first, then registry).
+            slug: Module ID to look up (checks cache first, then registry).
 
         Returns:
             List of OpenAI-style tool schemas, one per protocol. Empty if not found.
         """
-        tool_module_info = await self.tool_cache.get(
-            module_id, registry=self.registry, communication=self.communication
-        )
+        tool_module_info = self.tool_cache.get(slug)
         if not tool_module_info:
             return []
 
@@ -250,8 +248,8 @@ class ModuleContext:
                 "type": "function",
                 "function": {
                     "module_id": tool_module_info.module_id,
-                    "toolkit_name": tool_module_info.name or "undefined",
-                    "name": tool_def.name,
+                    "toolkit_name": tool_module_info.tool_name or "undefined",
+                    "name": tool_module_info.slug + "_" + tool_def.name,
                     "description": tool_def.description,
                     "parameters": ModuleContext._build_parameters_schema(tool_def.parameters),
                 },
@@ -277,9 +275,9 @@ class ModuleContext:
 
     def create_tool_functions(
         self,
-        module_id: str,
+        slug: str,
     ) -> list[tuple[ToolDefinition, Callable[..., AsyncGenerator[dict, None]]]]:
-        """Create tool functions for all protocols in a tool module.
+        """Create tool functions for all protocols in a tool setup.
 
         Returns an async generator per ToolDefinition that calls the remote tool
         module via gRPC with the protocol auto-injected.
@@ -288,12 +286,12 @@ class ModuleContext:
         in sync contexts like __init__ methods.
 
         Args:
-            module_id: Module ID to look up in cache.
+            slug: Setup ID to look up in cache.
 
         Returns:
             List of (ToolDefinition, async_generator_function) tuples. Empty if not found.
         """
-        tool_module_info = self.tool_cache.entries.get(module_id)
+        tool_module_info = self.tool_cache.entries.get(slug)
         if not tool_module_info:
             return []
 

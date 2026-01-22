@@ -8,11 +8,7 @@ from pydantic import BaseModel, Field
 from digitalkin.models.grpc_servers.models import ClientConfig, SecurityMode, ServerMode
 from digitalkin.models.module.module_context import ModuleContext
 from digitalkin.models.module.setup_types import SetupModel
-from digitalkin.models.module.tool_reference import (
-    ToolReference,
-    ToolReferenceConfig,
-    ToolSelectionMode,
-)
+from digitalkin.models.module.tool_reference import ToolReference
 from digitalkin.modules._base_module import BaseModule  # noqa: PLC2701
 from digitalkin.services.services_models import ServicesStrategy
 
@@ -64,29 +60,21 @@ class ArchetypeSetup(SetupModel):
 
     search_tool: ToolReference = Field(
         default_factory=lambda: ToolReference(
-            config=ToolReferenceConfig(
-                mode=ToolSelectionMode.FIXED,
-                module_id="search-tool-v1",
-            )
+            module_ids=["search-tool-v1"],
         ),
         json_schema_extra={"config": True},
     )
 
     calculator_tool: ToolReference = Field(
         default_factory=lambda: ToolReference(
-            config=ToolReferenceConfig(
-                mode=ToolSelectionMode.TAG,
-                tag="math-calculator",
-            )
+            tags=["math-calculator"],
         ),
         json_schema_extra={"config": True},
     )
 
     dynamic_tool: ToolReference = Field(
         default_factory=lambda: ToolReference(
-            config=ToolReferenceConfig(
-                mode=ToolSelectionMode.DISCOVERABLE,
-            )
+            tags=["discoverable"],
         ),
         json_schema_extra={"config": True},
     )

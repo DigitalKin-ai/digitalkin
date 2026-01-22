@@ -29,7 +29,6 @@ SetupModelT = TypeVar("SetupModelT", bound="SetupModel")
 class SetupModel(BaseModel, Generic[SetupModelT]):
     """Base setup model with dynamic schema and tool cache support."""
 
-    model_config = ConfigDict(extra="allow")
     _clean_model_cache: ClassVar[dict[tuple[type, bool, bool], type]] = {}
     resolved_tools: dict[str, ToolModuleInfo] = Field(
         default_factory=dict,
@@ -347,7 +346,7 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
             resolved_tools: Cache of already resolved tools.
         """
         if isinstance(field_value, ToolReference):
-            await cls._resolve_single_tool_reference(
+            await cls._resolve_tool_reference(
                 field_name,
                 field_value,
                 registry,
@@ -377,7 +376,7 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
             )
 
     @classmethod
-    async def _resolve_single_tool_reference(
+    async def _resolve_tool_reference(
         cls,
         field_name: str,
         tool_ref: ToolReference,
@@ -385,7 +384,7 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
         communication: "CommunicationStrategy",
         resolved_tools: dict[str, ToolModuleInfo],
     ) -> None:
-        """Resolve a single ToolReference.
+        """Resolve a ToolReference (may contain multiple selected tools).
 
         Args:
             field_name: Name of the field for logging.
@@ -394,21 +393,23 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
             communication: Communication service for module schemas.
             resolved_tools: Cache of already resolved tools.
         """
-        logger.info("Resolving ToolReference '%s' with setup_id='%s'", field_name, tool_ref.config.setup_id)
+        logger.info("Resolving ToolReference '%s' with %d selected tools", field_name, len(tool_ref.selected_tools))
 
-        slug = tool_ref.slug
-        if slug:
-            cached = resolved_tools.get(slug)
-            if cached:
-                tool_ref._cached_info = cached  # noqa: SLF001
-                logger.info("ToolReference '%s' resolved from cache -> %s", field_name, cached)
-                return
+        if not tool_ref.selected_tools:
+            logger.info("ToolReference '%s' has no selected tools, skipping", field_name)
+            return
+
+        tools_to_resolve = [tool for tool in tool_ref.selected_tools if tool.slug and tool.slug not in resolved_tools]
+
+        if not tools_to_resolve:
+            logger.info("All tools for '%s' already cached", field_name)
+            return
 
         try:
-            info = await tool_ref.resolve(registry, communication)
-            if info and info.setup_id:
+            infos = await tool_ref.resolve(registry, communication)
+            for info in infos:
                 resolved_tools[info.setup_id] = info
-            logger.info("Resolved ToolReference '%s' -> %s", field_name, tool_ref.tool_module_info)
+                logger.info("Resolved tool '%s' -> module_id=%s", info.setup_id, info.module_id)
         except Exception:
             logger.exception("Failed to resolve ToolReference '%s'", field_name)
 
@@ -430,7 +431,7 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
         """
         for item in items:
             if isinstance(item, ToolReference):
-                await cls._resolve_single_tool_reference(
+                await cls._resolve_tool_reference(
                     "list_item",
                     item,
                     registry,
@@ -463,7 +464,7 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
         """
         for item in mapping.values():
             if isinstance(item, ToolReference):
-                await cls._resolve_single_tool_reference(
+                await cls._resolve_tool_reference(
                     "dict_value",
                     item,
                     registry,
@@ -500,10 +501,10 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
             if field_value is None:
                 continue
             if isinstance(field_value, ToolReference):
-                module_info = self.resolved_tools.get(field_value.slug or "") or field_value.tool_module_info
-                if module_info:
-                    self.resolved_tools[module_info.setup_id] = module_info
-                    cache.add(module_info.module_id, module_info)
+                for tool in field_value.selected_tools:
+                    tool_module_info = self.resolved_tools.get(tool.slug or "")
+                    if tool_module_info:
+                        cache.add(tool_module_info)
             elif isinstance(field_value, BaseModel):
                 self._build_tool_cache_recursive(field_value, cache)
             elif isinstance(field_value, list):
@@ -520,10 +521,10 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
         """
         for item in items:
             if isinstance(item, ToolReference):
-                module_info = self.resolved_tools.get(item.slug or "") or item.tool_module_info
-                if module_info:
-                    self.resolved_tools[module_info.setup_id] = module_info
-                    cache.add(module_info.module_id, module_info)
+                for tool in item.selected_tools:
+                    tool_module_info = self.resolved_tools.get(tool.slug or "")
+                    if tool_module_info:
+                        cache.add(tool_module_info)
             elif isinstance(item, BaseModel):
                 self._build_tool_cache_recursive(item, cache)
 
@@ -536,9 +537,9 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
         """
         for item in mapping.values():
             if isinstance(item, ToolReference):
-                module_info = self.resolved_tools.get(item.slug or "") or item.tool_module_info
-                if module_info:
-                    self.resolved_tools[module_info.setup_id] = module_info
-                    cache.add(module_info.module_id, module_info)
+                for tool in item.selected_tools:
+                    tool_module_info = self.resolved_tools.get(tool.slug or "")
+                    if tool_module_info:
+                        cache.add(tool_module_info)
             elif isinstance(item, BaseModel):
                 self._build_tool_cache_recursive(item, cache)
