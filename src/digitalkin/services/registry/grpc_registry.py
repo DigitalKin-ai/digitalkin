@@ -74,7 +74,7 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
             address=descriptor.address,
             port=descriptor.port,
             version=descriptor.version,
-            name=descriptor.name,
+            module_name=descriptor.name,
             documentation=descriptor.documentation or None,
         )
 

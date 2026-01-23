@@ -7,15 +7,11 @@ including recursive resolution in nested structures.
 from unittest.mock import AsyncMock
 
 import pytest
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, TypeAdapter
 
 from digitalkin.models.module.setup_types import SetupModel
-from digitalkin.models.module.tool_cache import ToolDefinition, ToolModuleInfo, ToolParameter
-from digitalkin.models.module.tool_reference import (
-    ToolReference,
-    ToolReferenceConfig,
-    ToolSelectionMode,
-)
+from digitalkin.models.module.tool_cache import SelectedTool, ToolDefinition, ToolModuleInfo, ToolParameter
+from digitalkin.models.module.tool_reference import ToolReference, ToolReferenceInput
 from digitalkin.models.services.registry import (
     ModuleInfo,
     RegistryModuleStatus,
@@ -36,10 +32,10 @@ class FakeRegistry(RegistryStrategy):
     def add_module(self, info: ModuleInfo) -> None:
         self._modules[info.module_id] = info
 
-    def add_setup(self, setup_id: str, module_id: str) -> None:
+    def add_setup(self, setup_id: str, module_id: str, name: str = "") -> None:
         self._setups[setup_id] = SetupInfo(
             setup_id=setup_id,
-            name=f"Setup {setup_id}",
+            name=name or f"Setup {setup_id}",
             module_id=module_id,
         )
 
@@ -100,7 +96,13 @@ def create_mock_communication() -> AsyncMock:
     return mock
 
 
-def create_tool_module_info(module_id: str, name: str, port: int = 50051, setup_id: str = "") -> ToolModuleInfo:
+def create_tool_module_info(
+    module_id: str,
+    name: str,
+    port: int = 50051,
+    setup_id: str = "",
+    tool_name: str = "",
+) -> ToolModuleInfo:
     """Create a ToolModuleInfo for testing."""
     return ToolModuleInfo(
         module_id=module_id,
@@ -108,8 +110,9 @@ def create_tool_module_info(module_id: str, name: str, port: int = 50051, setup_
         address="localhost",
         port=port,
         version="1.0.0",
-        name=name,
+        module_name=name,
         setup_id=setup_id,
+        tool_name=tool_name,
         tools=[
             ToolDefinition(
                 name="search",
@@ -130,7 +133,7 @@ def search_tool_info() -> ModuleInfo:
         address="localhost",
         port=50051,
         version="1.0.0",
-        name="SearchTool",
+        module_name="SearchTool",
     )
 
 
@@ -142,7 +145,7 @@ def analyzer_tool_info() -> ModuleInfo:
         address="localhost",
         port=50052,
         version="2.0.0",
-        name="AnalyzerTool",
+        module_name="AnalyzerTool",
     )
 
 
@@ -154,7 +157,7 @@ def writer_tool_info() -> ModuleInfo:
         address="localhost",
         port=50053,
         version="1.5.0",
-        name="WriterTool",
+        module_name="WriterTool",
     )
 
 
@@ -169,136 +172,144 @@ def registry(
     reg.add_module(analyzer_tool_info)
     reg.add_module(writer_tool_info)
     # Add setup mappings
-    reg.add_setup("setup-search-001", "tool-search-001")
-    reg.add_setup("setup-analyzer-002", "tool-analyzer-002")
-    reg.add_setup("setup-writer-003", "tool-writer-003")
+    reg.add_setup("setup-search-001", "tool-search-001", "SearchTool")
+    reg.add_setup("setup-analyzer-002", "tool-analyzer-002", "AnalyzerTool")
+    reg.add_setup("setup-writer-003", "tool-writer-003", "WriterTool")
     reg.add_search_result("search", [search_tool_info])
     reg.add_search_result("analyzer", [analyzer_tool_info])
     return reg
 
 
 class TestToolReferenceValidation:
-    """Tests for ToolReferenceConfig validation."""
+    """Tests for ToolReference validation."""
 
-    def test_fixed_mode_requires_module_id(self) -> None:
-        """FIXED mode without setup_id raises ValueError."""
-        with pytest.raises(ValueError, match="setup_id required"):
-            ToolReferenceConfig(mode=ToolSelectionMode.FIXED, setup_id="")
+    def test_empty_tool_reference_is_valid(self) -> None:
+        """Empty ToolReference is valid (represents 'no tools configured')."""
+        ref = ToolReference()
+        assert ref.selected_tools == []
+        assert ref.setup_ids == []
+        assert ref.module_ids == []
+        assert ref.tags == []
 
-    def test_tag_mode_requires_tag(self) -> None:
-        """TAG mode without tag raises ValueError."""
-        with pytest.raises(ValueError, match="tag required"):
-            ToolReferenceConfig(mode=ToolSelectionMode.TAG, tag="")
+    def test_setup_ids_only_valid(self) -> None:
+        """ToolReference with only setup_ids is valid."""
+        ref = ToolReference(setup_ids=["setup-123"])
+        assert ref.setup_ids == ["setup-123"]
+        assert ref.selected_tools == []
 
-    def test_discoverable_mode_no_requirements(self) -> None:
-        """DISCOVERABLE mode has no field requirements."""
-        config = ToolReferenceConfig(mode=ToolSelectionMode.DISCOVERABLE)
-        assert config.mode == ToolSelectionMode.DISCOVERABLE
+    def test_module_ids_only_valid(self) -> None:
+        """ToolReference with only module_ids is valid."""
+        ref = ToolReference(module_ids=["module-123"])
+        assert ref.module_ids == ["module-123"]
 
-    def test_fixed_mode_valid(self) -> None:
-        """FIXED mode with setup_id is valid."""
-        config = ToolReferenceConfig(mode=ToolSelectionMode.FIXED, setup_id="setup-123")
-        assert config.setup_id == "setup-123"
+    def test_tags_only_valid(self) -> None:
+        """ToolReference with only tags is valid."""
+        ref = ToolReference(tags=["search"])
+        assert ref.tags == ["search"]
 
-    def test_tag_mode_valid(self) -> None:
-        """TAG mode with tag is valid."""
-        config = ToolReferenceConfig(mode=ToolSelectionMode.TAG, tag="search")
-        assert config.tag == "search"
+    def test_selected_tools_valid(self) -> None:
+        """ToolReference with selected_tools is valid."""
+        ref = ToolReference(
+            selected_tools=[SelectedTool(setup_id="setup-123", slug="setup-123")]
+        )
+        assert len(ref.selected_tools) == 1
+        assert ref.selected_tools[0].setup_id == "setup-123"
+
+    def test_string_list_creates_selected_tools(self) -> None:
+        """List of strings input creates selected_tools via ToolReferenceInput."""
+        adapter = TypeAdapter(ToolReferenceInput)
+        ref = adapter.validate_python(["setup-123", "setup-456"])
+        assert len(ref.selected_tools) == 2
+        assert ref.selected_tools[0].setup_id == "setup-123"
+        assert ref.selected_tools[1].setup_id == "setup-456"
+
+    def test_combined_constraints_valid(self) -> None:
+        """ToolReference with multiple constraint types is valid."""
+        ref = ToolReference(
+            setup_ids=["setup-123"],
+            module_ids=["module-456"],
+            tags=["search"],
+        )
+        assert ref.setup_ids == ["setup-123"]
+        assert ref.module_ids == ["module-456"]
+        assert ref.tags == ["search"]
 
 
 class TestToolReferenceResolution:
     """Tests for ToolReference.resolve() method."""
 
     @pytest.mark.asyncio
-    async def test_fixed_mode_resolves_by_id(
+    async def test_selected_tools_resolve_by_setup_id(
         self,
         registry: FakeRegistry,
         search_tool_info: ModuleInfo,
     ) -> None:
-        """FIXED mode resolves module by setup_id."""
+        """Selected tools resolve via registry lookup."""
         ref = ToolReference(
-            config=ToolReferenceConfig(
-                mode=ToolSelectionMode.FIXED,
-                setup_id="setup-search-001",
-            ),
+            selected_tools=[SelectedTool(setup_id="setup-search-001", slug="setup-search-001")]
         )
 
         communication = create_mock_communication()
         result = await ref.resolve(registry, communication)
 
-        assert result is not None
-        assert result.module_id == "tool-search-001"
-        assert ref.tool_module_info is not None
-        assert ref.tool_module_info.module_id == "tool-search-001"
-        assert ref.module_id == "tool-search-001"
-        assert ref.is_resolved
+        assert len(result) == 1
+        assert result[0].module_id == "tool-search-001"
 
     @pytest.mark.asyncio
-    async def test_fixed_mode_not_found_returns_none(self, registry: FakeRegistry) -> None:
-        """FIXED mode returns None when setup not found."""
-        ref = ToolReference(
-            config=ToolReferenceConfig(
-                mode=ToolSelectionMode.FIXED,
-                setup_id="nonexistent-setup",
-            ),
-        )
-
-        communication = create_mock_communication()
-        result = await ref.resolve(registry, communication)
-
-        assert result is None
-        assert ref.tool_module_info is None
-
-    @pytest.mark.asyncio
-    async def test_tag_mode_resolves_by_search(
+    async def test_multiple_selected_tools_resolve(
         self,
         registry: FakeRegistry,
-        search_tool_info: ModuleInfo,
     ) -> None:
-        """TAG mode resolves module by searching with tag."""
+        """Multiple selected tools all resolve."""
         ref = ToolReference(
-            config=ToolReferenceConfig(
-                mode=ToolSelectionMode.TAG,
-                tag="search",
-            ),
+            selected_tools=[
+                SelectedTool(setup_id="setup-search-001", slug="setup-search-001"),
+                SelectedTool(setup_id="setup-analyzer-002", slug="setup-analyzer-002"),
+            ]
         )
 
         communication = create_mock_communication()
         result = await ref.resolve(registry, communication)
 
-        assert result is not None
-        assert result.module_id == "tool-search-001"
-        assert ref.tool_module_info is not None
-        assert ref.module_id == "tool-search-001"
+        assert len(result) == 2
+        module_ids = {r.module_id for r in result}
+        assert "tool-search-001" in module_ids
+        assert "tool-analyzer-002" in module_ids
 
     @pytest.mark.asyncio
-    async def test_tag_mode_not_found_returns_none(self, registry: FakeRegistry) -> None:
-        """TAG mode returns None when no search results."""
+    async def test_nonexistent_setup_returns_empty(self, registry: FakeRegistry) -> None:
+        """Selected tool with nonexistent setup_id is not resolved."""
         ref = ToolReference(
-            config=ToolReferenceConfig(
-                mode=ToolSelectionMode.TAG,
-                tag="nonexistent-tag",
-            ),
+            selected_tools=[SelectedTool(setup_id="nonexistent-setup", slug="nonexistent-setup")]
         )
 
         communication = create_mock_communication()
         result = await ref.resolve(registry, communication)
 
-        assert result is None
-        assert ref.tool_module_info is None
+        assert len(result) == 0
 
     @pytest.mark.asyncio
-    async def test_discoverable_mode_returns_none(self, registry: FakeRegistry) -> None:
-        """DISCOVERABLE mode always returns None (LLM handles at runtime)."""
+    async def test_empty_selected_tools_returns_empty(self, registry: FakeRegistry) -> None:
+        """ToolReference with no selected_tools returns empty list."""
+        ref = ToolReference(setup_ids=["setup-123"])
+
+        communication = create_mock_communication()
+        result = await ref.resolve(registry, communication)
+
+        assert result == []
+
+    @pytest.mark.asyncio
+    async def test_constraint_only_returns_empty(self, registry: FakeRegistry) -> None:
+        """ToolReference with only constraints (no selected_tools) returns empty."""
         ref = ToolReference(
-            config=ToolReferenceConfig(mode=ToolSelectionMode.DISCOVERABLE),
+            module_ids=["tool-search-001"],
+            tags=["search"],
         )
 
         communication = create_mock_communication()
         result = await ref.resolve(registry, communication)
 
-        assert result is None
-        assert not ref.is_resolved
+        assert result == []
 
 
 class TestSetupModelToolResolution:
@@ -315,10 +326,7 @@ class TestSetupModelToolResolution:
         class ArchetypeSetup(SetupModel):
             search_tool: ToolReference = Field(
                 default_factory=lambda: ToolReference(
-                    config=ToolReferenceConfig(
-                        mode=ToolSelectionMode.FIXED,
-                        setup_id="setup-search-001",
-                    ),
+                    selected_tools=[SelectedTool(setup_id="setup-search-001", slug="setup-search-001")]
                 ),
             )
 
@@ -326,9 +334,9 @@ class TestSetupModelToolResolution:
         communication = create_mock_communication()
         await setup.resolve_tool_references(registry, communication)
 
-        assert setup.search_tool.is_resolved
-        assert setup.search_tool.tool_module_info is not None
-        assert setup.search_tool.tool_module_info.module_id == "tool-search-001"
+        assert len(setup.resolved_tools) == 1
+        tool_info = next(iter(setup.resolved_tools.values()))
+        assert tool_info.module_id == "tool-search-001"
 
     @pytest.mark.asyncio
     async def test_multiple_tool_references_resolved(
@@ -342,18 +350,12 @@ class TestSetupModelToolResolution:
         class ArchetypeSetup(SetupModel):
             search_tool: ToolReference = Field(
                 default_factory=lambda: ToolReference(
-                    config=ToolReferenceConfig(
-                        mode=ToolSelectionMode.FIXED,
-                        setup_id="setup-search-001",
-                    ),
+                    selected_tools=[SelectedTool(setup_id="setup-search-001", slug="setup-search-001")]
                 ),
             )
             analyzer_tool: ToolReference = Field(
                 default_factory=lambda: ToolReference(
-                    config=ToolReferenceConfig(
-                        mode=ToolSelectionMode.TAG,
-                        tag="analyzer",
-                    ),
+                    selected_tools=[SelectedTool(setup_id="setup-analyzer-002", slug="setup-analyzer-002")]
                 ),
             )
 
@@ -361,39 +363,22 @@ class TestSetupModelToolResolution:
         communication = create_mock_communication()
         await setup.resolve_tool_references(registry, communication)
 
-        assert setup.search_tool.tool_module_info is not None
-        assert setup.search_tool.tool_module_info.module_id == "tool-search-001"
-        assert setup.analyzer_tool.tool_module_info is not None
-        assert setup.analyzer_tool.tool_module_info.module_id == "tool-analyzer-002"
+        assert len(setup.resolved_tools) == 2
+        module_ids = {info.module_id for info in setup.resolved_tools.values()}
+        assert "tool-search-001" in module_ids
+        assert "tool-analyzer-002" in module_ids
 
     @pytest.mark.asyncio
-    async def test_mixed_tool_modes_resolved(
+    async def test_constraint_only_tool_reference_not_resolved(
         self,
         registry: FakeRegistry,
-        search_tool_info: ModuleInfo,
     ) -> None:
-        """Mix of FIXED, TAG, and DISCOVERABLE modes work together."""
+        """ToolReference with only constraints (no selected_tools) is not resolved."""
 
         class ArchetypeSetup(SetupModel):
-            fixed_tool: ToolReference = Field(
+            search_tool: ToolReference = Field(
                 default_factory=lambda: ToolReference(
-                    config=ToolReferenceConfig(
-                        mode=ToolSelectionMode.FIXED,
-                        setup_id="setup-search-001",
-                    ),
-                ),
-            )
-            tag_tool: ToolReference = Field(
-                default_factory=lambda: ToolReference(
-                    config=ToolReferenceConfig(
-                        mode=ToolSelectionMode.TAG,
-                        tag="search",
-                    ),
-                ),
-            )
-            discoverable_tool: ToolReference = Field(
-                default_factory=lambda: ToolReference(
-                    config=ToolReferenceConfig(mode=ToolSelectionMode.DISCOVERABLE),
+                    module_ids=["tool-search-001"],
                 ),
             )
 
@@ -401,9 +386,7 @@ class TestSetupModelToolResolution:
         communication = create_mock_communication()
         await setup.resolve_tool_references(registry, communication)
 
-        assert setup.fixed_tool.is_resolved
-        assert setup.tag_tool.is_resolved
-        assert not setup.discoverable_tool.is_resolved
+        assert len(setup.resolved_tools) == 0
 
     @pytest.mark.asyncio
     async def test_none_tool_reference_skipped(self, registry: FakeRegistry) -> None:
@@ -431,10 +414,7 @@ class TestNestedToolReferenceResolution:
         class ToolConfig(BaseModel):
             tool: ToolReference = Field(
                 default_factory=lambda: ToolReference(
-                    config=ToolReferenceConfig(
-                        mode=ToolSelectionMode.FIXED,
-                        setup_id="setup-search-001",
-                    ),
+                    selected_tools=[SelectedTool(setup_id="setup-search-001", slug="setup-search-001")]
                 ),
             )
 
@@ -446,9 +426,9 @@ class TestNestedToolReferenceResolution:
         communication = create_mock_communication()
         await setup.resolve_tool_references(registry, communication)
 
-        assert setup.config.tool.is_resolved
-        assert setup.config.tool.tool_module_info is not None
-        assert setup.config.tool.tool_module_info.module_id == "tool-search-001"
+        assert len(setup.resolved_tools) == 1
+        tool_info = next(iter(setup.resolved_tools.values()))
+        assert tool_info.module_id == "tool-search-001"
 
     @pytest.mark.asyncio
     async def test_deeply_nested_tool_resolved(
@@ -461,10 +441,7 @@ class TestNestedToolReferenceResolution:
         class DeepConfig(BaseModel):
             analyzer: ToolReference = Field(
                 default_factory=lambda: ToolReference(
-                    config=ToolReferenceConfig(
-                        mode=ToolSelectionMode.FIXED,
-                        setup_id="setup-analyzer-002",
-                    ),
+                    selected_tools=[SelectedTool(setup_id="setup-analyzer-002", slug="setup-analyzer-002")]
                 ),
             )
 
@@ -478,9 +455,9 @@ class TestNestedToolReferenceResolution:
         communication = create_mock_communication()
         await setup.resolve_tool_references(registry, communication)
 
-        assert setup.middle.deep.analyzer.is_resolved
-        assert setup.middle.deep.analyzer.tool_module_info is not None
-        assert setup.middle.deep.analyzer.tool_module_info.module_id == "tool-analyzer-002"
+        assert len(setup.resolved_tools) == 1
+        tool_info = next(iter(setup.resolved_tools.values()))
+        assert tool_info.module_id == "tool-analyzer-002"
 
     @pytest.mark.asyncio
     async def test_list_of_tool_references_resolved(
@@ -495,16 +472,10 @@ class TestNestedToolReferenceResolution:
             tools: list[ToolReference] = Field(
                 default_factory=lambda: [
                     ToolReference(
-                        config=ToolReferenceConfig(
-                            mode=ToolSelectionMode.FIXED,
-                            setup_id="setup-search-001",
-                        ),
+                        selected_tools=[SelectedTool(setup_id="setup-search-001", slug="setup-search-001")]
                     ),
                     ToolReference(
-                        config=ToolReferenceConfig(
-                            mode=ToolSelectionMode.FIXED,
-                            setup_id="setup-analyzer-002",
-                        ),
+                        selected_tools=[SelectedTool(setup_id="setup-analyzer-002", slug="setup-analyzer-002")]
                     ),
                 ],
             )
@@ -514,10 +485,10 @@ class TestNestedToolReferenceResolution:
         await setup.resolve_tool_references(registry, communication)
 
         assert len(setup.tools) == 2
-        assert setup.tools[0].tool_module_info is not None
-        assert setup.tools[0].tool_module_info.module_id == "tool-search-001"
-        assert setup.tools[1].tool_module_info is not None
-        assert setup.tools[1].tool_module_info.module_id == "tool-analyzer-002"
+        assert len(setup.resolved_tools) == 2
+        module_ids = {info.module_id for info in setup.resolved_tools.values()}
+        assert "tool-search-001" in module_ids
+        assert "tool-analyzer-002" in module_ids
 
     @pytest.mark.asyncio
     async def test_list_of_nested_models_with_tools_resolved(
@@ -538,19 +509,13 @@ class TestNestedToolReferenceResolution:
                     ToolWrapper(
                         name="search",
                         tool=ToolReference(
-                            config=ToolReferenceConfig(
-                                mode=ToolSelectionMode.FIXED,
-                                setup_id="setup-search-001",
-                            ),
+                            selected_tools=[SelectedTool(setup_id="setup-search-001", slug="setup-search-001")]
                         ),
                     ),
                     ToolWrapper(
                         name="writer",
                         tool=ToolReference(
-                            config=ToolReferenceConfig(
-                                mode=ToolSelectionMode.FIXED,
-                                setup_id="setup-writer-003",
-                            ),
+                            selected_tools=[SelectedTool(setup_id="setup-writer-003", slug="setup-writer-003")]
                         ),
                     ),
                 ],
@@ -560,10 +525,10 @@ class TestNestedToolReferenceResolution:
         communication = create_mock_communication()
         await setup.resolve_tool_references(registry, communication)
 
-        assert setup.wrappers[0].tool.tool_module_info is not None
-        assert setup.wrappers[0].tool.tool_module_info.module_id == "tool-search-001"
-        assert setup.wrappers[1].tool.tool_module_info is not None
-        assert setup.wrappers[1].tool.tool_module_info.module_id == "tool-writer-003"
+        assert len(setup.resolved_tools) == 2
+        module_ids = {info.module_id for info in setup.resolved_tools.values()}
+        assert "tool-search-001" in module_ids
+        assert "tool-writer-003" in module_ids
 
     @pytest.mark.asyncio
     async def test_dict_of_tool_references_resolved(
@@ -578,16 +543,10 @@ class TestNestedToolReferenceResolution:
             tools_by_name: dict[str, ToolReference] = Field(
                 default_factory=lambda: {
                     "search": ToolReference(
-                        config=ToolReferenceConfig(
-                            mode=ToolSelectionMode.FIXED,
-                            setup_id="setup-search-001",
-                        ),
+                        selected_tools=[SelectedTool(setup_id="setup-search-001", slug="setup-search-001")]
                     ),
                     "analyzer": ToolReference(
-                        config=ToolReferenceConfig(
-                            mode=ToolSelectionMode.FIXED,
-                            setup_id="setup-analyzer-002",
-                        ),
+                        selected_tools=[SelectedTool(setup_id="setup-analyzer-002", slug="setup-analyzer-002")]
                     ),
                 },
             )
@@ -596,10 +555,10 @@ class TestNestedToolReferenceResolution:
         communication = create_mock_communication()
         await setup.resolve_tool_references(registry, communication)
 
-        assert setup.tools_by_name["search"].tool_module_info is not None
-        assert setup.tools_by_name["search"].tool_module_info.module_id == "tool-search-001"
-        assert setup.tools_by_name["analyzer"].tool_module_info is not None
-        assert setup.tools_by_name["analyzer"].tool_module_info.module_id == "tool-analyzer-002"
+        assert len(setup.resolved_tools) == 2
+        module_ids = {info.module_id for info in setup.resolved_tools.values()}
+        assert "tool-search-001" in module_ids
+        assert "tool-analyzer-002" in module_ids
 
     @pytest.mark.asyncio
     async def test_dict_of_nested_models_with_tools_resolved(
@@ -618,18 +577,12 @@ class TestNestedToolReferenceResolution:
                 default_factory=lambda: {
                     "search": ToolWrapper(
                         tool=ToolReference(
-                            config=ToolReferenceConfig(
-                                mode=ToolSelectionMode.FIXED,
-                                setup_id="setup-search-001",
-                            ),
+                            selected_tools=[SelectedTool(setup_id="setup-search-001", slug="setup-search-001")]
                         ),
                     ),
                     "writer": ToolWrapper(
                         tool=ToolReference(
-                            config=ToolReferenceConfig(
-                                mode=ToolSelectionMode.FIXED,
-                                setup_id="setup-writer-003",
-                            ),
+                            selected_tools=[SelectedTool(setup_id="setup-writer-003", slug="setup-writer-003")]
                         ),
                     ),
                 },
@@ -639,10 +592,10 @@ class TestNestedToolReferenceResolution:
         communication = create_mock_communication()
         await setup.resolve_tool_references(registry, communication)
 
-        assert setup.wrappers_by_name["search"].tool.tool_module_info is not None
-        assert setup.wrappers_by_name["search"].tool.tool_module_info.module_id == "tool-search-001"
-        assert setup.wrappers_by_name["writer"].tool.tool_module_info is not None
-        assert setup.wrappers_by_name["writer"].tool.tool_module_info.module_id == "tool-writer-003"
+        assert len(setup.resolved_tools) == 2
+        module_ids = {info.module_id for info in setup.resolved_tools.values()}
+        assert "tool-search-001" in module_ids
+        assert "tool-writer-003" in module_ids
 
 
 class TestComplexArchetypeSetup:
@@ -662,10 +615,7 @@ class TestComplexArchetypeSetup:
             max_depth: int = 3
             search_tool: ToolReference = Field(
                 default_factory=lambda: ToolReference(
-                    config=ToolReferenceConfig(
-                        mode=ToolSelectionMode.FIXED,
-                        setup_id="setup-search-001",
-                    ),
+                    selected_tools=[SelectedTool(setup_id="setup-search-001", slug="setup-search-001")]
                 ),
             )
 
@@ -673,10 +623,7 @@ class TestComplexArchetypeSetup:
             format: str = "markdown"
             writer: ToolReference = Field(
                 default_factory=lambda: ToolReference(
-                    config=ToolReferenceConfig(
-                        mode=ToolSelectionMode.FIXED,
-                        setup_id="setup-writer-003",
-                    ),
+                    selected_tools=[SelectedTool(setup_id="setup-writer-003", slug="setup-writer-003")]
                 ),
             )
 
@@ -686,10 +633,7 @@ class TestComplexArchetypeSetup:
             output: OutputConfig = Field(default_factory=OutputConfig)
             analyzer: ToolReference = Field(
                 default_factory=lambda: ToolReference(
-                    config=ToolReferenceConfig(
-                        mode=ToolSelectionMode.TAG,
-                        tag="analyzer",
-                    ),
+                    selected_tools=[SelectedTool(setup_id="setup-analyzer-002", slug="setup-analyzer-002")]
                 ),
             )
             additional_tools: list[ToolReference] = Field(default_factory=list)
@@ -699,12 +643,11 @@ class TestComplexArchetypeSetup:
         await setup.resolve_tool_references(registry, communication)
 
         # All tools resolved correctly
-        assert setup.research.search_tool.tool_module_info is not None
-        assert setup.research.search_tool.tool_module_info.module_id == "tool-search-001"
-        assert setup.output.writer.tool_module_info is not None
-        assert setup.output.writer.tool_module_info.module_id == "tool-writer-003"
-        assert setup.analyzer.tool_module_info is not None
-        assert setup.analyzer.tool_module_info.module_id == "tool-analyzer-002"
+        assert len(setup.resolved_tools) == 3
+        module_ids = {info.module_id for info in setup.resolved_tools.values()}
+        assert "tool-search-001" in module_ids
+        assert "tool-writer-003" in module_ids
+        assert "tool-analyzer-002" in module_ids
 
     @pytest.mark.asyncio
     async def test_setup_with_partially_resolved_tools(
@@ -717,33 +660,23 @@ class TestComplexArchetypeSetup:
         class ArchetypeSetup(SetupModel):
             existing_tool: ToolReference = Field(
                 default_factory=lambda: ToolReference(
-                    config=ToolReferenceConfig(
-                        mode=ToolSelectionMode.FIXED,
-                        setup_id="setup-search-001",
-                    ),
+                    selected_tools=[SelectedTool(setup_id="setup-search-001", slug="setup-search-001")]
                 ),
             )
             missing_tool: ToolReference = Field(
                 default_factory=lambda: ToolReference(
-                    config=ToolReferenceConfig(
-                        mode=ToolSelectionMode.FIXED,
-                        setup_id="nonexistent-setup",
-                    ),
+                    selected_tools=[SelectedTool(setup_id="nonexistent-setup", slug="nonexistent-setup")]
                 ),
             )
-            discoverable: ToolReference = Field(
-                default_factory=lambda: ToolReference(
-                    config=ToolReferenceConfig(mode=ToolSelectionMode.DISCOVERABLE),
-                ),
+            constraint_only: ToolReference = Field(
+                default_factory=lambda: ToolReference(module_ids=["some-module"]),
             )
 
         setup = ArchetypeSetup()
         communication = create_mock_communication()
         await setup.resolve_tool_references(registry, communication)
 
-        assert setup.existing_tool.is_resolved
-        assert setup.existing_tool.tool_module_info is not None
-        assert setup.existing_tool.tool_module_info.module_id == "tool-search-001"
-        assert not setup.missing_tool.is_resolved
-        assert setup.missing_tool.tool_module_info is None
-        assert not setup.discoverable.is_resolved
+        # Only existing_tool resolved
+        assert len(setup.resolved_tools) == 1
+        tool_info = next(iter(setup.resolved_tools.values()))
+        assert tool_info.module_id == "tool-search-001"

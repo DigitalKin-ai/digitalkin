@@ -3,10 +3,11 @@
 from unittest.mock import AsyncMock, Mock
 
 import pytest
+from pydantic import Field
 
 from digitalkin.models.module.setup_types import SetupModel
-from digitalkin.models.module.tool_cache import ToolCache, ToolDefinition, ToolModuleInfo, ToolParameter
-from digitalkin.models.module.tool_reference import ToolReference, ToolReferenceConfig, ToolSelectionMode
+from digitalkin.models.module.tool_cache import SelectedTool, ToolCache, ToolDefinition, ToolModuleInfo, ToolParameter
+from digitalkin.models.module.tool_reference import ToolReference
 from digitalkin.models.services.registry import ModuleInfo, RegistryModuleType, SetupInfo
 
 
@@ -19,9 +20,10 @@ def sample_tool_module_info() -> ToolModuleInfo:
         address="localhost",
         port=50051,
         version="1.0.0",
-        name="TestTool",
+        module_name="TestTool",
         documentation="Test tool documentation",
         setup_id="setup-123",
+        tool_name="TestTool",
         tools=[
             ToolDefinition(
                 name="search",
@@ -43,9 +45,10 @@ def sample_tool_module_info_2() -> ToolModuleInfo:
         address="localhost",
         port=50052,
         version="2.0.0",
-        name="AnotherTool",
+        module_name="AnotherTool",
         documentation="Another test tool",
         setup_id="setup-456",
+        tool_name="AnotherTool",
         tools=[
             ToolDefinition(
                 name="analyze",
@@ -64,22 +67,22 @@ class TestToolCache:
     def test_add_and_get(self, sample_tool_module_info: ToolModuleInfo) -> None:
         """Test adding and getting a tool."""
         cache = ToolCache()
-        cache.add("my_tool", sample_tool_module_info)
+        cache.add(sample_tool_module_info)
 
-        # Direct access from entries (sync)
-        assert cache.entries.get("my_tool") == sample_tool_module_info
+        # Access via slug (setup_id + "_" + tool_name)
+        slug = sample_tool_module_info.slug
+        assert cache.get(slug) == sample_tool_module_info
 
-    @pytest.mark.asyncio
-    async def test_get_nonexistent_returns_none(self) -> None:
+    def test_get_nonexistent_returns_none(self) -> None:
         """Test getting a nonexistent tool returns None."""
         cache = ToolCache()
-        assert await cache.get("nonexistent") is None
+        assert cache.get("nonexistent") is None
 
     def test_clear(self, sample_tool_module_info: ToolModuleInfo, sample_tool_module_info_2: ToolModuleInfo) -> None:
         """Test clearing all tools."""
         cache = ToolCache()
-        cache.add("tool1", sample_tool_module_info)
-        cache.add("tool2", sample_tool_module_info_2)
+        cache.add(sample_tool_module_info)
+        cache.add(sample_tool_module_info_2)
         cache.clear()
 
         assert len(cache.entries) == 0
@@ -89,103 +92,50 @@ class TestToolCache:
     ) -> None:
         """Test listing tool names."""
         cache = ToolCache()
-        cache.add("tool1", sample_tool_module_info)
-        cache.add("tool2", sample_tool_module_info_2)
+        cache.add(sample_tool_module_info)
+        cache.add(sample_tool_module_info_2)
 
         tools = cache.list_tools()
-        assert "tool1" in tools
-        assert "tool2" in tools
+        assert sample_tool_module_info.slug in tools
+        assert sample_tool_module_info_2.slug in tools
 
-    @pytest.mark.asyncio
-    async def test_get_with_registry_on_cache_hit(self, sample_tool_module_info: ToolModuleInfo) -> None:
-        """Test get returns cached value without querying registry."""
+    def test_get_returns_cached_value(self, sample_tool_module_info: ToolModuleInfo) -> None:
+        """Test get returns cached value."""
         cache = ToolCache()
-        cache.add("my_tool", sample_tool_module_info)
+        cache.add(sample_tool_module_info)
 
-        mock_registry = Mock()
-        mock_communication = AsyncMock()
-        result = await cache.get("my_tool", registry=mock_registry, communication=mock_communication)
-
+        result = cache.get(sample_tool_module_info.slug)
         assert result == sample_tool_module_info
-        mock_registry.get_setup.assert_not_called()
 
-    @pytest.mark.asyncio
-    async def test_get_with_registry_on_cache_miss(self, sample_tool_module_info: ToolModuleInfo) -> None:
-        """Test get queries registry on cache miss."""
+    def test_get_without_cache_returns_none(self) -> None:
+        """Test get returns None if not cached."""
         cache = ToolCache()
-
-        mock_registry = Mock()
-        mock_registry.get_setup.return_value = SetupInfo(
-            setup_id="setup-123",
-            name="Test Setup",
-            module_id="tool-123",
-        )
-        mock_registry.discover_by_id.return_value = ModuleInfo(
-            module_id="tool-123",
-            module_type=RegistryModuleType.TOOL,
-            address="localhost",
-            port=50051,
-            version="1.0.0",
-            name="TestTool",
-            documentation="Test tool documentation",
-        )
-
-        mock_communication = AsyncMock()
-        mock_communication.get_module_schemas.return_value = {
-            "input": {
-                "json_schema": {
-                    "$defs": {
-                        "SearchInput": {
-                            "properties": {
-                                "protocol": {"const": "search"},
-                                "query": {"type": "string", "description": "Search query"},
-                            },
-                            "required": ["protocol", "query"],
-                            "description": "Search for items",
-                        },
-                    },
-                },
-            },
-        }
-
-        result = await cache.get("setup-123", registry=mock_registry, communication=mock_communication)
-
-        assert result is not None
-        assert result.module_id == "tool-123"
-        mock_registry.get_setup.assert_called_once_with("setup-123")
-        mock_registry.discover_by_id.assert_called_once_with("tool-123")
-        # Should be cached now
-        assert cache.entries.get("setup-123") is not None
-
-    @pytest.mark.asyncio
-    async def test_get_without_registry_returns_none(self) -> None:
-        """Test get returns None if no registry and not cached."""
-        cache = ToolCache()
-        result = await cache.get("nonexistent")
+        result = cache.get("nonexistent")
         assert result is None
 
 
 class TestSetupModelToolCache:
     """Tests for SetupModel tool cache integration."""
 
-    def test_build_tool_cache_from_tool_references(self, sample_tool_module_info: ToolModuleInfo) -> None:
+    def test_build_tool_cache_from_resolved_tools(self, sample_tool_module_info: ToolModuleInfo) -> None:
         """Test building tool cache from resolved tool references."""
 
         class TestSetup(SetupModel):
             my_tool: ToolReference
 
-        # Create setup with resolved tool reference
+        # Create setup with tool reference
         tool_ref = ToolReference(
-            config=ToolReferenceConfig(mode=ToolSelectionMode.FIXED, setup_id="setup-123"),
+            selected_tools=[SelectedTool(setup_id="setup-123", slug="setup-123")]
         )
-        tool_ref._cached_info = sample_tool_module_info
 
         setup = TestSetup(my_tool=tool_ref)
+        # Pre-populate resolved_tools using setup_id as key (matches caching logic)
+        setup.resolved_tools["setup-123"] = sample_tool_module_info
         cache = setup.build_tool_cache()
 
-        # module_id is used as cache key
-        assert "tool-123" in cache.entries
-        assert cache.entries.get("tool-123") == sample_tool_module_info
+        # ToolCache uses ToolModuleInfo.slug as key
+        assert sample_tool_module_info.slug in cache.entries
+        assert cache.entries[sample_tool_module_info.slug] == sample_tool_module_info
 
     def test_build_tool_cache_skips_unresolved(self) -> None:
         """Test that unresolved tool references are not cached."""
@@ -193,9 +143,7 @@ class TestSetupModelToolCache:
         class TestSetup(SetupModel):
             my_tool: ToolReference
 
-        tool_ref = ToolReference(
-            config=ToolReferenceConfig(mode=ToolSelectionMode.DISCOVERABLE),
-        )
+        tool_ref = ToolReference(module_ids=["some-module"])
 
         setup = TestSetup(my_tool=tool_ref)
         cache = setup.build_tool_cache()
@@ -209,17 +157,18 @@ class TestSetupModelToolCache:
             my_tool: ToolReference
 
         tool_ref = ToolReference(
-            config=ToolReferenceConfig(mode=ToolSelectionMode.FIXED, setup_id="setup-123"),
+            selected_tools=[SelectedTool(setup_id="setup-123", slug="setup-123")]
         )
-        tool_ref._cached_info = sample_tool_module_info
 
         setup = TestSetup(my_tool=tool_ref)
+        # Pre-populate resolved_tools using setup_id as key
+        setup.resolved_tools["setup-123"] = sample_tool_module_info
         cache = setup.build_tool_cache()
 
-        # resolved_tools uses setup_id as key, cache uses module_id
+        # resolved_tools uses setup_id as key, ToolCache uses slug
         assert "setup-123" in setup.resolved_tools
         assert setup.resolved_tools["setup-123"] == sample_tool_module_info
-        assert cache.entries.get("tool-123") == sample_tool_module_info
+        assert cache.entries[sample_tool_module_info.slug] == sample_tool_module_info
 
 
 class TestResolvedToolsField:
@@ -241,9 +190,7 @@ class TestResolvedToolsField:
         class TestSetup(SetupModel):
             my_tool: ToolReference
 
-        tool_ref = ToolReference(
-            config=ToolReferenceConfig(mode=ToolSelectionMode.DISCOVERABLE),
-        )
+        tool_ref = ToolReference(module_ids=["some-module"])
         setup = TestSetup(my_tool=tool_ref)
         assert setup.resolved_tools == {}
 
@@ -257,16 +204,16 @@ class TestResolvedToolsField:
             tool_b: ToolReference
 
         tool_ref_a = ToolReference(
-            config=ToolReferenceConfig(mode=ToolSelectionMode.FIXED, setup_id="setup-123"),
+            selected_tools=[SelectedTool(setup_id="setup-123", slug="setup-123")]
         )
-        tool_ref_a._cached_info = sample_tool_module_info
-
         tool_ref_b = ToolReference(
-            config=ToolReferenceConfig(mode=ToolSelectionMode.FIXED, setup_id="setup-456"),
+            selected_tools=[SelectedTool(setup_id="setup-456", slug="setup-456")]
         )
-        tool_ref_b._cached_info = sample_tool_module_info_2
 
         setup = TestSetup(tool_a=tool_ref_a, tool_b=tool_ref_b)
+        # Pre-populate resolved_tools using setup_id as key
+        setup.resolved_tools["setup-123"] = sample_tool_module_info
+        setup.resolved_tools["setup-456"] = sample_tool_module_info_2
         cache = setup.build_tool_cache()
 
         # resolved_tools uses setup_id as key
@@ -286,38 +233,27 @@ class TestResolvedToolsField:
         assert setup.resolved_tools == {}
 
 
-class TestToolReferenceSetupId:
-    """Tests for ToolReference setup_id property."""
+class TestToolReferenceSelectedTools:
+    """Tests for ToolReference selected_tools property."""
 
-    def test_setup_id_in_fixed_mode(self) -> None:
-        """Test setup_id is set in FIXED mode."""
+    def test_selected_tools_with_setup_id(self) -> None:
+        """Test selected_tools is set correctly."""
         tool_ref = ToolReference(
-            config=ToolReferenceConfig(
-                mode=ToolSelectionMode.FIXED,
-                setup_id="setup-123",
-            ),
+            selected_tools=[SelectedTool(setup_id="setup-123", slug="setup-123")]
         )
-        assert tool_ref.setup_id == "setup-123"
-        assert tool_ref.slug == "setup-123"
+        assert len(tool_ref.selected_tools) == 1
+        assert tool_ref.selected_tools[0].setup_id == "setup-123"
 
-    def test_setup_id_empty_in_tag_mode_before_resolution(self) -> None:
-        """Test setup_id is empty in TAG mode before resolution."""
-        tool_ref = ToolReference(
-            config=ToolReferenceConfig(
-                mode=ToolSelectionMode.TAG,
-                tag="search-tool",
-            ),
-        )
-        assert not tool_ref.setup_id
-        assert not tool_ref.slug
+    def test_selected_tools_empty_for_constraints_only(self) -> None:
+        """Test selected_tools is empty for constraint-only references."""
+        tool_ref = ToolReference(tags=["search-tool"])
+        assert len(tool_ref.selected_tools) == 0
 
-    def test_setup_id_empty_for_discoverable(self) -> None:
-        """Test setup_id is empty for DISCOVERABLE mode."""
-        tool_ref = ToolReference(
-            config=ToolReferenceConfig(mode=ToolSelectionMode.DISCOVERABLE),
-        )
-        assert not tool_ref.setup_id
-        assert not tool_ref.slug
+    def test_module_ids_set_for_constraints(self) -> None:
+        """Test module_ids is set for constraint references."""
+        tool_ref = ToolReference(module_ids=["module-123"])
+        assert tool_ref.module_ids == ["module-123"]
+        assert len(tool_ref.selected_tools) == 0
 
 
 class TestResolvedToolsCacheBehavior:
@@ -331,7 +267,7 @@ class TestResolvedToolsCacheBehavior:
             my_tool: ToolReference
 
         tool_ref = ToolReference(
-            config=ToolReferenceConfig(mode=ToolSelectionMode.FIXED, setup_id="setup-123"),
+            selected_tools=[SelectedTool(setup_id="setup-123", slug="setup-123")]
         )
         setup = TestSetup(my_tool=tool_ref)
 
@@ -347,7 +283,7 @@ class TestResolvedToolsCacheBehavior:
             address="localhost",
             port=50051,
             version="1.0.0",
-            name="TestTool",
+            module_name="TestTool",
             documentation="Test tool documentation",
         )
 
@@ -360,18 +296,19 @@ class TestResolvedToolsCacheBehavior:
 
         mock_registry.get_setup.assert_called_once_with("setup-123")
         mock_registry.discover_by_id.assert_called_once_with("tool-123")
-        assert setup.my_tool.tool_module_info is not None
-        assert setup.my_tool.tool_module_info.setup_id == "setup-123"
+        assert len(setup.resolved_tools) == 1
 
     @pytest.mark.asyncio
-    async def test_second_resolution_uses_cache_skips_registry(self, sample_tool_module_info: ToolModuleInfo) -> None:
+    async def test_second_resolution_uses_cache_skips_registry(
+        self, sample_tool_module_info: ToolModuleInfo
+    ) -> None:
         """Test second resolve_tool_references uses cache, does not call registry."""
 
         class TestSetup(SetupModel):
             my_tool: ToolReference
 
         tool_ref = ToolReference(
-            config=ToolReferenceConfig(mode=ToolSelectionMode.FIXED, setup_id="setup-123"),
+            selected_tools=[SelectedTool(setup_id="setup-123", slug="setup-123")]
         )
         setup = TestSetup(my_tool=tool_ref)
 
@@ -387,7 +324,7 @@ class TestResolvedToolsCacheBehavior:
             address="localhost",
             port=50051,
             version="1.0.0",
-            name="TestTool",
+            module_name="TestTool",
             documentation="Test tool documentation",
         )
 
@@ -400,41 +337,36 @@ class TestResolvedToolsCacheBehavior:
         await setup.resolve_tool_references(mock_registry, mock_communication)
         assert mock_registry.get_setup.call_count == 1
 
-        # Simulate serialization: _cached_info is lost but resolved_tools persists
-        setup.my_tool._cached_info = None
-
         # Second resolution - should use cache, not registry
         await setup.resolve_tool_references(mock_registry, mock_communication)
 
         # Registry still only called once (from first resolution)
         assert mock_registry.get_setup.call_count == 1
-        # But tool_ref should be resolved from cache
-        assert setup.my_tool.tool_module_info is not None
+        # resolved_tools still has the info
+        assert len(setup.resolved_tools) == 1
 
     @pytest.mark.asyncio
     async def test_serialization_preserves_resolved_tools(self, sample_tool_module_info: ToolModuleInfo) -> None:
-        """Test resolved_tools survives JSON serialization while _cached_info is lost."""
+        """Test resolved_tools survives JSON serialization."""
 
         class TestSetup(SetupModel):
             my_tool: ToolReference
 
         tool_ref = ToolReference(
-            config=ToolReferenceConfig(mode=ToolSelectionMode.FIXED, setup_id="setup-123"),
+            selected_tools=[SelectedTool(setup_id="setup-123", slug="setup-123")]
         )
         setup = TestSetup(my_tool=tool_ref)
 
-        # Manually set resolved state
-        setup.my_tool._cached_info = sample_tool_module_info
+        # Manually set resolved state using setup_id as key
         setup.resolved_tools["setup-123"] = sample_tool_module_info
 
         # Serialize and deserialize
         json_data = setup.model_dump_json()
         restored_setup = TestSetup.model_validate_json(json_data)
 
-        # resolved_tools persists, _cached_info is lost
+        # resolved_tools persists
         assert "setup-123" in restored_setup.resolved_tools
         assert restored_setup.resolved_tools["setup-123"] == sample_tool_module_info
-        assert restored_setup.my_tool._cached_info is None
 
         # Second resolution uses cache, registry not called
         mock_registry = Mock()
@@ -444,7 +376,6 @@ class TestResolvedToolsCacheBehavior:
 
         mock_registry.get_setup.assert_not_called()
         mock_registry.discover_by_id.assert_not_called()
-        assert restored_setup.my_tool.tool_module_info == sample_tool_module_info
 
     @pytest.mark.asyncio
     async def test_multiple_tools_cache_behavior(
@@ -458,10 +389,10 @@ class TestResolvedToolsCacheBehavior:
 
         setup = TestSetup(
             tool_a=ToolReference(
-                config=ToolReferenceConfig(mode=ToolSelectionMode.FIXED, setup_id="setup-123"),
+                selected_tools=[SelectedTool(setup_id="setup-123", slug="setup-123")]
             ),
             tool_b=ToolReference(
-                config=ToolReferenceConfig(mode=ToolSelectionMode.FIXED, setup_id="setup-456"),
+                selected_tools=[SelectedTool(setup_id="setup-456", slug="setup-456")]
             ),
         )
 
@@ -478,7 +409,7 @@ class TestResolvedToolsCacheBehavior:
                 address="localhost",
                 port=50051,
                 version="1.0.0",
-                name="ToolA",
+                module_name="ToolA",
                 documentation="Tool A",
             )
             if module_id == "tool-123"
@@ -488,7 +419,7 @@ class TestResolvedToolsCacheBehavior:
                 address="localhost",
                 port=50052,
                 version="1.0.0",
-                name="ToolB",
+                module_name="ToolB",
                 documentation="Tool B",
             )
         )
@@ -502,12 +433,7 @@ class TestResolvedToolsCacheBehavior:
         await setup.resolve_tool_references(mock_registry, mock_communication)
 
         assert mock_registry.get_setup.call_count == 2
-        assert "setup-123" in setup.resolved_tools
-        assert "setup-456" in setup.resolved_tools
-
-        # Clear _cached_info to simulate deserialization
-        setup.tool_a._cached_info = None
-        setup.tool_b._cached_info = None
+        assert len(setup.resolved_tools) == 2
 
         # Second resolution - both tools resolved from cache
         mock_registry.reset_mock()
@@ -515,8 +441,7 @@ class TestResolvedToolsCacheBehavior:
 
         mock_registry.get_setup.assert_not_called()
         mock_registry.discover_by_id.assert_not_called()
-        assert setup.tool_a.tool_module_info is not None
-        assert setup.tool_b.tool_module_info is not None
+        assert len(setup.resolved_tools) == 2
 
     @pytest.mark.asyncio
     async def test_partial_cache_only_queries_missing(
@@ -530,14 +455,14 @@ class TestResolvedToolsCacheBehavior:
 
         setup = TestSetup(
             tool_a=ToolReference(
-                config=ToolReferenceConfig(mode=ToolSelectionMode.FIXED, setup_id="setup-123"),
+                selected_tools=[SelectedTool(setup_id="setup-123", slug="setup-123")]
             ),
             tool_b=ToolReference(
-                config=ToolReferenceConfig(mode=ToolSelectionMode.FIXED, setup_id="setup-456"),
+                selected_tools=[SelectedTool(setup_id="setup-456", slug="setup-456")]
             ),
         )
 
-        # Pre-populate cache with only tool_a
+        # Pre-populate cache with only tool_a using setup_id as key
         setup.resolved_tools["setup-123"] = sample_tool_module_info
 
         mock_registry = Mock()
@@ -552,7 +477,7 @@ class TestResolvedToolsCacheBehavior:
             address="localhost",
             port=50052,
             version="1.0.0",
-            name="ToolB",
+            module_name="ToolB",
             documentation="Tool B",
         )
 
@@ -565,5 +490,5 @@ class TestResolvedToolsCacheBehavior:
 
         # Only tool_b should trigger registry call
         mock_registry.get_setup.assert_called_once_with("setup-456")
-        assert setup.tool_a.tool_module_info == sample_tool_module_info
-        assert setup.tool_b.tool_module_info is not None
+        assert "setup-123" in setup.resolved_tools
+        assert len(setup.resolved_tools) == 2

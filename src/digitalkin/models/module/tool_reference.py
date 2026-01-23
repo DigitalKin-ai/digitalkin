@@ -1,102 +1,37 @@
 """Tool reference types for module configuration."""
 
-from enum import Enum
+from typing import Annotated
 
-from pydantic import BaseModel, Field, PrivateAttr, model_validator
+from pydantic import BaseModel, BeforeValidator, Field
+from pydantic.json_schema import GetJsonSchemaHandler, JsonSchemaValue
+from pydantic_core import CoreSchema
 
-from digitalkin.models.module.tool_cache import ToolModuleInfo, module_info_to_tool_module_info
+from digitalkin.models.module.tool_cache import (
+    SelectedTool,
+    ToolModuleInfo,
+    module_info_to_tool_module_info,
+)
 from digitalkin.services.communication.communication_strategy import CommunicationStrategy
 from digitalkin.services.registry import RegistryStrategy
 
 
-class ToolSelectionMode(str, Enum):
-    """Tool selection mode."""
-
-    TAG = "tag"
-    FIXED = "fixed"
-    DISCOVERABLE = "discoverable"
-
-
-class ToolReferenceConfig(BaseModel):
-    """Tool selection configuration. The module_id serves as both identifier and cache key."""
-
-    mode: ToolSelectionMode = Field(default=ToolSelectionMode.FIXED)
-    setup_id: str = Field(default="")
-    module_id: str = Field(default="")
-    tag: str = Field(default="")
-    organization_id: str = Field(default="")
-
-    @model_validator(mode="after")
-    def validate_config(self) -> "ToolReferenceConfig":
-        """Validate required fields based on mode.
-
-        Returns:
-            Self if validation passes.
-
-        Raises:
-            ValueError: If required field is missing for the mode.
-        """
-        if self.mode == ToolSelectionMode.FIXED and not self.setup_id:
-            msg = "setup_id required when mode is FIXED"
-            raise ValueError(msg)
-        if self.mode == ToolSelectionMode.TAG and not self.tag:
-            msg = "tag required when mode is TAG"
-            raise ValueError(msg)
-        return self
-
-
 class ToolReference(BaseModel):
-    """Reference to a tool module, resolved via registry during config setup."""
+    """Tool selection configuration and reference.
 
-    config: ToolReferenceConfig
-    _cached_info: ToolModuleInfo | None = PrivateAttr(default=None)
+    The mode determines validation requirements and resolution behavior:
+    - FIXED: Requires setup_id, resolves to exact tool
+    - MODULE: Requires module_id, returns constraint for frontend selection
+    - TAG: Requires tag, returns constraint for frontend selection
+    - DISCOVERABLE: Optional module_id/tag constraints, returns constraint info
+    """
 
-    @property
-    def slug(self) -> str:
-        """Cache key (same as module_id).
+    selected_tools: list[SelectedTool] = Field(default=[], description="Tools selected by the user.")
+    setup_ids: list[str] = Field(default=[], description="Setup IDs for the user to choose from.")
+    module_ids: list[str] = Field(default=[], description="Module IDs for the user to choose from.")
+    tags: list[str] = Field(default=[], description="Tags for the user to choose from.")
+    max_tools: int = Field(default=0, description="Maximum tools to select. 0 for unlimited.")
 
-        Returns:
-            Module ID used as cache key.
-        """
-        return self.config.setup_id
-
-    @property
-    def module_id(self) -> str:
-        """Module identifier.
-
-        Returns:
-            Module ID or empty string if not set.
-        """
-        return self.config.module_id
-
-    @property
-    def setup_id(self) -> str:
-        """Setup identifier.
-
-        Returns:
-            Setup ID or empty string if not set.
-        """
-        return self.config.setup_id
-
-    @property
-    def tool_module_info(self) -> ToolModuleInfo | None:
-        """Resolved module information.
-
-        Returns:
-            ToolModuleInfo if resolved, None otherwise.
-        """
-        return self._cached_info
-
-    @property
-    def is_resolved(self) -> bool:
-        """Whether this reference has been resolved.
-
-        Returns:
-            True if resolved, False otherwise.
-        """
-        return self._cached_info is not None
-
-    async def resolve(self, registry: RegistryStrategy, communication: CommunicationStrategy) -> ToolModuleInfo | None:
+    async def resolve(self, registry: RegistryStrategy, communication: CommunicationStrategy) -> list[ToolModuleInfo]:
         """Resolve this reference using the registry.
 
         Args:
@@ -104,33 +39,65 @@ class ToolReference(BaseModel):
             communication: Communication service for module schemas.
 
         Returns:
-            ToolModuleInfo if resolved, None for DISCOVERABLE mode or if not found.
+            List of ToolModuleInfo if resolved.
         """
-        if self.config.mode == ToolSelectionMode.DISCOVERABLE:
-            return None
-
-        if self.config.mode == ToolSelectionMode.FIXED and self.config.setup_id:
-            setup = registry.get_setup(self.config.setup_id)
+        resolved: list[ToolModuleInfo] = []
+        for tool in self.selected_tools:
+            setup = registry.get_setup(tool.setup_id)
             if setup and setup.module_id:
-                self.config.module_id = setup.module_id
-                info = registry.discover_by_id(self.config.module_id)
+                info = registry.discover_by_id(setup.module_id)
+                tool.slug = tool.setup_id
+                tool.module_id = setup.module_id
+                tool.name = setup.name
                 if info:
-                    tool_module_info = await module_info_to_tool_module_info(info, self.config.setup_id, communication)
-                    self._cached_info = tool_module_info
-                    return tool_module_info
+                    resolved.append(await module_info_to_tool_module_info(info, tool, communication))
 
-        if self.config.mode == ToolSelectionMode.TAG and self.config.tag:
-            results = registry.search(
-                name=self.config.tag,
-                module_type="tool",
-                organization_id=self.config.organization_id,
-            )
-            if results:
-                tool_module_info = await module_info_to_tool_module_info(
-                    results[0], self.config.setup_id, communication
-                )
-                self._cached_info = tool_module_info
-                self.config.module_id = tool_module_info.module_id
-                return tool_module_info
+        return resolved
 
-        return None
+
+def _convert_to_tool_reference(v: object) -> "ToolReference | object":
+    """Convert list of setup IDs to ToolReference.
+
+    Args:
+        v: Input value, either a list of setup IDs or passthrough.
+
+    Returns:
+        ToolReference if input is list, otherwise original value.
+    """
+    if isinstance(v, list):
+        return ToolReference(selected_tools=[SelectedTool(setup_id=sid, slug=sid) for sid in v])
+    return v
+
+
+class _ToolReferenceInputSchema:
+    """Custom JSON schema generator that wraps ToolReference in anyOf with array option."""
+
+    @staticmethod
+    def __get_pydantic_json_schema__(  # noqa: PLW3201
+        schema: CoreSchema,
+        handler: GetJsonSchemaHandler,
+    ) -> JsonSchemaValue:
+        """Generate JSON schema accepting both list[str] and ToolReference.
+
+        Args:
+            schema: The core schema from Pydantic.
+            handler: Handler to generate JSON schema from core schema.
+
+        Returns:
+            JSON schema with anyOf accepting array or ToolReference.
+        """
+        json_schema = handler(schema)
+        return {
+            "anyOf": [
+                {"type": "array", "items": {"type": "string"}},
+                json_schema,
+            ]
+        }
+
+
+ToolReferenceInput = Annotated[
+    ToolReference,
+    BeforeValidator(_convert_to_tool_reference),
+    _ToolReferenceInputSchema,
+]
+"""Type alias for ToolReference fields that accept list[str] input from frontend."""

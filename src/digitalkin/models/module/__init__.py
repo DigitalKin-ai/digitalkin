@@ -14,8 +14,7 @@ from digitalkin.models.module.tool_cache import (
 )
 from digitalkin.models.module.tool_reference import (
     ToolReference,
-    ToolReferenceConfig,
-    ToolSelectionMode,
+    ToolReferenceInput,
 )
 from digitalkin.models.module.utility import (
     EndOfStreamOutput,
@@ -36,8 +35,7 @@ __all__ = [
     "ToolModuleInfo",
     "ToolParameter",
     "ToolReference",
-    "ToolReferenceConfig",
-    "ToolSelectionMode",
+    "ToolReferenceInput",
     "UtilityProtocol",
     "UtilityRegistry",
 ]
