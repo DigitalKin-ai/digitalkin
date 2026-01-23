@@ -69,11 +69,16 @@
     ]
   },
   {
-    "version": "0.3.2.dev21",
-    "title": "0.3.2.dev21",
+    "version": "0.3.2.dev22",
+    "title": "0.3.2.dev22",
     "aliases": [
       "latest"
     ]
+  },
+  {
+    "version": "0.3.2.dev21",
+    "title": "0.3.2.dev21",
+    "aliases": []
   },
   {
     "version": "0.3.2.dev20",
