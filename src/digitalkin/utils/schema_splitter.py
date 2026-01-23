@@ -30,7 +30,7 @@ class SchemaSplitter:
         return json_schema, ui_schema
 
     @classmethod
-    def _extract_ui_properties(
+    def _extract_ui_properties(  # noqa: C901, PLR0912
         cls,
         source: dict[str, Any],
         ui_target: dict[str, Any],
@@ -64,12 +64,11 @@ class SchemaSplitter:
                         cls._extract_ui_properties(item, ui_target, defs)
             elif key in {"if", "then", "else"} and isinstance(value, dict):
                 cls._extract_ui_properties(value, ui_target, defs)
-            elif key == "$ref" and isinstance(value, str) and defs is not None:
+            elif key == "$ref" and isinstance(value, str) and defs is not None and value.startswith("#/$defs/"):
                 # Resolve $ref and extract UI properties from the referenced definition
-                if value.startswith("#/$defs/"):
-                    def_name = value[8:]
-                    if def_name in defs:
-                        cls._extract_ui_properties(defs[def_name], ui_target, defs)
+                def_name = value[8:]
+                if def_name in defs:
+                    cls._extract_ui_properties(defs[def_name], ui_target, defs)
 
     @classmethod
     def _process_object(  # noqa: C901, PLR0912

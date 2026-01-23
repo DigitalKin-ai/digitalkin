@@ -3,8 +3,8 @@
 # https://peps.python.org/pep-0440/
 
 [tool.bumpversion]
-    current_version = "0.3.2.dev22"
-    parse = """(?x)
+current_version = "0.3.2.dev23"
+parse = """(?x)
     (?P<major>0|[1-9]\\d*)\\.
     (?P<minor>0|[1-9]\\d*)\\.
     (?P<patch>0|[1-9]\\d*)
@@ -15,49 +15,49 @@
     )?                                      # Release section is optional (for final releases)
 """
 
-    # Serialization patterns (order matters - first matching pattern is used)
-    serialize = [
-        "{major}.{minor}.{patch}.{release_type}{release_num}", # Pre/post releases
-        "{major}.{minor}.{patch}",                             # Final releases
-    ]
+# Serialization patterns (order matters - first matching pattern is used)
+serialize = [
+    "{major}.{minor}.{patch}",                             # Final releases
+    "{major}.{minor}.{patch}.{release_type}{release_num}", # Pre/post releases
+]
 
     # Configuration for version parts
     [tool.bumpversion.parts.release_type]
-        # Release progression: dev -> alpha -> beta -> rc -> final -> post
-        values         = [ "dev", "a", "b", "rc", "final", "post" ]
-        optional_value = "final"                                    # When "final", the release_type is omitted
+    # Release progression: dev -> alpha -> beta -> rc -> final -> post
+    values         = ["a", "b", "dev", "final", "post", "rc"]
+    optional_value = "final"                                  # When "final", the release_type is omitted
 
     # Files to update when bumping version
     [[tool.bumpversion.files]]
-        filename = "pyproject.toml"
-        # Update the version field in [project] section
-        search  = 'version = "{current_version}"'
-        replace = 'version = "{new_version}"'
+    filename = "pyproject.toml"
+    # Update the version field in [project] section
+    search  = 'version = "{current_version}"'
+    replace = 'version = "{new_version}"'
 
     [[tool.bumpversion.files]]
-        filename = "src/digitalkin/__version__.py"
-        # Update the fallback version in the __version__.py file
-        search  = '__version__ = "{current_version}"'
-        replace = '__version__ = "{new_version}"'
+    filename = "src/digitalkin/__version__.py"
+    # Update the fallback version in the __version__.py file
+    search  = '__version__ = "{current_version}"'
+    replace = '__version__ = "{new_version}"'
 
-        # Command aliases for convenience (these work with: bump-my-version bump <alias>)
-        # Examples:
-        #   bump-my-version bump patch          # 0.2.0 -> 0.2.1
-        #   bump-my-version bump minor          # 0.2.0 -> 0.3.0
-        #   bump-my-version bump major          # 0.2.0 -> 1.0.0
-        #   bump-my-version bump release_type   # dev -> a -> b -> rc -> final -> post
-        #   bump-my-version bump release_num    # dev1 -> dev2, rc1 -> rc2, etc.
-        #
-        # For specific version types:
-        #   bump-my-version bump --new-version 0.3.0.dev1    # Start dev cycle
-        #   bump-my-version bump --new-version 0.3.0a1       # Alpha release
-        #   bump-my-version bump --new-version 0.3.0b1       # Beta release
-        #   bump-my-version bump --new-version 0.3.0rc1      # Release candidate
-        #   bump-my-version bump --new-version 0.3.0         # Final release
-        #   bump-my-version bump --new-version 0.3.0.post1   # Post release
+    # Command aliases for convenience (these work with: bump-my-version bump <alias>)
+    # Examples:
+    #   bump-my-version bump patch          # 0.2.0 -> 0.2.1
+    #   bump-my-version bump minor          # 0.2.0 -> 0.3.0
+    #   bump-my-version bump major          # 0.2.0 -> 1.0.0
+    #   bump-my-version bump release_type   # dev -> a -> b -> rc -> final -> post
+    #   bump-my-version bump release_num    # dev1 -> dev2, rc1 -> rc2, etc.
+    #
+    # For specific version types:
+    #   bump-my-version bump --new-version 0.3.0.dev1    # Start dev cycle
+    #   bump-my-version bump --new-version 0.3.0a1       # Alpha release
+    #   bump-my-version bump --new-version 0.3.0b1       # Beta release
+    #   bump-my-version bump --new-version 0.3.0rc1      # Release candidate
+    #   bump-my-version bump --new-version 0.3.0         # Final release
+    #   bump-my-version bump --new-version 0.3.0.post1   # Post release
 
-        # Additional configuration options
-        commit      = false # Don't auto-commit (let user control git)
-        tag         = false # Don't auto-tag (let user control git tags)
-        sign_tags   = false # Don't sign tags
-        allow_dirty = false # Require clean working directory
+    # Additional configuration options
+    commit      = false # Don't auto-commit (let user control git)
+    tag         = false # Don't auto-tag (let user control git tags)
+    sign_tags   = false # Don't sign tags
+    allow_dirty = false # Require clean working directory

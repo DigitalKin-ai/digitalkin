@@ -7,11 +7,11 @@ including recursive resolution in nested structures.
 from unittest.mock import AsyncMock
 
 import pytest
-from pydantic import BaseModel, Field, TypeAdapter
+from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 
 from digitalkin.models.module.setup_types import SetupModel
 from digitalkin.models.module.tool_cache import SelectedTool, ToolDefinition, ToolModuleInfo, ToolParameter
-from digitalkin.models.module.tool_reference import ToolReference, ToolReferenceInput
+from digitalkin.models.module.tool_reference import ToolReference, tool_reference_input
 from digitalkin.models.services.registry import (
     ModuleInfo,
     RegistryModuleStatus,
@@ -216,8 +216,8 @@ class TestToolReferenceValidation:
         assert ref.selected_tools[0].setup_id == "setup-123"
 
     def test_string_list_creates_selected_tools(self) -> None:
-        """List of strings input creates selected_tools via ToolReferenceInput."""
-        adapter = TypeAdapter(ToolReferenceInput)
+        """List of strings input creates selected_tools via tool_reference_input."""
+        adapter = TypeAdapter(tool_reference_input())
         ref = adapter.validate_python(["setup-123", "setup-456"])
         assert len(ref.selected_tools) == 2
         assert ref.selected_tools[0].setup_id == "setup-123"
@@ -680,3 +680,85 @@ class TestComplexArchetypeSetup:
         assert len(setup.resolved_tools) == 1
         tool_info = next(iter(setup.resolved_tools.values()))
         assert tool_info.module_id == "tool-search-001"
+
+
+class TestToolReferenceJsonSchema:
+    """Tests for tool_reference_input JSON schema generation."""
+
+    def test_schema_has_anyof_with_array_option(self) -> None:
+        """Schema has anyOf with array and ToolReference options."""
+        adapter = TypeAdapter(tool_reference_input())
+        schema = adapter.json_schema()
+        assert "anyOf" in schema
+        assert len(schema["anyOf"]) == 2
+        assert schema["anyOf"][0]["type"] == "array"
+
+    def test_schema_array_has_no_maxitems_when_unlimited(self) -> None:
+        """Array option has no maxItems when max_tools is 0."""
+        adapter = TypeAdapter(tool_reference_input())
+        schema = adapter.json_schema()
+        assert "maxItems" not in schema["anyOf"][0]
+
+    def test_factory_adds_maxitems_to_array_option(self) -> None:
+        """Factory function creates type with maxItems constraint."""
+        adapter = TypeAdapter(tool_reference_input(max_tools=5))
+        schema = adapter.json_schema()
+        assert schema["anyOf"][0]["maxItems"] == 5
+
+    def test_factory_adds_ui_options(self) -> None:
+        """Factory function includes ui:options in schema."""
+        adapter = TypeAdapter(
+            tool_reference_input(
+                setup_ids=["setup-1", "setup-2"],
+                module_ids=["module-1"],
+                tags=["tag-a"],
+                max_tools=3,
+            )
+        )
+        schema = adapter.json_schema()
+        assert schema["ui:options"]["setup_ids"] == ["setup-1", "setup-2"]
+        assert schema["ui:options"]["module_ids"] == ["module-1"]
+        assert schema["ui:options"]["tags"] == ["tag-a"]
+        assert schema["ui:options"]["max_tools"] == 3
+
+    def test_factory_validation_still_works(self) -> None:
+        """Factory type still accepts list input."""
+        adapter = TypeAdapter(tool_reference_input(max_tools=3))
+        ref = adapter.validate_python(["setup-1", "setup-2"])
+        assert len(ref.selected_tools) == 2
+
+    def test_converted_reference_preserves_config(self) -> None:
+        """List input preserves setup_ids, module_ids, tags from factory."""
+        adapter = TypeAdapter(
+            tool_reference_input(
+                setup_ids=["setup-a"],
+                module_ids=["module-b"],
+                tags=["tag-c"],
+                max_tools=5,
+                min_tools=1,
+            )
+        )
+        ref = adapter.validate_python(["setup-1"])
+        assert ref.setup_ids == ["setup-a"]
+        assert ref.module_ids == ["module-b"]
+        assert ref.tags == ["tag-c"]
+        assert ref.max_tools == 5
+        assert ref.min_tools == 1
+
+    def test_min_tools_validation_raises_error(self) -> None:
+        """Factory type raises error when too few tools selected."""
+        adapter = TypeAdapter(tool_reference_input(min_tools=2, max_tools=5))
+        with pytest.raises(ValidationError):
+            adapter.validate_python(["setup-1"])
+
+    def test_max_tools_validation_raises_error(self) -> None:
+        """Factory type raises error when too many tools selected."""
+        adapter = TypeAdapter(tool_reference_input(max_tools=2))
+        with pytest.raises(ValidationError):
+            adapter.validate_python(["setup-1", "setup-2", "setup-3"])
+
+    def test_valid_tools_count_passes(self) -> None:
+        """Valid tool count within range passes validation."""
+        adapter = TypeAdapter(tool_reference_input(min_tools=1, max_tools=3))
+        ref = adapter.validate_python(["setup-1", "setup-2"])
+        assert len(ref.selected_tools) == 2
