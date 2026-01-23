@@ -17,24 +17,31 @@ class SchemaSplitter:
             Tuple of (jsonschema, uischema).
         """
         defs_ui: dict[str, dict[str, Any]] = {}
-        if "$defs" in combined_schema:
-            for def_name, def_value in combined_schema["$defs"].items():
+        schema_defs = combined_schema.get("$defs", {})
+        if schema_defs:
+            for def_name, def_value in schema_defs.items():
                 if isinstance(def_value, dict):
                     defs_ui[def_name] = {}
-                    cls._extract_ui_properties(def_value, defs_ui[def_name])
+                    cls._extract_ui_properties(def_value, defs_ui[def_name], schema_defs)
 
         json_schema: dict[str, Any] = {}
         ui_schema: dict[str, Any] = {}
-        cls._process_object(combined_schema, json_schema, ui_schema, defs_ui)
+        cls._process_object(combined_schema, json_schema, ui_schema, defs_ui, schema_defs)
         return json_schema, ui_schema
 
     @classmethod
-    def _extract_ui_properties(cls, source: dict[str, Any], ui_target: dict[str, Any]) -> None:  # noqa: C901
+    def _extract_ui_properties(
+        cls,
+        source: dict[str, Any],
+        ui_target: dict[str, Any],
+        defs: dict[str, Any] | None = None,
+    ) -> None:
         """Extract ui:* properties from source into ui_target recursively.
 
         Args:
             source: Source dict to extract from.
             ui_target: Target dict for ui properties.
+            defs: The $defs dictionary to resolve $ref references.
         """
         for key, value in source.items():
             if key.startswith("ui:"):
@@ -43,20 +50,26 @@ class SchemaSplitter:
                 for prop_name, prop_value in value.items():
                     if isinstance(prop_value, dict):
                         prop_ui: dict[str, Any] = {}
-                        cls._extract_ui_properties(prop_value, prop_ui)
+                        cls._extract_ui_properties(prop_value, prop_ui, defs)
                         if prop_ui:
                             ui_target[prop_name] = prop_ui
             elif key == "items" and isinstance(value, dict):
                 items_ui: dict[str, Any] = {}
-                cls._extract_ui_properties(value, items_ui)
+                cls._extract_ui_properties(value, items_ui, defs)
                 if items_ui:
                     ui_target["items"] = items_ui
             elif key == "allOf" and isinstance(value, list):
                 for item in value:
                     if isinstance(item, dict):
-                        cls._extract_ui_properties(item, ui_target)
+                        cls._extract_ui_properties(item, ui_target, defs)
             elif key in {"if", "then", "else"} and isinstance(value, dict):
-                cls._extract_ui_properties(value, ui_target)
+                cls._extract_ui_properties(value, ui_target, defs)
+            elif key == "$ref" and isinstance(value, str) and defs is not None:
+                # Resolve $ref and extract UI properties from the referenced definition
+                if value.startswith("#/$defs/"):
+                    def_name = value[8:]
+                    if def_name in defs:
+                        cls._extract_ui_properties(defs[def_name], ui_target, defs)
 
     @classmethod
     def _process_object(  # noqa: C901, PLR0912
@@ -65,6 +78,7 @@ class SchemaSplitter:
         json_target: dict[str, Any],
         ui_target: dict[str, Any],
         defs_ui: dict[str, dict[str, Any]],
+        schema_defs: dict[str, Any] | None = None,
     ) -> None:
         """Process an object, splitting json and ui properties.
 
@@ -73,6 +87,7 @@ class SchemaSplitter:
             json_target: Target dict for json schema.
             ui_target: Target dict for ui schema.
             defs_ui: Pre-extracted UI properties from $defs.
+            schema_defs: The original $defs dictionary to resolve $ref in _extract_ui_properties.
         """
         for key, value in source.items():
             if key.startswith("ui:"):
@@ -113,14 +128,14 @@ class SchemaSplitter:
                         cls._strip_ui_properties(item, item_json)
                         json_target["allOf"].append(item_json)
                         # Extract UI properties from allOf item
-                        cls._extract_ui_properties(item, ui_target)
+                        cls._extract_ui_properties(item, ui_target, schema_defs)
                     else:
                         json_target["allOf"].append(item)
             elif key in {"if", "then", "else"} and isinstance(value, dict):
                 json_target[key] = {}
                 cls._strip_ui_properties(value, json_target[key])
                 # Extract UI properties from conditional
-                cls._extract_ui_properties(value, ui_target)
+                cls._extract_ui_properties(value, ui_target, schema_defs)
             elif key == "hidden":
                 # Strip hidden key from json schema
                 continue

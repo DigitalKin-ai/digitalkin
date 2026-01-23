@@ -203,3 +203,76 @@ class TestSchemaSplitter:
         assert "items" in ui_schema["items_list"]
         assert ui_schema["items_list"]["items"]["ui:widget"] == "text"
         assert ui_schema["items_list"]["ui:options"] == {"orderable": True}
+
+    def test_split_with_nested_ref_ui_properties(self) -> None:
+        """Test that UI properties from $ref definitions are extracted."""
+        schema = {
+            "type": "object",
+            "$defs": {
+                "NestedModel": {
+                    "type": "object",
+                    "ui:order": ["field_a", "field_b"],
+                    "properties": {
+                        "field_a": {"type": "string", "ui:widget": "text"},
+                        "field_b": {"type": "string", "ui:widget": "textarea"},
+                    },
+                }
+            },
+            "properties": {
+                "top_level": {"type": "string", "ui:widget": "text"},
+                "nested": {"$ref": "#/$defs/NestedModel"},
+            },
+        }
+
+        _json_schema, ui_schema = SchemaSplitter.split(schema)
+
+        # Top level UI props should be extracted
+        assert ui_schema["top_level"]["ui:widget"] == "text"
+
+        # Nested $ref UI props should also be extracted
+        assert "nested" in ui_schema
+        assert ui_schema["nested"]["ui:order"] == ["field_a", "field_b"]
+        assert ui_schema["nested"]["field_a"]["ui:widget"] == "text"
+        assert ui_schema["nested"]["field_b"]["ui:widget"] == "textarea"
+
+    def test_split_with_deeply_nested_ref_ui_properties(self) -> None:
+        """Test that UI properties from deeply nested $ref definitions are extracted."""
+        schema = {
+            "type": "object",
+            "$defs": {
+                "InnerModel": {
+                    "type": "object",
+                    "ui:order": ["inner_field"],
+                    "properties": {
+                        "inner_field": {"type": "string", "ui:widget": "password"},
+                    },
+                },
+                "OuterModel": {
+                    "type": "object",
+                    "ui:order": ["outer_field", "inner"],
+                    "properties": {
+                        "outer_field": {"type": "string", "ui:widget": "email"},
+                        "inner": {"$ref": "#/$defs/InnerModel"},
+                    },
+                },
+            },
+            "properties": {
+                "root_field": {"type": "string", "ui:widget": "text"},
+                "outer": {"$ref": "#/$defs/OuterModel"},
+            },
+        }
+
+        _json_schema, ui_schema = SchemaSplitter.split(schema)
+
+        # Root level UI props
+        assert ui_schema["root_field"]["ui:widget"] == "text"
+
+        # Outer model UI props
+        assert "outer" in ui_schema
+        assert ui_schema["outer"]["ui:order"] == ["outer_field", "inner"]
+        assert ui_schema["outer"]["outer_field"]["ui:widget"] == "email"
+
+        # Inner model UI props (nested $ref)
+        assert "inner" in ui_schema["outer"]
+        assert ui_schema["outer"]["inner"]["ui:order"] == ["inner_field"]
+        assert ui_schema["outer"]["inner"]["inner_field"]["ui:widget"] == "password"
