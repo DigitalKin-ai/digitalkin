@@ -2,7 +2,7 @@
 
 from typing import Annotated
 
-from pydantic import AfterValidator, BaseModel, Field
+from pydantic import AfterValidator, BaseModel, BeforeValidator, Field
 from pydantic.annotated_handlers import GetJsonSchemaHandler
 from pydantic.json_schema import JsonSchemaValue
 from pydantic_core import CoreSchema
@@ -72,38 +72,29 @@ class _ToolReferenceInputSchema:
 
     def __get_pydantic_json_schema__(  # noqa: PLW3201
         self,
-        schema: CoreSchema,
-        handler: GetJsonSchemaHandler,
+        _schema: CoreSchema,
+        _handler: GetJsonSchemaHandler,
     ) -> JsonSchemaValue:
-        """Generate JSON schema for ToolReference with ui:options.
-
-        Args:
-            schema: The core schema from Pydantic.
-            handler: Handler to generate JSON schema from core schema.
+        """Generate JSON schema as array for UI, hiding ToolReference complexity.
 
         Returns:
-            JSON schema for ToolReference with ui:options.
+            JSON schema as array with ui:widget toolSelect.
         """
-        json_schema = handler(schema)
-        ui_options: dict[str, object] = {
+        json_schema: dict[str, object] = {
+            "type": "array",
+            "items": {"type": "string"},
+        }
+        if self.max_tools > 0:
+            json_schema["maxItems"] = self.max_tools
+        if self.min_tools > 0:
+            json_schema["minItems"] = self.min_tools
+        json_schema["ui:widget"] = "toolSelect"
+        json_schema["ui:options"] = {
             "setupIds": self.setup_ids,
             "moduleIds": self.module_ids,
             "tagIds": self.tag_ids,
             "categories": self.categories,
         }
-        if self.max_tools > 0:
-            ui_options["maxTools"] = self.max_tools
-        if self.min_tools > 0:
-            ui_options["minTools"] = self.min_tools
-        json_schema["ui:options"] = ui_options
-        json_schema["ui:widget"] = "toolSelect"
-        if self.max_tools > 0 or self.min_tools > 0:
-            resolved = handler.resolve_ref_schema(json_schema)
-            selected_tools_schema = resolved["properties"]["selected_tools"]
-            if self.max_tools > 0:
-                selected_tools_schema["maxItems"] = self.max_tools
-            if self.min_tools > 0:
-                selected_tools_schema["minItems"] = self.min_tools
         return json_schema
 
 
@@ -129,6 +120,24 @@ def tool_reference_input(
         Annotated type for use in Pydantic models.
     """
 
+    def convert_to_tool_reference(v: object) -> ToolReference | object:
+        """Convert list of setup IDs to ToolReference.
+
+        Returns:
+            ToolReference if input is list, otherwise original value.
+        """
+        if isinstance(v, list):
+            return ToolReference(
+                selected_tools=[SelectedTool(setup_id=sid, slug=sid) for sid in v],
+                setup_ids=setup_ids,
+                module_ids=module_ids,
+                tag_ids=tag_ids,
+                categories=categories,
+                max_tools=max_tools,
+                min_tools=min_tools,
+            )
+        return v
+
     def validate_tools_count(v: ToolReference) -> ToolReference:
         """Validate selected_tools count against min/max constraints.
 
@@ -149,6 +158,7 @@ def tool_reference_input(
 
     return Annotated[  # type: ignore[return-value]
         ToolReference,
+        BeforeValidator(convert_to_tool_reference),
         AfterValidator(validate_tools_count),
         _ToolReferenceInputSchema(
             setup_ids=setup_ids,
