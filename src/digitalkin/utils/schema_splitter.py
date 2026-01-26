@@ -59,9 +59,18 @@ class SchemaSplitter:
                 if items_ui:
                     ui_target["items"] = items_ui
             elif key in {"allOf", "oneOf", "anyOf"} and isinstance(value, list):
-                for item in value:
-                    if isinstance(item, dict):
-                        cls._extract_ui_properties(item, ui_target, defs)
+                # For oneOf/anyOf, create a mirrored structure in ui_target
+                if key in {"oneOf", "anyOf"}:
+                    ui_target[key] = []
+                    for item in value:
+                        if isinstance(item, dict):
+                            item_ui: dict[str, Any] = {}
+                            cls._extract_ui_properties(item, item_ui, defs)
+                            ui_target[key].append(item_ui)
+                else:  # allOf - merge into parent
+                    for item in value:
+                        if isinstance(item, dict):
+                            cls._extract_ui_properties(item, ui_target, defs)
             elif key in {"if", "then", "else"} and isinstance(value, dict):
                 cls._extract_ui_properties(value, ui_target, defs)
             elif key == "$ref" and isinstance(value, str) and defs is not None and value.startswith("#/$defs/"):
@@ -132,13 +141,16 @@ class SchemaSplitter:
                         json_target["allOf"].append(item)
             elif key in {"oneOf", "anyOf"} and isinstance(value, list):
                 json_target[key] = []
+                ui_target[key] = []  # Mirror structure in ui_schema
                 for item in value:
                     if isinstance(item, dict):
                         item_json_oneof_anyof: dict[str, Any] = {}
                         cls._strip_ui_properties(item, item_json_oneof_anyof)
                         json_target[key].append(item_json_oneof_anyof)
-                        # Extract UI properties from oneOf/anyOf item (resolves $ref)
-                        cls._extract_ui_properties(item, ui_target, schema_defs)
+                        # Extract UI properties into a separate dict for this variant
+                        item_ui_oneof_anyof: dict[str, Any] = {}
+                        cls._extract_ui_properties(item, item_ui_oneof_anyof, schema_defs)
+                        ui_target[key].append(item_ui_oneof_anyof)
                     else:
                         json_target[key].append(item)
             elif key in {"if", "then", "else"} and isinstance(value, dict):
@@ -200,15 +212,18 @@ class SchemaSplitter:
                     ui_target["items"] = items_ui
             elif key in {"oneOf", "anyOf"} and isinstance(value, list):
                 json_target[key] = []
+                ui_target[key] = []  # Mirror structure in ui_schema
                 for item in value:
                     if isinstance(item, dict):
                         item_json_oneof_anyof: dict[str, Any] = {}
                         cls._strip_ui_properties(item, item_json_oneof_anyof)
                         json_target[key].append(item_json_oneof_anyof)
-                        # Extract UI properties from $ref in oneOf/anyOf items
+                        # Extract UI properties for this variant
+                        item_ui_oneof_anyof: dict[str, Any] = {}
                         ref_path = item.get("$ref", "")
                         if ref_path.startswith("#/$defs/") and ref_path[8:] in defs_ui:
-                            ui_target.update(defs_ui[ref_path[8:]])
+                            item_ui_oneof_anyof.update(defs_ui[ref_path[8:]])
+                        ui_target[key].append(item_ui_oneof_anyof)
                     else:
                         json_target[key].append(item)
             elif key == "hidden":
