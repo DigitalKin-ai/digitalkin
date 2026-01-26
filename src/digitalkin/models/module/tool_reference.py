@@ -2,7 +2,7 @@
 
 from typing import Annotated
 
-from pydantic import AfterValidator, BaseModel, BeforeValidator, Field
+from pydantic import AfterValidator, BaseModel, BeforeValidator, Field, PlainSerializer
 from pydantic.annotated_handlers import GetJsonSchemaHandler
 from pydantic.json_schema import JsonSchemaValue
 from pydantic_core import CoreSchema
@@ -134,10 +134,19 @@ def tool_reference_input(
             raise ValueError(msg)
         return v
 
+    def serialize_to_list(v: ToolReference) -> list[str]:
+        """Serialize ToolReference as plain list for frontend compatibility.
+
+        Returns:
+            List of setup IDs.
+        """
+        return v.selected_tools
+
     return Annotated[  # type: ignore[return-value]
         ToolReference,
         BeforeValidator(convert_to_tool_reference),
         AfterValidator(validate_tools_count),
+        PlainSerializer(serialize_to_list, return_type=list[str]),
         _ToolReferenceInputSchema(
             setup_ids=setup_ids,
             module_ids=module_ids,

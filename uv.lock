@@ -788,7 +788,7 @@ wheels = [
 
 [[package]]
 name = "digitalkin"
-version = "0.3.2.dev26"
+version = "0.3.2.dev27"
 source = { editable = "." }
 dependencies = [
     { name = "agentic-mesh-protocol" },
