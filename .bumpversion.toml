@@ -3,7 +3,7 @@
 # https://peps.python.org/pep-0440/
 
 [tool.bumpversion]
-current_version = "0.3.2.dev28"
+current_version = "0.3.2.dev29"
 parse = """(?x)
     (?P<major>0|[1-9]\\d*)\\.
     (?P<minor>0|[1-9]\\d*)\\.

@@ -58,7 +58,7 @@ class SchemaSplitter:
                 cls._extract_ui_properties(value, items_ui, defs)
                 if items_ui:
                     ui_target["items"] = items_ui
-            elif key == "allOf" and isinstance(value, list):
+            elif key in {"allOf", "oneOf", "anyOf"} and isinstance(value, list):
                 for item in value:
                     if isinstance(item, dict):
                         cls._extract_ui_properties(item, ui_target, defs)
@@ -71,7 +71,7 @@ class SchemaSplitter:
                     cls._extract_ui_properties(defs[def_name], ui_target, defs)
 
     @classmethod
-    def _process_object(  # noqa: C901, PLR0912
+    def _process_object(  # noqa: C901, PLR0912, PLR0915
         cls,
         source: dict[str, Any],
         json_target: dict[str, Any],
@@ -123,13 +123,24 @@ class SchemaSplitter:
                 json_target["allOf"] = []
                 for item in value:
                     if isinstance(item, dict):
-                        item_json: dict[str, Any] = {}
-                        cls._strip_ui_properties(item, item_json)
-                        json_target["allOf"].append(item_json)
+                        item_json_all_of: dict[str, Any] = {}
+                        cls._strip_ui_properties(item, item_json_all_of)
+                        json_target["allOf"].append(item_json_all_of)
                         # Extract UI properties from allOf item
                         cls._extract_ui_properties(item, ui_target, schema_defs)
                     else:
                         json_target["allOf"].append(item)
+            elif key in {"oneOf", "anyOf"} and isinstance(value, list):
+                json_target[key] = []
+                for item in value:
+                    if isinstance(item, dict):
+                        item_json_oneof_anyof: dict[str, Any] = {}
+                        cls._strip_ui_properties(item, item_json_oneof_anyof)
+                        json_target[key].append(item_json_oneof_anyof)
+                        # Extract UI properties from oneOf/anyOf item (resolves $ref)
+                        cls._extract_ui_properties(item, ui_target, schema_defs)
+                    else:
+                        json_target[key].append(item)
             elif key in {"if", "then", "else"} and isinstance(value, dict):
                 json_target[key] = {}
                 cls._strip_ui_properties(value, json_target[key])
@@ -187,6 +198,19 @@ class SchemaSplitter:
                 cls._process_property(value, json_target["items"], items_ui, defs_ui)
                 if items_ui:
                     ui_target["items"] = items_ui
+            elif key in {"oneOf", "anyOf"} and isinstance(value, list):
+                json_target[key] = []
+                for item in value:
+                    if isinstance(item, dict):
+                        item_json_oneof_anyof: dict[str, Any] = {}
+                        cls._strip_ui_properties(item, item_json_oneof_anyof)
+                        json_target[key].append(item_json_oneof_anyof)
+                        # Extract UI properties from $ref in oneOf/anyOf items
+                        ref_path = item.get("$ref", "")
+                        if ref_path.startswith("#/$defs/") and ref_path[8:] in defs_ui:
+                            ui_target.update(defs_ui[ref_path[8:]])
+                    else:
+                        json_target[key].append(item)
             elif key == "hidden":
                 # Strip hidden key from json schema
                 continue
@@ -230,11 +254,20 @@ class SchemaSplitter:
                 json_target["allOf"] = []
                 for item in value:
                     if isinstance(item, dict):
-                        item_json: dict[str, Any] = {}
-                        cls._strip_ui_properties(item, item_json)
-                        json_target["allOf"].append(item_json)
+                        item_json_all_of: dict[str, Any] = {}
+                        cls._strip_ui_properties(item, item_json_all_of)
+                        json_target["allOf"].append(item_json_all_of)
                     else:
                         json_target["allOf"].append(item)
+            elif key in {"oneOf", "anyOf"} and isinstance(value, list):
+                json_target[key] = []
+                for item in value:
+                    if isinstance(item, dict):
+                        item_json_oneof_anyof: dict[str, Any] = {}
+                        cls._strip_ui_properties(item, item_json_oneof_anyof)
+                        json_target[key].append(item_json_oneof_anyof)
+                    else:
+                        json_target[key].append(item)
             elif key in {"if", "then", "else"} and isinstance(value, dict):
                 json_target[key] = {}
                 cls._strip_ui_properties(value, json_target[key])
