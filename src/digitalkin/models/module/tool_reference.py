@@ -90,6 +90,7 @@ class _ToolReferenceInputSchema:
             array_option["minItems"] = self.min_tools
 
         return {
+            "type": ["array", "object"],
             "anyOf": [
                 array_option,
                 json_schema,
