@@ -189,7 +189,7 @@ class TestToolReferenceValidation:
         assert ref.selected_tools == []
         assert ref.setup_ids == []
         assert ref.module_ids == []
-        assert ref.tags == []
+        assert ref.tag_ids == []
 
     def test_setup_ids_only_valid(self) -> None:
         """ToolReference with only setup_ids is valid."""
@@ -202,10 +202,10 @@ class TestToolReferenceValidation:
         ref = ToolReference(module_ids=["module-123"])
         assert ref.module_ids == ["module-123"]
 
-    def test_tags_only_valid(self) -> None:
-        """ToolReference with only tags is valid."""
-        ref = ToolReference(tags=["search"])
-        assert ref.tags == ["search"]
+    def test_tag_ids_only_valid(self) -> None:
+        """ToolReference with only tag_ids is valid."""
+        ref = ToolReference(tag_ids=["search"])
+        assert ref.tag_ids == ["search"]
 
     def test_selected_tools_valid(self) -> None:
         """ToolReference with selected_tools is valid."""
@@ -215,10 +215,15 @@ class TestToolReferenceValidation:
         assert len(ref.selected_tools) == 1
         assert ref.selected_tools[0].setup_id == "setup-123"
 
-    def test_string_list_creates_selected_tools(self) -> None:
-        """List of strings input creates selected_tools via tool_reference_input."""
+    def test_tool_reference_object_input(self) -> None:
+        """ToolReference object input is accepted via tool_reference_input."""
         adapter = TypeAdapter(tool_reference_input())
-        ref = adapter.validate_python(["setup-123", "setup-456"])
+        ref = adapter.validate_python({
+            "selected_tools": [
+                {"setup_id": "setup-123", "slug": "setup-123"},
+                {"setup_id": "setup-456", "slug": "setup-456"},
+            ]
+        })
         assert len(ref.selected_tools) == 2
         assert ref.selected_tools[0].setup_id == "setup-123"
         assert ref.selected_tools[1].setup_id == "setup-456"
@@ -228,11 +233,11 @@ class TestToolReferenceValidation:
         ref = ToolReference(
             setup_ids=["setup-123"],
             module_ids=["module-456"],
-            tags=["search"],
+            tag_ids=["search"],
         )
         assert ref.setup_ids == ["setup-123"]
         assert ref.module_ids == ["module-456"]
-        assert ref.tags == ["search"]
+        assert ref.tag_ids == ["search"]
 
 
 class TestToolReferenceResolution:
@@ -685,25 +690,47 @@ class TestComplexArchetypeSetup:
 class TestToolReferenceJsonSchema:
     """Tests for tool_reference_input JSON schema generation."""
 
-    def test_schema_has_anyof_with_array_option(self) -> None:
-        """Schema has anyOf with array and ToolReference options."""
+    def test_schema_is_tool_reference(self) -> None:
+        """Schema references ToolReference definition."""
         adapter = TypeAdapter(tool_reference_input())
         schema = adapter.json_schema()
-        assert "anyOf" in schema
-        assert len(schema["anyOf"]) == 2
-        assert schema["anyOf"][0]["type"] == "array"
+        assert "$ref" in schema
+        assert schema["$ref"] == "#/$defs/ToolReference"
+        assert schema["$defs"]["ToolReference"]["type"] == "object"
 
-    def test_schema_array_has_no_maxitems_when_unlimited(self) -> None:
-        """Array option has no maxItems when max_tools is 0."""
+    def test_schema_has_ui_widget(self) -> None:
+        """Schema has ui:widget set to toolSelect."""
         adapter = TypeAdapter(tool_reference_input())
         schema = adapter.json_schema()
-        assert "maxItems" not in schema["anyOf"][0]
+        assert schema["ui:widget"] == "toolSelect"
 
-    def test_factory_adds_maxitems_to_array_option(self) -> None:
-        """Factory function creates type with maxItems constraint."""
+    def test_schema_has_no_max_tools_when_zero(self) -> None:
+        """ui:options has no maxTools when max_tools is 0."""
+        adapter = TypeAdapter(tool_reference_input())
+        schema = adapter.json_schema()
+        assert "maxTools" not in schema["ui:options"]
+
+    def test_factory_adds_max_tools_to_ui_options(self) -> None:
+        """Factory function adds maxTools to ui:options when > 0."""
         adapter = TypeAdapter(tool_reference_input(max_tools=5))
         schema = adapter.json_schema()
-        assert schema["anyOf"][0]["maxItems"] == 5
+        assert schema["ui:options"]["maxTools"] == 5
+
+    def test_selected_tools_has_min_max_items(self) -> None:
+        """selected_tools property has minItems and maxItems constraints."""
+        adapter = TypeAdapter(tool_reference_input(min_tools=1, max_tools=3))
+        schema = adapter.json_schema()
+        selected_tools = schema["$defs"]["ToolReference"]["properties"]["selected_tools"]
+        assert selected_tools["minItems"] == 1
+        assert selected_tools["maxItems"] == 3
+
+    def test_selected_tools_no_constraints_when_zero(self) -> None:
+        """selected_tools has no minItems/maxItems when tools constraints are 0."""
+        adapter = TypeAdapter(tool_reference_input())
+        schema = adapter.json_schema()
+        selected_tools = schema["$defs"]["ToolReference"]["properties"]["selected_tools"]
+        assert "minItems" not in selected_tools
+        assert "maxItems" not in selected_tools
 
     def test_factory_adds_ui_options(self) -> None:
         """Factory function includes ui:options in schema."""
@@ -711,54 +738,54 @@ class TestToolReferenceJsonSchema:
             tool_reference_input(
                 setup_ids=["setup-1", "setup-2"],
                 module_ids=["module-1"],
-                tags=["tag-a"],
+                tag_ids=["tag-a"],
                 max_tools=3,
             )
         )
         schema = adapter.json_schema()
-        assert schema["ui:options"]["setup_ids"] == ["setup-1", "setup-2"]
-        assert schema["ui:options"]["module_ids"] == ["module-1"]
-        assert schema["ui:options"]["tags"] == ["tag-a"]
-        assert schema["ui:options"]["max_tools"] == 3
+        assert schema["ui:options"]["setupIds"] == ["setup-1", "setup-2"]
+        assert schema["ui:options"]["moduleIds"] == ["module-1"]
+        assert schema["ui:options"]["tagIds"] == ["tag-a"]
+        assert schema["ui:options"]["maxTools"] == 3
 
     def test_factory_validation_still_works(self) -> None:
-        """Factory type still accepts list input."""
+        """Factory type accepts ToolReference object input."""
         adapter = TypeAdapter(tool_reference_input(max_tools=3))
-        ref = adapter.validate_python(["setup-1", "setup-2"])
+        ref = adapter.validate_python({
+            "selected_tools": [
+                {"setup_id": "setup-1", "slug": "setup-1"},
+                {"setup_id": "setup-2", "slug": "setup-2"},
+            ]
+        })
         assert len(ref.selected_tools) == 2
-
-    def test_converted_reference_preserves_config(self) -> None:
-        """List input preserves setup_ids, module_ids, tags from factory."""
-        adapter = TypeAdapter(
-            tool_reference_input(
-                setup_ids=["setup-a"],
-                module_ids=["module-b"],
-                tags=["tag-c"],
-                max_tools=5,
-                min_tools=1,
-            )
-        )
-        ref = adapter.validate_python(["setup-1"])
-        assert ref.setup_ids == ["setup-a"]
-        assert ref.module_ids == ["module-b"]
-        assert ref.tags == ["tag-c"]
-        assert ref.max_tools == 5
-        assert ref.min_tools == 1
 
     def test_min_tools_validation_raises_error(self) -> None:
         """Factory type raises error when too few tools selected."""
         adapter = TypeAdapter(tool_reference_input(min_tools=2, max_tools=5))
         with pytest.raises(ValidationError):
-            adapter.validate_python(["setup-1"])
+            adapter.validate_python({
+                "selected_tools": [{"setup_id": "setup-1", "slug": "setup-1"}]
+            })
 
     def test_max_tools_validation_raises_error(self) -> None:
         """Factory type raises error when too many tools selected."""
         adapter = TypeAdapter(tool_reference_input(max_tools=2))
         with pytest.raises(ValidationError):
-            adapter.validate_python(["setup-1", "setup-2", "setup-3"])
+            adapter.validate_python({
+                "selected_tools": [
+                    {"setup_id": "setup-1", "slug": "setup-1"},
+                    {"setup_id": "setup-2", "slug": "setup-2"},
+                    {"setup_id": "setup-3", "slug": "setup-3"},
+                ]
+            })
 
     def test_valid_tools_count_passes(self) -> None:
         """Valid tool count within range passes validation."""
         adapter = TypeAdapter(tool_reference_input(min_tools=1, max_tools=3))
-        ref = adapter.validate_python(["setup-1", "setup-2"])
+        ref = adapter.validate_python({
+            "selected_tools": [
+                {"setup_id": "setup-1", "slug": "setup-1"},
+                {"setup_id": "setup-2", "slug": "setup-2"},
+            ]
+        })
         assert len(ref.selected_tools) == 2

@@ -36,7 +36,6 @@ repos:
         entry: docker compose run --rm -T tests -m 'not integration'
         language: system
         pass_filenames: false
-        always_run: true
         types: [python]
         verbose: true
-        files: \.py$
+        files: ^(src/|tests/).*\.py$
