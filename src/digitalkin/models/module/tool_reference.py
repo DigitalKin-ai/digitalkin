@@ -7,47 +7,33 @@ from pydantic.annotated_handlers import GetJsonSchemaHandler
 from pydantic.json_schema import JsonSchemaValue
 from pydantic_core import CoreSchema
 
-from digitalkin.models.module.tool_cache import (
-    SelectedTool,
-    ToolModuleInfo,
-    module_info_to_tool_module_info,
-)
+from digitalkin.models.module.tool_cache import ToolModuleInfo, module_info_to_tool_module_info
 from digitalkin.services.communication.communication_strategy import CommunicationStrategy
 from digitalkin.services.registry import RegistryStrategy
 
 
 class ToolReference(BaseModel):
-    """Tool selection configuration and reference."""
+    """Tool selection containing setup IDs."""
 
-    selected_tools: list[SelectedTool] = Field(default=[], description="Tools selected by the user.")
-    setup_ids: list[str] = Field(default=[], description="Setup IDs for the user to choose from.")
-    module_ids: list[str] = Field(default=[], description="Module IDs for the user to choose from.")
-    tag_ids: list[str] = Field(default=[], description="Tag IDs for the user to choose from.")
-    categories: list[str] = Field(default=[], description="Categories for the user to choose from.")
-    max_tools: int = Field(default=0, description="Maximum tools to select. 0 for unlimited.")
-    min_tools: int = Field(default=0, description="Minimum tools to select. 0 for no minimum.")
+    selected_tools: list[str] = Field(default=[], description="Setup IDs of selected tools.")
 
     async def resolve(self, registry: RegistryStrategy, communication: CommunicationStrategy) -> list[ToolModuleInfo]:
-        """Resolve this reference using the registry.
+        """Resolve selected tools using the registry.
 
         Args:
             registry: Registry service for module discovery.
             communication: Communication service for module schemas.
 
         Returns:
-            List of ToolModuleInfo if resolved.
+            List of ToolModuleInfo for resolved tools.
         """
         resolved: list[ToolModuleInfo] = []
-        for tool in self.selected_tools:
-            setup = registry.get_setup(tool.setup_id)
+        for setup_id in self.selected_tools:
+            setup = registry.get_setup(setup_id)
             if setup and setup.module_id:
                 info = registry.discover_by_id(setup.module_id)
-                tool.slug = tool.setup_id
-                tool.module_id = setup.module_id
-                tool.name = setup.name
                 if info:
-                    resolved.append(await module_info_to_tool_module_info(info, tool, communication))
-
+                    resolved.append(await module_info_to_tool_module_info(info, setup_id, setup.name, communication))
         return resolved
 
 
@@ -127,15 +113,7 @@ def tool_reference_input(
             ToolReference if input is list, otherwise original value.
         """
         if isinstance(v, list):
-            return ToolReference(
-                selected_tools=[SelectedTool(setup_id=sid, slug=sid) for sid in v],
-                setup_ids=setup_ids,
-                module_ids=module_ids,
-                tag_ids=tag_ids,
-                categories=categories,
-                max_tools=max_tools,
-                min_tools=min_tools,
-            )
+            return ToolReference(selected_tools=v)
         return v
 
     def validate_tools_count(v: ToolReference) -> ToolReference:

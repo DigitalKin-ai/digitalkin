@@ -120,7 +120,8 @@ class ToolCache(BaseModel):
 
 async def module_info_to_tool_module_info(
     module_info: ModuleInfo,
-    tool: SelectedTool,
+    setup_id: str,
+    tool_name: str,
     communication: "CommunicationStrategy",
     *,
     llm_format: bool = True,
@@ -132,7 +133,8 @@ async def module_info_to_tool_module_info(
 
     Args:
         module_info: Module info from registry.
-        tool: Selected tool information.
+        setup_id: Setup ID of the selected tool.
+        tool_name: Name of the tool.
         communication: Communication strategy for gRPC calls.
         llm_format: Use LLM-friendly schema format.
 
@@ -161,8 +163,8 @@ async def module_info_to_tool_module_info(
         documentation=module_info.documentation,
         status=module_info.status,
         tools=tools,
-        setup_id=tool.setup_id,
-        tool_name=tool.name,
+        setup_id=setup_id,
+        tool_name=tool_name,
     )
 
 

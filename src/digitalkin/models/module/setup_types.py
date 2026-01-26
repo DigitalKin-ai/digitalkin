@@ -399,7 +399,9 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
             logger.info("ToolReference '%s' has no selected tools, skipping", field_name)
             return
 
-        tools_to_resolve = [tool for tool in tool_ref.selected_tools if tool.slug and tool.slug not in resolved_tools]
+        tools_to_resolve = [
+            setup_id for setup_id in tool_ref.selected_tools if setup_id and setup_id not in resolved_tools
+        ]
 
         if not tools_to_resolve:
             logger.info("All tools for '%s' already cached", field_name)
@@ -501,8 +503,8 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
             if field_value is None:
                 continue
             if isinstance(field_value, ToolReference):
-                for tool in field_value.selected_tools:
-                    tool_module_info = self.resolved_tools.get(tool.slug or "")
+                for setup_id in field_value.selected_tools:
+                    tool_module_info = self.resolved_tools.get(setup_id)
                     if tool_module_info:
                         cache.add(tool_module_info)
             elif isinstance(field_value, BaseModel):
@@ -521,8 +523,8 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
         """
         for item in items:
             if isinstance(item, ToolReference):
-                for tool in item.selected_tools:
-                    tool_module_info = self.resolved_tools.get(tool.slug or "")
+                for setup_id in item.selected_tools:
+                    tool_module_info = self.resolved_tools.get(setup_id)
                     if tool_module_info:
                         cache.add(tool_module_info)
             elif isinstance(item, BaseModel):
@@ -537,8 +539,8 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
         """
         for item in mapping.values():
             if isinstance(item, ToolReference):
-                for tool in item.selected_tools:
-                    tool_module_info = self.resolved_tools.get(tool.slug or "")
+                for setup_id in item.selected_tools:
+                    tool_module_info = self.resolved_tools.get(setup_id)
                     if tool_module_info:
                         cache.add(tool_module_info)
             elif isinstance(item, BaseModel):

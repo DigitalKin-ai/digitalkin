@@ -3,10 +3,9 @@
 from unittest.mock import AsyncMock, Mock
 
 import pytest
-from pydantic import Field
 
 from digitalkin.models.module.setup_types import SetupModel
-from digitalkin.models.module.tool_cache import SelectedTool, ToolCache, ToolDefinition, ToolModuleInfo, ToolParameter
+from digitalkin.models.module.tool_cache import ToolCache, ToolDefinition, ToolModuleInfo, ToolParameter
 from digitalkin.models.module.tool_reference import ToolReference
 from digitalkin.models.services.registry import ModuleInfo, RegistryModuleType, SetupInfo
 
@@ -124,9 +123,7 @@ class TestSetupModelToolCache:
             my_tool: ToolReference
 
         # Create setup with tool reference
-        tool_ref = ToolReference(
-            selected_tools=[SelectedTool(setup_id="setup-123", slug="setup-123")]
-        )
+        tool_ref = ToolReference(selected_tools=["setup-123"])
 
         setup = TestSetup(my_tool=tool_ref)
         # Pre-populate resolved_tools using setup_id as key (matches caching logic)
@@ -143,7 +140,7 @@ class TestSetupModelToolCache:
         class TestSetup(SetupModel):
             my_tool: ToolReference
 
-        tool_ref = ToolReference(module_ids=["some-module"])
+        tool_ref = ToolReference(selected_tools=[])
 
         setup = TestSetup(my_tool=tool_ref)
         cache = setup.build_tool_cache()
@@ -156,9 +153,7 @@ class TestSetupModelToolCache:
         class TestSetup(SetupModel):
             my_tool: ToolReference
 
-        tool_ref = ToolReference(
-            selected_tools=[SelectedTool(setup_id="setup-123", slug="setup-123")]
-        )
+        tool_ref = ToolReference(selected_tools=["setup-123"])
 
         setup = TestSetup(my_tool=tool_ref)
         # Pre-populate resolved_tools using setup_id as key
@@ -190,7 +185,7 @@ class TestResolvedToolsField:
         class TestSetup(SetupModel):
             my_tool: ToolReference
 
-        tool_ref = ToolReference(module_ids=["some-module"])
+        tool_ref = ToolReference(selected_tools=[])
         setup = TestSetup(my_tool=tool_ref)
         assert setup.resolved_tools == {}
 
@@ -203,12 +198,8 @@ class TestResolvedToolsField:
             tool_a: ToolReference
             tool_b: ToolReference
 
-        tool_ref_a = ToolReference(
-            selected_tools=[SelectedTool(setup_id="setup-123", slug="setup-123")]
-        )
-        tool_ref_b = ToolReference(
-            selected_tools=[SelectedTool(setup_id="setup-456", slug="setup-456")]
-        )
+        tool_ref_a = ToolReference(selected_tools=["setup-123"])
+        tool_ref_b = ToolReference(selected_tools=["setup-456"])
 
         setup = TestSetup(tool_a=tool_ref_a, tool_b=tool_ref_b)
         # Pre-populate resolved_tools using setup_id as key
@@ -238,21 +229,13 @@ class TestToolReferenceSelectedTools:
 
     def test_selected_tools_with_setup_id(self) -> None:
         """Test selected_tools is set correctly."""
-        tool_ref = ToolReference(
-            selected_tools=[SelectedTool(setup_id="setup-123", slug="setup-123")]
-        )
+        tool_ref = ToolReference(selected_tools=["setup-123"])
         assert len(tool_ref.selected_tools) == 1
-        assert tool_ref.selected_tools[0].setup_id == "setup-123"
+        assert tool_ref.selected_tools[0] == "setup-123"
 
-    def test_selected_tools_empty_for_constraints_only(self) -> None:
-        """Test selected_tools is empty for constraint-only references."""
-        tool_ref = ToolReference(tags=["search-tool"])
-        assert len(tool_ref.selected_tools) == 0
-
-    def test_module_ids_set_for_constraints(self) -> None:
-        """Test module_ids is set for constraint references."""
-        tool_ref = ToolReference(module_ids=["module-123"])
-        assert tool_ref.module_ids == ["module-123"]
+    def test_selected_tools_empty_by_default(self) -> None:
+        """Test selected_tools is empty by default."""
+        tool_ref = ToolReference()
         assert len(tool_ref.selected_tools) == 0
 
 
@@ -266,9 +249,7 @@ class TestResolvedToolsCacheBehavior:
         class TestSetup(SetupModel):
             my_tool: ToolReference
 
-        tool_ref = ToolReference(
-            selected_tools=[SelectedTool(setup_id="setup-123", slug="setup-123")]
-        )
+        tool_ref = ToolReference(selected_tools=["setup-123"])
         setup = TestSetup(my_tool=tool_ref)
 
         mock_registry = Mock()
@@ -307,9 +288,7 @@ class TestResolvedToolsCacheBehavior:
         class TestSetup(SetupModel):
             my_tool: ToolReference
 
-        tool_ref = ToolReference(
-            selected_tools=[SelectedTool(setup_id="setup-123", slug="setup-123")]
-        )
+        tool_ref = ToolReference(selected_tools=["setup-123"])
         setup = TestSetup(my_tool=tool_ref)
 
         mock_registry = Mock()
@@ -352,9 +331,7 @@ class TestResolvedToolsCacheBehavior:
         class TestSetup(SetupModel):
             my_tool: ToolReference
 
-        tool_ref = ToolReference(
-            selected_tools=[SelectedTool(setup_id="setup-123", slug="setup-123")]
-        )
+        tool_ref = ToolReference(selected_tools=["setup-123"])
         setup = TestSetup(my_tool=tool_ref)
 
         # Manually set resolved state using setup_id as key
@@ -388,12 +365,8 @@ class TestResolvedToolsCacheBehavior:
             tool_b: ToolReference
 
         setup = TestSetup(
-            tool_a=ToolReference(
-                selected_tools=[SelectedTool(setup_id="setup-123", slug="setup-123")]
-            ),
-            tool_b=ToolReference(
-                selected_tools=[SelectedTool(setup_id="setup-456", slug="setup-456")]
-            ),
+            tool_a=ToolReference(selected_tools=["setup-123"]),
+            tool_b=ToolReference(selected_tools=["setup-456"]),
         )
 
         mock_registry = Mock()
@@ -454,12 +427,8 @@ class TestResolvedToolsCacheBehavior:
             tool_b: ToolReference
 
         setup = TestSetup(
-            tool_a=ToolReference(
-                selected_tools=[SelectedTool(setup_id="setup-123", slug="setup-123")]
-            ),
-            tool_b=ToolReference(
-                selected_tools=[SelectedTool(setup_id="setup-456", slug="setup-456")]
-            ),
+            tool_a=ToolReference(selected_tools=["setup-123"]),
+            tool_b=ToolReference(selected_tools=["setup-456"]),
         )
 
         # Pre-populate cache with only tool_a using setup_id as key

@@ -39,3 +39,4 @@ repos:
         types: [python]
         verbose: true
         files: ^(src/|tests/).*\.py$
+        exclude: __version__\.py$
