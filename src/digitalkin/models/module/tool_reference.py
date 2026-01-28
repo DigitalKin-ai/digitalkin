@@ -43,7 +43,7 @@ class _ToolReferenceInputSchema:
     def __init__(
         self,
         setup_ids: list[str],
-        module_ids: list[str],
+        module_ids: list[str] | None,
         tag_ids: list[str],
         categories: list[str],
         max_tools: int = 0,
@@ -77,16 +77,17 @@ class _ToolReferenceInputSchema:
         json_schema["ui:widget"] = "toolSelect"
         json_schema["ui:options"] = {
             "setupIds": self.setup_ids,
-            "moduleIds": self.module_ids,
             "tagIds": self.tag_ids,
             "categories": self.categories,
+            "moduleIds": self.module_ids or [],
+            "showModules": self.module_ids is not None,
         }
         return json_schema
 
 
 def tool_reference_input(
     setup_ids: list[str] = [],
-    module_ids: list[str] = [],
+    module_ids: list[str] | None = [],
     tag_ids: list[str] = [],
     categories: list[str] = [],
     max_tools: int = 0,

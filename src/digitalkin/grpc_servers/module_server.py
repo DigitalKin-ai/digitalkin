@@ -13,7 +13,6 @@ from digitalkin.logger import logger
 from digitalkin.models.grpc_servers.models import (
     ClientConfig,
     ModuleServerConfig,
-    SecurityMode,
 )
 from digitalkin.modules._base_module import BaseModule
 from digitalkin.services.registry import GrpcRegistry
@@ -45,8 +44,8 @@ class ModuleServer(BaseServer):
 
         Args:
             module_class: The module instance to be served.
-            server_config: Server configuration including registry address if auto-registration is desired.
-            client_config: Client configuration used by services.
+            server_config: Server configuration.
+            client_config: Client configuration used by services and registry connection.
         """
         super().__init__(server_config)
         self.module_class = module_class
@@ -55,9 +54,6 @@ class ModuleServer(BaseServer):
         self.module_servicer: ModuleServicer | None = None
         self.registry: RegistryStrategy | None = None
 
-        self._registry_client_config: ClientConfig | None = None
-        if self.server_config.registry_address:
-            self._registry_client_config = self._build_registry_client_config()
         self._prepare_registry_config()
 
     def _register_servicers(self) -> None:
@@ -85,36 +81,17 @@ class ModuleServer(BaseServer):
         This ensures ServicesConfig created by JobManager will have registry config,
         allowing spawned module instances to inherit the registry configuration.
         """
-        if not self._registry_client_config:
+        if not self.client_config:
             return
 
-        self.module_class.services_config_params["registry"] = {"client_config": self._registry_client_config}
-
-    def _build_registry_client_config(self) -> ClientConfig:
-        """Build ClientConfig for registry from server_config.registry_address.
-
-        Returns:
-            ClientConfig configured for registry connection.
-        """
-        host, port = self.server_config.registry_address.rsplit(":", 1)
-        return ClientConfig(
-            host=host,
-            port=int(port),
-            mode=self.server_config.mode,
-            security=self.client_config.security if self.client_config else SecurityMode.INSECURE,
-            credentials=self.client_config.credentials if self.client_config else None,
-        )
+        self.module_class.services_config_params["registry"] = {"client_config": self.client_config}
 
     def _init_registry(self) -> None:
-        """Initialize server-level registry client for registration.
-
-        Note: services_config_params["registry"] is already set in _prepare_registry_config()
-        which runs in __init__(). This method only creates the server-level client instance.
-        """
-        if not self._registry_client_config:
+        """Initialize server-level registry client for registration."""
+        if not self.client_config:
             return
 
-        self.registry = GrpcRegistry("", "", "", self._registry_client_config)
+        self.registry = GrpcRegistry("", "", "", self.client_config)
 
     def start(self) -> None:
         """Start the module server and register with the registry if configured."""
@@ -170,20 +147,21 @@ class ModuleServer(BaseServer):
             )
             return
 
+        advertise_address = self.server_config.advertise_host or self.server_config.host
+
         logger.info(
             "Attempting to register module with registry",
             extra={
                 "module_id": module_id,
-                "address": self.server_config.host,
+                "address": advertise_address,
                 "port": self.server_config.port,
                 "version": version,
-                "registry_address": self.server_config.registry_address,
             },
         )
 
         result = self.registry.register(
             module_id=module_id,
-            address=self.server_config.host,
+            address=advertise_address,
             port=self.server_config.port,
             version=version,
         )
@@ -193,16 +171,12 @@ class ModuleServer(BaseServer):
                 "Module registered successfully",
                 extra={
                     "module_id": result.module_id,
-                    "address": self.server_config.host,
+                    "address": advertise_address,
                     "port": self.server_config.port,
-                    "registry_address": self.server_config.registry_address,
                 },
             )
         else:
             logger.warning(
                 "Module registration returned None (module may not exist in registry)",
-                extra={
-                    "module_id": module_id,
-                    "registry_address": self.server_config.registry_address,
-                },
+                extra={"module_id": module_id, "address": advertise_address},
             )

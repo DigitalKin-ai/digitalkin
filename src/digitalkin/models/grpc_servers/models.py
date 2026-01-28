@@ -344,10 +344,12 @@ class ModuleServerConfig(ServerConfig):
     """Configuration for Module gRPC server.
 
     Attributes:
-        registry_address: Address of the registry server
+        advertise_host: Public hostname/IP sent to registry for discovery. Falls back to host if not set.
     """
 
-    registry_address: str = Field(..., description="Address of the registry server")
+    advertise_host: str | None = Field(
+        None, description="Public hostname/IP sent to registry for discovery. Falls back to host if not set."
+    )
 
 
 class RegistryServerConfig(ServerConfig):

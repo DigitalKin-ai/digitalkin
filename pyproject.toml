@@ -25,7 +25,7 @@
         "Programming Language :: Python",
         "Topic :: Software Development :: Libraries",
     ]
-    version = "0.3.2.dev30"
+    version = "0.3.2.dev31"
 
     dependencies = [
         "agentic-mesh-protocol==0.2.1.dev0",
@@ -61,7 +61,7 @@
         "mypy>=1.19.1",
         "pre-commit>=4.5.1",
         "pyright>=1.1.407",
-        "ruff>=0.14.9",
+        "ruff>=0.14.14",
         "twine>=6.2.0",
         "typos>=1.40.0",
     ]

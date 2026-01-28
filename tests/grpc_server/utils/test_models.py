@@ -296,12 +296,12 @@ class TestServerConfigSubclasses:
 
     def test_module_server_config(self) -> None:
         """Test ModuleServerConfig specific properties."""
-        config = ModuleServerConfig(registry_address="localhost:50051")
-        expected_registry_address = "localhost:50051"
+        config = ModuleServerConfig(advertise_host="digitalkin-sandbox-agno-server")
+        expected_advertise_host = "digitalkin-sandbox-agno-server"
 
-        if config.registry_address != expected_registry_address:
+        if config.advertise_host != expected_advertise_host:
             pytest.fail(
-                f"Expected registry_address to be '{expected_registry_address}', got '{config.registry_address}'"
+                f"Expected advertise_host to be '{expected_advertise_host}', got '{config.advertise_host}'"
             )
 
     def test_registry_server_config(self) -> None:
