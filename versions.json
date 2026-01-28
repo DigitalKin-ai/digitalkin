@@ -57,6 +57,11 @@
     "aliases": []
   },
   {
+    "version": "feat-cost_schema_cleanup",
+    "title": "feat-cost_schema_cleanup",
+    "aliases": []
+  },
+  {
     "version": "feat-communication-service",
     "title": "feat-communication-service",
     "aliases": []
