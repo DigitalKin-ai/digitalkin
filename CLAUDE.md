@@ -183,6 +183,38 @@ Every code change must be evaluated against these principles:
 
 Before writing any code, ask: "Is this the most minimal way to achieve this? Can I remove anything?"
 
+### Prohibited Patterns
+The following patterns are **strictly prohibited** in this codebase:
+
+1. **No `hasattr()`, `getattr()`, `setattr()`**: These indicate poor type design. Use explicit type checks (`is None`, `is not None`) or proper type annotations instead. If an attribute might not exist, the class design is wrong.
+2. **No `from __future__ import annotations`**: Use direct imports and string literals for forward references when needed.
+
+### Docstring Standard (Google Style)
+All docstrings must follow Google style with these sections (when applicable):
+
+```python
+def method(self, param1: str, param2: int) -> bool:
+    """Brief one-line description.
+
+    Longer description if needed (optional).
+
+    Args:
+        param1: Description of param1.
+        param2: Description of param2.
+
+    Returns:
+        Description of return value.
+
+    Raises:
+        ValueError: When validation fails.
+
+    Yields:
+        Description of yielded values (for generators).
+    """
+```
+
+Keep docstrings lean and professional. No flowery language, no numbered steps, no obvious explanations.
+
 ### Code Organization
 - **Encapsulation**: Keep related functionality together within classes
 - **Private methods**: Only create private methods (`_method_name`) if the code is reused within the class

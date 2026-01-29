@@ -45,8 +45,22 @@ def mock_db():
 
 @pytest.fixture
 def mock_module():
-    """Mock BaseModule instance."""
-    return MagicMock(spec=BaseModule)
+    """Mock BaseModule instance with context.session for session_ids property."""
+    module = MagicMock(spec=BaseModule)
+    # Mock context.session with current_ids() method for session_ids property
+    module.context = MagicMock()
+    module.context.session = MagicMock()
+    module.context.session.setup_id = "setup:test_setup"
+    module.context.session.setup_version_id = "setup_version:test_version"
+    module.context.session.current_ids = MagicMock(
+        return_value={
+            "job_id": "test_task_123",
+            "mission_id": "missions:test_mission",
+            "setup_id": "setup:test_setup",
+            "setup_version_id": "setup_version:test_version",
+        }
+    )
+    return module
 
 
 @pytest.fixture
@@ -1572,11 +1586,13 @@ class TestRegressionSnapshots:
 
             payload = mock_db.create.call_args[0][1]
 
-            # Snapshot of expected structure
-            expected_keys = {"task_id", "mission_id", "timestamp"}
+            # Snapshot of expected structure (updated with setup_id and setup_version_id)
+            expected_keys = {"task_id", "mission_id", "setup_id", "setup_version_id", "timestamp"}
             assert set(payload.keys()) == expected_keys
             assert payload["task_id"] == "test_task_123"
             assert payload["mission_id"] == "missions:test_mission"
+            assert payload["setup_id"] == "setup:test_setup"
+            assert payload["setup_version_id"] == "setup_version:test_version"
             assert isinstance(payload["timestamp"], datetime.datetime)
 
     @pytest.mark.asyncio
@@ -1591,11 +1607,13 @@ class TestRegressionSnapshots:
         await task_session._handle_cancel()
 
         payload = mock_db.update.call_args[0][2]
-        # Snapshot of expected structure
-        expected_keys = {"task_id", "mission_id", "action", "status", "payload", "timestamp"}
+        # Snapshot of expected structure (updated with setup_id and setup_version_id)
+        expected_keys = {"task_id", "mission_id", "setup_id", "setup_version_id", "action", "status", "payload", "timestamp"}
         assert set(payload.keys()) == expected_keys
         assert payload["mission_id"] == "missions:test_mission"
         assert payload["task_id"] == "test_task_123"
+        assert payload["setup_id"] == "setup:test_setup"
+        assert payload["setup_version_id"] == "setup_version:test_version"
         assert payload["action"] == SignalType.ACK_CANCEL.value
         assert payload["status"] == TaskStatus.CANCELLED.value
 
@@ -2061,8 +2079,8 @@ class TestLoggingValidation:
         mock_logger.error.assert_called()
         call_args = mock_logger.error.call_args
 
-        # Verify task_id in extra context
-        assert call_args[1].get("extra", {}).get("task_id") == "test_task_123"
+        # Verify job_id in extra context (via session_ids property)
+        assert call_args[1].get("extra", {}).get("job_id") == "test_task_123"
 
     @pytest.mark.asyncio
     async def test_cancellation_logs_with_correct_level(self, task_session, mock_db, mock_logger):

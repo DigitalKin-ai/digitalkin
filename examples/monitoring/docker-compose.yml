@@ -1,0 +1,59 @@
+# DigitalKin Monitoring Stack
+#
+# This is a standalone monitoring setup for DigitalKin modules.
+# Copy this entire directory to your project and customize as needed.
+#
+# Usage:
+#   docker compose up -d
+#
+# Access:
+#   - Prometheus: http://localhost:9090
+#   - Grafana: http://localhost:3000 (admin/admin)
+#
+# Prerequisites:
+#   - Your module server must expose metrics on port 8081 (or update prometheus/prometheus.yml)
+#   - Start metrics server in your module:
+#
+#     from digitalkin.observability import start_metrics_server
+#     start_metrics_server(port=8081)
+
+services:
+  prometheus:
+    container_name: digitalkin-prometheus
+    image: prom/prometheus:${PROMETHEUS_IMAGE_TAG:-v2.47.0}
+    ports:
+      - ${PROMETHEUS_PORT:-9090}:9090
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--web.enable-lifecycle'
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  grafana:
+    container_name: digitalkin-grafana
+    image: grafana/grafana:${GRAFANA_IMAGE_TAG:-10.1.0}
+    ports:
+      - ${GRAFANA_PORT:-3000}:3000
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_ROOT_URL=${GRAFANA_ROOT_URL:-http://localhost:3000}
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+volumes:
+  prometheus-data:
+  grafana-data:

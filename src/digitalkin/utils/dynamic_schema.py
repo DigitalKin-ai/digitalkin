@@ -136,6 +136,10 @@ class DynamicField:
         return hash(tuple(sorted(self.fetchers.keys())))
 
 
+# Alias for cleaner API: `Dynamic` is shorter than `DynamicField`
+Dynamic = DynamicField
+
+
 def get_dynamic_metadata(field_info: FieldInfo) -> DynamicField | None:
     """Extract DynamicField metadata from a FieldInfo's metadata list.
 

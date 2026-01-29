@@ -41,6 +41,19 @@ class MockModule(BaseModule):
         self.setup_id = setup_id
         self.setup_version_id = setup_version_id
         self.large_data = b"x" * (1024 * 1024)  # 1MB of data for memory tracking
+        # Mock context.session for TaskSession.session_ids property
+        self.context = Mock()
+        self.context.session = Mock()
+        self.context.session.setup_id = setup_id
+        self.context.session.setup_version_id = setup_version_id
+        self.context.session.current_ids = Mock(
+            return_value={
+                "job_id": job_id,
+                "mission_id": mission_id,
+                "setup_id": setup_id,
+                "setup_version_id": setup_version_id,
+            }
+        )
 
     def _init_strategies(self, mission_id: str, setup_id: str, setup_version_id: str) -> dict[str, Any]:
         """Override to skip service initialization in tests."""

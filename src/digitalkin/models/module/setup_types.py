@@ -1,0 +1,547 @@
+"""Setup model types with dynamic schema resolution and tool reference support."""
+
+import copy
+import types
+import typing
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, TypeVar, cast, get_args, get_origin
+
+from pydantic import BaseModel, ConfigDict, Field, create_model
+
+from digitalkin.logger import logger
+from digitalkin.models.module.tool_cache import ToolCache, ToolModuleInfo
+from digitalkin.models.module.tool_reference import ToolReference
+from digitalkin.utils.dynamic_schema import (
+    DynamicField,
+    get_fetchers,
+    has_dynamic,
+    resolve_safe,
+)
+
+if TYPE_CHECKING:
+    from pydantic.fields import FieldInfo
+
+    from digitalkin.services.communication import CommunicationStrategy
+    from digitalkin.services.registry import RegistryStrategy
+
+SetupModelT = TypeVar("SetupModelT", bound="SetupModel")
+
+
+class SetupModel(BaseModel, Generic[SetupModelT]):
+    """Base setup model with dynamic schema and tool cache support."""
+
+    _clean_model_cache: ClassVar[dict[tuple[type, bool, bool], type]] = {}
+    resolved_tools: dict[str, ToolModuleInfo] = Field(
+        default_factory=dict,
+        json_schema_extra={"hidden": True},
+    )
+
+    @classmethod
+    async def get_clean_model(
+        cls,
+        *,
+        config_fields: bool,
+        hidden_fields: bool,
+        force: bool = False,
+    ) -> "type[SetupModelT]":
+        """Build filtered model based on json_schema_extra metadata.
+
+        Args:
+            config_fields: Include fields with json_schema_extra["config"] = True.
+            hidden_fields: Include fields with json_schema_extra["hidden"] = True.
+            force: Refresh dynamic schema fields by calling providers.
+
+        Returns:
+            New BaseModel subclass with filtered fields.
+        """
+        cache_key = (cls, config_fields, hidden_fields)
+        if not force and cache_key in cls._clean_model_cache:
+            return cast("type[SetupModelT]", cls._clean_model_cache[cache_key])
+
+        clean_fields: dict[str, Any] = {}
+
+        for name, field_info in cls.model_fields.items():
+            extra = field_info.json_schema_extra or {}
+            is_config = bool(extra.get("config", False)) if isinstance(extra, dict) else False
+            is_hidden = bool(extra.get("hidden", False)) if isinstance(extra, dict) else False
+
+            if is_config and not config_fields:
+                continue
+            if is_hidden and not hidden_fields:
+                continue
+
+            current_field_info = field_info
+            current_annotation = field_info.annotation
+
+            if force:
+                if has_dynamic(field_info):
+                    current_field_info = await cls._refresh_field_schema(name, field_info)
+
+                nested_model = cls._get_base_model_type(current_annotation)
+                if nested_model is not None:
+                    refreshed_nested = await cls._refresh_nested_model(nested_model)
+                    if refreshed_nested is not nested_model:
+                        current_annotation = refreshed_nested
+                        current_field_info = copy.deepcopy(current_field_info)
+                        current_field_info.annotation = current_annotation
+
+            clean_fields[name] = (current_annotation, current_field_info)
+
+        root_extra = cls.model_config.get("json_schema_extra", {})
+
+        m = create_model(
+            f"{cls.__name__}",
+            __base__=SetupModel,
+            __config__=ConfigDict(
+                arbitrary_types_allowed=True,
+                json_schema_extra=copy.deepcopy(root_extra) if isinstance(root_extra, dict) else root_extra,
+            ),
+            **clean_fields,
+        )
+
+        if not force:
+            cls._clean_model_cache[cache_key] = m
+
+        return cast("type[SetupModelT]", m)
+
+    @classmethod
+    def _get_base_model_type(cls, annotation: "type | None") -> "type[BaseModel] | None":
+        """Extract BaseModel type from annotation.
+
+        Args:
+            annotation: Type annotation to inspect.
+
+        Returns:
+            BaseModel subclass if found, None otherwise.
+        """
+        if annotation is None:
+            return None
+
+        if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+            return annotation
+
+        origin = get_origin(annotation)
+        if origin is None:
+            return None
+
+        args = get_args(annotation)
+        return cls._extract_base_model_from_args(origin, args)
+
+    @classmethod
+    def _extract_base_model_from_args(
+        cls,
+        origin: type,
+        args: "tuple[type, ...]",
+    ) -> "type[BaseModel] | None":
+        """Extract BaseModel from generic type arguments.
+
+        Args:
+            origin: Generic origin type (list, dict, Union, etc.).
+            args: Type arguments.
+
+        Returns:
+            BaseModel subclass if found, None otherwise.
+        """
+        if origin is typing.Union or origin is types.UnionType:
+            return cls._find_base_model_in_args(args)
+
+        if origin in {list, set, frozenset} and args:
+            return cls._check_base_model(args[0])
+
+        dict_value_index = 1
+        if origin is dict and len(args) > dict_value_index:
+            return cls._check_base_model(args[dict_value_index])
+
+        if origin is tuple:
+            return cls._find_base_model_in_args(args, skip_ellipsis=True)
+
+        return None
+
+    @classmethod
+    def _check_base_model(cls, arg: type) -> "type[BaseModel] | None":
+        """Check if arg is a BaseModel subclass.
+
+        Args:
+            arg: Type to check.
+
+        Returns:
+            The type if it's a BaseModel subclass, None otherwise.
+        """
+        if isinstance(arg, type) and issubclass(arg, BaseModel):
+            return arg
+        return None
+
+    @classmethod
+    def _find_base_model_in_args(
+        cls,
+        args: "tuple[type, ...]",
+        *,
+        skip_ellipsis: bool = False,
+    ) -> "type[BaseModel] | None":
+        """Find first BaseModel in type args.
+
+        Args:
+            args: Type arguments to search.
+            skip_ellipsis: Skip ellipsis in tuple types.
+
+        Returns:
+            First BaseModel subclass found, None otherwise.
+        """
+        for arg in args:
+            if arg is type(None):
+                continue
+            if skip_ellipsis and arg is ...:
+                continue
+            result = cls._check_base_model(arg)
+            if result is not None:
+                return result
+        return None
+
+    @classmethod
+    async def _refresh_nested_model(cls, model_cls: "type[BaseModel]") -> "type[BaseModel]":
+        """Refresh dynamic fields in a nested BaseModel.
+
+        Args:
+            model_cls: Nested model class to refresh.
+
+        Returns:
+            New model class with refreshed fields, or original if no changes.
+        """
+        has_changes = False
+        clean_fields: dict[str, Any] = {}
+
+        for name, field_info in model_cls.model_fields.items():
+            current_field_info = field_info
+            current_annotation = field_info.annotation
+
+            if has_dynamic(field_info):
+                current_field_info = await cls._refresh_field_schema(name, field_info)
+                has_changes = True
+
+            nested_model = cls._get_base_model_type(current_annotation)
+            if nested_model is not None:
+                refreshed_nested = await cls._refresh_nested_model(nested_model)
+                if refreshed_nested is not nested_model:
+                    current_annotation = refreshed_nested
+                    current_field_info = copy.deepcopy(current_field_info)
+                    current_field_info.annotation = current_annotation
+                    has_changes = True
+
+            clean_fields[name] = (current_annotation, current_field_info)
+
+        if not has_changes:
+            return model_cls
+
+        root_extra = model_cls.model_config.get("json_schema_extra", {})
+
+        return create_model(
+            model_cls.__name__,
+            __base__=BaseModel,
+            __config__=ConfigDict(
+                arbitrary_types_allowed=True,
+                json_schema_extra=copy.deepcopy(root_extra) if isinstance(root_extra, dict) else root_extra,
+            ),
+            **clean_fields,
+        )
+
+    @classmethod
+    async def _refresh_field_schema(cls, field_name: str, field_info: "FieldInfo") -> "FieldInfo":
+        """Refresh field's json_schema_extra with values from dynamic providers.
+
+        Args:
+            field_name: Name of field being refreshed.
+            field_info: Original FieldInfo with dynamic providers.
+
+        Returns:
+            New FieldInfo with resolved values, or original if all fetchers fail.
+        """
+        fetchers = get_fetchers(field_info)
+
+        if not fetchers:
+            return field_info
+
+        result = await resolve_safe(fetchers)
+
+        if result.errors:
+            for key, error in result.errors.items():
+                logger.warning(
+                    "Failed to resolve '%s' for field '%s': %s",
+                    key,
+                    field_name,
+                    error,
+                )
+
+        if not result.values:
+            return field_info
+
+        extra = field_info.json_schema_extra or {}
+        new_extra = {**extra, **result.values} if isinstance(extra, dict) else result.values
+
+        new_field_info = copy.deepcopy(field_info)
+        new_field_info.json_schema_extra = new_extra
+        new_field_info.metadata = [m for m in new_field_info.metadata if not isinstance(m, DynamicField)]
+
+        return new_field_info
+
+    async def resolve_tool_references(
+        self, registry: "RegistryStrategy", communication: "CommunicationStrategy"
+    ) -> None:
+        """Resolve all ToolReference fields recursively.
+
+        Args:
+            registry: Registry service for module discovery.
+            communication: Communication service for module schemas.
+        """
+        logger.info("Starting resolve_tool_references")
+        await self._resolve_tool_references_recursive(
+            self,
+            registry,
+            communication,
+            self.resolved_tools,
+        )
+        logger.info("Finished resolve_tool_references")
+
+    @classmethod
+    async def _resolve_tool_references_recursive(
+        cls,
+        model_instance: BaseModel,
+        registry: "RegistryStrategy",
+        communication: "CommunicationStrategy",
+        resolved_tools: dict[str, ToolModuleInfo],
+    ) -> None:
+        """Recursively resolve ToolReference fields in a model.
+
+        Args:
+            model_instance: Model instance to process.
+            registry: Registry service for resolution.
+            communication: Communication service for module schemas.
+            resolved_tools: Cache of already resolved tools.
+        """
+        for field_name, field_value in model_instance.__dict__.items():
+            if field_value is None:
+                continue
+            await cls._resolve_field_value(
+                field_name,
+                field_value,
+                registry,
+                communication,
+                resolved_tools,
+            )
+
+    @classmethod
+    async def _resolve_field_value(
+        cls,
+        field_name: str,
+        field_value: "BaseModel | ToolReference | list | dict",
+        registry: "RegistryStrategy",
+        communication: "CommunicationStrategy",
+        resolved_tools: dict[str, ToolModuleInfo],
+    ) -> None:
+        """Resolve a single field value based on its type.
+
+        Args:
+            field_name: Name of the field.
+            field_value: Value to process.
+            registry: Registry service for resolution.
+            communication: Communication service for module schemas.
+            resolved_tools: Cache of already resolved tools.
+        """
+        if isinstance(field_value, ToolReference):
+            await cls._resolve_tool_reference(
+                field_name,
+                field_value,
+                registry,
+                communication,
+                resolved_tools,
+            )
+        elif isinstance(field_value, BaseModel):
+            await cls._resolve_tool_references_recursive(
+                field_value,
+                registry,
+                communication,
+                resolved_tools,
+            )
+        elif isinstance(field_value, list):
+            await cls._resolve_list_items(
+                field_value,
+                registry,
+                communication,
+                resolved_tools,
+            )
+        elif isinstance(field_value, dict):
+            await cls._resolve_dict_values(
+                field_value,
+                registry,
+                communication,
+                resolved_tools,
+            )
+
+    @classmethod
+    async def _resolve_tool_reference(
+        cls,
+        field_name: str,
+        tool_ref: ToolReference,
+        registry: "RegistryStrategy",
+        communication: "CommunicationStrategy",
+        resolved_tools: dict[str, ToolModuleInfo],
+    ) -> None:
+        """Resolve a ToolReference (may contain multiple selected tools).
+
+        Args:
+            field_name: Name of the field for logging.
+            tool_ref: ToolReference to resolve.
+            registry: Registry service for resolution.
+            communication: Communication service for module schemas.
+            resolved_tools: Cache of already resolved tools.
+        """
+        logger.info("Resolving ToolReference '%s' with %d selected tools", field_name, len(tool_ref.selected_tools))
+
+        if not tool_ref.selected_tools:
+            logger.info("ToolReference '%s' has no selected tools, skipping", field_name)
+            return
+
+        tools_to_resolve = [
+            setup_id for setup_id in tool_ref.selected_tools if setup_id and setup_id not in resolved_tools
+        ]
+
+        if not tools_to_resolve:
+            logger.info("All tools for '%s' already cached", field_name)
+            return
+
+        try:
+            infos = await tool_ref.resolve(registry, communication)
+            for info in infos:
+                resolved_tools[info.setup_id] = info
+                logger.info("Resolved tool '%s' -> module_id=%s", info.setup_id, info.module_id)
+        except Exception:
+            logger.exception("Failed to resolve ToolReference '%s'", field_name)
+
+    @classmethod
+    async def _resolve_list_items(
+        cls,
+        items: list,
+        registry: "RegistryStrategy",
+        communication: "CommunicationStrategy",
+        resolved_tools: dict[str, ToolModuleInfo],
+    ) -> None:
+        """Resolve ToolReference instances in a list.
+
+        Args:
+            items: List of items to process.
+            registry: Registry service for resolution.
+            communication: Communication service for module schemas.
+            resolved_tools: Cache of already resolved tools.
+        """
+        for item in items:
+            if isinstance(item, ToolReference):
+                await cls._resolve_tool_reference(
+                    "list_item",
+                    item,
+                    registry,
+                    communication,
+                    resolved_tools,
+                )
+            elif isinstance(item, BaseModel):
+                await cls._resolve_tool_references_recursive(
+                    item,
+                    registry,
+                    communication,
+                    resolved_tools,
+                )
+
+    @classmethod
+    async def _resolve_dict_values(
+        cls,
+        mapping: dict,
+        registry: "RegistryStrategy",
+        communication: "CommunicationStrategy",
+        resolved_tools: dict[str, ToolModuleInfo],
+    ) -> None:
+        """Resolve ToolReference instances in dict values.
+
+        Args:
+            mapping: Dict to process.
+            registry: Registry service for resolution.
+            communication: Communication service for module schemas.
+            resolved_tools: Cache of already resolved tools.
+        """
+        for item in mapping.values():
+            if isinstance(item, ToolReference):
+                await cls._resolve_tool_reference(
+                    "dict_value",
+                    item,
+                    registry,
+                    communication,
+                    resolved_tools,
+                )
+            elif isinstance(item, BaseModel):
+                await cls._resolve_tool_references_recursive(
+                    item,
+                    registry,
+                    communication,
+                    resolved_tools,
+                )
+
+    def build_tool_cache(self) -> ToolCache:
+        """Build tool cache from resolved ToolReferences.
+
+        Returns:
+            ToolCache with field names as keys and ToolModuleInfo as values.
+        """
+        cache = ToolCache()
+        self._build_tool_cache_recursive(self, cache)
+        logger.info("Tool cache built: %d entries", len(cache.entries))
+        return cache
+
+    def _build_tool_cache_recursive(self, model_instance: BaseModel, cache: ToolCache) -> None:
+        """Recursively build tool cache from ToolReferences.
+
+        Args:
+            model_instance: Model instance to process.
+            cache: ToolCache to populate.
+        """
+        for field_value in model_instance.__dict__.values():
+            if field_value is None:
+                continue
+            if isinstance(field_value, ToolReference):
+                for setup_id in field_value.selected_tools:
+                    tool_module_info = self.resolved_tools.get(setup_id)
+                    if tool_module_info:
+                        cache.add(tool_module_info)
+            elif isinstance(field_value, BaseModel):
+                self._build_tool_cache_recursive(field_value, cache)
+            elif isinstance(field_value, list):
+                self._process_list_items(field_value, cache)
+            elif isinstance(field_value, dict):
+                self._process_dict_values(field_value, cache)
+
+    def _process_list_items(self, items: list, cache: ToolCache) -> None:
+        """Process list items for ToolReferences.
+
+        Args:
+            items: List to process.
+            cache: ToolCache to populate.
+        """
+        for item in items:
+            if isinstance(item, ToolReference):
+                for setup_id in item.selected_tools:
+                    tool_module_info = self.resolved_tools.get(setup_id)
+                    if tool_module_info:
+                        cache.add(tool_module_info)
+            elif isinstance(item, BaseModel):
+                self._build_tool_cache_recursive(item, cache)
+
+    def _process_dict_values(self, mapping: dict, cache: ToolCache) -> None:
+        """Process dict values for ToolReferences.
+
+        Args:
+            mapping: Dict to process.
+            cache: ToolCache to populate.
+        """
+        for item in mapping.values():
+            if isinstance(item, ToolReference):
+                for setup_id in item.selected_tools:
+                    tool_module_info = self.resolved_tools.get(setup_id)
+                    if tool_module_info:
+                        cache.add(tool_module_info)
+            elif isinstance(item, BaseModel):
+                self._build_tool_cache_recursive(item, cache)

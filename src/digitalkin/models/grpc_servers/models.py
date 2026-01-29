@@ -65,6 +65,42 @@ class ServerCredentials(BaseModel):
         return v
 
 
+class RetryPolicy(BaseModel):
+    """gRPC retry policy configuration for resilient connections.
+
+    Attributes:
+        max_attempts: Maximum retry attempts including the original call
+        initial_backoff: Initial backoff duration (e.g., "0.1s")
+        max_backoff: Maximum backoff duration (e.g., "10s")
+        backoff_multiplier: Multiplier for exponential backoff
+        retryable_status_codes: gRPC status codes that trigger retry
+    """
+
+    max_attempts: int = Field(default=5, ge=1, le=10, description="Maximum retry attempts including the original call")
+    initial_backoff: str = Field(default="0.1s", description="Initial backoff duration (e.g., '0.1s')")
+    max_backoff: str = Field(default="10s", description="Maximum backoff duration (e.g., '10s')")
+    backoff_multiplier: float = Field(default=2.0, ge=1.0, description="Multiplier for exponential backoff")
+    retryable_status_codes: list[str] = Field(
+        default_factory=lambda: ["UNAVAILABLE", "RESOURCE_EXHAUSTED"],
+        description="gRPC status codes that trigger retry",
+    )
+
+    model_config = {"extra": "forbid", "frozen": True}
+
+    def to_service_config_json(self) -> str:
+        """Serialize to gRPC service config JSON string.
+
+        Returns:
+            JSON string for grpc.service_config channel option.
+        """
+        codes = "[" + ",".join(f'"{c}"' for c in self.retryable_status_codes) + "]"
+        return (
+            f'{{"methodConfig":[{{"name":[{{}}],"retryPolicy":{{"maxAttempts":{self.max_attempts},'
+            f'"initialBackoff":"{self.initial_backoff}","maxBackoff":"{self.max_backoff}",'
+            f'"backoffMultiplier":{self.backoff_multiplier},"retryableStatusCodes":{codes}}}}}]}}'
+        )
+
+
 class ClientCredentials(BaseModel):
     """Model for client credentials in secure mode.
 
@@ -170,15 +206,47 @@ class ClientConfig(ChannelConfig):
         security: Security mode (secure/insecure)
         credentials: Client credentials for secure mode
         channel_options: Additional channel options
+        retry_policy: Retry policy for failed RPCs
     """
 
     credentials: ClientCredentials | None = Field(None, description="Client credentials for secure mode")
+    retry_policy: RetryPolicy = Field(default_factory=lambda: RetryPolicy(), description="Retry policy for failed RPCs")  # noqa: PLW0108
     channel_options: list[tuple[str, Any]] = Field(
         default_factory=lambda: [
-            ("grpc.max_receive_message_length", 100 * 1024 * 1024),  # 100MB
-            ("grpc.max_send_message_length", 100 * 1024 * 1024),  # 100MB
+            ("grpc.max_receive_message_length", 100 * 1024 * 1024),
+            ("grpc.max_send_message_length", 100 * 1024 * 1024),
+            # === DNS Re-resolution (Critical for Container Environments) ===
+            # Minimum milliseconds between DNS re-resolution attempts (500 ms)
+            # When connection fails, gRPC will re-query DNS after this interval
+            # Solves: Container restarts with new IPs causing "No route to host"
+            ("grpc.dns_min_time_between_resolutions_ms", 500),
+            # Initial delay before first reconnection attempt (1 second)
+            ("grpc.initial_reconnect_backoff_ms", 1000),
+            # Maximum delay between reconnection attempts (10 seconds)
+            # Prevents overwhelming the network during extended outages
+            ("grpc.max_reconnect_backoff_ms", 10000),
+            # Minimum delay between reconnection attempts (500ms)
+            # Ensures rapid recovery for brief network glitches
+            ("grpc.min_reconnect_backoff_ms", 500),
+            # === Keepalive Settings (Detect Dead Connections) ===
+            # Send keepalive ping every 60 seconds when connection is idle
+            # Proactively detects dead connections before RPC calls fail
+            ("grpc.keepalive_time_ms", 60000),
+            # Wait 20 seconds for keepalive response before declaring connection dead
+            # Triggers reconnection (with DNS re-resolution) if pong not received
+            ("grpc.keepalive_timeout_ms", 20000),
+            # Send keepalive pings even when no RPCs are in flight
+            # Essential for long-lived connections that may sit idle
+            ("grpc.keepalive_permit_without_calls", True),
+            # Minimum interval between HTTP/2 pings (30 seconds)
+            # Must be >= server's grpc.http2.min_ping_interval_without_data_ms (10s)
+            ("grpc.http2.min_time_between_pings_ms", 30000),
+            # === Retry Configuration ===
+            # Enable automatic retry for failed RPCs (1 = enabled)
+            # Works with retryable status codes: UNAVAILABLE, RESOURCE_EXHAUSTED
+            ("grpc.enable_retries", 1),
         ],
-        description="Additional channel options",
+        description="Resilient gRPC channel options with DNS re-resolution, keepalive, and retries",
     )
 
     @field_validator("credentials")
@@ -204,6 +272,15 @@ class ClientConfig(ChannelConfig):
             raise ConfigurationError(msg)
         return v
 
+    @property
+    def grpc_options(self) -> list[tuple[str, Any]]:
+        """Get channel options with retry policy service config.
+
+        Returns:
+            Full list of gRPC channel options.
+        """
+        return [*self.channel_options, ("grpc.service_config", self.retry_policy.to_service_config_json())]
+
 
 class ServerConfig(ChannelConfig):
     """Base configuration for gRPC servers.
@@ -223,10 +300,18 @@ class ServerConfig(ChannelConfig):
     credentials: ServerCredentials | None = Field(None, description="Server credentials for secure mode")
     server_options: list[tuple[str, Any]] = Field(
         default_factory=lambda: [
-            ("grpc.max_receive_message_length", 100 * 1024 * 1024),  # 100MB
-            ("grpc.max_send_message_length", 100 * 1024 * 1024),  # 100MB
+            ("grpc.max_receive_message_length", 100 * 1024 * 1024),
+            ("grpc.max_send_message_length", 100 * 1024 * 1024),
+            # === Keepalive Permission (Required for Client Keepalive) ===
+            # Allow clients to send keepalive pings without active RPCs
+            # Without this, server rejects client keepalives with GOAWAY
+            ("grpc.keepalive_permit_without_calls", True),
+            # Minimum interval server allows between client pings (10 seconds)
+            # Prevents "too_many_pings" GOAWAY errors
+            # Must match or be less than client's http2.min_time_between_pings_ms
+            ("grpc.http2.min_ping_interval_without_data_ms", 10000),
         ],
-        description="Additional server options",
+        description="gRPC server options with keepalive support",
     )
     enable_reflection: bool = Field(default=True, description="Enable reflection for the server")
     enable_health_check: bool = Field(default=True, description="Enable health check service")
@@ -259,10 +344,12 @@ class ModuleServerConfig(ServerConfig):
     """Configuration for Module gRPC server.
 
     Attributes:
-        registry_address: Address of the registry server
+        advertise_host: Public hostname/IP sent to registry for discovery. Falls back to host if not set.
     """
 
-    registry_address: str = Field(..., description="Address of the registry server")
+    advertise_host: str | None = Field(
+        None, description="Public hostname/IP sent to registry for discovery. Falls back to host if not set."
+    )
 
 
 class RegistryServerConfig(ServerConfig):

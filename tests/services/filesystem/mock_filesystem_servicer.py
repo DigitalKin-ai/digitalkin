@@ -262,10 +262,16 @@ class MockFilesystemServicer(filesystem_service_pb2_grpc.FilesystemServiceServic
             return False
         if filters.file_ids and file_data.id not in filters.file_ids:
             return False
-        if filters.file_types and file_data.file_type not in filters.file_types:
-            return False
-        if filters.status and file_data.status != filters.status:
-            return False
+        # Handle both prefixed (FILE_TYPE_X) and non-prefixed (X) file types
+        if filters.file_types:
+            prefixed_types = [f"FILE_TYPE_{ft}" if not ft.startswith("FILE_TYPE_") else ft for ft in filters.file_types]
+            if file_data.file_type not in filters.file_types and file_data.file_type not in prefixed_types:
+                return False
+        # Handle both prefixed (FILE_STATUS_X) and non-prefixed (X) status
+        if filters.status:
+            prefixed_status = f"FILE_STATUS_{filters.status}" if not filters.status.startswith("FILE_STATUS_") else filters.status
+            if file_data.status != filters.status and file_data.status != prefixed_status:
+                return False
         if filters.content_type_prefix and not file_data.content_type.startswith(filters.content_type_prefix):
             return False
         if filters.min_size_bytes and file_data.size_bytes < filters.min_size_bytes:

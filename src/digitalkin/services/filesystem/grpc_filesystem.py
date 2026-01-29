@@ -90,12 +90,19 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper, GrpcErrorHandlerMixi
         Returns:
             filesystem_pb2.FileFilter: The converted FileFilter proto message
         """
+        context_id = "unknown"
+        match filters.context:
+            case "setup":
+                context_id = self.setup_id
+            case "mission":
+                context_id = self.mission_id
         return filesystem_pb2.FileFilter(
-            **filters.model_dump(exclude={"file_types", "status"}),
+            **filters.model_dump(exclude={"file_types", "status", "context"}),
             file_types=[self._file_type_to_enum(file_type) for file_type in filters.file_types]
             if filters.file_types
             else None,
             status=self._file_status_to_enum(filters.status) if filters.status else None,
+            context=context_id,
         )
 
     def __init__(

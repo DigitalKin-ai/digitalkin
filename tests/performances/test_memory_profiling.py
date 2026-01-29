@@ -98,6 +98,26 @@ class FakeCallbacks:
         """Fake stream_logs."""
 
 
+class FakeSession:
+    """Lightweight fake session for tests."""
+
+    def __init__(self) -> None:
+        """Initialize fake session."""
+        self.job_id = "test-job-id"
+        self.mission_id = "test-mission-id"
+        self.setup_id = "test-setup-id"
+        self.setup_version_id = "test-setup-version-id"
+
+    def current_ids(self) -> dict[str, str]:
+        """Return current session ids."""
+        return {
+            "job_id": self.job_id,
+            "mission_id": self.mission_id,
+            "setup_id": self.setup_id,
+            "setup_version_id": self.setup_version_id,
+        }
+
+
 class FakeModuleContext:
     """Lightweight fake module context."""
 
@@ -107,6 +127,8 @@ class FakeModuleContext:
         self.services = {}
         self.metadata = {}
         self.session_data = {}
+        self.session = FakeSession()
+        self.tool_cache = {}
 
 
 class ImprovedMockModule(BaseModule):

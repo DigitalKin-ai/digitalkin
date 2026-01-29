@@ -84,9 +84,12 @@ class TaskSession:
         self._heartbeat_interval = heartbeat_interval
 
         logger.info(
-            "TaskContext initialized for task: '%s'",
-            task_id,
-            extra={"task_id": task_id, "mission_id": mission_id, "heartbeat_interval": heartbeat_interval},
+            "TaskSession initialized",
+            extra={
+                "task_id": task_id,
+                "mission_id": mission_id,
+                "heartbeat_interval": str(heartbeat_interval),
+            },
         )
 
     @property
@@ -99,6 +102,21 @@ class TaskSession:
         """Task paused status."""
         return self._paused.is_set()
 
+    @property
+    def setup_id(self) -> str:
+        """Get setup_id from module context."""
+        return self.module.context.session.setup_id
+
+    @property
+    def setup_version_id(self) -> str:
+        """Get setup_version_id from module context."""
+        return self.module.context.session.setup_version_id
+
+    @property
+    def session_ids(self) -> dict[str, str]:
+        """Get all session IDs from module context for structured logging."""
+        return self.module.context.session.current_ids()
+
     async def send_heartbeat(self) -> bool:
         """Rate-limited heartbeat with connection resilience.
 
@@ -108,6 +126,8 @@ class TaskSession:
         heartbeat = HeartbeatMessage(
             task_id=self.task_id,
             mission_id=self.mission_id,
+            setup_id=self.setup_id,
+            setup_version_id=self.setup_version_id,
             timestamp=datetime.datetime.now(datetime.timezone.utc),
         )
 
@@ -120,23 +140,17 @@ class TaskSession:
                     return True
             except Exception as e:
                 logger.error(
-                    "Heartbeat exception for task: '%s'",
-                    self.task_id,
-                    extra={"task_id": self.task_id, "error": str(e)},
+                    "Heartbeat exception",
+                    extra={**self.session_ids, "error": str(e)},
                     exc_info=True,
                 )
-            logger.error(
-                "Initial heartbeat failed for task: '%s'",
-                self.task_id,
-                extra={"task_id": self.task_id},
-            )
+            logger.error("Initial heartbeat failed", extra=self.session_ids)
             return False
 
         if (heartbeat.timestamp - self._last_heartbeat) < self._heartbeat_interval:
             logger.debug(
-                "Heartbeat skipped due to rate limiting for task: '%s' | delta=%s",
-                self.task_id,
-                heartbeat.timestamp - self._last_heartbeat,
+                "Heartbeat skipped due to rate limiting",
+                extra={**self.session_ids, "delta": str(heartbeat.timestamp - self._last_heartbeat)},
             )
             return True
 
@@ -147,39 +161,24 @@ class TaskSession:
                 return True
         except Exception as e:
             logger.error(
-                "Heartbeat exception for task: '%s'",
-                self.task_id,
-                extra={"task_id": self.task_id, "error": str(e)},
+                "Heartbeat exception",
+                extra={**self.session_ids, "error": str(e)},
                 exc_info=True,
             )
-        logger.warning(
-            "Heartbeat failed for task: '%s'",
-            self.task_id,
-            extra={"task_id": self.task_id},
-        )
+        logger.warning("Heartbeat failed", extra=self.session_ids)
         return False
 
     async def generate_heartbeats(self) -> None:
         """Periodic heartbeat generator with cancellation support."""
-        logger.debug(
-            "Heartbeat generator started for task: '%s'",
-            self.task_id,
-            extra={"task_id": self.task_id, "mission_id": self.mission_id},
-        )
+        logger.debug("Heartbeat generator started", extra=self.session_ids)
         while not self.cancelled:
             logger.debug(
-                "Heartbeat tick for task: '%s', cancelled=%s",
-                self.task_id,
-                self.cancelled,
-                extra={"task_id": self.task_id, "mission_id": self.mission_id},
+                "Heartbeat tick",
+                extra={**self.session_ids, "cancelled": self.cancelled},
             )
             success = await self.send_heartbeat()
             if not success:
-                logger.error(
-                    "Heartbeat failed, cancelling task: '%s'",
-                    self.task_id,
-                    extra={"task_id": self.task_id, "mission_id": self.mission_id},
-                )
+                logger.error("Heartbeat failed, cancelling task", extra=self.session_ids)
                 await self._handle_cancel(CancellationReason.HEARTBEAT_FAILURE)
                 break
             await asyncio.sleep(self._heartbeat_interval.total_seconds())
@@ -187,11 +186,7 @@ class TaskSession:
     async def wait_if_paused(self) -> None:
         """Block execution if task is paused."""
         if self._paused.is_set():
-            logger.info(
-                "Task paused, waiting for resume: '%s'",
-                self.task_id,
-                extra={"task_id": self.task_id},
-            )
+            logger.info("Task paused, waiting for resume", extra=self.session_ids)
             await self._paused.wait()
 
     async def listen_signals(self) -> None:  # noqa: C901
@@ -200,18 +195,14 @@ class TaskSession:
         Raises:
             CancelledError: Asyncio when task cancelling
         """
-        logger.info(
-            "Signal listener started for task: '%s'",
-            self.task_id,
-            extra={"task_id": self.task_id},
-        )
+        logger.info("Signal listener started", extra=self.session_ids)
         if self.signal_record_id is None:
             self.signal_record_id = (await self.db.select_by_task_id("tasks", self.task_id)).get("id")
 
         live_id, live_signals = await self.db.start_live("tasks")
         try:
             async for signal in live_signals:
-                logger.debug("Signal received for task '%s': %s", self.task_id, signal)
+                logger.debug("Signal received", extra={**self.session_ids, "signal": signal})
                 if self.cancelled:
                     break
 
@@ -228,26 +219,17 @@ class TaskSession:
                     await self._handle_status_request()
 
         except asyncio.CancelledError:
-            logger.debug(
-                "Signal listener cancelled for task: '%s'",
-                self.task_id,
-                extra={"task_id": self.task_id},
-            )
+            logger.debug("Signal listener cancelled", extra=self.session_ids)
             raise
         except Exception as e:
             logger.error(
-                "Signal listener fatal error for task: '%s'",
-                self.task_id,
-                extra={"task_id": self.task_id, "error": str(e)},
+                "Signal listener fatal error",
+                extra={**self.session_ids, "error": str(e)},
                 exc_info=True,
             )
         finally:
             await self.db.stop_live(live_id)
-            logger.info(
-                "Signal listener stopped for task: '%s'",
-                self.task_id,
-                extra={"task_id": self.task_id},
-            )
+            logger.info("Signal listener stopped", extra=self.session_ids)
 
     async def _handle_cancel(self, reason: CancellationReason = CancellationReason.UNKNOWN) -> None:
         """Idempotent cancellation with acknowledgment and reason tracking.
@@ -257,13 +239,9 @@ class TaskSession:
         """
         if self.is_cancelled.is_set():
             logger.debug(
-                "Cancel ignored - task already cancelled: '%s' (existing reason: %s, new reason: %s)",
-                self.task_id,
-                self.cancellation_reason.value,
-                reason.value,
+                "Cancel ignored - already cancelled",
                 extra={
-                    "task_id": self.task_id,
-                    "mission_id": self.mission_id,
+                    **self.session_ids,
                     "existing_reason": self.cancellation_reason.value,
                     "new_reason": reason.value,
                 },
@@ -277,25 +255,13 @@ class TaskSession:
         # Log with appropriate level based on reason
         if reason in {CancellationReason.SUCCESS_CLEANUP, CancellationReason.FAILURE_CLEANUP}:
             logger.debug(
-                "Task cancelled (cleanup): '%s', reason: %s",
-                self.task_id,
-                reason.value,
-                extra={
-                    "task_id": self.task_id,
-                    "mission_id": self.mission_id,
-                    "cancellation_reason": reason.value,
-                },
+                "Task cancelled (cleanup)",
+                extra={**self.session_ids, "cancellation_reason": reason.value},
             )
         else:
             logger.info(
-                "Task cancelled: '%s', reason: %s",
-                self.task_id,
-                reason.value,
-                extra={
-                    "task_id": self.task_id,
-                    "mission_id": self.mission_id,
-                    "cancellation_reason": reason.value,
-                },
+                "Task cancelled",
+                extra={**self.session_ids, "cancellation_reason": reason.value},
             )
 
         # Resume if paused so cancellation can proceed
@@ -308,6 +274,8 @@ class TaskSession:
             SignalMessage(
                 task_id=self.task_id,
                 mission_id=self.mission_id,
+                setup_id=self.setup_id,
+                setup_version_id=self.setup_version_id,
                 action=SignalType.ACK_CANCEL,
                 status=self.status,
             ).model_dump(),
@@ -316,11 +284,7 @@ class TaskSession:
     async def _handle_pause(self) -> None:
         """Pause task execution."""
         if not self._paused.is_set():
-            logger.info(
-                "Pausing task: '%s'",
-                self.task_id,
-                extra={"task_id": self.task_id},
-            )
+            logger.info("Task paused", extra=self.session_ids)
             self._paused.set()
 
         await self.db.update(
@@ -329,6 +293,8 @@ class TaskSession:
             SignalMessage(
                 task_id=self.task_id,
                 mission_id=self.mission_id,
+                setup_id=self.setup_id,
+                setup_version_id=self.setup_version_id,
                 action=SignalType.ACK_PAUSE,
                 status=self.status,
             ).model_dump(),
@@ -337,11 +303,7 @@ class TaskSession:
     async def _handle_resume(self) -> None:
         """Resume paused task."""
         if self._paused.is_set():
-            logger.info(
-                "Resuming task: '%s'",
-                self.task_id,
-                extra={"task_id": self.task_id},
-            )
+            logger.info("Task resumed", extra=self.session_ids)
             self._paused.clear()
 
         await self.db.update(
@@ -350,6 +312,8 @@ class TaskSession:
             SignalMessage(
                 task_id=self.task_id,
                 mission_id=self.mission_id,
+                setup_id=self.setup_id,
+                setup_version_id=self.setup_version_id,
                 action=SignalType.ACK_RESUME,
                 status=self.status,
             ).model_dump(),
@@ -361,18 +325,16 @@ class TaskSession:
             "tasks",
             self.signal_record_id,  # type: ignore
             SignalMessage(
-                mission_id=self.mission_id,
                 task_id=self.task_id,
+                mission_id=self.mission_id,
+                setup_id=self.setup_id,
+                setup_version_id=self.setup_version_id,
                 status=self.status,
                 action=SignalType.ACK_STATUS,
             ).model_dump(),
         )
 
-        logger.debug(
-            "Status report sent for task: '%s'",
-            self.task_id,
-            extra={"task_id": self.task_id},
-        )
+        logger.debug("Status report sent", extra=self.session_ids)
 
     async def cleanup(self) -> None:
         """Clean up task session resources.

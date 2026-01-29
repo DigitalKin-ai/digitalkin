@@ -3,7 +3,7 @@
 from typing import Annotated
 
 import pytest
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from digitalkin.models.module.module_types import SetupModel
 from digitalkin.utils import Dynamic
@@ -463,3 +463,105 @@ class TestGenericTypeDetection:
 
         # The nested fetcher should have been called
         assert call_count == 1
+
+
+class TestNestedModelUiOrder:
+    """Tests for ui:order preservation in nested models."""
+
+    @pytest.mark.asyncio
+    async def test_nested_model_preserves_own_ui_order(self) -> None:
+        """Test that nested model's ui:order is preserved, not overwritten by parent's."""
+
+        class NestedConfig(BaseModel):
+            """A nested configuration with its own ui:order."""
+
+            model_config = ConfigDict(
+                json_schema_extra={
+                    "ui:order": ["field_b", "field_a"],
+                }
+            )
+
+            field_a: str = Field(default="a")
+            field_b: Annotated[str, Dynamic(enum=lambda: ["opt1", "opt2"])] = Field(default="opt1")
+
+        class ParentSetup(SetupModel):
+            """Parent setup with a different ui:order."""
+
+            model_config = ConfigDict(
+                json_schema_extra={
+                    "ui:order": ["name", "config"],
+                }
+            )
+
+            name: str = Field(default="test")
+            config: NestedConfig = Field(default_factory=NestedConfig)
+
+        model = await ParentSetup.get_clean_model(config_fields=False, hidden_fields=True, force=True)
+
+        # Parent's ui:order should be preserved
+        parent_extra = model.model_config.get("json_schema_extra", {})
+        assert parent_extra.get("ui:order") == ["name", "config"]
+
+        # Nested model's ui:order should be preserved (not parent's)
+        config_field = model.model_fields["config"]
+        nested_model = config_field.annotation
+        nested_extra = nested_model.model_config.get("json_schema_extra", {})
+        assert nested_extra.get("ui:order") == ["field_b", "field_a"], (
+            "Nested model should preserve its own ui:order, not inherit parent's"
+        )
+
+    @pytest.mark.asyncio
+    async def test_deeply_nested_model_ui_order_preserved(self) -> None:
+        """Test that deeply nested models preserve their ui:order at all levels."""
+
+        class DeepNested(BaseModel):
+            """Deepest level config."""
+
+            model_config = ConfigDict(
+                json_schema_extra={
+                    "ui:order": ["deep_z", "deep_y"],
+                }
+            )
+
+            deep_y: str = Field(default="y")
+            deep_z: Annotated[str, Dynamic(enum=lambda: ["z1", "z2"])] = Field(default="z1")
+
+        class MiddleNested(BaseModel):
+            """Middle level config."""
+
+            model_config = ConfigDict(
+                json_schema_extra={
+                    "ui:order": ["middle_b", "deep_config"],
+                }
+            )
+
+            deep_config: DeepNested = Field(default_factory=DeepNested)
+            middle_b: Annotated[str, Dynamic(enum=lambda: ["m1", "m2"])] = Field(default="m1")
+
+        class RootSetup(SetupModel):
+            """Root setup model."""
+
+            model_config = ConfigDict(
+                json_schema_extra={
+                    "ui:order": ["root_field", "middle_config"],
+                }
+            )
+
+            root_field: str = Field(default="root")
+            middle_config: MiddleNested = Field(default_factory=MiddleNested)
+
+        model = await RootSetup.get_clean_model(config_fields=False, hidden_fields=True, force=True)
+
+        # Check root level ui:order
+        root_extra = model.model_config.get("json_schema_extra", {})
+        assert root_extra.get("ui:order") == ["root_field", "middle_config"]
+
+        # Check middle level ui:order
+        middle_model = model.model_fields["middle_config"].annotation
+        middle_extra = middle_model.model_config.get("json_schema_extra", {})
+        assert middle_extra.get("ui:order") == ["middle_b", "deep_config"]
+
+        # Check deep level ui:order
+        deep_model = middle_model.model_fields["deep_config"].annotation
+        deep_extra = deep_model.model_config.get("json_schema_extra", {})
+        assert deep_extra.get("ui:order") == ["deep_z", "deep_y"]
