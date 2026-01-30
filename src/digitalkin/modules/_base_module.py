@@ -18,6 +18,7 @@ from digitalkin.models.module.module_types import (
     SecretModelT,
     SetupModelT,
 )
+from digitalkin.models.module.select_schema import SelectSchema
 from digitalkin.models.module.utility import EndOfStreamOutput, ModuleStartInfoOutput, UtilityProtocol
 from digitalkin.models.services.storage import BaseRole
 from digitalkin.modules.trigger_handler import TriggerHandler
@@ -42,6 +43,7 @@ class BaseModule(  # noqa: PLR0904
 
     setup_format: type[SetupModelT]
     input_format: type[InputModelT]
+    select_format: type[SelectSchema] = SelectSchema
     output_format: type[OutputModelT]
     secret_format: type[SecretModelT]
     metadata: ClassVar[dict[str, Any]]
@@ -165,8 +167,38 @@ class BaseModule(  # noqa: PLR0904
 
         if llm_format:
             result_json, result_ui = SchemaSplitter.split(extended_model.model_json_schema())
-            return json.dumps({"json_schema": result_json, "ui_schema": result_ui}, indent=2)
+
+            result: dict[str, Any] = {
+                "json_schema": result_json,
+                "ui_schema": result_ui,
+            }
+
+            protocols_info = cls.triggers_discoverer.get_registered_protocols_with_info()
+            select_schema = cls.select_format.build(protocols_info)
+            if select_schema is not None:
+                result["select_schema"] = select_schema
+
+            return json.dumps(result, indent=2)
         return json.dumps(extended_model.model_json_schema(), indent=2)
+
+    @classmethod
+    async def get_select_input_format(cls) -> str:
+        """Get the JSON schema for trigger selection UI.
+
+        Returns:
+            The JSON schema for selecting triggers as a JSON string,
+            or empty object if no select_format is defined.
+        """
+        if cls.select_format is None:
+            return json.dumps({}, indent=2)
+
+        protocols_info = cls.triggers_discoverer.get_registered_protocols_with_info()
+        select_schema = cls.select_format.build(protocols_info)
+
+        if select_schema is None:
+            return json.dumps({}, indent=2)
+
+        return json.dumps(select_schema, indent=2)
 
     @classmethod
     async def get_output_format(cls, *, llm_format: bool) -> str:

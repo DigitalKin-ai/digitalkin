@@ -19,6 +19,7 @@ class HealthcheckServicesTrigger(TriggerHandler, BaseMixin):
     """
 
     protocol: ClassVar[str] = "healthcheck_services"
+    description: ClassVar[str] = "Reports health status of all configured services."
     input_format = HealthcheckServicesInput
 
     def __init__(self, context: ModuleContext) -> None:

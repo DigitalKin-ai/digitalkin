@@ -240,7 +240,7 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             setup_version_id,
             self.module_class,
             self.services_mode,
-            config_setup_data.model_dump(),  # type: ignore
+            config_setup_data.model_dump(mode="json"),  # type: ignore
         )
 
         job_id = running_task.task_id
@@ -389,8 +389,8 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             setup_version_id,
             self.module_class,
             self.services_mode,
-            input_data.model_dump(),
-            setup_data.model_dump(),
+            input_data.model_dump(mode="json"),
+            setup_data.model_dump(mode="json"),
         )
         job_id = running_task.task_id
 

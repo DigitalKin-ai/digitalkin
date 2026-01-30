@@ -5,10 +5,12 @@ Each test is documented with the original issue and fix.
 """
 
 import asyncio
+from enum import Enum
 from typing import Any, ClassVar
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
+from pydantic import BaseModel, Field
 
 from digitalkin.core.job_manager.single_job_manager import SingleJobManager
 from digitalkin.core.task_manager.local_task_manager import LocalTaskManager
@@ -572,4 +574,51 @@ class TestConcurrencyRegression:
             assert module.stop.await_count <= 1
 
             # Clean up
+            await manager.stop_all_modules()
+
+
+class _MockBackend(Enum):
+    """Test enum for serialization regression."""
+
+    AUTO = "auto"
+    CUSTOM = "custom"
+
+
+class _MockEnumSetupModel(BaseModel):
+    """Test model with enum field for serialization regression."""
+
+    backend: _MockBackend = Field(default=_MockBackend.AUTO)
+    name: str = "test"
+
+
+class TestEnumSerializationRegression:
+    """Test regression for enum serialization in job manager queues."""
+
+    @pytest.mark.asyncio
+    async def test_add_to_queue_serializes_enums(self):
+        """REGRESSION: model_dump() without mode='json' left raw Python enums in dict,
+        causing json_format.ParseDict to fail with ParseError.
+        Fix: Changed model_dump() to model_dump(mode='json') in add_to_queue.
+        """
+        with patch("digitalkin.core.job_manager.single_job_manager.ConnectionFactory") as mock_factory:
+            mock_conn = AsyncMock()
+            mock_factory.create_surreal_connection = AsyncMock(return_value=mock_conn)
+
+            manager = SingleJobManager(MockModule, ServicesMode.LOCAL)
+            await manager.start()
+
+            session = Mock()
+            session.queue = asyncio.Queue()
+            session.stream_closed = False
+            manager.tasks_sessions["job-enum"] = session
+
+            output = _MockEnumSetupModel(backend=_MockBackend.CUSTOM, name="test")
+            await manager.add_to_queue("job-enum", output)
+
+            result = session.queue.get_nowait()
+
+            # Enum must be serialized as string, not raw enum object
+            assert result["backend"] == "custom"
+            assert isinstance(result["backend"], str)
+
             await manager.stop_all_modules()

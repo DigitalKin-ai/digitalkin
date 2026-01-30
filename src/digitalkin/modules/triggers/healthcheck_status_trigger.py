@@ -19,6 +19,7 @@ class HealthcheckStatusTrigger(TriggerHandler, BaseMixin):
     """
 
     protocol: ClassVar[str] = "healthcheck_status"
+    description: ClassVar[str] = "Comprehensive status healthcheck with uptime, active jobs, and metadata."
     input_format = HealthcheckStatusInput
     _start_time: ClassVar[float] = time.time()
 

@@ -149,7 +149,7 @@ async def send_message_to_stream(job_id: str, output_data: OutputModelT | Module
         job_id: id of the job that sent the message
         output_data: message body as a OutputModelT or error / stream_code
     """
-    body = json.dumps({"job_id": job_id, "output_data": output_data.model_dump()}).encode("utf-8")
+    body = json.dumps({"job_id": job_id, "output_data": output_data.model_dump(mode="json")}).encode("utf-8")
     await RSTREAM_PRODUCER.send(stream=STREAM, message=body)
 
 

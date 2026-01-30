@@ -162,7 +162,7 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             return
 
         try:
-            await asyncio.wait_for(session.queue.put(output_data.model_dump()), timeout=5.0)
+            await asyncio.wait_for(session.queue.put(output_data.model_dump(mode="json")), timeout=5.0)
         except asyncio.TimeoutError:
             logger.warning("Queue full, dropping oldest message", extra={"job_id": job_id})
             try:
@@ -170,7 +170,7 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
                 session.queue.task_done()
             except asyncio.QueueEmpty:
                 pass
-            session.queue.put_nowait(output_data.model_dump())
+            session.queue.put_nowait(output_data.model_dump(mode="json"))
 
     @asynccontextmanager  # type: ignore
     async def generate_stream_consumer(self, job_id: str) -> AsyncIterator[AsyncGenerator[dict[str, Any], None]]:  # type: ignore

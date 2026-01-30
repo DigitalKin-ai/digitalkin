@@ -19,6 +19,7 @@ class HealthcheckPingTrigger(TriggerHandler, BaseMixin):
     """
 
     protocol: ClassVar[str] = "healthcheck_ping"
+    description: ClassVar[str] = "Simple ping healthcheck that responds with pong status."
     input_format = HealthcheckPingInput
     _request_time: datetime
 

@@ -17,6 +17,7 @@ class TriggerHandler(ABC, BaseMixin, Generic[InputModelT, SetupModelT, OutputMod
     """
 
     protocol: ClassVar[str]
+    description: ClassVar[str] = ""
     input_format: type[InputModelT]
     output_format: type[OutputModelT]
 

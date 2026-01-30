@@ -437,6 +437,34 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             input_schema=input_format_struct,
         )
 
+    async def GetModuleSelectInput(  # noqa: N802
+        self,
+        request: information_pb2.GetModuleSelectInputRequest,  # noqa: ARG002
+        context: grpc.ServicerContext,  # noqa: ARG002
+    ) -> information_pb2.GetModuleSelectInputResponse:
+        """Get the trigger selection schema for the module.
+
+        Args:
+            request: The get module select input request.
+            context: The gRPC context.
+
+        Returns:
+            A response with the module's select input schema.
+        """
+        logger.debug("GetModuleSelectInput called for module: '%s'", self.module_class.__name__)
+
+        select_input_schema_proto = await self.module_class.get_select_input_format()
+        select_input_format_struct = json_format.Parse(
+            text=select_input_schema_proto,
+            message=struct_pb2.Struct(),
+            ignore_unknown_fields=True,
+        )
+
+        return information_pb2.GetModuleSelectInputResponse(
+            success=True,
+            select_input_schema=select_input_format_struct,
+        )
+
     async def GetModuleOutput(  # noqa: N802
         self,
         request: information_pb2.GetModuleOutputRequest,

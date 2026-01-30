@@ -12,10 +12,17 @@ from digitalkin.services.communication.communication_strategy import Communicati
 from digitalkin.services.registry import RegistryStrategy
 
 
-class ToolReference(BaseModel):
-    """Tool selection containing setup IDs."""
+class ToolSelection(BaseModel):
+    """Single tool selection with subtool filtering."""
 
-    selected_tools: list[str] = Field(default=[], description="Setup IDs of selected tools.")
+    id: str = Field(description="Setup ID of the selected tool.")
+    subtools: list[str] = Field(min_length=1, description="Protocol names to include.")
+
+
+class ToolReference(BaseModel):
+    """Tool selection containing setup IDs and subtool filters."""
+
+    selected_tools: list[ToolSelection] = Field(default=[], description="Selected tools with subtool filters.")
 
     async def resolve(self, registry: RegistryStrategy, communication: CommunicationStrategy) -> list[ToolModuleInfo]:
         """Resolve selected tools using the registry.
@@ -25,15 +32,17 @@ class ToolReference(BaseModel):
             communication: Communication service for module schemas.
 
         Returns:
-            List of ToolModuleInfo for resolved tools.
+            List of ToolModuleInfo for resolved tools, filtered by subtools.
         """
         resolved: list[ToolModuleInfo] = []
-        for setup_id in self.selected_tools:
-            setup = registry.get_setup(setup_id)
+        for entry in self.selected_tools:
+            setup = registry.get_setup(entry.id)
             if setup and setup.module_id:
                 info = registry.discover_by_id(setup.module_id)
                 if info:
-                    resolved.append(await module_info_to_tool_module_info(info, setup_id, setup.name, communication))
+                    tool_info = await module_info_to_tool_module_info(info, entry.id, setup.name, communication)
+                    tool_info.tools = [t for t in tool_info.tools if t.name in entry.subtools]
+                    resolved.append(tool_info)
         return resolved
 
 
@@ -68,7 +77,14 @@ class _ToolReferenceInputSchema:
         """
         json_schema: dict[str, object] = {
             "type": "array",
-            "items": {"type": "string"},
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"},
+                    "subTools": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+                },
+                "required": ["id", "subTools"],
+            },
         }
         if self.max_tools > 0:
             json_schema["maxItems"] = self.max_tools
@@ -108,13 +124,15 @@ def tool_reference_input(
     """
 
     def convert_to_tool_reference(v: object) -> ToolReference | object:
-        """Convert list of setup IDs to ToolReference.
+        """Convert list of tool selection dicts to ToolReference.
 
         Returns:
             ToolReference if input is list, otherwise original value.
         """
         if isinstance(v, list):
-            return ToolReference(selected_tools=v)
+            return ToolReference(
+                selected_tools=[ToolSelection(**entry) if isinstance(entry, dict) else entry for entry in v]
+            )
         return v
 
     def validate_tools_count(v: ToolReference) -> ToolReference:
@@ -135,19 +153,19 @@ def tool_reference_input(
             raise ValueError(msg)
         return v
 
-    def serialize_to_list(v: ToolReference) -> list[str]:
-        """Serialize ToolReference as plain list for frontend compatibility.
+    def serialize_to_list(v: ToolReference) -> list[dict[str, object]]:
+        """Serialize ToolReference as list of dicts for frontend compatibility.
 
         Returns:
-            List of setup IDs.
+            List of tool selection dicts with id and subtools.
         """
-        return v.selected_tools
+        return [{"id": t.id, "subTools": t.subtools} for t in v.selected_tools]
 
     return Annotated[  # type: ignore[return-value]
         ToolReference,
         BeforeValidator(convert_to_tool_reference),
         AfterValidator(validate_tools_count),
-        PlainSerializer(serialize_to_list, return_type=list[str]),
+        PlainSerializer(serialize_to_list, return_type=list[dict[str, object]]),
         _ToolReferenceInputSchema(
             setup_ids=setup_ids,
             module_ids=module_ids,
