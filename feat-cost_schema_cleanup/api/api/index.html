@@ -3272,6 +3272,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#digitalkin.core.task_manager.task_session.TaskSession.record_exception" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        <code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;record_exception
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#digitalkin.core.task_manager.task_session.TaskSession.send_heartbeat" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3485,22 +3496,11 @@
     </span>
   </a>
   
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#digitalkin.grpc_servers.module_server.ModuleServer.stop_async" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        <code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;stop_async
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label=" stop_async">
+    <nav class="md-nav" aria-label=" stop">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#digitalkin.grpc_servers.module_server.ModuleServer.stop_async(grace)" class="md-nav__link">
+  <a href="#digitalkin.grpc_servers.module_server.ModuleServer.stop(grace)" class="md-nav__link">
     <span class="md-ellipsis">
       
         <code class="doc-symbol doc-symbol-toc doc-symbol-parameter"></code>&nbsp;grace
@@ -3512,6 +3512,17 @@
         
       </ul>
     </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#digitalkin.grpc_servers.module_server.ModuleServer.stop_async" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        <code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;stop_async
+      
+    </span>
+  </a>
   
 </li>
         
@@ -17705,6 +17716,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label=" get_setup">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#digitalkin.services.DefaultRegistry.get_setup(setup_id)" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        <code class="doc-symbol doc-symbol-toc doc-symbol-parameter"></code>&nbsp;setup_id
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
         
           <li class="md-nav__item">
@@ -24346,6 +24374,23 @@
       
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label=" get_setup">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#digitalkin.services.registry.DefaultRegistry.get_setup(setup_id)" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        <code class="doc-symbol doc-symbol-toc doc-symbol-parameter"></code>&nbsp;setup_id
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
         
@@ -41242,6 +41287,13 @@ Used by workers to run distributed tasks or by TaskManager for local execution.<
             </div>
           </li>
           <li class="doc-section-item field-body">
+            <b><code><a class="autorefs autorefs-internal" href="#digitalkin.core.task_manager.task_session.TaskSession.record_exception">record_exception</a></code></b>
+            –
+            <div class="doc-md-description">
+              <p>Record exception details for DB logging.</p>
+            </div>
+          </li>
+          <li class="doc-section-item field-body">
             <b><code><a class="autorefs autorefs-internal" href="#digitalkin.core.task_manager.task_session.TaskSession.send_heartbeat">send_heartbeat</a></code></b>
             –
             <div class="doc-md-description">
@@ -41582,6 +41634,40 @@ Second and subsequent calls are no-ops.</p>
             –
           <div class="doc-md-description">
             <p>Asyncio when task cancelling</p>
+          </div>
+        </li>
+    </ul>
+
+          
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h6 id="digitalkin.core.task_manager.task_session.TaskSession.record_exception" class="doc doc-heading">
+<code class="doc-symbol doc-symbol-heading doc-symbol-method"></code>            <span class="doc doc-object-name doc-function-name">record_exception</span>
+
+
+<a href="#digitalkin.core.task_manager.task_session.TaskSession.record_exception" class="headerlink" title="Permanent link">¤</a></h6>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span class="nf">record_exception</span><span class="p">(</span><span class="n"><a class="autorefs autorefs-internal" href="#digitalkin.core.task_manager.task_session.TaskSession.record_exception(exc)">exc</a></span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/exceptions.html#Exception">Exception</a></span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>Record exception details for DB logging.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <ul>
+        <li class="doc-section-item field-body">
+<h7 id="digitalkin.core.task_manager.task_session.TaskSession.record_exception(exc)" class="doc doc-heading doc-heading-parameter">              <b><code>exc</code></b>
+<a href="#digitalkin.core.task_manager.task_session.TaskSession.record_exception(exc)" class="headerlink" title="Permanent link">¤</a></h7>              (<code><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/exceptions.html#Exception">Exception</a></code>)
+          –
+          <div class="doc-md-description">
+            <p>The exception that caused the task to fail.</p>
           </div>
         </li>
     </ul>
@@ -41962,14 +42048,14 @@ It can optionally register itself with a Registry server.</p>
             <b><code><a class="autorefs autorefs-internal" href="#digitalkin.grpc_servers.module_server.ModuleServer.stop">stop</a></code></b>
             –
             <div class="doc-md-description">
-              <p>Stop the module server.</p>
+              <p>Stop the gRPC server.</p>
             </div>
           </li>
           <li class="doc-section-item field-body">
             <b><code><a class="autorefs autorefs-internal" href="#digitalkin.grpc_servers.module_server.ModuleServer.stop_async">stop_async</a></code></b>
             –
             <div class="doc-md-description">
-              <p>Stop the gRPC server asynchronously.</p>
+              <p>Stop the module server with async cleanup.</p>
             </div>
           </li>
           <li class="doc-section-item field-body">
@@ -42151,14 +42237,27 @@ It can optionally register itself with a Registry server.</p>
 
 
 <a href="#digitalkin.grpc_servers.module_server.ModuleServer.stop" class="headerlink" title="Permanent link">¤</a></h5>
-<div class="language-python doc-signature highlight"><pre><span></span><code><span class="nf">stop</span><span class="p">(</span><span class="n"><span title="digitalkin.grpc_servers.module_server.ModuleServer.stop(grace)">grace</span></span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/functions.html#float">float</a></span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span class="nf">stop</span><span class="p">(</span><span class="n"><a class="autorefs autorefs-internal" href="#digitalkin.grpc_servers.module_server.ModuleServer.stop(grace)">grace</a></span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/functions.html#float">float</a></span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
 </code></pre></div>
 
     <div class="doc doc-contents ">
 
-        <p>Stop the module server.</p>
-<p>Deregisters from registry and stops the server. Modules also become
-inactive when they stop sending heartbeats as a fallback.</p>
+        <p>Stop the gRPC server.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <ul>
+        <li class="doc-section-item field-body">
+<h6 id="digitalkin.grpc_servers.module_server.ModuleServer.stop(grace)" class="doc doc-heading doc-heading-parameter">              <b><code>grace</code></b>
+<a href="#digitalkin.grpc_servers.module_server.ModuleServer.stop(grace)" class="headerlink" title="Permanent link">¤</a></h6>              (<code><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/functions.html#float">float</a> | None</code>, default:
+                  <code>None</code>
+)
+          –
+          <div class="doc-md-description">
+            <p>Optional grace period in seconds for existing RPCs to complete.</p>
+          </div>
+        </li>
+    </ul>
 
           
 
@@ -42178,28 +42277,14 @@ inactive when they stop sending heartbeats as a fallback.</p>
   </span>
 
 <a href="#digitalkin.grpc_servers.module_server.ModuleServer.stop_async" class="headerlink" title="Permanent link">¤</a></h5>
-<div class="language-python doc-signature highlight"><pre><span></span><code><span class="nf">stop_async</span><span class="p">(</span><span class="n"><a class="autorefs autorefs-internal" href="#digitalkin.grpc_servers.module_server.ModuleServer.stop_async(grace)">grace</a></span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/functions.html#float">float</a></span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span class="nf">stop_async</span><span class="p">(</span><span class="n"><span title="digitalkin.grpc_servers.module_server.ModuleServer.stop_async(grace)">grace</span></span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/functions.html#float">float</a></span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
 </code></pre></div>
 
     <div class="doc doc-contents ">
 
-        <p>Stop the gRPC server asynchronously.</p>
-<p>This method should be used in async contexts.</p>
-
-
-<p><span class="doc-section-title">Parameters:</span></p>
-    <ul>
-        <li class="doc-section-item field-body">
-<h6 id="digitalkin.grpc_servers.module_server.ModuleServer.stop_async(grace)" class="doc doc-heading doc-heading-parameter">              <b><code>grace</code></b>
-<a href="#digitalkin.grpc_servers.module_server.ModuleServer.stop_async(grace)" class="headerlink" title="Permanent link">¤</a></h6>              (<code><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/functions.html#float">float</a> | None</code>, default:
-                  <code>None</code>
-)
-          –
-          <div class="doc-md-description">
-            <p>Optional grace period in seconds for existing RPCs to complete.</p>
-          </div>
-        </li>
-    </ul>
+        <p>Stop the module server with async cleanup.</p>
+<p>Deregisters from registry and stops the server. Modules also become
+inactive when they stop sending heartbeats as a fallback.</p>
 
           
 
@@ -59218,32 +59303,9 @@ access to shared strategies and resources. Additional attributes may be set dyna
       <a href="#digitalkin.modules.TriggerHandler"><code class="doc-symbol doc-symbol-toc doc-symbol-class"></code>&nbsp;TriggerHandler</a>
   </span>
 
-            <ul class="doc doc-backlink-list">
-      <li class="doc doc-backlink">
             <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.TriggerHandler.append_files_history"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;append_files_history</a>
+      <a href="#digitalkin.modules.TriggerHandler.append_chat_history_message"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;append_chat_history_message</a>
   </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.TriggerHandler.get_costs"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;get_costs</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.TriggerHandler.load_chat_history"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;load_chat_history</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.TriggerHandler.log_warning"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;log_warning</a>
-  </span>
-
-      </li>
-  </ul>
 
       </li>
       <li class="doc doc-backlink">
@@ -59305,9 +59367,38 @@ access to shared strategies and resources. Additional attributes may be set dyna
       <a href="#digitalkin.modules.trigger_handler.TriggerHandler"><code class="doc-symbol doc-symbol-toc doc-symbol-class"></code>&nbsp;TriggerHandler</a>
   </span>
 
+            <ul class="doc doc-backlink-list">
+      <li class="doc doc-backlink">
             <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.trigger_handler.TriggerHandler.get_cost"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;get_cost</a>
+      <a href="#digitalkin.modules.trigger_handler.TriggerHandler.add_cost"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;add_cost</a>
   </span>
+
+      </li>
+      <li class="doc doc-backlink">
+            <span class="doc doc-backlink-crumb last">
+      <a href="#digitalkin.modules.trigger_handler.TriggerHandler.append_files_history"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;append_files_history</a>
+  </span>
+
+      </li>
+      <li class="doc doc-backlink">
+            <span class="doc doc-backlink-crumb last">
+      <a href="#digitalkin.modules.trigger_handler.TriggerHandler.handle"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;handle</a>
+  </span>
+
+      </li>
+      <li class="doc doc-backlink">
+            <span class="doc doc-backlink-crumb last">
+      <a href="#digitalkin.modules.trigger_handler.TriggerHandler.log_debug"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;log_debug</a>
+  </span>
+
+      </li>
+      <li class="doc doc-backlink">
+            <span class="doc doc-backlink-crumb last">
+      <a href="#digitalkin.modules.trigger_handler.TriggerHandler.log_warning"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;log_warning</a>
+  </span>
+
+      </li>
+  </ul>
 
       </li>
       <li class="doc doc-backlink">
@@ -59334,7 +59425,31 @@ access to shared strategies and resources. Additional attributes may be set dyna
       </li>
       <li class="doc doc-backlink">
             <span class="doc doc-backlink-crumb last">
+      <a href="#digitalkin.modules.triggers.healthcheck_ping_trigger.HealthcheckPingTrigger.append_files_history"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;append_files_history</a>
+  </span>
+
+      </li>
+      <li class="doc doc-backlink">
+            <span class="doc doc-backlink-crumb last">
+      <a href="#digitalkin.modules.triggers.healthcheck_ping_trigger.HealthcheckPingTrigger.get_cost"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;get_cost</a>
+  </span>
+
+      </li>
+      <li class="doc doc-backlink">
+            <span class="doc doc-backlink-crumb last">
       <a href="#digitalkin.modules.triggers.healthcheck_ping_trigger.HealthcheckPingTrigger.load_chat_history"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;load_chat_history</a>
+  </span>
+
+      </li>
+      <li class="doc doc-backlink">
+            <span class="doc doc-backlink-crumb last">
+      <a href="#digitalkin.modules.triggers.healthcheck_ping_trigger.HealthcheckPingTrigger.load_file_history"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;load_file_history</a>
+  </span>
+
+      </li>
+      <li class="doc doc-backlink">
+            <span class="doc doc-backlink-crumb last">
+      <a href="#digitalkin.modules.triggers.healthcheck_ping_trigger.HealthcheckPingTrigger.log_debug"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;log_debug</a>
   </span>
 
       </li>
@@ -59346,13 +59461,25 @@ access to shared strategies and resources. Additional attributes may be set dyna
       </li>
       <li class="doc doc-backlink">
             <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.triggers.healthcheck_ping_trigger.HealthcheckPingTrigger.log_warning"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;log_warning</a>
+      <a href="#digitalkin.modules.triggers.healthcheck_ping_trigger.HealthcheckPingTrigger.log_info"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;log_info</a>
   </span>
 
       </li>
       <li class="doc doc-backlink">
             <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.triggers.healthcheck_ping_trigger.HealthcheckPingTrigger.send_message"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;send_message</a>
+      <a href="#digitalkin.modules.triggers.healthcheck_ping_trigger.HealthcheckPingTrigger.read_storage"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;read_storage</a>
+  </span>
+
+      </li>
+      <li class="doc doc-backlink">
+            <span class="doc doc-backlink-crumb last">
+      <a href="#digitalkin.modules.triggers.healthcheck_ping_trigger.HealthcheckPingTrigger.store_storage"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;store_storage</a>
+  </span>
+
+      </li>
+      <li class="doc doc-backlink">
+            <span class="doc doc-backlink-crumb last">
+      <a href="#digitalkin.modules.triggers.healthcheck_ping_trigger.HealthcheckPingTrigger.update_storage"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;update_storage</a>
   </span>
 
       </li>
@@ -59369,6 +59496,12 @@ access to shared strategies and resources. Additional attributes may be set dyna
   </span>
 
             <ul class="doc doc-backlink-list">
+      <li class="doc doc-backlink">
+            <span class="doc doc-backlink-crumb last">
+      <a href="#digitalkin.modules.triggers.healthcheck_services_trigger.HealthcheckServicesTrigger.add_cost"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;add_cost</a>
+  </span>
+
+      </li>
       <li class="doc doc-backlink">
             <span class="doc doc-backlink-crumb last">
       <a href="#digitalkin.modules.triggers.healthcheck_services_trigger.HealthcheckServicesTrigger.append_chat_history_message"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;append_chat_history_message</a>
@@ -59390,6 +59523,12 @@ access to shared strategies and resources. Additional attributes may be set dyna
       <li class="doc doc-backlink">
             <span class="doc doc-backlink-crumb last">
       <a href="#digitalkin.modules.triggers.healthcheck_services_trigger.HealthcheckServicesTrigger.get_costs"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;get_costs</a>
+  </span>
+
+      </li>
+      <li class="doc doc-backlink">
+            <span class="doc doc-backlink-crumb last">
+      <a href="#digitalkin.modules.triggers.healthcheck_services_trigger.HealthcheckServicesTrigger.handle"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;handle</a>
   </span>
 
       </li>
@@ -59419,13 +59558,31 @@ access to shared strategies and resources. Additional attributes may be set dyna
       </li>
       <li class="doc doc-backlink">
             <span class="doc doc-backlink-crumb last">
+      <a href="#digitalkin.modules.triggers.healthcheck_services_trigger.HealthcheckServicesTrigger.log_info"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;log_info</a>
+  </span>
+
+      </li>
+      <li class="doc doc-backlink">
+            <span class="doc doc-backlink-crumb last">
       <a href="#digitalkin.modules.triggers.healthcheck_services_trigger.HealthcheckServicesTrigger.log_warning"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;log_warning</a>
   </span>
 
       </li>
       <li class="doc doc-backlink">
             <span class="doc doc-backlink-crumb last">
+      <a href="#digitalkin.modules.triggers.healthcheck_services_trigger.HealthcheckServicesTrigger.read_storage"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;read_storage</a>
+  </span>
+
+      </li>
+      <li class="doc doc-backlink">
+            <span class="doc doc-backlink-crumb last">
       <a href="#digitalkin.modules.triggers.healthcheck_services_trigger.HealthcheckServicesTrigger.save_send_message"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;save_send_message</a>
+  </span>
+
+      </li>
+      <li class="doc doc-backlink">
+            <span class="doc doc-backlink-crumb last">
+      <a href="#digitalkin.modules.triggers.healthcheck_services_trigger.HealthcheckServicesTrigger.send_message"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;send_message</a>
   </span>
 
       </li>
@@ -59456,7 +59613,7 @@ access to shared strategies and resources. Additional attributes may be set dyna
             <ul class="doc doc-backlink-list">
       <li class="doc doc-backlink">
             <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.triggers.healthcheck_status_trigger.HealthcheckStatusTrigger.append_chat_history_message"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;append_chat_history_message</a>
+      <a href="#digitalkin.modules.triggers.healthcheck_status_trigger.HealthcheckStatusTrigger.add_cost"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;add_cost</a>
   </span>
 
       </li>
@@ -59486,12 +59643,6 @@ access to shared strategies and resources. Additional attributes may be set dyna
       </li>
       <li class="doc doc-backlink">
             <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.triggers.healthcheck_status_trigger.HealthcheckStatusTrigger.load_chat_history"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;load_chat_history</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
       <a href="#digitalkin.modules.triggers.healthcheck_status_trigger.HealthcheckStatusTrigger.load_file_history"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;load_file_history</a>
   </span>
 
@@ -59505,12 +59656,6 @@ access to shared strategies and resources. Additional attributes may be set dyna
       <li class="doc doc-backlink">
             <span class="doc doc-backlink-crumb last">
       <a href="#digitalkin.modules.triggers.healthcheck_status_trigger.HealthcheckStatusTrigger.log_error"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;log_error</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.triggers.healthcheck_status_trigger.HealthcheckStatusTrigger.log_info"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;log_info</a>
   </span>
 
       </li>
@@ -63712,32 +63857,9 @@ access to shared strategies and resources. Additional attributes may be set dyna
       <a href="#digitalkin.modules.TriggerHandler"><code class="doc-symbol doc-symbol-toc doc-symbol-class"></code>&nbsp;TriggerHandler</a>
   </span>
 
-            <ul class="doc doc-backlink-list">
-      <li class="doc doc-backlink">
             <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.TriggerHandler.append_files_history"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;append_files_history</a>
+      <a href="#digitalkin.modules.TriggerHandler.append_chat_history_message"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;append_chat_history_message</a>
   </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.TriggerHandler.get_costs"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;get_costs</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.TriggerHandler.load_chat_history"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;load_chat_history</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.TriggerHandler.log_warning"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;log_warning</a>
-  </span>
-
-      </li>
-  </ul>
 
       </li>
       <li class="doc doc-backlink">
@@ -63799,9 +63921,38 @@ access to shared strategies and resources. Additional attributes may be set dyna
       <a href="#digitalkin.modules.trigger_handler.TriggerHandler"><code class="doc-symbol doc-symbol-toc doc-symbol-class"></code>&nbsp;TriggerHandler</a>
   </span>
 
+            <ul class="doc doc-backlink-list">
+      <li class="doc doc-backlink">
             <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.trigger_handler.TriggerHandler.get_cost"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;get_cost</a>
+      <a href="#digitalkin.modules.trigger_handler.TriggerHandler.add_cost"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;add_cost</a>
   </span>
+
+      </li>
+      <li class="doc doc-backlink">
+            <span class="doc doc-backlink-crumb last">
+      <a href="#digitalkin.modules.trigger_handler.TriggerHandler.append_files_history"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;append_files_history</a>
+  </span>
+
+      </li>
+      <li class="doc doc-backlink">
+            <span class="doc doc-backlink-crumb last">
+      <a href="#digitalkin.modules.trigger_handler.TriggerHandler.handle"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;handle</a>
+  </span>
+
+      </li>
+      <li class="doc doc-backlink">
+            <span class="doc doc-backlink-crumb last">
+      <a href="#digitalkin.modules.trigger_handler.TriggerHandler.log_debug"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;log_debug</a>
+  </span>
+
+      </li>
+      <li class="doc doc-backlink">
+            <span class="doc doc-backlink-crumb last">
+      <a href="#digitalkin.modules.trigger_handler.TriggerHandler.log_warning"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;log_warning</a>
+  </span>
+
+      </li>
+  </ul>
 
       </li>
       <li class="doc doc-backlink">
@@ -63828,7 +63979,31 @@ access to shared strategies and resources. Additional attributes may be set dyna
       </li>
       <li class="doc doc-backlink">
             <span class="doc doc-backlink-crumb last">
+      <a href="#digitalkin.modules.triggers.healthcheck_ping_trigger.HealthcheckPingTrigger.append_files_history"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;append_files_history</a>
+  </span>
+
+      </li>
+      <li class="doc doc-backlink">
+            <span class="doc doc-backlink-crumb last">
+      <a href="#digitalkin.modules.triggers.healthcheck_ping_trigger.HealthcheckPingTrigger.get_cost"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;get_cost</a>
+  </span>
+
+      </li>
+      <li class="doc doc-backlink">
+            <span class="doc doc-backlink-crumb last">
       <a href="#digitalkin.modules.triggers.healthcheck_ping_trigger.HealthcheckPingTrigger.load_chat_history"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;load_chat_history</a>
+  </span>
+
+      </li>
+      <li class="doc doc-backlink">
+            <span class="doc doc-backlink-crumb last">
+      <a href="#digitalkin.modules.triggers.healthcheck_ping_trigger.HealthcheckPingTrigger.load_file_history"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;load_file_history</a>
+  </span>
+
+      </li>
+      <li class="doc doc-backlink">
+            <span class="doc doc-backlink-crumb last">
+      <a href="#digitalkin.modules.triggers.healthcheck_ping_trigger.HealthcheckPingTrigger.log_debug"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;log_debug</a>
   </span>
 
       </li>
@@ -63840,13 +64015,25 @@ access to shared strategies and resources. Additional attributes may be set dyna
       </li>
       <li class="doc doc-backlink">
             <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.triggers.healthcheck_ping_trigger.HealthcheckPingTrigger.log_warning"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;log_warning</a>
+      <a href="#digitalkin.modules.triggers.healthcheck_ping_trigger.HealthcheckPingTrigger.log_info"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;log_info</a>
   </span>
 
       </li>
       <li class="doc doc-backlink">
             <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.triggers.healthcheck_ping_trigger.HealthcheckPingTrigger.send_message"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;send_message</a>
+      <a href="#digitalkin.modules.triggers.healthcheck_ping_trigger.HealthcheckPingTrigger.read_storage"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;read_storage</a>
+  </span>
+
+      </li>
+      <li class="doc doc-backlink">
+            <span class="doc doc-backlink-crumb last">
+      <a href="#digitalkin.modules.triggers.healthcheck_ping_trigger.HealthcheckPingTrigger.store_storage"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;store_storage</a>
+  </span>
+
+      </li>
+      <li class="doc doc-backlink">
+            <span class="doc doc-backlink-crumb last">
+      <a href="#digitalkin.modules.triggers.healthcheck_ping_trigger.HealthcheckPingTrigger.update_storage"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;update_storage</a>
   </span>
 
       </li>
@@ -63863,6 +64050,12 @@ access to shared strategies and resources. Additional attributes may be set dyna
   </span>
 
             <ul class="doc doc-backlink-list">
+      <li class="doc doc-backlink">
+            <span class="doc doc-backlink-crumb last">
+      <a href="#digitalkin.modules.triggers.healthcheck_services_trigger.HealthcheckServicesTrigger.add_cost"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;add_cost</a>
+  </span>
+
+      </li>
       <li class="doc doc-backlink">
             <span class="doc doc-backlink-crumb last">
       <a href="#digitalkin.modules.triggers.healthcheck_services_trigger.HealthcheckServicesTrigger.append_chat_history_message"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;append_chat_history_message</a>
@@ -63884,6 +64077,12 @@ access to shared strategies and resources. Additional attributes may be set dyna
       <li class="doc doc-backlink">
             <span class="doc doc-backlink-crumb last">
       <a href="#digitalkin.modules.triggers.healthcheck_services_trigger.HealthcheckServicesTrigger.get_costs"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;get_costs</a>
+  </span>
+
+      </li>
+      <li class="doc doc-backlink">
+            <span class="doc doc-backlink-crumb last">
+      <a href="#digitalkin.modules.triggers.healthcheck_services_trigger.HealthcheckServicesTrigger.handle"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;handle</a>
   </span>
 
       </li>
@@ -63913,13 +64112,31 @@ access to shared strategies and resources. Additional attributes may be set dyna
       </li>
       <li class="doc doc-backlink">
             <span class="doc doc-backlink-crumb last">
+      <a href="#digitalkin.modules.triggers.healthcheck_services_trigger.HealthcheckServicesTrigger.log_info"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;log_info</a>
+  </span>
+
+      </li>
+      <li class="doc doc-backlink">
+            <span class="doc doc-backlink-crumb last">
       <a href="#digitalkin.modules.triggers.healthcheck_services_trigger.HealthcheckServicesTrigger.log_warning"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;log_warning</a>
   </span>
 
       </li>
       <li class="doc doc-backlink">
             <span class="doc doc-backlink-crumb last">
+      <a href="#digitalkin.modules.triggers.healthcheck_services_trigger.HealthcheckServicesTrigger.read_storage"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;read_storage</a>
+  </span>
+
+      </li>
+      <li class="doc doc-backlink">
+            <span class="doc doc-backlink-crumb last">
       <a href="#digitalkin.modules.triggers.healthcheck_services_trigger.HealthcheckServicesTrigger.save_send_message"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;save_send_message</a>
+  </span>
+
+      </li>
+      <li class="doc doc-backlink">
+            <span class="doc doc-backlink-crumb last">
+      <a href="#digitalkin.modules.triggers.healthcheck_services_trigger.HealthcheckServicesTrigger.send_message"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;send_message</a>
   </span>
 
       </li>
@@ -63950,7 +64167,7 @@ access to shared strategies and resources. Additional attributes may be set dyna
             <ul class="doc doc-backlink-list">
       <li class="doc doc-backlink">
             <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.triggers.healthcheck_status_trigger.HealthcheckStatusTrigger.append_chat_history_message"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;append_chat_history_message</a>
+      <a href="#digitalkin.modules.triggers.healthcheck_status_trigger.HealthcheckStatusTrigger.add_cost"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;add_cost</a>
   </span>
 
       </li>
@@ -63980,12 +64197,6 @@ access to shared strategies and resources. Additional attributes may be set dyna
       </li>
       <li class="doc doc-backlink">
             <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.triggers.healthcheck_status_trigger.HealthcheckStatusTrigger.load_chat_history"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;load_chat_history</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
       <a href="#digitalkin.modules.triggers.healthcheck_status_trigger.HealthcheckStatusTrigger.load_file_history"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;load_file_history</a>
   </span>
 
@@ -63999,12 +64210,6 @@ access to shared strategies and resources. Additional attributes may be set dyna
       <li class="doc doc-backlink">
             <span class="doc doc-backlink-crumb last">
       <a href="#digitalkin.modules.triggers.healthcheck_status_trigger.HealthcheckStatusTrigger.log_error"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;log_error</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.modules.triggers.healthcheck_status_trigger.HealthcheckStatusTrigger.log_info"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;log_info</a>
   </span>
 
       </li>
@@ -70402,16 +70607,6 @@ providing the client with essential execution context information.</p>
             <ul class="doc doc-backlink-list">
       <li class="doc doc-backlink">
             <span class="doc doc-backlink-crumb">
-      <a href="#digitalkin.services.DefaultRegistry"><code class="doc-symbol doc-symbol-toc doc-symbol-class"></code>&nbsp;DefaultRegistry</a>
-  </span>
-
-            <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.services.DefaultRegistry.get_setup"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;get_setup</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb">
       <a href="#digitalkin.services.RegistryStrategy"><code class="doc-symbol doc-symbol-toc doc-symbol-class"></code>&nbsp;RegistryStrategy</a>
   </span>
 
@@ -70426,16 +70621,6 @@ providing the client with essential execution context information.</p>
   </span>
 
             <ul class="doc doc-backlink-list">
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb">
-      <a href="#digitalkin.services.registry.DefaultRegistry"><code class="doc-symbol doc-symbol-toc doc-symbol-class"></code>&nbsp;DefaultRegistry</a>
-  </span>
-
-            <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.services.registry.DefaultRegistry.get_setup"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;get_setup</a>
-  </span>
-
-      </li>
       <li class="doc doc-backlink">
             <span class="doc doc-backlink-crumb">
       <a href="#digitalkin.services.registry.GrpcRegistry"><code class="doc-symbol doc-symbol-toc doc-symbol-class"></code>&nbsp;GrpcRegistry</a>
@@ -70453,20 +70638,6 @@ providing the client with essential execution context information.</p>
 
             <span class="doc doc-backlink-crumb last">
       <a href="#digitalkin.services.registry.RegistryStrategy.get_setup"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;get_setup</a>
-  </span>
-
-      </li>
-      <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb">
-      <a href="#digitalkin.services.registry.default_registry"><code class="doc-symbol doc-symbol-toc doc-symbol-module"></code>&nbsp;default_registry</a>
-  </span>
-
-            <span class="doc doc-backlink-crumb">
-      <a href="#digitalkin.services.registry.default_registry.DefaultRegistry"><code class="doc-symbol doc-symbol-toc doc-symbol-class"></code>&nbsp;DefaultRegistry</a>
-  </span>
-
-            <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.services.registry.default_registry.DefaultRegistry.get_setup"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;get_setup</a>
   </span>
 
       </li>
@@ -87515,7 +87686,7 @@ atomically - if one fails, others may still succeed.</p>
             <b><code><a class="autorefs autorefs-internal" href="#digitalkin.services.DefaultRegistry.get_setup">get_setup</a></code></b>
             –
             <div class="doc-md-description">
-              <p>Get setup info.</p>
+              <p>Get setup info (not supported in default registry).</p>
             </div>
           </li>
           <li class="doc-section-item field-body">
@@ -87572,7 +87743,7 @@ atomically - if one fails, others may still succeed.</p>
 
 
   <span class="doc doc-labels">
-      <small class="doc doc-label doc-label-abstractmethod"><code>abstractmethod</code></small>
+      <small class="doc doc-label doc-label-async"><code>async</code></small>
   </span>
 
 <a href="#digitalkin.services.DefaultRegistry.deregister" class="headerlink" title="Permanent link">¤</a></h4>
@@ -87603,7 +87774,7 @@ atomically - if one fails, others may still succeed.</p>
               <code><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/functions.html#bool">bool</a></code>
           –
           <div class="doc-md-description">
-            <p>True if deregistration was successful, False otherwise.</p>
+            <p>True if module was removed, False if not found.</p>
           </div>
         </li>
     </ul>
@@ -87679,17 +87850,26 @@ atomically - if one fails, others may still succeed.</p>
 <code class="doc-symbol doc-symbol-heading doc-symbol-method"></code>            <span class="doc doc-object-name doc-function-name">get_setup</span>
 
 
-  <span class="doc doc-labels">
-      <small class="doc doc-label doc-label-abstractmethod"><code>abstractmethod</code></small>
-  </span>
-
 <a href="#digitalkin.services.DefaultRegistry.get_setup" class="headerlink" title="Permanent link">¤</a></h4>
-<div class="language-python doc-signature highlight"><pre><span></span><code><span class="nf">get_setup</span><span class="p">(</span><span class="n"><span title="digitalkin.services.DefaultRegistry.get_setup(setup_id)">setup_id</span></span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a></span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n"><a class="autorefs autorefs-internal" href="#digitalkin.models.services.registry.SetupInfo">SetupInfo</a></span> <span class="o">|</span> <span class="kc">None</span>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span class="nf">get_setup</span><span class="p">(</span><span class="n"><a class="autorefs autorefs-internal" href="#digitalkin.services.DefaultRegistry.get_setup(setup_id)">setup_id</a></span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a></span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
 </code></pre></div>
 
     <div class="doc doc-contents ">
 
-        <p>Get setup info.</p>
+        <p>Get setup info (not supported in default registry).</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <ul>
+        <li class="doc-section-item field-body">
+<h5 id="digitalkin.services.DefaultRegistry.get_setup(setup_id)" class="doc doc-heading doc-heading-parameter">              <b><code>setup_id</code></b>
+<a href="#digitalkin.services.DefaultRegistry.get_setup(setup_id)" class="headerlink" title="Permanent link">¤</a></h5>              (<code><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a></code>)
+          –
+          <div class="doc-md-description">
+            <p>The setup identifier.</p>
+          </div>
+        </li>
+    </ul>
 
           
 
@@ -90460,6 +90640,7 @@ registration, and status management.</p>
 
   <span class="doc doc-labels">
       <small class="doc doc-label doc-label-abstractmethod"><code>abstractmethod</code></small>
+      <small class="doc doc-label doc-label-async"><code>async</code></small>
   </span>
 
 <a href="#digitalkin.services.RegistryStrategy.deregister" class="headerlink" title="Permanent link">¤</a></h4>
@@ -96256,8 +96437,12 @@ using the Module Service gRPC protocol.</p>
 
       </li>
       <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
+            <span class="doc doc-backlink-crumb">
       <a href="#digitalkin.services.cost.GrpcCost"><code class="doc-symbol doc-symbol-toc doc-symbol-class"></code>&nbsp;GrpcCost</a>
+  </span>
+
+            <span class="doc doc-backlink-crumb last">
+      <a href="#digitalkin.services.cost.GrpcCost.set_cost_config"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;set_cost_config</a>
   </span>
 
       </li>
@@ -96280,8 +96465,12 @@ using the Module Service gRPC protocol.</p>
       <a href="#digitalkin.services.cost.default_cost"><code class="doc-symbol doc-symbol-toc doc-symbol-module"></code>&nbsp;default_cost</a>
   </span>
 
-            <span class="doc doc-backlink-crumb last">
+            <span class="doc doc-backlink-crumb">
       <a href="#digitalkin.services.cost.default_cost.DefaultCost"><code class="doc-symbol doc-symbol-toc doc-symbol-class"></code>&nbsp;DefaultCost</a>
+  </span>
+
+            <span class="doc doc-backlink-crumb last">
+      <a href="#digitalkin.services.cost.default_cost.DefaultCost.set_cost_config"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;set_cost_config</a>
   </span>
 
       </li>
@@ -98935,8 +99124,12 @@ using the Module Service gRPC protocol.</p>
 
       </li>
       <li class="doc doc-backlink">
-            <span class="doc doc-backlink-crumb last">
+            <span class="doc doc-backlink-crumb">
       <a href="#digitalkin.services.cost.GrpcCost"><code class="doc-symbol doc-symbol-toc doc-symbol-class"></code>&nbsp;GrpcCost</a>
+  </span>
+
+            <span class="doc doc-backlink-crumb last">
+      <a href="#digitalkin.services.cost.GrpcCost.set_cost_config"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;set_cost_config</a>
   </span>
 
       </li>
@@ -98959,8 +99152,12 @@ using the Module Service gRPC protocol.</p>
       <a href="#digitalkin.services.cost.default_cost"><code class="doc-symbol doc-symbol-toc doc-symbol-module"></code>&nbsp;default_cost</a>
   </span>
 
-            <span class="doc doc-backlink-crumb last">
+            <span class="doc doc-backlink-crumb">
       <a href="#digitalkin.services.cost.default_cost.DefaultCost"><code class="doc-symbol doc-symbol-toc doc-symbol-class"></code>&nbsp;DefaultCost</a>
+  </span>
+
+            <span class="doc doc-backlink-crumb last">
+      <a href="#digitalkin.services.cost.default_cost.DefaultCost.set_cost_config"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;set_cost_config</a>
   </span>
 
       </li>
@@ -108356,7 +108553,7 @@ atomically - if one fails, others may still succeed.</p>
             <b><code><a class="autorefs autorefs-internal" href="#digitalkin.services.registry.DefaultRegistry.get_setup">get_setup</a></code></b>
             –
             <div class="doc-md-description">
-              <p>Get setup info.</p>
+              <p>Get setup info (not supported in default registry).</p>
             </div>
           </li>
           <li class="doc-section-item field-body">
@@ -108413,7 +108610,7 @@ atomically - if one fails, others may still succeed.</p>
 
 
   <span class="doc doc-labels">
-      <small class="doc doc-label doc-label-abstractmethod"><code>abstractmethod</code></small>
+      <small class="doc doc-label doc-label-async"><code>async</code></small>
   </span>
 
 <a href="#digitalkin.services.registry.DefaultRegistry.deregister" class="headerlink" title="Permanent link">¤</a></h5>
@@ -108444,7 +108641,7 @@ atomically - if one fails, others may still succeed.</p>
               <code><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/functions.html#bool">bool</a></code>
           –
           <div class="doc-md-description">
-            <p>True if deregistration was successful, False otherwise.</p>
+            <p>True if module was removed, False if not found.</p>
           </div>
         </li>
     </ul>
@@ -108520,17 +108717,26 @@ atomically - if one fails, others may still succeed.</p>
 <code class="doc-symbol doc-symbol-heading doc-symbol-method"></code>            <span class="doc doc-object-name doc-function-name">get_setup</span>
 
 
-  <span class="doc doc-labels">
-      <small class="doc doc-label doc-label-abstractmethod"><code>abstractmethod</code></small>
-  </span>
-
 <a href="#digitalkin.services.registry.DefaultRegistry.get_setup" class="headerlink" title="Permanent link">¤</a></h5>
-<div class="language-python doc-signature highlight"><pre><span></span><code><span class="nf">get_setup</span><span class="p">(</span><span class="n"><span title="digitalkin.services.registry.DefaultRegistry.get_setup(setup_id)">setup_id</span></span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a></span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n"><a class="autorefs autorefs-internal" href="#digitalkin.models.services.registry.SetupInfo">SetupInfo</a></span> <span class="o">|</span> <span class="kc">None</span>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span class="nf">get_setup</span><span class="p">(</span><span class="n"><a class="autorefs autorefs-internal" href="#digitalkin.services.registry.DefaultRegistry.get_setup(setup_id)">setup_id</a></span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a></span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
 </code></pre></div>
 
     <div class="doc doc-contents ">
 
-        <p>Get setup info.</p>
+        <p>Get setup info (not supported in default registry).</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <ul>
+        <li class="doc-section-item field-body">
+<h6 id="digitalkin.services.registry.DefaultRegistry.get_setup(setup_id)" class="doc doc-heading doc-heading-parameter">              <b><code>setup_id</code></b>
+<a href="#digitalkin.services.registry.DefaultRegistry.get_setup(setup_id)" class="headerlink" title="Permanent link">¤</a></h6>              (<code><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a></code>)
+          –
+          <div class="doc-md-description">
+            <p>The setup identifier.</p>
+          </div>
+        </li>
+    </ul>
 
           
 
@@ -108992,6 +109198,10 @@ to perform module discovery, registration, and status management operations.</p>
 <h5 id="digitalkin.services.registry.GrpcRegistry.deregister" class="doc doc-heading">
 <code class="doc-symbol doc-symbol-heading doc-symbol-method"></code>            <span class="doc doc-object-name doc-function-name">deregister</span>
 
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-async"><code>async</code></small>
+  </span>
 
 <a href="#digitalkin.services.registry.GrpcRegistry.deregister" class="headerlink" title="Permanent link">¤</a></h5>
 <div class="language-python doc-signature highlight"><pre><span></span><code><span class="nf">deregister</span><span class="p">(</span><span class="n"><a class="autorefs autorefs-internal" href="#digitalkin.services.registry.GrpcRegistry.deregister(module_id)">module_id</a></span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a></span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n"><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/functions.html#bool">bool</a></span>
@@ -111156,6 +111366,7 @@ registration, and status management.</p>
 
   <span class="doc doc-labels">
       <small class="doc doc-label doc-label-abstractmethod"><code>abstractmethod</code></small>
+      <small class="doc doc-label doc-label-async"><code>async</code></small>
   </span>
 
 <a href="#digitalkin.services.registry.RegistryStrategy.deregister" class="headerlink" title="Permanent link">¤</a></h5>
@@ -111625,7 +111836,7 @@ The module must already exist in the registry database.</p>
             <b><code><a class="autorefs autorefs-internal" href="#digitalkin.services.registry.default_registry.DefaultRegistry.get_setup">get_setup</a></code></b>
             –
             <div class="doc-md-description">
-              <p>Get setup info.</p>
+              <p>Get setup info (not supported in default registry).</p>
             </div>
           </li>
           <li class="doc-section-item field-body">
@@ -111682,7 +111893,7 @@ The module must already exist in the registry database.</p>
 
 
   <span class="doc doc-labels">
-      <small class="doc doc-label doc-label-abstractmethod"><code>abstractmethod</code></small>
+      <small class="doc doc-label doc-label-async"><code>async</code></small>
   </span>
 
 <a href="#digitalkin.services.registry.default_registry.DefaultRegistry.deregister" class="headerlink" title="Permanent link">¤</a></h6>
@@ -111713,7 +111924,7 @@ The module must already exist in the registry database.</p>
               <code><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/functions.html#bool">bool</a></code>
           –
           <div class="doc-md-description">
-            <p>True if deregistration was successful, False otherwise.</p>
+            <p>True if module was removed, False if not found.</p>
           </div>
         </li>
     </ul>
@@ -111789,17 +112000,26 @@ The module must already exist in the registry database.</p>
 <code class="doc-symbol doc-symbol-heading doc-symbol-method"></code>            <span class="doc doc-object-name doc-function-name">get_setup</span>
 
 
-  <span class="doc doc-labels">
-      <small class="doc doc-label doc-label-abstractmethod"><code>abstractmethod</code></small>
-  </span>
-
 <a href="#digitalkin.services.registry.default_registry.DefaultRegistry.get_setup" class="headerlink" title="Permanent link">¤</a></h6>
-<div class="language-python doc-signature highlight"><pre><span></span><code><span class="nf">get_setup</span><span class="p">(</span><span class="n"><span title="digitalkin.services.registry.default_registry.DefaultRegistry.get_setup(setup_id)">setup_id</span></span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a></span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n"><a class="autorefs autorefs-internal" href="#digitalkin.models.services.registry.SetupInfo">SetupInfo</a></span> <span class="o">|</span> <span class="kc">None</span>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span class="nf">get_setup</span><span class="p">(</span><span class="n"><a class="autorefs autorefs-internal" href="#digitalkin.services.registry.default_registry.DefaultRegistry.get_setup(setup_id)">setup_id</a></span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a></span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
 </code></pre></div>
 
     <div class="doc doc-contents ">
 
-        <p>Get setup info.</p>
+        <p>Get setup info (not supported in default registry).</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <ul>
+        <li class="doc-section-item field-body">
+<h7 id="digitalkin.services.registry.default_registry.DefaultRegistry.get_setup(setup_id)" class="doc doc-heading doc-heading-parameter">              <b><code>setup_id</code></b>
+<a href="#digitalkin.services.registry.default_registry.DefaultRegistry.get_setup(setup_id)" class="headerlink" title="Permanent link">¤</a></h7>              (<code><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a></code>)
+          –
+          <div class="doc-md-description">
+            <p>The setup identifier.</p>
+          </div>
+        </li>
+    </ul>
 
           
 
@@ -113061,6 +113281,10 @@ to perform module discovery, registration, and status management operations.</p>
 <code class="doc-symbol doc-symbol-heading doc-symbol-method"></code>            <span class="doc doc-object-name doc-function-name">deregister</span>
 
 
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-async"><code>async</code></small>
+  </span>
+
 <a href="#digitalkin.services.registry.grpc_registry.GrpcRegistry.deregister" class="headerlink" title="Permanent link">¤</a></h6>
 <div class="language-python doc-signature highlight"><pre><span></span><code><span class="nf">deregister</span><span class="p">(</span><span class="n"><a class="autorefs autorefs-internal" href="#digitalkin.services.registry.grpc_registry.GrpcRegistry.deregister(module_id)">module_id</a></span><span class="p">:</span> <span class="n"><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/stdtypes.html#str">str</a></span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n"><a class="autorefs autorefs-external" href="https://docs.python.org/3/library/functions.html#bool">bool</a></span>
 </code></pre></div>
@@ -114248,6 +114472,7 @@ registration, and status management.</p>
 
   <span class="doc doc-labels">
       <small class="doc doc-label doc-label-abstractmethod"><code>abstractmethod</code></small>
+      <small class="doc doc-label doc-label-async"><code>async</code></small>
   </span>
 
 <a href="#digitalkin.services.registry.registry_strategy.RegistryStrategy.deregister" class="headerlink" title="Permanent link">¤</a></h6>
@@ -115497,12 +115722,8 @@ allowing them to be switched between local and remote modes.</p>
       <a href="#digitalkin.services.services_config"><code class="doc-symbol doc-symbol-toc doc-symbol-module"></code>&nbsp;services_config</a>
   </span>
 
-            <span class="doc doc-backlink-crumb">
-      <a href="#digitalkin.services.services_config.ServicesConfig"><code class="doc-symbol doc-symbol-toc doc-symbol-class"></code>&nbsp;ServicesConfig</a>
-  </span>
-
             <span class="doc doc-backlink-crumb last">
-      <a href="#digitalkin.services.services_config.ServicesConfig.update_mode"><code class="doc-symbol doc-symbol-toc doc-symbol-method"></code>&nbsp;update_mode</a>
+      <a href="#digitalkin.services.services_config.ServicesConfig"><code class="doc-symbol doc-symbol-toc doc-symbol-class"></code>&nbsp;ServicesConfig</a>
   </span>
 
       </li>
