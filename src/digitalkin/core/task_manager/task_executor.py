@@ -55,7 +55,9 @@ class TaskExecutor:
         async def signal_wrapper() -> None:
             """Create initial signal record and listen for signals."""
             try:
-                await channel.create(
+                # Create task record and capture the record ID directly
+                # This avoids a race condition where SELECT might run before CREATE completes
+                result = await channel.create(
                     "tasks",
                     SignalMessage(
                         task_id=task_id,
@@ -66,7 +68,22 @@ class TaskExecutor:
                         action=SignalType.START,
                     ).model_dump(),
                 )
-                await session.listen_signals()
+                # Store the record ID in session - required before starting live query
+                if isinstance(result, dict) and "id" in result:
+                    session.signal_record_id = result["id"]
+                    logger.debug(
+                        "Task signal record created",
+                        extra={"mission_id": mission_id, "task_id": task_id, "record_id": result["id"]},
+                    )
+                    # Only start listening if we have a valid record ID
+                    await session.listen_signals()
+                else:
+                    # Create failed - wait for cancellation instead of listening
+                    logger.error(
+                        "Failed to get record ID from task creation, waiting for cancellation",
+                        extra={"mission_id": mission_id, "task_id": task_id, "result": result},
+                    )
+                    await session.is_cancelled.wait()
             except asyncio.CancelledError:
                 logger.debug("Signal listener cancelled", extra={"mission_id": mission_id, "task_id": task_id})
             finally:

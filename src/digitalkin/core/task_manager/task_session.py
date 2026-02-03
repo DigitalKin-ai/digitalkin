@@ -229,17 +229,25 @@ class TaskSession:
         """Enhanced signal listener with comprehensive handling.
 
         Raises:
-            CancelledError: Asyncio when task cancelling
+            CancelledError: If task is cancelled during signal listening.
         """
         logger.info("Signal listener started", extra=self.session_ids)
+
+        # signal_record_id must be set by TaskExecutor before calling this method.
+        # If not set, we cannot filter signals correctly - abort early.
         if self.signal_record_id is None:
-            self.signal_record_id = (await self.db.select_by_task_id("tasks", self.task_id)).get("id")
+            logger.error(
+                "signal_record_id not set - cannot start signal listener without valid record ID",
+                extra=self.session_ids,
+            )
+            return
 
         live_id, live_signals = await self.db.start_live("tasks")
         try:
             async for signal in live_signals:
                 logger.debug("Signal received", extra={**self.session_ids, "signal": signal})
-                if self.cancelled:
+                # Check both cancelled and stream_closed to ensure clean shutdown
+                if self.cancelled or self.stream_closed:
                     break
 
                 if signal is None or signal["id"] == self.signal_record_id or "payload" not in signal:

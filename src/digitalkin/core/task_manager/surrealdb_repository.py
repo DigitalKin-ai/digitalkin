@@ -145,10 +145,26 @@ class SurrealDBConnection(Generic[TSurreal]):
 
         Returns:
             Dict[str, Any]: The created record as returned by the database
+
+        Raises:
+            RuntimeError: If the database returns an error response
         """
         logger.debug("Creating record in %s with data: %s", table_name, data)
         result = await self.db.create(table_name, data)
         logger.debug("create result: %s", result)
+
+        # Check for error response from SurrealDB
+        if isinstance(result, dict) and "code" in result:
+            error_msg = result.get("message", result.get("information", "Unknown error"))
+            logger.error(
+                "SurrealDB create failed: %s (code: %s)",
+                error_msg,
+                result.get("code"),
+                extra={"table": table_name, "error": result},
+            )
+            msg = f"SurrealDB create failed in '{table_name}': {error_msg}"
+            raise RuntimeError(msg)
+
         return cast("list[dict[str, Any]] | dict[str, Any]", result)
 
     async def merge(

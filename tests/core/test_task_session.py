@@ -462,22 +462,19 @@ class TestSignalListener:
     """Test signal reception and handler dispatch."""
 
     @pytest.mark.asyncio
-    async def test_listen_signals_initializes_signal_record_id(self, task_session, mock_db):
-        """Verify signal listener fetches signal_record_id if not set.
+    async def test_listen_signals_returns_early_if_signal_record_id_not_set(self, task_session, mock_db):
+        """Verify signal listener returns early if signal_record_id is not set.
 
-        Before listening, the method should query the database to get the
-        task's signal record ID for filtering relevant signals.
+        The TaskExecutor is responsible for setting signal_record_id from the
+        create result. If not set, listen_signals returns early to avoid race conditions.
         """
-        signals = []
-        mock_db.start_live.return_value = ("live_123", _signal_generator(signals))
-
-        # Trigger exit immediately
-        task_session.is_cancelled.set()
+        task_session.signal_record_id = None
 
         await task_session.listen_signals()
 
-        mock_db.select_by_task_id.assert_called_once_with("tasks", "test_task_123")
-        assert task_session.signal_record_id == "tasks:test_signal_id"
+        # Should not start live query if signal_record_id is not set
+        mock_db.start_live.assert_not_called()
+        mock_db.select_by_task_id.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_listen_signals_handles_cancel_signal(self, task_session, mock_db):
@@ -2199,21 +2196,19 @@ class TestDatabaseInteractionPatterns:
             assert call_args[1] == "heartbeats:existing_123"
 
     @pytest.mark.asyncio
-    async def test_db_select_by_task_id_called_for_signal_init(self, task_session, mock_db):
-        """Verify signal listener queries for task record on initialization.
+    async def test_signal_listener_requires_record_id_to_start(self, task_session, mock_db):
+        """Verify signal listener requires signal_record_id to be set before starting.
 
-        Tests that the listener properly fetches the task record ID
-        before starting to listen for signals.
+        The TaskExecutor sets signal_record_id from the create result before calling
+        listen_signals. If not set, the listener returns early without database calls.
         """
         task_session.signal_record_id = None  # Not initialized
-        task_session.is_cancelled.set()  # Exit immediately
-
-        mock_db.start_live.return_value = ("live_123", _signal_generator([]))
 
         await task_session.listen_signals()
 
-        mock_db.select_by_task_id.assert_called_once_with("tasks", "test_task_123")
-        assert task_session.signal_record_id == "tasks:test_signal_id"
+        # Should not make any database calls if signal_record_id is not set
+        mock_db.start_live.assert_not_called()
+        mock_db.select_by_task_id.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_db_live_query_lifecycle(self, task_session, mock_db):
