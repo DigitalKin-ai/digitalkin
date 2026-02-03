@@ -99,3 +99,6 @@ class DefaultCommunication(CommunicationStrategy):
             await callback(response)
         yield response
         return  # Explicit return for async generator
+
+    async def cleanup(self) -> None:
+        """No-op for local communication."""

@@ -40,6 +40,7 @@ class SurrealDBConnection(Generic[TSurreal]):
     db: TSurreal
     timeout: datetime.timedelta
     _live_queries: set[UUID]  # Track active live queries for cleanup
+    _closed: bool  # Flag to prevent operations on closed connection
 
     @staticmethod
     def _valid_id(raw_id: str, table_name: str) -> RecordID:
@@ -85,6 +86,7 @@ class SurrealDBConnection(Generic[TSurreal]):
         self.namespace = os.getenv("SURREALDB_NAMESPACE", "test")
         self.database = database or os.getenv("SURREALDB_DATABASE", "task_manager")
         self._live_queries = set()  # Initialize live queries tracker
+        self._closed = False
 
     async def init_surreal_instance(self) -> None:
         """Init a SurrealDB connection instance."""
@@ -99,6 +101,7 @@ class SurrealDBConnection(Generic[TSurreal]):
 
         This will also kill all active live queries to prevent memory leaks.
         """
+        self._closed = True
         # Kill all tracked live queries before closing connection
         if self._live_queries:
             logger.debug("Killing %d active live queries before closing", len(self._live_queries))
@@ -260,6 +263,9 @@ class SurrealDBConnection(Generic[TSurreal]):
         Args:
             live_id: Live query ID to kill
         """
+        if self._closed:
+            self._live_queries.discard(live_id)
+            return
         logger.debug("Killing live query: %s", live_id)
         await self.db.kill(live_id)
         self._live_queries.discard(live_id)  # Remove from tracker

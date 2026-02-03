@@ -2,7 +2,7 @@
 
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -33,6 +33,27 @@ class CostConfig(BaseModel):
     description: str | None = None
     unit: str
     rate: float
+
+
+class QuantityLimit(BaseModel):
+    """Cost limit based on quantity (e.g., max 10000 tokens)."""
+
+    limit_type: Literal["quantity"] = "quantity"
+    name: str
+    type: CostTypeEnum
+    max_value: float
+
+
+class AmountLimit(BaseModel):
+    """Cost limit based on cost amount in dollars (e.g., max $1.00)."""
+
+    limit_type: Literal["amount"] = "amount"
+    name: str
+    type: CostTypeEnum
+    max_value: float
+
+
+CostLimit = Annotated[QuantityLimit | AmountLimit, Field(discriminator="limit_type")]
 
 
 class CostEvent(BaseModel):

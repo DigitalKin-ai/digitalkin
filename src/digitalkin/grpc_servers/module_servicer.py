@@ -1,5 +1,6 @@
 """Module servicer implementation for DigitalKin."""
 
+import asyncio
 from argparse import ArgumentParser, Namespace
 from collections.abc import AsyncGenerator
 from typing import Any
@@ -250,6 +251,11 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         try:
             async with self.job_manager.generate_stream_consumer(job_id) as stream:  # type: ignore
                 async for message in stream:
+                    # Early detection of client disconnection
+                    if context.cancelled():
+                        logger.info("Client disconnected", extra={"job_id": job_id})
+                        break
+
                     if message.get("error", None) is not None:
                         logger.error("Error in output_data", extra={"message": message})
                         context.set_code(message["error"]["code"])
@@ -275,8 +281,23 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
                         )
                         break
         finally:
-            await self.job_manager.wait_for_completion(job_id)
-            await self.job_manager.clean_session(job_id, mission_id=request.mission_id)
+            try:
+                await asyncio.wait_for(
+                    self.job_manager.wait_for_completion(job_id),
+                    timeout=30.0,
+                )
+            except Exception:
+                logger.exception(
+                    "Error waiting for job completion",
+                    extra={"job_id": job_id, "mission_id": request.mission_id},
+                )
+            try:
+                await self.job_manager.clean_session(job_id, mission_id=request.mission_id)
+            except Exception:
+                logger.exception(
+                    "Error cleaning session",
+                    extra={"job_id": job_id, "mission_id": request.mission_id},
+                )
 
         logger.info("Job %s finished", job_id)
 
@@ -560,4 +581,38 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         return information_pb2.GetConfigSetupModuleResponse(
             success=True,
             config_setup_schema=config_setup_format_struct,
+        )
+
+    async def GetModuleCost(  # noqa: N802
+        self,
+        request: information_pb2.GetModuleCostRequest,
+        context: grpc.ServicerContext,
+    ) -> information_pb2.GetModuleCostResponse:
+        """Get information about the module's cost configuration.
+
+        Args:
+            request: The get module cost request.
+            context: The gRPC context.
+
+        Returns:
+            A response with the module's cost schema.
+        """
+        logger.debug("GetModuleCost called for module: '%s'", self.module_class.__name__)
+
+        try:
+            cost_schema_proto = await self.module_class.get_cost_format(llm_format=request.llm_format)
+            cost_format_struct = json_format.Parse(
+                text=cost_schema_proto,
+                message=struct_pb2.Struct(),
+                ignore_unknown_fields=True,
+            )
+        except NotImplementedError as e:
+            logger.warning(e)
+            context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+            context.set_details(str(e))
+            return information_pb2.GetModuleCostResponse()
+
+        return information_pb2.GetModuleCostResponse(
+            success=True,
+            cost_schema=cost_format_struct,
         )

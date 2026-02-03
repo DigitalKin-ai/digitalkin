@@ -14,9 +14,9 @@ class GrpcClientWrapper:
     """gRPC client shared by the different services."""
 
     stub: Any
+    _channel: grpc.Channel | None = None
 
-    @staticmethod
-    def _init_channel(config: ClientConfig) -> grpc.Channel:
+    def _init_channel(self, config: ClientConfig) -> grpc.Channel:
         """Create an appropriate channel to the registry server.
 
         Returns:
@@ -43,9 +43,19 @@ class GrpcClientWrapper:
                 private_key=private_key,
             )
 
-            return grpc.secure_channel(config.address, channel_credentials, options=config.grpc_options)
+            channel = grpc.secure_channel(config.address, channel_credentials, options=config.grpc_options)
+            self._channel = channel
+            return channel
         # Insecure channel
-        return grpc.insecure_channel(config.address, options=config.grpc_options)
+        channel = grpc.insecure_channel(config.address, options=config.grpc_options)
+        self._channel = channel
+        return channel
+
+    def close_channel(self) -> None:
+        """Close the gRPC channel if it exists."""
+        if self._channel is not None:
+            self._channel.close()
+            self._channel = None
 
     def exec_grpc_query(self, query_endpoint: str, request: Any) -> Any:  # noqa: ANN401
         """Execute a gRPC query with from the query's rpc endpoint name.

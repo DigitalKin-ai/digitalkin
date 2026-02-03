@@ -9,6 +9,7 @@ from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
 from digitalkin.grpc_servers.utils.grpc_error_handler import GrpcErrorHandlerMixin
 from digitalkin.logger import logger
 from digitalkin.models.grpc_servers.models import ClientConfig
+from digitalkin.models.services.cost import AmountLimit, QuantityLimit
 from digitalkin.services.cost.cost_strategy import (
     CostConfig,
     CostData,
@@ -30,10 +31,48 @@ class GrpcCost(CostStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
         client_config: ClientConfig,
     ) -> None:
         """Initialize the cost."""
-        super().__init__(mission_id=mission_id, setup_id=setup_id, setup_version_id=setup_version_id, config=config)
+        super().__init__(mission_id=mission_id, setup_id=setup_id, setup_version_id=setup_version_id)
+        self.config = config
+        self._limits: dict[str, QuantityLimit | AmountLimit] = {}
+        self._accumulated: dict[str, float] = {}
         channel = self._init_channel(client_config)
         self.stub = cost_service_pb2_grpc.CostServiceStub(channel)
         logger.debug("Channel client 'Cost' initialized successfully")
+
+    def set_limits(self, limits: list[QuantityLimit | AmountLimit]) -> None:
+        """Set cost limits for this session.
+
+        Args:
+            limits: List of CostLimit objects to enforce.
+        """
+        self._limits = {limit.name: limit for limit in limits}
+        self._accumulated = {}
+
+    def check_limit(self, cost_config_name: str, quantity: float) -> bool:
+        """Check if adding this cost would exceed any limits.
+
+        Args:
+            cost_config_name: Name of the cost config.
+            quantity: Quantity to add.
+
+        Returns:
+            True if within limits, False if would exceed.
+        """
+        limit = self._limits.get(cost_config_name)
+        if limit is None:
+            return True
+
+        cost_config = self.config.get(cost_config_name)
+        if cost_config is None:
+            return True
+
+        if limit.limit_type == "quantity":
+            current = self._accumulated.get(f"{cost_config_name}_quantity", 0)
+            return current + quantity <= limit.max_value
+
+        current = self._accumulated.get(f"{cost_config_name}_amount", 0)
+        projected = cost_config.rate * quantity
+        return current + projected <= limit.max_value
 
     def add(
         self,
@@ -136,3 +175,60 @@ class GrpcCost(CostStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
             ]
             logger.debug("Filtered costs retrieved with cost_dict: %s", cost_data_list)
             return [CostData.model_validate(cost_data) for cost_data in cost_data_list]
+
+    def get_cost_config(self) -> list[CostConfig]:
+        """Get cost configuration from the database.
+
+        Returns:
+            List of CostConfig objects from the database.
+        """
+        with self.handle_grpc_errors("GetCostConfig", CostServiceError):
+            request = cost_pb2.GetCostConfigRequest(setup_version_id=self.setup_version_id)
+            response: cost_pb2.GetCostConfigResponse = self.exec_grpc_query("GetCostConfig", request)
+            config_list = []
+            for config in response.configs:
+                config_dict = json_format.MessageToDict(
+                    config,
+                    preserving_proto_field_name=True,
+                    always_print_fields_with_no_presence=True,
+                )
+                # Map proto field names to CostConfig field names
+                config_list.append(
+                    CostConfig(
+                        cost_name=config_dict.get("name", ""),
+                        cost_type=config_dict.get("cost_type", "OTHER"),
+                        description=config_dict.get("description"),
+                        unit=config_dict.get("unit", ""),
+                        rate=config_dict.get("rate", 0.0),
+                    )
+                )
+            logger.debug("Cost configs retrieved: %s", config_list)
+            return config_list
+
+    def set_cost_config(self, configs: list[CostConfig]) -> bool:
+        """Store cost configuration in the database.
+
+        Args:
+            configs: List of CostConfig objects to store.
+
+        Returns:
+            True if successfully stored.
+        """
+        with self.handle_grpc_errors("SetCostConfig", CostServiceError):
+            proto_configs = [
+                cost_pb2.CostConfig(
+                    name=config.cost_name,
+                    cost_type=config.cost_type,
+                    description=config.description or "",
+                    unit=config.unit,
+                    rate=config.rate,
+                )
+                for config in configs
+            ]
+            request = cost_pb2.SetCostConfigRequest(
+                setup_version_id=self.setup_version_id,
+                configs=proto_configs,
+            )
+            response: cost_pb2.SetCostConfigResponse = self.exec_grpc_query("SetCostConfig", request)
+            logger.debug("Cost configs stored, success: %s", response.success)
+            return response.success

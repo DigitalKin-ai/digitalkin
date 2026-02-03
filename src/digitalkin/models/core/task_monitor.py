@@ -18,7 +18,10 @@ class TaskStatus(Enum):
 
 
 class CancellationReason(Enum):
-    """Reason for task cancellation - helps distinguish cleanup vs real cancellation."""
+    """Reason for task termination - helps distinguish normal completion, cleanup, and real cancellation."""
+
+    # Normal completion
+    COMPLETED = "completed"  # Task finished successfully
 
     # Cleanup cancellations (not errors)
     SUCCESS_CLEANUP = "success_cleanup"  # Main task completed, cleaning up helper tasks
@@ -61,6 +64,21 @@ class SignalMessage(BaseModel):
     action: SignalType = Field(..., description="Type of signal action")
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     payload: dict[str, Any] = Field(default={}, description="Optional payload for the signal")
+
+    # Enhanced logging fields
+    cancellation_reason: CancellationReason | None = Field(
+        default=None,
+        description="Reason for cancellation if status is CANCELLED",
+    )
+    error_message: str | None = Field(
+        default=None,
+        description="Human-readable error message if task failed",
+    )
+    exception_traceback: str | None = Field(
+        default=None,
+        description="Full traceback if task failed with exception",
+    )
+
     model_config = {"use_enum_values": True}
 
 

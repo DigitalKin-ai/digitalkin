@@ -22,6 +22,7 @@ from digitalkin.core.common import ConnectionFactory, QueueFactory
 from digitalkin.core.job_manager.base_job_manager import BaseJobManager
 from digitalkin.core.job_manager.taskiq_broker import STREAM, STREAM_RETENTION, TASKIQ_BROKER, cleanup_global_resources
 from digitalkin.core.task_manager.remote_task_manager import RemoteTaskManager
+from digitalkin.core.task_manager.surrealdb_repository import SurrealDBConnection
 from digitalkin.logger import logger
 from digitalkin.models.core.task_monitor import TaskStatus
 from digitalkin.models.module.module_types import InputModelT, OutputModelT, SetupModelT
@@ -36,6 +37,7 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
     """Taskiq job manager for running modules in Taskiq tasks."""
 
     services_mode: ServicesMode
+    channel: SurrealDBConnection | None
 
     @staticmethod
     def _define_consumer() -> Consumer:
@@ -113,7 +115,7 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
     async def _stop(self) -> None:
         """Stop the TaskiqJobManager and clean up all resources."""
         # Close SurrealDB connection
-        if hasattr(self, "channel"):
+        if self.channel is not None:
             try:
                 await self.channel.close()
                 logger.info("TaskiqJobManager: SurrealDB connection closed")
@@ -128,8 +130,9 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             await self.stream_consumer_task
 
         # Clean up job queues
+        queue_count = len(self.job_queues)
         self.job_queues.clear()
-        logger.info("TaskiqJobManager: Cleared %d job queues", len(self.job_queues))
+        logger.info("TaskiqJobManager: Cleared %d job queues", queue_count)
 
         # Call global cleanup for producer and broker
         await cleanup_global_resources()
@@ -161,6 +164,7 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         self.job_queues: dict[str, asyncio.Queue] = {}
         self.max_queue_size = 1000
         self.stream_timeout = stream_timeout
+        self.channel = None
 
     async def generate_config_setup_module_response(self, job_id: str) -> SetupModelT:
         """Generate a stream consumer for a module's output data.
@@ -429,7 +433,7 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             return TaskStatus.FAILED
 
         # Safety check: if channel not initialized (start() wasn't called), return FAILED
-        if not hasattr(self, "channel") or self.channel is None:
+        if self.channel is None:
             logger.warning("Job %s status check failed - channel not initialized", job_id)
             return TaskStatus.FAILED
 
@@ -521,7 +525,7 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         for job_id in self.tasks_sessions:
             try:
                 status = await self.get_module_status(job_id)
-                task_record = await self.channel.select_by_task_id("tasks", job_id)
+                task_record = await self.channel.select_by_task_id("tasks", job_id)  # type: ignore
 
                 modules_info[job_id] = {
                     "name": self.module_class.__name__,

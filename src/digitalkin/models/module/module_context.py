@@ -231,7 +231,8 @@ class ModuleContext:
         """Create OpenAI-style function calling schemas for a tool module.
 
         Uses tool cache (fast path) with registry fallback. Returns one schema
-        per ToolDefinition (protocol) in the module.
+        per ToolDefinition (protocol) in the module. Includes cost information
+        both in the description and as separate metadata.
 
         Args:
             slug: Module ID to look up (checks cache first, then registry).
@@ -243,6 +244,9 @@ class ModuleContext:
         if not tool_module_info:
             return []
 
+        cost_info = ModuleContext._build_cost_info(tool_module_info.cost_config)
+        cost_description = ModuleContext._build_cost_description(tool_module_info.cost_config)
+
         return [
             {
                 "type": "function",
@@ -250,9 +254,10 @@ class ModuleContext:
                     "module_id": tool_module_info.module_id,
                     "toolkit_name": tool_module_info.tool_name or "undefined",
                     "name": tool_module_info.slug + "_" + tool_def.name,
-                    "description": tool_def.description,
+                    "description": tool_def.description + cost_description,
                     "parameters": ModuleContext._build_parameters_schema(tool_def.parameters),
                 },
+                "cost_info": cost_info,
             }
             for tool_def in tool_module_info.tools
         ]
@@ -272,6 +277,55 @@ class ModuleContext:
             "properties": {p.name: {"type": p.type, "description": p.description or ""} for p in params},
             "required": [p.name for p in params if p.required],
         }
+
+    @staticmethod
+    def _build_cost_info(cost_config: dict[str, Any]) -> dict[str, Any]:
+        """Build cost information structure for tool metadata.
+
+        Args:
+            cost_config: Cost configuration dictionary from tool module.
+
+        Returns:
+            Structured cost information for LLM consumption.
+        """
+        if not cost_config:
+            return {}
+
+        costs = cost_config.get("costs", cost_config)
+        return {
+            "costs": {
+                name: {
+                    "type": config.get("type", ""),
+                    "unit": config.get("unit", ""),
+                    "rate": config.get("rate", 0),
+                    "description": config.get("description", ""),
+                }
+                for name, config in costs.items()
+            }
+        }
+
+    @staticmethod
+    def _build_cost_description(cost_config: dict[str, Any]) -> str:
+        """Build human-readable cost summary for LLM tool description.
+
+        Args:
+            cost_config: Cost configuration dictionary from tool module.
+
+        Returns:
+            Human-readable cost summary string.
+        """
+        if not cost_config:
+            return ""
+
+        costs = cost_config.get("costs", cost_config)
+        parts = []
+        for name, config in costs.items():
+            rate = config.get("rate", 0)
+            unit = config.get("unit", "unit")
+            cost_type = config.get("type", "")
+            parts.append(f"{name}: ${rate}/{unit} ({cost_type})")
+
+        return f" [Cost: {', '.join(parts)}]" if parts else ""
 
     def create_tool_functions(
         self,
@@ -342,3 +396,11 @@ class ModuleContext:
         tool_function.__doc__ = tool_def.description
 
         return tool_function
+
+    async def cleanup(self) -> None:
+        """Clean up all service resources.
+
+        Currently cleans up communication service (gRPC channel pool).
+        """
+        if self.communication is not None:
+            await self.communication.cleanup()

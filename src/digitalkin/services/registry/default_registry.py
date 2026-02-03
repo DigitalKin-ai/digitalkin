@@ -139,3 +139,24 @@ class DefaultRegistry(RegistryStrategy):
             status=RegistryModuleStatus.ACTIVE,
         )
         return RegistryModuleStatus.ACTIVE
+
+    async def deregister(self, module_id: str) -> bool:
+        """Deregister a module from the registry.
+
+        Args:
+            module_id: The module identifier to deregister.
+
+        Returns:
+            True if module was removed, False if not found.
+        """
+        if module_id in self._modules:
+            del self._modules[module_id]
+            return True
+        return False
+
+    def get_setup(self, setup_id: str) -> None:
+        """Get setup info (not supported in default registry).
+
+        Args:
+            setup_id: The setup identifier.
+        """

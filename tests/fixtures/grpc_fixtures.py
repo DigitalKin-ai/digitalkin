@@ -119,6 +119,14 @@ class FakeContext(grpc.ServicerContext):
         """
         return self._is_active
 
+    def cancelled(self) -> bool:
+        """Check if the RPC has been cancelled.
+
+        Returns:
+            True if RPC was cancelled, False otherwise
+        """
+        return self._code == grpc.StatusCode.CANCELLED
+
     def auth_context(self) -> dict[str, Any]:
         """Get the authentication context.
 

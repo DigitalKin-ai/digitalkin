@@ -255,6 +255,43 @@ class BaseModule(  # noqa: PLR0904
         raise NotImplementedError(msg)
 
     @classmethod
+    async def get_cost_format(cls, *, llm_format: bool) -> str:
+        """Get the JSON schema of the cost configuration.
+
+        Extracts CostConfig from services_config_params["cost"]["config"]
+        and returns as JSON schema.
+
+        Args:
+            llm_format: If True, return LLM-optimized schema format with inlined
+                references and simplified structure.
+
+        Returns:
+            The JSON schema of the cost configuration as a JSON string.
+        """
+        cost_params = cls.services_config_params.get("cost", {})
+        config = cost_params.get("config", {}) if cost_params else {}
+
+        if not config:
+            return json.dumps({}, indent=2)
+
+        # Convert CostConfig objects to serializable dict
+        cost_schema = {
+            name: {
+                "name": cost_config.name,
+                "type": cost_config.type.value if hasattr(cost_config.type, "value") else cost_config.type,
+                "description": cost_config.description,
+                "unit": cost_config.unit,
+                "rate": cost_config.rate,
+            }
+            for name, cost_config in config.items()
+        }
+
+        if llm_format:
+            result_json, result_ui = SchemaSplitter.split({"costs": cost_schema})
+            return json.dumps({"json_schema": result_json, "ui_schema": result_ui}, indent=2)
+        return json.dumps(cost_schema, indent=2)
+
+    @classmethod
     def create_config_setup_model(cls, config_setup_data: dict[str, Any]) -> SetupModelT:
         """Create the setup model from the setup data.
 
@@ -376,6 +413,12 @@ class BaseModule(  # noqa: PLR0904
             ValueError: If no handler for the protocol is found.
         """
         input_instance = self.input_format.model_validate(input_data)
+
+        # Apply cost limits if present in input
+        cost_limits = getattr(input_instance, "cost_limits", None)
+        if cost_limits is not None and self.context.cost is not None:
+            self.context.cost.set_limits(cost_limits)
+
         handler_instance = self.triggers_discoverer.get_trigger(
             input_instance.root.protocol,
             input_instance.root,

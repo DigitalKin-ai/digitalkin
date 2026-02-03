@@ -18,6 +18,7 @@ from digitalkin.models.module.utility import (
     HealthcheckStatusInput,
     HealthcheckStatusOutput,
 )
+from digitalkin.models.services.cost import CostLimit
 
 
 class UtilitySchemaExtender:
@@ -85,7 +86,8 @@ class UtilitySchemaExtender:
             base_model: The module's input_format class (a DataModel subclass).
 
         Returns:
-            A new DataModel subclass with root typed as Union[original_types, utility_types].
+            A new DataModel subclass with root typed as Union[original_types, utility_types],
+            and includes cost_limits field for cost control.
         """
         original_annotation = base_model.model_fields["root"].annotation
         original_types = cls._extract_union_types(original_annotation)
@@ -97,4 +99,8 @@ class UtilitySchemaExtender:
             __base__=DataModel,
             root=(extended_root, ...),
             annotations=(dict[str, str], Field(default={})),
+            cost_limits=(
+                list[CostLimit] | None,
+                Field(default=None, description="Optional cost limits for this invocation"),
+            ),
         )

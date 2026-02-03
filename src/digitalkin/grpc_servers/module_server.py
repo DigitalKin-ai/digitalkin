@@ -124,12 +124,21 @@ class ModuleServer(BaseServer):
             await self.module_servicer.job_manager.start()
             self.module_servicer.setup.__post_init__(self.client_config)
 
-    def stop(self, grace: float | None = None) -> None:
-        """Stop the module server.
+    async def stop_async(self, grace: float | None = None) -> None:
+        """Stop the module server with async cleanup.
 
-        Modules become inactive when they stop sending heartbeats
+        Deregisters from registry and stops the server. Modules also become
+        inactive when they stop sending heartbeats as a fallback.
         """
-        super().stop(grace)
+        if self.registry is not None:
+            try:
+                module_id = self.module_class.get_module_id()
+                if module_id and module_id != "unknown":
+                    await self.registry.deregister(module_id)
+            except Exception:
+                logger.exception("Failed to deregister from registry")
+
+        await super().stop_async(grace)
 
     def _register_with_registry(self) -> None:
         """Register this module with the registry server."""

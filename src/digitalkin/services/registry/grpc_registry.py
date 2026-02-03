@@ -361,3 +361,22 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
                 logger.error(msg)
                 raise RegistryServiceError(msg) from e
             return self._proto_to_setup_info(response)
+
+    async def deregister(self, module_id: str) -> bool:  # noqa: PLR6301
+        """Deregister a module from the registry.
+
+        Note: The registry protocol uses heartbeat expiration for deregistration.
+        When a module stops sending heartbeats, it becomes inactive. This method
+        logs the deregistration intent for observability.
+
+        Args:
+            module_id: The module identifier to deregister.
+
+        Returns:
+            True always (heartbeat expiration handles actual deregistration).
+        """
+        logger.info(
+            "Module deregistration initiated (will become inactive via heartbeat expiration)",
+            extra={"module_id": module_id},
+        )
+        return True

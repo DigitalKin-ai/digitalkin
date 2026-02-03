@@ -371,6 +371,10 @@ class TestJobManagerMemoryLeaks:
                     for i in range(10):
                         job_id = f"job-{i}"
                         mock_module = Mock(spec=BaseModule)
+                        mock_module.context = Mock()
+                        mock_module.context.session = Mock()
+                        mock_module.context.session.setup_id = "setup:test"
+                        mock_module.context.session.setup_version_id = "setup_version:test"
                         manager.tasks_sessions[job_id] = TaskSession(job_id, "test_mission", mock_db, mock_module)
                         manager.job_queues[job_id] = asyncio.Queue()
 

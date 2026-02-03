@@ -19,6 +19,15 @@ class CommunicationStrategy(BaseStrategy, ABC):
     """
 
     @abstractmethod
+    async def cleanup(self) -> None:
+        """Clean up communication resources.
+
+        This method should release any held resources such as
+        gRPC channels, connection pools, etc.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
     async def get_module_schemas(
         self,
         module_address: str,
@@ -26,12 +35,13 @@ class CommunicationStrategy(BaseStrategy, ABC):
         *,
         llm_format: bool = False,
     ) -> dict[str, dict]:
-        """Get module schemas (input/output/setup/secret).
+        """Get module schemas (input/output/setup/secret/cost).
 
         Args:
             module_address: Target module address
             module_port: Target module port
-            llm_format: Return LLM-friendly format (simplified schema)
+            llm_format: Return LLM-friendly format (simplified schema).
+                Note: cost always returns actual data regardless of this flag.
 
         Returns:
             Dictionary containing schemas:
@@ -39,7 +49,8 @@ class CommunicationStrategy(BaseStrategy, ABC):
                 "input": {...},
                 "output": {...},
                 "setup": {...},
-                "secret": {...}
+                "secret": {...},
+                "cost": {...}
             }
         """
         raise NotImplementedError

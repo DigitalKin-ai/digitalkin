@@ -1,6 +1,7 @@
 """Task executor for running tasks with full lifecycle management."""
 
 import asyncio
+import contextlib
 import datetime
 from collections.abc import Coroutine
 from typing import Any
@@ -59,6 +60,8 @@ class TaskExecutor:
                     SignalMessage(
                         task_id=task_id,
                         mission_id=mission_id,
+                        setup_id=session.setup_id,
+                        setup_version_id=session.setup_version_id,
                         status=session.status,
                         action=SignalType.START,
                     ).model_dump(),
@@ -67,15 +70,21 @@ class TaskExecutor:
             except asyncio.CancelledError:
                 logger.debug("Signal listener cancelled", extra={"mission_id": mission_id, "task_id": task_id})
             finally:
-                await channel.create(
-                    "tasks",
-                    SignalMessage(
-                        task_id=task_id,
-                        mission_id=mission_id,
-                        status=session.status,
-                        action=SignalType.STOP,
-                    ).model_dump(),
-                )
+                with contextlib.suppress(Exception):  # Connection may already be closed
+                    await channel.create(
+                        "tasks",
+                        SignalMessage(
+                            task_id=task_id,
+                            mission_id=mission_id,
+                            setup_id=session.setup_id,
+                            setup_version_id=session.setup_version_id,
+                            status=session.status,
+                            action=SignalType.STOP,
+                            cancellation_reason=session.cancellation_reason,
+                            error_message=session._last_exception,  # noqa: SLF001
+                            exception_traceback=session._last_traceback,  # noqa: SLF001
+                        ).model_dump(),
+                    )
                 logger.info("Signal listener ended", extra={"mission_id": mission_id, "task_id": task_id})
 
         async def heartbeat_wrapper() -> None:
@@ -125,8 +134,14 @@ class TaskExecutor:
                     # Heartbeat stopped - failure cleanup
                     cleanup_reason = CancellationReason.FAILURE_CLEANUP
 
+                # Signal stream to close FIRST before any cleanup
+                session.close_stream()
+
                 # Cancel pending tasks with proper reason logging
                 if pending:
+                    # Give stream time to see the signal and exit gracefully
+                    await asyncio.sleep(0.01)  # Allow one event loop cycle
+
                     pending_names = [t.get_name() for t in pending]
                     logger.debug(
                         "Cancelling pending tasks: %s, reason: %s",
@@ -148,6 +163,7 @@ class TaskExecutor:
                 # Determine final status based on which task completed
                 if completed is main_task:
                     session.status = TaskStatus.COMPLETED
+                    session.cancellation_reason = CancellationReason.COMPLETED
                     logger.info(
                         "Main task completed successfully",
                         extra={"mission_id": mission_id, "task_id": task_id},
@@ -193,9 +209,10 @@ class TaskExecutor:
                 )
                 cleanup_reason = CancellationReason.FAILURE_CLEANUP
                 raise
-            except Exception:
+            except Exception as e:
                 session.status = TaskStatus.FAILED
                 cleanup_reason = CancellationReason.FAILURE_CLEANUP
+                session.record_exception(e)
                 logger.exception(
                     "Task failed with exception: '%s'",
                     task_id,
