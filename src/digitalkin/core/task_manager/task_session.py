@@ -102,12 +102,9 @@ class TaskSession:
         self._cleanup_done = False
 
         logger.info(
-            "TaskSession initialized",
-            extra={
-                "task_id": task_id,
-                "mission_id": mission_id,
-                "heartbeat_interval": str(heartbeat_interval),
-            },
+            "TaskSession initialized (heartbeat_interval=%.1fs)",
+            heartbeat_interval.total_seconds(),
+            extra={"task_id": task_id, "mission_id": mission_id},
         )
 
     @property
@@ -153,11 +150,11 @@ class TaskSession:
         self._last_exception = str(exc)
         self._last_traceback = traceback.format_exc()
 
-    async def send_heartbeat(self) -> bool:
-        """Rate-limited heartbeat with connection resilience.
+    async def send_heartbeat(self) -> CancellationReason | None:
+        """Rate-limited heartbeat with connection resilience and detailed error tracking.
 
         Returns:
-            bool: True if heartbeat was successful, False otherwise
+            None if heartbeat was successful, CancellationReason on failure.
         """
         heartbeat = HeartbeatMessage(
             task_id=self.task_id,
@@ -168,54 +165,122 @@ class TaskSession:
         )
 
         if self.heartbeat_record_id is None:
-            try:
-                success = await self.db.create("heartbeats", heartbeat.model_dump())
-                if "code" not in success:
-                    self.heartbeat_record_id = success.get("id")  # type: ignore
-                    self._last_heartbeat = heartbeat.timestamp
-                    return True
-            except Exception as e:
-                logger.error(
-                    "Heartbeat exception",
-                    extra={**self.session_ids, "error": str(e)},
-                    exc_info=True,
-                )
-            logger.error("Initial heartbeat failed", extra=self.session_ids)
-            return False
+            return await self._send_initial_heartbeat(heartbeat)
 
         if (heartbeat.timestamp - self._last_heartbeat) < self._heartbeat_interval:
-            logger.debug(
-                "Heartbeat skipped due to rate limiting",
-                extra={**self.session_ids, "delta": str(heartbeat.timestamp - self._last_heartbeat)},
-            )
-            return True
+            logger.debug("Heartbeat skipped (rate limited)", extra=self.session_ids)
+            return None
 
+        return await self._send_heartbeat_update(heartbeat)
+
+    @staticmethod
+    def _classify_exception(e: Exception, *, is_initial: bool) -> CancellationReason:
+        """Classify exception to CancellationReason.
+
+        Args:
+            e: The exception to classify.
+            is_initial: True for CREATE, False for MERGE (affects ConnectionError mapping).
+
+        Returns:
+            CancellationReason based on exception type and message.
+        """
+        if isinstance(e, TimeoutError):
+            return CancellationReason.HEARTBEAT_TIMEOUT
+        if isinstance(e, ConnectionError):
+            if is_initial:
+                return CancellationReason.HEARTBEAT_CONNECTION_REFUSED
+            return CancellationReason.SURREALDB_CONNECTION_LOST
+        error_msg = str(e)
+        error_type = type(e).__name__
+        if "keepalive ping timeout" in error_msg or "ConnectionClosedError" in error_type:
+            return CancellationReason.HEARTBEAT_WEBSOCKET_CLOSED
+        if "timed out during opening handshake" in error_msg:
+            return CancellationReason.SURREALDB_HANDSHAKE_TIMEOUT
+        return CancellationReason.HEARTBEAT_FAILURE
+
+    async def _send_initial_heartbeat(self, heartbeat: HeartbeatMessage) -> CancellationReason | None:
+        """Send the initial heartbeat CREATE to SurrealDB.
+
+        Args:
+            heartbeat: The heartbeat message to create.
+
+        Returns:
+            None if successful, CancellationReason on failure.
+        """
         try:
-            success = await self.db.merge("heartbeats", self.heartbeat_record_id, heartbeat.model_dump())
-            if "code" not in success:
+            result = await self.db.create("heartbeats", heartbeat.model_dump())
+            if not isinstance(result, dict):
+                return CancellationReason.HEARTBEAT_FAILURE
+            if "code" not in result:
+                self.heartbeat_record_id = result.get("id")
                 self._last_heartbeat = heartbeat.timestamp
-                return True
-        except Exception as e:
+                logger.debug("Heartbeat CREATE ok (record_id=%s)", self.heartbeat_record_id, extra=self.session_ids)
+                return None
             logger.error(
-                "Heartbeat exception",
-                extra={**self.session_ids, "error": str(e)},
-                exc_info=True,
+                "Heartbeat CREATE failed [%s]: %s",
+                result.get("code"),
+                result.get("message", result.get("information", "unknown")),
+                extra=self.session_ids,
             )
-        logger.warning("Heartbeat failed", extra=self.session_ids)
-        return False
+            return CancellationReason.HEARTBEAT_FAILURE  # noqa: TRY300
+        except Exception as e:
+            reason = self._classify_exception(e, is_initial=True)
+            logger.error(
+                "Heartbeat CREATE exception (%s): %s",
+                reason.value,
+                e,
+                extra=self.session_ids,
+                exc_info=reason == CancellationReason.HEARTBEAT_FAILURE,
+            )
+            return reason
+
+    async def _send_heartbeat_update(self, heartbeat: HeartbeatMessage) -> CancellationReason | None:
+        """Send a heartbeat MERGE/UPDATE to SurrealDB.
+
+        Args:
+            heartbeat: The heartbeat message to merge.
+
+        Returns:
+            None if successful, CancellationReason on failure.
+        """
+        try:
+            result = await self.db.merge(
+                "heartbeats",
+                self.heartbeat_record_id,
+                heartbeat.model_dump(),  # type: ignore[arg-type]
+            )
+            if not isinstance(result, dict):
+                return CancellationReason.HEARTBEAT_FAILURE
+            if "code" not in result:
+                self._last_heartbeat = heartbeat.timestamp
+                return None
+            logger.warning(
+                "Heartbeat MERGE failed [%s]: %s",
+                result.get("code"),
+                result.get("message", result.get("information", "unknown")),
+                extra=self.session_ids,
+            )
+            return CancellationReason.HEARTBEAT_FAILURE  # noqa: TRY300
+        except Exception as e:
+            reason = self._classify_exception(e, is_initial=False)
+            logger.error(
+                "Heartbeat MERGE exception (%s): %s",
+                reason.value,
+                e,
+                extra=self.session_ids,
+                exc_info=reason == CancellationReason.HEARTBEAT_FAILURE,
+            )
+            return reason
 
     async def generate_heartbeats(self) -> None:
-        """Periodic heartbeat generator with cancellation support."""
+        """Periodic heartbeat generator with cancellation support and detailed failure reasons."""
         logger.debug("Heartbeat generator started", extra=self.session_ids)
         while not self.cancelled:
-            logger.debug(
-                "Heartbeat tick",
-                extra={**self.session_ids, "cancelled": self.cancelled},
-            )
-            success = await self.send_heartbeat()
-            if not success:
-                logger.error("Heartbeat failed, cancelling task", extra=self.session_ids)
-                await self._handle_cancel(CancellationReason.HEARTBEAT_FAILURE)
+            logger.debug("Heartbeat tick", extra=self.session_ids)
+            failure_reason = await self.send_heartbeat()
+            if failure_reason is not None:
+                logger.error("Heartbeat failed, cancelling task (%s)", failure_reason.name, extra=self.session_ids)
+                await self._handle_cancel(failure_reason)
                 break
             await asyncio.sleep(self._heartbeat_interval.total_seconds())
 
@@ -229,17 +294,25 @@ class TaskSession:
         """Enhanced signal listener with comprehensive handling.
 
         Raises:
-            CancelledError: Asyncio when task cancelling
+            CancelledError: If task is cancelled during signal listening.
         """
         logger.info("Signal listener started", extra=self.session_ids)
+
+        # signal_record_id must be set by TaskExecutor before calling this method.
+        # If not set, we cannot filter signals correctly - abort early.
         if self.signal_record_id is None:
-            self.signal_record_id = (await self.db.select_by_task_id("tasks", self.task_id)).get("id")
+            logger.error(
+                "signal_record_id not set - cannot start signal listener without valid record ID",
+                extra=self.session_ids,
+            )
+            return
 
         live_id, live_signals = await self.db.start_live("tasks")
         try:
             async for signal in live_signals:
-                logger.debug("Signal received", extra={**self.session_ids, "signal": signal})
-                if self.cancelled:
+                logger.debug("Signal received: %s", signal, extra=self.session_ids)
+                # Check both cancelled and stream_closed to ensure clean shutdown
+                if self.cancelled or self.stream_closed:
                     break
 
                 if signal is None or signal["id"] == self.signal_record_id or "payload" not in signal:
@@ -257,12 +330,8 @@ class TaskSession:
         except asyncio.CancelledError:
             logger.debug("Signal listener cancelled", extra=self.session_ids)
             raise
-        except Exception as e:
-            logger.error(
-                "Signal listener fatal error",
-                extra={**self.session_ids, "error": str(e)},
-                exc_info=True,
-            )
+        except Exception:
+            logger.exception("Signal listener fatal error", extra=self.session_ids)
         finally:
             with contextlib.suppress(Exception):  # Connection may already be closed
                 await self.db.stop_live(live_id)
@@ -276,12 +345,10 @@ class TaskSession:
         """
         if self.is_cancelled.is_set():
             logger.debug(
-                "Cancel ignored - already cancelled",
-                extra={
-                    **self.session_ids,
-                    "existing_reason": self.cancellation_reason.value,
-                    "new_reason": reason.value,
-                },
+                "Cancel ignored - already cancelled (existing=%s, new=%s)",
+                self.cancellation_reason.value,
+                reason.value,
+                extra=self.session_ids,
             )
             return
 
@@ -291,15 +358,9 @@ class TaskSession:
 
         # Log with appropriate level based on reason
         if reason in {CancellationReason.SUCCESS_CLEANUP, CancellationReason.FAILURE_CLEANUP}:
-            logger.debug(
-                "Task cancelled (cleanup)",
-                extra={**self.session_ids, "cancellation_reason": reason.value},
-            )
+            logger.debug("Task cancelled (%s)", reason.value, extra=self.session_ids)
         else:
-            logger.info(
-                "Task cancelled",
-                extra={**self.session_ids, "cancellation_reason": reason.value},
-            )
+            logger.info("Task cancelled (%s)", reason.value, extra=self.session_ids)
 
         # Resume if paused so cancellation can proceed
         if self._paused.is_set():
@@ -387,11 +448,11 @@ class TaskSession:
         - Closing database connection
         - Clearing module reference
         """
+        # Use basic IDs for logging since module may already be None from previous cleanup
+        ids = {"task_id": self.task_id, "mission_id": self.mission_id}
+
         if self._cleanup_done:
-            logger.debug(
-                "Cleanup already done, skipping",
-                extra={"task_id": self.task_id, "mission_id": self.mission_id},
-            )
+            logger.debug("Cleanup already done", extra=ids)
             return
         self._cleanup_done = True
 
@@ -407,19 +468,13 @@ class TaskSession:
             try:
                 await self.module.context.cleanup()
             except Exception:
-                logger.exception(
-                    "Error cleaning up module context",
-                    extra={"mission_id": self.mission_id, "task_id": self.task_id},
-                )
+                logger.exception("Error cleaning up module context", extra=ids)
 
         # Stop module
         try:
             await self.module.stop()
         except Exception:
-            logger.exception(
-                "Error stopping module during cleanup",
-                extra={"mission_id": self.mission_id, "task_id": self.task_id},
-            )
+            logger.exception("Error stopping module during cleanup", extra=ids)
 
         # Close DB connection (kills all live queries)
         await self.db.close()

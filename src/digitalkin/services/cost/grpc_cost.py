@@ -20,7 +20,9 @@ from digitalkin.services.cost.cost_strategy import (
 
 
 class GrpcCost(CostStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
-    """This class implements the default Cost strategy."""
+    """gRPC client implementation for the Cost service."""
+
+    service_name: str = "CostService"
 
     def __init__(
         self,

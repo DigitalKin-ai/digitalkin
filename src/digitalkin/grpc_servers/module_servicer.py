@@ -13,9 +13,10 @@ from agentic_mesh_protocol.module.v1 import (
     monitoring_pb2,
 )
 from google.protobuf import json_format, struct_pb2
+from pydantic import ValidationError
 
 from digitalkin.core.job_manager.base_job_manager import BaseJobManager
-from digitalkin.grpc_servers.utils.exceptions import ServicerError
+from digitalkin.grpc_servers.utils.exceptions import ServerError, ServicerError
 from digitalkin.logger import logger
 from digitalkin.models.core.job_manager_models import JobManagerMode
 from digitalkin.models.module.module import ModuleCodeModel, ModuleStatus
@@ -24,7 +25,7 @@ from digitalkin.services.registry import GrpcRegistry, RegistryStrategy
 from digitalkin.services.services_models import ServicesMode
 from digitalkin.services.setup.default_setup import DefaultSetup
 from digitalkin.services.setup.grpc_setup import GrpcSetup
-from digitalkin.services.setup.setup_strategy import SetupStrategy
+from digitalkin.services.setup.setup_strategy import SetupServiceError, SetupStrategy
 from digitalkin.utils.arg_parser import ArgParser
 from digitalkin.utils.development_mode_action import DevelopmentModeMappingAction
 
@@ -194,7 +195,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         )
         return lifecycle_pb2.ConfigSetupModuleResponse(success=True, setup_version=setup_version)
 
-    async def StartModule(  # noqa: N802
+    async def StartModule(  # noqa: N802, C901, PLR0912, PLR0915
         self,
         request: lifecycle_pb2.StartModuleRequest,
         context: grpc.aio.ServicerContext,
@@ -220,16 +221,120 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         # TODO: Check failure of input data format
         input_data = self.module_class.create_input_model(json_format.MessageToDict(request.input))
 
-        setup_data_class = self.setup.get_setup(
-            setup_dict={
-                "setup_id": request.setup_id,
-                "mission_id": request.mission_id,
-            }
-        )
+        # Fetch setup configuration with comprehensive error handling
+        try:
+            setup_data_class = self.setup.get_setup(
+                setup_dict={
+                    "setup_id": request.setup_id,
+                    "mission_id": request.mission_id,
+                }
+            )
+        except SetupServiceError as e:
+            logger.error(
+                "SetupServiceError: %s (setup_id=%s, mission_id=%s, mode=%s)",
+                e,
+                request.setup_id,
+                request.mission_id,
+                self.args.services_mode.name,
+                extra={
+                    "setup_id": request.setup_id,
+                    "mission_id": request.mission_id,
+                    "module_class": self.module_class.__name__,
+                    "error_type": "SetupServiceError",
+                },
+                exc_info=True,
+            )
+            context.set_code(grpc.StatusCode.UNAVAILABLE)
+            context.set_details(
+                f"[gRPC-server:ModuleService.StartModule] (setup_id={request.setup_id}, "
+                f"mission_id={request.mission_id}) Setup service unavailable: {e}"
+            )
+            yield lifecycle_pb2.StartModuleResponse(success=False)
+            return
+        except ServerError as e:
+            logger.error(
+                "ServerError fetching setup: %s (setup_id=%s, mission_id=%s)",
+                e,
+                request.setup_id,
+                request.mission_id,
+                extra={
+                    "setup_id": request.setup_id,
+                    "mission_id": request.mission_id,
+                    "module_class": self.module_class.__name__,
+                    "error_type": "ServerError",
+                },
+                exc_info=True,
+            )
+            context.set_code(grpc.StatusCode.UNAVAILABLE)
+            context.set_details(
+                f"[gRPC-server:ModuleService.StartModule] (setup_id={request.setup_id}, "
+                f"mission_id={request.mission_id}) gRPC communication error with Setup service: {e}"
+            )
+            yield lifecycle_pb2.StartModuleResponse(success=False)
+            return
+        except ValidationError as e:
+            logger.error(
+                "ValidationError on setup data: %s (setup_id=%s, mission_id=%s)",
+                e,
+                request.setup_id,
+                request.mission_id,
+                extra={
+                    "setup_id": request.setup_id,
+                    "mission_id": request.mission_id,
+                    "module_class": self.module_class.__name__,
+                    "error_type": "ValidationError",
+                },
+                exc_info=True,
+            )
+            context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+            context.set_details(
+                f"[gRPC-server:ModuleService.StartModule] (setup_id={request.setup_id}, "
+                f"mission_id={request.mission_id}) Setup data validation failed: {e}"
+            )
+            yield lifecycle_pb2.StartModuleResponse(success=False)
+            return
+        except Exception as e:
+            error_type = type(e).__name__
+            logger.error(
+                "Unexpected %s fetching setup: %s (setup_id=%s, mission_id=%s)",
+                error_type,
+                e,
+                request.setup_id,
+                request.mission_id,
+                extra={
+                    "setup_id": request.setup_id,
+                    "mission_id": request.mission_id,
+                    "module_class": self.module_class.__name__,
+                    "error_type": error_type,
+                },
+                exc_info=True,
+            )
+            context.set_code(grpc.StatusCode.UNKNOWN)
+            context.set_details(
+                f"[gRPC-server:ModuleService.StartModule] (setup_id={request.setup_id}, "
+                f"mission_id={request.mission_id}) Unexpected {error_type} during setup fetch: {e}"
+            )
+            yield lifecycle_pb2.StartModuleResponse(success=False)
+            return
 
         if not setup_data_class:
-            msg = "No setup data returned."
-            raise ServicerError(msg)
+            logger.error(
+                "No setup data returned (setup_id=%s, mission_id=%s)",
+                request.setup_id,
+                request.mission_id,
+                extra={
+                    "setup_id": request.setup_id,
+                    "mission_id": request.mission_id,
+                    "module_class": self.module_class.__name__,
+                },
+            )
+            context.set_code(grpc.StatusCode.NOT_FOUND)
+            context.set_details(
+                f"[gRPC-server:ModuleService.StartModule] (setup_id={request.setup_id}, "
+                f"mission_id={request.mission_id}) No setup data found for setup_id"
+            )
+            yield lifecycle_pb2.StartModuleResponse(success=False)
+            return
 
         setup_data = await self.module_class.create_setup_model(setup_data_class.current_setup_version.content)
 

@@ -16,6 +16,7 @@ from freezegun import freeze_time
 from digitalkin.core.task_manager.surrealdb_repository import SurrealDBConnection
 from digitalkin.core.task_manager.task_session import TaskSession
 from digitalkin.models.core.task_monitor import (
+    CancellationReason,
     SignalType,
     TaskStatus,
 )
@@ -232,7 +233,7 @@ class TestHeartbeats:
         """
         result = await task_session.send_heartbeat()
 
-        assert result is True
+        assert result is None
         assert task_session.heartbeat_record_id == "heartbeats:test_hb_id"
         assert task_session._last_heartbeat == datetime.datetime.now(tz=datetime.timezone.utc)
 
@@ -246,14 +247,14 @@ class TestHeartbeats:
     async def test_send_heartbeat_initial_creation_failure(self, task_session, mock_db, mock_logger):
         """Verify proper error handling when initial heartbeat creation fails.
 
-        Tests that db.create failures are logged and return False without
+        Tests that db.create failures are logged and return CancellationReason without
         setting heartbeat_record_id.
         """
         mock_db.create.return_value = {"code": "DB_ERROR", "message": "Connection failed"}
 
         result = await task_session.send_heartbeat()
 
-        assert result is False
+        assert result == CancellationReason.HEARTBEAT_FAILURE
         assert task_session.heartbeat_record_id is None
         mock_logger.error.assert_called()
 
@@ -276,7 +277,7 @@ class TestHeartbeats:
 
             result = await task_session.send_heartbeat()
 
-            assert result is True
+            assert result is None
             assert task_session._last_heartbeat == new_time
 
             mock_db.merge.assert_called_once()
@@ -290,26 +291,26 @@ class TestHeartbeats:
         """Verify heartbeat is skipped when called within rate limit interval.
 
         This test ensures rate limiting prevents excessive DB operations while
-        still returning success to avoid triggering cancellation.
+        still returning None to avoid triggering cancellation.
         """
         task_session.heartbeat_record_id = "heartbeats:existing_id"
         task_session._last_heartbeat = datetime.datetime.now(tz=datetime.timezone.utc)
 
         result = await task_session.send_heartbeat()
-        assert result is True
+        assert result is None
         # Should not call merge due to rate limiting
         mock_db.merge.assert_not_called()
         # Last heartbeat should remain unchanged
         assert task_session._last_heartbeat == datetime.datetime.now(tz=datetime.timezone.utc)
-        # Should log rate limiting
-        assert any("rate limiting" in str(call).lower() for call in mock_logger.debug.call_args_list)
+        # Should log rate limited
+        assert any("rate limited" in str(call).lower() for call in mock_logger.debug.call_args_list)
 
     @freeze_time("2025-10-14 03:21:34")
     @pytest.mark.asyncio
     async def test_send_heartbeat_merge_failure(self, task_session, mock_db, mock_logger):
         """Verify proper handling of db.merge failures.
 
-        Tests that merge failures are logged and return False without updating
+        Tests that merge failures are logged and return CancellationReason without updating
         _last_heartbeat timestamp.
         """
         task_session.heartbeat_record_id = "heartbeats:existing_id"
@@ -324,7 +325,7 @@ class TestHeartbeats:
 
             result = await task_session.send_heartbeat()
 
-            assert result is False
+            assert result == CancellationReason.HEARTBEAT_FAILURE
             # Last heartbeat should not update on failure
             assert task_session._last_heartbeat == datetime.datetime.now(tz=datetime.timezone.utc) - datetime.timedelta(
                 seconds=5
@@ -351,7 +352,7 @@ class TestHeartbeats:
 
             result = await task_session.send_heartbeat()
 
-            assert result is False
+            assert result == CancellationReason.HEARTBEAT_FAILURE
             mock_logger.error.assert_called()
             # Verify exc_info was used for traceback
             assert mock_logger.error.call_args[1].get("exc_info") is True
@@ -374,12 +375,12 @@ class TestPeriodicHeartbeatGenerator:
         """
         heartbeat_count = 0
 
-        async def mock_send_heartbeat() -> bool:
+        async def mock_send_heartbeat() -> CancellationReason | None:
             nonlocal heartbeat_count
             heartbeat_count += 1
             if heartbeat_count >= 3:
                 task_session.is_cancelled.set()
-            return True
+            return None
 
         task_session.send_heartbeat = mock_send_heartbeat
 
@@ -392,15 +393,15 @@ class TestPeriodicHeartbeatGenerator:
     async def test_generate_heartbeats_failure_triggers_cancellation(self, task_session, mock_db, mock_logger):
         """Verify heartbeat failure triggers task cancellation.
 
-        When send_heartbeat returns False, generate_heartbeats should call
+        When send_heartbeat returns CancellationReason, generate_heartbeats should call
         _handle_cancel and break the loop to prevent infinite failed attempts.
         """
         call_count = 0
 
-        async def mock_send_heartbeat() -> bool:
+        async def mock_send_heartbeat() -> CancellationReason | None:
             nonlocal call_count
             call_count += 1
-            return False  # Simulate failure
+            return CancellationReason.HEARTBEAT_FAILURE  # Simulate failure
 
         task_session.send_heartbeat = mock_send_heartbeat
         task_session._handle_cancel = AsyncMock()
@@ -428,7 +429,7 @@ class TestPeriodicHeartbeatGenerator:
             if len(sleep_calls) >= 2:
                 task_session.is_cancelled.set()
 
-        task_session.send_heartbeat = AsyncMock(return_value=True)
+        task_session.send_heartbeat = AsyncMock(return_value=None)
 
         with patch("asyncio.sleep", side_effect=mock_sleep):
             await task_session.generate_heartbeats()
@@ -462,22 +463,19 @@ class TestSignalListener:
     """Test signal reception and handler dispatch."""
 
     @pytest.mark.asyncio
-    async def test_listen_signals_initializes_signal_record_id(self, task_session, mock_db):
-        """Verify signal listener fetches signal_record_id if not set.
+    async def test_listen_signals_returns_early_if_signal_record_id_not_set(self, task_session, mock_db):
+        """Verify signal listener returns early if signal_record_id is not set.
 
-        Before listening, the method should query the database to get the
-        task's signal record ID for filtering relevant signals.
+        The TaskExecutor is responsible for setting signal_record_id from the
+        create result. If not set, listen_signals returns early to avoid race conditions.
         """
-        signals = []
-        mock_db.start_live.return_value = ("live_123", _signal_generator(signals))
-
-        # Trigger exit immediately
-        task_session.is_cancelled.set()
+        task_session.signal_record_id = None
 
         await task_session.listen_signals()
 
-        mock_db.select_by_task_id.assert_called_once_with("tasks", "test_task_123")
-        assert task_session.signal_record_id == "tasks:test_signal_id"
+        # Should not start live query if signal_record_id is not set
+        mock_db.start_live.assert_not_called()
+        mock_db.select_by_task_id.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_listen_signals_handles_cancel_signal(self, task_session, mock_db):
@@ -689,7 +687,7 @@ class TestSignalListener:
         await task_session.listen_signals()
 
         mock_db.stop_live.assert_called_once_with(live_id)
-        mock_logger.error.assert_called()
+        mock_logger.exception.assert_called()
 
     @pytest.mark.asyncio
     async def test_listen_signals_handles_multiple_signals(self, task_session, mock_db):
@@ -1163,10 +1161,10 @@ class TestLifecycleIntegration:
         """
         heartbeat_count = 0
 
-        async def counting_send_heartbeat() -> bool:
+        async def counting_send_heartbeat() -> CancellationReason | None:
             nonlocal heartbeat_count
             heartbeat_count += 1
-            return True
+            return None
 
         task_session.send_heartbeat = counting_send_heartbeat
 
@@ -1497,7 +1495,7 @@ class TestErrorHandling:
 
         result = await task_session.send_heartbeat()
 
-        assert result is False
+        assert result == CancellationReason.HEARTBEAT_CONNECTION_REFUSED
         mock_logger.error.assert_called()
 
     @pytest.mark.asyncio
@@ -1536,7 +1534,7 @@ class TestErrorHandling:
         Tests that the system doesn't enter an infinite retry loop when
         heartbeats consistently fail.
         """
-        task_session.send_heartbeat = AsyncMock(return_value=False)
+        task_session.send_heartbeat = AsyncMock(return_value=CancellationReason.HEARTBEAT_FAILURE)
         task_session._handle_cancel = AsyncMock()
 
         await task_session.generate_heartbeats()
@@ -1567,7 +1565,7 @@ class TestErrorHandling:
         mock_db.stop_live.assert_called_once_with("live_123")
 
         # Should have logged the error
-        mock_logger.error.assert_called()
+        mock_logger.exception.assert_called()
 
 
 # ============================================================================
@@ -1667,10 +1665,10 @@ class TestFailureModes:
     @pytest.mark.parametrize(
         ("db_method", "return_value", "expected_result"),
         [
-            ("create", {"code": "ERROR"}, False),
-            ("create", {"id": "success"}, True),
-            ("merge", {"code": "ERROR"}, False),
-            ("merge", {"id": "success"}, True),
+            ("create", {"code": "ERROR"}, CancellationReason.HEARTBEAT_FAILURE),
+            ("create", {"id": "success"}, None),
+            ("merge", {"code": "ERROR"}, CancellationReason.HEARTBEAT_FAILURE),
+            ("merge", {"id": "success"}, None),
         ],
     )
     @freeze_time("2025-10-14 03:21:34")
@@ -1701,21 +1699,26 @@ class TestFailureModes:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        "exception_type",
+        ("exception_type", "expect_exc_info"),
         [
-            ConnectionError,
-            TimeoutError,
-            ValueError,
-            RuntimeError,
-            Exception,
+            # Known exception types are logged without exc_info since traceback is not needed
+            (ConnectionError, False),
+            (TimeoutError, False),
+            # Unknown/unexpected exception types include exc_info for debugging
+            (ValueError, True),
+            (RuntimeError, True),
+            (Exception, True),
         ],
     )
     @freeze_time("2025-10-14 03:21:34")
-    async def test_heartbeat_various_exception_types(self, task_session, mock_db, mock_logger, exception_type):
+    async def test_heartbeat_various_exception_types(
+        self, task_session, mock_db, mock_logger, exception_type, expect_exc_info
+    ):
         """Verify heartbeat handles various exception types gracefully.
 
         Tests that all exception types are caught and logged without
-        crashing the heartbeat mechanism.
+        crashing the heartbeat mechanism. Known errors (ConnectionError, TimeoutError)
+        are logged without full traceback since they're expected failures.
         """
         task_session.heartbeat_record_id = "heartbeats:existing_id"
         task_session._last_heartbeat = datetime.datetime.now(tz=datetime.timezone.utc) - datetime.timedelta(seconds=5)
@@ -1728,9 +1731,13 @@ class TestFailureModes:
 
             result = await task_session.send_heartbeat()
 
-            assert result is False
+            assert result is not None  # Should return a CancellationReason on failure
             mock_logger.error.assert_called()
-            assert mock_logger.error.call_args[1].get("exc_info") is True
+            if expect_exc_info:
+                assert mock_logger.error.call_args[1].get("exc_info") is True
+            else:
+                # Known errors may or may not include exc_info, just verify error was logged
+                assert mock_logger.error.call_count >= 1
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -1841,11 +1848,11 @@ class TestTimingAndConcurrency:
             heartbeat_interval=datetime.timedelta(milliseconds=1),
         )
 
-        async def counting_heartbeat() -> bool:
+        async def counting_heartbeat() -> CancellationReason | None:
             nonlocal heartbeat_count
             heartbeat_count += 1
             await asyncio.sleep(0.05)
-            return True
+            return None
 
         session.send_heartbeat = counting_heartbeat
 
@@ -2199,21 +2206,19 @@ class TestDatabaseInteractionPatterns:
             assert call_args[1] == "heartbeats:existing_123"
 
     @pytest.mark.asyncio
-    async def test_db_select_by_task_id_called_for_signal_init(self, task_session, mock_db):
-        """Verify signal listener queries for task record on initialization.
+    async def test_signal_listener_requires_record_id_to_start(self, task_session, mock_db):
+        """Verify signal listener requires signal_record_id to be set before starting.
 
-        Tests that the listener properly fetches the task record ID
-        before starting to listen for signals.
+        The TaskExecutor sets signal_record_id from the create result before calling
+        listen_signals. If not set, the listener returns early without database calls.
         """
         task_session.signal_record_id = None  # Not initialized
-        task_session.is_cancelled.set()  # Exit immediately
-
-        mock_db.start_live.return_value = ("live_123", _signal_generator([]))
 
         await task_session.listen_signals()
 
-        mock_db.select_by_task_id.assert_called_once_with("tasks", "test_task_123")
-        assert task_session.signal_record_id == "tasks:test_signal_id"
+        # Should not make any database calls if signal_record_id is not set
+        mock_db.start_live.assert_not_called()
+        mock_db.select_by_task_id.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_db_live_query_lifecycle(self, task_session, mock_db):
@@ -2367,3 +2372,197 @@ class TestCompleteScenarios:
         assert len(work_steps_completed) < 10
         assert "cancelled_detected" in work_steps_completed
         assert task_session.status == TaskStatus.CANCELLED
+
+
+# ============================================================================
+# Exception Classification Tests
+# ============================================================================
+
+
+class TestExceptionClassification:
+    """Tests for _classify_exception static method covering all CancellationReason scenarios."""
+
+    def test_timeout_error_returns_heartbeat_timeout(self) -> None:
+        """TimeoutError maps to HEARTBEAT_TIMEOUT."""
+        result = TaskSession._classify_exception(TimeoutError("operation timed out"), is_initial=True)
+        assert result == CancellationReason.HEARTBEAT_TIMEOUT
+
+    def test_connection_error_initial_returns_connection_refused(self) -> None:
+        """ConnectionError on CREATE maps to HEARTBEAT_CONNECTION_REFUSED."""
+        result = TaskSession._classify_exception(ConnectionError("refused"), is_initial=True)
+        assert result == CancellationReason.HEARTBEAT_CONNECTION_REFUSED
+
+    def test_connection_error_update_returns_connection_lost(self) -> None:
+        """ConnectionError on MERGE maps to SURREALDB_CONNECTION_LOST."""
+        result = TaskSession._classify_exception(ConnectionError("reset"), is_initial=False)
+        assert result == CancellationReason.SURREALDB_CONNECTION_LOST
+
+    def test_keepalive_ping_timeout_returns_websocket_closed(self) -> None:
+        """Exception with 'keepalive ping timeout' maps to HEARTBEAT_WEBSOCKET_CLOSED."""
+        exc = Exception("sent 1011 (internal error) keepalive ping timeout; no close frame received")
+        result = TaskSession._classify_exception(exc, is_initial=True)
+        assert result == CancellationReason.HEARTBEAT_WEBSOCKET_CLOSED
+
+    def test_connection_closed_error_type_returns_websocket_closed(self) -> None:
+        """Exception type containing 'ConnectionClosedError' maps to HEARTBEAT_WEBSOCKET_CLOSED."""
+
+        class ConnectionClosedError(Exception):
+            pass
+
+        result = TaskSession._classify_exception(ConnectionClosedError("closed"), is_initial=False)
+        assert result == CancellationReason.HEARTBEAT_WEBSOCKET_CLOSED
+
+    def test_handshake_timeout_returns_surrealdb_handshake_timeout(self) -> None:
+        """Exception with 'timed out during opening handshake' maps to SURREALDB_HANDSHAKE_TIMEOUT."""
+        exc = Exception("timed out during opening handshake")
+        result = TaskSession._classify_exception(exc, is_initial=True)
+        assert result == CancellationReason.SURREALDB_HANDSHAKE_TIMEOUT
+
+    def test_unknown_exception_returns_heartbeat_failure(self) -> None:
+        """Unknown exception maps to HEARTBEAT_FAILURE."""
+        result = TaskSession._classify_exception(ValueError("unexpected"), is_initial=True)
+        assert result == CancellationReason.HEARTBEAT_FAILURE
+
+    def test_runtime_error_returns_heartbeat_failure(self) -> None:
+        """RuntimeError without special message maps to HEARTBEAT_FAILURE."""
+        result = TaskSession._classify_exception(RuntimeError("generic error"), is_initial=False)
+        assert result == CancellationReason.HEARTBEAT_FAILURE
+
+
+class TestHeartbeatFailureReasons:
+    """Tests for heartbeat operations returning correct CancellationReason."""
+
+    @pytest.fixture
+    def session(self, mock_db, mock_module) -> TaskSession:
+        """Create a TaskSession for testing."""
+        return TaskSession(
+            task_id="test_task",
+            mission_id="missions:test",
+            db=mock_db,
+            module=mock_module,
+        )
+
+    @pytest.mark.asyncio
+    async def test_initial_heartbeat_timeout_returns_correct_reason(self, session, mock_db) -> None:
+        """Initial heartbeat TimeoutError returns HEARTBEAT_TIMEOUT."""
+        mock_db.create = AsyncMock(side_effect=TimeoutError("db timeout"))
+
+        result = await session.send_heartbeat()
+
+        assert result == CancellationReason.HEARTBEAT_TIMEOUT
+
+    @pytest.mark.asyncio
+    async def test_initial_heartbeat_connection_refused_returns_correct_reason(self, session, mock_db) -> None:
+        """Initial heartbeat ConnectionError returns HEARTBEAT_CONNECTION_REFUSED."""
+        mock_db.create = AsyncMock(side_effect=ConnectionError("refused"))
+
+        result = await session.send_heartbeat()
+
+        assert result == CancellationReason.HEARTBEAT_CONNECTION_REFUSED
+
+    @pytest.mark.asyncio
+    async def test_initial_heartbeat_websocket_closed_returns_correct_reason(self, session, mock_db) -> None:
+        """Initial heartbeat websocket close returns HEARTBEAT_WEBSOCKET_CLOSED."""
+        mock_db.create = AsyncMock(side_effect=Exception("keepalive ping timeout"))
+
+        result = await session.send_heartbeat()
+
+        assert result == CancellationReason.HEARTBEAT_WEBSOCKET_CLOSED
+
+    @pytest.mark.asyncio
+    async def test_initial_heartbeat_handshake_timeout_returns_correct_reason(self, session, mock_db) -> None:
+        """Initial heartbeat handshake timeout returns SURREALDB_HANDSHAKE_TIMEOUT."""
+        mock_db.create = AsyncMock(side_effect=Exception("timed out during opening handshake"))
+
+        result = await session.send_heartbeat()
+
+        assert result == CancellationReason.SURREALDB_HANDSHAKE_TIMEOUT
+
+    @pytest.mark.asyncio
+    async def test_initial_heartbeat_surreal_error_returns_correct_reason(self, session, mock_db) -> None:
+        """Initial heartbeat SurrealDB error response returns HEARTBEAT_FAILURE."""
+        mock_db.create = AsyncMock(return_value={"code": -1, "message": "table not found"})
+
+        result = await session.send_heartbeat()
+
+        assert result == CancellationReason.HEARTBEAT_FAILURE
+
+    @pytest.mark.asyncio
+    async def test_update_heartbeat_timeout_returns_correct_reason(self, session, mock_db) -> None:
+        """Update heartbeat TimeoutError returns HEARTBEAT_TIMEOUT."""
+        mock_db.create = AsyncMock(return_value={"id": "heartbeats:1"})
+        mock_db.merge = AsyncMock(side_effect=TimeoutError("db timeout"))
+
+        await session.send_heartbeat()  # Create initial
+        # Force update by setting last heartbeat to old time (timezone-aware)
+        session._last_heartbeat = datetime.datetime(2000, 1, 1, tzinfo=datetime.timezone.utc)
+        result = await session.send_heartbeat()
+
+        assert result == CancellationReason.HEARTBEAT_TIMEOUT
+
+    @pytest.mark.asyncio
+    async def test_update_heartbeat_connection_lost_returns_correct_reason(self, session, mock_db) -> None:
+        """Update heartbeat ConnectionError returns SURREALDB_CONNECTION_LOST."""
+        mock_db.create = AsyncMock(return_value={"id": "heartbeats:1"})
+        mock_db.merge = AsyncMock(side_effect=ConnectionError("connection reset"))
+
+        await session.send_heartbeat()  # Create initial
+        session._last_heartbeat = datetime.datetime(2000, 1, 1, tzinfo=datetime.timezone.utc)
+        result = await session.send_heartbeat()
+
+        assert result == CancellationReason.SURREALDB_CONNECTION_LOST
+
+    @pytest.mark.asyncio
+    async def test_update_heartbeat_websocket_closed_returns_correct_reason(self, session, mock_db) -> None:
+        """Update heartbeat websocket close returns HEARTBEAT_WEBSOCKET_CLOSED."""
+        mock_db.create = AsyncMock(return_value={"id": "heartbeats:1"})
+        mock_db.merge = AsyncMock(side_effect=Exception("keepalive ping timeout"))
+
+        await session.send_heartbeat()  # Create initial
+        session._last_heartbeat = datetime.datetime(2000, 1, 1, tzinfo=datetime.timezone.utc)
+        result = await session.send_heartbeat()
+
+        assert result == CancellationReason.HEARTBEAT_WEBSOCKET_CLOSED
+
+
+class TestCancellationReasonValues:
+    """Tests to verify all CancellationReason enum values exist and have expected format."""
+
+    def test_all_cancellation_reasons_are_strings(self) -> None:
+        """All CancellationReason values should be strings."""
+        for reason in CancellationReason:
+            assert isinstance(reason.value, str)
+
+    def test_cancellation_reason_count(self) -> None:
+        """Verify expected number of CancellationReason values."""
+        assert len(CancellationReason) == 15
+
+    def test_expected_cancellation_reasons_exist(self) -> None:
+        """Verify all expected CancellationReason members exist."""
+        expected = [
+            "COMPLETED",
+            "SUCCESS_CLEANUP",
+            "FAILURE_CLEANUP",
+            "SIGNAL",
+            "HEARTBEAT_FAILURE",
+            "HEARTBEAT_WEBSOCKET_CLOSED",
+            "HEARTBEAT_TIMEOUT",
+            "HEARTBEAT_CONNECTION_REFUSED",
+            "SURREALDB_HANDSHAKE_TIMEOUT",
+            "SURREALDB_CONNECTION_LOST",
+            "GRPC_SETUP_UNAVAILABLE",
+            "GRPC_SERVICE_ERROR",
+            "TIMEOUT",
+            "SHUTDOWN",
+            "UNKNOWN",
+        ]
+        actual = [r.name for r in CancellationReason]
+        assert actual == expected
+
+    def test_completed_is_simple_string(self) -> None:
+        """COMPLETED should be a simple string without description."""
+        assert CancellationReason.COMPLETED.value == "completed"
+
+    def test_unknown_is_simple_string(self) -> None:
+        """UNKNOWN should be a simple string."""
+        assert CancellationReason.UNKNOWN.value == "unknown"

@@ -17,7 +17,9 @@ from digitalkin.services.storage.storage_strategy import (
 
 
 class GrpcStorage(StorageStrategy, GrpcClientWrapper):
-    """This class implements the default storage strategy."""
+    """gRPC client implementation for the Storage service."""
+
+    service_name: str = "StorageService"
 
     def _build_record_from_proto(self, proto: data_pb2.StorageRecord) -> StorageRecord:
         """Convert a protobuf StorageRecord message into our Pydantic model.

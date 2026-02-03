@@ -25,6 +25,8 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
     using the Module Service gRPC protocol.
     """
 
+    service_name: str = "CommunicationService"
+
     def __init__(
         self,
         mission_id: str,

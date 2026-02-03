@@ -269,7 +269,7 @@ class TestCreateSetup:
 
         # Start the client call (this call will block until the response is simulated).
         future = thread_pool.submit(client.create_setup, generate_setup_obj.model_dump(warnings=False))
-        with pytest.raises(ValueError, match="Invalid data for Setup Creation"):
+        with pytest.raises(ValueError, match="Validation failed for Setup Creation"):
             future.result()
 
 
@@ -743,7 +743,7 @@ class TestSetupVersionOperations:
 
         # Start the client call (this call will block until the response is simulated).
         future = thread_pool.submit(client.create_setup_version, generate_setup_version_obj.model_dump(warnings=False))
-        with pytest.raises(ValueError, match="Invalid data for Setup Version Creation"):
+        with pytest.raises(ValueError, match="Validation failed for Setup Version Creation"):
             future.result()
 
     @freeze_time("2025-04-01 12:00:01")

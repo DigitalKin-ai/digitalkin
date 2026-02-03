@@ -11,9 +11,14 @@ from digitalkin.models.grpc_servers.models import ClientConfig, SecurityMode
 
 
 class GrpcClientWrapper:
-    """gRPC client shared by the different services."""
+    """gRPC client shared by the different services.
+
+    Subclasses should set the service_name class attribute to identify
+    the gRPC service in logs (e.g., "SetupService", "RegistryService").
+    """
 
     stub: Any
+    service_name: str = "UnknownService"  # Override in subclasses for better logging
     _channel: grpc.Channel | None = None
 
     def _init_channel(self, config: ClientConfig) -> grpc.Channel:
@@ -61,38 +66,63 @@ class GrpcClientWrapper:
         """Execute a gRPC query with from the query's rpc endpoint name.
 
         Arguments:
-            query_endpoint: rpc query name
-            request: gRPC object to match the rpc query
+            query_endpoint: rpc query name (e.g., "GetSetup", "CreateSetupVersion")
+            request: gRPC protobuf request object
 
         Returns:
-            corresponding gRPC reponse.
+            gRPC protobuf response object.
 
         Raises:
-            ServerError: gRPC error catching with status code and details
+            ServerError: gRPC error with status code and details for caller to handle.
         """
-        service_name = getattr(self, "service_name", "unknown")
         try:
             logger.debug(
-                "Sending gRPC request to %s",
+                "gRPC request: %s.%s - sending request to remote service",
+                self.service_name,
                 query_endpoint,
-                extra={"request": str(request), "service": service_name},
+                extra={
+                    "service_name": self.service_name,
+                    "endpoint": query_endpoint,
+                    "request_type": type(request).__name__,
+                    "request_preview": str(request)[:200],  # Truncate for log readability
+                },
             )
             response = getattr(self.stub, query_endpoint)(request)
             logger.debug(
-                "Received gRPC response from %s",
+                "gRPC response: %s.%s - received response from remote service",
+                self.service_name,
                 query_endpoint,
-                extra={"response": str(response), "service": service_name},
+                extra={
+                    "service_name": self.service_name,
+                    "endpoint": query_endpoint,
+                    "response_type": type(response).__name__,
+                    "response_preview": str(response)[:200],  # Truncate for log readability
+                },
             )
+            return response  # noqa: TRY300
         except grpc.RpcError as e:
             status_code = e.code().name if hasattr(e, "code") else "UNKNOWN"
+            status_value = e.code().value[0] if hasattr(e, "code") else -1
             details = e.details() if hasattr(e, "details") else str(e)
-            msg = f"[{status_code}] {details}"
+
+            # Build comprehensive error message for the caller
+            error_msg = f"[gRPC-client:{self.service_name}.{query_endpoint}] [{status_code}] {details}"
+
             logger.error(
-                "gRPC %s failed: %s",
+                "gRPC call failed: %s.%s returned [%s] %s. "
+                "The remote gRPC service returned an error or is unreachable. "
+                "Check the remote service logs for more details.",
+                self.service_name,
                 query_endpoint,
-                msg,
-                extra={"service": service_name},
+                status_code,
+                details,
+                extra={
+                    "service_name": self.service_name,
+                    "endpoint": query_endpoint,
+                    "grpc_status_code": status_code,
+                    "grpc_status_value": status_value,
+                    "grpc_details": details,
+                    "request_type": type(request).__name__,
+                },
             )
-            raise ServerError(msg) from e
-        else:
-            return response
+            raise ServerError(error_msg) from e

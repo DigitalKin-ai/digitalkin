@@ -20,7 +20,9 @@ from digitalkin.services.filesystem.filesystem_strategy import (
 
 
 class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
-    """Default state filesystem strategy."""
+    """gRPC client implementation for the Filesystem service."""
+
+    service_name: str = "FilesystemService"
 
     @staticmethod
     def _file_type_to_enum(file_type: str) -> filesystem_pb2.FileType:

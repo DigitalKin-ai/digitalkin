@@ -41,6 +41,8 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
     to perform module discovery, registration, and status management operations.
     """
 
+    service_name: str = "RegistryService"
+
     def __init__(
         self,
         mission_id: str,

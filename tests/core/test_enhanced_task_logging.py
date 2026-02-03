@@ -278,8 +278,9 @@ class TestSignalMessageEnhancedFields:
             exception_traceback="Traceback...",
         )
 
-        # Note: SignalMessage uses use_enum_values=True, so values are strings
-        assert msg.cancellation_reason == "heartbeat_failure"
+        # Note: SignalMessage uses use_enum_values=True, enum values are strings
+
+        assert msg.cancellation_reason== "heartbeat_failure"
         assert msg.error_message == "Test error"
         assert msg.exception_traceback == "Traceback..."
 
@@ -312,7 +313,8 @@ class TestSignalMessageEnhancedFields:
 
         data = msg.model_dump()
 
-        assert data["cancellation_reason"] == "signal"  # Enum serialized to value
+        # Enum serialized to value string
+        assert data["cancellation_reason"]== "signal"
         assert data["error_message"] == "User requested cancellation"
         assert data["exception_traceback"] is None
 
@@ -424,7 +426,7 @@ class TestDBPersistenceEnhancedFields:
         assert stop_call is not None
 
         # Cancellation reason should be included
-        assert stop_call["cancellation_reason"] == "signal"
+        assert stop_call["cancellation_reason"]== "signal"
         # No exception details for cancellation
         assert stop_call["error_message"] is None
         assert stop_call["exception_traceback"] is None
@@ -471,7 +473,7 @@ class TestDBPersistenceEnhancedFields:
         assert stop_call is not None
 
         # Successful completion has COMPLETED reason, no error fields
-        assert stop_call["cancellation_reason"] == "completed"
+        assert stop_call["cancellation_reason"]== "completed"
         assert stop_call["error_message"] is None
         assert stop_call["exception_traceback"] is None
 
@@ -505,7 +507,7 @@ class TestCancellationReasonPropagation:
 
         assert args[0] == "tasks"
         update_data = args[2]
-        assert update_data["cancellation_reason"] == "signal"
+        assert update_data["cancellation_reason"]== "signal"
 
     @pytest.mark.asyncio
     async def test_heartbeat_failure_reason_tracked(
@@ -526,7 +528,7 @@ class TestCancellationReasonPropagation:
         call_args = mock_surreal_connection.update.call_args
         args, kwargs = call_args
         update_data = args[2]
-        assert update_data["cancellation_reason"] == "heartbeat_failure"
+        assert update_data["cancellation_reason"]== "heartbeat_failure"
 
     @pytest.mark.asyncio
     async def test_cleanup_reasons_tracked(
@@ -899,7 +901,7 @@ class TestSignalMessageStructure:
         # Enums should be serialized to their values (strings)
         assert data["status"] == "cancelled"
         assert data["action"] == "ack_cancel"
-        assert data["cancellation_reason"] == "signal"
+        assert data["cancellation_reason"]== "signal"
 
     @pytest.mark.asyncio
     async def test_null_enhanced_fields_serialized(self) -> None:
