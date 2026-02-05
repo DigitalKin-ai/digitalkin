@@ -405,7 +405,9 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
             logger.info("ToolReference '%s' has no selected tools, skipping", field_name)
             return
 
-        tools_to_resolve = [entry for entry in tool_ref.selected_tools if entry.id and entry.id not in resolved_tools]
+        tools_to_resolve = [
+            entry for entry in tool_ref.selected_tools if entry.setup_id and entry.setup_id not in resolved_tools
+        ]
 
         if not tools_to_resolve:
             logger.info("All tools for '%s' already cached", field_name)
@@ -508,7 +510,7 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
                 continue
             if isinstance(field_value, ToolReference):
                 for entry in field_value.selected_tools:
-                    tool_module_info = self.resolved_tools.get(entry.id)
+                    tool_module_info = self.resolved_tools.get(entry.setup_id)
                     if tool_module_info:
                         cache.add(tool_module_info)
             elif isinstance(field_value, BaseModel):
@@ -528,7 +530,7 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
         for item in items:
             if isinstance(item, ToolReference):
                 for entry in item.selected_tools:
-                    tool_module_info = self.resolved_tools.get(entry.id)
+                    tool_module_info = self.resolved_tools.get(entry.setup_id)
                     if tool_module_info:
                         cache.add(tool_module_info)
             elif isinstance(item, BaseModel):
@@ -544,7 +546,7 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
         for item in mapping.values():
             if isinstance(item, ToolReference):
                 for entry in item.selected_tools:
-                    tool_module_info = self.resolved_tools.get(entry.id)
+                    tool_module_info = self.resolved_tools.get(entry.setup_id)
                     if tool_module_info:
                         cache.add(tool_module_info)
             elif isinstance(item, BaseModel):

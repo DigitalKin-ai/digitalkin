@@ -59,7 +59,7 @@ class SelectSchema(BaseModel):
                     "type": "boolean",
                     "title": protocol,
                     "description": description,
-                    "default": False,
+                    "default": True,
                 }
                 for protocol, description in protocols_info.items()
             },
