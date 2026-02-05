@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+    <url>
+         <loc>https://digitalkin.com/feat-grpc_aio/</loc>
+         <lastmod>2026-02-05</lastmod>
+    </url>
+    <url>
+         <loc>https://digitalkin.com/feat-grpc_aio/getting_started/</loc>
+         <lastmod>2026-02-05</lastmod>
+    </url>
+    <url>
+         <loc>https://digitalkin.com/feat-grpc_aio/guides/</loc>
+         <lastmod>2026-02-05</lastmod>
+    </url>
+    <url>
+         <loc>https://digitalkin.com/feat-grpc_aio/api/api/</loc>
+         <lastmod>2026-02-05</lastmod>
+    </url>
+    <url>
+         <loc>https://digitalkin.com/feat-grpc_aio/api/dynamic_schema/</loc>
+         <lastmod>2026-02-05</lastmod>
+    </url>
+    <url>
+         <loc>https://digitalkin.com/feat-grpc_aio/architecture/sdk-flow/</loc>
+         <lastmod>2026-02-05</lastmod>
+    </url>
+</urlset>

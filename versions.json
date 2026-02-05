@@ -42,6 +42,11 @@
     "aliases": []
   },
   {
+    "version": "feat-grpc_aio",
+    "title": "feat-grpc_aio",
+    "aliases": []
+  },
+  {
     "version": "feat-end_of_stream_protocol",
     "title": "feat-end_of_stream_protocol",
     "aliases": []
