@@ -89,7 +89,7 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
         root_extra = cls.model_config.get("json_schema_extra", {})
 
         extra_bases = tuple(b for b in cls.__bases__ if b is not SetupModel)
-        base: type | tuple[type, ...] = (SetupModel, *extra_bases) if extra_bases else SetupModel
+        base: type | tuple[type, ...] = (BaseModel, *extra_bases) if extra_bases else BaseModel
 
         m = create_model(
             f"{cls.__name__}",

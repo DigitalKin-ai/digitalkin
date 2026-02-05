@@ -6,6 +6,7 @@ import pytest
 from pydantic import BaseModel, ConfigDict, Field
 
 from digitalkin.models.module.module_types import SetupModel
+from digitalkin.models.module.tool_reference import tool_reference_input
 from digitalkin.utils import Dynamic
 from digitalkin.utils.dynamic_schema import has_dynamic
 
@@ -565,3 +566,76 @@ class TestNestedModelUiOrder:
         deep_model = middle_model.model_fields["deep_config"].annotation
         deep_extra = deep_model.model_config.get("json_schema_extra", {})
         assert deep_extra.get("ui:order") == ["deep_z", "deep_y"]
+
+
+class TestCleanModelSchemaIsolation:
+    """Tests that get_clean_model produces schemas without SetupModel internals."""
+
+    @pytest.mark.asyncio
+    async def test_clean_model_schema_excludes_resolved_tools(self) -> None:
+        """Clean model schema should not contain resolved_tools or its type defs."""
+
+        class ToolSetup(SetupModel):
+            enabled: bool = Field(default=True)
+
+        model = await ToolSetup.get_clean_model(config_fields=False, hidden_fields=False)
+        schema = model.model_json_schema()
+
+        assert "resolved_tools" not in schema.get("properties", {})
+        defs = schema.get("$defs", {})
+        assert "ToolModuleInfo" not in defs
+        assert "ToolDefinition" not in defs
+        assert "ToolParameter" not in defs
+        assert "RegistryModuleType" not in defs
+        assert "RegistryModuleStatus" not in defs
+
+    @pytest.mark.asyncio
+    async def test_clean_model_schema_only_contains_declared_fields(self) -> None:
+        """Clean model schema properties should match declared fields only."""
+
+        class SimpleSetup(SetupModel):
+            name: str = Field(default="test")
+            value: int = Field(default=42)
+
+        model = await SimpleSetup.get_clean_model(config_fields=False, hidden_fields=False)
+        schema = model.model_json_schema()
+
+        properties = schema.get("properties", {})
+        assert set(properties.keys()) == {"name", "value"}
+        assert "$defs" not in schema
+
+    @pytest.mark.asyncio
+    async def test_clean_model_with_hidden_true_includes_resolved_tools(self) -> None:
+        """Clean model with hidden_fields=True should include resolved_tools."""
+
+        class ToolSetup(SetupModel):
+            enabled: bool = Field(default=True)
+
+        model = await ToolSetup.get_clean_model(config_fields=False, hidden_fields=True)
+
+        assert "resolved_tools" in model.model_fields
+
+    @pytest.mark.asyncio
+    async def test_clean_model_with_tool_reference_field(self) -> None:
+        """Clean model with tool_reference_input field produces valid schema without ToolModuleInfo defs."""
+
+        class ArchetypeSetup(SetupModel):
+            name: str = Field(default="test")
+            my_tools: tool_reference_input()  # type: ignore[valid-type]
+
+        model = await ArchetypeSetup.get_clean_model(config_fields=False, hidden_fields=False)
+        schema = model.model_json_schema()
+
+        # Tool reference field should be in properties with custom array schema
+        properties = schema.get("properties", {})
+        assert "my_tools" in properties
+        assert properties["my_tools"]["type"] == "array"
+        assert properties["my_tools"]["items"]["properties"]["setupId"]["type"] == "string"
+        assert properties["my_tools"]["ui:widget"] == "toolSelect"
+
+        # resolved_tools and its type defs should NOT leak
+        assert "resolved_tools" not in properties
+        defs = schema.get("$defs", {})
+        assert "ToolModuleInfo" not in defs
+        assert "ToolDefinition" not in defs
+        assert "ToolParameter" not in defs
