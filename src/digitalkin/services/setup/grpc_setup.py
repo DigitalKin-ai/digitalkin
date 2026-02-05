@@ -21,7 +21,13 @@ from digitalkin.services.setup.setup_strategy import SetupData, SetupServiceErro
 
 
 class GrpcSetup(SetupStrategy, GrpcClientWrapper):
-    """This class implements the gRPC setup service."""
+    """gRPC client implementation for the Setup service.
+
+    Communicates with the remote SetupService gRPC server to manage
+    setup configurations and versions.
+    """
+
+    service_name: str = "SetupService"
 
     def __post_init__(self, config: ClientConfig) -> None:
         """Init the channel from a config file.
@@ -34,32 +40,64 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
 
     @contextmanager
     def handle_grpc_errors(self, operation: str) -> Generator[Any, Any, Any]:  # noqa: PLR6301
-        """Context manager for consistent gRPC error handling.
+        """Context manager for consistent gRPC error handling with detailed logging.
 
         Yields:
             Allow error handling in context.
 
         Args:
-            operation: Description of the operation being performed.
+            operation: Description of the operation being performed (e.g., "Get Setup", "Create Setup Version").
 
         Raises:
-            ValueError: Error wiht the model validation.
-            ServerError: from gRPC Client.
-            SetupServiceError: setup service internal.
+            ValueError: Pydantic model validation failed - input data is malformed.
+            ServerError: gRPC communication failed - remote service returned error or is unreachable.
+            SetupServiceError: Unexpected error during setup operation - includes connection/timeout issues.
         """
         try:
             yield
         except ValidationError as e:
-            msg = f"Invalid data for {operation}"
-            logger.exception(msg)
+            msg = f"Validation failed for {operation}: {e}"
+            logger.error(
+                "ValidationError in %s: %s",
+                operation,
+                e,
+                extra={"operation": operation, "error_type": "ValidationError", "service_name": "SetupService"},
+            )
             raise ValueError(msg) from e
         except grpc.RpcError as e:
-            msg = f"gRPC {operation} failed: {e}"
-            logger.exception(msg)
+            status_code = e.code().name if e.code() else "UNKNOWN"
+            details = e.details() or str(e)
+            msg = f"gRPC {operation} [{status_code}]: {details}"
+            logger.error(
+                "gRPC %s [%s]: %s",
+                operation,
+                status_code,
+                details,
+                extra={"operation": operation, "error_type": "grpc.RpcError", "grpc_code": status_code},
+            )
             raise ServerError(msg) from e
+        except (TimeoutError, ConnectionError, OSError) as e:
+            error_type = type(e).__name__
+            msg = f"{error_type} in {operation}: {e}"
+            logger.error(
+                "%s in %s: %s",
+                error_type,
+                operation,
+                e,
+                extra={"operation": operation, "error_type": error_type, "service_name": "SetupService"},
+            )
+            raise SetupServiceError(msg) from e
         except Exception as e:
-            msg = f"Unexpected error in {operation}"
-            logger.exception(msg)
+            error_type = type(e).__name__
+            msg = f"Unexpected {error_type} in {operation}: {e}"
+            logger.error(
+                "Unexpected %s in %s: %s",
+                error_type,
+                operation,
+                e,
+                extra={"operation": operation, "error_type": error_type, "service_name": "SetupService"},
+                exc_info=True,
+            )
             raise SetupServiceError(msg) from e
 
     def create_setup(self, setup_dict: dict[str, Any]) -> str:

@@ -233,10 +233,19 @@ Most operations are async/await. Use `async def` for handlers and module methods
 Comprehensive type hints are used throughout. Always add type annotations to new code.
 
 ### Structured Logging
-All logs include context via `extra` parameter:
+The `extra` parameter is **only for global context IDs** that help correlate logs across the system (e.g., `job_id`, `mission_id`, `setup_id`, `setup_version_id`, `task_id`). These IDs are typically available via `self.session_ids` or `context.session.current_ids()`.
+
+**Local-scope variables go in the log message, not in `extra`:**
 ```python
-logger.info("Task started", extra={"job_id": job_id, "mission_id": mission_id})
+# GOOD: Global IDs in extra, local vars in message
+logger.info("Task started (attempt %d/%d)", attempt, max_retries, extra=self.session_ids)
+logger.error("Connection failed: %s", error_msg, extra=self.session_ids)
+
+# BAD: Local vars in extra
+logger.info("Task started", extra={"attempt": attempt, "error": error_msg})
 ```
+
+If no global context is available, omit `extra` entirely and put everything in the message.
 
 ### Error Handling
 Exceptions are properly caught and converted to gRPC status codes. Use appropriate error types from `grpc.StatusCode`.

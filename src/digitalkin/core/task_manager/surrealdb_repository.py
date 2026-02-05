@@ -88,13 +88,83 @@ class SurrealDBConnection(Generic[TSurreal]):
         self._live_queries = set()  # Initialize live queries tracker
         self._closed = False
 
-    async def init_surreal_instance(self) -> None:
-        """Init a SurrealDB connection instance."""
-        logger.debug("Connecting to SurrealDB at %s", self.url)
-        self.db = AsyncSurreal(self.url)  # type: ignore
-        await self.db.signin({"username": self.username, "password": self.password})
-        await self.db.use(self.namespace, self.database)  # type: ignore[arg-type]
-        logger.debug("Successfully connected to SurrealDB")
+    async def init_surreal_instance(self, max_retries: int = 3, retry_delay: float = 1.0) -> None:
+        """Init a SurrealDB connection instance with retry logic and exponential backoff.
+
+        Args:
+            max_retries: Maximum number of connection attempts before giving up.
+            retry_delay: Initial delay between retries in seconds (doubles each attempt).
+
+        Raises:
+            ConnectionError: If all retry attempts fail, with detailed error context.
+        """
+        last_exception: Exception | None = None
+
+        for attempt in range(max_retries):
+            try:
+                logger.debug("SurrealDB connecting (attempt %d/%d)", attempt + 1, max_retries)
+                self.db = AsyncSurreal(self.url)  # type: ignore
+
+                # Wrap signin with timeout to catch handshake timeouts
+                await asyncio.wait_for(
+                    self.db.signin({"username": self.username, "password": self.password}),
+                    timeout=self.timeout.total_seconds(),
+                )
+                await self.db.use(self.namespace, self.database)  # type: ignore[arg-type]
+
+                logger.info("SurrealDB connected (attempt %d/%d)", attempt + 1, max_retries)
+                return  # noqa: TRY300
+
+            except TimeoutError as e:
+                last_exception = e
+                error_msg = str(e) or "operation timed out"
+
+                if "timed out during opening handshake" in error_msg:
+                    logger.warning("SurrealDB handshake timeout (attempt %d/%d)", attempt + 1, max_retries)
+                else:
+                    logger.warning("SurrealDB timeout (attempt %d/%d): %s", attempt + 1, max_retries, error_msg)
+
+            except ConnectionError as e:
+                last_exception = e
+                logger.warning("SurrealDB connection refused (attempt %d/%d): %s", attempt + 1, max_retries, e)
+
+            except OSError as e:
+                last_exception = e
+                logger.warning("SurrealDB OS error (attempt %d/%d): %s", attempt + 1, max_retries, e)
+
+            except Exception as e:
+                last_exception = e
+                error_msg = str(e)
+
+                if "keepalive ping timeout" in error_msg:
+                    logger.warning("SurrealDB keepalive timeout (attempt %d/%d)", attempt + 1, max_retries)
+                else:
+                    logger.warning(
+                        "SurrealDB error (attempt %d/%d): %s: %s",
+                        attempt + 1,
+                        max_retries,
+                        type(e).__name__,
+                        error_msg,
+                        exc_info=True,
+                    )
+
+            # Retry with exponential backoff (but not after the last attempt)
+            if attempt < max_retries - 1:
+                delay = retry_delay * (2**attempt)  # Exponential backoff: 1s, 2s, 4s, ...
+                logger.debug("SurrealDB retry in %.1fs (next attempt %d)", delay, attempt + 2)
+                await asyncio.sleep(delay)
+
+        # All retries exhausted
+        error_type = type(last_exception).__name__ if last_exception else "Unknown"
+        error_msg = str(last_exception) if last_exception else "No exception captured"
+
+        final_error = (
+            f"Failed to connect to SurrealDB after {max_retries} attempts. "
+            f"URL: {self.url}, namespace: {self.namespace}, database: {self.database}. "
+            f"Last error: {error_type}: {error_msg}"
+        )
+        logger.error("SurrealDB connection failed after %d attempts: %s: %s", max_retries, error_type, error_msg)
+        raise ConnectionError(final_error) from last_exception
 
     async def close(self) -> None:
         """Close the SurrealDB connection if it exists.
@@ -104,7 +174,7 @@ class SurrealDBConnection(Generic[TSurreal]):
         self._closed = True
         # Kill all tracked live queries before closing connection
         if self._live_queries:
-            logger.debug("Killing %d active live queries before closing", len(self._live_queries))
+            logger.debug("Killing %d live queries before close", len(self._live_queries))
             live_query_ids = list(self._live_queries)
 
             # Kill all queries concurrently, capturing any exceptions
@@ -122,12 +192,7 @@ class SurrealDBConnection(Generic[TSurreal]):
 
             # Log aggregated failures once instead of per-query
             if failed_queries:
-                logger.warning(
-                    "Failed to kill %d live queries: %s",
-                    len(failed_queries),
-                    failed_queries[:5],  # Only log first 5 to avoid log spam
-                    extra={"total_failed": len(failed_queries)},
-                )
+                logger.warning("Failed to kill %d live queries", len(failed_queries))
 
         logger.debug("Closing SurrealDB connection")
         await self.db.close()
@@ -145,10 +210,19 @@ class SurrealDBConnection(Generic[TSurreal]):
 
         Returns:
             Dict[str, Any]: The created record as returned by the database
+
+        Raises:
+            RuntimeError: If the database returns an error response
         """
-        logger.debug("Creating record in %s with data: %s", table_name, data)
         result = await self.db.create(table_name, data)
-        logger.debug("create result: %s", result)
+
+        # Check for error response from SurrealDB
+        if isinstance(result, dict) and "code" in result:
+            error_msg = result.get("message", result.get("information", "Unknown error"))
+            logger.error("SurrealDB create failed [%s]: %s", result.get("code"), error_msg)
+            msg = f"SurrealDB create failed in '{table_name}': {error_msg}"
+            raise RuntimeError(msg)
+
         return cast("list[dict[str, Any]] | dict[str, Any]", result)
 
     async def merge(
@@ -170,9 +244,7 @@ class SurrealDBConnection(Generic[TSurreal]):
         if isinstance(record_id, str):
             # validate surrealDB id if raw str
             record_id = self._valid_id(record_id, table_name)
-        logger.debug("Updating record in %s with data: %s", record_id, data)
         result = await self.db.merge(record_id, data)
-        logger.debug("update result: %s", result)
         return cast("list[dict[str, Any]] | dict[str, Any]", result)
 
     async def update(
@@ -194,9 +266,7 @@ class SurrealDBConnection(Generic[TSurreal]):
         if isinstance(record_id, str):
             # validate surrealDB id if raw str
             record_id = self._valid_id(record_id, table_name)
-        logger.debug("Updating record in %s with data: %s", record_id, data)
         result = await self.db.update(record_id, data)
-        logger.debug("update result: %s", result)
         return cast("list[dict[str, Any]] | dict[str, Any]", result)
 
     async def execute_query(self, query: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
@@ -209,9 +279,7 @@ class SurrealDBConnection(Generic[TSurreal]):
         Returns:
             List[Dict[str, Any]]: Query results
         """
-        logger.debug("execute_query: %s with params: %s", query, params)
         result = await self.db.query(query, params or {})
-        logger.debug("execute_query result: %s", result)
         return cast("list[dict[str, Any]]", [result] if isinstance(result, dict) else result)
 
     async def select_by_task_id(self, table: str, value: str) -> dict[str, Any]:
@@ -232,8 +300,8 @@ class SurrealDBConnection(Generic[TSurreal]):
 
         result = await self.execute_query(query, params)
         if not result:
+            logger.error("No records found in %s for task_id %s", table, value)
             msg = f"No records found in table '{table}' with task_id '{value}'"
-            logger.error(msg)
             raise ValueError(msg)
 
         return result[0]
@@ -254,7 +322,7 @@ class SurrealDBConnection(Generic[TSurreal]):
         """
         live_id = await self.db.live(table_name, diff=False)
         self._live_queries.add(live_id)  # Track for cleanup
-        logger.debug("Started live query %s for table %s (total: %d)", live_id, table_name, len(self._live_queries))
+        logger.debug("Live query %s started on %s (total: %d)", live_id, table_name, len(self._live_queries))
         return live_id, await self.db.subscribe_live(live_id)
 
     async def stop_live(self, live_id: UUID) -> None:
@@ -266,7 +334,6 @@ class SurrealDBConnection(Generic[TSurreal]):
         if self._closed:
             self._live_queries.discard(live_id)
             return
-        logger.debug("Killing live query: %s", live_id)
         await self.db.kill(live_id)
         self._live_queries.discard(live_id)  # Remove from tracker
-        logger.debug("Stopped live query %s (remaining: %d)", live_id, len(self._live_queries))
+        logger.debug("Live query %s stopped (remaining: %d)", live_id, len(self._live_queries))

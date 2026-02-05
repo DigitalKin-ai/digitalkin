@@ -16,7 +16,9 @@ from digitalkin.services.user_profile.user_profile_strategy import UserProfileSe
 
 
 class GrpcUserProfile(UserProfileStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
-    """This class implements the gRPC user profile service."""
+    """gRPC client implementation for the UserProfile service."""
+
+    service_name: str = "UserProfileService"
 
     def __init__(
         self,

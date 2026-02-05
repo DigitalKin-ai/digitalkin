@@ -18,23 +18,23 @@ class TaskStatus(Enum):
 
 
 class CancellationReason(Enum):
-    """Reason for task termination - helps distinguish normal completion, cleanup, and real cancellation."""
+    """Reason for task termination."""
 
-    # Normal completion
-    COMPLETED = "completed"  # Task finished successfully
-
-    # Cleanup cancellations (not errors)
-    SUCCESS_CLEANUP = "success_cleanup"  # Main task completed, cleaning up helper tasks
-    FAILURE_CLEANUP = "failure_cleanup"  # Main task failed, cleaning up helper tasks
-
-    # Real cancellations
-    SIGNAL = "signal"  # External signal requested cancellation
-    HEARTBEAT_FAILURE = "heartbeat_failure"  # Heartbeat stopped working
-    TIMEOUT = "timeout"  # Task timed out
-    SHUTDOWN = "shutdown"  # Manager is shutting down
-
-    # Unknown/unset
-    UNKNOWN = "unknown"  # Reason not determined
+    COMPLETED = "completed"
+    SUCCESS_CLEANUP = "success_cleanup"  # Post-completion, terminating helper tasks
+    FAILURE_CLEANUP = "failure_cleanup"  # Post-failure, releasing resources
+    SIGNAL = "signal"  # Cancel via SurrealDB live query (StopModule, orchestrator, mission)
+    HEARTBEAT_FAILURE = "heartbeat_failure"  # SurrealDB CREATE/MERGE failed (check error code)
+    HEARTBEAT_WEBSOCKET_CLOSED = "heartbeat_ws_closed"  # WebSocket closed, keepalive ping timeout
+    HEARTBEAT_TIMEOUT = "heartbeat_timeout"  # CREATE/MERGE operation timed out
+    HEARTBEAT_CONNECTION_REFUSED = "heartbeat_conn_refused"  # SurrealDB not running
+    SURREALDB_HANDSHAKE_TIMEOUT = "surrealdb_handshake_timeout"  # WebSocket handshake timed out
+    SURREALDB_CONNECTION_LOST = "surrealdb_conn_lost"  # Connection established then lost
+    GRPC_SETUP_UNAVAILABLE = "grpc_setup_unavailable"  # Setup service unreachable at startup
+    GRPC_SERVICE_ERROR = "grpc_service_error"  # Service dependency failed during execution
+    TIMEOUT = "timeout"  # Task exceeded time limit
+    SHUTDOWN = "shutdown"  # TaskManager shutdown (SIGTERM/SIGINT)
+    UNKNOWN = "unknown"  # Reason not set - investigate code path
 
 
 class SignalType(Enum):

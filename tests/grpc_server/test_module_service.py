@@ -184,7 +184,7 @@ class TestStartModule:
 
     @pytest.mark.asyncio
     async def test_start_module_no_setup_data(self, module_servicer, fake_context):
-        """Test module start fails when setup data is not found."""
+        """Test module start returns failure response when setup data is not found."""
         # Mock setup to return None
         module_servicer.setup.get_setup = Mock(return_value=None)
 
@@ -194,10 +194,14 @@ class TestStartModule:
             input=struct_pb2.Struct(),
         )
 
-        # Execute and expect exception
-        with pytest.raises(Exception, match="No setup data returned"):
-            async for _ in module_servicer.StartModule(request, fake_context):
-                pass
+        # Execute - should return failure response, not raise exception
+        responses = [response async for response in module_servicer.StartModule(request, fake_context)]
+
+        # Verify - should get a single failure response with proper gRPC status
+        assert len(responses) == 1
+        assert responses[0].success is False
+        assert fake_context._code == grpc.StatusCode.NOT_FOUND
+        assert "No setup data found" in fake_context._details
 
     @pytest.mark.asyncio
     async def test_start_module_job_creation_fails(self, module_servicer, fake_context, mock_job_manager):
