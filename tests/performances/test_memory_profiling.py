@@ -378,6 +378,7 @@ class TestImprovedJobManagerMemoryProfile:
     @pytest.mark.asyncio
     async def test_taskiq_job_manager_queue_clearing(self):
         """Test TaskiqJobManager queue memory is cleared properly."""
+        pytest.importorskip("taskiq", reason="taskiq not installed")
         with patch("digitalkin.core.job_manager.taskiq_job_manager.TASKIQ_BROKER"):
             with patch("digitalkin.core.job_manager.taskiq_job_manager.TaskiqJobManager._start"):
                 from digitalkin.core.job_manager.taskiq_job_manager import TaskiqJobManager

@@ -14,6 +14,8 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 import pytest_asyncio
 
+pytest.importorskip("taskiq", reason="taskiq not installed")
+
 from digitalkin.core.job_manager.taskiq_job_manager import TaskiqJobManager
 from digitalkin.models.core.task_monitor import TaskStatus
 from digitalkin.modules._base_module import BaseModule

@@ -1098,14 +1098,11 @@ class TestChannelPoolCleanup:
             client_config=config,
         )
 
-        # Mock the _init_channel method to return a mock channel
-        mock_channel = Mock()
-        mock_channel.close = Mock()
-        comm._init_channel = Mock(return_value=mock_channel)
-
-        # Create some channels
-        comm._get_or_create_channel("localhost", 50051)
-        comm._get_or_create_channel("localhost", 50052)
+        # Insert mock async channels directly into the pool
+        mock_channel_1 = AsyncMock()
+        mock_channel_2 = AsyncMock()
+        comm._channel_pool[("localhost", 50051)] = mock_channel_1
+        comm._channel_pool[("localhost", 50052)] = mock_channel_2
 
         assert len(comm._channel_pool) == 2
 
@@ -1114,7 +1111,8 @@ class TestChannelPoolCleanup:
 
         # All channels should be closed and pool cleared
         assert len(comm._channel_pool) == 0
-        assert mock_channel.close.call_count == 2
+        mock_channel_1.close.assert_awaited_once()
+        mock_channel_2.close.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_default_communication_cleanup_noop(self) -> None:
