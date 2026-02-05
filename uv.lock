@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = ">=3.10"
 resolution-markers = [
     "python_full_version == '3.14.*'",
@@ -10,7 +10,7 @@ resolution-markers = [
 
 [[package]]
 name = "agentic-mesh-protocol"
-version = "0.2.1.dev1"
+version = "0.2.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "bump-my-version" },
@@ -20,9 +20,9 @@ dependencies = [
     { name = "protobuf" },
     { name = "protovalidate" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/c3/b4/80aa262a23f7af670f4384fe24da1713d9c5ca0670dbfc0d2a387dc63467/agentic_mesh_protocol-0.2.1.dev1.tar.gz", hash = "sha256:3df27361a5727647b25d28f3f2e0cf30d14d5824890af8e99ed1a9214f6b3290", size = 74626, upload-time = "2026-01-28T15:49:55.043Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/28/f3/cb4ac1f1d3e5a4ac21041b04c03a53e0048d2726b5fef211ef69955bc071/agentic_mesh_protocol-0.2.2.tar.gz", hash = "sha256:224c0ee64bfea108b5ef3c60d8f2db65f05f6ce363b9c020b5f25c7bec3e655c", size = 75041, upload-time = "2026-02-04T16:41:46.269Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/7a/4a/e42c639d578c859313f3cb43062ff0eba823dcfba0b881c7bdc1414d4efc/agentic_mesh_protocol-0.2.1.dev1-py3-none-any.whl", hash = "sha256:4dcc2b80c4672658aca027b36adcb9768bb67143220e6e4baf0fc292dd075179", size = 109582, upload-time = "2026-01-28T15:49:53.342Z" },
+    { url = "https://files.pythonhosted.org/packages/02/64/00eb8d6427b5a92c5a77938e1763a43e96ac354d36ebe35ae8127f99268e/agentic_mesh_protocol-0.2.2-py3-none-any.whl", hash = "sha256:2c359ffbbc8f6248f689a96985679b46505a5bcdab655473a3257038b3cdd765", size = 109864, upload-time = "2026-02-04T16:41:44.986Z" },
 ]
 
 [[package]]
@@ -853,7 +853,7 @@ tests = [
 
 [package.metadata]
 requires-dist = [
-    { name = "agentic-mesh-protocol", specifier = "==0.2.1.dev1" },
+    { name = "agentic-mesh-protocol", specifier = "==0.2.2" },
     { name = "grpcio-health-checking", specifier = ">=1.76.0" },
     { name = "grpcio-reflection", specifier = ">=1.76.0" },
     { name = "grpcio-status", specifier = ">=1.76.0" },

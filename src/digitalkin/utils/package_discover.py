@@ -316,6 +316,18 @@ class ModuleDiscoverer:
         self._trigger_handlers_cls[key].append(handler_cls)
         return handler_cls
 
+    def get_registered_protocols_with_info(self) -> dict[str, str]:
+        """Get registered protocols with their descriptions.
+
+        Returns:
+            Dict mapping protocol name to description (from handler description attribute).
+        """
+        result: dict[str, str] = {}
+        for protocol, handlers in self._trigger_handlers_cls.items():
+            if handlers:
+                result[protocol] = handlers[0].description or protocol
+        return result
+
     def init_handlers(self, context: ModuleContext) -> None:
         """Initialize all registered trigger handler instances.
 

@@ -6,6 +6,7 @@ from digitalkin.models.module.module_types import (
     DataTrigger,
     SetupModel,
 )
+from digitalkin.models.module.select_schema import SelectSchema
 from digitalkin.models.module.tool_cache import (
     ToolCache,
     ToolDefinition,
@@ -14,6 +15,7 @@ from digitalkin.models.module.tool_cache import (
 )
 from digitalkin.models.module.tool_reference import (
     ToolReference,
+    ToolSelection,
     tool_reference_input,
 )
 from digitalkin.models.module.utility import (
@@ -29,12 +31,14 @@ __all__ = [
     "EndOfStreamOutput",
     "ModuleContext",
     "ModuleStartInfoOutput",
+    "SelectSchema",
     "SetupModel",
     "ToolCache",
     "ToolDefinition",
     "ToolModuleInfo",
     "ToolParameter",
     "ToolReference",
+    "ToolSelection",
     "UtilityProtocol",
     "UtilityRegistry",
     "tool_reference_input",

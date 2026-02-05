@@ -88,9 +88,12 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
 
         root_extra = cls.model_config.get("json_schema_extra", {})
 
+        extra_bases = tuple(b for b in cls.__bases__ if b is not SetupModel)
+        base: type | tuple[type, ...] = (SetupModel, *extra_bases) if extra_bases else SetupModel
+
         m = create_model(
             f"{cls.__name__}",
-            __base__=SetupModel,
+            __base__=base,
             __config__=ConfigDict(
                 arbitrary_types_allowed=True,
                 json_schema_extra=copy.deepcopy(root_extra) if isinstance(root_extra, dict) else root_extra,
@@ -233,9 +236,12 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
 
         root_extra = model_cls.model_config.get("json_schema_extra", {})
 
+        extra_bases = tuple(b for b in model_cls.__bases__ if b is not BaseModel)
+        base: type | tuple[type, ...] = (BaseModel, *extra_bases) if extra_bases else BaseModel
+
         return create_model(
             model_cls.__name__,
-            __base__=BaseModel,
+            __base__=base,
             __config__=ConfigDict(
                 arbitrary_types_allowed=True,
                 json_schema_extra=copy.deepcopy(root_extra) if isinstance(root_extra, dict) else root_extra,
@@ -399,9 +405,7 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
             logger.info("ToolReference '%s' has no selected tools, skipping", field_name)
             return
 
-        tools_to_resolve = [
-            setup_id for setup_id in tool_ref.selected_tools if setup_id and setup_id not in resolved_tools
-        ]
+        tools_to_resolve = [entry for entry in tool_ref.selected_tools if entry.id and entry.id not in resolved_tools]
 
         if not tools_to_resolve:
             logger.info("All tools for '%s' already cached", field_name)
@@ -503,8 +507,8 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
             if field_value is None:
                 continue
             if isinstance(field_value, ToolReference):
-                for setup_id in field_value.selected_tools:
-                    tool_module_info = self.resolved_tools.get(setup_id)
+                for entry in field_value.selected_tools:
+                    tool_module_info = self.resolved_tools.get(entry.id)
                     if tool_module_info:
                         cache.add(tool_module_info)
             elif isinstance(field_value, BaseModel):
@@ -523,8 +527,8 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
         """
         for item in items:
             if isinstance(item, ToolReference):
-                for setup_id in item.selected_tools:
-                    tool_module_info = self.resolved_tools.get(setup_id)
+                for entry in item.selected_tools:
+                    tool_module_info = self.resolved_tools.get(entry.id)
                     if tool_module_info:
                         cache.add(tool_module_info)
             elif isinstance(item, BaseModel):
@@ -539,8 +543,8 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
         """
         for item in mapping.values():
             if isinstance(item, ToolReference):
-                for setup_id in item.selected_tools:
-                    tool_module_info = self.resolved_tools.get(setup_id)
+                for entry in item.selected_tools:
+                    tool_module_info = self.resolved_tools.get(entry.id)
                     if tool_module_info:
                         cache.add(tool_module_info)
             elif isinstance(item, BaseModel):
