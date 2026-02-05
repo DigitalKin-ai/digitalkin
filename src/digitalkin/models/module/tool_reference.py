@@ -131,7 +131,12 @@ def tool_reference_input(
         """
         if isinstance(v, list):
             return ToolReference(
-                selected_tools=[ToolSelection(**entry) if isinstance(entry, dict) else entry for entry in v]
+                selected_tools=[
+                    ToolSelection(id=e["id"], subtools=e.get("subtools", e.get("subTools", [])))
+                    if isinstance(e, dict)
+                    else e
+                    for e in v
+                ]
             )
         return v
 
@@ -174,5 +179,5 @@ def tool_reference_input(
             max_tools=max_tools,
             min_tools=min_tools,
         ),
-        Field(default=[]),
+        Field(default_factory=ToolReference),
     ]
