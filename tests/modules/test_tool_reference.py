@@ -193,34 +193,34 @@ class TestToolReferenceValidation:
 
     def test_selected_tools_valid(self) -> None:
         """ToolReference with selected_tools is valid."""
-        ref = ToolReference(selected_tools=[ToolSelection(id="setup-123", subtools=["search"])])
+        ref = ToolReference(selected_tools=[ToolSelection(setup_id="setup-123", triggers={"search": True})])
         assert len(ref.selected_tools) == 1
-        assert ref.selected_tools[0].id == "setup-123"
-        assert ref.selected_tools[0].subtools == ["search"]
+        assert ref.selected_tools[0].setup_id == "setup-123"
+        assert ref.selected_tools[0].triggers == {"search": True}
 
     def test_list_input_creates_selected_tools(self) -> None:
         """List of dicts input creates selected_tools via tool_reference_input."""
         adapter = TypeAdapter(tool_reference_input())
         ref = adapter.validate_python([
-            {"id": "setup-123", "subtools": ["search"]},
-            {"id": "setup-456", "subtools": ["analyze"]},
+            {"setupId": "setup-123", "triggers": {"search": True}},
+            {"setupId": "setup-456", "triggers": {"analyze": True}},
         ])
         assert len(ref.selected_tools) == 2
-        assert ref.selected_tools[0].id == "setup-123"
-        assert ref.selected_tools[1].id == "setup-456"
+        assert ref.selected_tools[0].setup_id == "setup-123"
+        assert ref.selected_tools[1].setup_id == "setup-456"
 
     def test_object_input_accepted(self) -> None:
         """ToolReference object input is also accepted via tool_reference_input."""
         adapter = TypeAdapter(tool_reference_input())
         ref = adapter.validate_python({
             "selected_tools": [
-                {"id": "setup-123", "subtools": ["search"]},
-                {"id": "setup-456", "subtools": ["analyze"]},
+                {"setup_id": "setup-123", "triggers": {"search": True}},
+                {"setup_id": "setup-456", "triggers": {"analyze": True}},
             ],
         })
         assert len(ref.selected_tools) == 2
-        assert ref.selected_tools[0].id == "setup-123"
-        assert ref.selected_tools[1].id == "setup-456"
+        assert ref.selected_tools[0].setup_id == "setup-123"
+        assert ref.selected_tools[1].setup_id == "setup-456"
 
 
 class TestToolReferenceResolution:
@@ -233,7 +233,7 @@ class TestToolReferenceResolution:
         search_tool_info: ModuleInfo,
     ) -> None:
         """Selected tools resolve via registry lookup."""
-        ref = ToolReference(selected_tools=[ToolSelection(id="setup-search-001", subtools=["search"])])
+        ref = ToolReference(selected_tools=[ToolSelection(setup_id="setup-search-001", triggers={"search": True})])
 
         communication = create_mock_communication()
         result = await ref.resolve(registry, communication)
@@ -250,8 +250,8 @@ class TestToolReferenceResolution:
     ) -> None:
         """Multiple selected tools all resolve."""
         ref = ToolReference(selected_tools=[
-            ToolSelection(id="setup-search-001", subtools=["search"]),
-            ToolSelection(id="setup-analyzer-002", subtools=["search"]),
+            ToolSelection(setup_id="setup-search-001", triggers={"search": True}),
+            ToolSelection(setup_id="setup-analyzer-002", triggers={"search": True}),
         ])
 
         communication = create_mock_communication()
@@ -265,7 +265,7 @@ class TestToolReferenceResolution:
     @pytest.mark.asyncio
     async def test_nonexistent_setup_returns_empty(self, registry: FakeRegistry) -> None:
         """Selected tool with nonexistent setup_id is not resolved."""
-        ref = ToolReference(selected_tools=[ToolSelection(id="nonexistent-setup", subtools=["search"])])
+        ref = ToolReference(selected_tools=[ToolSelection(setup_id="nonexistent-setup", triggers={"search": True})])
 
         communication = create_mock_communication()
         result = await ref.resolve(registry, communication)
@@ -296,7 +296,7 @@ class TestSetupModelToolResolution:
 
         class ArchetypeSetup(SetupModel):
             search_tool: ToolReference = Field(
-                default_factory=lambda: ToolReference(selected_tools=[ToolSelection(id="setup-search-001", subtools=["search"])]),
+                default_factory=lambda: ToolReference(selected_tools=[ToolSelection(setup_id="setup-search-001", triggers={"search": True})]),
             )
 
         setup = ArchetypeSetup()
@@ -318,10 +318,10 @@ class TestSetupModelToolResolution:
 
         class ArchetypeSetup(SetupModel):
             search_tool: ToolReference = Field(
-                default_factory=lambda: ToolReference(selected_tools=[ToolSelection(id="setup-search-001", subtools=["search"])]),
+                default_factory=lambda: ToolReference(selected_tools=[ToolSelection(setup_id="setup-search-001", triggers={"search": True})]),
             )
             analyzer_tool: ToolReference = Field(
-                default_factory=lambda: ToolReference(selected_tools=[ToolSelection(id="setup-analyzer-002", subtools=["search"])]),
+                default_factory=lambda: ToolReference(selected_tools=[ToolSelection(setup_id="setup-analyzer-002", triggers={"search": True})]),
             )
 
         setup = ArchetypeSetup()
@@ -374,7 +374,7 @@ class TestNestedToolReferenceResolution:
 
         class ToolConfig(BaseModel):
             tool: ToolReference = Field(
-                default_factory=lambda: ToolReference(selected_tools=[ToolSelection(id="setup-search-001", subtools=["search"])]),
+                default_factory=lambda: ToolReference(selected_tools=[ToolSelection(setup_id="setup-search-001", triggers={"search": True})]),
             )
 
         class ArchetypeSetup(SetupModel):
@@ -399,7 +399,7 @@ class TestNestedToolReferenceResolution:
 
         class DeepConfig(BaseModel):
             analyzer: ToolReference = Field(
-                default_factory=lambda: ToolReference(selected_tools=[ToolSelection(id="setup-analyzer-002", subtools=["search"])]),
+                default_factory=lambda: ToolReference(selected_tools=[ToolSelection(setup_id="setup-analyzer-002", triggers={"search": True})]),
             )
 
         class MiddleConfig(BaseModel):
@@ -428,8 +428,8 @@ class TestNestedToolReferenceResolution:
         class ArchetypeSetup(SetupModel):
             tools: list[ToolReference] = Field(
                 default_factory=lambda: [
-                    ToolReference(selected_tools=[ToolSelection(id="setup-search-001", subtools=["search"])]),
-                    ToolReference(selected_tools=[ToolSelection(id="setup-analyzer-002", subtools=["search"])]),
+                    ToolReference(selected_tools=[ToolSelection(setup_id="setup-search-001", triggers={"search": True})]),
+                    ToolReference(selected_tools=[ToolSelection(setup_id="setup-analyzer-002", triggers={"search": True})]),
                 ],
             )
 
@@ -461,11 +461,11 @@ class TestNestedToolReferenceResolution:
                 default_factory=lambda: [
                     ToolWrapper(
                         name="search",
-                        tool=ToolReference(selected_tools=[ToolSelection(id="setup-search-001", subtools=["search"])]),
+                        tool=ToolReference(selected_tools=[ToolSelection(setup_id="setup-search-001", triggers={"search": True})]),
                     ),
                     ToolWrapper(
                         name="writer",
-                        tool=ToolReference(selected_tools=[ToolSelection(id="setup-writer-003", subtools=["search"])]),
+                        tool=ToolReference(selected_tools=[ToolSelection(setup_id="setup-writer-003", triggers={"search": True})]),
                     ),
                 ],
             )
@@ -491,8 +491,8 @@ class TestNestedToolReferenceResolution:
         class ArchetypeSetup(SetupModel):
             tools_by_name: dict[str, ToolReference] = Field(
                 default_factory=lambda: {
-                    "search": ToolReference(selected_tools=[ToolSelection(id="setup-search-001", subtools=["search"])]),
-                    "analyzer": ToolReference(selected_tools=[ToolSelection(id="setup-analyzer-002", subtools=["search"])]),
+                    "search": ToolReference(selected_tools=[ToolSelection(setup_id="setup-search-001", triggers={"search": True})]),
+                    "analyzer": ToolReference(selected_tools=[ToolSelection(setup_id="setup-analyzer-002", triggers={"search": True})]),
                 },
             )
 
@@ -520,8 +520,8 @@ class TestNestedToolReferenceResolution:
         class ArchetypeSetup(SetupModel):
             wrappers_by_name: dict[str, ToolWrapper] = Field(
                 default_factory=lambda: {
-                    "search": ToolWrapper(tool=ToolReference(selected_tools=[ToolSelection(id="setup-search-001", subtools=["search"])])),
-                    "writer": ToolWrapper(tool=ToolReference(selected_tools=[ToolSelection(id="setup-writer-003", subtools=["search"])])),
+                    "search": ToolWrapper(tool=ToolReference(selected_tools=[ToolSelection(setup_id="setup-search-001", triggers={"search": True})])),
+                    "writer": ToolWrapper(tool=ToolReference(selected_tools=[ToolSelection(setup_id="setup-writer-003", triggers={"search": True})])),
                 },
             )
 
@@ -551,13 +551,13 @@ class TestComplexArchetypeSetup:
         class ResearchConfig(BaseModel):
             max_depth: int = 3
             search_tool: ToolReference = Field(
-                default_factory=lambda: ToolReference(selected_tools=[ToolSelection(id="setup-search-001", subtools=["search"])]),
+                default_factory=lambda: ToolReference(selected_tools=[ToolSelection(setup_id="setup-search-001", triggers={"search": True})]),
             )
 
         class OutputConfig(BaseModel):
             format: str = "markdown"
             writer: ToolReference = Field(
-                default_factory=lambda: ToolReference(selected_tools=[ToolSelection(id="setup-writer-003", subtools=["search"])]),
+                default_factory=lambda: ToolReference(selected_tools=[ToolSelection(setup_id="setup-writer-003", triggers={"search": True})]),
             )
 
         class ResearchArchetypeSetup(SetupModel):
@@ -565,7 +565,7 @@ class TestComplexArchetypeSetup:
             research: ResearchConfig = Field(default_factory=ResearchConfig)
             output: OutputConfig = Field(default_factory=OutputConfig)
             analyzer: ToolReference = Field(
-                default_factory=lambda: ToolReference(selected_tools=[ToolSelection(id="setup-analyzer-002", subtools=["search"])]),
+                default_factory=lambda: ToolReference(selected_tools=[ToolSelection(setup_id="setup-analyzer-002", triggers={"search": True})]),
             )
             additional_tools: list[ToolReference] = Field(default_factory=list)
 
@@ -590,10 +590,10 @@ class TestComplexArchetypeSetup:
 
         class ArchetypeSetup(SetupModel):
             existing_tool: ToolReference = Field(
-                default_factory=lambda: ToolReference(selected_tools=[ToolSelection(id="setup-search-001", subtools=["search"])]),
+                default_factory=lambda: ToolReference(selected_tools=[ToolSelection(setup_id="setup-search-001", triggers={"search": True})]),
             )
             missing_tool: ToolReference = Field(
-                default_factory=lambda: ToolReference(selected_tools=[ToolSelection(id="nonexistent-setup", subtools=["search"])]),
+                default_factory=lambda: ToolReference(selected_tools=[ToolSelection(setup_id="nonexistent-setup", triggers={"search": True})]),
             )
             empty_tool: ToolReference = Field(default_factory=ToolReference)
 
@@ -611,16 +611,15 @@ class TestToolReferenceJsonSchema:
     """Tests for tool_reference_input JSON schema generation."""
 
     def test_schema_is_array_of_objects(self) -> None:
-        """Schema is array of objects with id and subtools."""
+        """Schema is array of objects with setupId and triggers."""
         adapter = TypeAdapter(tool_reference_input())
         schema = adapter.json_schema()
         assert schema["type"] == "array"
         items = schema["items"]
         assert items["type"] == "object"
-        assert items["properties"]["id"]["type"] == "string"
-        assert items["properties"]["subTools"]["type"] == "array"
-        assert items["properties"]["subTools"]["minItems"] == 1
-        assert items["required"] == ["id", "subTools"]
+        assert items["properties"]["setupId"]["type"] == "string"
+        assert items["properties"]["triggers"]["type"] == "object"
+        assert items["required"] == ["setupId", "triggers"]
 
     def test_schema_has_ui_widget(self) -> None:
         """Schema has ui:widget set to toolSelect."""
@@ -670,20 +669,20 @@ class TestToolReferenceJsonSchema:
         """List of dicts input creates ToolReference with selected_tools."""
         adapter = TypeAdapter(tool_reference_input())
         ref = adapter.validate_python([
-            {"id": "setup-1", "subtools": ["search"]},
-            {"id": "setup-2", "subtools": ["analyze"]},
+            {"setupId": "setup-1", "triggers": {"search": True}},
+            {"setupId": "setup-2", "triggers": {"analyze": True}},
         ])
         assert len(ref.selected_tools) == 2
-        assert ref.selected_tools[0].id == "setup-1"
-        assert ref.selected_tools[1].id == "setup-2"
+        assert ref.selected_tools[0].setup_id == "setup-1"
+        assert ref.selected_tools[1].setup_id == "setup-2"
 
     def test_object_input_still_works(self) -> None:
         """ToolReference object input is also accepted."""
         adapter = TypeAdapter(tool_reference_input(max_tools=3))
         ref = adapter.validate_python({
             "selected_tools": [
-                {"id": "setup-1", "subtools": ["search"]},
-                {"id": "setup-2", "subtools": ["analyze"]},
+                {"setup_id": "setup-1", "triggers": {"search": True}},
+                {"setup_id": "setup-2", "triggers": {"analyze": True}},
             ],
         })
         assert len(ref.selected_tools) == 2
@@ -692,23 +691,23 @@ class TestToolReferenceJsonSchema:
         """Factory type raises error when too few tools selected."""
         adapter = TypeAdapter(tool_reference_input(min_tools=2, max_tools=5))
         with pytest.raises(ValidationError):
-            adapter.validate_python([{"id": "setup-1", "subtools": ["search"]}])
+            adapter.validate_python([{"setupId": "setup-1", "triggers": {"search": True}}])
 
     def test_max_tools_validation_raises_error(self) -> None:
         """Factory type raises error when too many tools selected."""
         adapter = TypeAdapter(tool_reference_input(max_tools=2))
         with pytest.raises(ValidationError):
             adapter.validate_python([
-                {"id": "setup-1", "subtools": ["search"]},
-                {"id": "setup-2", "subtools": ["analyze"]},
-                {"id": "setup-3", "subtools": ["write"]},
+                {"setupId": "setup-1", "triggers": {"search": True}},
+                {"setupId": "setup-2", "triggers": {"analyze": True}},
+                {"setupId": "setup-3", "triggers": {"write": True}},
             ])
 
     def test_valid_tools_count_passes(self) -> None:
         """Valid tool count within range passes validation."""
         adapter = TypeAdapter(tool_reference_input(min_tools=1, max_tools=3))
         ref = adapter.validate_python([
-            {"id": "setup-1", "subtools": ["search"]},
-            {"id": "setup-2", "subtools": ["analyze"]},
+            {"setupId": "setup-1", "triggers": {"search": True}},
+            {"setupId": "setup-2", "triggers": {"analyze": True}},
         ])
         assert len(ref.selected_tools) == 2

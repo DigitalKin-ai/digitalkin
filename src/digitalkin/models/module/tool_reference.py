@@ -13,16 +13,16 @@ from digitalkin.services.registry import RegistryStrategy
 
 
 class ToolSelection(BaseModel):
-    """Single tool selection with subtool filtering."""
+    """Single tool selection with trigger filtering."""
 
-    id: str = Field(description="Setup ID of the selected tool.")
-    subtools: list[str] = Field(min_length=1, description="Protocol names to include.")
+    setup_id: str = Field(description="Setup ID of the selected tool.")
+    triggers: dict[str, bool] = Field(min_length=1, max_length=100, description="Trigger protocols with enabled state.")
 
 
 class ToolReference(BaseModel):
-    """Tool selection containing setup IDs and subtool filters."""
+    """Tool selection containing setup IDs and trigger filters."""
 
-    selected_tools: list[ToolSelection] = Field(default=[], description="Selected tools with subtool filters.")
+    selected_tools: list[ToolSelection] = Field(default=[], description="Selected tools with trigger filters.")
 
     async def resolve(self, registry: RegistryStrategy, communication: CommunicationStrategy) -> list[ToolModuleInfo]:
         """Resolve selected tools using the registry.
@@ -32,16 +32,18 @@ class ToolReference(BaseModel):
             communication: Communication service for module schemas.
 
         Returns:
-            List of ToolModuleInfo for resolved tools, filtered by subtools.
+            List of ToolModuleInfo for resolved tools, filtered by enabled triggers.
         """
         resolved: list[ToolModuleInfo] = []
         for entry in self.selected_tools:
-            setup = registry.get_setup(entry.id)
+            setup = registry.get_setup(entry.setup_id)
             if setup and setup.module_id:
                 info = registry.discover_by_id(setup.module_id)
                 if info:
-                    tool_info = await module_info_to_tool_module_info(info, entry.id, setup.name, communication)
-                    tool_info.tools = [t for t in tool_info.tools if t.name in entry.subtools]
+                    tool_info = await module_info_to_tool_module_info(info, entry.setup_id, setup.name, communication)
+                    enabled_triggers = {name for name, enabled in entry.triggers.items() if enabled}
+                    if enabled_triggers:
+                        tool_info.tools = [t for t in tool_info.tools if t.name in enabled_triggers]
                     resolved.append(tool_info)
         return resolved
 
@@ -80,10 +82,15 @@ class _ToolReferenceInputSchema:
             "items": {
                 "type": "object",
                 "properties": {
-                    "id": {"type": "string"},
-                    "subTools": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+                    "setupId": {"type": "string"},
+                    "triggers": {
+                        "type": "object",
+                        "additionalProperties": {"type": "boolean"},
+                        "minProperties": 1,
+                        "maxProperties": 100,
+                    },
                 },
-                "required": ["id", "subTools"],
+                "required": ["setupId", "triggers"],
             },
         }
         if self.max_tools > 0:
@@ -131,7 +138,15 @@ def tool_reference_input(
         """
         if isinstance(v, list):
             return ToolReference(
-                selected_tools=[ToolSelection(**entry) if isinstance(entry, dict) else entry for entry in v]
+                selected_tools=[
+                    ToolSelection(
+                        setup_id=e.get("setup_id", e.get("setupId", "")),
+                        triggers=e.get("triggers", {}),
+                    )
+                    if isinstance(e, dict)
+                    else e
+                    for e in v
+                ]
             )
         return v
 
@@ -159,7 +174,7 @@ def tool_reference_input(
         Returns:
             List of tool selection dicts with id and subtools.
         """
-        return [{"id": t.id, "subTools": t.subtools} for t in v.selected_tools]
+        return [{"setupId": t.setup_id, "triggers": t.triggers} for t in v.selected_tools]
 
     return Annotated[  # type: ignore[return-value]
         ToolReference,
@@ -174,5 +189,5 @@ def tool_reference_input(
             max_tools=max_tools,
             min_tools=min_tools,
         ),
-        Field(default=[]),
+        Field(default_factory=ToolReference),
     ]
