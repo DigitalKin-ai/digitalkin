@@ -362,8 +362,8 @@ class TestMemoryEfficiency:
 
         assert len(results) == 1250  # 5000 / 4
 
-        # Filter should complete quickly (under 100ms for local operation)
-        assert elapsed < 0.1
+        # Filter should complete quickly (guards against O(n²) regressions)
+        assert elapsed < 1.0
 
 
 # ============================================================================

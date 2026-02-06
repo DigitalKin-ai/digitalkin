@@ -159,6 +159,7 @@ class TestTaskiqInfiniteLoopRegression:
         """REGRESSION: test_taskiq_job_manager had infinite loop in stream consumer
         Fix: Added asyncio.timeout(2.0) wrapper.
         """
+        pytest.importorskip("taskiq", reason="taskiq not installed")
         with patch("digitalkin.core.job_manager.taskiq_job_manager.TASKIQ_BROKER"):
             with patch("digitalkin.core.job_manager.taskiq_job_manager.TaskiqJobManager._start"):
                 from digitalkin.core.job_manager.taskiq_job_manager import TaskiqJobManager
@@ -243,6 +244,7 @@ class TestMemoryLeakRegressions:
         """REGRESSION: TaskiqJobManager didn't close SurrealDB connection
         Fix: Added connection cleanup in _stop().
         """
+        pytest.importorskip("taskiq", reason="taskiq not installed")
         with (
             patch("digitalkin.core.job_manager.taskiq_job_manager.TASKIQ_BROKER") as mock_broker,
             patch(
@@ -286,6 +288,7 @@ class TestFireAndForgetRegression:
         """REGRESSION: Stream consumer task in TaskiqJobManager was fire-and-forget
         Fix: Wrapped with error handling and proper task management.
         """
+        pytest.importorskip("taskiq", reason="taskiq not installed")
         with (
             patch("digitalkin.core.job_manager.taskiq_job_manager.TASKIQ_BROKER") as mock_broker,
             patch(
@@ -376,6 +379,7 @@ class TestQueueTimeoutRegression:
         """REGRESSION: generate_config_setup_module_response could hang forever
         Fix: Added asyncio.wait_for with 30s timeout.
         """
+        pytest.importorskip("taskiq", reason="taskiq not installed")
         with patch("digitalkin.core.job_manager.taskiq_job_manager.TASKIQ_BROKER"):
             with patch("digitalkin.core.job_manager.taskiq_job_manager.TaskiqJobManager._start"):
                 from digitalkin.core.job_manager.taskiq_job_manager import TaskiqJobManager
@@ -395,6 +399,7 @@ class TestQueueTimeoutRegression:
         """REGRESSION: Stream consumer could hang if job disappeared
         Fix: Added periodic timeout checks.
         """
+        pytest.importorskip("taskiq", reason="taskiq not installed")
         with patch("digitalkin.core.job_manager.taskiq_job_manager.TASKIQ_BROKER"):
             with patch("digitalkin.core.job_manager.taskiq_job_manager.TaskiqJobManager._start"):
                 with patch("digitalkin.core.task_manager.base_task_manager.SurrealDBConnection"):

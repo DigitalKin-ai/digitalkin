@@ -309,6 +309,7 @@ class TestJobManagerMemoryLeaks:
     @pytest.mark.asyncio
     async def test_taskiq_job_manager_stream_consumer_cleanup(self):
         """Test that TaskiqJobManager cleans up stream consumers."""
+        pytest.importorskip("taskiq", reason="taskiq not installed")
         with (
             patch("digitalkin.core.job_manager.taskiq_job_manager.TASKIQ_BROKER") as mock_broker,
             patch(
@@ -358,6 +359,7 @@ class TestJobManagerMemoryLeaks:
     @pytest.mark.asyncio
     async def test_job_registry_cleanup(self):
         """Test that job registries (task sessions) are properly cleaned up."""
+        pytest.importorskip("taskiq", reason="taskiq not installed")
         with patch("digitalkin.core.job_manager.taskiq_job_manager.TASKIQ_BROKER"):
             with patch("digitalkin.core.job_manager.taskiq_job_manager.TaskiqJobManager._start"):
                 with patch("digitalkin.core.task_manager.base_task_manager.SurrealDBConnection"):

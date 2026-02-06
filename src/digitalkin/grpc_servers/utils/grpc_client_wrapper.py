@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 import grpc
+import grpc.aio
 
 from digitalkin.grpc_servers.utils.exceptions import ServerError
 from digitalkin.logger import logger
@@ -21,40 +22,60 @@ class GrpcClientWrapper:
     service_name: str = "UnknownService"  # Override in subclasses for better logging
     _channel: grpc.Channel | None = None
 
-    def _init_channel(self, config: ClientConfig) -> grpc.Channel:
-        """Create an appropriate channel to the registry server.
+    @staticmethod
+    def _build_channel_credentials(config: ClientConfig) -> grpc.ChannelCredentials | None:
+        """Build SSL channel credentials from config if secure mode.
+
+        Args:
+            config: Client configuration with security and credential settings.
 
         Returns:
-            A gRPC channel for communication with the registry.
-
-        Raises:
-            ValueError: If credentials are required but not provided.
+            Channel credentials for secure mode, None for insecure.
         """
-        if config.security == SecurityMode.SECURE and config.credentials is not None:
-            # Secure channel
-            root_certificates = Path(config.credentials.root_cert_path).read_bytes()
+        if config.security != SecurityMode.SECURE or config.credentials is None:
+            return None
+        root_certificates = Path(config.credentials.root_cert_path).read_bytes()
+        private_key = None
+        certificate_chain = None
+        if config.credentials.client_cert_path is not None and config.credentials.client_key_path is not None:
+            private_key = Path(config.credentials.client_key_path).read_bytes()
+            certificate_chain = Path(config.credentials.client_cert_path).read_bytes()
+        return grpc.ssl_channel_credentials(
+            root_certificates=root_certificates,
+            certificate_chain=certificate_chain,
+            private_key=private_key,
+        )
 
-            # mTLS channel
-            private_key = None
-            certificate_chain = None
-            if config.credentials.client_cert_path is not None and config.credentials.client_key_path is not None:
-                private_key = Path(config.credentials.client_key_path).read_bytes()
-                certificate_chain = Path(config.credentials.client_cert_path).read_bytes()
+    def _init_channel(self, config: ClientConfig) -> grpc.Channel:
+        """Create a sync gRPC channel.
 
-            # Create channel credentials
-            channel_credentials = grpc.ssl_channel_credentials(
-                root_certificates=root_certificates,
-                certificate_chain=certificate_chain,
-                private_key=private_key,
-            )
+        Args:
+            config: Client configuration for the channel.
 
-            channel = grpc.secure_channel(config.address, channel_credentials, options=config.grpc_options)
-            self._channel = channel
-            return channel
-        # Insecure channel
-        channel = grpc.insecure_channel(config.address, options=config.grpc_options)
+        Returns:
+            A sync gRPC channel.
+        """
+        credentials = self._build_channel_credentials(config)
+        if credentials is not None:
+            channel = grpc.secure_channel(config.address, credentials, options=config.grpc_options)
+        else:
+            channel = grpc.insecure_channel(config.address, options=config.grpc_options)
         self._channel = channel
         return channel
+
+    def _init_aio_channel(self, config: ClientConfig) -> grpc.aio.Channel:
+        """Create an async gRPC channel.
+
+        Args:
+            config: Client configuration for the channel.
+
+        Returns:
+            An async gRPC channel.
+        """
+        credentials = self._build_channel_credentials(config)
+        if credentials is not None:
+            return grpc.aio.secure_channel(config.address, credentials, options=config.grpc_options)
+        return grpc.aio.insecure_channel(config.address, options=config.grpc_options)
 
     def close_channel(self) -> None:
         """Close the gRPC channel if it exists."""

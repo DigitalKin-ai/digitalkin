@@ -3,7 +3,7 @@
 import asyncio
 from collections.abc import AsyncGenerator, Awaitable, Callable
 
-import grpc
+import grpc.aio
 from agentic_mesh_protocol.module.v1 import (
     information_pb2,
     lifecycle_pb2,
@@ -44,14 +44,14 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
         """
         BaseStrategy.__init__(self, mission_id, setup_id, setup_version_id)
         self.client_config = client_config
-        self._channel_pool: dict[tuple[str, int], grpc.Channel] = {}
+        self._channel_pool: dict[tuple[str, int], grpc.aio.Channel] = {}
 
         logger.debug(
             "Initialized GrpcCommunication",
             extra={"security": client_config.security},
         )
 
-    def _get_or_create_channel(self, module_address: str, module_port: int) -> grpc.Channel:
+    def _get_or_create_channel(self, module_address: str, module_port: int) -> grpc.aio.Channel:
         """Get existing channel or create new one for the target module.
 
         Args:
@@ -59,7 +59,7 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
             module_port: Module port
 
         Returns:
-            gRPC channel for the target module
+            Async gRPC channel for the target module
         """
         key = (module_address, module_port)
         if key not in self._channel_pool:
@@ -75,18 +75,18 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
                 credentials=self.client_config.credentials,
                 channel_options=self.client_config.channel_options,
             )
-            self._channel_pool[key] = self._init_channel(config)
+            self._channel_pool[key] = self._init_aio_channel(config)
         return self._channel_pool[key]
 
-    def close_all_channels(self) -> None:
+    async def close_all_channels(self) -> None:
         """Close all pooled gRPC channels."""
         for channel in self._channel_pool.values():
-            channel.close()
+            await channel.close()
         self._channel_pool.clear()
 
     async def cleanup(self) -> None:
         """Clean up all gRPC channels."""
-        self.close_all_channels()
+        await self.close_all_channels()
 
     def _create_stub(self, module_address: str, module_port: int) -> module_service_pb2_grpc.ModuleServiceStub:
         """Create a new stub for the target module.
@@ -132,11 +132,11 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
         # Get all schemas in parallel
         try:
             input_response, output_response, setup_response, secret_response, cost_response = await asyncio.gather(
-                asyncio.to_thread(stub.GetModuleInput, input_request),
-                asyncio.to_thread(stub.GetModuleOutput, output_request),
-                asyncio.to_thread(stub.GetModuleSetup, setup_request),
-                asyncio.to_thread(stub.GetModuleSecret, secret_request),
-                asyncio.to_thread(stub.GetModuleCost, cost_request),
+                stub.GetModuleInput(input_request),
+                stub.GetModuleOutput(output_request),
+                stub.GetModuleSetup(setup_request),
+                stub.GetModuleSecret(secret_request),
+                stub.GetModuleCost(cost_request),
             )
 
             logger.debug(
@@ -215,7 +215,7 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
             response_stream = stub.StartModule(request)
 
             # Stream responses
-            for response in response_stream:
+            async for response in response_stream:
                 # Convert protobuf Struct to dict
                 output_dict = json_format.MessageToDict(response.output)
 
