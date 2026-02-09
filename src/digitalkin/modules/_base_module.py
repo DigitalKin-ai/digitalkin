@@ -309,8 +309,10 @@ class BaseModule(  # noqa: PLR0904
         # Convert CostConfig objects to serializable dict
         cost_schema = {
             name: {
-                "name": cost_config.name,
-                "type": cost_config.type.value if hasattr(cost_config.type, "value") else cost_config.type,
+                "name": cost_config.cost_name,
+                "type": cost_config.cost_type.value
+                if hasattr(cost_config.cost_type, "value")
+                else cost_config.cost_type,
                 "description": cost_config.description,
                 "unit": cost_config.unit,
                 "rate": cost_config.rate,
