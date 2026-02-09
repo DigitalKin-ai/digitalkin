@@ -166,19 +166,8 @@ class BaseModule(  # noqa: PLR0904
         extended_model = UtilitySchemaExtender.create_extended_input_model(cls.input_format)
 
         if llm_format:
-            result_json, result_ui = SchemaSplitter.split(extended_model.model_json_schema())
-
-            result: dict[str, Any] = {
-                "json_schema": result_json,
-                "ui_schema": result_ui,
-            }
-
-            protocols_info = cls.triggers_discoverer.get_registered_protocols_with_info()
-            select_schema = cls.select_format.build(protocols_info)
-            if select_schema is not None:
-                result["select_schema"] = select_schema
-
-            return json.dumps(result, indent=2)
+            result_json, _ = SchemaSplitter.split(extended_model.model_json_schema())
+            return json.dumps({"json_schema": result_json}, indent=2)
         return json.dumps(extended_model.model_json_schema(), indent=2)
 
     @classmethod
@@ -186,7 +175,7 @@ class BaseModule(  # noqa: PLR0904
         """Get the JSON schema for trigger selection UI.
 
         Returns:
-            The JSON schema for selecting triggers as a JSON string,
+            The JSON schema with json_schema and ui_schema keys as a JSON string,
             or empty object if no select_format is defined.
         """
         if cls.select_format is None:
@@ -221,8 +210,8 @@ class BaseModule(  # noqa: PLR0904
         extended_model = UtilitySchemaExtender.create_extended_output_model(cls.output_format)
 
         if llm_format:
-            result_json, result_ui = SchemaSplitter.split(extended_model.model_json_schema())
-            return json.dumps({"json_schema": result_json, "ui_schema": result_ui}, indent=2)
+            result_json, _ = SchemaSplitter.split(extended_model.model_json_schema())
+            return json.dumps({"json_schema": result_json}, indent=2)
         return json.dumps(extended_model.model_json_schema(), indent=2)
 
     @classmethod
@@ -280,8 +269,8 @@ class BaseModule(  # noqa: PLR0904
         if cls.setup_format is not None:
             setup_format = await cls.setup_format.get_clean_model(config_fields=False, hidden_fields=True, force=True)
             if llm_format:
-                result_json, result_ui = SchemaSplitter.split(setup_format.model_json_schema())
-                return json.dumps({"json_schema": result_json, "ui_schema": result_ui}, indent=2)
+                result_json, _ = SchemaSplitter.split(setup_format.model_json_schema())
+                return json.dumps({"json_schema": result_json}, indent=2)
             return json.dumps(setup_format.model_json_schema(), indent=2)
         msg = "'%s' class does not define an 'setup_format'."
         raise NotImplementedError(msg)

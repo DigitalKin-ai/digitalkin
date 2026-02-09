@@ -81,7 +81,7 @@ class ArchetypeSetup(SetupModel):
 
     system_prompt: str = Field(
         default="You are a helpful assistant with access to tools.",
-        json_schema_extra={"hidden": True},
+        json_schema_extra={"ui:widget": "hidden"},
     )
 
 

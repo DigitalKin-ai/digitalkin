@@ -276,3 +276,396 @@ class TestSchemaSplitter:
         assert "inner" in ui_schema["outer"]
         assert ui_schema["outer"]["inner"]["ui:order"] == ["inner_field"]
         assert ui_schema["outer"]["inner"]["inner_field"]["ui:widget"] == "password"
+
+    def test_split_with_non_dict_property_value(self) -> None:
+        """Test that non-dict property values are passed through unchanged."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "normal": {"type": "string", "ui:widget": "text"},
+                "scalar": "string",
+            },
+        }
+
+        json_schema, ui_schema = SchemaSplitter.split(schema)
+
+        assert json_schema["properties"]["scalar"] == "string"
+        assert ui_schema["normal"]["ui:widget"] == "text"
+
+    def test_split_with_non_dict_defs_value(self) -> None:
+        """Test that non-dict $defs values are passed through."""
+        schema = {
+            "type": "object",
+            "$defs": {
+                "MyModel": {"type": "object", "properties": {"a": {"type": "string"}}},
+                "Alias": "string",
+            },
+            "properties": {"field": {"type": "string"}},
+        }
+
+        json_schema, _ui_schema = SchemaSplitter.split(schema)
+
+        assert json_schema["$defs"]["Alias"] == "string"
+        assert "MyModel" in json_schema["$defs"]
+
+    def test_split_with_root_level_items(self) -> None:
+        """Test splitting schema with items at root level (array schema)."""
+        schema = {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "ui:widget": "text"},
+                },
+            },
+        }
+
+        json_schema, ui_schema = SchemaSplitter.split(schema)
+
+        assert json_schema["type"] == "array"
+        assert "ui:widget" not in json_schema["items"]["properties"]["name"]
+        assert ui_schema["items"]["name"]["ui:widget"] == "text"
+
+    def test_split_with_root_level_oneof(self) -> None:
+        """Test splitting schema with oneOf at root level."""
+        schema = {
+            "oneOf": [
+                {
+                    "type": "object",
+                    "properties": {
+                        "text": {"type": "string", "ui:widget": "textarea"},
+                    },
+                },
+                {
+                    "type": "object",
+                    "properties": {
+                        "number": {"type": "integer", "ui:widget": "range"},
+                    },
+                },
+            ],
+        }
+
+        json_schema, ui_schema = SchemaSplitter.split(schema)
+
+        assert len(json_schema["oneOf"]) == 2
+        assert "ui:widget" not in json_schema["oneOf"][0]["properties"]["text"]
+        assert "ui:widget" not in json_schema["oneOf"][1]["properties"]["number"]
+        assert len(ui_schema["oneOf"]) == 2
+        assert ui_schema["oneOf"][0]["text"]["ui:widget"] == "textarea"
+        assert ui_schema["oneOf"][1]["number"]["ui:widget"] == "range"
+
+    def test_split_with_root_level_anyof(self) -> None:
+        """Test splitting schema with anyOf at root level."""
+        schema = {
+            "anyOf": [
+                {"type": "string", "ui:widget": "text"},
+                {"type": "integer"},
+            ],
+        }
+
+        json_schema, ui_schema = SchemaSplitter.split(schema)
+
+        assert len(json_schema["anyOf"]) == 2
+        assert "ui:widget" not in json_schema["anyOf"][0]
+        assert len(ui_schema["anyOf"]) == 2
+        assert ui_schema["anyOf"][0]["ui:widget"] == "text"
+
+    def test_split_with_non_dict_allof_item(self) -> None:
+        """Test that non-dict allOf items are preserved."""
+        schema = {
+            "type": "object",
+            "allOf": [
+                {"properties": {"a": {"type": "string"}}},
+                True,
+            ],
+        }
+
+        json_schema, _ui_schema = SchemaSplitter.split(schema)
+
+        assert len(json_schema["allOf"]) == 2
+        assert json_schema["allOf"][1] is True
+
+    def test_split_with_non_dict_oneof_item(self) -> None:
+        """Test that non-dict oneOf items are preserved."""
+        schema = {
+            "oneOf": [
+                {"type": "string"},
+                True,
+            ],
+        }
+
+        json_schema, _ui_schema = SchemaSplitter.split(schema)
+
+        assert json_schema["oneOf"][1] is True
+
+    def test_split_with_root_level_if_then_else(self) -> None:
+        """Test splitting schema with if/then/else at root level (not inside allOf)."""
+        schema = {
+            "type": "object",
+            "properties": {"mode": {"type": "string"}},
+            "if": {"properties": {"mode": {"const": "advanced"}}},
+            "then": {
+                "properties": {
+                    "detail": {"type": "string", "ui:widget": "textarea"},
+                }
+            },
+            "else": {
+                "properties": {
+                    "simple": {"type": "string", "ui:widget": "text"},
+                }
+            },
+        }
+
+        json_schema, ui_schema = SchemaSplitter.split(schema)
+
+        assert "if" in json_schema
+        assert "then" in json_schema
+        assert "else" in json_schema
+        assert "ui:widget" not in json_schema["then"]["properties"]["detail"]
+        assert "ui:widget" not in json_schema["else"]["properties"]["simple"]
+        assert ui_schema["detail"]["ui:widget"] == "textarea"
+        assert ui_schema["simple"]["ui:widget"] == "text"
+
+    def test_split_property_with_nested_properties(self) -> None:
+        """Test _process_property handles nested properties within a property."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "nested_obj": {
+                    "type": "object",
+                    "properties": {
+                        "inner": {"type": "string", "ui:widget": "text"},
+                        "plain": "string",
+                    },
+                },
+            },
+        }
+
+        json_schema, ui_schema = SchemaSplitter.split(schema)
+
+        assert "ui:widget" not in json_schema["properties"]["nested_obj"]["properties"]["inner"]
+        assert json_schema["properties"]["nested_obj"]["properties"]["plain"] == "string"
+        assert ui_schema["nested_obj"]["inner"]["ui:widget"] == "text"
+
+    def test_split_property_with_items(self) -> None:
+        """Test _process_property handles items within a property."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "my_list": {
+                    "type": "array",
+                    "items": {"type": "string", "ui:widget": "text"},
+                },
+            },
+        }
+
+        json_schema, ui_schema = SchemaSplitter.split(schema)
+
+        assert "ui:widget" not in json_schema["properties"]["my_list"]["items"]
+        assert ui_schema["my_list"]["items"]["ui:widget"] == "text"
+
+    def test_split_property_with_oneof(self) -> None:
+        """Test _process_property handles oneOf within a property."""
+        schema = {
+            "type": "object",
+            "$defs": {
+                "OptionA": {"type": "object", "ui:order": ["a"], "properties": {"a": {"type": "string"}}},
+            },
+            "properties": {
+                "choice": {
+                    "oneOf": [
+                        {"$ref": "#/$defs/OptionA"},
+                        {"type": "string", "ui:widget": "text"},
+                    ],
+                },
+            },
+        }
+
+        json_schema, ui_schema = SchemaSplitter.split(schema)
+
+        assert len(json_schema["properties"]["choice"]["oneOf"]) == 2
+        assert "ui:widget" not in json_schema["properties"]["choice"]["oneOf"][1]
+        assert len(ui_schema["choice"]["oneOf"]) == 2
+        # First item resolves $ref UI from defs_ui
+        assert ui_schema["choice"]["oneOf"][0]["ui:order"] == ["a"]
+
+    def test_split_property_with_anyof_non_dict(self) -> None:
+        """Test _process_property handles non-dict items in anyOf."""
+        schema = {
+            "type": "object",
+            "properties": {
+                "val": {
+                    "anyOf": [
+                        {"type": "string"},
+                        True,
+                    ],
+                },
+            },
+        }
+
+        json_schema, _ui_schema = SchemaSplitter.split(schema)
+
+        assert json_schema["properties"]["val"]["anyOf"][1] is True
+
+    def test_strip_ui_with_defs(self) -> None:
+        """Test _strip_ui_properties handles $defs with dict and non-dict values."""
+        schema = {
+            "type": "object",
+            "allOf": [
+                {
+                    "$defs": {
+                        "Inner": {"type": "object", "ui:order": ["x"], "properties": {"x": {"type": "string"}}},
+                        "Scalar": "string",
+                    },
+                    "properties": {"a": {"type": "string"}},
+                },
+            ],
+        }
+
+        json_schema, _ui_schema = SchemaSplitter.split(schema)
+
+        # allOf items go through _strip_ui_properties
+        stripped = json_schema["allOf"][0]
+        assert "ui:order" not in stripped["$defs"]["Inner"]
+        assert stripped["$defs"]["Scalar"] == "string"
+
+    def test_strip_ui_with_items(self) -> None:
+        """Test _strip_ui_properties handles items."""
+        schema = {
+            "type": "object",
+            "allOf": [
+                {
+                    "type": "array",
+                    "items": {"type": "string", "ui:widget": "text"},
+                },
+            ],
+        }
+
+        json_schema, _ui_schema = SchemaSplitter.split(schema)
+
+        stripped = json_schema["allOf"][0]
+        assert "ui:widget" not in stripped["items"]
+
+    def test_strip_ui_with_allof(self) -> None:
+        """Test _strip_ui_properties handles nested allOf."""
+        schema = {
+            "type": "object",
+            "allOf": [
+                {
+                    "allOf": [
+                        {"properties": {"x": {"type": "string", "ui:widget": "text"}}},
+                        True,
+                    ],
+                },
+            ],
+        }
+
+        json_schema, _ui_schema = SchemaSplitter.split(schema)
+
+        nested_allof = json_schema["allOf"][0]["allOf"]
+        assert "ui:widget" not in nested_allof[0]["properties"]["x"]
+        assert nested_allof[1] is True
+
+    def test_strip_ui_with_oneof(self) -> None:
+        """Test _strip_ui_properties handles oneOf/anyOf."""
+        schema = {
+            "type": "object",
+            "allOf": [
+                {
+                    "oneOf": [
+                        {"type": "string", "ui:widget": "text"},
+                        True,
+                    ],
+                },
+            ],
+        }
+
+        json_schema, _ui_schema = SchemaSplitter.split(schema)
+
+        nested_oneof = json_schema["allOf"][0]["oneOf"]
+        assert "ui:widget" not in nested_oneof[0]
+        assert nested_oneof[1] is True
+
+    def test_strip_ui_with_if_then_else(self) -> None:
+        """Test _strip_ui_properties handles if/then/else."""
+        schema = {
+            "type": "object",
+            "allOf": [
+                {
+                    "if": {"properties": {"x": {"const": True}}},
+                    "then": {"properties": {"y": {"type": "string", "ui:widget": "text"}}},
+                    "else": {"properties": {"z": {"type": "string", "ui:widget": "range"}}},
+                },
+            ],
+        }
+
+        json_schema, _ui_schema = SchemaSplitter.split(schema)
+
+        stripped = json_schema["allOf"][0]
+        assert "ui:widget" not in stripped["then"]["properties"]["y"]
+        assert "ui:widget" not in stripped["else"]["properties"]["z"]
+
+    def test_strip_ui_with_non_dict_property(self) -> None:
+        """Test _strip_ui_properties handles non-dict property values."""
+        schema = {
+            "type": "object",
+            "allOf": [
+                {
+                    "properties": {
+                        "normal": {"type": "string"},
+                        "scalar": "string",
+                    },
+                },
+            ],
+        }
+
+        json_schema, _ui_schema = SchemaSplitter.split(schema)
+
+        stripped = json_schema["allOf"][0]
+        assert stripped["properties"]["scalar"] == "string"
+
+    def test_extract_ui_with_oneof_in_defs(self) -> None:
+        """Test _extract_ui_properties handles oneOf inside $defs."""
+        schema = {
+            "type": "object",
+            "$defs": {
+                "Choice": {
+                    "oneOf": [
+                        {"type": "string", "ui:widget": "text"},
+                        {"type": "integer", "ui:widget": "number"},
+                    ],
+                },
+            },
+            "properties": {
+                "pick": {"$ref": "#/$defs/Choice"},
+            },
+        }
+
+        _json_schema, ui_schema = SchemaSplitter.split(schema)
+
+        # The $ref resolves and pulls UI from Choice def
+        assert "pick" in ui_schema
+        assert "oneOf" in ui_schema["pick"]
+        assert ui_schema["pick"]["oneOf"][0]["ui:widget"] == "text"
+        assert ui_schema["pick"]["oneOf"][1]["ui:widget"] == "number"
+
+    def test_extract_ui_with_items_in_defs(self) -> None:
+        """Test _extract_ui_properties handles items inside $defs."""
+        schema = {
+            "type": "object",
+            "$defs": {
+                "MyList": {
+                    "type": "array",
+                    "items": {"type": "string", "ui:widget": "text"},
+                },
+            },
+            "properties": {
+                "list_field": {"$ref": "#/$defs/MyList"},
+            },
+        }
+
+        _json_schema, ui_schema = SchemaSplitter.split(schema)
+
+        assert "list_field" in ui_schema
+        assert "items" in ui_schema["list_field"]
+        assert ui_schema["list_field"]["items"]["ui:widget"] == "text"
