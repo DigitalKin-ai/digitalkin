@@ -79,11 +79,16 @@
     ]
   },
   {
-    "version": "0.3.2b0",
-    "title": "0.3.2b0",
+    "version": "0.3.2b1",
+    "title": "0.3.2b1",
     "aliases": [
       "latest"
     ]
+  },
+  {
+    "version": "0.3.2b0",
+    "title": "0.3.2b0",
+    "aliases": []
   },
   {
     "version": "0.3.2a7",
