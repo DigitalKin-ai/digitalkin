@@ -177,14 +177,16 @@ class TestGetConfigSetupFormat:
         props = schema.get("properties", {})
         assert "timeout" in props
         assert "internal" not in props
+        assert "resolved_tools" not in props
 
     @pytest.mark.asyncio
     async def test_config_setup_format_llm(self) -> None:
-        """LLM format returns json_schema + ui_schema."""
+        """LLM format returns json_schema + ui_schema, without hidden fields."""
         result = await _FormatModule.get_config_setup_format(llm_format=True)
         data = json.loads(result)
         assert "json_schema" in data
         assert "ui_schema" in data
+        assert "resolved_tools" not in data["json_schema"].get("properties", {})
 
     @pytest.mark.asyncio
     async def test_config_setup_format_not_implemented(self) -> None:

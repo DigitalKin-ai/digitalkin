@@ -1,7 +1,7 @@
 """Define the module context used in the triggers."""
 
 import os
-from collections.abc import AsyncGenerator, Callable, Coroutine
+from collections.abc import AsyncGenerator, Callable
 from datetime import tzinfo
 from types import SimpleNamespace
 from typing import Any
@@ -154,47 +154,6 @@ class ModuleContext:
         self.callbacks = SimpleNamespace(**callbacks)
         self.tool_cache = tool_cache or ToolCache()
 
-    async def call_module_by_id(
-        self,
-        module_id: str,
-        input_data: dict,
-        setup_id: str,
-        mission_id: str,
-        callback: Callable[[dict], Coroutine[Any, Any, None]] | None = None,
-    ) -> AsyncGenerator[dict, None]:
-        """Call a module by ID, discovering address/port from registry.
-
-        Args:
-            module_id: Module identifier to look up in registry.
-            input_data: Input data as dictionary.
-            setup_id: Setup configuration ID.
-            mission_id: Mission context ID.
-            callback: Optional callback for each response.
-
-        Yields:
-            Streaming responses from module as dictionaries.
-        """
-        module_info = self.registry.discover_by_id(module_id)
-
-        logger.debug(
-            "Calling module by ID",
-            extra={
-                "module_id": module_id,
-                "address": module_info.address,
-                "port": module_info.port,
-            },
-        )
-
-        async for response in self.communication.call_module(
-            module_address=module_info.address,
-            module_port=module_info.port,
-            input_data=input_data,
-            setup_id=setup_id,
-            mission_id=mission_id,
-            callback=callback,
-        ):
-            yield response
-
     async def get_module_schemas_by_id(
         self,
         module_id: str,
@@ -227,7 +186,7 @@ class ModuleContext:
             llm_format=llm_format,
         )
 
-    def create_openai_style_tools(self, slug: str) -> list[dict[str, Any]]:
+    def create_openai_style_tools(self, setup_id: str) -> list[dict[str, Any]]:
         """Create OpenAI-style function calling schemas for a tool module.
 
         Uses tool cache (fast path) with registry fallback. Returns one schema
@@ -235,12 +194,12 @@ class ModuleContext:
         both in the description and as separate metadata.
 
         Args:
-            slug: Module ID to look up (checks cache first, then registry).
+            setup_id: Setup ID to look up (checks cache first, then registry).
 
         Returns:
             List of OpenAI-style tool schemas, one per protocol. Empty if not found.
         """
-        tool_module_info = self.tool_cache.get(slug)
+        tool_module_info = self.tool_cache.get(setup_id)
         if not tool_module_info:
             return []
 
@@ -253,7 +212,7 @@ class ModuleContext:
                 "function": {
                     "module_id": tool_module_info.module_id,
                     "toolkit_name": tool_module_info.tool_name or "undefined",
-                    "name": tool_module_info.slug + "_" + tool_def.name,
+                    "name": tool_module_info.slug + "__" + tool_def.name,
                     "description": tool_def.description + cost_description,
                     "parameters": ModuleContext._build_parameters_schema(tool_def.parameters),
                 },
@@ -392,7 +351,7 @@ class ModuleContext:
             ):
                 yield response
 
-        tool_function.__name__ = tool_def.name
+        tool_function.__name__ = tool_module_info.slug + "__" + tool_def.name
         tool_function.__doc__ = tool_def.description
 
         return tool_function

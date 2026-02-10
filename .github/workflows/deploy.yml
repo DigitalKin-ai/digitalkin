@@ -61,39 +61,35 @@ jobs:
           WARNING_MESSAGE=""
 
           if [[ "$REF_TYPE" == "tag" ]] && [[ "$REF_NAME" == v* ]]; then
-            # Release version: v1.0.0 -> 1.0.0
             VERSION="${REF_NAME#v}"
+
+            # Only deploy docs for final releases (skip dev, alpha, beta, rc, post)
+            if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "Skipping pre-release version: $VERSION"
+              echo "should_deploy=false" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+
             ALIAS="latest"
             ENVIRONMENT="production"
             IS_DEV="false"
             WARNING_MESSAGE=""
           elif [[ "$REF_NAME" == "main" ]]; then
-            # Main branch
             VERSION="main"
             ALIAS="stable"
             ENVIRONMENT="production"
             IS_DEV="false"
             WARNING_MESSAGE="⚠️ This is the development version of the documentation for the main branch."
           elif [[ "$REF_NAME" == "dev" ]]; then
-            # Dev branch
             VERSION="dev"
             ALIAS="development"
             ENVIRONMENT="staging"
             IS_DEV="true"
             WARNING_MESSAGE="⚠️ This is the development version of the documentation. Features may change."
-          elif [[ "$REF_NAME" =~ ^dev- ]]; then
-            # Feature branch: dev-feature-name
-            VERSION="$REF_NAME"
-            ALIAS=""
-            ENVIRONMENT="staging"
-            IS_DEV="true"
-            WARNING_MESSAGE="⚠️ This is a preview of documentation for the $REF_NAME branch. This version is experimental."
           else
-            VERSION="$REF_NAME"
-            ALIAS=""
-            ENVIRONMENT="experimental"
-            IS_DEV="true"
-            WARNING_MESSAGE="⚠️ This is a preview of documentation for the $REF_NAME branch. This version is untested."
+            echo "Skipping unrecognized ref: $REF_NAME"
+            echo "should_deploy=false" >> $GITHUB_OUTPUT
+            exit 0
           fi
 
           SAFE_VERSION="${VERSION//\//-}"
@@ -185,7 +181,7 @@ jobs:
           path: site/
 
       - name: Upload site artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: docs-${{ needs.determine-version.outputs.safe_version }}-${{ github.run_number }}
           path: site/

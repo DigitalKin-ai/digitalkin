@@ -1,5 +1,6 @@
 """Tool cache for resolved tool references."""
 
+import re
 from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, Field
@@ -67,8 +68,22 @@ class ToolModuleInfo(ModuleInfo):
 
     @property
     def slug(self) -> str:
-        """Module ID."""
-        return self.setup_id + "_" + self.tool_name
+        """Slugified tool name for cache keys and function naming."""
+        return ToolModuleInfo._slugify(self.tool_name)
+
+    @staticmethod
+    def _slugify(name: str) -> str:
+        """Convert a name to a valid lowercase identifier.
+
+        Args:
+            name: Human-readable name (e.g., "Google Search").
+
+        Returns:
+            Slugified name (e.g., "google_search").
+        """
+        slug = name.lower()
+        slug = re.sub(r"[^a-z0-9]+", "_", slug)
+        return slug.strip("_")
 
 
 class ToolCache(BaseModel):
@@ -82,29 +97,35 @@ class ToolCache(BaseModel):
         Args:
             tool_module_info: Resolved tool module information.
         """
-        self.entries[tool_module_info.slug] = tool_module_info
+        setup_id = tool_module_info.setup_id
+        existing = self.entries.get(setup_id)
+        if existing and existing.setup_id != setup_id:
+            logger.warning(
+                "Tool setup_id collision: '%s' already exists",
+                setup_id,
+            )
+        self.entries[setup_id] = tool_module_info
         logger.debug(
             "Tool cached",
             extra={
-                "slug": tool_module_info.slug,
+                "setup_id": setup_id,
                 "module_id": tool_module_info.module_id,
-                "setup_id": tool_module_info.setup_id,
             },
         )
 
     def get(
         self,
-        slug: str,
+        setup_id: str,
     ) -> ToolModuleInfo | None:
         """Get a tool from cache, optionally querying registry on miss.
 
         Args:
-            slug: Field name to look up.
+            setup_id: Field name to look up.
 
         Returns:
             ToolModuleInfo if found, None otherwise.
         """
-        return self.entries.get(slug)
+        return self.entries.get(setup_id)
 
     def clear(self) -> None:
         """Clear all cache entries."""

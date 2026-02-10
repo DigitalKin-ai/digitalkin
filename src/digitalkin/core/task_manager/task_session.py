@@ -343,7 +343,7 @@ class TaskSession:
         Args:
             reason: The reason for cancellation (signal, heartbeat failure, cleanup, etc.)
         """
-        if self.is_cancelled.is_set():
+        if self.cancelled:
             logger.debug(
                 "Cancel ignored - already cancelled (existing=%s, new=%s)",
                 self.cancellation_reason.value,

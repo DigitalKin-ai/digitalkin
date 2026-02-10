@@ -62,6 +62,8 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.test
+      args:
+        PYTHON_VERSION: ${PYTHON_VERSION:-3.10}
     networks:
       - services-network
     environment:
@@ -70,9 +72,9 @@ services:
       - TEST_SURREALDB_USERNAME=${TEST_SURREALDB_USERNAME:-root}
       - TEST_SURREALDB_PASSWORD=${TEST_SURREALDB_PASSWORD:-root}
       - TEST_SURREALDB_DATABASE=${TEST_SURREALDB_DATABASE:-test}
-      # optional defaults you can override at runtime:
-      - TEST_SELECTOR=tests/
-      - PYTEST_ARGS=
+      - TEST_SELECTOR=${TEST_SELECTOR:-tests/}
+      - TEST_MARKER=${TEST_MARKER:-}
+      - PYTEST_ARGS=${PYTEST_ARGS:-}
     depends_on:
       - tests-surrealdb
     volumes:

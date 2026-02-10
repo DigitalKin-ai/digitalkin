@@ -68,9 +68,7 @@ class TestToolCache:
         cache = ToolCache()
         cache.add(sample_tool_module_info)
 
-        # Access via slug (setup_id + "_" + tool_name)
-        slug = sample_tool_module_info.slug
-        assert cache.get(slug) == sample_tool_module_info
+        assert cache.get(sample_tool_module_info.setup_id) == sample_tool_module_info
 
     def test_get_nonexistent_returns_none(self) -> None:
         """Test getting a nonexistent tool returns None."""
@@ -95,15 +93,15 @@ class TestToolCache:
         cache.add(sample_tool_module_info_2)
 
         tools = cache.list_tools()
-        assert sample_tool_module_info.slug in tools
-        assert sample_tool_module_info_2.slug in tools
+        assert sample_tool_module_info.setup_id in tools
+        assert sample_tool_module_info_2.setup_id in tools
 
     def test_get_returns_cached_value(self, sample_tool_module_info: ToolModuleInfo) -> None:
         """Test get returns cached value."""
         cache = ToolCache()
         cache.add(sample_tool_module_info)
 
-        result = cache.get(sample_tool_module_info.slug)
+        result = cache.get(sample_tool_module_info.setup_id)
         assert result == sample_tool_module_info
 
     def test_get_without_cache_returns_none(self) -> None:
@@ -116,7 +114,8 @@ class TestToolCache:
 class TestSetupModelToolCache:
     """Tests for SetupModel tool cache integration."""
 
-    def test_build_tool_cache_from_resolved_tools(self, sample_tool_module_info: ToolModuleInfo) -> None:
+    @pytest.mark.asyncio
+    async def test_build_tool_cache_from_resolved_tools(self, sample_tool_module_info: ToolModuleInfo) -> None:
         """Test building tool cache from resolved tool references."""
 
         class TestSetup(SetupModel):
@@ -128,13 +127,13 @@ class TestSetupModelToolCache:
         setup = TestSetup(my_tool=tool_ref)
         # Pre-populate resolved_tools using setup_id as key (matches caching logic)
         setup.resolved_tools["setup-123"] = sample_tool_module_info
-        cache = setup.build_tool_cache()
+        cache = await setup.build_tool_cache()
 
-        # ToolCache uses ToolModuleInfo.slug as key
-        assert sample_tool_module_info.slug in cache.entries
-        assert cache.entries[sample_tool_module_info.slug] == sample_tool_module_info
+        assert sample_tool_module_info.setup_id in cache.entries
+        assert cache.entries[sample_tool_module_info.setup_id] == sample_tool_module_info
 
-    def test_build_tool_cache_skips_unresolved(self) -> None:
+    @pytest.mark.asyncio
+    async def test_build_tool_cache_skips_unresolved(self) -> None:
         """Test that unresolved tool references are not cached."""
 
         class TestSetup(SetupModel):
@@ -143,11 +142,12 @@ class TestSetupModelToolCache:
         tool_ref = ToolReference(selected_tools=[])
 
         setup = TestSetup(my_tool=tool_ref)
-        cache = setup.build_tool_cache()
+        cache = await setup.build_tool_cache()
 
         assert len(cache.entries) == 0
 
-    def test_resolved_tools_populated(self, sample_tool_module_info: ToolModuleInfo) -> None:
+    @pytest.mark.asyncio
+    async def test_resolved_tools_populated(self, sample_tool_module_info: ToolModuleInfo) -> None:
         """Test resolved_tools dict is populated after build_tool_cache."""
 
         class TestSetup(SetupModel):
@@ -158,12 +158,11 @@ class TestSetupModelToolCache:
         setup = TestSetup(my_tool=tool_ref)
         # Pre-populate resolved_tools using setup_id as key
         setup.resolved_tools["setup-123"] = sample_tool_module_info
-        cache = setup.build_tool_cache()
+        cache = await setup.build_tool_cache()
 
-        # resolved_tools uses setup_id as key, ToolCache uses slug
         assert "setup-123" in setup.resolved_tools
         assert setup.resolved_tools["setup-123"] == sample_tool_module_info
-        assert cache.entries[sample_tool_module_info.slug] == sample_tool_module_info
+        assert cache.entries[sample_tool_module_info.setup_id] == sample_tool_module_info
 
 
 class TestResolvedToolsField:
@@ -189,7 +188,8 @@ class TestResolvedToolsField:
         setup = TestSetup(my_tool=tool_ref)
         assert setup.resolved_tools == {}
 
-    def test_multiple_tool_references_in_resolved_tools(
+    @pytest.mark.asyncio
+    async def test_multiple_tool_references_in_resolved_tools(
         self, sample_tool_module_info: ToolModuleInfo, sample_tool_module_info_2: ToolModuleInfo
     ) -> None:
         """Test multiple resolved tools stored in resolved_tools dict."""
@@ -205,7 +205,7 @@ class TestResolvedToolsField:
         # Pre-populate resolved_tools using setup_id as key
         setup.resolved_tools["setup-123"] = sample_tool_module_info
         setup.resolved_tools["setup-456"] = sample_tool_module_info_2
-        cache = setup.build_tool_cache()
+        cache = await setup.build_tool_cache()
 
         # resolved_tools uses setup_id as key
         assert len(setup.resolved_tools) == 2
@@ -273,7 +273,7 @@ class TestResolvedToolsCacheBehavior:
             "input": {"json_schema": {"$defs": {}}},
         }
 
-        await setup.resolve_tool_references(mock_registry, mock_communication)
+        await setup.build_tool_cache(mock_registry, mock_communication)
 
         mock_registry.get_setup.assert_called_once_with("setup-123")
         mock_registry.discover_by_id.assert_called_once_with("tool-123")
@@ -313,11 +313,11 @@ class TestResolvedToolsCacheBehavior:
         }
 
         # First resolution - registry called
-        await setup.resolve_tool_references(mock_registry, mock_communication)
+        await setup.build_tool_cache(mock_registry, mock_communication)
         assert mock_registry.get_setup.call_count == 1
 
         # Second resolution - should use cache, not registry
-        await setup.resolve_tool_references(mock_registry, mock_communication)
+        await setup.build_tool_cache(mock_registry, mock_communication)
 
         # Registry still only called once (from first resolution)
         assert mock_registry.get_setup.call_count == 1
@@ -349,7 +349,7 @@ class TestResolvedToolsCacheBehavior:
         mock_registry = Mock()
         mock_communication = AsyncMock()
 
-        await restored_setup.resolve_tool_references(mock_registry, mock_communication)
+        await restored_setup.build_tool_cache(mock_registry, mock_communication)
 
         mock_registry.get_setup.assert_not_called()
         mock_registry.discover_by_id.assert_not_called()
@@ -403,14 +403,14 @@ class TestResolvedToolsCacheBehavior:
         }
 
         # First resolution - both tools resolved via registry
-        await setup.resolve_tool_references(mock_registry, mock_communication)
+        await setup.build_tool_cache(mock_registry, mock_communication)
 
         assert mock_registry.get_setup.call_count == 2
         assert len(setup.resolved_tools) == 2
 
         # Second resolution - both tools resolved from cache
         mock_registry.reset_mock()
-        await setup.resolve_tool_references(mock_registry, mock_communication)
+        await setup.build_tool_cache(mock_registry, mock_communication)
 
         mock_registry.get_setup.assert_not_called()
         mock_registry.discover_by_id.assert_not_called()
@@ -455,9 +455,86 @@ class TestResolvedToolsCacheBehavior:
             "input": {"json_schema": {"$defs": {}}},
         }
 
-        await setup.resolve_tool_references(mock_registry, mock_communication)
+        await setup.build_tool_cache(mock_registry, mock_communication)
 
         # Only tool_b should trigger registry call
         mock_registry.get_setup.assert_called_once_with("setup-456")
         assert "setup-123" in setup.resolved_tools
         assert len(setup.resolved_tools) == 2
+
+
+class TestSlugify:
+    """Tests for ToolModuleInfo._slugify and slug property."""
+
+    def test_slugify_simple_name(self) -> None:
+        """Test slugify with a simple name."""
+        assert ToolModuleInfo._slugify("Google Search") == "google_search"
+
+    def test_slugify_already_lowercase(self) -> None:
+        """Test slugify with already lowercase name."""
+        assert ToolModuleInfo._slugify("my_tool") == "my_tool"
+
+    def test_slugify_special_characters(self) -> None:
+        """Test slugify strips special characters."""
+        assert ToolModuleInfo._slugify("Tool (v2.0)") == "tool_v2_0"
+
+    def test_slugify_multiple_spaces(self) -> None:
+        """Test slugify collapses multiple spaces."""
+        assert ToolModuleInfo._slugify("My   Tool   Name") == "my_tool_name"
+
+    def test_slugify_leading_trailing(self) -> None:
+        """Test slugify strips leading/trailing underscores."""
+        assert ToolModuleInfo._slugify("  Tool  ") == "tool"
+
+    def test_slugify_camelcase(self) -> None:
+        """Test slugify lowercases CamelCase."""
+        assert ToolModuleInfo._slugify("DuckDuckGo") == "duckduckgo"
+
+    def test_slug_property_uses_tool_name(self) -> None:
+        """Test slug property returns slugified tool_name."""
+        info = ToolModuleInfo(
+            module_id="m1",
+            setup_id="setup-abc",
+            tool_name="Google Search",
+        )
+        assert info.slug == "google_search"
+
+    def test_slug_no_setup_id(self) -> None:
+        """Test slug does not contain setup_id."""
+        info = ToolModuleInfo(
+            module_id="m1",
+            setup_id="setup-abc-123",
+            tool_name="My Tool",
+        )
+        assert "setup" not in info.slug
+        assert info.slug == "my_tool"
+
+
+class TestToolCacheCollision:
+    """Tests for ToolCache setup_id-based keying."""
+
+    def test_different_setup_ids_coexist(self, sample_tool_module_info: ToolModuleInfo) -> None:
+        """Test that tools with different setup_ids coexist even with same tool_name."""
+        cache = ToolCache()
+        cache.add(sample_tool_module_info)
+
+        other = ToolModuleInfo(
+            module_id="tool-other",
+            setup_id="setup-other",
+            tool_name="TestTool",
+            tools=[],
+        )
+        cache.add(other)
+
+        assert cache.get("setup-123") == sample_tool_module_info
+        assert cache.get("setup-other") == other
+        assert len(cache.entries) == 2
+
+    def test_same_setup_id_overwrites(self, sample_tool_module_info: ToolModuleInfo) -> None:
+        """Test that re-adding same setup_id overwrites the entry."""
+        cache = ToolCache()
+        cache.add(sample_tool_module_info)
+        cache.add(sample_tool_module_info)
+
+        assert cache.get("setup-123") == sample_tool_module_info
+        assert len(cache.entries) == 1

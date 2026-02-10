@@ -583,7 +583,7 @@ class TestCleanModelSchemaIsolation:
         assert issubclass(model, SetupModel)
         assert "resolved_tools" in model.model_fields
         instance = model(enabled=True)
-        assert instance.build_tool_cache() is not None
+        assert await instance.build_tool_cache() is not None
 
     @pytest.mark.asyncio
     async def test_clean_model_schema_only_contains_declared_fields(self) -> None:

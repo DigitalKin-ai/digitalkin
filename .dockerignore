@@ -1,3 +1,56 @@
+# Version control
+.git
+.github
+.gitignore
+
+# Python
 .venv
 __pycache__
 *.pyc
+*.pyo
+*.egg-info
+dist
+build
+
+# Testing / coverage artifacts
+.pytest_cache
+.coverage
+.coverage.*
+coverage.xml
+pytest-report.html
+test-results.xml
+test-metrics.json
+test-artifacts/
+consolidated-report/
+htmlcov/
+
+# Linting / type checking
+.ruff_cache
+.mypy_cache
+
+# Documentation
+docs
+mkdocs.yml
+site/
+
+# IDE
+.vscode
+.idea
+
+# Docker (avoid recursive copy)
+docker-compose.yml
+.dockerignore
+
+# Misc
+.claude
+CLAUDE.md
+CHANGELOG.md
+README.md
+LICENSE
+.pre-commit-config.yaml
+.bumpversion.toml
+.report.json
+examples
+scripts
+certs
+*.md

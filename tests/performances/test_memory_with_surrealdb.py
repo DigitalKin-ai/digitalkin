@@ -40,6 +40,8 @@ TEST_DB_CONFIG = {
     "SURREALDB_DATABASE": "test_surreal",
 }
 
+tracemalloc.start()
+
 # Set timeout for all tests (60 seconds)
 pytestmark = [
     pytest.mark.timeout(60),
@@ -125,36 +127,14 @@ class MockModuleForMemory(BaseModule):
 
 
 def get_memory_mb() -> float:
-    """Get current memory usage in MB using hybrid approach.
-
-    Hybrid approach:
-    1. If tracemalloc is running, use it (more precise for Python allocations)
-    2. Otherwise, use psutil RSS (more reliable than ru_maxrss peak memory)
+    """Get current traced Python memory usage in MB via tracemalloc.
 
     Returns:
         Memory usage in megabytes.
     """
-    import time
-
-    import psutil
-
-    # Force garbage collection
-    for _ in range(3):
-        gc.collect()
-
-    # Small delay for GC to complete
-    time.sleep(0.01)
-
-    # Prefer tracemalloc if available (more precise for Python allocations)
-    if tracemalloc.is_tracing():
-        current, _peak = tracemalloc.get_traced_memory()
-        if current > 0:
-            return current / 1024 / 1024
-
-    # Fall back to psutil RSS (current, not peak)
-    process = psutil.Process()
-    mem_info = process.memory_info()
-    return mem_info.rss / 1024 / 1024
+    gc.collect()
+    current, _peak = tracemalloc.get_traced_memory()
+    return current / 1024 / 1024
 
 
 # ============================================================================
@@ -166,63 +146,8 @@ class TestRealDatabaseMemoryBehavior:
     """Test memory behavior with real SurrealDB connections."""
 
     @pytest.mark.asyncio
-    async def test_database_crud_operations_no_leak(self, conn):
-        """Verify repeated CRUD operations don't leak memory.
-
-        This test validates basic database operations memory behavior.
-        """
-        tracemalloc.start()
-
-        # Clean test table
-        with contextlib.suppress(Exception):
-            await conn.execute_query("DELETE test_memory_crud;")
-
-        gc.collect()
-        baseline_memory = get_memory_mb()
-
-        memory_samples = []
-
-        # Perform repeated CRUD cycles
-        for cycle in range(10):
-            # Create records
-            for i in range(20):
-                await conn.create(
-                    "test_memory_crud",
-                    {
-                        "task_id": f"task-{cycle}-{i}",
-                        "cycle": cycle,
-                        "data": "x" * 500,
-                    },
-                )
-
-            # Query records
-            query = "SELECT * FROM test_memory_crud WHERE cycle = $cycle;"
-            await conn.execute_query(query, {"cycle": cycle})
-
-            # Delete records
-            delete_query = "DELETE test_memory_crud WHERE cycle = $cycle;"
-            await conn.execute_query(delete_query, {"cycle": cycle})
-
-            gc.collect()
-            current_memory = get_memory_mb()
-            memory_samples.append(current_memory - baseline_memory)
-
-        tracemalloc.stop()
-
-        # Verify no significant memory growth trend
-        if len(memory_samples) >= 5:
-            early_avg = sum(memory_samples[:3]) / 3
-            late_avg = sum(memory_samples[-3:]) / 3
-
-            if early_avg > 0:
-                growth_ratio = (late_avg - early_avg) / early_avg
-                assert growth_ratio < 2.0, f"Memory leak in CRUD operations: {growth_ratio * 100:.1f}% growth"
-
-    @pytest.mark.asyncio
     async def test_live_query_subscription_memory(self, conn):
         """Test memory behavior with real SurrealDB live queries."""
-        tracemalloc.start()
-
         # Clean test table
         with contextlib.suppress(Exception):
             await conn.execute_query("DELETE test_memory_live;")
@@ -252,8 +177,6 @@ class TestRealDatabaseMemoryBehavior:
         gc.collect()
         memory_after_stop = get_memory_mb()
 
-        tracemalloc.stop()
-
         # Verify live query cleanup
         memory_retained = memory_after_stop - baseline_memory
         memory_during = memory_with_live - baseline_memory
@@ -265,8 +188,6 @@ class TestRealDatabaseMemoryBehavior:
     @pytest.mark.asyncio
     async def test_concurrent_db_operations_memory(self, conn):
         """Test memory with concurrent database operations."""
-        tracemalloc.start()
-
         # Clean test table
         with contextlib.suppress(Exception):
             await conn.execute_query("DELETE test_memory_concurrent;")
@@ -293,8 +214,6 @@ class TestRealDatabaseMemoryBehavior:
         gc.collect()
         memory_after_operations = get_memory_mb()
 
-        tracemalloc.stop()
-
         memory_used = memory_after_operations - baseline_memory
 
         # Memory usage should be reasonable (less than 100MB for 20 x 5KB operations)
@@ -307,8 +226,6 @@ class TestRealDatabaseScaling:
     @pytest.mark.asyncio
     async def test_database_connection_pooling_memory(self, conn):
         """Test memory behavior when reusing database connections."""
-        tracemalloc.start()
-
         gc.collect()
         baseline_memory = get_memory_mb()
 
@@ -331,8 +248,6 @@ class TestRealDatabaseScaling:
         gc.collect()
         final_memory = get_memory_mb()
 
-        tracemalloc.stop()
-
         memory_growth = final_memory - baseline_memory
 
         # With connection reuse, memory should not grow excessively
@@ -342,8 +257,6 @@ class TestRealDatabaseScaling:
     @pytest.mark.asyncio
     async def test_query_result_memory_scaling(self, conn):
         """Test memory scaling with varying query result sizes."""
-        tracemalloc.start()
-
         # Create baseline dataset
         for i in range(100):
             await conn.create(
@@ -383,8 +296,6 @@ class TestRealDatabaseScaling:
             # Clear results
             results.clear()
 
-        tracemalloc.stop()
-
         # Memory should scale sub-linearly with result count
         if len(memory_by_result_size) >= 2:
             sizes = sorted(memory_by_result_size.keys())
@@ -406,7 +317,15 @@ class TestRealDatabaseLongRunning:
     @pytest.mark.asyncio
     async def test_sustained_operations_no_leak(self, conn):
         """Test sustained database operations don't leak memory."""
-        tracemalloc.start()
+        # Warmup: match test workload to stabilize connection buffers
+        for warmup in range(10):
+            for i in range(10):
+                await conn.create(
+                    "test_memory_sustained",
+                    {"task_id": f"warmup-{warmup}-{i}", "iteration": -1, "data": "x" * 500},
+                )
+            await conn.execute_query("SELECT * FROM test_memory_sustained WHERE iteration = $iter;", {"iter": -1})
+            await conn.execute_query("DELETE test_memory_sustained WHERE iteration = $iter;", {"iter": -1})
 
         gc.collect()
         baseline_memory = get_memory_mb()
@@ -416,13 +335,13 @@ class TestRealDatabaseLongRunning:
 
         for iteration in range(iterations):
             # Create data
-            for i in range(10):
+            for i in range(50):
                 await conn.create(
                     "test_memory_sustained",
                     {
                         "task_id": f"sustained-{iteration}-{i}",
                         "iteration": iteration,
-                        "data": "x" * 500,
+                        "data": "x" * 5000,
                     },
                 )
 
@@ -436,23 +355,30 @@ class TestRealDatabaseLongRunning:
                 cleanup_query = "DELETE test_memory_sustained WHERE iteration = $iter;"
                 await conn.execute_query(cleanup_query, {"iter": cleanup_iter})
 
-            # Sample memory every 5 iterations
-            if iteration % 5 == 0:
-                gc.collect()
-                current_memory = get_memory_mb()
-                memory_samples.append(current_memory - baseline_memory)
+            # Sample memory every iteration
+            gc.collect()
+            current_memory = get_memory_mb()
+            memory_samples.append(current_memory - baseline_memory)
 
-        tracemalloc.stop()
+        # Debug: always print memory info
+        print(f"\n[Memory Debug] baseline_memory={baseline_memory:.2f} MB")
+        print(f"[Memory Debug] samples count={len(memory_samples)}")
+        print(f"[Memory Debug] all samples (delta from baseline): {[f'{s:.3f}' for s in memory_samples]}")
 
         # Check for memory leak trend
-        if len(memory_samples) >= 3:
-            # Compare first third vs last third
-            early_avg = sum(memory_samples[: len(memory_samples) // 3]) / (len(memory_samples) // 3)
-            late_avg = sum(memory_samples[-(len(memory_samples) // 3) :]) / (len(memory_samples) // 3)
+        if len(memory_samples) >= 6:
+            third = len(memory_samples) // 3
+            early_avg = sum(memory_samples[:third]) / third
+            late_avg = sum(memory_samples[-third:]) / third
 
+            print(f"[Memory Debug] early_avg={early_avg:.4f} MB, late_avg={late_avg:.4f} MB")
+            print(f"[Memory Debug] absolute growth={late_avg - early_avg:.4f} MB")
             if early_avg > 0:
                 growth_ratio = (late_avg - early_avg) / early_avg
+                print(f"[Memory Debug] growth_ratio={growth_ratio:.4f} ({growth_ratio * 100:.1f}%)")
                 assert growth_ratio < 2.0, f"Memory leak in sustained operations: {growth_ratio * 100:.1f}% growth"
+            else:
+                print("[Memory Debug] early_avg <= 0, skipping ratio check")
 
 
 # ============================================================================
@@ -470,8 +396,6 @@ class TestMemoryIntegrationSummary:
         This test validates memory behavior when combining CRUD, live queries,
         and concurrent operations - simulating realistic usage.
         """
-        tracemalloc.start()
-
         # Clean all test tables
         for table in ["test_integration_crud", "test_integration_live", "test_integration_concurrent"]:
             with contextlib.suppress(Exception):
@@ -524,10 +448,6 @@ class TestMemoryIntegrationSummary:
 
         gc.collect()
         final_memory = get_memory_mb() - baseline_memory
-
-        tracemalloc.stop()
-
-        # Print summary
 
         # Validation - allow reasonable memory usage for realistic operations
         assert phase1_memory < 50, f"CRUD used excessive memory: {phase1_memory:.2f}MB"

@@ -284,7 +284,7 @@ class TestToolReferenceResolution:
 
 
 class TestSetupModelToolResolution:
-    """Tests for SetupModel.resolve_tool_references() method."""
+    """Tests for SetupModel.build_tool_cache() method."""
 
     @pytest.mark.asyncio
     async def test_single_tool_reference_resolved(
@@ -301,7 +301,7 @@ class TestSetupModelToolResolution:
 
         setup = ArchetypeSetup()
         communication = create_mock_communication()
-        await setup.resolve_tool_references(registry, communication)
+        await setup.build_tool_cache(registry, communication)
 
         assert len(setup.resolved_tools) == 1
         tool_info = next(iter(setup.resolved_tools.values()))
@@ -326,7 +326,7 @@ class TestSetupModelToolResolution:
 
         setup = ArchetypeSetup()
         communication = create_mock_communication()
-        await setup.resolve_tool_references(registry, communication)
+        await setup.build_tool_cache(registry, communication)
 
         assert len(setup.resolved_tools) == 2
         module_ids = {info.module_id for info in setup.resolved_tools.values()}
@@ -345,7 +345,7 @@ class TestSetupModelToolResolution:
 
         setup = ArchetypeSetup()
         communication = create_mock_communication()
-        await setup.resolve_tool_references(registry, communication)
+        await setup.build_tool_cache(registry, communication)
 
         assert len(setup.resolved_tools) == 0
 
@@ -358,7 +358,7 @@ class TestSetupModelToolResolution:
 
         setup = ArchetypeSetup()
         communication = create_mock_communication()
-        await setup.resolve_tool_references(registry, communication)  # Should not raise
+        await setup.build_tool_cache(registry, communication)  # Should not raise
 
 
 class TestNestedToolReferenceResolution:
@@ -383,7 +383,7 @@ class TestNestedToolReferenceResolution:
 
         setup = ArchetypeSetup()
         communication = create_mock_communication()
-        await setup.resolve_tool_references(registry, communication)
+        await setup.build_tool_cache(registry, communication)
 
         assert len(setup.resolved_tools) == 1
         tool_info = next(iter(setup.resolved_tools.values()))
@@ -410,7 +410,7 @@ class TestNestedToolReferenceResolution:
 
         setup = ArchetypeSetup()
         communication = create_mock_communication()
-        await setup.resolve_tool_references(registry, communication)
+        await setup.build_tool_cache(registry, communication)
 
         assert len(setup.resolved_tools) == 1
         tool_info = next(iter(setup.resolved_tools.values()))
@@ -435,7 +435,7 @@ class TestNestedToolReferenceResolution:
 
         setup = ArchetypeSetup()
         communication = create_mock_communication()
-        await setup.resolve_tool_references(registry, communication)
+        await setup.build_tool_cache(registry, communication)
 
         assert len(setup.tools) == 2
         assert len(setup.resolved_tools) == 2
@@ -472,7 +472,7 @@ class TestNestedToolReferenceResolution:
 
         setup = ArchetypeSetup()
         communication = create_mock_communication()
-        await setup.resolve_tool_references(registry, communication)
+        await setup.build_tool_cache(registry, communication)
 
         assert len(setup.resolved_tools) == 2
         module_ids = {info.module_id for info in setup.resolved_tools.values()}
@@ -498,7 +498,7 @@ class TestNestedToolReferenceResolution:
 
         setup = ArchetypeSetup()
         communication = create_mock_communication()
-        await setup.resolve_tool_references(registry, communication)
+        await setup.build_tool_cache(registry, communication)
 
         assert len(setup.resolved_tools) == 2
         module_ids = {info.module_id for info in setup.resolved_tools.values()}
@@ -527,7 +527,7 @@ class TestNestedToolReferenceResolution:
 
         setup = ArchetypeSetup()
         communication = create_mock_communication()
-        await setup.resolve_tool_references(registry, communication)
+        await setup.build_tool_cache(registry, communication)
 
         assert len(setup.resolved_tools) == 2
         module_ids = {info.module_id for info in setup.resolved_tools.values()}
@@ -571,7 +571,7 @@ class TestComplexArchetypeSetup:
 
         setup = ResearchArchetypeSetup()
         communication = create_mock_communication()
-        await setup.resolve_tool_references(registry, communication)
+        await setup.build_tool_cache(registry, communication)
 
         # All tools resolved correctly
         assert len(setup.resolved_tools) == 3
@@ -599,7 +599,7 @@ class TestComplexArchetypeSetup:
 
         setup = ArchetypeSetup()
         communication = create_mock_communication()
-        await setup.resolve_tool_references(registry, communication)
+        await setup.build_tool_cache(registry, communication)
 
         # Only existing_tool resolved
         assert len(setup.resolved_tools) == 1
