@@ -74,6 +74,10 @@ async def conn() -> AsyncGenerator[SurrealDBConnection, None]:
 
     try:
         await connection.init_surreal_instance()
+    except (ConnectionError, OSError):
+        pytest.skip("SurrealDB not available")
+
+    try:
         yield connection
     finally:
         # Cleanup: close connection
@@ -105,6 +109,7 @@ class MockModuleForMemory(BaseModule):
             "registry": None,
             "snapshot": None,
             "storage": None,
+            "user_profile": None,
         }
 
     async def initialize(self, context: Any, setup_data: Any) -> None:

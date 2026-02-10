@@ -156,7 +156,7 @@ class DynamicAgentSetup(SetupModel):
         le=4096,
         title="Max Tokens",
         description="Maximum tokens in the response.",
-        json_schema_extra={"hidden": True},
+        json_schema_extra={"ui:widget": "hidden"},
     )
 
     # Static field without any special flags
@@ -326,9 +326,9 @@ async def demonstrate_dynamic_schema() -> None:
         force=False,
     )
 
-    # All fields including hidden
+    # Runtime fields including hidden
     await DynamicAgentSetup.get_clean_model(
-        config_fields=True,
+        config_fields=False,
         hidden_fields=True,
         force=False,
     )

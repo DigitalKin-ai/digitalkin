@@ -35,6 +35,8 @@ TEST_DB_CONFIG = {
     "SURREALDB_DATABASE": "test_surreal",
 }
 
+pytestmark = pytest.mark.integration
+
 
 @pytest.fixture(scope="session")
 def event_loop():
@@ -66,6 +68,10 @@ async def conn() -> AsyncGenerator[SurrealDBConnection, None]:
 
     try:
         await connection.init_surreal_instance()
+    except (ConnectionError, OSError):
+        pytest.skip("SurrealDB not available")
+
+    try:
         yield connection
     finally:
         # Cleanup: close connection
@@ -105,7 +111,11 @@ class TestConnectionLifecycle:
         conn = SurrealDBConnection(database="test_lifecycle")
 
         # Initialize connection
-        await conn.init_surreal_instance()
+        try:
+            await conn.init_surreal_instance()
+        except (ConnectionError, OSError):
+            pytest.skip("SurrealDB not available")
+
         assert conn.db is not None
 
         # Close connection

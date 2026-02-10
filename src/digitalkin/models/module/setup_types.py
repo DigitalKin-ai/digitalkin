@@ -32,7 +32,7 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
     _clean_model_cache: ClassVar[dict[tuple[type, bool, bool], type]] = {}
     resolved_tools: dict[str, ToolModuleInfo] = Field(
         default_factory=dict,
-        json_schema_extra={"hidden": True},
+        json_schema_extra={"ui:widget": "hidden"},
     )
 
     @classmethod
@@ -47,7 +47,7 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
 
         Args:
             config_fields: Include fields with json_schema_extra["config"] = True.
-            hidden_fields: Include fields with json_schema_extra["hidden"] = True.
+            hidden_fields: Include fields with json_schema_extra["ui:widget"] = "hidden".
             force: Refresh dynamic schema fields by calling providers.
 
         Returns:
@@ -62,7 +62,7 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
         for name, field_info in cls.model_fields.items():
             extra = field_info.json_schema_extra or {}
             is_config = bool(extra.get("config", False)) if isinstance(extra, dict) else False
-            is_hidden = bool(extra.get("hidden", False)) if isinstance(extra, dict) else False
+            is_hidden = (extra.get("ui:widget") == "hidden") if isinstance(extra, dict) else False
 
             if is_config and not config_fields:
                 continue

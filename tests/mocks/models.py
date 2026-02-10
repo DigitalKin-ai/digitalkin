@@ -47,7 +47,7 @@ class MockSetupModel(BaseModel):
     config: str = "default_config"
     timeout: int = Field(default=30, json_schema_extra={"config": True})
     enabled: bool = Field(default=True, json_schema_extra={"config": True})
-    internal_state: str = Field(default="", json_schema_extra={"hidden": True})
+    internal_state: str = Field(default="", json_schema_extra={"ui:widget": "hidden"})
 
 
 class MockSecretModel(BaseModel):

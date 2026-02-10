@@ -49,21 +49,21 @@ class TestSetupModelGetCleanModel:
 
     @pytest.mark.asyncio
     async def test_get_clean_model_filters_hidden_fields(self) -> None:
-        """Test that hidden fields are properly filtered."""
+        """Test that hidden fields are properly filtered via hidden_fields parameter."""
 
         class TestSetup(SetupModel):
             visible_field: str = Field(default="visible")
             hidden_field: str = Field(
                 default="hidden",
-                json_schema_extra={"hidden": True},
+                json_schema_extra={"ui:widget": "hidden"},
             )
 
-        # Without hidden_fields=True, hidden field should be excluded
-        model = await TestSetup.get_clean_model(config_fields=False, hidden_fields=False)
+        # hidden_fields=False excludes hidden fields
+        model = await TestSetup.get_clean_model(config_fields=True, hidden_fields=False)
         assert "visible_field" in model.model_fields
         assert "hidden_field" not in model.model_fields
 
-        # With hidden_fields=True, hidden field should be included
+        # hidden_fields=True includes hidden fields
         model_with_hidden = await TestSetup.get_clean_model(config_fields=False, hidden_fields=True)
         assert "hidden_field" in model_with_hidden.model_fields
 
@@ -578,7 +578,7 @@ class TestCleanModelSchemaIsolation:
         class ToolSetup(SetupModel):
             enabled: bool = Field(default=True)
 
-        model = await ToolSetup.get_clean_model(config_fields=False, hidden_fields=False)
+        model = await ToolSetup.get_clean_model(config_fields=False, hidden_fields=True)
 
         assert issubclass(model, SetupModel)
         assert "resolved_tools" in model.model_fields
@@ -593,15 +593,15 @@ class TestCleanModelSchemaIsolation:
             name: str = Field(default="test")
             value: int = Field(default=42)
 
-        model = await SimpleSetup.get_clean_model(config_fields=False, hidden_fields=False)
+        model = await SimpleSetup.get_clean_model(config_fields=False, hidden_fields=True)
         schema = model.model_json_schema()
 
         properties = schema.get("properties", {})
         assert {"name", "value"}.issubset(set(properties.keys()))
 
     @pytest.mark.asyncio
-    async def test_clean_model_with_hidden_true_includes_resolved_tools(self) -> None:
-        """Clean model with hidden_fields=True should include resolved_tools."""
+    async def test_clean_model_with_default_includes_resolved_tools(self) -> None:
+        """Clean model with default config_fields=False should include resolved_tools."""
 
         class ToolSetup(SetupModel):
             enabled: bool = Field(default=True)
@@ -618,7 +618,7 @@ class TestCleanModelSchemaIsolation:
             name: str = Field(default="test")
             my_tools: tool_reference_input()  # type: ignore[valid-type]
 
-        model = await ArchetypeSetup.get_clean_model(config_fields=False, hidden_fields=False)
+        model = await ArchetypeSetup.get_clean_model(config_fields=False, hidden_fields=True)
         schema = model.model_json_schema()
 
         # Tool reference field should be in properties with custom array schema
@@ -630,3 +630,26 @@ class TestCleanModelSchemaIsolation:
 
         # resolved_tools is inherited from SetupModel base
         assert "resolved_tools" in model.model_fields
+
+
+class TestCleanModelCallableExtra:
+    """Tests for get_clean_model with non-dict json_schema_extra (callable)."""
+
+    @pytest.mark.asyncio
+    async def test_callable_json_schema_extra_treated_as_not_config_not_hidden(self) -> None:
+        """Fields with callable json_schema_extra should not be treated as config or hidden."""
+
+        def custom_extra(schema: dict) -> None:
+            schema["example"] = "hello"
+
+        class TestSetup(SetupModel):
+            normal: str = Field(default="normal")
+            custom: str = Field(default="custom", json_schema_extra=custom_extra)
+
+        # config_fields=True: callable extra → not config, not hidden → included
+        model = await TestSetup.get_clean_model(config_fields=True, hidden_fields=False, force=True)
+        assert "custom" in model.model_fields
+
+        # config_fields=False: callable extra → not config → included
+        model2 = await TestSetup.get_clean_model(config_fields=False, hidden_fields=True, force=True)
+        assert "custom" in model2.model_fields

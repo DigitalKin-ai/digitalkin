@@ -10,6 +10,7 @@ import os
 import uuid
 from collections.abc import AsyncGenerator, Awaitable, Callable
 
+import pytest
 import pytest_asyncio
 
 from digitalkin.core.task_manager.surrealdb_repository import SurrealDBConnection
@@ -54,6 +55,10 @@ async def real_db_connection() -> AsyncGenerator[SurrealDBConnection, None]:
 
     try:
         await connection.init_surreal_instance()
+    except (ConnectionError, OSError):
+        pytest.skip("SurrealDB not available")
+
+    try:
         yield connection
     finally:
         # Ensure all live queries are killed and connection closed
@@ -128,6 +133,10 @@ async def isolated_db_connection() -> AsyncGenerator[SurrealDBConnection, None]:
 
     try:
         await connection.init_surreal_instance()
+    except (ConnectionError, OSError):
+        pytest.skip("SurrealDB not available")
+
+    try:
         yield connection
     finally:
         await connection.close()

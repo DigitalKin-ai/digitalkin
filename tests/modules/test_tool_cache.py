@@ -177,7 +177,7 @@ class TestResolvedToolsField:
 
         assert "resolved_tools" in TestSetup.model_fields
         field_info = TestSetup.model_fields["resolved_tools"]
-        assert field_info.json_schema_extra == {"hidden": True}
+        assert field_info.json_schema_extra == {"ui:widget": "hidden"}
 
     def test_resolved_tools_default_empty(self) -> None:
         """Test resolved_tools defaults to empty dict."""

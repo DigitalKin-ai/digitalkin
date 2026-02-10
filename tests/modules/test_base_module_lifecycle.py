@@ -1,0 +1,520 @@
+"""Tests for BaseModule lifecycle, model creation, and discovery.
+
+Covers __init__, status, get_module_id, create_*_model, discover, register,
+run, _run_lifecycle, start, stop, _resolve_tools, start_config_setup.
+"""
+
+import asyncio
+from typing import Any, ClassVar, Literal
+from unittest.mock import AsyncMock, Mock, patch
+
+import pytest
+from pydantic import BaseModel, Field
+
+from digitalkin.models.module.module import ModuleCodeModel, ModuleStatus
+from digitalkin.models.module.module_types import DataModel, DataTrigger, SetupModel
+from digitalkin.models.module.tool_cache import ToolCache
+from digitalkin.modules._base_module import BaseModule
+from digitalkin.utils.package_discover import ModuleDiscoverer
+
+
+# ---------------------------------------------------------------------------
+# Test Models
+# ---------------------------------------------------------------------------
+
+
+class _LcInputTrigger(DataTrigger):
+    protocol: Literal["lc_test"] = "lc_test"
+    message: str = ""
+
+
+class _LcInputModel(DataModel[_LcInputTrigger]):
+    pass
+
+
+class _LcOutputTrigger(DataTrigger):
+    protocol: Literal["lc_test"] = "lc_test"
+    result: str = ""
+
+
+class _LcOutputModel(DataModel[_LcOutputTrigger]):
+    pass
+
+
+class _LcSetupModel(SetupModel):
+    name: str = Field(default="test")
+    timeout: int = Field(default=30, json_schema_extra={"config": True})
+    internal: str = Field(default="", json_schema_extra={"ui:widget": "hidden"})
+
+
+class _LcSecretModel(BaseModel):
+    api_key: str = Field(default="secret")
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+_SERVICE_NAMES = {
+    "agent",
+    "communication",
+    "cost",
+    "filesystem",
+    "identity",
+    "registry",
+    "snapshot",
+    "storage",
+    "user_profile",
+}
+
+
+def _make_module_cls() -> type[BaseModule]:
+    """Create a fresh concrete module class."""
+
+    class _LifecycleModule(BaseModule[_LcInputModel, _LcOutputModel, _LcSetupModel, _LcSecretModel]):
+        name = "lifecycle_test"
+        description = "Test module"
+        setup_format = _LcSetupModel
+        input_format = _LcInputModel
+        output_format = _LcOutputModel
+        secret_format = _LcSecretModel
+        metadata: ClassVar[dict[str, Any]] = {"module_id": "lifecycle_test_id"}
+        triggers_discoverer = ModuleDiscoverer(["test_pkg"])
+        services_config_strategies: ClassVar[dict] = {}
+        services_config_params: ClassVar[dict] = {}
+
+        async def initialize(self, context, setup_data) -> None:  # noqa: ARG002
+            pass
+
+        async def cleanup(self) -> None:
+            pass
+
+    return _LifecycleModule
+
+
+def _instantiate(cls: type[BaseModule]) -> BaseModule:
+    """Instantiate a module class with mocked services."""
+    mock_config = Mock()
+    mock_config.valid_strategy_names.return_value = _SERVICE_NAMES
+    mock_config.init_strategy.side_effect = lambda *a, **kw: Mock()
+    cls.services_config = mock_config
+    return cls(
+        job_id="job-1",
+        mission_id="mission-1",
+        setup_id="setup-1",
+        setup_version_id="sv-1",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+
+
+class TestGetModuleId:
+    """Tests for BaseModule.get_module_id."""
+
+    def test_from_env_var(self) -> None:
+        """Returns DIGITALKIN_MODULE_ID env var when set."""
+        cls = _make_module_cls()
+        with patch.dict("os.environ", {"DIGITALKIN_MODULE_ID": "env-id"}):
+            assert cls.get_module_id() == "env-id"
+
+    def test_from_metadata(self) -> None:
+        """Falls back to metadata module_id."""
+        cls = _make_module_cls()
+        with patch.dict("os.environ", {}, clear=True):
+            assert cls.get_module_id() == "lifecycle_test_id"
+
+    def test_unknown_fallback(self) -> None:
+        """Returns 'unknown' when neither env var nor metadata exist."""
+        cls = _make_module_cls()
+        cls.metadata = {}
+        with patch.dict("os.environ", {}, clear=True):
+            assert cls.get_module_id() == "unknown"
+
+
+class TestInit:
+    """Tests for BaseModule.__init__ and _init_strategies."""
+
+    def test_creates_context_with_services(self) -> None:
+        """__init__ creates a ModuleContext with all services."""
+        cls = _make_module_cls()
+        module = _instantiate(cls)
+
+        assert module.context is not None
+        assert module.context.session.job_id == "job-1"
+        assert module.context.session.mission_id == "mission-1"
+        assert module.context.session.setup_id == "setup-1"
+        assert module.context.session.setup_version_id == "sv-1"
+
+    def test_initial_status_is_created(self) -> None:
+        """Module starts in CREATED status."""
+        cls = _make_module_cls()
+        module = _instantiate(cls)
+        assert module.status == ModuleStatus.CREATED
+
+    def test_init_strategies_called_for_all_services(self) -> None:
+        """_init_strategies calls init_strategy for each valid service."""
+        cls = _make_module_cls()
+        mock_config = Mock()
+        mock_config.valid_strategy_names.return_value = _SERVICE_NAMES
+        mock_config.init_strategy.side_effect = lambda *a, **kw: Mock()
+        cls.services_config = mock_config
+
+        cls(job_id="j", mission_id="m", setup_id="s", setup_version_id="sv")
+
+        assert mock_config.init_strategy.call_count == len(_SERVICE_NAMES)
+
+
+class TestCreateModels:
+    """Tests for create_*_model methods."""
+
+    def test_create_config_setup_model(self) -> None:
+        """Creates setup model from dict."""
+        cls = _make_module_cls()
+        model = cls.create_config_setup_model({"name": "custom", "timeout": 60})
+        assert model.name == "custom"
+        assert model.timeout == 60
+
+    def test_create_input_model(self) -> None:
+        """Creates input model from dict."""
+        cls = _make_module_cls()
+        model = cls.create_input_model({"root": {"protocol": "lc_test", "message": "hi"}})
+        assert model.root.message == "hi"
+
+    async def test_create_setup_model(self) -> None:
+        """Creates filtered setup model via get_clean_model."""
+        cls = _make_module_cls()
+        model = await cls.create_setup_model({"name": "rt", "internal": "state"})
+        assert model.name == "rt"
+
+    async def test_create_setup_model_config_fields(self) -> None:
+        """Creates config-filtered setup model."""
+        cls = _make_module_cls()
+        model = await cls.create_setup_model({"timeout": 99}, config_fields=True)
+        assert model.timeout == 99
+
+    def test_create_secret_model(self) -> None:
+        """Creates secret model from dict."""
+        cls = _make_module_cls()
+        model = cls.create_secret_model({"api_key": "key123"})
+        assert model.api_key == "key123"
+
+    def test_create_output_model(self) -> None:
+        """Creates output model from dict."""
+        cls = _make_module_cls()
+        model = cls.create_output_model({"root": {"protocol": "lc_test", "result": "ok"}})
+        assert model.root.result == "ok"
+
+
+class TestDiscoverAndRegister:
+    """Tests for discover and register."""
+
+    def test_discover_calls_discoverer(self) -> None:
+        """discover() delegates to triggers_discoverer.discover_modules."""
+        cls = _make_module_cls()
+        cls.triggers_discoverer = Mock()
+        cls.triggers_discoverer.discover_modules = Mock()
+
+        with patch("digitalkin.models.module.utility.UtilityRegistry") as mock_registry:
+            mock_registry.get_builtin_triggers.return_value = ()
+            cls.discover()
+
+        cls.triggers_discoverer.discover_modules.assert_called_once()
+
+    def test_register_delegates_to_discoverer(self) -> None:
+        """register() delegates to triggers_discoverer.register_trigger."""
+        cls = _make_module_cls()
+        cls.triggers_discoverer = Mock()
+        mock_handler = Mock()
+        cls.triggers_discoverer.register_trigger.return_value = mock_handler
+
+        result = cls.register(mock_handler)
+
+        cls.triggers_discoverer.register_trigger.assert_called_once_with(mock_handler)
+        assert result is mock_handler
+
+
+class TestRun:
+    """Tests for BaseModule.run."""
+
+    async def test_dispatches_to_trigger_handler(self) -> None:
+        """run() validates input and dispatches to trigger handler."""
+        cls = _make_module_cls()
+        module = _instantiate(cls)
+
+        mock_handler = AsyncMock()
+        module.triggers_discoverer = Mock()
+        module.triggers_discoverer.get_trigger.return_value = mock_handler
+
+        input_data = _LcInputModel(root=_LcInputTrigger(message="hello"))
+        setup_data = _LcSetupModel()
+
+        await module.run(input_data, setup_data)
+
+        mock_handler.handle.assert_awaited_once()
+        # Verify correct args: root trigger, setup, context
+        call_args = mock_handler.handle.call_args
+        assert call_args[0][1] is setup_data
+        assert call_args[0][2] is module.context
+
+    async def test_raises_on_unknown_protocol(self) -> None:
+        """run() raises ValueError for unregistered protocol."""
+        cls = _make_module_cls()
+        module = _instantiate(cls)
+
+        module.triggers_discoverer = Mock()
+        module.triggers_discoverer.get_trigger.side_effect = ValueError("No handler")
+
+        input_data = _LcInputModel(root=_LcInputTrigger())
+        setup_data = _LcSetupModel()
+
+        with pytest.raises(ValueError, match="No handler"):
+            await module.run(input_data, setup_data)
+
+
+class TestRunLifecycle:
+    """Tests for BaseModule._run_lifecycle."""
+
+    async def test_success_sets_stopping(self) -> None:
+        """Successful run sets status to STOPPING."""
+        cls = _make_module_cls()
+        module = _instantiate(cls)
+
+        with patch.object(module, "run", new_callable=AsyncMock):
+            await module._run_lifecycle(_LcInputModel(root=_LcInputTrigger()), _LcSetupModel())
+
+        assert module.status == ModuleStatus.STOPPING
+
+    async def test_exception_sets_failed(self) -> None:
+        """Exception in run sets status to FAILED."""
+        cls = _make_module_cls()
+        module = _instantiate(cls)
+
+        with patch.object(module, "run", new_callable=AsyncMock, side_effect=RuntimeError("boom")):
+            await module._run_lifecycle(_LcInputModel(root=_LcInputTrigger()), _LcSetupModel())
+
+        assert module.status == ModuleStatus.FAILED
+
+    async def test_cancel_sets_cancelled(self) -> None:
+        """CancelledError in run sets status to CANCELLED."""
+        cls = _make_module_cls()
+        module = _instantiate(cls)
+
+        with patch.object(module, "run", new_callable=AsyncMock, side_effect=asyncio.CancelledError):
+            await module._run_lifecycle(_LcInputModel(root=_LcInputTrigger()), _LcSetupModel())
+
+        assert module.status == ModuleStatus.CANCELLED
+
+
+class TestStart:
+    """Tests for BaseModule.start."""
+
+    async def test_success_path(self) -> None:
+        """start() runs full lifecycle: callback, init, handlers, run, stop."""
+        cls = _make_module_cls()
+        module = _instantiate(cls)
+
+        callback = AsyncMock()
+        setup_data = _LcSetupModel()
+        input_data = _LcInputModel(root=_LcInputTrigger())
+
+        with (
+            patch.object(module, "initialize", new_callable=AsyncMock) as mock_init,
+            patch.object(module, "_run_lifecycle", new_callable=AsyncMock),
+            patch.object(module, "stop", new_callable=AsyncMock) as mock_stop,
+        ):
+            module.triggers_discoverer = Mock()
+            module.triggers_discoverer.init_handlers = Mock()
+
+            await module.start(input_data, setup_data, callback)
+
+        # Module start info sent first
+        assert callback.await_count >= 1
+        mock_init.assert_awaited_once()
+        mock_stop.assert_awaited_once()
+
+    async def test_init_error_sends_error_code(self) -> None:
+        """start() sends ModuleCodeModel on initialize error."""
+        cls = _make_module_cls()
+        module = _instantiate(cls)
+
+        callback = AsyncMock()
+        setup_data = _LcSetupModel()
+        input_data = _LcInputModel(root=_LcInputTrigger())
+
+        with (
+            patch.object(module, "initialize", new_callable=AsyncMock, side_effect=RuntimeError("init fail")),
+            patch.object(module, "stop", new_callable=AsyncMock),
+        ):
+            await module.start(input_data, setup_data, callback)
+
+        assert module.status == ModuleStatus.FAILED
+        # Second callback call should be ModuleCodeModel
+        error_call = callback.call_args_list[1]
+        assert isinstance(error_call[0][0], ModuleCodeModel)
+        assert error_call[0][0].code == "Error"
+
+    async def test_init_error_with_done_callback(self) -> None:
+        """start() calls done_callback when init fails."""
+        cls = _make_module_cls()
+        module = _instantiate(cls)
+
+        callback = AsyncMock()
+        done_callback = AsyncMock()
+        setup_data = _LcSetupModel()
+        input_data = _LcInputModel(root=_LcInputTrigger())
+
+        with (
+            patch.object(module, "initialize", new_callable=AsyncMock, side_effect=RuntimeError("fail")),
+            patch.object(module, "stop", new_callable=AsyncMock),
+        ):
+            await module.start(input_data, setup_data, callback, done_callback=done_callback)
+
+        done_callback.assert_awaited_once_with(None)
+
+    async def test_lifecycle_error_sets_failed(self) -> None:
+        """start() sets FAILED on lifecycle exception."""
+        cls = _make_module_cls()
+        module = _instantiate(cls)
+
+        callback = AsyncMock()
+        setup_data = _LcSetupModel()
+        input_data = _LcInputModel(root=_LcInputTrigger())
+
+        with (
+            patch.object(module, "initialize", new_callable=AsyncMock),
+            patch.object(module, "_run_lifecycle", new_callable=AsyncMock, side_effect=RuntimeError("lifecycle")),
+            patch.object(module, "stop", new_callable=AsyncMock),
+        ):
+            module.triggers_discoverer = Mock()
+            module.triggers_discoverer.init_handlers = Mock()
+
+            await module.start(input_data, setup_data, callback)
+
+        assert module.status == ModuleStatus.FAILED
+
+
+class TestStop:
+    """Tests for BaseModule.stop."""
+
+    async def test_success_sets_stopped(self) -> None:
+        """stop() cleans up and sends EndOfStream."""
+        cls = _make_module_cls()
+        module = _instantiate(cls)
+        module.context.callbacks.send_message = AsyncMock()
+
+        with patch.object(module, "cleanup", new_callable=AsyncMock):
+            await module.stop()
+
+        assert module.status == ModuleStatus.STOPPED
+        module.context.callbacks.send_message.assert_awaited_once()
+        # Verify EndOfStream was sent
+        sent = module.context.callbacks.send_message.call_args[0][0]
+        assert sent.root.protocol == "end_of_stream"
+
+    async def test_cleanup_error_sets_failed(self) -> None:
+        """stop() sets FAILED when cleanup raises."""
+        cls = _make_module_cls()
+        module = _instantiate(cls)
+        module.context.callbacks.send_message = AsyncMock()
+
+        with patch.object(module, "cleanup", new_callable=AsyncMock, side_effect=RuntimeError("cleanup fail")):
+            await module.stop()
+
+        assert module.status == ModuleStatus.FAILED
+
+
+class TestResolveTools:
+    """Tests for BaseModule._resolve_tools."""
+
+    async def test_with_registry_and_communication(self) -> None:
+        """_resolve_tools calls resolve_tool_references when services available."""
+        cls = _make_module_cls()
+        module = _instantiate(cls)
+        module.context.registry = Mock()
+        module.context.communication = Mock()
+
+        setup_data = _LcSetupModel()
+
+        with (
+            patch.object(type(setup_data), "resolve_tool_references", new_callable=AsyncMock) as mock_resolve,
+            patch.object(type(setup_data), "build_tool_cache", return_value=ToolCache()),
+        ):
+            await module._resolve_tools(setup_data)
+
+        mock_resolve.assert_awaited_once_with(
+            module.context.registry,
+            module.context.communication,
+        )
+        assert isinstance(module.context.tool_cache, ToolCache)
+
+    async def test_without_registry_skips_resolution(self) -> None:
+        """_resolve_tools skips resolution when registry is None."""
+        cls = _make_module_cls()
+        module = _instantiate(cls)
+        module.context.registry = None
+        module.context.communication = Mock()
+
+        setup_data = _LcSetupModel()
+
+        with (
+            patch.object(type(setup_data), "resolve_tool_references", new_callable=AsyncMock) as mock_resolve,
+            patch.object(type(setup_data), "build_tool_cache", return_value=ToolCache()),
+        ):
+            await module._resolve_tools(setup_data)
+
+        mock_resolve.assert_not_awaited()
+
+    async def test_without_communication_skips_resolution(self) -> None:
+        """_resolve_tools skips resolution when communication is None."""
+        cls = _make_module_cls()
+        module = _instantiate(cls)
+        module.context.registry = Mock()
+        module.context.communication = None
+
+        setup_data = _LcSetupModel()
+
+        with (
+            patch.object(type(setup_data), "resolve_tool_references", new_callable=AsyncMock) as mock_resolve,
+            patch.object(type(setup_data), "build_tool_cache", return_value=ToolCache()),
+        ):
+            await module._resolve_tools(setup_data)
+
+        mock_resolve.assert_not_awaited()
+
+
+class TestStartConfigSetup:
+    """Tests for BaseModule.start_config_setup."""
+
+    async def test_success_path(self) -> None:
+        """start_config_setup resolves tools, runs config, sends result."""
+        cls = _make_module_cls()
+        module = _instantiate(cls)
+
+        callback = AsyncMock()
+        setup_data = _LcSetupModel(name="initial")
+
+        with (
+            patch.object(module, "_resolve_tools", new_callable=AsyncMock),
+            patch.object(module, "run_config_setup", new_callable=AsyncMock, return_value=setup_data),
+            patch.object(cls, "create_setup_model", new_callable=AsyncMock, return_value=setup_data),
+        ):
+            await module.start_config_setup(setup_data, callback)
+
+        assert module.status == ModuleStatus.STOPPING
+        callback.assert_awaited_once()
+
+    async def test_error_sets_failed(self) -> None:
+        """start_config_setup sets FAILED on exception."""
+        cls = _make_module_cls()
+        module = _instantiate(cls)
+
+        callback = AsyncMock()
+        setup_data = _LcSetupModel()
+
+        with patch.object(module, "_resolve_tools", new_callable=AsyncMock, side_effect=RuntimeError("resolve fail")):
+            await module.start_config_setup(setup_data, callback)
+
+        assert module.status == ModuleStatus.FAILED
