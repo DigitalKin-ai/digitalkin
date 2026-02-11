@@ -152,7 +152,7 @@ class TaskExecutor:
                     # Heartbeat stopped - failure cleanup
                     cleanup_reason = CancellationReason.FAILURE_CLEANUP
 
-                # Signal stream to close FIRST before any cleanup
+                # Signal stream to close — nothing new will be produced after this point.
                 session.close_stream()
 
                 # Cancel pending tasks with proper reason logging

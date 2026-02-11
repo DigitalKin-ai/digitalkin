@@ -27,7 +27,7 @@ from tests.mocks import (
 )
 
 # Set timeout for all tests in this file (60 seconds)
-pytestmark = pytest.mark.timeout(60)
+pytestmark = [pytest.mark.timeout(60), pytest.mark.taskiq]
 
 
 # ============================================================================

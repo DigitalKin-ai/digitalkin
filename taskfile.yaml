@@ -75,7 +75,7 @@ tasks:
   run-tests:
     desc: "Run pytest tests"
     cmds:
-      - docker compose run --rm -T tests -m 'not integration'
+      - docker compose run --rm -T tests
 
   linter:
     desc: "run linter on the project"

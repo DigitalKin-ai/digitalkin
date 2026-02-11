@@ -306,6 +306,7 @@ class TestJobManagerMemoryLeaks:
             # Verify all sessions and queues cleaned
             assert len(manager.tasks_sessions) == 0
 
+    @pytest.mark.taskiq
     @pytest.mark.asyncio
     async def test_taskiq_job_manager_stream_consumer_cleanup(self):
         """Test that TaskiqJobManager cleans up stream consumers."""

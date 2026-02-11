@@ -58,6 +58,7 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
             return cast("type[SetupModelT]", cls._clean_model_cache[cache_key])
 
         clean_fields: dict[str, Any] = {}
+        excluded_fields: set[str] = set()
 
         for name, field_info in cls.model_fields.items():
             extra = field_info.json_schema_extra or {}
@@ -65,8 +66,10 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
             is_hidden = (extra.get("ui:widget") == "hidden") if isinstance(extra, dict) else False
 
             if is_config and not config_fields:
+                excluded_fields.add(name)
                 continue
             if is_hidden and not hidden_fields:
+                excluded_fields.add(name)
                 continue
 
             current_field_info = field_info
@@ -101,10 +104,33 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
             **clean_fields,
         )
 
+        cls._remove_excluded_inherited_fields(m, excluded_fields, clean_fields)
+
         if not force:
             cls._clean_model_cache[cache_key] = m
 
         return cast("type[SetupModelT]", m)
+
+    @staticmethod
+    def _remove_excluded_inherited_fields(
+        model: type[BaseModel],
+        excluded_fields: set[str],
+        clean_fields: dict[str, Any],
+    ) -> None:
+        """Remove inherited fields that were excluded by the filter.
+
+        Args:
+            model: The created model class.
+            excluded_fields: Field names that should be excluded.
+            clean_fields: Fields explicitly included in the model.
+        """
+        removed = False
+        for field_name in excluded_fields:
+            if field_name in model.model_fields and field_name not in clean_fields:
+                del model.model_fields[field_name]
+                removed = True
+        if removed:
+            model.model_rebuild(force=True)
 
     @classmethod
     def _get_base_model_type(cls, annotation: "type | None") -> "type[BaseModel] | None":
@@ -288,266 +314,94 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
 
         return new_field_info
 
-    async def resolve_tool_references(
-        self, registry: "RegistryStrategy", communication: "CommunicationStrategy"
-    ) -> None:
-        """Resolve all ToolReference fields recursively.
+    async def build_tool_cache(
+        self,
+        registry: "RegistryStrategy | None" = None,
+        communication: "CommunicationStrategy | None" = None,
+    ) -> ToolCache:
+        """Build tool cache, resolving uncached tools via registry.
+
+        Walks ToolReference fields recursively. For each selected tool,
+        checks resolved_tools first (cache). If missing and registry is
+        available, resolves via gRPC and populates the cache.
 
         Args:
-            registry: Registry service for module discovery.
+            registry: Registry service for resolving uncached tools.
             communication: Communication service for module schemas.
+
+        Returns:
+            ToolCache with resolved tool entries.
         """
-        logger.info("Starting resolve_tool_references")
-        await self._resolve_tool_references_recursive(
-            self,
-            registry,
-            communication,
-            self.resolved_tools,
-        )
-        logger.info("Finished resolve_tool_references")
+        cache = ToolCache()
+        await self._collect_tools_recursive(self, cache, registry, communication)
+        logger.info("Tool cache built: %d entries", len(cache.entries))
+        return cache
 
-    @classmethod
-    async def _resolve_tool_references_recursive(
-        cls,
+    async def _collect_tools_recursive(
+        self,
         model_instance: BaseModel,
-        registry: "RegistryStrategy",
-        communication: "CommunicationStrategy",
-        resolved_tools: dict[str, ToolModuleInfo],
+        cache: ToolCache,
+        registry: "RegistryStrategy | None",
+        communication: "CommunicationStrategy | None",
     ) -> None:
-        """Recursively resolve ToolReference fields in a model.
+        """Recursively walk model fields to find and resolve ToolReferences.
 
         Args:
-            model_instance: Model instance to process.
-            registry: Registry service for resolution.
-            communication: Communication service for module schemas.
-            resolved_tools: Cache of already resolved tools.
+            model_instance: Model instance to walk.
+            cache: ToolCache to populate.
+            registry: Optional registry for resolving uncached tools.
+            communication: Optional communication for module schemas.
         """
         for field_name, field_value in model_instance.__dict__.items():
             if field_value is None:
                 continue
-            await cls._resolve_field_value(
-                field_name,
-                field_value,
-                registry,
-                communication,
-                resolved_tools,
-            )
+            if isinstance(field_value, ToolReference):
+                await self._collect_from_tool_ref(field_name, field_value, cache, registry, communication)
+            elif isinstance(field_value, BaseModel):
+                await self._collect_tools_recursive(field_value, cache, registry, communication)
+            elif isinstance(field_value, (list, dict)):
+                items = field_value if isinstance(field_value, list) else field_value.values()
+                for item in items:
+                    if isinstance(item, ToolReference):
+                        await self._collect_from_tool_ref(field_name, item, cache, registry, communication)
+                    elif isinstance(item, BaseModel):
+                        await self._collect_tools_recursive(item, cache, registry, communication)
 
-    @classmethod
-    async def _resolve_field_value(
-        cls,
-        field_name: str,
-        field_value: "BaseModel | ToolReference | list | dict",
-        registry: "RegistryStrategy",
-        communication: "CommunicationStrategy",
-        resolved_tools: dict[str, ToolModuleInfo],
-    ) -> None:
-        """Resolve a single field value based on its type.
-
-        Args:
-            field_name: Name of the field.
-            field_value: Value to process.
-            registry: Registry service for resolution.
-            communication: Communication service for module schemas.
-            resolved_tools: Cache of already resolved tools.
-        """
-        if isinstance(field_value, ToolReference):
-            await cls._resolve_tool_reference(
-                field_name,
-                field_value,
-                registry,
-                communication,
-                resolved_tools,
-            )
-        elif isinstance(field_value, BaseModel):
-            await cls._resolve_tool_references_recursive(
-                field_value,
-                registry,
-                communication,
-                resolved_tools,
-            )
-        elif isinstance(field_value, list):
-            await cls._resolve_list_items(
-                field_value,
-                registry,
-                communication,
-                resolved_tools,
-            )
-        elif isinstance(field_value, dict):
-            await cls._resolve_dict_values(
-                field_value,
-                registry,
-                communication,
-                resolved_tools,
-            )
-
-    @classmethod
-    async def _resolve_tool_reference(
-        cls,
+    async def _collect_from_tool_ref(
+        self,
         field_name: str,
         tool_ref: ToolReference,
-        registry: "RegistryStrategy",
-        communication: "CommunicationStrategy",
-        resolved_tools: dict[str, ToolModuleInfo],
+        cache: ToolCache,
+        registry: "RegistryStrategy | None",
+        communication: "CommunicationStrategy | None",
     ) -> None:
-        """Resolve a ToolReference (may contain multiple selected tools).
+        """Resolve and cache tools from a single ToolReference.
 
         Args:
-            field_name: Name of the field for logging.
-            tool_ref: ToolReference to resolve.
-            registry: Registry service for resolution.
-            communication: Communication service for module schemas.
-            resolved_tools: Cache of already resolved tools.
+            field_name: Field name for logging.
+            tool_ref: ToolReference to process.
+            cache: ToolCache to populate.
+            registry: Optional registry for resolution.
+            communication: Optional communication for schemas.
         """
-        logger.info("Resolving ToolReference '%s' with %d selected tools", field_name, len(tool_ref.selected_tools))
-
         if not tool_ref.selected_tools:
-            logger.info("ToolReference '%s' has no selected tools, skipping", field_name)
             return
 
-        tools_to_resolve = [
-            entry for entry in tool_ref.selected_tools if entry.setup_id and entry.setup_id not in resolved_tools
-        ]
+        # Resolve uncached entries via registry
+        has_uncached = any(
+            entry.setup_id and entry.setup_id not in self.resolved_tools for entry in tool_ref.selected_tools
+        )
+        if has_uncached and registry and communication:
+            try:
+                infos = await tool_ref.resolve(registry, communication)
+                for info in infos:
+                    self.resolved_tools[info.setup_id] = info
+                    logger.info("Resolved tool '%s' -> module_id=%s", info.setup_id, info.module_id)
+            except Exception:
+                logger.exception("Failed to resolve ToolReference '%s'", field_name)
 
-        if not tools_to_resolve:
-            logger.info("All tools for '%s' already cached", field_name)
-            return
-
-        try:
-            infos = await tool_ref.resolve(registry, communication)
-            for info in infos:
-                resolved_tools[info.setup_id] = info
-                logger.info("Resolved tool '%s' -> module_id=%s", info.setup_id, info.module_id)
-        except Exception:
-            logger.exception("Failed to resolve ToolReference '%s'", field_name)
-
-    @classmethod
-    async def _resolve_list_items(
-        cls,
-        items: list,
-        registry: "RegistryStrategy",
-        communication: "CommunicationStrategy",
-        resolved_tools: dict[str, ToolModuleInfo],
-    ) -> None:
-        """Resolve ToolReference instances in a list.
-
-        Args:
-            items: List of items to process.
-            registry: Registry service for resolution.
-            communication: Communication service for module schemas.
-            resolved_tools: Cache of already resolved tools.
-        """
-        for item in items:
-            if isinstance(item, ToolReference):
-                await cls._resolve_tool_reference(
-                    "list_item",
-                    item,
-                    registry,
-                    communication,
-                    resolved_tools,
-                )
-            elif isinstance(item, BaseModel):
-                await cls._resolve_tool_references_recursive(
-                    item,
-                    registry,
-                    communication,
-                    resolved_tools,
-                )
-
-    @classmethod
-    async def _resolve_dict_values(
-        cls,
-        mapping: dict,
-        registry: "RegistryStrategy",
-        communication: "CommunicationStrategy",
-        resolved_tools: dict[str, ToolModuleInfo],
-    ) -> None:
-        """Resolve ToolReference instances in dict values.
-
-        Args:
-            mapping: Dict to process.
-            registry: Registry service for resolution.
-            communication: Communication service for module schemas.
-            resolved_tools: Cache of already resolved tools.
-        """
-        for item in mapping.values():
-            if isinstance(item, ToolReference):
-                await cls._resolve_tool_reference(
-                    "dict_value",
-                    item,
-                    registry,
-                    communication,
-                    resolved_tools,
-                )
-            elif isinstance(item, BaseModel):
-                await cls._resolve_tool_references_recursive(
-                    item,
-                    registry,
-                    communication,
-                    resolved_tools,
-                )
-
-    def build_tool_cache(self) -> ToolCache:
-        """Build tool cache from resolved ToolReferences.
-
-        Returns:
-            ToolCache with field names as keys and ToolModuleInfo as values.
-        """
-        cache = ToolCache()
-        self._build_tool_cache_recursive(self, cache)
-        logger.info("Tool cache built: %d entries", len(cache.entries))
-        return cache
-
-    def _build_tool_cache_recursive(self, model_instance: BaseModel, cache: ToolCache) -> None:
-        """Recursively build tool cache from ToolReferences.
-
-        Args:
-            model_instance: Model instance to process.
-            cache: ToolCache to populate.
-        """
-        for field_value in model_instance.__dict__.values():
-            if field_value is None:
-                continue
-            if isinstance(field_value, ToolReference):
-                for entry in field_value.selected_tools:
-                    tool_module_info = self.resolved_tools.get(entry.setup_id)
-                    if tool_module_info:
-                        cache.add(tool_module_info)
-            elif isinstance(field_value, BaseModel):
-                self._build_tool_cache_recursive(field_value, cache)
-            elif isinstance(field_value, list):
-                self._process_list_items(field_value, cache)
-            elif isinstance(field_value, dict):
-                self._process_dict_values(field_value, cache)
-
-    def _process_list_items(self, items: list, cache: ToolCache) -> None:
-        """Process list items for ToolReferences.
-
-        Args:
-            items: List to process.
-            cache: ToolCache to populate.
-        """
-        for item in items:
-            if isinstance(item, ToolReference):
-                for entry in item.selected_tools:
-                    tool_module_info = self.resolved_tools.get(entry.setup_id)
-                    if tool_module_info:
-                        cache.add(tool_module_info)
-            elif isinstance(item, BaseModel):
-                self._build_tool_cache_recursive(item, cache)
-
-    def _process_dict_values(self, mapping: dict, cache: ToolCache) -> None:
-        """Process dict values for ToolReferences.
-
-        Args:
-            mapping: Dict to process.
-            cache: ToolCache to populate.
-        """
-        for item in mapping.values():
-            if isinstance(item, ToolReference):
-                for entry in item.selected_tools:
-                    tool_module_info = self.resolved_tools.get(entry.setup_id)
-                    if tool_module_info:
-                        cache.add(tool_module_info)
-            elif isinstance(item, BaseModel):
-                self._build_tool_cache_recursive(item, cache)
+        # Add all resolved entries to cache
+        for entry in tool_ref.selected_tools:
+            tool_info = self.resolved_tools.get(entry.setup_id) if entry.setup_id else None
+            if tool_info:
+                cache.add(tool_info)

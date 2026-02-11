@@ -375,6 +375,7 @@ class TestImprovedJobManagerMemoryProfile:
                 f"Memory grew excessively after cleanup: {cleanup_ratio * 100:.1f}% of init (expected <200%)"
             )
 
+    @pytest.mark.taskiq
     @pytest.mark.asyncio
     async def test_taskiq_job_manager_queue_clearing(self):
         """Test TaskiqJobManager queue memory is cleared properly."""
@@ -557,9 +558,9 @@ class TestImprovedMemoryOptimizations:
             gc.collect()
             baseline = get_memory_usage_reliable()
 
-            # Create connections
+            # Create enough connections so the delta exceeds measurement noise
             created_connections = []
-            for i in range(20):
+            for i in range(200):
                 conn = await ConnectionFactory.create_surreal_connection(database=f"db-{i}", auto_init=False)
                 created_connections.append(conn)
 
@@ -577,8 +578,7 @@ class TestImprovedMemoryOptimizations:
 
             assert memory_with_connections > 0, f"Memory with connections is {memory_with_connections}, expected > 0"
 
-            # Note: With tracemalloc and Python pooling, memory may not decrease significantly
-            # We verify it doesn't grow excessively after clearing
+            # Verify memory doesn't grow excessively after clearing
             retention_ratio = memory_after_clear / memory_with_connections
             assert retention_ratio < 1.5, (
                 f"Memory grew after clearing connections: {retention_ratio * 100:.1f}% retained (expected <150%)"

@@ -154,6 +154,7 @@ class TestTaskManagerChannelRegression:
 class TestTaskiqInfiniteLoopRegression:
     """Test regression for TaskiqJobManager infinite loop."""
 
+    @pytest.mark.taskiq
     @pytest.mark.asyncio
     async def test_taskiq_stream_consumer_timeout(self):
         """REGRESSION: test_taskiq_job_manager had infinite loop in stream consumer
@@ -239,6 +240,7 @@ class TestMemoryLeakRegressions:
         # Session should be removed
         assert "task-1" not in manager.tasks_sessions
 
+    @pytest.mark.taskiq
     @pytest.mark.asyncio
     async def test_taskiq_job_manager_connection_cleanup(self):
         """REGRESSION: TaskiqJobManager didn't close SurrealDB connection
@@ -283,6 +285,7 @@ class TestMemoryLeakRegressions:
 class TestFireAndForgetRegression:
     """Test regressions related to fire-and-forget async tasks."""
 
+    @pytest.mark.taskiq
     @pytest.mark.asyncio
     async def test_stream_consumer_task_error_handling(self):
         """REGRESSION: Stream consumer task in TaskiqJobManager was fire-and-forget
@@ -374,6 +377,7 @@ class TestContextManagerRegression:
 class TestQueueTimeoutRegression:
     """Test regressions related to queue timeout issues."""
 
+    @pytest.mark.taskiq
     @pytest.mark.asyncio
     async def test_generate_config_setup_timeout(self):
         """REGRESSION: generate_config_setup_module_response could hang forever
@@ -393,6 +397,7 @@ class TestQueueTimeoutRegression:
                 # Queue should be cleaned up
                 assert "timeout-job" not in manager.job_queues
 
+    @pytest.mark.taskiq
     @pytest.mark.timeout(10)
     @pytest.mark.asyncio
     async def test_stream_consumer_periodic_timeout(self):

@@ -430,7 +430,7 @@ class TestResolveTools:
     """Tests for BaseModule._resolve_tools."""
 
     async def test_with_registry_and_communication(self) -> None:
-        """_resolve_tools calls resolve_tool_references when services available."""
+        """_resolve_tools calls build_tool_cache with services."""
         cls = _make_module_cls()
         module = _instantiate(cls)
         module.context.registry = Mock()
@@ -438,20 +438,17 @@ class TestResolveTools:
 
         setup_data = _LcSetupModel()
 
-        with (
-            patch.object(type(setup_data), "resolve_tool_references", new_callable=AsyncMock) as mock_resolve,
-            patch.object(type(setup_data), "build_tool_cache", return_value=ToolCache()),
-        ):
+        with patch.object(type(setup_data), "build_tool_cache", new_callable=AsyncMock, return_value=ToolCache()) as mock_build:
             await module._resolve_tools(setup_data)
 
-        mock_resolve.assert_awaited_once_with(
+        mock_build.assert_awaited_once_with(
             module.context.registry,
             module.context.communication,
         )
         assert isinstance(module.context.tool_cache, ToolCache)
 
-    async def test_without_registry_skips_resolution(self) -> None:
-        """_resolve_tools skips resolution when registry is None."""
+    async def test_without_registry(self) -> None:
+        """_resolve_tools passes None registry to build_tool_cache."""
         cls = _make_module_cls()
         module = _instantiate(cls)
         module.context.registry = None
@@ -459,16 +456,13 @@ class TestResolveTools:
 
         setup_data = _LcSetupModel()
 
-        with (
-            patch.object(type(setup_data), "resolve_tool_references", new_callable=AsyncMock) as mock_resolve,
-            patch.object(type(setup_data), "build_tool_cache", return_value=ToolCache()),
-        ):
+        with patch.object(type(setup_data), "build_tool_cache", new_callable=AsyncMock, return_value=ToolCache()) as mock_build:
             await module._resolve_tools(setup_data)
 
-        mock_resolve.assert_not_awaited()
+        mock_build.assert_awaited_once_with(None, module.context.communication)
 
-    async def test_without_communication_skips_resolution(self) -> None:
-        """_resolve_tools skips resolution when communication is None."""
+    async def test_without_communication(self) -> None:
+        """_resolve_tools passes None communication to build_tool_cache."""
         cls = _make_module_cls()
         module = _instantiate(cls)
         module.context.registry = Mock()
@@ -476,13 +470,10 @@ class TestResolveTools:
 
         setup_data = _LcSetupModel()
 
-        with (
-            patch.object(type(setup_data), "resolve_tool_references", new_callable=AsyncMock) as mock_resolve,
-            patch.object(type(setup_data), "build_tool_cache", return_value=ToolCache()),
-        ):
+        with patch.object(type(setup_data), "build_tool_cache", new_callable=AsyncMock, return_value=ToolCache()) as mock_build:
             await module._resolve_tools(setup_data)
 
-        mock_resolve.assert_not_awaited()
+        mock_build.assert_awaited_once_with(module.context.registry, None)
 
 
 class TestStartConfigSetup:

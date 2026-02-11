@@ -25,7 +25,7 @@
         "Programming Language :: Python",
         "Topic :: Software Development :: Libraries",
     ]
-    version = "0.3.2b1"
+    version = "0.3.2b2"
 
     dependencies = [
         "agentic-mesh-protocol==0.2.2",
@@ -275,5 +275,7 @@
         "integration: marks tests that require real SurrealDB connection (deselect with '-m \"not integration\"')",
         "regression: marks tests for previously fixed bugs",
         "smoke: marks critical path tests that should always pass",
+        "stress: marks stress/load tests for performance under pressure",
+        "taskiq: marks tests for Taskiq distributed job execution",
         "validation: marks tests for input validation and schema checking",
     ]

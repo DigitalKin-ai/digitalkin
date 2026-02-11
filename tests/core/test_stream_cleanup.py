@@ -34,6 +34,7 @@ from digitalkin.core.task_manager.task_executor import TaskExecutor
 from digitalkin.core.task_manager.task_session import TaskSession
 from digitalkin.models.core.task_monitor import CancellationReason, TaskStatus
 from digitalkin.modules._base_module import BaseModule
+from digitalkin.services.services_models import ServicesMode
 
 # Set timeout for all tests in this file
 pytestmark = pytest.mark.timeout(30)
@@ -1158,3 +1159,175 @@ class TestChannelPoolCleanup:
         await context.cleanup()
 
         mock_communication.cleanup.assert_called_once()
+
+
+# ============================================================================
+# Test: Stream Drain Behavior (via real _stream() generator)
+# ============================================================================
+
+
+class TestStreamDrainBehavior:
+    """Tests for the _stream() drain-vs-abort behavior via generate_stream_consumer.
+
+    Validates the core fix: stream_closed triggers a drain (yields remaining
+    queue items) instead of an immediate break that would lose messages.
+    """
+
+    @pytest.mark.asyncio
+    async def test_stream_closed_drains_queue(
+        self,
+        mock_surreal_connection: Mock,
+        mock_base_module: Mock,
+    ) -> None:
+        """Test that stream_closed drains remaining queue items before exiting.
+
+        This is the core regression test: previously stream_closed caused an
+        immediate break, losing messages still in the queue.
+        """
+        job_id = "drain_test"
+        mission_id = "missions:drain"
+
+        manager = SingleJobManager(mock_base_module.__class__, ServicesMode.LOCAL)
+
+        session = TaskSession(job_id, mission_id, mock_surreal_connection, mock_base_module)
+        manager.tasks_sessions[job_id] = session
+
+        # Pre-fill queue with messages (simulating tool output + EndOfStreamOutput)
+        await session.queue.put({"root": {"type": "module_start_info"}})
+        await session.queue.put({"root": {"type": "text_search", "results": ["r1", "r2"]}})
+        await session.queue.put({"root": {"protocol": "end_of_stream"}})
+
+        # Close stream BEFORE consuming (simulates the race condition)
+        session.close_stream()
+
+        collected: list[dict[str, Any]] = []
+        async with manager.generate_stream_consumer(job_id) as stream:
+            async for msg in stream:
+                collected.append(msg)
+
+        # All 3 messages should have been drained, not lost
+        assert len(collected) == 3
+        assert collected[0]["root"]["type"] == "module_start_info"
+        assert collected[1]["root"]["type"] == "text_search"
+        assert collected[2]["root"]["protocol"] == "end_of_stream"
+
+    @pytest.mark.asyncio
+    async def test_completed_status_drains_queue(
+        self,
+        mock_surreal_connection: Mock,
+        mock_base_module: Mock,
+    ) -> None:
+        """Test that COMPLETED status drains remaining queue items before exiting."""
+        job_id = "completed_drain"
+        mission_id = "missions:completed_drain"
+
+        manager = SingleJobManager(mock_base_module.__class__, ServicesMode.LOCAL)
+
+        session = TaskSession(job_id, mission_id, mock_surreal_connection, mock_base_module)
+        manager.tasks_sessions[job_id] = session
+
+        # Pre-fill queue
+        await session.queue.put({"data": "msg_1"})
+        await session.queue.put({"data": "msg_2"})
+
+        # Set completed status
+        session.status = TaskStatus.COMPLETED
+
+        collected: list[dict[str, Any]] = []
+        async with manager.generate_stream_consumer(job_id) as stream:
+            async for msg in stream:
+                collected.append(msg)
+
+        assert len(collected) == 2
+        assert collected[0]["data"] == "msg_1"
+        assert collected[1]["data"] == "msg_2"
+
+    @pytest.mark.asyncio
+    async def test_failed_status_drains_queue(
+        self,
+        mock_surreal_connection: Mock,
+        mock_base_module: Mock,
+    ) -> None:
+        """Test that FAILED status drains remaining queue items before exiting."""
+        job_id = "failed_drain"
+        mission_id = "missions:failed_drain"
+
+        manager = SingleJobManager(mock_base_module.__class__, ServicesMode.LOCAL)
+
+        session = TaskSession(job_id, mission_id, mock_surreal_connection, mock_base_module)
+        manager.tasks_sessions[job_id] = session
+
+        await session.queue.put({"error": "partial output before crash"})
+        session.status = TaskStatus.FAILED
+
+        collected: list[dict[str, Any]] = []
+        async with manager.generate_stream_consumer(job_id) as stream:
+            async for msg in stream:
+                collected.append(msg)
+
+        assert len(collected) == 1
+        assert collected[0]["error"] == "partial output before crash"
+
+    @pytest.mark.asyncio
+    async def test_cancelled_aborts_without_draining(
+        self,
+        mock_surreal_connection: Mock,
+        mock_base_module: Mock,
+    ) -> None:
+        """Test that cancelled status aborts immediately without draining the queue."""
+        job_id = "cancel_abort"
+        mission_id = "missions:cancel_abort"
+
+        manager = SingleJobManager(mock_base_module.__class__, ServicesMode.LOCAL)
+
+        session = TaskSession(job_id, mission_id, mock_surreal_connection, mock_base_module)
+        manager.tasks_sessions[job_id] = session
+
+        # Fill queue with items that should NOT be yielded
+        await session.queue.put({"data": "should_not_yield_1"})
+        await session.queue.put({"data": "should_not_yield_2"})
+
+        # Set cancelled
+        session.is_cancelled.set()
+
+        collected: list[dict[str, Any]] = []
+        async with manager.generate_stream_consumer(job_id) as stream:
+            async for msg in stream:
+                collected.append(msg)
+
+        # Nothing should have been yielded — cancelled aborts immediately
+        assert len(collected) == 0
+
+    @pytest.mark.asyncio
+    async def test_stream_closed_during_consumption_drains_remaining(
+        self,
+        mock_surreal_connection: Mock,
+        mock_base_module: Mock,
+    ) -> None:
+        """Test that close_stream() during active consumption drains the rest."""
+        job_id = "mid_close"
+        mission_id = "missions:mid_close"
+
+        manager = SingleJobManager(mock_base_module.__class__, ServicesMode.LOCAL)
+
+        session = TaskSession(job_id, mission_id, mock_surreal_connection, mock_base_module)
+        manager.tasks_sessions[job_id] = session
+
+        collected: list[dict[str, Any]] = []
+
+        async def producer() -> None:
+            """Add messages then close stream."""
+            for i in range(3):
+                await session.queue.put({"idx": i})
+                await asyncio.sleep(0.01)
+            session.close_stream()
+
+        async def consumer() -> None:
+            async with manager.generate_stream_consumer(job_id) as stream:
+                async for msg in stream:
+                    collected.append(msg)
+
+        await asyncio.gather(producer(), consumer())
+
+        # All 3 messages should have been consumed (drain on close)
+        assert len(collected) == 3
