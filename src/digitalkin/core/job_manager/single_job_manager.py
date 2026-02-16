@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from digitalkin.core.task_manager.surrealdb_repository import SurrealDBConnection
 from digitalkin.logger import logger
 from digitalkin.models.core.task_monitor import TaskStatus
-from digitalkin.models.module.base_types import InputModelT, OutputModelT, SetupModelT
+from digitalkin.models.module.base_types import DataModel, InputModelT, OutputModelT, SetupModelT
 from digitalkin.models.module.module import ModuleCodeModel
 from digitalkin.modules._base_module import BaseModule
 from digitalkin.services.services_models import ServicesMode
@@ -141,7 +141,7 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         else:
             return job_id
 
-    async def add_to_queue(self, job_id: str, output_data: OutputModelT | ModuleCodeModel) -> None:
+    async def add_to_queue(self, job_id: str, output_data: DataModel | ModuleCodeModel) -> None:
         """Add output data to the queue for a specific job.
 
         Uses timeout-based backpressure: if the queue is full after 5s,
@@ -172,8 +172,8 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
                 pass
             session.queue.put_nowait(output_data.model_dump(mode="json"))
 
-    @asynccontextmanager  # type: ignore
-    async def generate_stream_consumer(self, job_id: str) -> AsyncIterator[AsyncGenerator[dict[str, Any], None]]:  # type: ignore
+    @asynccontextmanager
+    async def generate_stream_consumer(self, job_id: str) -> AsyncIterator[AsyncGenerator[dict[str, Any], None]]:
         """Generate a stream consumer for a module's output data.
 
         This method creates an asynchronous generator that streams output data
@@ -188,7 +188,9 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         """
         if (session := self.tasks_sessions.get(job_id, None)) is None:
 
-            async def _error_gen() -> AsyncGenerator[dict[str, Any], None]:  # noqa: RUF029
+            async def _error_gen() -> AsyncGenerator[  # noqa: RUF029
+                dict[str, Any], None
+            ]:  # Async generator type required by caller even though body uses yield
                 """Generate an error message for a non-existent module.
 
                 Yields:
@@ -290,7 +292,7 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             job_id,
             mission_id,
             module,
-            module.start(input_data, setup_data, callback, done_callback=None),
+            module.start(input_data, setup_data, callback, done_callback=None),  # type: ignore[arg-type]
         )
         logger.info("Managed task started: '%s'", job_id, extra={"task_id": job_id})
         return job_id

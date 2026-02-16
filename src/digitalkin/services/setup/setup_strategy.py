@@ -38,8 +38,8 @@ class SetupStrategy(ABC):
     def __init__(self) -> None:
         """Initialize the setup strategy."""
 
-    def __post_init__(self, *args, **kwargs) -> None:  # noqa: ANN002, ANN003
-        """Initialize the setup strategy."""
+    def __post_init__(self, *args: Any, **kwargs: Any) -> None:
+        """Lifecycle hook for post-initialization. Subclasses override with specific params."""
 
     @abstractmethod
     def create_setup(self, setup_dict: dict[str, Any]) -> str:

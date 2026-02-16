@@ -25,7 +25,7 @@ class TaskExecutor:
     """
 
     @staticmethod
-    async def execute_task(  # noqa: C901, PLR0915
+    async def execute_task(  # noqa: C901, PLR0915 — supervisor pattern, TODO split
         task_id: str,
         mission_id: str,
         coro: Coroutine[Any, Any, None],
@@ -114,7 +114,9 @@ class TaskExecutor:
             finally:
                 logger.debug("Heartbeat task ended", extra={"mission_id": mission_id, "task_id": task_id})
 
-        async def supervisor() -> None:  # noqa: C901, PLR0912, PLR0915
+        async def supervisor() -> (  # noqa: C901, PLR0912, PLR0915
+            None
+        ):  # Complex: multi-task lifecycle with error handling and cleanup
             """Supervise the three concurrent tasks and handle outcomes.
 
             Raises:
@@ -210,7 +212,9 @@ class TaskExecutor:
                         },
                     )
                     msg = f"Heartbeat stopped for {task_id}"
-                    raise RuntimeError(msg)  # noqa: TRY301
+                    raise RuntimeError(  # noqa: TRY301
+                        msg
+                    )  # Intentional: propagate heartbeat failure to supervisor caller
 
             except asyncio.CancelledError:
                 session.status = TaskStatus.CANCELLED

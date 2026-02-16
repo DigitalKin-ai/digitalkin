@@ -5,7 +5,7 @@ import datetime
 import json
 import logging
 import os
-import pickle  # noqa: S403
+import pickle
 from typing import Any
 
 from rstream import Producer
@@ -22,7 +22,7 @@ from digitalkin.core.task_manager.task_executor import TaskExecutor
 from digitalkin.core.task_manager.task_session import TaskSession
 from digitalkin.logger import logger
 from digitalkin.models.module.module import ModuleCodeModel
-from digitalkin.models.module.module_types import DataModel, OutputModelT
+from digitalkin.models.module.module_types import DataModel
 from digitalkin.models.module.utility import EndOfStreamOutput
 from digitalkin.modules._base_module import BaseModule
 from digitalkin.services.services_config import ServicesConfig
@@ -41,7 +41,7 @@ class PickleFormatter(TaskiqFormatter):
     by first converting to JSON-safe primitives, then pickling that string.
     """
 
-    def dumps(self, message: TaskiqMessage) -> BrokerMessage:  # noqa: PLR6301
+    def dumps(self, message: TaskiqMessage) -> BrokerMessage:  # Required by TaskiqFormatter interface # noqa: PLR6301
         """Dumps message from python complex object to JSON.
 
         Args:
@@ -59,7 +59,7 @@ class PickleFormatter(TaskiqFormatter):
             labels=message.labels,
         )
 
-    def loads(self, message: bytes) -> TaskiqMessage:  # noqa: PLR6301
+    def loads(self, message: bytes) -> TaskiqMessage:  # Required by TaskiqFormatter interface # noqa: PLR6301
         """Recreate Python object from bytes.
 
         Args:
@@ -68,7 +68,9 @@ class PickleFormatter(TaskiqFormatter):
         Returns:
             message with TaskIQ format
         """
-        json_str = pickle.loads(message)  # noqa: S301
+        json_str = pickle.loads(  # noqa: S301
+            message
+        )  # Pickle: required for Taskiq deserialization (internal broker messages only)
         return model_validate(TaskiqMessage, json_str)
 
 
@@ -142,7 +144,7 @@ async def cleanup_global_resources() -> None:
         logger.warning("Failed to shutdown Taskiq broker: %s", e)
 
 
-async def send_message_to_stream(job_id: str, output_data: OutputModelT | ModuleCodeModel) -> None:  # type: ignore[type-var]
+async def send_message_to_stream(job_id: str, output_data: DataModel | ModuleCodeModel) -> None:
     """Callback define to add a message frame to the Rstream.
 
     Args:
@@ -182,12 +184,12 @@ async def run_start_module(
         services_config_params=module_class.services_config_params,
         mode=services_mode,
     )
-    setattr(module_class, "services_config", services_config)
+    module_class.services_config = services_config
     logger.debug("Services config: %s | Module config: %s", services_config, module_class.services_config)
     module_class.discover()
 
     job_id = context.message.task_id
-    callback = await BaseJobManager.job_specific_callback(send_message_to_stream, job_id)  # type: ignore[type-var]
+    callback = await BaseJobManager.job_specific_callback(send_message_to_stream, job_id)
     module = ModuleFactory.create_module_instance(module_class, job_id, mission_id, setup_id, setup_version_id)
 
     channel = None
@@ -200,7 +202,7 @@ async def run_start_module(
 
         # Execute the task using TaskExecutor
         # Create a proper done callback that handles errors
-        async def send_end_of_stream(_: Any) -> None:  # noqa: ANN401
+        async def send_end_of_stream(_: Any) -> None:
             try:
                 await callback(DataModel(root=EndOfStreamOutput()))
             except Exception as e:
@@ -269,11 +271,13 @@ async def run_config_module(
         services_config_params=module_class.services_config_params,
         mode=services_mode,
     )
-    setattr(module_class, "services_config", services_config)
+    module_class.services_config = services_config
     logger.debug("Services config: %s | Module config: %s", services_config, module_class.services_config)
 
     job_id = context.message.task_id
-    callback = await BaseJobManager.job_specific_callback(send_message_to_stream, job_id)  # type: ignore[type-var]
+    callback = await BaseJobManager.job_specific_callback(  # type: ignore[type-var]
+        send_message_to_stream, job_id
+    )
     module = ModuleFactory.create_module_instance(module_class, job_id, mission_id, setup_id, setup_version_id)
 
     # Override environment variables temporarily to use manager's SurrealDB

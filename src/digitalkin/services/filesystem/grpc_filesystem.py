@@ -36,10 +36,8 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper, GrpcErrorHandlerMixi
         """
         if not file_type.upper().startswith("FILE_TYPE_"):
             file_type = f"FILE_TYPE_{file_type.upper()}"
-        try:
-            return getattr(filesystem_pb2.FileType, file_type.upper())
-        except AttributeError:
-            return filesystem_pb2.FileType.FILE_TYPE_UNSPECIFIED
+        mapping: dict[str, filesystem_pb2.FileType] = dict[str, Any](filesystem_pb2.FileType.items())
+        return mapping.get(file_type.upper(), filesystem_pb2.FileType.FILE_TYPE_UNSPECIFIED)
 
     @staticmethod
     def _file_status_to_enum(file_status: str) -> filesystem_pb2.FileStatus:
@@ -53,10 +51,8 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper, GrpcErrorHandlerMixi
         """
         if not file_status.upper().startswith("FILE_STATUS_"):
             file_status = f"FILE_STATUS_{file_status.upper()}"
-        try:
-            return getattr(filesystem_pb2.FileStatus, file_status.upper())
-        except AttributeError:
-            return filesystem_pb2.FileStatus.FILE_STATUS_UNSPECIFIED
+        mapping: dict[str, filesystem_pb2.FileStatus] = dict(filesystem_pb2.FileStatus.items())  # type: ignore[arg-type]
+        return mapping.get(file_status.upper(), filesystem_pb2.FileStatus.FILE_STATUS_UNSPECIFIED)
 
     @staticmethod
     def _file_proto_to_data(file: filesystem_pb2.File) -> FilesystemRecord:

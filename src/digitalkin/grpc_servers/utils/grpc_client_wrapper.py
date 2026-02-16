@@ -83,7 +83,11 @@ class GrpcClientWrapper:
             self._channel.close()
             self._channel = None
 
-    def exec_grpc_query(self, query_endpoint: str, request: Any) -> Any:  # noqa: ANN401
+    def exec_grpc_query(
+        self,
+        query_endpoint: str,
+        request: Any,
+    ) -> Any:
         """Execute a gRPC query with from the query's rpc endpoint name.
 
         Arguments:
@@ -108,6 +112,7 @@ class GrpcClientWrapper:
                     "request_preview": str(request)[:200],  # Truncate for log readability
                 },
             )
+            # getattr unavoidable: gRPC stubs expose RPC methods as dynamic attributes by endpoint name
             response = getattr(self.stub, query_endpoint)(request)
             logger.debug(
                 "gRPC response: %s.%s - received response from remote service",
@@ -120,13 +125,11 @@ class GrpcClientWrapper:
                     "response_preview": str(response)[:200],  # Truncate for log readability
                 },
             )
-            return response  # noqa: TRY300
         except grpc.RpcError as e:
-            status_code = e.code().name if hasattr(e, "code") else "UNKNOWN"
-            status_value = e.code().value[0] if hasattr(e, "code") else -1
-            details = e.details() if hasattr(e, "details") else str(e)
+            status_code = e.code().name
+            status_value = e.code().value[0]
+            details = e.details()
 
-            # Build comprehensive error message for the caller
             error_msg = f"[gRPC-client:{self.service_name}.{query_endpoint}] [{status_code}] {details}"
 
             logger.error(
@@ -147,3 +150,5 @@ class GrpcClientWrapper:
                 },
             )
             raise ServerError(error_msg) from e
+        else:
+            return response

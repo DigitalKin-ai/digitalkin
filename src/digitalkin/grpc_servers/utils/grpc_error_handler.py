@@ -12,7 +12,7 @@ class GrpcErrorHandlerMixin:
     """Mixin class providing common gRPC error handling functionality."""
 
     @contextmanager
-    def handle_grpc_errors(  # noqa: PLR6301
+    def handle_grpc_errors(  # Mixin: self available for subclass overrides # noqa: PLR6301
         self,
         operation: str,
         service_error_class: type[Exception] | None = None,

@@ -37,7 +37,8 @@ class DefaultRegistry(RegistryStrategy):
         self,
         name: str | None = None,
         module_type: str | None = None,
-        organization_id: str | None = None,  # noqa: ARG002
+        organization_id: str  # noqa: ARG002
+        | None = None,  # Strategy interface parameter, not used in local implementation
     ) -> list[ModuleInfo]:
         """Search for modules by criteria.
 
@@ -49,10 +50,10 @@ class DefaultRegistry(RegistryStrategy):
         Returns:
             List of matching modules.
         """
-        results = list(self._modules.values())
+        results = list[ModuleInfo](self._modules.values())
 
         if name:
-            results = [m for m in results if name in m.name]
+            results = [m for m in results if name in m.module_name]
 
         if module_type:
             results = [m for m in results if m.module_type == module_type]
@@ -107,7 +108,7 @@ class DefaultRegistry(RegistryStrategy):
             address=address,
             port=port,
             version=version,
-            name=existing.name if existing else module_id,
+            module_name=existing.module_name if existing else module_id,
             status=RegistryModuleStatus.ACTIVE,
         )
         return self._modules[module_id]
@@ -135,7 +136,7 @@ class DefaultRegistry(RegistryStrategy):
             address=module.address,
             port=module.port,
             version=module.version,
-            name=module.name,
+            module_name=module.module_name,
             status=RegistryModuleStatus.ACTIVE,
         )
         return RegistryModuleStatus.ACTIVE

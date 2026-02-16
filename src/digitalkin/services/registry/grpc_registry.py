@@ -178,10 +178,10 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
         )
 
         with self.handle_grpc_errors("DiscoverModules", RegistryServiceError):
-            module_types = []
+            module_types: list[str] = []
             if module_type:
                 enum_val = RegistryModuleType[module_type.upper()]
-                module_types.append(getattr(registry_enums_pb2, f"MODULE_TYPE_{enum_val.name}"))
+                module_types.append(f"MODULE_TYPE_{enum_val.name}")
 
             try:
                 response = self.exec_grpc_query(
@@ -364,7 +364,9 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
                 raise RegistryServiceError(msg) from e
             return self._proto_to_setup_info(response)
 
-    async def deregister(self, module_id: str) -> bool:  # noqa: PLR6301
+    async def deregister(  # noqa: PLR6301
+        self, module_id: str
+    ) -> bool:  # Protocol uses heartbeat expiration; self available for future override
         """Deregister a module from the registry.
 
         Note: The registry protocol uses heartbeat expiration for deregistration.

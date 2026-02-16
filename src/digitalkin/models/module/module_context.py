@@ -103,7 +103,7 @@ class ModuleContext:
     state: SimpleNamespace = SimpleNamespace()
     tool_cache: ToolCache
 
-    def __init__(  # noqa: PLR0913, PLR0917
+    def __init__(  # All service strategies are mandatory constructor args # noqa: PLR0913, PLR0917
         self,
         agent: AgentStrategy,
         communication: CommunicationStrategy,
@@ -339,7 +339,9 @@ class ModuleContext:
         """
         protocol = tool_def.name
 
-        async def tool_function(**kwargs: Any) -> AsyncGenerator[dict, None]:  # noqa: ANN401
+        async def tool_function(
+            **kwargs: Any,
+        ) -> AsyncGenerator[dict, None]:  # Tool kwargs are dynamically typed
             kwargs["protocol"] = protocol
             wrapped_input = {"root": kwargs}
             async for response in communication.call_module(

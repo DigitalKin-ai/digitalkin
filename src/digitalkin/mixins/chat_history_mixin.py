@@ -33,9 +33,7 @@ class ChatHistoryMixin(UserMessageMixin, StorageMixin, LoggerMixin, Generic[Inpu
         Returns:
             Unique history key for the current session
         """
-        # TODO: define mission-specific chat history key not dependant on mission_id
-        # or need customization by user
-        mission_id = getattr(context.session, "mission_id", None) or "default"
+        mission_id = context.session.mission_id or "default"
         return f"{self.CHAT_HISTORY_RECORD_ID}_{mission_id}"
 
     def load_chat_history(self, context: ModuleContext) -> ChatHistory:
@@ -57,7 +55,7 @@ class ChatHistoryMixin(UserMessageMixin, StorageMixin, LoggerMixin, Generic[Inpu
         self,
         context: ModuleContext,
         role: Role,
-        content: Any,  # noqa: ANN401
+        content: Any,
     ) -> None:
         """Append a message to chat history.
 

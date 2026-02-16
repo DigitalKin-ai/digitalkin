@@ -10,7 +10,7 @@
     readme          = "README.md"
     requires-python = ">=3.10"
 
-    keywords = [ "agent", "digitalkin", "gprc", "kin", "sdk" ]
+    keywords = [ "agent", "digitalkin", "grpc", "kin", "sdk" ]
 
     classifiers = [
         "Development Status :: 3 - Alpha",
@@ -63,6 +63,10 @@
         "pyright>=1.1.407",
         "ruff>=0.15.2",
         "twine>=6.2.0",
+        "types-grpcio-health-checking>=1.0.0",
+        "types-grpcio-reflection>=1.0.0",
+        "types-grpcio>=1.0.0",
+        "types-protobuf>=5.29.0",
         "typos>=1.43.5",
     ]
     docs = [
@@ -191,9 +195,15 @@
         ]
 
         ignore = [
-            "COM812", # Disable because of formatter incompatibility
-            "DOC502", # Allow extraneous-exception in docstring
-            "S105",   # Hardcoded-password
+            "ANN401",  # Allow typing.Any — gRPC stubs, callbacks, and dynamic APIs require it
+            "COM812",  # Disable because of formatter incompatibility
+            "DOC502",  # Allow extraneous-exception in docstring
+            "F401",    # Allow unused imports — used for availability checks (e.g. taskiq)
+            "N802",    # Allow PascalCase methods — gRPC servicer convention
+            "PLC0415", # Allow lazy imports — needed to break circular dependencies
+            "PLW3201", # Allow __get_pydantic_core_schema__ — Pydantic dunder hook
+            "S105",    # Hardcoded-password
+            "S403",    # Allow pickle import — required for Taskiq serialization
         ]
 
         fixable = [ "ALL" ]
@@ -255,7 +265,8 @@
 
 [tool.mypy]
 
-    exclude = [ "examples", "tests" ]
+    exclude                = [ "examples", "tests" ]
+    ignore_missing_imports = true
 [tool.pytest.ini_options]
 
     asyncio_mode = "auto"

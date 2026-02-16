@@ -24,7 +24,7 @@ class DefaultStorage(StorageStrategy):
     """
 
     @staticmethod
-    def _json_default(o: Any) -> str:  # noqa: ANN401
+    def _json_default(o: Any) -> str:
         """JSON serializer for non-standard types (datetime → ISO).
 
         Args:
@@ -219,7 +219,6 @@ class DefaultStorage(StorageStrategy):
         setup_version_id: str,
         config: dict[str, type[BaseModel]],
         storage_file_path: str = "local_storage",
-        **kwargs,  # noqa: ANN003, ARG002
     ) -> None:
         """Initialize the storage."""
         super().__init__(mission_id=mission_id, setup_id=setup_id, setup_version_id=setup_version_id, config=config)

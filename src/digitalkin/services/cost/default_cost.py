@@ -91,7 +91,7 @@ class DefaultCost(CostStrategy):
             "name": name,
             "cost": cost_config.rate * quantity,
             "unit": cost_config.unit,
-            "cost_type": getattr(CostType, cost_config.cost_type),
+            "cost_type": CostType[cost_config.cost_type],
             "mission_id": self.mission_id,
             "rate": cost_config.rate,
             "quantity": quantity,

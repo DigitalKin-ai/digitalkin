@@ -58,8 +58,8 @@ class ServicesStrategy(BaseModel, Generic[T]):
         Returns:
             The strategy based on the mode.
         """
-        try:
-            return getattr(self, mode)
-        except AttributeError:
-            logger.exception("Unknown mode: %s, available modes are: %s", mode, ServicesMode.__members__)
-            return getattr(self, ServicesMode.LOCAL.value)
+        modes: dict[str, type[T]] = {ServicesMode.LOCAL.value: self.local, ServicesMode.REMOTE.value: self.remote}
+        if mode not in modes:
+            logger.error("Unknown mode: %s, available modes are: %s. Falling back to LOCAL.", mode, list(modes))
+            return self.local
+        return modes[mode]

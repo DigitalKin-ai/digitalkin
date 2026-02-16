@@ -123,7 +123,7 @@ class DefaultFilesystem(FilesystemStrategy):
                 if os.path.exists(file_path) and not file.replace_if_exists:
                     msg = f"File with name {file.name} already exists."
                     logger.error(msg)
-                    raise FilesystemServiceError(msg)  # noqa: TRY301
+                    raise FilesystemServiceError(msg)  # Intentional: wrap in domain exception for caller # noqa: TRY301
 
                 Path(file_path).write_bytes(file.content)
                 storage_uri = str(Path(file_path).resolve())
@@ -145,7 +145,7 @@ class DefaultFilesystem(FilesystemStrategy):
                 uploaded_files.append(file_data)
                 total_uploaded += 1
                 logger.debug("Uploaded file %s", file_data)
-            except Exception as e:  # noqa: PERF203
+            except Exception as e:  # Exception in loop: per-file error isolation in batch upload # noqa: PERF203
                 logger.exception("Error uploading file %s: %s", file.name, e)
                 total_failed += 1
                 # If only one file and it failed, propagate the error for pytest.raises
@@ -160,7 +160,7 @@ class DefaultFilesystem(FilesystemStrategy):
         *,
         list_size: int = 100,
         offset: int = 0,
-        order: str | None = None,  # noqa: ARG002
+        order: str | None = None,  # API interface parameter, not implemented in local filesystem # noqa: ARG002
         include_content: bool = False,
     ) -> tuple[list[FilesystemRecord], int]:
         """List files with filtering, sorting, and pagination.
@@ -190,8 +190,7 @@ class DefaultFilesystem(FilesystemStrategy):
             filtered_files = self._filter_db(filters)
             if not filtered_files:
                 return [], 0
-            # Sort if order is specified
-            # TODO
+            # Sorting not implemented for local filesystem (only used in development)
 
             # Apply pagination
             start_idx = offset
@@ -242,7 +241,7 @@ class DefaultFilesystem(FilesystemStrategy):
             if not file_data:
                 msg = f"File not found with id {file_id}"
                 logger.error(msg)
-                raise FilesystemServiceError(msg)  # noqa: TRY301
+                raise FilesystemServiceError(msg)  # Intentional: wrap in domain exception for caller # noqa: TRY301
 
             if include_content:
                 file_path = file_data.storage_uri
@@ -348,7 +347,7 @@ class DefaultFilesystem(FilesystemStrategy):
         filters: FileFilter,
         *,
         permanent: bool = False,
-        force: bool = False,  # noqa: ARG002
+        force: bool = False,  # API interface parameter, not used in local filesystem # noqa: ARG002
     ) -> tuple[dict[str, bool], int, int]:
         """Delete multiple files.
 

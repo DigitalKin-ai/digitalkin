@@ -1,6 +1,6 @@
 """Healthcheck services trigger - reports service health."""
 
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 
 from digitalkin.mixins import BaseMixin
 from digitalkin.models.module.module_context import ModuleContext
@@ -18,7 +18,7 @@ class HealthcheckServicesTrigger(TriggerHandler, BaseMixin):
     Reports the health status of all configured services (storage, cost, filesystem, etc.).
     """
 
-    protocol: str = "healthcheck_services"
+    protocol: Literal["healthcheck_services"] = "healthcheck_services"
     description: ClassVar[str] = "Reports health status of all configured services."
     input_format = HealthcheckServicesInput
 
@@ -27,8 +27,8 @@ class HealthcheckServicesTrigger(TriggerHandler, BaseMixin):
 
     async def handle(
         self,
-        input_data: HealthcheckServicesInput,  # noqa: ARG002
-        setup_data: Any,  # noqa: ANN401, ARG002
+        input_data: HealthcheckServicesInput,  # Healthcheck needs no input data # noqa: ARG002
+        setup_data: Any,  # Module-agnostic setup; healthcheck ignores it # noqa: ARG002
         context: ModuleContext,
     ) -> None:
         """Handle services healthcheck request.
@@ -38,11 +38,16 @@ class HealthcheckServicesTrigger(TriggerHandler, BaseMixin):
             setup_data: The setup configuration (unused for healthcheck).
             context: The module context.
         """
-        service_names = ["storage", "cost", "filesystem", "registry", "user_profile"]
+        services = {
+            "storage": context.storage,
+            "cost": context.cost,
+            "filesystem": context.filesystem,
+            "registry": context.registry,
+            "user_profile": context.user_profile,
+        }
         services_status: list[ServiceHealthStatus] = []
 
-        for name in service_names:
-            service = getattr(context, name, None)
+        for name, service in services.items():
             if service is not None:
                 services_status.append(ServiceHealthStatus(name=name, status="healthy"))
             else:
@@ -59,6 +64,6 @@ class HealthcheckServicesTrigger(TriggerHandler, BaseMixin):
 
         output = HealthcheckServicesOutput(
             services=services_status,
-            overall_status=overall_status,  # type: ignore[arg-type]
+            overall_status=overall_status,  # type: ignore[arg-type]  # String value matches Literal type at runtime
         )
         await self.send_message(context, output)

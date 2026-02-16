@@ -25,7 +25,7 @@ class UtilityProtocol(DataTrigger):
 class EndOfStreamOutput(UtilityProtocol):
     """Signal that the stream has ended."""
 
-    protocol: Literal["end_of_stream"] = "end_of_stream"  # type: ignore
+    protocol: Literal["end_of_stream"] = "end_of_stream"  # type: ignore[misc]
 
 
 class ModuleStartInfoOutput(UtilityProtocol):
@@ -35,7 +35,7 @@ class ModuleStartInfoOutput(UtilityProtocol):
     providing the client with essential execution context information.
     """
 
-    protocol: Literal["module_start_info"] = "module_start_info"  # type: ignore
+    protocol: Literal["module_start_info"] = "module_start_info"  # type: ignore[misc]
     job_id: str = Field(..., description="Unique job identifier")
     mission_id: str = Field(..., description="Mission identifier")
     setup_id: str = Field(..., description="Setup identifier")
@@ -51,7 +51,7 @@ class ModuleStartInfoOutput(UtilityProtocol):
 class HealthcheckPingInput(UtilityProtocol):
     """Input for healthcheck ping request."""
 
-    protocol: Literal["healthcheck_ping"] = "healthcheck_ping"  # type: ignore
+    protocol: Literal["healthcheck_ping"] = "healthcheck_ping"  # type: ignore[misc]
 
 
 class HealthcheckPingOutput(UtilityProtocol):
@@ -60,7 +60,7 @@ class HealthcheckPingOutput(UtilityProtocol):
     Simple alive check that returns "pong" status.
     """
 
-    protocol: Literal["healthcheck_ping"] = "healthcheck_ping"  # type: ignore
+    protocol: Literal["healthcheck_ping"] = "healthcheck_ping"  # type: ignore[misc]
     status: Literal["pong"] = "pong"
     latency_ms: float | None = Field(
         default=None,
@@ -85,7 +85,7 @@ class ServiceHealthStatus(BaseModel):
 class HealthcheckServicesInput(UtilityProtocol):
     """Input for healthcheck services request."""
 
-    protocol: Literal["healthcheck_services"] = "healthcheck_services"  # type: ignore
+    protocol: Literal["healthcheck_services"] = "healthcheck_services"  # type: ignore[misc]
 
 
 class HealthcheckServicesOutput(UtilityProtocol):
@@ -94,7 +94,7 @@ class HealthcheckServicesOutput(UtilityProtocol):
     Reports the health status of all configured services.
     """
 
-    protocol: Literal["healthcheck_services"] = "healthcheck_services"  # type: ignore
+    protocol: Literal["healthcheck_services"] = "healthcheck_services"  # type: ignore[misc]
     services: list[ServiceHealthStatus] = Field(
         ...,
         description="List of service health statuses",
@@ -108,7 +108,7 @@ class HealthcheckServicesOutput(UtilityProtocol):
 class HealthcheckStatusInput(UtilityProtocol):
     """Input for healthcheck status request."""
 
-    protocol: Literal["healthcheck_status"] = "healthcheck_status"  # type: ignore
+    protocol: Literal["healthcheck_status"] = "healthcheck_status"  # type: ignore[misc]
 
 
 class HealthcheckStatusOutput(UtilityProtocol):
@@ -117,7 +117,7 @@ class HealthcheckStatusOutput(UtilityProtocol):
     Comprehensive module status including uptime, active jobs, and metadata.
     """
 
-    protocol: Literal["healthcheck_status"] = "healthcheck_status"  # type: ignore
+    protocol: Literal["healthcheck_status"] = "healthcheck_status"  # type: ignore[misc]
     module_name: str = Field(..., description="Name of the module")
     module_status: str = Field(..., description="Current status of the module")
     uptime_seconds: float | None = Field(
@@ -153,11 +153,15 @@ class UtilityRegistry:
             Tuple of TriggerHandler subclasses for built-in functionality.
         """
         if cls._builtin_triggers is None:
-            from digitalkin.modules.triggers.healthcheck_ping_trigger import HealthcheckPingTrigger  # noqa: PLC0415
-            from digitalkin.modules.triggers.healthcheck_services_trigger import (  # noqa: PLC0415
+            from digitalkin.modules.triggers.healthcheck_ping_trigger import (
+                HealthcheckPingTrigger,
+            )  # Lazy import to avoid circular dependency
+            from digitalkin.modules.triggers.healthcheck_services_trigger import (
                 HealthcheckServicesTrigger,
-            )
-            from digitalkin.modules.triggers.healthcheck_status_trigger import HealthcheckStatusTrigger  # noqa: PLC0415
+            )  # Lazy import to avoid circular dependency
+            from digitalkin.modules.triggers.healthcheck_status_trigger import (
+                HealthcheckStatusTrigger,
+            )  # Lazy import to avoid circular dependency
 
             cls._builtin_triggers = (
                 HealthcheckPingTrigger,

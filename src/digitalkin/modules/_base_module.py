@@ -27,7 +27,7 @@ from digitalkin.utils.package_discover import ModuleDiscoverer
 from digitalkin.utils.schema_splitter import SchemaSplitter
 
 
-class BaseModule(  # noqa: PLR0904
+class BaseModule(  # Module SDK base class requires many public methods # noqa: PLR0904
     ABC,
     Generic[
         InputModelT,
@@ -299,9 +299,7 @@ class BaseModule(  # noqa: PLR0904
         cost_schema = {
             name: {
                 "name": cost_config.cost_name,
-                "type": cost_config.cost_type.value
-                if hasattr(cost_config.cost_type, "value")
-                else cost_config.cost_type,
+                "type": cost_config.cost_type,
                 "description": cost_config.description,
                 "unit": cost_config.unit,
                 "rate": cost_config.rate,
@@ -394,7 +392,9 @@ class BaseModule(  # noqa: PLR0904
         Built-in healthcheck handlers (ping, services, status) are automatically registered
         to provide standard healthcheck functionality for all modules.
         """
-        from digitalkin.models.module.utility import UtilityRegistry  # noqa: PLC0415
+        from digitalkin.models.module.utility import (
+            UtilityRegistry,
+        )  # Lazy import to avoid circular dependency
 
         cls.triggers_discoverer.discover_modules()
 
@@ -437,8 +437,8 @@ class BaseModule(  # noqa: PLR0904
         """
         input_instance = self.input_format.model_validate(input_data)
 
-        # Apply cost limits if present in input
-        cost_limits = getattr(input_instance, "cost_limits", None)
+        # Apply cost limits if present in input (field added dynamically by UtilitySchemaExtender)
+        cost_limits = input_instance.model_dump().get("cost_limits")
         if cost_limits is not None and self.context.cost is not None:
             self.context.cost.set_limits(cost_limits)
 
@@ -458,9 +458,9 @@ class BaseModule(  # noqa: PLR0904
         """Run the module."""
         raise NotImplementedError
 
-    async def run_config_setup(  # noqa: PLR6301
+    async def run_config_setup(  # Default implementation; subclasses may use self # noqa: PLR6301
         self,
-        context: ModuleContext,  # noqa: ARG002
+        context: ModuleContext,  # Available for subclass overrides # noqa: ARG002
         config_setup_data: SetupModelT,
     ) -> SetupModelT:
         """Run config setup the module.

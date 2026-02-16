@@ -76,6 +76,7 @@ class ModuleDiscoverer:
             logger.exception("Could not import package %s", package_name)
             return {}
 
+        # getattr unavoidable: __path__ only exists on packages, not regular modules (Python runtime)
         paths = getattr(pkg, "__path__", None)
         if not paths:
             logger.warning("Package %s has no __path__", package_name)

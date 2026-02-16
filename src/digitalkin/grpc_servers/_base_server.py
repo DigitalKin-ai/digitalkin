@@ -87,12 +87,11 @@ class BaseServer(abc.ABC):
                     logger.debug("Registered explicit service name for reflection: %s", name)
 
         # If a descriptor is provided, extract service names
-        if service_descriptor and hasattr(service_descriptor, "services_by_name"):
-            for service_name in service_descriptor.services_by_name:
-                full_name = service_descriptor.services_by_name[service_name].full_name  # ignore: PLC0206
-                if full_name not in self._service_names:
-                    self._service_names.append(full_name)
-                    logger.debug("Registered service name from descriptor: %s", full_name)
+        if service_descriptor is not None:
+            for service in service_descriptor.services_by_name.values():
+                if service.full_name not in self._service_names:
+                    self._service_names.append(service.full_name)
+                    logger.debug("Registered service name from descriptor: %s", service.full_name)
 
     @abc.abstractmethod
     def _register_servicers(self) -> None:
@@ -115,8 +114,9 @@ class BaseServer(abc.ABC):
             return
 
         try:
-            # Import here to avoid dependency if not used
-            from grpc_reflection.v1alpha import reflection  # noqa: PLC0415
+            from grpc_reflection.v1alpha import (
+                reflection,
+            )  # Optional dependency, import only if reflection enabled
 
             # Get all registered service names
             service_names = self._service_names.copy()
@@ -147,9 +147,13 @@ class BaseServer(abc.ABC):
             return
 
         try:
-            # Import here to avoid dependency if not used
-            from grpc_health.v1 import health_pb2, health_pb2_grpc  # noqa: PLC0415
-            from grpc_health.v1.health import HealthServicer  # noqa: PLC0415
+            from grpc_health.v1 import (
+                health_pb2,
+                health_pb2_grpc,
+            )  # Optional dependency, import only if health service needed
+            from grpc_health.v1.health import (
+                HealthServicer,
+            )  # Optional dependency, import only if health service needed
 
             # Create health servicer
             health_servicer = HealthServicer()
@@ -194,7 +198,7 @@ class BaseServer(abc.ABC):
             if self.config.mode == ServerMode.ASYNC:
                 server = grpc_aio.server(options=self.config.server_options)
             else:
-                server = grpc.server(
+                server = grpc.server(  # type: ignore[assignment]  # sync grpc.Server assigned to GrpcServer union
                     futures.ThreadPoolExecutor(max_workers=self.config.max_workers),
                     options=self.config.server_options,
                 )

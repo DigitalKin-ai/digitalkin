@@ -1,7 +1,7 @@
 """Taskiq job manager module."""
 
 try:
-    import taskiq  # noqa: F401
+    import taskiq  # Verify taskiq is installed before module loads
 
 except ImportError:
     msg = "Install digitalkin[taskiq] to use this functionality\n$ uv pip install digitalkin[taskiq]."
@@ -54,7 +54,11 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         logger.info("Connection to RabbitMQ: %s:%s.", host, port)
         return Consumer(host=host, port=int(port), username=username, password=password)
 
-    async def _on_message(self, message: bytes, message_context: MessageContext) -> None:  # noqa: ARG002
+    async def _on_message(
+        self,
+        message: bytes,
+        message_context: MessageContext,  # noqa: ARG002 #TODO
+    ) -> None:  # RStream callback signature
         """Internal callback: parse JSON and route to the correct job queue."""
         try:
             data = json.loads(message.decode("utf-8"))
@@ -91,7 +95,7 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         await self.stream_consumer.subscribe(
             stream=STREAM,
             subscriber_name=f"""subscriber_{os.environ.get("SERVER_NAME", "module_servicer")}""",
-            callback=self._on_message,  # type: ignore
+            callback=self._on_message,  # RStream expects (bytes, MessageContext) callback # type: ignore
             offset_specification=start_spec,
         )
 
@@ -240,7 +244,7 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             setup_version_id,
             self.module_class,
             self.services_mode,
-            config_setup_data.model_dump(mode="json"),  # type: ignore
+            config_setup_data.model_dump(mode="json"),  # SetupModelT generic bound to BaseModel # type: ignore
         )
 
         job_id = running_task.task_id
@@ -269,8 +273,8 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         logger.info("Job %s with data %s", job_id, result)
         return job_id
 
-    @asynccontextmanager  # type: ignore
-    async def generate_stream_consumer(self, job_id: str) -> AsyncIterator[AsyncGenerator[dict[str, Any], None]]:  # type: ignore
+    @asynccontextmanager
+    async def generate_stream_consumer(self, job_id: str) -> AsyncIterator[AsyncGenerator[dict[str, Any], None]]:
         """Generate a stream consumer for the RStream stream.
 
         Args:
@@ -300,9 +304,12 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
                 dict: generated object from the module
             """
             while True:
-                try:
-                    # Block for first item with timeout to allow termination checks
-                    item = await asyncio.wait_for(queue.get(), timeout=self.stream_timeout)
+                # Block for first item with timeout to allow termination checks
+                get_task = asyncio.create_task(queue.get())
+                done, _ = await asyncio.wait([get_task], timeout=self.stream_timeout)
+
+                if done:
+                    item = get_task.result()
                     queue.task_done()
                     yield item
 
@@ -310,43 +317,32 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
                     # This reduces latency when messages arrive in bursts from RabbitMQ
                     batch_count = 0
                     max_batch_size = 100  # Safety limit to prevent memory spikes
-                    while batch_count < max_batch_size:
-                        try:
-                            item = queue.get_nowait()
-                            queue.task_done()
-                            yield item
-                            batch_count += 1
-                        except asyncio.QueueEmpty:  # noqa: PERF203
-                            # No more items immediately available, break to next blocking wait
-                            break
-
-                except asyncio.TimeoutError:
-                    logger.warning("Stream consumer timeout for job %s, checking if job is still active", job_id)
-
-                    # Check if job is registered
-                    if job_id not in self.tasks_sessions:
-                        logger.info("Job %s no longer registered, ending stream", job_id)
-                        break
-
-                    # Check job status to detect cancelled/failed jobs
-                    status = await self.get_module_status(job_id)
-
-                    if status in {TaskStatus.CANCELLED, TaskStatus.FAILED}:
-                        logger.info("Job %s has terminal status %s, draining queue and ending stream", job_id, status)
-
-                        # Drain remaining queue items before stopping
-                        while not queue.empty():
-                            try:
-                                item = queue.get_nowait()
-                                queue.task_done()
-                                yield item
-                            except asyncio.QueueEmpty:  # noqa: PERF203
-                                break
-
-                        break
-
-                    # Continue waiting for active/completed jobs
+                    while batch_count < max_batch_size and not queue.empty():
+                        item = queue.get_nowait()
+                        queue.task_done()
+                        yield item
+                        batch_count += 1
                     continue
+
+                # Timeout — cancel pending get and check job status
+                get_task.cancel()
+                logger.warning("Stream consumer timeout for job %s, checking if job is still active", job_id)
+
+                if job_id not in self.tasks_sessions:
+                    logger.info("Job %s no longer registered, ending stream", job_id)
+                    break
+
+                status = await self.get_module_status(job_id)
+
+                if status in {TaskStatus.CANCELLED, TaskStatus.FAILED}:
+                    logger.info("Job %s has terminal status %s, draining queue and ending stream", job_id, status)
+
+                    while not queue.empty():
+                        item = queue.get_nowait()
+                        queue.task_done()
+                        yield item
+
+                    break
 
         try:
             yield _stream()
@@ -520,26 +516,28 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         Returns:
             dict[str, dict[str, Any]]: A dictionary containing information about all tracked modules.
         """
-        modules_info: dict[str, dict[str, Any]] = {}
+        job_ids = list(self.tasks_sessions.keys())
 
-        for job_id in self.tasks_sessions:
+        async def _get_job_info(job_id: str) -> tuple[str, dict[str, Any]]:
             try:
                 status = await self.get_module_status(job_id)
-                task_record = await self.channel.select_by_task_id("tasks", job_id)  # type: ignore
-
-                modules_info[job_id] = {
+                task_record = await self.channel.select_by_task_id(  # type: ignore[union-attr]
+                    "tasks", job_id
+                )  # channel guaranteed non-None by start()
+                return job_id, {
                     "name": self.module_class.__name__,
                     "status": status,
                     "class": self.module_class.__name__,
                     "mission_id": task_record.get("mission_id") if task_record else "unknown",
                 }
-            except Exception:  # noqa: PERF203
+            except Exception:
                 logger.exception("Error getting info for job %s", job_id)
-                modules_info[job_id] = {
+                return job_id, {
                     "name": self.module_class.__name__,
                     "status": TaskStatus.FAILED,
                     "class": self.module_class.__name__,
                     "error": "Failed to retrieve status",
                 }
 
-        return modules_info
+        results = await asyncio.gather(*(_get_job_info(jid) for jid in job_ids))
+        return dict(results)

@@ -30,9 +30,7 @@ class FileHistoryMixin(StorageMixin, LoggerMixin):
         Returns:
             Unique history key for the current session
         """
-        # TODO: define mission-specific chat history key not dependant on mission_id
-        # or need customization by user
-        mission_id = getattr(context.session, "mission_id", None) or "default"
+        mission_id = context.session.mission_id or "default"
         return f"{self.FILE_HISTORY_RECORD_ID}_{mission_id}"
 
     def load_file_history(self, context: ModuleContext) -> FileHistory:

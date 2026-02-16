@@ -201,6 +201,17 @@ class TaskSession:
         """
         try:
             result = await self.db.create("heartbeats", heartbeat.model_dump())
+        except Exception as e:
+            reason = self._classify_exception(e, is_initial=True)
+            logger.error(
+                "Heartbeat CREATE exception (%s): %s",
+                reason.value,
+                e,
+                extra=self.session_ids,
+                exc_info=reason == CancellationReason.HEARTBEAT_FAILURE,
+            )
+            return reason
+        else:
             if not isinstance(result, dict):
                 return CancellationReason.HEARTBEAT_FAILURE
             if "code" not in result:
@@ -214,17 +225,7 @@ class TaskSession:
                 result.get("message", result.get("information", "unknown")),
                 extra=self.session_ids,
             )
-            return CancellationReason.HEARTBEAT_FAILURE  # noqa: TRY300
-        except Exception as e:
-            reason = self._classify_exception(e, is_initial=True)
-            logger.error(
-                "Heartbeat CREATE exception (%s): %s",
-                reason.value,
-                e,
-                extra=self.session_ids,
-                exc_info=reason == CancellationReason.HEARTBEAT_FAILURE,
-            )
-            return reason
+            return CancellationReason.HEARTBEAT_FAILURE
 
     async def _send_heartbeat_update(self, heartbeat: HeartbeatMessage) -> CancellationReason | None:
         """Send a heartbeat MERGE/UPDATE to SurrealDB.
@@ -241,6 +242,17 @@ class TaskSession:
                 self.heartbeat_record_id,  # type: ignore[arg-type]
                 heartbeat.model_dump(),
             )
+        except Exception as e:
+            reason = self._classify_exception(e, is_initial=False)
+            logger.error(
+                "Heartbeat MERGE exception (%s): %s",
+                reason.value,
+                e,
+                extra=self.session_ids,
+                exc_info=reason == CancellationReason.HEARTBEAT_FAILURE,
+            )
+            return reason
+        else:
             if not isinstance(result, dict):
                 return CancellationReason.HEARTBEAT_FAILURE
             if "code" not in result:
@@ -252,17 +264,7 @@ class TaskSession:
                 result.get("message", result.get("information", "unknown")),
                 extra=self.session_ids,
             )
-            return CancellationReason.HEARTBEAT_FAILURE  # noqa: TRY300
-        except Exception as e:
-            reason = self._classify_exception(e, is_initial=False)
-            logger.error(
-                "Heartbeat MERGE exception (%s): %s",
-                reason.value,
-                e,
-                extra=self.session_ids,
-                exc_info=reason == CancellationReason.HEARTBEAT_FAILURE,
-            )
-            return reason
+            return CancellationReason.HEARTBEAT_FAILURE
 
     async def generate_heartbeats(self) -> None:
         """Periodic heartbeat generator with cancellation support and detailed failure reasons."""
@@ -355,7 +357,7 @@ class TaskSession:
         try:
             await self.db.update(
                 "tasks",
-                self.signal_record_id,  # type: ignore
+                self.signal_record_id,  # type: ignore # Guaranteed non-None by guard in listen_signals
                 SignalMessage(
                     task_id=self.task_id,
                     mission_id=self.mission_id,
@@ -374,7 +376,7 @@ class TaskSession:
         try:
             await self.db.update(
                 "tasks",
-                self.signal_record_id,  # type: ignore
+                self.signal_record_id,  # type: ignore # Guaranteed non-None by guard in listen_signals
                 SignalMessage(
                     task_id=self.task_id,
                     mission_id=self.mission_id,
@@ -434,4 +436,4 @@ class TaskSession:
         await self.db.close()
 
         # Clear module reference to allow garbage collection
-        self.module = None  # type: ignore
+        self.module = None  # type: ignore[assignment]  # Allow GC; typed as BaseModule but set to None after cleanup

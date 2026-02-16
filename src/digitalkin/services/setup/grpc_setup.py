@@ -39,7 +39,9 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
         logger.debug("Channel client 'setup' initialized successfully")
 
     @contextmanager
-    def handle_grpc_errors(self, operation: str) -> Generator[Any, Any, Any]:  # noqa: PLR6301
+    def handle_grpc_errors(  # noqa: PLR6301
+        self, operation: str
+    ) -> Generator[Any, Any, Any]:  # Mixin: self available for subclass overrides
         """Context manager for consistent gRPC error handling with detailed logging.
 
         Yields:
@@ -184,7 +186,7 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
             )
             response = self.exec_grpc_query("UpdateSetup", request)
             logger.debug("Setup '%s' query sent successfully", valid_data.name)
-            return getattr(response, "success", False)
+            return response.success
 
     def delete_setup(self, setup_dict: dict[str, Any]) -> bool:
         """Delete a setup by its unique identifier.
@@ -208,7 +210,7 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
             request = setup_pb2.DeleteSetupRequest(setup_id=setup_id)
             response = self.exec_grpc_query("DeleteSetup", request)
             logger.debug("Setup '%s' query sent successfully", setup_id)
-            return getattr(response, "success", False)
+            return response.success
 
     def create_setup_version(self, setup_version_dict: dict[str, Any]) -> str:
         """Create a new setup version.
@@ -322,7 +324,7 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
                 valid_data.id,
                 valid_data.setup_id,
             )
-            return getattr(response, "success", False)
+            return response.success
 
     def delete_setup_version(self, setup_version_dict: dict[str, Any]) -> bool:
         """Delete a setup version by its unique identifier.
@@ -346,7 +348,7 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
             request = setup_pb2.DeleteSetupVersionRequest(setup_version_id=setup_version_id)
             response = self.exec_grpc_query("DeleteSetupVersion", request)
             logger.debug("Setup Version '%s' query sent successfully", setup_version_id)
-            return getattr(response, "success", False)
+            return response.success
 
     def list_setups(self, list_dict: dict[str, Any]) -> dict[str, Any]:
         """List setups with optional filtering and pagination.
