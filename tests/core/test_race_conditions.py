@@ -327,11 +327,10 @@ class TestConcurrentSignaling:
 
             # Send multiple signals concurrently
             signal_tasks = [
-                manager.pause_task("task-1", "mission"),
-                manager.resume_task("task-1", "mission"),
                 manager.get_task_status("task-1", "mission"),
-                manager.pause_task("task-1", "mission"),
-                manager.send_signal("task-1", "mission", "custom", {"data": "test"}),
+                manager.get_task_status("task-1", "mission"),
+                manager.get_task_status("task-1", "mission"),
+                manager.send_signal("task-1", "mission", "cancel", {"data": "test"}),
             ]
 
             results = await asyncio.gather(*signal_tasks, return_exceptions=True)
@@ -361,7 +360,7 @@ class TestConcurrentSignaling:
             await manager.create_task("task-1", "mission", module, task())
 
             # Send signal and cancel concurrently
-            signal_task = asyncio.create_task(manager.pause_task("task-1", "mission"))
+            signal_task = asyncio.create_task(manager.get_task_status("task-1", "mission"))
             cancel_task = asyncio.create_task(manager.cancel_task("task-1", "mission", timeout=0.1))
 
             signal_result, cancel_result = await asyncio.gather(signal_task, cancel_task, return_exceptions=True)

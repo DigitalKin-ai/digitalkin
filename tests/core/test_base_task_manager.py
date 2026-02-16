@@ -102,6 +102,7 @@ async def mock_task_session() -> Mock:
     session.completed_at = None
     session.db = Mock()
     session.db.close = AsyncMock()
+    session.db.create = AsyncMock(return_value={"id": "tasks:sig1"})
     session.db.update = AsyncMock()
     session.listen_signals = AsyncMock(side_effect=asyncio.CancelledError())
     session.generate_heartbeats = AsyncMock(side_effect=asyncio.CancelledError())
@@ -488,6 +489,10 @@ class TestCleanup:
         mock_session.cleanup = AsyncMock()
         mock_session.status = TaskStatus.RUNNING
         mock_session.cancellation_reason = CancellationReason.UNKNOWN
+        mock_session.setup_id = "setup:test"
+        mock_session.setup_version_id = "setup_version:test"
+        mock_session.db = Mock()
+        mock_session.db.create = AsyncMock(return_value={"id": "tasks:sig1"})
         task_manager.tasks_sessions[task_id] = mock_session
 
         # Cancel with short timeout - will timeout and force cancel
@@ -570,48 +575,48 @@ class TestSignalOperations:
         task_id = "signal_test"
         mission_id = "missions:signal"
 
-        task_manager.channel = mock_surreal_connection
         task_manager.tasks_sessions[task_id] = mock_task_session
 
-        result = await task_manager.send_signal(task_id, mission_id, SignalType.CANCEL, {"key": "value"})
+        result = await task_manager.send_signal(task_id, mission_id, "cancel", {"key": "value"})
 
         assert result is True
-        mock_task_session.db.update.assert_awaited_once_with(
-            "signals", task_id, {"type": SignalType.CANCEL, "payload": {"key": "value"}}
-        )
+        mock_task_session.db.create.assert_awaited_once()
+        call_args = mock_task_session.db.create.call_args
+        assert call_args[0][0] == "tasks"
+        payload = call_args[0][1]
+        assert payload["task_id"] == task_id
+        assert payload["action"] == SignalType.CANCEL.value
 
     @pytest.mark.asyncio
     async def test_send_signal_unknown_task(
         self,
         task_manager: ConcreteTaskManager,
-        mock_surreal_connection: Mock,
     ) -> None:
         """Test signal sending to unknown task returns False."""
-        task_manager.channel = mock_surreal_connection
-
-        result = await task_manager.send_signal("unknown", "missions:signal", SignalType.CANCEL, {})
+        result = await task_manager.send_signal("unknown", "missions:signal", "cancel", {})
 
         assert result is False
-        mock_surreal_connection.update.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_get_task_status(
         self,
         task_manager: ConcreteTaskManager,
-        mock_surreal_connection: Mock,
         mock_task_session: Mock,
     ) -> None:
         """Test get_task_status sends status signal."""
         task_id = "status_test"
         mission_id = "missions:status"
 
-        task_manager.channel = mock_surreal_connection
         task_manager.tasks_sessions[task_id] = mock_task_session
 
         result = await task_manager.get_task_status(task_id, mission_id)
 
         assert result is True
-        mock_task_session.db.update.assert_awaited_once_with("signals", task_id, {"type": "status", "payload": {}})
+        mock_task_session.db.create.assert_awaited_once()
+        call_args = mock_task_session.db.create.call_args
+        assert call_args[0][0] == "tasks"
+        payload = call_args[0][1]
+        assert payload["action"] == SignalType.STATUS.value
 
 
 # ============================================================================
@@ -621,6 +626,29 @@ class TestSignalOperations:
 
 class TestCancellation:
     """Tests for task cancellation logic."""
+
+    @pytest.mark.asyncio
+    async def test_cancel_task_sends_signal_before_waiting(
+        self,
+        task_manager: ConcreteTaskManager,
+        mock_task_session: Mock,
+    ) -> None:
+        """Test cancel_task sends cancel signal before waiting for graceful shutdown."""
+        task_id = "signal_cancel"
+        mission_id = "missions:signal_cancel"
+
+        async def quick_task() -> None:
+            await asyncio.sleep(0.05)
+
+        task = asyncio.create_task(quick_task())
+        task_manager.tasks[task_id] = task
+        task_manager.tasks_sessions[task_id] = mock_task_session
+
+        result = await task_manager.cancel_task(task_id, mission_id, timeout=1.0)
+
+        assert result is True
+        # send_signal calls db.create on "tasks" table
+        mock_task_session.db.create.assert_awaited()
 
     @pytest.mark.asyncio
     async def test_cancel_task_graceful(
@@ -1269,6 +1297,10 @@ class TestCleanupIntegration:
             mock_session.cleanup = AsyncMock()
             mock_session.status = TaskStatus.RUNNING
             mock_session.cancellation_reason = CancellationReason.UNKNOWN
+            mock_session.setup_id = "setup:test"
+            mock_session.setup_version_id = "setup_version:test"
+            mock_session.db = Mock()
+            mock_session.db.create = AsyncMock(return_value={"id": "tasks:sig1"})
             sessions[task_id] = mock_session
             task_manager.tasks_sessions[task_id] = mock_session
 
@@ -1312,6 +1344,10 @@ class TestCleanupIntegration:
             mock_session.cleanup = AsyncMock()
             mock_session.status = TaskStatus.RUNNING
             mock_session.cancellation_reason = CancellationReason.UNKNOWN
+            mock_session.setup_id = "setup:test"
+            mock_session.setup_version_id = "setup_version:test"
+            mock_session.db = Mock()
+            mock_session.db.create = AsyncMock(return_value={"id": "tasks:sig1"})
             sessions[task_id] = mock_session
             task_manager.tasks_sessions[task_id] = mock_session
 

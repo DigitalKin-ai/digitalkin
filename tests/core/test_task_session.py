@@ -1,9 +1,9 @@
 """Comprehensive test suite for TaskSession class.
 
 This test suite provides exhaustive coverage of TaskSession lifecycle management,
-including initialization, heartbeat mechanisms, signal handling, pause/resume
-functionality, and cancellation logic. Tests are designed to detect regressions,
-validate state transitions, and ensure async concurrency safety.
+including initialization, heartbeat mechanisms, signal handling, and cancellation
+logic. Tests are designed to detect regressions, validate state transitions, and
+ensure async concurrency safety.
 """
 
 import asyncio
@@ -106,7 +106,6 @@ def assert_task_state(
     session: TaskSession,
     status: TaskStatus | None = None,
     cancelled: bool | None = None,
-    paused: bool | None = None,
     heartbeat_record_id: str | None = None,
     signal_record_id: str | None = None,
 ):
@@ -119,8 +118,6 @@ def assert_task_state(
         assert session.status == status, f"Expected status {status}, got {session.status}"
     if cancelled is not None:
         assert session.cancelled == cancelled, f"Expected cancelled={cancelled}, got {session.cancelled}"
-    if paused is not None:
-        assert session.paused == paused, f"Expected paused={paused}, got {session.paused}"
     if heartbeat_record_id is not None:
         assert session.heartbeat_record_id == heartbeat_record_id
     if signal_record_id is not None:
@@ -133,7 +130,7 @@ def compute_state_hash(session: TaskSession) -> str:
     Returns a string representation of critical state attributes that can be
     compared across test runs to detect unintended state changes.
     """
-    return f"{session.task_id}|{session.status.value}|{session.cancelled}|{session.paused}|{session.heartbeat_record_id}|{session.signal_record_id}"
+    return f"{session.task_id}|{session.status.value}|{session.cancelled}|{session.heartbeat_record_id}|{session.signal_record_id}"
 
 
 # ============================================================================
@@ -178,8 +175,6 @@ class TestInitialization:
         # Verify event states
         assert isinstance(session.is_cancelled, asyncio.Event)
         assert not session.is_cancelled.is_set()
-        assert isinstance(session._paused, asyncio.Event)
-        assert not session._paused.is_set()
 
         # Verify queue
         assert isinstance(session.queue, asyncio.Queue)
@@ -208,11 +203,6 @@ class TestInitialization:
         task_session.is_cancelled.set()
         assert task_session.cancelled
 
-    def test_paused_property(self, task_session):
-        """Verify paused property reflects _paused event state."""
-        assert not task_session.paused
-        task_session._paused.set()
-        assert task_session.paused
 
 
 # ============================================================================
@@ -489,6 +479,7 @@ class TestSignalListener:
         signals = [
             {
                 "id": "tasks:different_id",
+                "task_id": "test_task_123",
                 "action": "cancel",
                 "payload": {"signal": "cancel"},
             }
@@ -509,64 +500,6 @@ class TestSignalListener:
         task_session._handle_cancel.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_listen_signals_handles_pause_signal(self, task_session, mock_db):
-        """Verify pause signal triggers _handle_pause.
-
-        Tests pause signal detection and handler invocation.
-        """
-        task_session.signal_record_id = "tasks:test_signal_id"
-
-        signals = [
-            {
-                "id": "tasks:different_id",
-                "action": "pause",
-                "payload": {"signal": "pause"},
-            }
-        ]
-        mock_db.start_live.return_value = ("live_123", _signal_generator(signals))
-        task_session._handle_pause = AsyncMock()
-
-        async def delayed_cancel() -> None:
-            await asyncio.sleep(0.1)
-            task_session.is_cancelled.set()
-
-        await asyncio.gather(
-            task_session.listen_signals(),
-            delayed_cancel(),
-        )
-
-        task_session._handle_pause.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_listen_signals_handles_resume_signal(self, task_session, mock_db):
-        """Verify resume signal triggers _handle_resume.
-
-        Tests resume signal detection and handler invocation.
-        """
-        task_session.signal_record_id = "tasks:test_signal_id"
-
-        signals = [
-            {
-                "id": "tasks:different_id",
-                "action": "resume",
-                "payload": {"signal": "resume"},
-            }
-        ]
-        mock_db.start_live.return_value = ("live_123", _signal_generator(signals))
-        task_session._handle_resume = AsyncMock()
-
-        async def delayed_cancel() -> None:
-            await asyncio.sleep(0.1)
-            task_session.is_cancelled.set()
-
-        await asyncio.gather(
-            task_session.listen_signals(),
-            delayed_cancel(),
-        )
-
-        task_session._handle_resume.assert_called_once()
-
-    @pytest.mark.asyncio
     async def test_listen_signals_handles_status_signal(self, task_session, mock_db):
         """Verify status signal triggers _handle_status_request.
 
@@ -577,6 +510,7 @@ class TestSignalListener:
         signals = [
             {
                 "id": "tasks:different_id",
+                "task_id": "test_task_123",
                 "action": "status",
                 "payload": {"signal": "status"},
             }
@@ -676,7 +610,7 @@ class TestSignalListener:
         task_session.signal_record_id = "tasks:test_signal_id"
 
         async def failing_generator():
-            yield {"id": "tasks:different_id", "action": "cancel", "payload": {}}
+            yield {"id": "tasks:different_id", "task_id": "test_task_123", "action": "cancel", "payload": {}}
             msg = "Simulated failure"
             raise RuntimeError(msg)
 
@@ -699,14 +633,12 @@ class TestSignalListener:
         task_session.signal_record_id = "tasks:test_signal_id"
 
         signals = [
-            {"id": "tasks:sig1", "action": "pause", "payload": {}},
-            {"id": "tasks:sig2", "action": "resume", "payload": {}},
-            {"id": "tasks:sig3", "action": "status", "payload": {}},
+            {"id": "tasks:sig1", "task_id": "test_task_123", "action": "status", "payload": {}},
+            {"id": "tasks:sig2", "task_id": "test_task_123", "action": "cancel", "payload": {}},
         ]
         mock_db.start_live.return_value = ("live_123", _signal_generator(signals))
 
-        task_session._handle_pause = AsyncMock()
-        task_session._handle_resume = AsyncMock()
+        task_session._handle_cancel = AsyncMock()
         task_session._handle_status_request = AsyncMock()
 
         async def delayed_cancel() -> None:
@@ -718,181 +650,39 @@ class TestSignalListener:
             delayed_cancel(),
         )
 
-        task_session._handle_pause.assert_called_once()
-        task_session._handle_resume.assert_called_once()
+        task_session._handle_cancel.assert_called_once()
         task_session._handle_status_request.assert_called_once()
 
-
-# ============================================================================
-# Test Class: Pause and Resume Handlers
-# ============================================================================
-
-
-class TestPauseResume:
-    """Test pause and resume functionality."""
-
     @pytest.mark.asyncio
-    async def test_handle_pause_sets_event_and_sends_ack(self, task_session, mock_db):
-        """Verify _handle_pause clears the pause event and sends acknowledgement.
+    async def test_listen_signals_filters_by_task_id(self, task_session, mock_db):
+        """Verify signals with a different task_id are ignored.
 
-        Tests that pause handler properly updates the pause event state and
-        sends an ACK_PAUSE signal through the database.
+        Each listener should only process signals meant for its own task.
         """
         task_session.signal_record_id = "tasks:test_signal_id"
 
-        # Ensure not paused initially
-        task_session._paused.clear()
+        signals = [
+            {
+                "id": "tasks:different_id",
+                "task_id": "some_other_task",
+                "action": "cancel",
+                "payload": {"signal": "cancel"},
+            }
+        ]
+        mock_db.start_live.return_value = ("live_123", _signal_generator(signals))
+        task_session._handle_cancel = AsyncMock()
 
-        await task_session._handle_pause()
+        async def delayed_cancel() -> None:
+            await asyncio.sleep(0.1)
+            task_session.is_cancelled.set()
 
-        # Pause event should be cleared (blocking wait_if_paused)
-        assert task_session.paused
-
-        # Verify DB update with ACK_PAUSE
-        mock_db.update.assert_called_once()
-        call_args = mock_db.update.call_args[0]
-        assert call_args[0] == "tasks"
-        assert call_args[1] == "tasks:test_signal_id"
-
-        payload = call_args[2]
-        assert payload["task_id"] == "test_task_123"
-        assert payload["action"] == SignalType.ACK_PAUSE.value
-
-    @pytest.mark.asyncio
-    async def test_handle_pause_idempotency(self, task_session, mock_db):
-        """Verify multiple pause calls are safe and idempotent.
-
-        Tests that calling _handle_pause multiple times doesn't cause
-        unexpected state changes or duplicate database operations beyond
-        acknowledgements.
-        """
-        task_session.signal_record_id = "tasks:test_signal_id"
-
-        # First pause
-        task_session._paused.clear()
-        await task_session._handle_pause()
-        assert task_session.paused
-
-        # Second pause (already paused)
-        await task_session._handle_pause()
-        assert task_session.paused
-
-        # Should have two ACK calls (one per pause)
-        assert task_session.paused
-        assert mock_db.update.call_count == 2
-
-    @pytest.mark.asyncio
-    async def test_handle_resume_sets_event_and_sends_ack(self, task_session, mock_db):
-        """Verify _handle_resume sets the pause event and sends acknowledgement.
-
-        Tests that resume handler properly updates the pause event state and
-        sends an ACK_RESUME signal through the database.
-        """
-        task_session.signal_record_id = "tasks:test_signal_id"
-
-        # Ensure paused initially
-        task_session._paused.is_set()
-
-        await task_session._handle_resume()
-
-        # Pause event should be set (releasing wait_if_paused)
-        assert not task_session.paused
-
-        # Verify DB update with ACK_RESUME
-        mock_db.update.assert_called_once()
-        call_args = mock_db.update.call_args[0]
-        assert call_args[0] == "tasks"
-        assert call_args[1] == "tasks:test_signal_id"
-
-        payload = call_args[2]
-        assert payload["task_id"] == "test_task_123"
-        assert payload["action"] == SignalType.ACK_RESUME.value
-
-    @pytest.mark.asyncio
-    async def test_handle_resume_idempotency(self, task_session, mock_db):
-        """Verify multiple resume calls are safe and idempotent.
-
-        Tests that calling _handle_resume multiple times doesn't cause
-        unexpected state changes or duplicate operations.
-        """
-        task_session.signal_record_id = "tasks:test_signal_id"
-
-        # First resume
-        task_session._paused.clear()
-        await task_session._handle_resume()
-        assert not task_session.paused
-
-        # Second resume (already resumed)
-        await task_session._handle_resume()
-        assert not task_session.paused
-
-        # Should have two ACK calls
-        assert mock_db.update.call_count == 2
-
-    @pytest.mark.asyncio
-    async def test_wait_if_paused_blocks_when_paused(self, task_session):
-        """Verify wait_if_paused blocks execution when task is paused.
-
-        Tests that the wait_if_paused method properly blocks until the
-        pause event is set by resume.
-        """
-        task_session._paused.set()  # Paused state
-
-        wait_completed = False
-
-        async def wait_task() -> None:
-            nonlocal wait_completed
-            await task_session.wait_if_paused()
-            wait_completed = True
-
-        async def resume_after_delay() -> None:
-            await asyncio.sleep(0.05)
-            task_session._paused.clear()
-
-        await asyncio.gather(wait_task(), resume_after_delay())
-
-        assert wait_completed
-        assert not task_session.paused
-
-    @pytest.mark.asyncio
-    async def test_wait_if_paused_returns_immediately_when_not_paused(self, task_session, mock_logger):
-        """Verify wait_if_paused returns immediately when not paused.
-
-        Tests that the method doesn't block when the task is not in paused state.
-        """
-        task_session._paused.clear()  # Not paused
-
-        # Should complete immediately
-        await asyncio.wait_for(task_session.wait_if_paused(), timeout=0.1)
-
-        # Should not log waiting message
-        assert not any(
-            "paused" in str(call).lower() and "waiting" in str(call).lower() for call in mock_logger.info.call_args_list
+        await asyncio.gather(
+            task_session.listen_signals(),
+            delayed_cancel(),
         )
 
-    @pytest.mark.asyncio
-    async def test_pause_resume_cycle_maintains_state_integrity(self, task_session, mock_db):
-        """Verify pause/resume cycle maintains consistent state.
-
-        Tests a complete pause-resume cycle to ensure state transitions
-        are clean and don't leave the session in an inconsistent state.
-        """
-        task_session.signal_record_id = "tasks:test_signal_id"
-
-        initial_state = compute_state_hash(task_session)
-
-        # Pause
-        task_session._paused.set()
-        await task_session._handle_pause()
-        assert task_session.paused
-
-        # Resume
-        await task_session._handle_resume()
-        assert not task_session.paused
-
-        # State should only differ in pause flag
-        final_state = compute_state_hash(task_session)
-        assert initial_state == final_state  # Both have paused=False initially and after resume
+        # Should not handle signal for a different task
+        task_session._handle_cancel.assert_not_called()
 
 
 # ============================================================================
@@ -927,22 +717,6 @@ class TestCancellation:
         assert payload["task_id"] == "test_task_123"
         assert payload["action"] == SignalType.ACK_CANCEL.value
         assert payload["status"] == TaskStatus.CANCELLED.value
-
-    @pytest.mark.asyncio
-    async def test_handle_cancel_resumes_if_paused(self, task_session, mock_db):
-        """Verify cancellation resumes paused tasks to allow cleanup.
-
-        Tests that if a task is paused when cancelled, the pause event
-        is set to allow the cancellation to proceed through blocked code.
-        """
-        task_session.signal_record_id = "tasks:test_signal_id"
-        task_session._paused.set()  # Paused state
-
-        await task_session._handle_cancel()
-
-        # Should resume to allow cancellation to proceed
-        assert task_session.paused
-        assert task_session.is_cancelled.is_set()
 
     @pytest.mark.asyncio
     async def test_handle_cancel_idempotency(self, task_session, mock_db, mock_logger):
@@ -1101,6 +875,7 @@ class TestLifecycleIntegration:
         signals = [
             {
                 "id": "tasks:sig1",
+                "task_id": "test_task_123",
                 "action": "status",
                 "payload": {},
             },
@@ -1143,14 +918,11 @@ class TestLifecycleIntegration:
 
         # Perform sequence of operations
         await task_session.send_heartbeat()
-        await task_session._handle_pause()
-        await task_session._handle_resume()
         await task_session._handle_status_request()
 
         # Status and heartbeat should have changed, others stable
         assert task_session.task_id == "test_task_123"
         assert isinstance(task_session.is_cancelled, asyncio.Event)
-        assert isinstance(task_session._paused, asyncio.Event)
 
     @pytest.mark.asyncio
     async def test_cancellation_stops_heartbeat_generation(self, task_session, mock_db):
@@ -1183,48 +955,6 @@ class TestLifecycleIntegration:
         # Should have sent at least one heartbeat before cancellation
         assert heartbeat_count >= 1
 
-    @pytest.mark.skip(reason="Resume doesn't communicate with the main CORO task so only the signal task is paused")
-    @pytest.mark.asyncio
-    async def test_pause_blocks_execution_in_wait_if_paused(self, task_session, mock_db):
-        """Verify pause properly blocks wait_if_paused calls.
-
-        Integration test ensuring pause/resume mechanism works correctly
-        for blocking task execution.
-        """
-        execution_log = []
-        task_session.signal_record_id = "tasks:test_signal_id"
-        task_session._paused.set()
-
-        async def task_with_checkpoints() -> None:
-            execution_log.append("start")
-            await task_session.wait_if_paused()
-            execution_log.append("after_checkpoint_1")
-            await task_session.wait_if_paused()
-            execution_log.append("after_checkpoint_2")
-
-        async def pause_resume_sequence() -> None:
-            await asyncio.sleep(0.1)
-            execution_log.append("resuming")
-            task_session._paused.set()
-
-            await asyncio.sleep(0.05)
-            execution_log.append("pausing")
-            task_session._paused.clear()
-
-            await asyncio.sleep(0.1)
-            execution_log.append("resuming")
-            task_session._paused.set()
-
-        await asyncio.gather(
-            task_with_checkpoints(),
-            pause_resume_sequence(),
-        )
-
-        # Verify execution order
-        assert execution_log.index("start") < execution_log.index("pausing")
-        assert execution_log.index("pausing") < execution_log.index("resuming")
-        assert execution_log.index("resuming") < execution_log.index("after_checkpoint_1")
-
     @pytest.mark.asyncio
     async def test_concurrent_signal_processing(self, task_session, mock_db):
         """Verify multiple signals are processed without state corruption.
@@ -1235,15 +965,13 @@ class TestLifecycleIntegration:
         task_session.signal_record_id = "tasks:test_signal_id"
 
         signals = [
-            {"id": "tasks:sig1", "action": "pause", "payload": {}},
-            {"id": "tasks:sig2", "action": "status", "payload": {}},
-            {"id": "tasks:sig3", "action": "resume", "payload": {}},
-            {"id": "tasks:sig4", "action": "status", "payload": {}},
+            {"id": "tasks:sig1", "task_id": "test_task_123", "action": "status", "payload": {}},
+            {"id": "tasks:sig2", "task_id": "test_task_123", "action": "status", "payload": {}},
+            {"id": "tasks:sig3", "task_id": "test_task_123", "action": "cancel", "payload": {}},
         ]
         mock_db.start_live.return_value = ("live_123", _signal_generator(signals))
 
-        task_session._handle_pause = AsyncMock()
-        task_session._handle_resume = AsyncMock()
+        task_session._handle_cancel = AsyncMock()
         task_session._handle_status_request = AsyncMock()
 
         async def delayed_cancel() -> None:
@@ -1256,8 +984,7 @@ class TestLifecycleIntegration:
         )
 
         # All signals should have been processed
-        task_session._handle_pause.assert_called_once()
-        task_session._handle_resume.assert_called_once()
+        task_session._handle_cancel.assert_called_once()
         assert task_session._handle_status_request.call_count == 2
 
     @pytest.mark.asyncio
@@ -1613,10 +1340,10 @@ class TestRegressionSnapshots:
         await task_session._handle_cancel()
 
         payload = mock_db.update.call_args[0][2]
-        # Snapshot of expected structure (updated with setup_id, setup_version_id, and enhanced logging fields)
+        # Snapshot of expected structure (exclude_none=True omits None-valued optional fields)
         expected_keys = {
             "task_id", "mission_id", "setup_id", "setup_version_id", "action", "status", "payload", "timestamp",
-            "cancellation_reason", "error_message", "exception_traceback",
+            "cancellation_reason",
         }
         assert set(payload.keys()) == expected_keys
         assert payload["mission_id"] == "missions:test_mission"
@@ -1643,13 +1370,11 @@ class TestRegressionSnapshots:
             # Perform standard operation sequence
             await task_session.send_heartbeat()
             await task_session._handle_status_request()
-            await task_session._handle_pause()
-            await task_session._handle_resume()
             await task_session._handle_cancel()
 
             # Snapshot of expected call pattern
             assert mock_db.create.call_count == 1  # Initial heartbeat
-            assert mock_db.update.call_count == 4  # status, pause, resume, cancel
+            assert mock_db.update.call_count == 2  # status, cancel
             assert mock_db.merge.call_count == 0  # No subsequent heartbeats
 
 
@@ -1744,8 +1469,6 @@ class TestFailureModes:
         ("signal_action", "handler_name"),
         [
             ("cancel", "_handle_cancel"),
-            ("pause", "_handle_pause"),
-            ("resume", "_handle_resume"),
             ("status", "_handle_status_request"),
         ],
     )
@@ -1760,6 +1483,7 @@ class TestFailureModes:
         signals = [
             {
                 "id": "tasks:sig1",
+                "task_id": "test_task_123",
                 "action": signal_action,
                 "payload": {},
             }
@@ -1768,8 +1492,6 @@ class TestFailureModes:
 
         # Mock all handlers
         task_session._handle_cancel = AsyncMock()
-        task_session._handle_pause = AsyncMock()
-        task_session._handle_resume = AsyncMock()
         task_session._handle_status_request = AsyncMock()
 
         async def delayed_cancel() -> None:
@@ -1788,8 +1510,6 @@ class TestFailureModes:
         # Verify other handlers were not called
         all_handlers = [
             task_session._handle_cancel,
-            task_session._handle_pause,
-            task_session._handle_resume,
             task_session._handle_status_request,
         ]
         for handler in all_handlers:
@@ -1869,34 +1589,31 @@ class TestTimingAndConcurrency:
         assert session.cancelled
 
     @pytest.mark.asyncio
-    async def test_pause_resume_during_signal_processing(self, task_session, mock_db):
-        """Verify pause/resume works correctly during active signal processing.
+    async def test_status_and_cancel_during_signal_processing(self, task_session, mock_db):
+        """Verify status and cancel signals are processed sequentially.
 
-        Tests that pause and resume signals can be processed while other
-        signals are being handled without state corruption.
+        Tests that multiple signals are handled in order without corruption.
         """
         task_session.signal_record_id = "tasks:test_signal_id"
 
         processing_order = []
 
-        async def slow_pause() -> None:
-            processing_order.append("pause_start")
+        async def slow_status() -> None:
+            processing_order.append("status_start")
             await asyncio.sleep(0.05)
-            task_session._paused.clear()
-            processing_order.append("pause_end")
+            processing_order.append("status_end")
 
-        async def slow_resume() -> None:
-            processing_order.append("resume_start")
+        async def slow_cancel(reason=None) -> None:
+            processing_order.append("cancel_start")
             await asyncio.sleep(0.05)
-            task_session._paused.set()
-            processing_order.append("resume_end")
+            processing_order.append("cancel_end")
 
-        task_session._handle_pause = slow_pause
-        task_session._handle_resume = slow_resume
+        task_session._handle_status_request = slow_status
+        task_session._handle_cancel = slow_cancel
 
         signals = [
-            {"id": "tasks:sig1", "action": "pause", "payload": {}},
-            {"id": "tasks:sig2", "action": "resume", "payload": {}},
+            {"id": "tasks:sig1", "task_id": "test_task_123", "action": "status", "payload": {}},
+            {"id": "tasks:sig2", "task_id": "test_task_123", "action": "cancel", "payload": {}},
         ]
         mock_db.start_live.return_value = ("live_123", _signal_generator(signals))
 
@@ -1910,9 +1627,9 @@ class TestTimingAndConcurrency:
         )
 
         # Verify sequential processing
-        assert processing_order.index("pause_start") < processing_order.index("pause_end")
-        assert processing_order.index("pause_end") < processing_order.index("resume_start")
-        assert processing_order.index("resume_start") < processing_order.index("resume_end")
+        assert processing_order.index("status_start") < processing_order.index("status_end")
+        assert processing_order.index("status_end") < processing_order.index("cancel_start")
+        assert processing_order.index("cancel_start") < processing_order.index("cancel_end")
 
     @pytest.mark.asyncio
     async def test_rapid_signal_sequence(self, task_session, mock_db):
@@ -1924,7 +1641,7 @@ class TestTimingAndConcurrency:
         task_session.signal_record_id = "tasks:test_signal_id"
 
         # Generate 20 rapid signals
-        signals = [{"id": f"tasks:sig{i}", "action": "status", "payload": {}} for i in range(20)]
+        signals = [{"id": f"tasks:sig{i}", "task_id": "test_task_123", "action": "status", "payload": {}} for i in range(20)]
         mock_db.start_live.return_value = ("live_123", _signal_generator(signals))
 
         task_session._handle_status_request = AsyncMock()
@@ -1949,26 +1666,6 @@ class TestTimingAndConcurrency:
 
 class TestStateInvariants:
     """Test state invariants and consistency guarantees."""
-
-    def test_cancelled_and_paused_are_mutually_independent(self, task_session):
-        """Verify cancelled and paused states can coexist independently.
-
-        Tests that cancellation and pause are orthogonal states that
-        don't interfere with each other's event mechanisms.
-        """
-        # Can be both cancelled and paused
-        task_session.is_cancelled.set()
-        task_session._paused.clear()
-
-        assert task_session.cancelled
-        assert not task_session.paused
-
-        # Can be neither
-        task_session.is_cancelled.clear()
-        task_session._paused.set()
-
-        assert not task_session.cancelled
-        assert task_session.paused
 
     @pytest.mark.asyncio
     async def test_status_transitions_are_monotonic(self, task_session, mock_db):
@@ -2019,32 +1716,6 @@ class TestStateInvariants:
             await task_session.send_heartbeat()
             assert task_session.heartbeat_record_id == first_id
 
-    @pytest.mark.asyncio
-    async def test_event_state_consistency_after_operations(self, task_session, mock_db):
-        """Verify event states remain consistent after various operations.
-
-        Tests that asyncio.Event states don't get corrupted or stuck
-        after complex operation sequences.
-        """
-        task_session.signal_record_id = "tasks:test_signal_id"
-
-        # Initial state
-        assert not task_session.is_cancelled.is_set()
-        assert not task_session.paused
-
-        # Pause
-        await task_session._handle_pause()
-        assert task_session.paused  # Paused = cleared
-
-        # Resume
-        await task_session._handle_resume()
-        assert not task_session.paused  # Resumed = set
-
-        # Cancel (should also resume if paused)
-        task_session._paused.clear()
-        await task_session._handle_cancel()
-        assert task_session.is_cancelled.is_set()
-        assert not task_session.paused  # Should be resumed
 
 
 # ============================================================================
@@ -2263,14 +1934,13 @@ class TestCompleteScenarios:
             execution_log.append("work_started")
             for i in range(3):
                 await asyncio.sleep(0.05)
-                await task_session.wait_if_paused()
                 execution_log.append(f"work_step_{i}")
             execution_log.append("work_completed")
             task_session.is_cancelled.set()
 
         # Status check signal
         signals = [
-            {"id": "tasks:sig1", "action": "status", "payload": {}},
+            {"id": "tasks:sig1", "task_id": "test_task_123", "action": "status", "payload": {}},
         ]
         mock_db.start_live.return_value = ("live_123", _signal_generator(signals))
         task_session._handle_status_request = AsyncMock()
@@ -2289,53 +1959,6 @@ class TestCompleteScenarios:
         # Verify monitoring components functioned
         assert mock_db.create.call_count >= 1  # Heartbeats sent
         task_session._handle_status_request.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_task_pause_resume_workflow(self, task_session, mock_db):
-        """Simulate task being paused and resumed during execution.
-
-        End-to-end test of pause/resume workflow showing task properly
-        blocks during pause and continues after resume.
-        """
-        task_session.signal_record_id = "tasks:test_signal_id"
-
-        execution_timeline = []
-
-        async def simulate_pausable_work() -> None:
-            execution_timeline.append(("work_start", asyncio.get_event_loop().time()))
-
-            for i in range(5):
-                await task_session.wait_if_paused()
-                execution_timeline.append((f"step_{i}", asyncio.get_event_loop().time()))
-                await asyncio.sleep(0.02)
-
-            execution_timeline.append(("work_end", asyncio.get_event_loop().time()))
-            task_session.is_cancelled.set()
-
-        async def control_sequence() -> None:
-            await asyncio.sleep(0.05)
-            execution_timeline.append(("pause_sent", asyncio.get_event_loop().time()))
-            await task_session._handle_pause()
-
-            await asyncio.sleep(0.1)
-            execution_timeline.append(("resume_sent", asyncio.get_event_loop().time()))
-            await task_session._handle_resume()
-
-        mock_db.start_live.return_value = ("live_123", _signal_generator([]))
-
-        await asyncio.gather(
-            simulate_pausable_work(),
-            control_sequence(),
-            task_session.listen_signals(),
-        )
-
-        # Verify pause and resume occurred in sequence
-        pause_time = next(t for event, t in execution_timeline if event == "pause_sent")
-        resume_time = next(t for event, t in execution_timeline if event == "resume_sent")
-        assert pause_time < resume_time
-
-        # Verify work completed
-        assert any(event == "work_end" for event, _ in execution_timeline)
 
     @pytest.mark.asyncio
     async def test_task_cancellation_during_execution(self, task_session, mock_db):

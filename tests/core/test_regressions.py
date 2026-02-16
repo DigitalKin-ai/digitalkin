@@ -133,22 +133,28 @@ class TestTaskManagerChannelRegression:
     @pytest.mark.asyncio
     async def test_send_signal_uses_session_db(self):
         """REGRESSION: send_signal was trying to use self.channel.update
-        instead of session.db.update.
+        instead of session.db.create.
         """
         manager = LocalTaskManager()
 
         mock_db = AsyncMock()
-        mock_db.update = AsyncMock(return_value=True)
+        mock_db.create = AsyncMock(return_value={"id": "tasks:sig1"})
 
         mock_session = Mock()
         mock_session.db = mock_db
+        mock_session.setup_id = "setup:test"
+        mock_session.setup_version_id = "setup_version:test"
+        from digitalkin.models.core.task_monitor import TaskStatus
+        mock_session.status = TaskStatus.PENDING
         manager.tasks_sessions["task-1"] = mock_session
 
-        # Should use session.db.update, not self.channel.update
-        result = await manager.send_signal("task-1", "mission", "pause", {})
+        # Should use session.db.create on "tasks" table
+        result = await manager.send_signal("task-1", "mission", "cancel", {})
 
         assert result is True
-        mock_db.update.assert_awaited_once_with("signals", "task-1", {"type": "pause", "payload": {}})
+        mock_db.create.assert_awaited_once()
+        call_args = mock_db.create.call_args
+        assert call_args[0][0] == "tasks"
 
 
 class TestTaskiqInfiniteLoopRegression:
