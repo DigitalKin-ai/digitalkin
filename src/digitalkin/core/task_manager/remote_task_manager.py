@@ -1,6 +1,5 @@
 """Remote task manager for distributed execution."""
 
-import datetime
 from collections.abc import Coroutine
 from typing import Any
 
@@ -16,14 +15,25 @@ class RemoteTaskManager(BaseTaskManager):
     Suitable for horizontally scaled deployments with Taskiq/Celery workers.
     """
 
+    def __init__(
+        self,
+        default_timeout: float = 10.0,
+        max_concurrent_tasks: int = 100,
+    ) -> None:
+        """Initialize remote task manager.
+
+        Args:
+            default_timeout: Default timeout for task operations in seconds.
+            max_concurrent_tasks: Maximum number of concurrent tasks.
+        """
+        super().__init__(default_timeout, max_concurrent_tasks)
+
     async def create_task(
         self,
         task_id: str,
         mission_id: str,
         module: BaseModule,
         coro: Coroutine[Any, Any, None],
-        heartbeat_interval: datetime.timedelta = datetime.timedelta(seconds=2),
-        connection_timeout: datetime.timedelta = datetime.timedelta(seconds=5),
     ) -> None:
         """Register task for remote execution (metadata only).
 
@@ -31,36 +41,25 @@ class RemoteTaskManager(BaseTaskManager):
         The coroutine will be recreated and executed by a remote worker.
 
         Args:
-            task_id: Unique identifier for the task
-            mission_id: Mission identifier
-            module: Module instance for metadata (not executed here)
-            coro: Coroutine (will be closed - execution happens in worker)
-            heartbeat_interval: Interval between heartbeats
-            connection_timeout: Connection timeout for SurrealDB
+            task_id: Unique identifier for the task.
+            mission_id: Mission identifier.
+            module: Module instance for metadata (not executed here).
+            coro: Coroutine (will be closed - execution happens in worker).
 
         Raises:
-            ValueError: If task_id duplicated
-            RuntimeError: If task overload
+            ValueError: If task_id duplicated.
+            RuntimeError: If task overload.
         """
-        # Validation
         await self._validate_task_creation(task_id, mission_id, coro)
 
         logger.info(
             "Registering remote task: '%s'",
             task_id,
-            extra={
-                "mission_id": mission_id,
-                "task_id": task_id,
-                "heartbeat_interval": heartbeat_interval,
-                "connection_timeout": connection_timeout,
-            },
+            extra={"mission_id": mission_id, "task_id": task_id},
         )
 
         try:
-            # Create session for metadata and signal handling
-            _channel, _session = await self._create_session(
-                task_id, mission_id, module, heartbeat_interval, connection_timeout
-            )
+            _ = await self._create_session(task_id, mission_id, module)
 
             # Close coroutine - worker will recreate and execute it
             coro.close()
@@ -76,12 +75,12 @@ class RemoteTaskManager(BaseTaskManager):
             )
 
         except Exception as e:
+            coro.close()
             logger.error(
                 "Failed to register remote task: '%s'",
                 task_id,
                 extra={"mission_id": mission_id, "task_id": task_id, "error": str(e)},
                 exc_info=True,
             )
-            # Cleanup on failure
             await self._cleanup_task(task_id, mission_id=mission_id)
             raise

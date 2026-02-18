@@ -17,6 +17,7 @@ from digitalkin.services.identity.identity_strategy import IdentityStrategy
 from digitalkin.services.registry.registry_strategy import RegistryStrategy
 from digitalkin.services.snapshot.snapshot_strategy import SnapshotStrategy
 from digitalkin.services.storage.storage_strategy import StorageStrategy
+from digitalkin.services.task_manager.task_manager_strategy import TaskManagerStrategy
 from digitalkin.services.user_profile.user_profile_strategy import UserProfileStrategy
 
 
@@ -94,6 +95,7 @@ class ModuleContext:
     registry: RegistryStrategy
     snapshot: SnapshotStrategy
     storage: StorageStrategy
+    task_manager: TaskManagerStrategy
     user_profile: UserProfileStrategy
 
     session: Session
@@ -103,7 +105,7 @@ class ModuleContext:
     state: SimpleNamespace = SimpleNamespace()
     tool_cache: ToolCache
 
-    def __init__(  # noqa: PLR0913, PLR0917
+    def __init__(  # All service strategies are mandatory constructor args # noqa: PLR0913, PLR0917
         self,
         agent: AgentStrategy,
         communication: CommunicationStrategy,
@@ -113,6 +115,7 @@ class ModuleContext:
         registry: RegistryStrategy,
         snapshot: SnapshotStrategy,
         storage: StorageStrategy,
+        task_manager: TaskManagerStrategy,
         user_profile: UserProfileStrategy,
         session: dict[str, Any],
         metadata: dict[str, Any] = {},
@@ -131,6 +134,7 @@ class ModuleContext:
             registry: RegistryStrategy.
             snapshot: SnapshotStrategy.
             storage: StorageStrategy.
+            task_manager: TaskManagerStrategy.
             user_profile: UserProfileStrategy.
             metadata: dict defining differents Module metadata.
             helpers: dict different user defined helpers.
@@ -146,6 +150,7 @@ class ModuleContext:
         self.registry = registry
         self.snapshot = snapshot
         self.storage = storage
+        self.task_manager = task_manager
         self.user_profile = user_profile
 
         self.metadata = SimpleNamespace(**metadata)
@@ -169,7 +174,7 @@ class ModuleContext:
         Returns:
             Dictionary containing schemas: {"input": ..., "output": ..., "setup": ..., "secret": ...}
         """
-        module_info = self.registry.discover_by_id(module_id)
+        module_info = await self.registry.discover_by_id(module_id)
 
         logger.debug(
             "Getting module schemas by ID",
@@ -339,7 +344,9 @@ class ModuleContext:
         """
         protocol = tool_def.name
 
-        async def tool_function(**kwargs: Any) -> AsyncGenerator[dict, None]:  # noqa: ANN401
+        async def tool_function(
+            **kwargs: Any,
+        ) -> AsyncGenerator[dict, None]:  # Tool kwargs are dynamically typed
             kwargs["protocol"] = protocol
             wrapped_input = {"root": kwargs}
             async for response in communication.call_module(
@@ -357,9 +364,11 @@ class ModuleContext:
         return tool_function
 
     async def cleanup(self) -> None:
-        """Clean up all service resources.
+        """Clean up all service resources."""
+        from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
 
-        Currently cleans up communication service (gRPC channel pool).
-        """
-        if self.communication is not None:
-            await self.communication.cleanup()
+        await self.communication.close()
+        await self.task_manager.close()
+        for service in (self.storage, self.cost, self.filesystem, self.registry, self.user_profile):
+            if isinstance(service, GrpcClientWrapper):
+                await service.close()

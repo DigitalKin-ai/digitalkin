@@ -187,7 +187,6 @@ Before writing any code, ask: "Is this the most minimal way to achieve this? Can
 The following patterns are **strictly prohibited** in this codebase:
 
 1. **No `hasattr()`, `getattr()`, `setattr()`**: These indicate poor type design. Use explicit type checks (`is None`, `is not None`) or proper type annotations instead. If an attribute might not exist, the class design is wrong.
-2. **No `from __future__ import annotations`**: Use direct imports and string literals for forward references when needed.
 
 ### Docstring Standard (Google Style)
 All docstrings must follow Google style with these sections (when applicable):

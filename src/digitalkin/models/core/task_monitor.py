@@ -7,23 +7,15 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 
-class TaskStatus(Enum):
-    """Task status enumeration."""
-
-    PENDING = "pending"
-    RUNNING = "running"
-    CANCELLED = "cancelled"
-    COMPLETED = "completed"
-    FAILED = "failed"
-
-
-class CancellationReason(Enum):
+class CancellationReason(str, Enum):
     """Reason for task termination."""
 
     COMPLETED = "completed"
     SUCCESS_CLEANUP = "success_cleanup"  # Post-completion, terminating helper tasks
     FAILURE_CLEANUP = "failure_cleanup"  # Post-failure, releasing resources
-    SIGNAL = "signal"  # Cancel via SurrealDB live query (StopModule, orchestrator, mission)
+    SIGNAL_SERVICE_CANCEL = (
+        "signal_service_cancel"  # Cancel via SurrealDB live query (StopModule, orchestrator, mission)
+    )
     HEARTBEAT_FAILURE = "heartbeat_failure"  # SurrealDB CREATE/MERGE failed (check error code)
     HEARTBEAT_WEBSOCKET_CLOSED = "heartbeat_ws_closed"  # WebSocket closed, keepalive ping timeout
     HEARTBEAT_TIMEOUT = "heartbeat_timeout"  # CREATE/MERGE operation timed out
@@ -37,16 +29,16 @@ class CancellationReason(Enum):
     UNKNOWN = "unknown"  # Reason not set - investigate code path
 
 
-class SignalType(Enum):
+class SignalType(str, Enum):
     """Signal type enumeration."""
 
     START = "start"
     STOP = "stop"
     CANCEL = "cancel"
-    STATUS = "status"
 
+    ACK_START = "ack_start"
+    ACK_STOP = "ack_stop"
     ACK_CANCEL = "ack_cancel"
-    ACK_STATUS = "ack_status"
 
 
 class SignalMessage(BaseModel):
@@ -56,15 +48,13 @@ class SignalMessage(BaseModel):
     mission_id: str = Field(..., description="Identifier for the mission")
     setup_id: str = Field(default="", description="Identifier for the setup")
     setup_version_id: str = Field(default="", description="Identifier for the setup version")
-    status: TaskStatus = Field(..., description="Current status of the task")
     action: SignalType = Field(..., description="Type of signal action")
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     payload: dict[str, Any] = Field(default_factory=dict, description="Optional payload for the signal")
 
-    # Enhanced logging fields
     cancellation_reason: CancellationReason | None = Field(
         default=None,
-        description="Reason for cancellation if status is CANCELLED",
+        description="Reason for task termination (only set on ACK_STOP/ACK_CANCEL).",
     )
     error_message: str | None = Field(
         default=None,
@@ -74,8 +64,6 @@ class SignalMessage(BaseModel):
         default=None,
         description="Full traceback if task failed with exception",
     )
-
-    model_config = {"use_enum_values": True}
 
 
 class HeartbeatMessage(BaseModel):

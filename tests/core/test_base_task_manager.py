@@ -54,6 +54,9 @@ class ConcreteTaskManager(BaseTaskManager):
             task_id, mission_id, module, heartbeat_interval, connection_timeout
         )
 
+        # Close the coroutine since this test implementation uses its own supervisor
+        coro.close()
+
         # Create a simple task for testing
         async def simple_supervisor() -> None:
             await asyncio.sleep(0.1)

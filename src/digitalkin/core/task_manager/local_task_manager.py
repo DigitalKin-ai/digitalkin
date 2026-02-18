@@ -1,6 +1,5 @@
 """Local task manager for single-process execution."""
 
-import datetime
 from collections.abc import Coroutine
 from typing import Any
 
@@ -27,8 +26,8 @@ class LocalTaskManager(BaseTaskManager):
         """Initialize local task manager.
 
         Args:
-            default_timeout: Default timeout for task operations in seconds
-            max_concurrent_tasks: Maximum number of concurrent tasks
+            default_timeout: Default timeout for task operations in seconds.
+            max_concurrent_tasks: Maximum number of concurrent tasks.
         """
         super().__init__(default_timeout, max_concurrent_tasks)
         self._executor = TaskExecutor()
@@ -39,50 +38,35 @@ class LocalTaskManager(BaseTaskManager):
         mission_id: str,
         module: BaseModule,
         coro: Coroutine[Any, Any, None],
-        heartbeat_interval: datetime.timedelta = datetime.timedelta(seconds=2),
-        connection_timeout: datetime.timedelta = datetime.timedelta(seconds=5),
     ) -> None:
         """Create and execute a task locally using TaskExecutor.
 
         Args:
-            task_id: Unique identifier for the task
-            mission_id: Mission identifier
-            module: Module instance to execute
-            coro: Coroutine to execute
-            heartbeat_interval: Interval between heartbeats
-            connection_timeout: Connection timeout for SurrealDB
+            task_id: Unique identifier for the task.
+            mission_id: Mission identifier.
+            module: Module instance to execute.
+            coro: Coroutine to execute.
 
         Raises:
-            ValueError: If task_id duplicated
-            RuntimeError: If task overload
+            ValueError: If task_id duplicated.
+            RuntimeError: If task overload.
         """
-        # Validation
         await self._validate_task_creation(task_id, mission_id, coro)
 
         logger.info(
             "Creating local task: '%s'",
             task_id,
-            extra={
-                "mission_id": mission_id,
-                "task_id": task_id,
-                "heartbeat_interval": heartbeat_interval,
-                "connection_timeout": connection_timeout,
-            },
+            extra={"mission_id": mission_id, "task_id": task_id},
         )
 
         try:
-            # Create session
-            channel, session = await self._create_session(
-                task_id, mission_id, module, heartbeat_interval, connection_timeout
-            )
+            session = await self._create_session(task_id, mission_id, module)
 
-            # Execute task using TaskExecutor
             supervisor_task = await self._executor.execute_task(
                 task_id,
                 mission_id,
                 coro,
                 session,
-                channel,
             )
             self.tasks[task_id] = supervisor_task
 
@@ -97,12 +81,12 @@ class LocalTaskManager(BaseTaskManager):
             )
 
         except Exception as e:
+            coro.close()
             logger.error(
                 "Failed to create local task: '%s'",
                 task_id,
                 extra={"mission_id": mission_id, "task_id": task_id, "error": str(e)},
                 exc_info=True,
             )
-            # Cleanup on failure
             await self._cleanup_task(task_id, mission_id=mission_id)
             raise

@@ -44,7 +44,6 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
         """
         BaseStrategy.__init__(self, mission_id, setup_id, setup_version_id)
         self.client_config = client_config
-        self._channel_pool: dict[tuple[str, int], grpc.aio.Channel] = {}
 
         logger.debug(
             "Initialized GrpcCommunication",
@@ -61,32 +60,19 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
         Returns:
             Async gRPC channel for the target module
         """
-        key = (module_address, module_port)
-        if key not in self._channel_pool:
-            logger.debug(
-                "Creating new channel",
-                extra={"address": module_address, "port": module_port},
-            )
-            config = ClientConfig(
-                host=module_address,
-                port=module_port,
-                mode=self.client_config.mode,
-                security=self.client_config.security,
-                credentials=self.client_config.credentials,
-                channel_options=self.client_config.channel_options,
-            )
-            self._channel_pool[key] = self._init_aio_channel(config)
-        return self._channel_pool[key]
+        config = ClientConfig(
+            host=module_address,
+            port=module_port,
+            mode=self.client_config.mode,
+            security=self.client_config.security,
+            credentials=self.client_config.credentials,
+            compression=self.client_config.compression,
+            channel_options=self.client_config.channel_options,
+        )
+        return self._init_channel(config)
 
-    async def close_all_channels(self) -> None:
-        """Close all pooled gRPC channels."""
-        for channel in self._channel_pool.values():
-            await channel.close()
-        self._channel_pool.clear()
-
-    async def cleanup(self) -> None:
-        """Clean up all gRPC channels."""
-        await self.close_all_channels()
+    async def close(self) -> None:
+        return
 
     def _create_stub(self, module_address: str, module_port: int) -> module_service_pb2_grpc.ModuleServiceStub:
         """Create a new stub for the target module.

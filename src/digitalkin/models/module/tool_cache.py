@@ -137,7 +137,7 @@ class ToolCache(BaseModel):
         Returns:
             List of setup field names in cache.
         """
-        return list(self.entries.keys())
+        return list[str](self.entries.keys())
 
 
 async def module_info_to_tool_module_info(
@@ -204,8 +204,10 @@ def _extract_tools_from_schema(schema: dict[str, Any]) -> list[ToolDefinition]:
     tools: list[ToolDefinition] = []
     defs = schema.get("$defs", {})
 
-    # Skip SDK utility protocols
-    utility_protocols = {"HealthcheckPingInput", "HealthcheckServicesInput", "HealthcheckStatusInput"}
+    # Skip SDK utility protocols (dynamically derived from UtilityProtocol hierarchy)
+    from digitalkin.models.module.utility import UtilityProtocol
+
+    utility_protocols = {cls.__name__ for cls in UtilityProtocol.__subclasses__()}
 
     for def_name, def_schema in defs.items():
         if def_name in utility_protocols:
@@ -222,7 +224,7 @@ def _extract_tools_from_schema(schema: dict[str, Any]) -> list[ToolDefinition]:
         tool_name = protocol_prop.get("const", def_name)
         tool_description = def_schema.get("description", "")
 
-        required_fields = set(def_schema.get("required", []))
+        required_fields = set[Any](def_schema.get("required", []))
         parameters: list[ToolParameter] = []
 
         for prop_name, prop_info in properties.items():

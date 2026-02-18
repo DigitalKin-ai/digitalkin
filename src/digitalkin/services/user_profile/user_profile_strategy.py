@@ -14,7 +14,7 @@ class UserProfileStrategy(BaseStrategy, ABC):
     """Abstract base class for UserProfile strategies."""
 
     @abstractmethod
-    def get_user_profile(self) -> dict[str, Any]:
+    async def get_user_profile(self) -> dict[str, Any]:
         """Get user profile data.
 
         Returns:

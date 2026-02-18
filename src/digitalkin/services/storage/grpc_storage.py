@@ -52,7 +52,7 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
             update_date=raw.get("update_date"),
         )
 
-    def _store(self, record: StorageRecord) -> StorageRecord:
+    async def _store(self, record: StorageRecord) -> StorageRecord:
         """Create a new record in the database.
 
         Parameters:
@@ -74,7 +74,7 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
                 record_id=record.record_id,
                 data_type=record.data_type.name,
             )
-            resp = self.exec_grpc_query("StoreRecord", req)
+            resp = await self.exec_grpc_query("StoreRecord", req)
             return self._build_record_from_proto(resp.stored_data)
         except Exception as e:
             logger.exception(
@@ -84,7 +84,7 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
             )
             raise StorageServiceError(str(e)) from e
 
-    def _read(self, collection: str, record_id: str) -> StorageRecord | None:
+    async def _read(self, collection: str, record_id: str) -> StorageRecord | None:
         """Fetch a single document by collection + record_id.
 
         Returns:
@@ -96,13 +96,13 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
                 collection=collection,
                 record_id=record_id,
             )
-            resp = self.exec_grpc_query("ReadRecord", req)
+            resp = await self.exec_grpc_query("ReadRecord", req)
             return self._build_record_from_proto(resp.stored_data)
         except Exception:
             logger.warning("gRPC ReadRecord failed for %s:%s", collection, record_id)
             return None
 
-    def _update(
+    async def _update(
         self,
         collection: str,
         record_id: str,
@@ -127,13 +127,13 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
                 collection=collection,
                 record_id=record_id,
             )
-            resp = self.exec_grpc_query("UpdateRecord", req)
+            resp = await self.exec_grpc_query("UpdateRecord", req)
             return self._build_record_from_proto(resp.stored_data)
         except Exception:
             logger.warning("gRPC UpdateRecord failed for %s:%s", collection, record_id)
             return None
 
-    def _remove(self, collection: str, record_id: str) -> bool:
+    async def _remove(self, collection: str, record_id: str) -> bool:
         """Delete a document via gRPC.
 
         Args:
@@ -149,7 +149,7 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
                 collection=collection,
                 record_id=record_id,
             )
-            self.exec_grpc_query("RemoveRecord", req)
+            await self.exec_grpc_query("RemoveRecord", req)
         except Exception:
             logger.warning(
                 "gRPC RemoveRecord failed for %s:%s",
@@ -159,7 +159,7 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
             return False
         return True
 
-    def _list(self, collection: str) -> list[StorageRecord]:
+    async def _list(self, collection: str) -> list[StorageRecord]:
         """List all documents in a collection via gRPC.
 
         Args:
@@ -173,13 +173,13 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
                 mission_id=self.mission_id,
                 collection=collection,
             )
-            resp = self.exec_grpc_query("ListRecords", req)
+            resp = await self.exec_grpc_query("ListRecords", req)
             return [self._build_record_from_proto(r) for r in resp.records]
         except Exception:
             logger.warning("gRPC ListRecords failed for %s", collection)
             return []
 
-    def _remove_collection(self, collection: str) -> bool:
+    async def _remove_collection(self, collection: str) -> bool:
         """Delete an entire collection via gRPC.
 
         Args:
@@ -193,7 +193,7 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
                 mission_id=self.mission_id,
                 collection=collection,
             )
-            self.exec_grpc_query("RemoveCollection", req)
+            await self.exec_grpc_query("RemoveCollection", req)
         except Exception:
             logger.warning("gRPC RemoveCollection failed for %s", collection)
             return False
@@ -206,7 +206,6 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
         setup_version_id: str,
         config: dict[str, type[BaseModel]],
         client_config: ClientConfig,
-        **kwargs,  # noqa: ANN003, ARG002
     ) -> None:
         """Initialize the storage."""
         super().__init__(mission_id=mission_id, setup_id=setup_id, setup_version_id=setup_version_id, config=config)

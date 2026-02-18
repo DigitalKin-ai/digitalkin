@@ -2,7 +2,6 @@
 
 import asyncio
 import contextlib
-import datetime
 import types
 from abc import ABC, abstractmethod
 from collections.abc import Coroutine
@@ -10,7 +9,6 @@ from typing import Any
 
 from typing_extensions import Self
 
-from digitalkin.core.task_manager.surrealdb_repository import SurrealDBConnection
 from digitalkin.core.task_manager.task_session import TaskSession
 from digitalkin.logger import logger
 from digitalkin.models.core.task_monitor import CancellationReason, SignalMessage, SignalType
@@ -34,6 +32,7 @@ class BaseTaskManager(ABC):
     default_timeout: float
     max_concurrent_tasks: int
     _shutdown_event: asyncio.Event
+    _tasks_lock: asyncio.Lock
 
     def __init__(
         self,
@@ -43,14 +42,15 @@ class BaseTaskManager(ABC):
         """Initialize task manager properties.
 
         Args:
-            default_timeout: Default timeout for task operations in seconds
-            max_concurrent_tasks: Maximum number of concurrent tasks
+            default_timeout: Default timeout for task operations in seconds.
+            max_concurrent_tasks: Maximum number of concurrent tasks.
         """
         self.tasks = {}
         self.tasks_sessions = {}
         self.default_timeout = default_timeout
         self.max_concurrent_tasks = max_concurrent_tasks
         self._shutdown_event = asyncio.Event()
+        self._tasks_lock = asyncio.Lock()
 
         logger.info(
             "%s initialized (max_concurrent_tasks=%d, default_timeout=%.1fs)",
@@ -72,23 +72,19 @@ class BaseTaskManager(ABC):
     async def _cleanup_task(self, task_id: str, mission_id: str) -> None:
         """Clean up task resources.
 
-        Delegates cleanup to TaskSession which handles:
-        - Clearing queue items to free memory
-        - Stopping module (if not already stopped)
-        - Closing database connection (which kills live queries)
-
-        Then removes task from tracking dictionaries.
-
         Args:
-            task_id: The ID of the task to clean up
-            mission_id: The ID of the mission associated with the task
+            task_id: The ID of the task to clean up.
+            mission_id: The ID of the mission associated with the task.
         """
         session = self.tasks_sessions.get(task_id)
         cancellation_reason = session.cancellation_reason.value if session else "no_session"
-        final_status = session.status.value if session else "unknown"
+        final_status = session.status if session else "unknown"
 
         logger.debug(
-            "Cleaning up resources",
+            "Cleaning up resources (managed_tasks=%d, sessions=%d, asyncio_tasks=%d)",
+            len(self.tasks),
+            len(self.tasks_sessions),
+            len(asyncio.all_tasks()),
             extra={
                 "mission_id": mission_id,
                 "task_id": task_id,
@@ -99,30 +95,30 @@ class BaseTaskManager(ABC):
 
         if session:
             await session.cleanup()
-            self.tasks_sessions.pop(task_id, None)
-            logger.debug(
-                "Task session cleanup completed",
-                extra={
-                    "mission_id": mission_id,
-                    "task_id": task_id,
-                    "final_status": final_status,
-                    "cancellation_reason": cancellation_reason,
-                },
-            )
 
-        self.tasks.pop(task_id, None)
+        async with self._tasks_lock:
+            self.tasks_sessions.pop(task_id, None)
+            self.tasks.pop(task_id, None)
+
+        logger.info(
+            "Task cleanup done (managed_tasks=%d, sessions=%d, asyncio_tasks=%d)",
+            len(self.tasks),
+            len(self.tasks_sessions),
+            len(asyncio.all_tasks()),
+            extra={"mission_id": mission_id, "task_id": task_id},
+        )
 
     async def _validate_task_creation(self, task_id: str, mission_id: str, coro: Coroutine[Any, Any, None]) -> None:
         """Validate task creation preconditions.
 
         Args:
-            task_id: The ID of the task to create
-            mission_id: The ID of the mission associated with the task
-            coro: The coroutine to execute
+            task_id: The ID of the task to create.
+            mission_id: The ID of the mission associated with the task.
+            coro: The coroutine to execute.
 
         Raises:
-            ValueError: If task_id already exists
-            RuntimeError: If max concurrent tasks reached
+            ValueError: If task_id already exists.
+            RuntimeError: If max concurrent tasks reached.
         """
         if task_id in self.tasks_sessions:
             coro.close()
@@ -154,32 +150,32 @@ class BaseTaskManager(ABC):
         task_id: str,
         mission_id: str,
         module: BaseModule,
-        heartbeat_interval: datetime.timedelta,
-        connection_timeout: datetime.timedelta,
-    ) -> tuple[SurrealDBConnection, TaskSession]:
-        """Create SurrealDB connection and task session.
+    ) -> TaskSession:
+        """Create task session (signal service derived from module context).
 
         Args:
-            task_id: The ID of the task
-            mission_id: The ID of the mission
-            module: The module instance
-            heartbeat_interval: Interval between heartbeats
-            connection_timeout: Connection timeout for SurrealDB
+            task_id: The ID of the task.
+            mission_id: The ID of the mission.
+            module: The module instance.
 
         Returns:
-            Tuple of (channel, session)
+            The created TaskSession.
         """
-        channel: SurrealDBConnection = SurrealDBConnection("task_manager", connection_timeout)
-        await channel.init_surreal_instance()
         session = TaskSession(
             task_id=task_id,
             mission_id=mission_id,
-            db=channel,
             module=module,
-            heartbeat_interval=heartbeat_interval,
         )
         self.tasks_sessions[task_id] = session
-        return channel, session
+
+        logger.info(
+            "Task session created (managed_tasks=%d, sessions=%d, asyncio_tasks=%d)",
+            len(self.tasks),
+            len(self.tasks_sessions),
+            len(asyncio.all_tasks()),
+            extra={"mission_id": mission_id, "task_id": task_id},
+        )
+        return session
 
     @abstractmethod
     async def create_task(
@@ -188,24 +184,20 @@ class BaseTaskManager(ABC):
         mission_id: str,
         module: BaseModule,
         coro: Coroutine[Any, Any, None],
-        heartbeat_interval: datetime.timedelta = datetime.timedelta(seconds=2),
-        connection_timeout: datetime.timedelta = datetime.timedelta(seconds=5),
     ) -> None:
         """Create and manage a new task.
 
         Subclasses implement specific execution strategies.
 
         Args:
-            task_id: Unique identifier for the task
-            mission_id: Mission identifier
-            module: Module instance to execute
-            coro: Coroutine to execute
-            heartbeat_interval: Interval between heartbeats
-            connection_timeout: Connection timeout for SurrealDB
+            task_id: Unique identifier for the task.
+            mission_id: Mission identifier.
+            module: Module instance to execute.
+            coro: Coroutine to execute.
 
         Raises:
-            ValueError: If task_id duplicated
-            RuntimeError: If task overload
+            ValueError: If task_id duplicated.
+            RuntimeError: If task overload.
         """
         ...
 
@@ -213,13 +205,13 @@ class BaseTaskManager(ABC):
         """Send signal to a specific task.
 
         Args:
-            task_id: The ID of the task
-            mission_id: The ID of the mission
-            signal_type: Type of signal to send
-            payload: Signal payload
+            task_id: The ID of the task.
+            mission_id: The ID of the mission.
+            signal_type: Type of signal to send.
+            payload: Signal payload.
 
         Returns:
-            True if the signal was sent successfully, False otherwise
+            True if the signal was sent successfully, False otherwise.
         """
         if task_id not in self.tasks_sessions:
             logger.warning(
@@ -229,22 +221,22 @@ class BaseTaskManager(ABC):
             )
             return False
 
+        session = self.tasks_sessions[task_id]
+
         logger.info(
-            "Sending signal '%s' to task '%s'",
+            "Sending signal '%s' to task '%s' (current_status=%s)",
             signal_type,
             task_id,
+            session.status,
             extra={"mission_id": mission_id, "task_id": task_id},
         )
-
-        session = self.tasks_sessions[task_id]
-        await session.db.create(
-            "tasks",
+        await session.signal_service.send_signal(
+            task_id,
             SignalMessage(
                 task_id=task_id,
                 mission_id=mission_id,
                 setup_id=session.setup_id,
                 setup_version_id=session.setup_version_id,
-                status=session.status,
                 action=SignalType[signal_type.upper()],
                 payload=payload,
             ).model_dump(exclude_none=True),
@@ -255,12 +247,12 @@ class BaseTaskManager(ABC):
         """Cancel a task with graceful shutdown and fallback.
 
         Args:
-            task_id: The ID of the task to cancel
-            mission_id: The ID of the mission
-            timeout: Optional timeout for cancellation
+            task_id: The ID of the task to cancel.
+            mission_id: The ID of the mission.
+            timeout: Optional timeout for cancellation.
 
         Returns:
-            True if the task was cancelled successfully, False otherwise
+            True if the task was cancelled successfully, False otherwise.
         """
         if task_id not in self.tasks:
             logger.warning(
@@ -274,9 +266,12 @@ class BaseTaskManager(ABC):
         task = self.tasks[task_id]
 
         logger.info(
-            "Initiating task cancellation: '%s', timeout: %.1fs",
+            "Initiating task cancellation: '%s', timeout: %.1fs (managed_tasks=%d, sessions=%d, asyncio_tasks=%d)",
             task_id,
             timeout,
+            len(self.tasks),
+            len(self.tasks_sessions),
+            len(asyncio.all_tasks()),
             extra={"mission_id": mission_id, "task_id": task_id, "timeout": timeout},
         )
 
@@ -328,11 +323,11 @@ class BaseTaskManager(ABC):
         return True
 
     async def clean_session(self, task_id: str, mission_id: str) -> bool:
-        """Force cleanup of task session, cancelling the task if still running.
+        """Clean up task session, only cancelling if the task is still running.
 
         Args:
-            task_id: The ID of the task
-            mission_id: The ID of the mission
+            task_id: The ID of the task.
+            mission_id: The ID of the mission.
 
         Returns:
             True if the task session was cleaned successfully, False otherwise.
@@ -345,20 +340,37 @@ class BaseTaskManager(ABC):
             )
             return False
 
-        await self.cancel_task(mission_id=mission_id, task_id=task_id)
+        task = self.tasks.get(task_id)
+        session = self.tasks_sessions[task_id]
 
-        logger.info("Cleaning up session for task: '%s'", task_id, extra={"mission_id": mission_id, "task_id": task_id})
+        logger.info(
+            "Cleaning session for task '%s' (status=%s, task_done=%s, managed_tasks=%d, sessions=%d, asyncio_tasks=%d)",
+            task_id,
+            session.status,
+            task.done() if task else "no_task",
+            len(self.tasks),
+            len(self.tasks_sessions),
+            len(asyncio.all_tasks()),
+            extra={"mission_id": mission_id, "task_id": task_id},
+        )
+
+        # Only cancel if the task is still running; otherwise just clean up resources
+        if task is not None and not task.done():
+            await self.cancel_task(mission_id=mission_id, task_id=task_id)
+        else:
+            await self._cleanup_task(task_id, mission_id)
+
         return True
 
     async def get_task_status(self, task_id: str, mission_id: str) -> bool:
         """Request status from a task.
 
         Args:
-            task_id: The ID of the task
-            mission_id: The ID of the mission
+            task_id: The ID of the task.
+            mission_id: The ID of the mission.
 
         Returns:
-            True if the status request was sent successfully, False otherwise
+            True if the status request was sent successfully, False otherwise.
         """
         return await self.send_signal(task_id=task_id, mission_id=mission_id, signal_type="status", payload={})
 
@@ -366,11 +378,11 @@ class BaseTaskManager(ABC):
         """Cancel all running tasks.
 
         Args:
-            mission_id: The ID of the mission
-            timeout: Optional timeout for cancellation
+            mission_id: The ID of the mission.
+            timeout: Optional timeout for cancellation.
 
         Returns:
-            Dictionary mapping task_id to cancellation success status
+            Dictionary mapping task_id to cancellation success status.
         """
         timeout = timeout or self.default_timeout
         task_ids = list(self.running_tasks)
@@ -381,7 +393,6 @@ class BaseTaskManager(ABC):
             extra={"mission_id": mission_id, "task_count": len(task_ids), "timeout": timeout},
         )
 
-        # Cancel all tasks in parallel to reduce latency
         cancel_coros = [
             self.cancel_task(
                 task_id=task_id,
@@ -392,7 +403,6 @@ class BaseTaskManager(ABC):
         ]
         results_list = await asyncio.gather(*cancel_coros, return_exceptions=True)
 
-        # Build results dictionary
         results: dict[str, bool | BaseException] = {}
         for task_id, result in zip(task_ids, results_list):
             if isinstance(result, Exception):
@@ -416,8 +426,8 @@ class BaseTaskManager(ABC):
         """Graceful shutdown of all tasks.
 
         Args:
-            mission_id: The ID of the mission
-            timeout: Timeout for shutdown operations
+            mission_id: The ID of the mission.
+            timeout: Timeout for shutdown operations.
         """
         logger.info(
             "TaskManager shutdown initiated, timeout: %.1fs",
@@ -457,7 +467,7 @@ class BaseTaskManager(ABC):
                 },
             )
 
-        # Clean up any remaining sessions (in case cancellation didn't clean them)
+        # Clean up any remaining sessions
         remaining_sessions = list(self.tasks_sessions.keys())
         if remaining_sessions:
             logger.info(
@@ -487,9 +497,8 @@ class BaseTaskManager(ABC):
         """Enter async context manager.
 
         Returns:
-            Self for use in async with statements
+            Self for use in async with statements.
         """
-        logger.debug("Entering %s context", self.__class__.__name__)
         return self
 
     async def __aexit__(
@@ -501,15 +510,8 @@ class BaseTaskManager(ABC):
         """Exit async context manager and clean up resources.
 
         Args:
-            exc_type: Exception type if an exception occurred
-            exc_val: Exception value if an exception occurred
-            exc_tb: Exception traceback if an exception occurred
+            exc_type: Exception type if an exception occurred.
+            exc_val: Exception value if an exception occurred.
+            exc_tb: Exception traceback if an exception occurred.
         """
-        logger.debug(
-            "Exiting %s context, exception: %s",
-            self.__class__.__name__,
-            exc_type,
-            extra={"exc_type": exc_type, "exc_val": exc_val},
-        )
-        # Shutdown with default mission_id for context manager usage
         await self.shutdown(mission_id="context_manager_cleanup")

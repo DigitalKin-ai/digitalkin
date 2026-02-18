@@ -1,24 +1,19 @@
 """Background module manager with single instance."""
 
 import asyncio
-import datetime
 import uuid
 from collections.abc import AsyncGenerator, AsyncIterator
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import grpc
 
-from digitalkin.core.common import ConnectionFactory, ModuleFactory
+from digitalkin.core.common import ModuleFactory
 from digitalkin.core.job_manager.base_job_manager import BaseJobManager
 from digitalkin.core.task_manager.local_task_manager import LocalTaskManager
 from digitalkin.core.task_manager.task_session import TaskSession
-
-if TYPE_CHECKING:
-    from digitalkin.core.task_manager.surrealdb_repository import SurrealDBConnection
 from digitalkin.logger import logger
-from digitalkin.models.core.task_monitor import TaskStatus
-from digitalkin.models.module.base_types import InputModelT, OutputModelT, SetupModelT
+from digitalkin.models.module.base_types import DataModel, InputModelT, OutputModelT, SetupModelT
 from digitalkin.models.module.module import ModuleCodeModel
 from digitalkin.modules._base_module import BaseModule
 from digitalkin.services.services_models import ServicesMode
@@ -44,28 +39,21 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         Args:
             module_class: The class of the module to be managed.
             services_mode: The mode of operation for the services (e.g., ASYNC or SYNC).
-            default_timeout: Default timeout for task operations
-            max_concurrent_tasks: Maximum number of concurrent tasks
+            default_timeout: Default timeout for task operations.
+            max_concurrent_tasks: Maximum number of concurrent tasks.
         """
-        # Create local task manager for same-process execution
         task_manager = LocalTaskManager(default_timeout, max_concurrent_tasks)
-
-        # Initialize base job manager with task manager
         super().__init__(module_class, services_mode, task_manager)
-
         self._lock = asyncio.Lock()
-        self.channel: SurrealDBConnection | None = None
 
     async def start(self) -> None:
-        """Start manager."""
-        self.channel = await ConnectionFactory.create_surreal_connection("task_manager", datetime.timedelta(seconds=5))
+        """Start the SingleJobManager.
+
+        No-op for single-process deployments — all resources are initialized in __init__.
+        """
 
     async def generate_config_setup_module_response(self, job_id: str) -> SetupModelT | ModuleCodeModel:
         """Generate a stream consumer for a module's output data.
-
-        This method creates an asynchronous generator that streams output data
-        from a specific module job. If the module does not exist, it generates
-        an error message.
 
         Args:
             job_id: The unique identifier of the job.
@@ -81,7 +69,6 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
 
         logger.debug("Module %s found: %s", job_id, session.module)
         try:
-            # Add timeout to prevent indefinite blocking
             return await asyncio.wait_for(session.queue.get(), timeout=30.0)
         except asyncio.TimeoutError:
             logger.error("Timeout waiting for config setup response from module %s", job_id)
@@ -104,9 +91,6 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
     ) -> str:
         """Create and start a new module setup configuration job.
 
-        This method initializes a new module job, assigns it a unique job ID,
-        and starts the config setup it in the background.
-
         Args:
             config_setup_data: The input data required to start the job.
             mission_id: The mission ID associated with the job.
@@ -117,15 +101,11 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             str: The unique identifier (job ID) of the created job.
 
         Raises:
-            RuntimeError: If start() was not called before creating jobs.
             Exception: If the module fails to start.
         """
         job_id = str(uuid.uuid4())
         module = ModuleFactory.create_module_instance(self.module_class, job_id, mission_id, setup_id, setup_version_id)
-        if self.channel is None:
-            msg = "JobManager.start() must be called before creating jobs"
-            raise RuntimeError(msg)
-        self.tasks_sessions[job_id] = TaskSession(job_id, mission_id, self.channel, module)
+        self.tasks_sessions[job_id] = TaskSession(job_id, mission_id, module)
 
         try:
             await module.start_config_setup(
@@ -134,19 +114,14 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             )
             logger.debug("Module %s (%s) started successfully", job_id, module.name)
         except Exception:
-            # Remove the module from the manager in case of an error.
             del self.tasks_sessions[job_id]
             logger.exception("Failed to start module", extra={"job_id": job_id})
             raise
         else:
             return job_id
 
-    async def add_to_queue(self, job_id: str, output_data: OutputModelT | ModuleCodeModel) -> None:
+    async def add_to_queue(self, job_id: str, output_data: DataModel | ModuleCodeModel) -> None:
         """Add output data to the queue for a specific job.
-
-        Uses timeout-based backpressure: if the queue is full after 5s,
-        drops the oldest message to make room for the new one.
-        Rejects writes after stream is closed to prevent message loss.
 
         Args:
             job_id: The unique identifier of the job.
@@ -172,13 +147,9 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
                 pass
             session.queue.put_nowait(output_data.model_dump(mode="json"))
 
-    @asynccontextmanager  # type: ignore
-    async def generate_stream_consumer(self, job_id: str) -> AsyncIterator[AsyncGenerator[dict[str, Any], None]]:  # type: ignore
+    @asynccontextmanager
+    async def generate_stream_consumer(self, job_id: str) -> AsyncIterator[AsyncGenerator[dict[str, Any], None]]:
         """Generate a stream consumer for a module's output data.
-
-        This method creates an asynchronous generator that streams output data
-        from a specific module job. If the module does not exist, it generates
-        an error message.
 
         Args:
             job_id: The unique identifier of the job.
@@ -188,7 +159,9 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         """
         if (session := self.tasks_sessions.get(job_id, None)) is None:
 
-            async def _error_gen() -> AsyncGenerator[dict[str, Any], None]:  # noqa: RUF029
+            async def _error_gen() -> AsyncGenerator[  # noqa: RUF029
+                dict[str, Any], None
+            ]:  # Async generator type required by caller even though body uses yield
                 """Generate an error message for a non-existent module.
 
                 Yields:
@@ -209,14 +182,6 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         async def _stream() -> AsyncGenerator[dict[str, Any], Any]:
             """Stream output data from the module with bounded blocking.
 
-            Uses a 1-second timeout on queue.get() to periodically re-check
-            termination flags, preventing indefinite hangs when the task crashes
-            without producing output.
-
-            Termination behavior:
-            - cancelled: abort immediately (abnormal, discard remaining)
-            - stream_closed / COMPLETED / FAILED: drain remaining queue items, then exit
-
             Yields:
                 dict: Output data generated by the module.
             """
@@ -225,8 +190,7 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
                     logger.debug("Stream cancelled for job %s", job_id)
                     break
 
-                # If no more output will be produced, drain remaining items and exit
-                if session.stream_closed or session.status in {TaskStatus.COMPLETED, TaskStatus.FAILED}:
+                if session.stream_closed or session.status in {"completed", "failed"}:
                     while not session.queue.empty():
                         msg = session.queue.get_nowait()
                         try:
@@ -266,9 +230,6 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
     ) -> str:
         """Create and start a new module job.
 
-        This method initializes a new module job, assigns it a unique job ID,
-        and starts it in the background.
-
         Args:
             input_data: The input data required to start the job.
             setup_data: The setup configuration for the module.
@@ -290,7 +251,7 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             job_id,
             mission_id,
             module,
-            module.start(input_data, setup_data, callback, done_callback=None),
+            module.start(input_data, setup_data, callback, done_callback=None),  # type: ignore[arg-type]
         )
         logger.info("Managed task started: '%s'", job_id, extra={"task_id": job_id})
         return job_id
@@ -340,17 +301,17 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             else:
                 return True
 
-    async def get_module_status(self, job_id: str) -> TaskStatus:
+    async def get_module_status(self, job_id: str) -> str:
         """Retrieve the status of a module job.
 
         Args:
             job_id: The unique identifier of the job.
 
         Returns:
-            ModuleStatus: The status of the module.
+            The status of the module.
         """
         session = self.tasks_sessions.get(job_id, None)
-        return session.status if session is not None else TaskStatus.FAILED
+        return session.status if session is not None else "failed"
 
     async def wait_for_completion(self, job_id: str) -> None:
         """Wait for a task to complete by awaiting its asyncio.Task.
@@ -367,27 +328,13 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         await self._task_manager.tasks[job_id]
 
     async def stop_all_modules(self) -> None:
-        """Stop all currently running module jobs.
-
-        This method ensures that all active jobs are gracefully terminated
-        and closes the SurrealDB connection.
-        """
-        # Snapshot job IDs while holding lock
+        """Stop all currently running module jobs."""
         async with self._lock:
             job_ids = list(self.tasks_sessions.keys())
 
-        # Release lock before calling stop_module (which has its own lock)
         if job_ids:
             stop_tasks = [self.stop_module(job_id) for job_id in job_ids]
             await asyncio.gather(*stop_tasks, return_exceptions=True)
-
-        # Close SurrealDB connection after stopping all modules
-        if self.channel is not None:
-            try:
-                await self.channel.close()
-                logger.info("SingleJobManager: SurrealDB connection closed")
-            except Exception as e:
-                logger.warning("Failed to close SurrealDB connection: %s", e)
 
     async def list_modules(self) -> dict[str, dict[str, Any]]:
         """List all modules along with their statuses.

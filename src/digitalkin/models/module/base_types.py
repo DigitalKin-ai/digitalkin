@@ -1,9 +1,7 @@
 """Base types for module models."""
 
-from __future__ import annotations
-
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, ClassVar, Generic, TypeVar
+from typing import TYPE_CHECKING, Generic, TypeVar
 
 from pydantic import BaseModel, Field
 
@@ -26,7 +24,7 @@ class DataTrigger(BaseModel):
         print(my_input.root.protocol)  # Output: message
     """
 
-    protocol: ClassVar[str]
+    protocol: str
     created_at: str = Field(
         default_factory=lambda: datetime.now(tz=timezone.utc).isoformat(),
         title="Created At",

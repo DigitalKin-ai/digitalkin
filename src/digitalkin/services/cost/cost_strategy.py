@@ -59,7 +59,7 @@ class CostStrategy(BaseStrategy, ABC):
     """Abstract base class for cost strategies."""
 
     @abstractmethod
-    def set_limits(self, limits: list[QuantityLimit | AmountLimit]) -> None:
+    async def set_limits(self, limits: list[QuantityLimit | AmountLimit]) -> None:
         """Set cost limits for this session.
 
         Args:
@@ -67,7 +67,7 @@ class CostStrategy(BaseStrategy, ABC):
         """
 
     @abstractmethod
-    def check_limit(self, cost_config_name: str, quantity: float) -> bool:
+    async def check_limit(self, cost_config_name: str, quantity: float) -> bool:
         """Check if adding this cost would exceed any limits.
 
         Args:
@@ -79,7 +79,7 @@ class CostStrategy(BaseStrategy, ABC):
         """
 
     @abstractmethod
-    def add(
+    async def add(
         self,
         name: str,
         cost_config_name: str,
@@ -88,14 +88,14 @@ class CostStrategy(BaseStrategy, ABC):
         """Register a new cost."""
 
     @abstractmethod
-    def get(
+    async def get(
         self,
         name: str,
     ) -> list[CostData]:
         """Get a cost."""
 
     @abstractmethod
-    def get_filtered(
+    async def get_filtered(
         self,
         names: list[str] | None = None,
         cost_types: list[Literal["TOKEN_INPUT", "TOKEN_OUTPUT", "API_CALL", "STORAGE", "TIME", "OTHER"]] | None = None,
@@ -103,7 +103,7 @@ class CostStrategy(BaseStrategy, ABC):
         """Get filtered costs."""
 
     @abstractmethod
-    def get_cost_config(self) -> list[CostConfig]:
+    async def get_cost_config(self) -> list[CostConfig]:
         """Get cost configuration for the current setup version.
 
         Returns:
@@ -111,7 +111,7 @@ class CostStrategy(BaseStrategy, ABC):
         """
 
     @abstractmethod
-    def set_cost_config(self, configs: list[CostConfig]) -> bool:
+    async def set_cost_config(self, configs: list[CostConfig]) -> bool:
         """Store cost configuration for the current setup version.
 
         Args:

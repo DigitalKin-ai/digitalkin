@@ -82,6 +82,7 @@ tasks:
     cmds:
       - |
         uv run ruff format . && uv run ruff check --select I --fix . && uv run ruff check . --fix
+      - uv run mypy src/{{.PACKAGE_NAME}}
 
   clean:
     desc: "Remove build artifacts and cache directories"
@@ -117,6 +118,23 @@ tasks:
       - task: dev-deps
       - task: tests-deps
       - task: setup-pre-commit
+
+  docs-serve:
+    desc: "Serve documentation locally"
+    cmds:
+      - uv run mkdocs serve
+
+  docs-build:
+    desc: "Build documentation"
+    cmds:
+      - uv run mkdocs build
+
+  check:
+    desc: "Run linter, type check, and tests"
+    cmds:
+      - task: linter
+      - uv run mypy src/{{.PACKAGE_NAME}}
+      - task: run-tests
 
   start-taskiq:
     desc: "Start TaskIQ worker. be sure to enable rabbitMQ stream capability"

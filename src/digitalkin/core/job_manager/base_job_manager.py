@@ -1,15 +1,14 @@
 """Background module manager."""
 
 import abc
-from collections.abc import AsyncGenerator, AsyncIterator, Callable, Coroutine
-from contextlib import asynccontextmanager
+from collections.abc import AsyncGenerator, Callable, Coroutine
+from contextlib import AbstractAsyncContextManager
 from typing import Any, Generic
 
 from digitalkin.core.task_manager.base_task_manager import BaseTaskManager
 from digitalkin.core.task_manager.task_session import TaskSession
-from digitalkin.models.core.task_monitor import TaskStatus
 from digitalkin.models.module.module import ModuleCodeModel
-from digitalkin.models.module.module_types import InputModelT, OutputModelT, SetupModelT
+from digitalkin.models.module.module_types import DataModel, InputModelT, OutputModelT, SetupModelT
 from digitalkin.modules._base_module import BaseModule
 from digitalkin.services.services_config import ServicesConfig
 from digitalkin.services.services_models import ServicesMode
@@ -47,7 +46,7 @@ class BaseJobManager(abc.ABC, Generic[InputModelT, OutputModelT, SetupModelT]):
             services_config_params=self.module_class.services_config_params,
             mode=services_mode,
         )
-        setattr(self.module_class, "services_config", services_config)
+        self.module_class.services_config = services_config
 
     # Properties to expose task manager attributes
     @property
@@ -67,7 +66,7 @@ class BaseJobManager(abc.ABC, Generic[InputModelT, OutputModelT, SetupModelT]):
         mission_id: str,
         module: BaseModule,
         coro: Coroutine[Any, Any, None],
-        **kwargs: Any,  # noqa: ANN401
+        **kwargs: Any,
     ) -> None:
         """Create a task using the task manager.
 
@@ -133,9 +132,9 @@ class BaseJobManager(abc.ABC, Generic[InputModelT, OutputModelT, SetupModelT]):
 
     @staticmethod
     async def job_specific_callback(
-        callback: Callable[[str, OutputModelT | ModuleCodeModel], Coroutine[Any, Any, None]],
+        callback: Callable[[str, DataModel | ModuleCodeModel], Coroutine[Any, Any, None]],
         job_id: str,
-    ) -> Callable[[OutputModelT | ModuleCodeModel], Coroutine[Any, Any, None]]:
+    ) -> Callable[[DataModel | ModuleCodeModel], Coroutine[Any, Any, None]]:
         """Generate a job-specific callback function.
 
         Args:
@@ -146,7 +145,7 @@ class BaseJobManager(abc.ABC, Generic[InputModelT, OutputModelT, SetupModelT]):
             Callable: A wrapped callback function that includes the job ID.
         """
 
-        def callback_wrapper(output_data: OutputModelT | ModuleCodeModel) -> Coroutine[Any, Any, None]:
+        def callback_wrapper(output_data: DataModel | ModuleCodeModel) -> Coroutine[Any, Any, None]:
             """Wrapper for the callback function.
 
             Args:
@@ -159,9 +158,10 @@ class BaseJobManager(abc.ABC, Generic[InputModelT, OutputModelT, SetupModelT]):
 
         return callback_wrapper
 
-    @abc.abstractmethod  # type: ignore
-    @asynccontextmanager  # type: ignore
-    async def generate_stream_consumer(self, job_id: str) -> AsyncIterator[AsyncGenerator[dict[str, Any], None]]:
+    @abc.abstractmethod
+    def generate_stream_consumer(
+        self, job_id: str
+    ) -> AbstractAsyncContextManager[AsyncGenerator[dict[str, Any], None]]:
         """Generate a stream consumer for the job's message stream.
 
         Args:
@@ -246,7 +246,7 @@ class BaseJobManager(abc.ABC, Generic[InputModelT, OutputModelT, SetupModelT]):
         """
 
     @abc.abstractmethod
-    async def get_module_status(self, job_id: str) -> TaskStatus:
+    async def get_module_status(self, job_id: str) -> str:
         """Retrieve the status of a module job.
 
         Args:
@@ -263,7 +263,7 @@ class BaseJobManager(abc.ABC, Generic[InputModelT, OutputModelT, SetupModelT]):
         This method blocks until the specified job has reached a terminal state.
         The implementation varies by job manager type:
         - SingleJobManager: Awaits the asyncio.Task directly
-        - TaskiqJobManager: Polls task status from SurrealDB
+        - TaskiqJobManager: Polls task status from session
 
         Args:
             job_id: The unique identifier of the job to wait for.

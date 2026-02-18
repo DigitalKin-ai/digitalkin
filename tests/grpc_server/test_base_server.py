@@ -302,7 +302,10 @@ class TestServerCreation:
             result = server._create_server()
 
             # Verify server was created with correct parameters
-            mock_server.assert_called_once_with(options=server_config_async_insecure.server_options)
+            mock_server.assert_called_once_with(
+                options=server_config_async_insecure.server_options,
+                compression=grpc.Compression.Gzip,
+            )
 
             # Verify result is the mock server
             if result != mock_server.return_value:
@@ -586,3 +589,66 @@ class TestHealthService:
 
         if not any("health" in name.lower() for name in server._service_names):
             pytest.fail(f"Expected _service_names to contain a health service, got {server._service_names}")
+
+
+@pytest.mark.grpc
+class TestAsyncioMonitorCleanup:
+    """Tests for asyncio monitor cleanup in server lifecycle."""
+
+    @pytest.mark.asyncio
+    async def test_stop_async_cleans_up_monitor(self, server_config_async_insecure) -> None:
+        """Test that stop_async properly cleans up the asyncio monitor."""
+        server = MockServer(server_config_async_insecure)
+
+        mock_grpc_server = mock.MagicMock(spec=grpc_aio.Server)
+        server.server = mock_grpc_server
+
+        mock_monitor = mock.MagicMock()
+        mock_monitor.stop = mock.AsyncMock()
+        server._asyncio_monitor = mock_monitor
+
+        await server.stop_async(grace=1.0)
+
+        mock_monitor.stop.assert_awaited_once()
+        assert server._asyncio_monitor is None
+        assert server.server is None
+
+    @pytest.mark.asyncio
+    async def test_stop_async_without_monitor(self, server_config_async_insecure) -> None:
+        """Test that stop_async works when no monitor is set."""
+        server = MockServer(server_config_async_insecure)
+
+        mock_grpc_server = mock.MagicMock(spec=grpc_aio.Server)
+        server.server = mock_grpc_server
+
+        await server.stop_async(grace=1.0)
+
+        assert server._asyncio_monitor is None
+        assert server.server is None
+
+    @pytest.mark.asyncio
+    async def test_invalid_port_env_var_does_not_crash(self, server_config_async_insecure) -> None:
+        """Test that a non-numeric DIGITALKIN_ASYNCIO_INSPECTOR_PORT is caught."""
+        server = MockServer(server_config_async_insecure)
+
+        with (
+            mock.patch.object(server, "_create_server") as mock_create,
+            mock.patch.object(server, "_register_servicers"),
+            mock.patch.object(server, "_add_health_service"),
+            mock.patch.object(server, "_add_reflection"),
+            mock.patch.dict(
+                "os.environ",
+                {"DIGITALKIN_ASYNCIO_INSPECTOR": "true", "DIGITALKIN_ASYNCIO_INSPECTOR_PORT": "abc"},
+            ),
+        ):
+            mock_grpc_server = mock.MagicMock(spec=grpc_aio.Server)
+            mock_grpc_server.start = mock.AsyncMock()
+            mock_create.return_value = mock_grpc_server
+
+            # Should not raise ValueError
+            await server.start_async()
+
+            assert server._asyncio_monitor is None
+
+            # Cleanup
+            server.server = None

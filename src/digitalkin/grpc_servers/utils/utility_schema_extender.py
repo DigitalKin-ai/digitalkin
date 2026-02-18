@@ -67,10 +67,12 @@ class UtilitySchemaExtender:
             A new DataModel subclass with root typed as Union[original_types, utility_types].
         """
         original_annotation = base_model.model_fields["root"].annotation
-        original_types = cls._extract_union_types(original_annotation)
+        original_types = cls._extract_union_types(original_annotation)  # type: ignore[arg-type]
         extended_types = (*original_types, *cls._output_protocols)
-        union_type = Union[extended_types]  # type: ignore[valid-type] # noqa: UP007
-        extended_root = Annotated[union_type, Field(discriminator="protocol")]  # type: ignore[valid-type]
+        union_type = Union[extended_types]  # type: ignore[valid-type]  # noqa: UP007
+        extended_root = Annotated[
+            union_type, Field(discriminator="protocol")  # type: ignore[valid-type]
+        ]
         return create_model(
             f"{base_model.__name__}Utilities",
             __base__=DataModel,
@@ -90,10 +92,12 @@ class UtilitySchemaExtender:
             and includes cost_limits field for cost control.
         """
         original_annotation = base_model.model_fields["root"].annotation
-        original_types = cls._extract_union_types(original_annotation)
+        original_types = cls._extract_union_types(original_annotation)  # type: ignore[arg-type]
         extended_types = (*original_types, *cls._input_protocols)
-        union_type = Union[extended_types]  # type: ignore[valid-type] # noqa: UP007
-        extended_root = Annotated[union_type, Field(discriminator="protocol")]  # type: ignore[valid-type]
+        union_type = Union[extended_types]  # type: ignore[valid-type]  # noqa: UP007
+        extended_root = Annotated[
+            union_type, Field(discriminator="protocol")  # type: ignore[valid-type]
+        ]
         return create_model(
             f"{base_model.__name__}Utilities",
             __base__=DataModel,

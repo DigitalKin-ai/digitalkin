@@ -4,9 +4,38 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+import grpc
 from pydantic import BaseModel, Field, ValidationInfo, field_validator
 
 from digitalkin.grpc_servers.utils.exceptions import ConfigurationError, SecurityError
+
+
+class GrpcCompression(str, Enum):
+    """gRPC compression algorithm.
+
+    Attributes:
+        NONE: No compression
+        GZIP: Gzip compression
+        DEFLATE: Deflate compression
+    """
+
+    NONE = "none"
+    GZIP = "gzip"
+    DEFLATE = "deflate"
+
+    def to_grpc(self) -> grpc.Compression:
+        """Convert to grpc.Compression enum.
+
+        Returns:
+            The corresponding grpc.Compression value.
+        """
+        match self:
+            case GrpcCompression.NONE:
+                return grpc.Compression.NoCompression
+            case GrpcCompression.GZIP:
+                return grpc.Compression.Gzip
+            case GrpcCompression.DEFLATE:
+                return grpc.Compression.Deflate
 
 
 class ServerMode(str, Enum):
@@ -41,8 +70,7 @@ class ServerCredentials(BaseModel):
         "extra": "forbid",
         "arbitrary_types_allowed": True,
         "validate_assignment": True,
-        "use_enum_values": True,
-        "frozen": True,  # Make immutable
+        "frozen": True,
     }
 
     @field_validator("server_key_path", "server_cert_path", "root_cert_path")
@@ -119,8 +147,7 @@ class ClientCredentials(BaseModel):
         "extra": "forbid",
         "arbitrary_types_allowed": True,
         "validate_assignment": True,
-        "use_enum_values": True,
-        "frozen": True,  # Make immutable
+        "frozen": True,
     }
 
     @field_validator("client_key_path", "client_cert_path", "root_cert_path")
@@ -154,7 +181,10 @@ class ChannelConfig(BaseModel):
         credentials: Client credentials for secure mode
     """
 
-    host: str = Field("0.0.0.0", description="Host address to bind the client to")  # noqa: S104
+    host: str = Field(
+        "0.0.0.0",  # noqa: S104
+        description="Host address to bind the client to",
+    )  # Bind to all interfaces by design
     port: int = Field(50051, description="Port to listen on")
     mode: ServerMode = Field(ServerMode.SYNC, description="Client operation mode (sync/async)")
     security: SecurityMode = Field(SecurityMode.INSECURE, description="Security mode (secure/insecure)")
@@ -164,7 +194,6 @@ class ChannelConfig(BaseModel):
         "extra": "forbid",
         "arbitrary_types_allowed": True,
         "validate_assignment": True,
-        "use_enum_values": True,
     }
 
     @field_validator("port")
@@ -181,7 +210,7 @@ class ChannelConfig(BaseModel):
         Raises:
             ConfigurationError: If port is outside valid range
         """
-        if not 0 < v < 65536:  # noqa: PLR2004
+        if not 0 < v < 65536:  # TCP port range constant # noqa: PLR2004
             msg = f"Port must be between 1 and 65535, got {v}"
             raise ConfigurationError(msg)
         return v
@@ -207,46 +236,32 @@ class ClientConfig(ChannelConfig):
         credentials: Client credentials for secure mode
         channel_options: Additional channel options
         retry_policy: Retry policy for failed RPCs
+        compression: gRPC compression algorithm for channel-level compression
     """
 
     credentials: ClientCredentials | None = Field(None, description="Client credentials for secure mode")
-    retry_policy: RetryPolicy = Field(default_factory=lambda: RetryPolicy(), description="Retry policy for failed RPCs")  # noqa: PLW0108
+    retry_policy: RetryPolicy = Field(default_factory=RetryPolicy, description="Retry policy for failed RPCs")
+    compression: GrpcCompression = Field(GrpcCompression.GZIP, description="gRPC compression algorithm")
     channel_options: list[tuple[str, Any]] = Field(
         default_factory=lambda: [
             ("grpc.max_receive_message_length", 100 * 1024 * 1024),
             ("grpc.max_send_message_length", 100 * 1024 * 1024),
-            # === DNS Re-resolution (Critical for Container Environments) ===
-            # Minimum milliseconds between DNS re-resolution attempts (500 ms)
-            # When connection fails, gRPC will re-query DNS after this interval
-            # Solves: Container restarts with new IPs causing "No route to host"
+            # === DNS Re-resolution (Railway redeployments change IPs) ===
             ("grpc.dns_min_time_between_resolutions_ms", 500),
-            # Initial delay before first reconnection attempt (1 second)
-            ("grpc.initial_reconnect_backoff_ms", 1000),
-            # Maximum delay between reconnection attempts (10 seconds)
-            # Prevents overwhelming the network during extended outages
-            ("grpc.max_reconnect_backoff_ms", 10000),
-            # Minimum delay between reconnection attempts (500ms)
-            # Ensures rapid recovery for brief network glitches
-            ("grpc.min_reconnect_backoff_ms", 500),
-            # === Keepalive Settings (Detect Dead Connections) ===
-            # Send keepalive ping every 60 seconds when connection is idle
-            # Proactively detects dead connections before RPC calls fail
-            ("grpc.keepalive_time_ms", 60000),
-            # Wait 20 seconds for keepalive response before declaring connection dead
-            # Triggers reconnection (with DNS re-resolution) if pong not received
-            ("grpc.keepalive_timeout_ms", 20000),
-            # Send keepalive pings even when no RPCs are in flight
-            # Essential for long-lived connections that may sit idle
+            ("grpc.initial_reconnect_backoff_ms", 500),
+            ("grpc.max_reconnect_backoff_ms", 5000),
+            ("grpc.min_reconnect_backoff_ms", 250),
+            # === Keepalive (Keep streams alive through Railway proxy) ===
+            # Both client and server ping at 30s — ensures continuous HTTP/2
+            # frames even when stream produces no application data for minutes
+            ("grpc.keepalive_time_ms", 30000),
+            ("grpc.keepalive_timeout_ms", 10000),
             ("grpc.keepalive_permit_without_calls", True),
-            # Minimum interval between HTTP/2 pings (30 seconds)
-            # Must be >= server's grpc.http2.min_ping_interval_without_data_ms (10s)
-            ("grpc.http2.min_time_between_pings_ms", 30000),
-            # === Retry Configuration ===
-            # Enable automatic retry for failed RPCs (1 = enabled)
-            # Works with retryable status codes: UNAVAILABLE, RESOURCE_EXHAUSTED
+            ("grpc.http2.min_time_between_pings_ms", 20000),
+            # === Retries ===
             ("grpc.enable_retries", 1),
         ],
-        description="Resilient gRPC channel options with DNS re-resolution, keepalive, and retries",
+        description="gRPC channel options optimized for Railway with long-lived streams",
     )
 
     @field_validator("credentials")
@@ -294,24 +309,28 @@ class ServerConfig(ChannelConfig):
         credentials: Server credentials for secure mode
         server_options: Additional server options
         enable_reflection: Enable reflection for the server
+        compression: gRPC compression algorithm for server-level compression
     """
 
     max_workers: int = Field(10, description="Maximum number of workers for sync mode")
     credentials: ServerCredentials | None = Field(None, description="Server credentials for secure mode")
+    compression: GrpcCompression = Field(GrpcCompression.GZIP, description="gRPC compression algorithm")
     server_options: list[tuple[str, Any]] = Field(
         default_factory=lambda: [
             ("grpc.max_receive_message_length", 100 * 1024 * 1024),
             ("grpc.max_send_message_length", 100 * 1024 * 1024),
-            # === Keepalive Permission (Required for Client Keepalive) ===
-            # Allow clients to send keepalive pings without active RPCs
-            # Without this, server rejects client keepalives with GOAWAY
+            # === Server-Side Keepalive (Keep Railway proxy from dropping silent streams) ===
+            # Server pings clients every 30s — keeps long-lived silent streams
+            # alive through Railway's proxy which drops idle HTTP/2 connections
+            ("grpc.keepalive_time_ms", 30000),
+            # Wait 10s for pong before declaring connection dead
+            ("grpc.keepalive_timeout_ms", 10000),
+            # Send keepalive pings even when no RPCs are active
             ("grpc.keepalive_permit_without_calls", True),
-            # Minimum interval server allows between client pings (10 seconds)
-            # Prevents "too_many_pings" GOAWAY errors
-            # Must match or be less than client's http2.min_time_between_pings_ms
+            # Minimum client ping interval server tolerates (10s)
             ("grpc.http2.min_ping_interval_without_data_ms", 10000),
         ],
-        description="gRPC server options with keepalive support",
+        description="gRPC server options with keepalive for long-lived streams",
     )
     enable_reflection: bool = Field(default=True, description="Enable reflection for the server")
     enable_health_check: bool = Field(default=True, description="Enable health check service")

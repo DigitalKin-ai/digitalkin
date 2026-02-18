@@ -65,7 +65,7 @@ class GrpcContextError(DigitalKinError):
     original_error_type: str | None
     original_error_message: str | None
 
-    def __init__(  # noqa: PLR0913, PLR0917
+    def __init__(  # All context fields needed for detailed gRPC error propagation # noqa: PLR0913, PLR0917
         self,
         message: str,
         grpc_code: grpc.StatusCode = grpc.StatusCode.UNKNOWN,
@@ -75,7 +75,7 @@ class GrpcContextError(DigitalKinError):
         mission_id: str | None = None,
         service_name: str | None = None,
         endpoint: str | None = None,
-        is_client: bool = True,  # noqa: FBT001, FBT002
+        is_client: bool = True,  # Boolean positional: matches gRPC client/server role convention # noqa: FBT001, FBT002
         original_error_type: str | None = None,
         original_error_message: str | None = None,
     ) -> None:
@@ -177,7 +177,7 @@ class ConnectionTimeoutError(GrpcContextError):
     - Initial authentication/signin times out
     """
 
-    def __init__(self, message: str, **kwargs: Any) -> None:  # noqa: ANN401
+    def __init__(self, message: str, **kwargs: Any) -> None:
         """Initialize with DEADLINE_EXCEEDED status code."""
         super().__init__(message, grpc_code=grpc.StatusCode.DEADLINE_EXCEEDED, **kwargs)
 
@@ -191,7 +191,7 @@ class ConnectionUnavailableError(GrpcContextError):
     - Connection closed unexpectedly during operation
     """
 
-    def __init__(self, message: str, **kwargs: Any) -> None:  # noqa: ANN401
+    def __init__(self, message: str, **kwargs: Any) -> None:
         """Initialize with UNAVAILABLE status code."""
         super().__init__(message, grpc_code=grpc.StatusCode.UNAVAILABLE, **kwargs)
 
@@ -205,7 +205,7 @@ class SetupFetchError(GrpcContextError):
     - Setup data validation fails
     """
 
-    def __init__(self, message: str, **kwargs: Any) -> None:  # noqa: ANN401
+    def __init__(self, message: str, **kwargs: Any) -> None:
         """Initialize with FAILED_PRECONDITION status code."""
         super().__init__(message, grpc_code=grpc.StatusCode.FAILED_PRECONDITION, **kwargs)
 
@@ -219,7 +219,7 @@ class HeartbeatFailureError(GrpcContextError):
     - SurrealDB returns error code in response
     """
 
-    def __init__(self, message: str, **kwargs: Any) -> None:  # noqa: ANN401
+    def __init__(self, message: str, **kwargs: Any) -> None:
         """Initialize with UNAVAILABLE status code."""
         super().__init__(message, grpc_code=grpc.StatusCode.UNAVAILABLE, **kwargs)
 
@@ -233,6 +233,6 @@ class ValidationFailedError(GrpcContextError):
     - Field values are out of valid range
     """
 
-    def __init__(self, message: str, **kwargs: Any) -> None:  # noqa: ANN401
+    def __init__(self, message: str, **kwargs: Any) -> None:
         """Initialize with INVALID_ARGUMENT status code."""
         super().__init__(message, grpc_code=grpc.StatusCode.INVALID_ARGUMENT, **kwargs)

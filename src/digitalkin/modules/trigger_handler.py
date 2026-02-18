@@ -16,7 +16,7 @@ class TriggerHandler(ABC, BaseMixin, Generic[InputModelT, SetupModelT, OutputMod
       - handle(): logic to process the validated payload
     """
 
-    protocol: ClassVar[str]
+    protocol: str
     description: ClassVar[str] = ""
     input_format: type[InputModelT]
     output_format: type[OutputModelT]
@@ -42,8 +42,8 @@ class TriggerHandler(ABC, BaseMixin, Generic[InputModelT, SetupModelT, OutputMod
             Any: The result of the processing, if applicable.
 
         Note:
-            self.send_message: : callback used to stream results.
-                (Callable[[OutputMdodelT], Coroutine[Any, Any, None]])
+            self.send_message: callback used to stream results.
+                (Callable[[OutputModelT], Coroutine[Any, Any, None]])
 
             The callback must be awaited to ensure results are streamed correctly during processing.
         """

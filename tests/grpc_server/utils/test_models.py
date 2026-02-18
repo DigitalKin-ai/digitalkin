@@ -144,10 +144,12 @@ class TestServerConfig:
         if config.credentials is not None:
             pytest.fail(f"Expected default credentials to be None, got {config.credentials}")
 
-        # Check server_options (message limits + keepalive support)
+        # Check server_options (message limits + keepalive for long-lived streams)
         expected_server_options = [
             ("grpc.max_receive_message_length", 100 * 1024 * 1024),
             ("grpc.max_send_message_length", 100 * 1024 * 1024),
+            ("grpc.keepalive_time_ms", 30000),
+            ("grpc.keepalive_timeout_ms", 10000),
             ("grpc.keepalive_permit_without_calls", True),
             ("grpc.http2.min_ping_interval_without_data_ms", 10000),
         ]

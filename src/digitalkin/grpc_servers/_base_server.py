@@ -2,10 +2,14 @@
 
 import abc
 import asyncio
+import os
 from collections.abc import Callable
 from concurrent import futures
 from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
+
+if TYPE_CHECKING:
+    from digitalkin.core.profiling.asyncio_monitor import AsyncioMonitor
 
 import grpc
 from grpc import aio as grpc_aio
@@ -48,6 +52,7 @@ class BaseServer(abc.ABC):
         self._servicers: list[Any] = []
         self._service_names: list[str] = []  # Track service names for reflection
         self._health_servicer: Any = None  # For health checking
+        self._asyncio_monitor: AsyncioMonitor | None = None
 
     def register_servicer(
         self,
@@ -87,12 +92,11 @@ class BaseServer(abc.ABC):
                     logger.debug("Registered explicit service name for reflection: %s", name)
 
         # If a descriptor is provided, extract service names
-        if service_descriptor and hasattr(service_descriptor, "services_by_name"):
-            for service_name in service_descriptor.services_by_name:
-                full_name = service_descriptor.services_by_name[service_name].full_name  # ignore: PLC0206
-                if full_name not in self._service_names:
-                    self._service_names.append(full_name)
-                    logger.debug("Registered service name from descriptor: %s", full_name)
+        if service_descriptor is not None:
+            for service in service_descriptor.services_by_name.values():
+                if service.full_name not in self._service_names:
+                    self._service_names.append(service.full_name)
+                    logger.debug("Registered service name from descriptor: %s", service.full_name)
 
     @abc.abstractmethod
     def _register_servicers(self) -> None:
@@ -115,8 +119,9 @@ class BaseServer(abc.ABC):
             return
 
         try:
-            # Import here to avoid dependency if not used
-            from grpc_reflection.v1alpha import reflection  # noqa: PLC0415
+            from grpc_reflection.v1alpha import (
+                reflection,
+            )  # Optional dependency, import only if reflection enabled
 
             # Get all registered service names
             service_names = self._service_names.copy()
@@ -147,9 +152,13 @@ class BaseServer(abc.ABC):
             return
 
         try:
-            # Import here to avoid dependency if not used
-            from grpc_health.v1 import health_pb2, health_pb2_grpc  # noqa: PLC0415
-            from grpc_health.v1.health import HealthServicer  # noqa: PLC0415
+            from grpc_health.v1 import (
+                health_pb2,
+                health_pb2_grpc,
+            )  # Optional dependency, import only if health service needed
+            from grpc_health.v1.health import (
+                HealthServicer,
+            )  # Optional dependency, import only if health service needed
 
             # Create health servicer
             health_servicer = HealthServicer()
@@ -191,12 +200,14 @@ class BaseServer(abc.ABC):
         """
         try:
             # Create the server based on mode
+            grpc_compression = self.config.compression.to_grpc()
             if self.config.mode == ServerMode.ASYNC:
-                server = grpc_aio.server(options=self.config.server_options)
+                server = grpc_aio.server(options=self.config.server_options, compression=grpc_compression)
             else:
-                server = grpc.server(
+                server = grpc.server(  # type: ignore[assignment]  # sync grpc.Server assigned to GrpcServer union
                     futures.ThreadPoolExecutor(max_workers=self.config.max_workers),
                     options=self.config.server_options,
+                    compression=grpc_compression,
                 )
 
             # Add the appropriate port
@@ -363,6 +374,17 @@ class BaseServer(abc.ABC):
             msg = f"Failed to start server: {e}"
             raise ServerStateError(msg) from e
 
+        if os.environ.get("DIGITALKIN_ASYNCIO_INSPECTOR", "false").lower() == "true":
+            try:
+                from digitalkin.core.profiling.asyncio_monitor import AsyncioMonitor as _AsyncioMonitor
+
+                self._asyncio_monitor = _AsyncioMonitor(
+                    int(os.environ.get("DIGITALKIN_ASYNCIO_INSPECTOR_PORT", "8080"))
+                )
+                await self._asyncio_monitor.start()
+            except Exception:
+                logger.exception("Failed to start asyncio-inspector")
+
     def stop(self, grace: float | None = None) -> None:
         """Stop the gRPC server.
 
@@ -388,25 +410,29 @@ class BaseServer(abc.ABC):
                         "This might not fully shut down the server. "
                         "Use await stop_async() in async contexts instead."
                     )
+                    if self._asyncio_monitor is not None:
+                        logger.warning("asyncio-inspector not cleaned up — use stop_async() for proper shutdown")
+                        self._asyncio_monitor = None
                     # Set server to None to avoid further operations
                     self.server = None
                     logger.debug("✅ gRPC server marked as stopped")
                     return
                 # If not in a running event loop, use run_until_complete
-                loop.run_until_complete(self._stop_async(grace))
+                loop.run_until_complete(self.stop_async(grace))
             except RuntimeError:
                 # Event loop issues - try with a new loop
                 logger.debug("Creating new event loop for shutdown")
                 try:
                     new_loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(new_loop)
-                    new_loop.run_until_complete(self._stop_async(grace))
+                    new_loop.run_until_complete(self.stop_async(grace))
                 finally:
                     new_loop.close()
-        else:
-            # For sync server, we can just call stop
-            sync_server = cast("grpc.Server", self.server)
-            sync_server.stop(grace=grace)
+            # stop_async already handled server/monitor cleanup and logging
+            return
+        # For sync server, we can just call stop
+        sync_server = cast("grpc.Server", self.server)
+        sync_server.stop(grace=grace)
 
         logger.debug("✅ gRPC server stopped")
         self.server = None
@@ -434,6 +460,10 @@ class BaseServer(abc.ABC):
         if self.server is None:
             logger.warning("Attempted to stop server, but no server is running")
             return
+
+        if self._asyncio_monitor is not None:
+            await self._asyncio_monitor.stop()
+            self._asyncio_monitor = None
 
         logger.debug("Stopping gRPC server asynchronously...")
         if self.config.mode == ServerMode.ASYNC:

@@ -19,7 +19,7 @@ class CommunicationStrategy(BaseStrategy, ABC):
     """
 
     @abstractmethod
-    async def cleanup(self) -> None:
+    async def close(self) -> None:
         """Clean up communication resources.
 
         This method should release any held resources such as

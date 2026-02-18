@@ -285,8 +285,8 @@ class TestSignalMessageEnhancedFields:
         assert msg.exception_traceback == "Traceback..."
 
     @pytest.mark.asyncio
-    async def test_signal_message_optional_fields_default_none(self) -> None:
-        """Test that enhanced fields default to None."""
+    async def test_signal_message_optional_fields_defaults(self) -> None:
+        """Test that enhanced fields have correct defaults."""
         msg = SignalMessage(
             task_id="test",
             mission_id="missions:test",
@@ -294,7 +294,7 @@ class TestSignalMessageEnhancedFields:
             action=SignalType.START,
         )
 
-        assert msg.cancellation_reason is None
+        assert msg.cancellation_reason == CancellationReason.UNKNOWN.value
         assert msg.error_message is None
         assert msg.exception_traceback is None
 
@@ -905,7 +905,7 @@ class TestSignalMessageStructure:
 
     @pytest.mark.asyncio
     async def test_null_enhanced_fields_serialized(self) -> None:
-        """Test that None enhanced fields are serialized as null."""
+        """Test that optional enhanced fields are serialized correctly."""
         msg = SignalMessage(
             task_id="test",
             mission_id="missions:test",
@@ -915,6 +915,53 @@ class TestSignalMessageStructure:
 
         data = msg.model_dump()
 
-        assert data["cancellation_reason"] is None
+        assert data["cancellation_reason"] == CancellationReason.UNKNOWN.value
         assert data["error_message"] is None
         assert data["exception_traceback"] is None
+
+    @pytest.mark.asyncio
+    async def test_model_dump_exclude_none_surrealdb_compatible(self) -> None:
+        """Test that model_dump(exclude_none=True) produces SurrealDB-compatible output.
+
+        SurrealDB's CBOR encoder cannot serialize Python enum instances.
+        All enum fields must be serialized as primitive strings.
+        The cancellation_reason field must always be present (not excluded).
+        """
+        msg = SignalMessage(
+            task_id="test",
+            mission_id="missions:test",
+            status=TaskStatus.RUNNING,
+            action=SignalType.START,
+        )
+
+        data = msg.model_dump(exclude_none=True)
+
+        # cancellation_reason must be present (not excluded as None)
+        assert "cancellation_reason" in data
+
+        # All enum fields must be str-serializable for SurrealDB CBOR encoder.
+        # str, Enum members satisfy isinstance(v, str) so CBOR encodes them as strings.
+        for key in ("status", "action", "cancellation_reason"):
+            assert isinstance(data[key], str), (
+                f"Field '{key}' ({type(data[key]).__name__}) is not a str — "
+                f"SurrealDB CBOR encoder requires string-compatible types"
+            )
+
+    @pytest.mark.asyncio
+    async def test_model_dump_exclude_none_with_explicit_reason(self) -> None:
+        """Test that explicitly provided cancellation_reason is also serialized as string."""
+        msg = SignalMessage(
+            task_id="test",
+            mission_id="missions:test",
+            status=TaskStatus.CANCELLED,
+            action=SignalType.STOP,
+            cancellation_reason=CancellationReason.SIGNAL,
+            error_message="User cancelled",
+        )
+
+        data = msg.model_dump(exclude_none=True)
+
+        assert data["cancellation_reason"] == "signal"
+        assert isinstance(data["cancellation_reason"], str)
+        assert data["status"] == "cancelled"
+        assert isinstance(data["status"], str)

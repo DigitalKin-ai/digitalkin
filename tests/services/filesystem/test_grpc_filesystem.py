@@ -1,8 +1,10 @@
 """Test the grpc filesystem service."""
 
+import asyncio
 import logging
 import secrets
 import string
+import types
 
 import grpc
 import grpc_testing
@@ -17,11 +19,11 @@ from grpc.framework.foundation import logging_pool
 from mock_filesystem_servicer import MockFilesystemServicer
 from tests.fixtures.grpc_fixtures import FakeContext
 
-from digitalkin.grpc_servers.utils.exceptions import ServerError
 from digitalkin.models.grpc_servers.models import ClientConfig, SecurityMode, ServerMode
 from digitalkin.services.filesystem.filesystem_strategy import (
     FileFilter,
     FilesystemRecord,
+    FilesystemServiceError,
     UploadFileData,
 )
 from digitalkin.services.filesystem.grpc_filesystem import GrpcFilesystem
@@ -87,6 +89,13 @@ def client(test_channel: grpc_testing.Channel) -> GrpcFilesystem:
 
     # Override the channel and stub to use our test channel
     client.stub = filesystem_service_pb2_grpc.FilesystemServiceStub(test_channel)
+
+    async def _test_exec_grpc_query(self, query_endpoint, request):
+        response = getattr(self.stub, query_endpoint)(request)
+        return await response if asyncio.iscoroutine(response) else response
+
+    client.exec_grpc_query = types.MethodType(_test_exec_grpc_query, client)
+
     test_logger.info("Client created")
     return client
 
@@ -160,7 +169,7 @@ class TestUploadFiles:
         )
 
         # Start the client call in a separate thread
-        future = client_execution_thread_pool.submit(client.upload_files, [upload_file])
+        future = client_execution_thread_pool.submit(asyncio.run, client.upload_files([upload_file]))
 
         # Get the service and method descriptor
         service_desc = filesystem_service_pb2.DESCRIPTOR.services_by_name["FilesystemService"]
@@ -269,7 +278,7 @@ class TestUploadFiles:
         )
 
         # Upload the file first time
-        future = client_execution_thread_pool.submit(client.upload_files, [upload_file])
+        future = client_execution_thread_pool.submit(asyncio.run, client.upload_files([upload_file]))
         service_desc = filesystem_service_pb2.DESCRIPTOR.services_by_name["FilesystemService"]
         method_desc = service_desc.methods_by_name["UploadFiles"]
         _, _, rpc = test_channel.take_unary_unary(method_desc)
@@ -295,13 +304,13 @@ class TestUploadFiles:
         future.result()
 
         # Try to upload the same file again
-        future = client_execution_thread_pool.submit(client.upload_files, [upload_file])
+        future = client_execution_thread_pool.submit(asyncio.run, client.upload_files([upload_file]))
         _, _, rpc = test_channel.take_unary_unary(method_desc)
         response = mock_servicer.UploadFiles(upload_request, FakeContext())
         rpc.send_initial_metadata(())
         rpc.terminate(response, (), grpc.StatusCode.ALREADY_EXISTS, "File already exists")
 
-        with pytest.raises(ServerError):
+        with pytest.raises(FilesystemServiceError):
             future.result()
 
 
@@ -353,7 +362,7 @@ class TestGetFile:
         file_id = upload_response.results[0].file.file_id
 
         # Start the client call to get the file
-        future = client_execution_thread_pool.submit(client.get_file, file_id)
+        future = client_execution_thread_pool.submit(asyncio.run, client.get_file(file_id))
 
         # Get the service and method descriptor
         service_desc = filesystem_service_pb2.DESCRIPTOR.services_by_name["FilesystemService"]
@@ -402,14 +411,14 @@ class TestGetFile:
             client: GrpcFilesystem client for testing
             test_channel: Mock gRPC channel
         """
-        future = client_execution_thread_pool.submit(client.get_file, "nonexistent_file_id")
+        future = client_execution_thread_pool.submit(asyncio.run, client.get_file("nonexistent_file_id"))
         service_desc = filesystem_service_pb2.DESCRIPTOR.services_by_name["FilesystemService"]
         method_desc = service_desc.methods_by_name["GetFile"]
         _, _, rpc = test_channel.take_unary_unary(method_desc)
         rpc.send_initial_metadata(())
         rpc.terminate(None, (), grpc.StatusCode.NOT_FOUND, "File not found")
 
-        with pytest.raises(ServerError):
+        with pytest.raises(FilesystemServiceError):
             future.result()
 
 
@@ -468,12 +477,14 @@ class TestGetFiles:
 
         # Start the client call to get files
         future = client_execution_thread_pool.submit(
-            client.get_files,
-            filters,
-            list_size=10,
-            offset=0,
-            order="created_at:desc",
-            include_content=False,
+            asyncio.run,
+            client.get_files(
+                filters,
+                list_size=10,
+                offset=0,
+                order="created_at:desc",
+                include_content=False,
+            ),
         )
 
         # Get the service and method descriptor
@@ -529,10 +540,12 @@ class TestGetFiles:
         )
 
         future = client_execution_thread_pool.submit(
-            client.get_files,
-            empty_filters,
-            list_size=10,
-            offset=0,
+            asyncio.run,
+            client.get_files(
+                empty_filters,
+                list_size=10,
+                offset=0,
+            ),
         )
 
         _, _, rpc = test_channel.take_unary_unary(method_desc)
@@ -607,14 +620,16 @@ class TestUpdateFile:
         # Start the client call to update the file
         updated_content = b"Updated content"
         future = client_execution_thread_pool.submit(
-            client.update_file,
-            file_id,
-            content=updated_content,
-            file_type="DOCUMENT",
-            content_type="text/plain",
-            metadata={"new_key": "new_value"},
-            new_name="updated_file.txt",
-            status="ACTIVE",
+            asyncio.run,
+            client.update_file(
+                file_id,
+                content=updated_content,
+                file_type="DOCUMENT",
+                content_type="text/plain",
+                metadata={"new_key": "new_value"},
+                new_name="updated_file.txt",
+                status="ACTIVE",
+            ),
         )
 
         # Get the service and method descriptor
@@ -671,11 +686,13 @@ class TestUpdateFile:
             test_channel: Mock gRPC channel
         """
         future = client_execution_thread_pool.submit(
-            client.update_file,
-            "nonexistent_file_id",
-            content=b"new content",
-            file_type="DOCUMENT",
-            content_type="text/plain",
+            asyncio.run,
+            client.update_file(
+                "nonexistent_file_id",
+                content=b"new content",
+                file_type="DOCUMENT",
+                content_type="text/plain",
+            ),
         )
         service_desc = filesystem_service_pb2.DESCRIPTOR.services_by_name["FilesystemService"]
         method_desc = service_desc.methods_by_name["UpdateFile"]
@@ -683,7 +700,7 @@ class TestUpdateFile:
         rpc.send_initial_metadata(())
         rpc.terminate(None, (), grpc.StatusCode.NOT_FOUND, "File not found")
 
-        with pytest.raises(ServerError):
+        with pytest.raises(FilesystemServiceError):
             future.result()
 
 
@@ -744,10 +761,12 @@ class TestDeleteFiles:
 
         # Start the client call to delete files
         future = client_execution_thread_pool.submit(
-            client.delete_files,
-            filters,
-            permanent=True,
-            force=False,
+            asyncio.run,
+            client.delete_files(
+                filters,
+                permanent=True,
+                force=False,
+            ),
         )
 
         # Get the service and method descriptor
@@ -807,10 +826,12 @@ class TestDeleteFiles:
         )
 
         future = client_execution_thread_pool.submit(
-            client.delete_files,
-            filters,
-            permanent=True,
-            force=False,
+            asyncio.run,
+            client.delete_files(
+                filters,
+                permanent=True,
+                force=False,
+            ),
         )
         service_desc = filesystem_service_pb2.DESCRIPTOR.services_by_name["FilesystemService"]
         method_desc = service_desc.methods_by_name["DeleteFiles"]
@@ -862,7 +883,7 @@ class TestFilesystemEdgeCases:
         )
 
         # Start the client call
-        future = client_execution_thread_pool.submit(client.upload_files, [upload_file])
+        future = client_execution_thread_pool.submit(asyncio.run, client.upload_files([upload_file]))
 
         # Get the service and method descriptor
         service_desc = filesystem_service_pb2.DESCRIPTOR.services_by_name["FilesystemService"]
@@ -881,7 +902,7 @@ class TestFilesystemEdgeCases:
         )
 
         # Verify the client call raises a ServerError
-        with pytest.raises(ServerError):
+        with pytest.raises(FilesystemServiceError):
             future.result()
 
     @pytest.mark.grpc
@@ -915,7 +936,7 @@ class TestFilesystemEdgeCases:
         )
 
         # Upload the file
-        future = client_execution_thread_pool.submit(client.upload_files, [upload_file])
+        future = client_execution_thread_pool.submit(asyncio.run, client.upload_files([upload_file]))
         service_desc = filesystem_service_pb2.DESCRIPTOR.services_by_name["FilesystemService"]
         method_desc = service_desc.methods_by_name["UploadFiles"]
         _, _, rpc = test_channel.take_unary_unary(method_desc)
@@ -953,9 +974,11 @@ class TestFilesystemEdgeCases:
 
         # Update the file status
         future = client_execution_thread_pool.submit(
-            client.update_file,
-            file_id,
-            status="ACTIVE",
+            asyncio.run,
+            client.update_file(
+                file_id,
+                status="ACTIVE",
+            ),
         )
 
         method_desc = service_desc.methods_by_name["UpdateFile"]
@@ -974,7 +997,7 @@ class TestFilesystemEdgeCases:
         assert update_result.status == "FILE_STATUS_ACTIVE"
 
         # Get the file and verify status
-        future = client_execution_thread_pool.submit(client.get_file, file_id)
+        future = client_execution_thread_pool.submit(asyncio.run, client.get_file(file_id))
         method_desc = service_desc.methods_by_name["GetFile"]
         _, _, rpc = test_channel.take_unary_unary(method_desc)
         get_request = filesystem_pb2.GetFileRequest(
@@ -997,10 +1020,12 @@ class TestFilesystemEdgeCases:
         )
 
         future = client_execution_thread_pool.submit(
-            client.delete_files,
-            filters,
-            permanent=False,
-            force=False,
+            asyncio.run,
+            client.delete_files(
+                filters,
+                permanent=False,
+                force=False,
+            ),
         )
 
         # Build proto filter manually to avoid context ID conversion

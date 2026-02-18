@@ -76,6 +76,7 @@ class ModuleDiscoverer:
             logger.exception("Could not import package %s", package_name)
             return {}
 
+        # getattr unavoidable: __path__ only exists on packages, not regular modules (Python runtime)
         paths = getattr(pkg, "__path__", None)
         if not paths:
             logger.warning("Package %s has no __path__", package_name)
@@ -316,8 +317,11 @@ class ModuleDiscoverer:
         self._trigger_handlers_cls[key].append(handler_cls)
         return handler_cls
 
-    def get_registered_protocols_with_info(self) -> dict[str, str]:
+    def get_registered_protocols_with_info(self, *, exclude_utility: bool = False) -> dict[str, str]:
         """Get registered protocols with their descriptions.
+
+        Args:
+            exclude_utility: If True, exclude SDK utility protocols (healthcheck, etc.).
 
         Returns:
             Dict mapping protocol name to description (from handler description attribute).
@@ -325,6 +329,12 @@ class ModuleDiscoverer:
         result: dict[str, str] = {}
         for protocol, handlers in self._trigger_handlers_cls.items():
             if handlers:
+                if exclude_utility:
+                    from digitalkin.models.module.utility import UtilityProtocol
+
+                    input_fmt = handlers[0].input_format  # type: ignore[misc]
+                    if isinstance(input_fmt, type) and issubclass(input_fmt, UtilityProtocol):
+                        continue
                 result[protocol] = handlers[0].description or protocol
         return result
 

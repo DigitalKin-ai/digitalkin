@@ -1,11 +1,10 @@
 """Taskiq broker & RSTREAM producer for the job manager."""
 
 import asyncio
-import datetime
 import json
 import logging
 import os
-import pickle  # noqa: S403
+import pickle
 from typing import Any
 
 from rstream import Producer
@@ -16,13 +15,13 @@ from taskiq.compat import model_validate
 from taskiq.message import BrokerMessage
 from taskiq_aio_pika import AioPikaBroker
 
-from digitalkin.core.common import ConnectionFactory, ModuleFactory
+from digitalkin.core.common import ModuleFactory
 from digitalkin.core.job_manager.base_job_manager import BaseJobManager
 from digitalkin.core.task_manager.task_executor import TaskExecutor
 from digitalkin.core.task_manager.task_session import TaskSession
 from digitalkin.logger import logger
 from digitalkin.models.module.module import ModuleCodeModel
-from digitalkin.models.module.module_types import DataModel, OutputModelT
+from digitalkin.models.module.module_types import DataModel
 from digitalkin.models.module.utility import EndOfStreamOutput
 from digitalkin.modules._base_module import BaseModule
 from digitalkin.services.services_config import ServicesConfig
@@ -41,7 +40,7 @@ class PickleFormatter(TaskiqFormatter):
     by first converting to JSON-safe primitives, then pickling that string.
     """
 
-    def dumps(self, message: TaskiqMessage) -> BrokerMessage:  # noqa: PLR6301
+    def dumps(self, message: TaskiqMessage) -> BrokerMessage:  # Required by TaskiqFormatter interface # noqa: PLR6301
         """Dumps message from python complex object to JSON.
 
         Args:
@@ -59,7 +58,7 @@ class PickleFormatter(TaskiqFormatter):
             labels=message.labels,
         )
 
-    def loads(self, message: bytes) -> TaskiqMessage:  # noqa: PLR6301
+    def loads(self, message: bytes) -> TaskiqMessage:  # Required by TaskiqFormatter interface # noqa: PLR6301
         """Recreate Python object from bytes.
 
         Args:
@@ -68,7 +67,9 @@ class PickleFormatter(TaskiqFormatter):
         Returns:
             message with TaskIQ format
         """
-        json_str = pickle.loads(message)  # noqa: S301
+        json_str = pickle.loads(  # noqa: S301
+            message
+        )  # Pickle: required for Taskiq deserialization (internal broker messages only)
         return model_validate(TaskiqMessage, json_str)
 
 
@@ -142,7 +143,7 @@ async def cleanup_global_resources() -> None:
         logger.warning("Failed to shutdown Taskiq broker: %s", e)
 
 
-async def send_message_to_stream(job_id: str, output_data: OutputModelT | ModuleCodeModel) -> None:  # type: ignore[type-var]
+async def send_message_to_stream(job_id: str, output_data: DataModel | ModuleCodeModel) -> None:
     """Callback define to add a message frame to the Rstream.
 
     Args:
@@ -182,25 +183,21 @@ async def run_start_module(
         services_config_params=module_class.services_config_params,
         mode=services_mode,
     )
-    setattr(module_class, "services_config", services_config)
+    module_class.services_config = services_config
     logger.debug("Services config: %s | Module config: %s", services_config, module_class.services_config)
     module_class.discover()
 
     job_id = context.message.task_id
-    callback = await BaseJobManager.job_specific_callback(send_message_to_stream, job_id)  # type: ignore[type-var]
+    callback = await BaseJobManager.job_specific_callback(send_message_to_stream, job_id)
     module = ModuleFactory.create_module_instance(module_class, job_id, mission_id, setup_id, setup_version_id)
 
-    channel = None
     try:
-        # Create TaskExecutor and supporting components for worker execution
         executor = TaskExecutor()
-        # SurrealDB env vars are expected to be set in env.
-        channel = await ConnectionFactory.create_surreal_connection("taskiq_worker", datetime.timedelta(seconds=5))
-        session = TaskSession(job_id, mission_id, channel, module, datetime.timedelta(seconds=2))
+        session = TaskSession(job_id, mission_id, module)
 
         # Execute the task using TaskExecutor
         # Create a proper done callback that handles errors
-        async def send_end_of_stream(_: Any) -> None:  # noqa: ANN401
+        async def send_end_of_stream(_: Any) -> None:
             try:
                 await callback(DataModel(root=EndOfStreamOutput()))
             except Exception as e:
@@ -224,7 +221,6 @@ async def run_start_module(
                 done_callback=lambda result: asyncio.ensure_future(send_end_of_stream(result)),
             ),
             session=session,
-            channel=channel,
         )
 
         # Wait for the supervisor task to complete
@@ -234,12 +230,10 @@ async def run_start_module(
         logger.exception("Error running module %s", job_id)
         raise
     finally:
-        # Cleanup channel
-        if channel is not None:
-            try:
-                await channel.close()
-            except Exception:
-                logger.exception("Error closing channel for job %s", job_id)
+        try:
+            await module.context.task_manager.close()
+        except Exception:
+            logger.exception("Error closing signal service for job %s", job_id)
 
 
 @TASKIQ_BROKER.task
@@ -269,21 +263,18 @@ async def run_config_module(
         services_config_params=module_class.services_config_params,
         mode=services_mode,
     )
-    setattr(module_class, "services_config", services_config)
+    module_class.services_config = services_config
     logger.debug("Services config: %s | Module config: %s", services_config, module_class.services_config)
 
     job_id = context.message.task_id
-    callback = await BaseJobManager.job_specific_callback(send_message_to_stream, job_id)  # type: ignore[type-var]
+    callback = await BaseJobManager.job_specific_callback(  # type: ignore[type-var]
+        send_message_to_stream, job_id
+    )
     module = ModuleFactory.create_module_instance(module_class, job_id, mission_id, setup_id, setup_version_id)
 
-    # Override environment variables temporarily to use manager's SurrealDB
-    channel = None
     try:
-        # Create TaskExecutor and supporting components for worker execution
         executor = TaskExecutor()
-        # SurrealDB env vars are expected to be set in env.
-        channel = await ConnectionFactory.create_surreal_connection("taskiq_worker", datetime.timedelta(seconds=5))
-        session = TaskSession(job_id, mission_id, channel, module, datetime.timedelta(seconds=2))
+        session = TaskSession(job_id, mission_id, module)
 
         # Create and run the config setup task with TaskExecutor
         setup_model = module_class.create_config_setup_model(config_setup_data)
@@ -293,7 +284,6 @@ async def run_config_module(
             mission_id=mission_id,
             coro=module.start_config_setup(setup_model, callback),
             session=session,
-            channel=channel,
         )
 
         # Wait for the supervisor task to complete
@@ -303,9 +293,7 @@ async def run_config_module(
         logger.exception("Error running config module %s", job_id)
         raise
     finally:
-        # Cleanup channel
-        if channel is not None:
-            try:
-                await channel.close()
-            except Exception:
-                logger.exception("Error closing channel for job %s", job_id)
+        try:
+            await module.context.task_manager.close()
+        except Exception:
+            logger.exception("Error closing signal service for job %s", job_id)

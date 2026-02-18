@@ -103,17 +103,17 @@ class SurrealDBConnection(Generic[TSurreal]):
         for attempt in range(max_retries):
             try:
                 logger.debug("SurrealDB connecting (attempt %d/%d)", attempt + 1, max_retries)
-                self.db = AsyncSurreal(self.url)  # type: ignore
+                self.db = AsyncSurreal(self.url)  # type: ignore[assignment]  # surrealdb typing not fully resolved
 
                 # Wrap signin with timeout to catch handshake timeouts
                 await asyncio.wait_for(
                     self.db.signin({"username": self.username, "password": self.password}),
                     timeout=self.timeout.total_seconds(),
                 )
-                await self.db.use(self.namespace, self.database)  # type: ignore[arg-type]
-
-                logger.info("SurrealDB connected (attempt %d/%d)", attempt + 1, max_retries)
-                return  # noqa: TRY300
+                await self.db.use(
+                    self.namespace,
+                    self.database,  # type: ignore[arg-type]  # surrealdb.use() accepts str but typed differently
+                )
 
             except TimeoutError as e:
                 last_exception = e
@@ -147,6 +147,10 @@ class SurrealDBConnection(Generic[TSurreal]):
                         error_msg,
                         exc_info=True,
                     )
+
+            else:
+                logger.info("SurrealDB connected (attempt %d/%d)", attempt + 1, max_retries)
+                return
 
             # Retry with exponential backoff (but not after the last attempt)
             if attempt < max_retries - 1:
@@ -201,7 +205,7 @@ class SurrealDBConnection(Generic[TSurreal]):
         self,
         table_name: str,
         data: dict[str, Any],
-    ) -> list[dict[str, Any]] | dict[str, Any]:
+    ) -> dict[str, Any]:
         """Create a new record.
 
         Args:
@@ -209,21 +213,28 @@ class SurrealDBConnection(Generic[TSurreal]):
             data: Data to insert
 
         Returns:
-            Dict[str, Any]: The created record as returned by the database
+            The created record as a single dict.
 
         Raises:
-            RuntimeError: If the database returns an error response
+            RuntimeError: If the database returns an error or empty list.
         """
         result = await self.db.create(table_name, data)
+
+        # Normalize list return (some driver versions return [dict] instead of dict)
+        if isinstance(result, list):
+            if not result:
+                msg = f"SurrealDB create returned empty list for '{table_name}'"
+                raise RuntimeError(msg)
+            result = result[0]
 
         # Check for error response from SurrealDB
         if isinstance(result, dict) and "code" in result:
             error_msg = result.get("message", result.get("information", "Unknown error"))
             logger.error("SurrealDB create failed [%s]: %s", result.get("code"), error_msg)
-            msg = f"SurrealDB create failed in '{table_name}': {error_msg}"
+            msg = f"SurrealDB create failed in '{table_name}': {error_msg}"  # type: ignore[str-bytes-safe]
             raise RuntimeError(msg)
 
-        return cast("list[dict[str, Any]] | dict[str, Any]", result)
+        return cast("dict[str, Any]", result)
 
     async def merge(
         self,

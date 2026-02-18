@@ -7,7 +7,9 @@ This test suite validates the GrpcUserProfile service implementation, including:
 - Error handling and edge cases
 """
 
+import asyncio
 import logging
+import types
 from concurrent import futures
 
 import grpc
@@ -37,6 +39,11 @@ service_instance = MockUserProfileServicer()
 service_name = user_profile_service_pb2.DESCRIPTOR.services_by_name["UserProfileService"]
 
 test_logger = logging.getLogger(__name__)
+
+
+async def _test_exec_grpc_query(self, query_endpoint, request):
+    response = getattr(self.stub, query_endpoint)(request)
+    return await response if asyncio.iscoroutine(response) else response
 
 
 # --- Fixtures ---
@@ -127,6 +134,7 @@ def client(
     )
     # Override the channel and stub to use our test channel
     client.stub = user_profile_service_pb2_grpc.UserProfileServiceStub(test_channel)
+    client.exec_grpc_query = types.MethodType(_test_exec_grpc_query, client)
     test_logger.info("Client created")
     return client
 
@@ -187,7 +195,7 @@ class TestGetUserProfileSuccess:
             "GetUserProfile"
         ]
 
-        future = thread_pool.submit(client.get_user_profile)
+        future = thread_pool.submit(asyncio.run, client.get_user_profile())
         _, request, rpc = test_channel.take_unary_unary(method_desc)
 
         assert request.mission_id == MISSION_ID
@@ -224,7 +232,7 @@ class TestGetUserProfileSuccess:
             "GetUserProfile"
         ]
 
-        future = thread_pool.submit(client.get_user_profile)
+        future = thread_pool.submit(asyncio.run, client.get_user_profile())
         _, request, rpc = test_channel.take_unary_unary(method_desc)
 
         context = FakeContext()
@@ -257,7 +265,7 @@ class TestGetUserProfileSuccess:
             "GetUserProfile"
         ]
 
-        future = thread_pool.submit(client.get_user_profile)
+        future = thread_pool.submit(asyncio.run, client.get_user_profile())
         _, request, rpc = test_channel.take_unary_unary(method_desc)
 
         context = FakeContext()
@@ -291,7 +299,7 @@ class TestGetUserProfileSuccess:
             "GetUserProfile"
         ]
 
-        future = thread_pool.submit(client.get_user_profile)
+        future = thread_pool.submit(asyncio.run, client.get_user_profile())
         _, request, rpc = test_channel.take_unary_unary(method_desc)
 
         context = FakeContext()
@@ -325,7 +333,7 @@ class TestGetUserProfileValidation:
             "GetUserProfile"
         ]
 
-        future = thread_pool.submit(client.get_user_profile)
+        future = thread_pool.submit(asyncio.run, client.get_user_profile())
         _, request, rpc = test_channel.take_unary_unary(method_desc)
 
         context = FakeContext()
@@ -359,7 +367,7 @@ class TestGetUserProfileValidation:
             "GetUserProfile"
         ]
 
-        future = thread_pool.submit(client.get_user_profile)
+        future = thread_pool.submit(asyncio.run, client.get_user_profile())
         _, request, rpc = test_channel.take_unary_unary(method_desc)
 
         context = FakeContext()
@@ -399,7 +407,7 @@ class TestGetUserProfileEdgeCases:
             "GetUserProfile"
         ]
 
-        future = thread_pool.submit(client.get_user_profile)
+        future = thread_pool.submit(asyncio.run, client.get_user_profile())
         _, request, rpc = test_channel.take_unary_unary(method_desc)
 
         context = FakeContext()
@@ -434,7 +442,7 @@ class TestGetUserProfileEdgeCases:
             "GetUserProfile"
         ]
 
-        future = thread_pool.submit(client.get_user_profile)
+        future = thread_pool.submit(asyncio.run, client.get_user_profile())
         _, request, rpc = test_channel.take_unary_unary(method_desc)
 
         context = FakeContext()
@@ -480,8 +488,9 @@ class TestGetUserProfileEdgeCases:
                 client_config=dummy_client_config,
             )
             test_client.stub = user_profile_service_pb2_grpc.UserProfileServiceStub(test_channel)
+            test_client.exec_grpc_query = types.MethodType(_test_exec_grpc_query, test_client)
 
-            future = thread_pool.submit(test_client.get_user_profile)
+            future = thread_pool.submit(asyncio.run, test_client.get_user_profile())
             _, request, rpc = test_channel.take_unary_unary(method_desc)
 
             context = FakeContext()
@@ -521,7 +530,7 @@ class TestGetUserProfileEdgeCases:
             "GetUserProfile"
         ]
 
-        future = thread_pool.submit(client.get_user_profile)
+        future = thread_pool.submit(asyncio.run, client.get_user_profile())
         _, request, rpc = test_channel.take_unary_unary(method_desc)
 
         context = FakeContext()
@@ -561,7 +570,7 @@ class TestGetUserProfileEdgeCases:
             "GetUserProfile"
         ]
 
-        future = thread_pool.submit(client.get_user_profile)
+        future = thread_pool.submit(asyncio.run, client.get_user_profile())
         _, request, rpc = test_channel.take_unary_unary(method_desc)
 
         context = FakeContext()
@@ -620,8 +629,9 @@ class TestGetUserProfileEdgeCases:
             client_config=dummy_client_config,
         )
         client1.stub = user_profile_service_pb2_grpc.UserProfileServiceStub(test_channel)
+        client1.exec_grpc_query = types.MethodType(_test_exec_grpc_query, client1)
 
-        future1 = thread_pool.submit(client1.get_user_profile)
+        future1 = thread_pool.submit(asyncio.run, client1.get_user_profile())
         _, request1, rpc1 = test_channel.take_unary_unary(method_desc)
         context1 = FakeContext()
         resp1 = mock_servicer.GetUserProfile(request1, context1)
@@ -636,8 +646,9 @@ class TestGetUserProfileEdgeCases:
             client_config=dummy_client_config,
         )
         client2.stub = user_profile_service_pb2_grpc.UserProfileServiceStub(test_channel)
+        client2.exec_grpc_query = types.MethodType(_test_exec_grpc_query, client2)
 
-        future2 = thread_pool.submit(client2.get_user_profile)
+        future2 = thread_pool.submit(asyncio.run, client2.get_user_profile())
         _, request2, rpc2 = test_channel.take_unary_unary(method_desc)
         context2 = FakeContext()
         resp2 = mock_servicer.GetUserProfile(request2, context2)

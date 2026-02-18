@@ -31,12 +31,12 @@ class RegistryStrategy(BaseStrategy, ABC):
         self.config = config
 
     @abstractmethod
-    def discover_by_id(self, module_id: str) -> ModuleInfo:
+    async def discover_by_id(self, module_id: str) -> ModuleInfo:
         """Get module info by ID."""
         raise NotImplementedError
 
     @abstractmethod
-    def search(
+    async def search(
         self,
         name: str | None = None,
         module_type: str | None = None,
@@ -55,12 +55,12 @@ class RegistryStrategy(BaseStrategy, ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def get_status(self, module_id: str) -> ModuleStatusInfo:
+    async def get_status(self, module_id: str) -> ModuleStatusInfo:
         """Get module status."""
         raise NotImplementedError
 
     @abstractmethod
-    def register(
+    async def register(
         self,
         module_id: str,
         address: str,
@@ -84,7 +84,7 @@ class RegistryStrategy(BaseStrategy, ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def heartbeat(self, module_id: str) -> RegistryModuleStatus:
+    async def heartbeat(self, module_id: str) -> RegistryModuleStatus:
         """Send heartbeat to keep module active.
 
         Args:
@@ -99,7 +99,7 @@ class RegistryStrategy(BaseStrategy, ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def get_setup(self, setup_id: str) -> SetupInfo | None:
+    async def get_setup(self, setup_id: str) -> SetupInfo | None:
         """Get setup info."""
         raise NotImplementedError
 

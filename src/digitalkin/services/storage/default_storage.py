@@ -24,7 +24,7 @@ class DefaultStorage(StorageStrategy):
     """
 
     @staticmethod
-    def _json_default(o: Any) -> str:  # noqa: ANN401
+    def _json_default(o: Any) -> str:
         """JSON serializer for non-standard types (datetime → ISO).
 
         Args:
@@ -107,7 +107,7 @@ class DefaultStorage(StorageStrategy):
             except Exception:
                 logger.exception("Unexpected error saving storage")
 
-    def _store(self, record: StorageRecord) -> StorageRecord:
+    async def _store(self, record: StorageRecord) -> StorageRecord:
         """Store a new record in the database and persist to file.
 
         Args:
@@ -131,7 +131,7 @@ class DefaultStorage(StorageStrategy):
         logger.debug("Created %s", key)
         return record
 
-    def _read(self, collection: str, record_id: str) -> StorageRecord | None:
+    async def _read(self, collection: str, record_id: str) -> StorageRecord | None:
         """Get records from the database.
 
         Args:
@@ -144,7 +144,7 @@ class DefaultStorage(StorageStrategy):
         key = f"{collection}:{record_id}"
         return self.storage.get(key)
 
-    def _update(self, collection: str, record_id: str, data: BaseModel) -> StorageRecord | None:
+    async def _update(self, collection: str, record_id: str, data: BaseModel) -> StorageRecord | None:
         """Update records in the database and persist to file.
 
         Args:
@@ -165,7 +165,7 @@ class DefaultStorage(StorageStrategy):
         logger.debug("Modified %s", key)
         return rec
 
-    def _remove(self, collection: str, record_id: str) -> bool:
+    async def _remove(self, collection: str, record_id: str) -> bool:
         """Delete records from the database and update file.
 
         Args:
@@ -183,7 +183,7 @@ class DefaultStorage(StorageStrategy):
         logger.debug("Removed %s", key)
         return True
 
-    def _list(self, collection: str) -> list[StorageRecord]:
+    async def _list(self, collection: str) -> list[StorageRecord]:
         """Implements StorageStrategy._list.
 
         Args:
@@ -195,7 +195,7 @@ class DefaultStorage(StorageStrategy):
         prefix = f"{collection}:"
         return [r for k, r in self.storage.items() if k.startswith(prefix)]
 
-    def _remove_collection(self, collection: str) -> bool:
+    async def _remove_collection(self, collection: str) -> bool:
         """Implements StorageStrategy._remove_collection.
 
         Args:
@@ -219,7 +219,6 @@ class DefaultStorage(StorageStrategy):
         setup_version_id: str,
         config: dict[str, type[BaseModel]],
         storage_file_path: str = "local_storage",
-        **kwargs,  # noqa: ANN003, ARG002
     ) -> None:
         """Initialize the storage."""
         super().__init__(mission_id=mission_id, setup_id=setup_id, setup_version_id=setup_version_id, config=config)

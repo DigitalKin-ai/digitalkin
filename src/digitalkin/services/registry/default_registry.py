@@ -17,7 +17,7 @@ class DefaultRegistry(RegistryStrategy):
 
     _modules: ClassVar[dict[str, ModuleInfo]] = {}
 
-    def discover_by_id(self, module_id: str) -> ModuleInfo:
+    async def discover_by_id(self, module_id: str) -> ModuleInfo:
         """Get module info by ID.
 
         Args:
@@ -33,11 +33,12 @@ class DefaultRegistry(RegistryStrategy):
             raise RegistryModuleNotFoundError(module_id)
         return self._modules[module_id]
 
-    def search(
+    async def search(
         self,
         name: str | None = None,
         module_type: str | None = None,
-        organization_id: str | None = None,  # noqa: ARG002
+        organization_id: str  # noqa: ARG002
+        | None = None,  # Strategy interface parameter, not used in local implementation
     ) -> list[ModuleInfo]:
         """Search for modules by criteria.
 
@@ -49,17 +50,17 @@ class DefaultRegistry(RegistryStrategy):
         Returns:
             List of matching modules.
         """
-        results = list(self._modules.values())
+        results = list[ModuleInfo](self._modules.values())
 
         if name:
-            results = [m for m in results if name in m.name]
+            results = [m for m in results if name in m.module_name]
 
         if module_type:
             results = [m for m in results if m.module_type == module_type]
 
         return results
 
-    def get_status(self, module_id: str) -> ModuleStatusInfo:
+    async def get_status(self, module_id: str) -> ModuleStatusInfo:
         """Get module status.
 
         Args:
@@ -80,7 +81,7 @@ class DefaultRegistry(RegistryStrategy):
             status=module.status or RegistryModuleStatus.UNSPECIFIED,
         )
 
-    def register(
+    async def register(
         self,
         module_id: str,
         address: str,
@@ -107,12 +108,12 @@ class DefaultRegistry(RegistryStrategy):
             address=address,
             port=port,
             version=version,
-            name=existing.name if existing else module_id,
+            module_name=existing.module_name if existing else module_id,
             status=RegistryModuleStatus.ACTIVE,
         )
         return self._modules[module_id]
 
-    def heartbeat(self, module_id: str) -> RegistryModuleStatus:
+    async def heartbeat(self, module_id: str) -> RegistryModuleStatus:
         """Send heartbeat to keep module active.
 
         Args:
@@ -135,7 +136,7 @@ class DefaultRegistry(RegistryStrategy):
             address=module.address,
             port=module.port,
             version=module.version,
-            name=module.name,
+            module_name=module.module_name,
             status=RegistryModuleStatus.ACTIVE,
         )
         return RegistryModuleStatus.ACTIVE
@@ -154,7 +155,7 @@ class DefaultRegistry(RegistryStrategy):
             return True
         return False
 
-    def get_setup(self, setup_id: str) -> None:
+    async def get_setup(self, setup_id: str) -> None:
         """Get setup info (not supported in default registry).
 
         Args:

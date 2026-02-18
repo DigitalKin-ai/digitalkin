@@ -27,7 +27,7 @@ from digitalkin.utils.package_discover import ModuleDiscoverer
 from digitalkin.utils.schema_splitter import SchemaSplitter
 
 
-class BaseModule(  # noqa: PLR0904
+class BaseModule(  # Module SDK base class requires many public methods # noqa: PLR0904
     ABC,
     Generic[
         InputModelT,
@@ -181,7 +181,7 @@ class BaseModule(  # noqa: PLR0904
         if cls.select_format is None:
             return json.dumps({}, indent=2)
 
-        protocols_info = cls.triggers_discoverer.get_registered_protocols_with_info()
+        protocols_info = cls.triggers_discoverer.get_registered_protocols_with_info(exclude_utility=True)
         select_schema = cls.select_format.build(protocols_info)
 
         if select_schema is None:
@@ -299,9 +299,7 @@ class BaseModule(  # noqa: PLR0904
         cost_schema = {
             name: {
                 "name": cost_config.cost_name,
-                "type": cost_config.cost_type.value
-                if hasattr(cost_config.cost_type, "value")
-                else cost_config.cost_type,
+                "type": cost_config.cost_type,
                 "description": cost_config.description,
                 "unit": cost_config.unit,
                 "rate": cost_config.rate,
@@ -394,7 +392,9 @@ class BaseModule(  # noqa: PLR0904
         Built-in healthcheck handlers (ping, services, status) are automatically registered
         to provide standard healthcheck functionality for all modules.
         """
-        from digitalkin.models.module.utility import UtilityRegistry  # noqa: PLC0415
+        from digitalkin.models.module.utility import (
+            UtilityRegistry,
+        )  # Lazy import to avoid circular dependency
 
         cls.triggers_discoverer.discover_modules()
 
@@ -437,10 +437,10 @@ class BaseModule(  # noqa: PLR0904
         """
         input_instance = self.input_format.model_validate(input_data)
 
-        # Apply cost limits if present in input
-        cost_limits = getattr(input_instance, "cost_limits", None)
+        # Apply cost limits if present in input (field added dynamically by UtilitySchemaExtender)
+        cost_limits = input_instance.model_dump().get("cost_limits")
         if cost_limits is not None and self.context.cost is not None:
-            self.context.cost.set_limits(cost_limits)
+            await self.context.cost.set_limits(cost_limits)
 
         handler_instance = self.triggers_discoverer.get_trigger(
             input_instance.root.protocol,
@@ -458,9 +458,9 @@ class BaseModule(  # noqa: PLR0904
         """Run the module."""
         raise NotImplementedError
 
-    async def run_config_setup(  # noqa: PLR6301
+    async def run_config_setup(  # Default implementation; subclasses may use self # noqa: PLR6301
         self,
-        context: ModuleContext,  # noqa: ARG002
+        context: ModuleContext,  # Available for subclass overrides # noqa: ARG002
         config_setup_data: SetupModelT,
     ) -> SetupModelT:
         """Run config setup the module.
@@ -529,7 +529,7 @@ class BaseModule(  # noqa: PLR0904
                 )
             )
 
-            logger.info("Initialize module %s", self.context.session.job_id)
+            logger.debug("Initialize module %s", self.context.session.job_id)
             await self.initialize(self.context, setup_data)
         except Exception as e:
             self._status = ModuleStatus.FAILED
@@ -548,9 +548,7 @@ class BaseModule(  # noqa: PLR0904
             return
 
         try:
-            logger.debug("Init the discovered input handlers.")
             self.triggers_discoverer.init_handlers(self.context)
-            logger.debug("Run lifecycle %s", self.context.session.job_id)
             await self._run_lifecycle(input_data, setup_data)
         except Exception:
             self._status = ModuleStatus.FAILED
@@ -583,10 +581,10 @@ class BaseModule(  # noqa: PLR0904
         Args:
             config_setup_data: Setup data containing tool references.
         """
-        logger.info("Starting tool resolution", extra=self.context.session.current_ids())
+        logger.debug("Starting tool resolution", extra=self.context.session.current_ids())
         tool_cache = await config_setup_data.build_tool_cache(self.context.registry, self.context.communication)
         self.context.tool_cache = tool_cache
-        logger.info(
+        logger.debug(
             "Tool cache built with %d entries: %s",
             len(tool_cache.entries),
             list(tool_cache.entries.keys()),
@@ -605,7 +603,7 @@ class BaseModule(  # noqa: PLR0904
             callback: Callback to send the configured setup model.
         """
         try:
-            logger.info("Run Config Setup lifecycle", extra=self.context.session.current_ids())
+            logger.debug("Run Config Setup lifecycle", extra=self.context.session.current_ids())
             self._status = ModuleStatus.RUNNING
             self.context.callbacks.set_config_setup = callback
 

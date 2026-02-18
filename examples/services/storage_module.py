@@ -134,7 +134,7 @@ class ExampleModule(ArchetypeModule[ExampleInput, ExampleOutput, ExampleSetup, E
         )
 
         # Store the output data in storage
-        storage_id = self.storage.store(
+        storage_id = await self.storage.store(
             collection="example", record_id="example_outputs", data=output_data.model_dump(), data_type="OUTPUT"
         )
 
@@ -176,12 +176,12 @@ async def test_module() -> None:
 
     # Check the storage
     if module.status == ModuleStatus.STOPPED:
-        result: StorageRecord = module.storage.read("example", "example_outputs")
+        result: StorageRecord = await module.storage.read("example", "example_outputs")
         if result:
             pass
 
 
-def test_storage_directly() -> None:
+async def test_storage_directly() -> None:
     """Test the storage service directly."""
     # Initialize storage service
     storage = ServicesConfig().storage(
@@ -189,10 +189,10 @@ def test_storage_directly() -> None:
     )
 
     # Create a test record
-    storage.store("example", "test_table", {"test_key": "test_value"}, "OUTPUT")
+    await storage.store("example", "test_table", {"test_key": "test_value"}, "OUTPUT")
 
     # Retrieve the record
-    retrieved = storage.read("example", "test_table")
+    retrieved = await storage.read("example", "test_table")
 
     if retrieved:
         pass
@@ -203,4 +203,4 @@ if __name__ == "__main__":
     asyncio.run(test_module())
 
     # Test storage directly
-    test_storage_directly()
+    asyncio.run(test_storage_directly())

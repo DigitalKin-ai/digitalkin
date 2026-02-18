@@ -112,7 +112,7 @@ class FilesystemStrategy(BaseStrategy, ABC):
         self.config = config
 
     @abstractmethod
-    def upload_files(
+    async def upload_files(
         self,
         files: list[UploadFileData],
     ) -> tuple[list[FilesystemRecord], int, int]:
@@ -130,7 +130,7 @@ class FilesystemStrategy(BaseStrategy, ABC):
         """
 
     @abstractmethod
-    def get_file(
+    async def get_file(
         self,
         file_id: str,
         context: Literal["mission", "setup"] = "mission",
@@ -153,7 +153,7 @@ class FilesystemStrategy(BaseStrategy, ABC):
         """
 
     @abstractmethod
-    def get_files(
+    async def get_files(
         self,
         filters: FileFilter,
         *,
@@ -185,7 +185,7 @@ class FilesystemStrategy(BaseStrategy, ABC):
         """
 
     @abstractmethod
-    def update_file(
+    async def update_file(
         self,
         file_id: str,
         content: bytes | None = None,
@@ -227,7 +227,7 @@ class FilesystemStrategy(BaseStrategy, ABC):
         """
 
     @abstractmethod
-    def delete_files(
+    async def delete_files(
         self,
         filters: FileFilter,
         *,
