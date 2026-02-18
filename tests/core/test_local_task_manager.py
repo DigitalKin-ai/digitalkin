@@ -119,6 +119,7 @@ async def mock_task_session() -> Mock:
     session.db = Mock()
     session.db.close = AsyncMock()
     session.db.update = AsyncMock()
+    session.db.create = AsyncMock(return_value={"id": "tasks_signal_123"})
 
     # Make these stay alive so main task can complete first
     # Use sleep loop that responds to cancellation
@@ -636,24 +637,31 @@ class TestCancellation:
 class TestSignals:
     """Signal handling tests."""
 
-    @pytest.mark.parametrize("sig", [SignalType.CANCEL, "custom"])
+    @pytest.mark.parametrize("sig", ["cancel", "status"])
     @pytest.mark.asyncio
     async def test_send_signal(self, task_manager: LocalTaskManager, sig) -> None:
         """Positive: Signal sending works."""
-        # Create mock session with properly configured db.update
+        # Create mock session with properly configured db.create and required attributes
         mock_session = Mock()
         mock_session.db = Mock()
-        mock_session.db.update = AsyncMock()
+        mock_session.db.create = AsyncMock(return_value={"id": "tasks_signal_123"})
+        mock_session.setup_id = "setup:test"
+        mock_session.setup_version_id = "setup_version:test"
+        mock_session.status = TaskStatus.RUNNING
         task_manager.tasks_sessions["t1"] = mock_session
 
         result = await task_manager.send_signal("t1", "missions:signal", sig, {})
         assert result is True
-        mock_session.db.update.assert_awaited_once_with("signals", "t1", {"type": sig, "payload": {}})
+        mock_session.db.create.assert_awaited_once()
+        call_args = mock_session.db.create.call_args
+        assert call_args[0][0] == "tasks"
+        assert call_args[0][1]["task_id"] == "t1"
+        assert call_args[0][1]["action"] == sig
 
     @pytest.mark.asyncio
     async def test_signal_unknown_task(self, task_manager: LocalTaskManager) -> None:
         """Negative: Unknown task returns False."""
-        result = await task_manager.send_signal("unknown", "missions:signal", SignalType.CANCEL, {})
+        result = await task_manager.send_signal("unknown", "missions:signal", "cancel", {})
         assert result is False
 
 

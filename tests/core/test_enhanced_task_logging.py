@@ -427,9 +427,9 @@ class TestDBPersistenceEnhancedFields:
 
         # Cancellation reason should be included
         assert stop_call["cancellation_reason"]== "signal"
-        # No exception details for cancellation
-        assert stop_call["error_message"] is None
-        assert stop_call["exception_traceback"] is None
+        # No exception details for cancellation (excluded by exclude_none=True)
+        assert "error_message" not in stop_call
+        assert "exception_traceback" not in stop_call
 
     @pytest.mark.asyncio
     async def test_stop_signal_no_enhanced_fields_on_success(
@@ -472,10 +472,10 @@ class TestDBPersistenceEnhancedFields:
 
         assert stop_call is not None
 
-        # Successful completion has COMPLETED reason, no error fields
+        # Successful completion has COMPLETED reason, no error fields (excluded by exclude_none=True)
         assert stop_call["cancellation_reason"]== "completed"
-        assert stop_call["error_message"] is None
-        assert stop_call["exception_traceback"] is None
+        assert "error_message" not in stop_call
+        assert "exception_traceback" not in stop_call
 
 
 # ============================================================================

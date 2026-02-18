@@ -43,13 +43,9 @@ class SignalType(Enum):
     START = "start"
     STOP = "stop"
     CANCEL = "cancel"
-    PAUSE = "pause"
-    RESUME = "resume"
     STATUS = "status"
 
     ACK_CANCEL = "ack_cancel"
-    ACK_PAUSE = "ack_pause"
-    ACK_RESUME = "ack_resume"
     ACK_STATUS = "ack_status"
 
 
@@ -63,7 +59,7 @@ class SignalMessage(BaseModel):
     status: TaskStatus = Field(..., description="Current status of the task")
     action: SignalType = Field(..., description="Type of signal action")
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    payload: dict[str, Any] = Field(default={}, description="Optional payload for the signal")
+    payload: dict[str, Any] = Field(default_factory=dict, description="Optional payload for the signal")
 
     # Enhanced logging fields
     cancellation_reason: CancellationReason | None = Field(

@@ -37,7 +37,7 @@ class TaskExecutor:
         Runs three concurrent sub-tasks:
         - Main coroutine (the actual work)
         - Heartbeat generator (sends heartbeats to SurrealDB)
-        - Signal listener (watches for stop/pause/resume signals)
+        - Signal listener (watches for stop/cancel signals)
 
         The first task to complete determines the outcome.
 
@@ -66,7 +66,7 @@ class TaskExecutor:
                         setup_version_id=session.setup_version_id,
                         status=session.status,
                         action=SignalType.START,
-                    ).model_dump(),
+                    ).model_dump(exclude_none=True),
                 )
                 # Store the record ID in session - required before starting live query
                 if isinstance(result, dict) and "id" in result:
@@ -101,7 +101,7 @@ class TaskExecutor:
                             cancellation_reason=session.cancellation_reason,
                             error_message=session._last_exception,  # noqa: SLF001
                             exception_traceback=session._last_traceback,  # noqa: SLF001
-                        ).model_dump(),
+                        ).model_dump(exclude_none=True),
                     )
                 logger.info("Signal listener ended", extra={"mission_id": mission_id, "task_id": task_id})
 

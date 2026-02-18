@@ -13,7 +13,7 @@ from typing_extensions import Self
 from digitalkin.core.task_manager.surrealdb_repository import SurrealDBConnection
 from digitalkin.core.task_manager.task_session import TaskSession
 from digitalkin.logger import logger
-from digitalkin.models.core.task_monitor import CancellationReason
+from digitalkin.models.core.task_monitor import CancellationReason, SignalMessage, SignalType
 from digitalkin.modules._base_module import BaseModule
 
 
@@ -53,14 +53,10 @@ class BaseTaskManager(ABC):
         self._shutdown_event = asyncio.Event()
 
         logger.info(
-            "%s initialized with max_concurrent_tasks: %d, default_timeout: %.1f",
+            "%s initialized (max_concurrent_tasks=%d, default_timeout=%.1fs)",
             self.__class__.__name__,
             max_concurrent_tasks,
             default_timeout,
-            extra={
-                "max_concurrent_tasks": max_concurrent_tasks,
-                "default_timeout": default_timeout,
-            },
         )
 
     @property
@@ -234,15 +230,25 @@ class BaseTaskManager(ABC):
             return False
 
         logger.info(
-            "Sending signal '%s' to task: '%s'",
+            "Sending signal '%s' to task '%s'",
             signal_type,
             task_id,
-            extra={"mission_id": mission_id, "task_id": task_id, "signal_type": signal_type, "payload": payload},
+            extra={"mission_id": mission_id, "task_id": task_id},
         )
 
-        # Use the task session's db connection to send the signal
         session = self.tasks_sessions[task_id]
-        await session.db.update("signals", task_id, {"type": signal_type, "payload": payload})
+        await session.db.create(
+            "tasks",
+            SignalMessage(
+                task_id=task_id,
+                mission_id=mission_id,
+                setup_id=session.setup_id,
+                setup_version_id=session.setup_version_id,
+                status=session.status,
+                action=SignalType[signal_type.upper()],
+                payload=payload,
+            ).model_dump(exclude_none=True),
+        )
         return True
 
     async def cancel_task(self, task_id: str, mission_id: str, timeout: float | None = None) -> bool:
@@ -275,13 +281,13 @@ class BaseTaskManager(ABC):
         )
 
         try:
-            # Wait for graceful shutdown
+            # Phase 1: Send cancel signal for graceful shutdown
+            await self.send_signal(task_id, mission_id, "cancel", {})
             await asyncio.wait_for(task, timeout=timeout)
 
             logger.info(
                 "Task cancelled gracefully: '%s'", task_id, extra={"mission_id": mission_id, "task_id": task_id}
             )
-
         except asyncio.TimeoutError:
             # Set timeout as cancellation reason
             if task_id in self.tasks_sessions:
@@ -290,14 +296,9 @@ class BaseTaskManager(ABC):
                     session.cancellation_reason = CancellationReason.TIMEOUT
 
             logger.warning(
-                "Graceful cancellation timed out for task: '%s', forcing cancellation",
+                "Graceful cancellation timed out for task '%s', forcing cancellation",
                 task_id,
-                extra={
-                    "mission_id": mission_id,
-                    "task_id": task_id,
-                    "timeout": timeout,
-                    "cancellation_reason": CancellationReason.TIMEOUT.value,
-                },
+                extra={"mission_id": mission_id, "task_id": task_id},
             )
 
             # Phase 2: Force cancellation
@@ -306,22 +307,19 @@ class BaseTaskManager(ABC):
                 await task
 
             logger.warning(
-                "Task force-cancelled: '%s', reason: %s",
+                "Task force-cancelled: '%s' (%s)",
                 task_id,
                 CancellationReason.TIMEOUT.value,
-                extra={
-                    "mission_id": mission_id,
-                    "task_id": task_id,
-                    "cancellation_reason": CancellationReason.TIMEOUT.value,
-                },
+                extra={"mission_id": mission_id, "task_id": task_id},
             )
             return True
 
         except Exception as e:
             logger.error(
-                "Error during task cancellation: '%s'",
+                "Error during task cancellation '%s': %s",
                 task_id,
-                extra={"mission_id": mission_id, "task_id": task_id, "error": str(e)},
+                e,
+                extra={"mission_id": mission_id, "task_id": task_id},
                 exc_info=True,
             )
             return False
@@ -330,7 +328,7 @@ class BaseTaskManager(ABC):
         return True
 
     async def clean_session(self, task_id: str, mission_id: str) -> bool:
-        """Clean up task session without cancelling the task.
+        """Force cleanup of task session, cancelling the task if still running.
 
         Args:
             task_id: The ID of the task
@@ -351,30 +349,6 @@ class BaseTaskManager(ABC):
 
         logger.info("Cleaning up session for task: '%s'", task_id, extra={"mission_id": mission_id, "task_id": task_id})
         return True
-
-    async def pause_task(self, task_id: str, mission_id: str) -> bool:
-        """Pause a running task.
-
-        Args:
-            task_id: The ID of the task
-            mission_id: The ID of the mission
-
-        Returns:
-            True if the task was paused successfully, False otherwise
-        """
-        return await self.send_signal(task_id=task_id, mission_id=mission_id, signal_type="pause", payload={})
-
-    async def resume_task(self, task_id: str, mission_id: str) -> bool:
-        """Resume a paused task.
-
-        Args:
-            task_id: The ID of the task
-            mission_id: The ID of the mission
-
-        Returns:
-            True if the task was resumed successfully, False otherwise
-        """
-        return await self.send_signal(task_id=task_id, mission_id=mission_id, signal_type="resume", payload={})
 
     async def get_task_status(self, task_id: str, mission_id: str) -> bool:
         """Request status from a task.

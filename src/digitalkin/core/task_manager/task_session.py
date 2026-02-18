@@ -40,7 +40,6 @@ class TaskSession:
 
     is_cancelled: asyncio.Event
     cancellation_reason: CancellationReason
-    _paused: asyncio.Event
     _stream_closed: asyncio.Event
     _heartbeat_interval: datetime.timedelta
     _last_heartbeat: datetime.datetime
@@ -90,7 +89,6 @@ class TaskSession:
 
         self.is_cancelled = asyncio.Event()
         self.cancellation_reason = CancellationReason.UNKNOWN
-        self._paused = asyncio.Event()
         self._stream_closed = asyncio.Event()
         self._heartbeat_interval = heartbeat_interval
 
@@ -111,11 +109,6 @@ class TaskSession:
     def cancelled(self) -> bool:
         """Task cancellation status."""
         return self.is_cancelled.is_set()
-
-    @property
-    def paused(self) -> bool:
-        """Task paused status."""
-        return self._paused.is_set()
 
     @property
     def stream_closed(self) -> bool:
@@ -246,8 +239,8 @@ class TaskSession:
         try:
             result = await self.db.merge(
                 "heartbeats",
-                self.heartbeat_record_id,
-                heartbeat.model_dump(),  # type: ignore[arg-type]
+                self.heartbeat_record_id,  # type: ignore[arg-type]
+                heartbeat.model_dump(),
             )
             if not isinstance(result, dict):
                 return CancellationReason.HEARTBEAT_FAILURE
@@ -284,14 +277,12 @@ class TaskSession:
                 break
             await asyncio.sleep(self._heartbeat_interval.total_seconds())
 
-    async def wait_if_paused(self) -> None:
-        """Block execution if task is paused."""
-        if self._paused.is_set():
-            logger.info("Task paused, waiting for resume", extra=self.session_ids)
-            await self._paused.wait()
+    async def listen_signals(self) -> None:
+        """Signal listener for cancel and status signals.
 
-    async def listen_signals(self) -> None:  # noqa: C901
-        """Enhanced signal listener with comprehensive handling.
+        Filters signals by task_id so each listener only processes its own signals.
+        AsyncSurreal multiplexes operations over a single WebSocket via JSON-RPC
+        request IDs, so concurrent heartbeat + signal operations on self.db are safe.
 
         Raises:
             CancelledError: If task is cancelled during signal listening.
@@ -315,15 +306,16 @@ class TaskSession:
                 if self.cancelled or self.stream_closed:
                     break
 
-                if signal is None or signal["id"] == self.signal_record_id or "payload" not in signal:
+                if (
+                    signal is None
+                    or signal["id"] == self.signal_record_id
+                    or "payload" not in signal
+                    or signal.get("task_id") != self.task_id
+                ):
                     continue
 
                 if signal["action"] == "cancel":
                     await self._handle_cancel(CancellationReason.SIGNAL)
-                elif signal["action"] == "pause":
-                    await self._handle_pause()
-                elif signal["action"] == "resume":
-                    await self._handle_resume()
                 elif signal["action"] == "status":
                     await self._handle_status_request()
 
@@ -362,76 +354,40 @@ class TaskSession:
         else:
             logger.info("Task cancelled (%s)", reason.value, extra=self.session_ids)
 
-        # Resume if paused so cancellation can proceed
-        if self._paused.is_set():
-            self._paused.set()
-
-        await self.db.update(
-            "tasks",
-            self.signal_record_id,  # type: ignore
-            SignalMessage(
-                task_id=self.task_id,
-                mission_id=self.mission_id,
-                setup_id=self.setup_id,
-                setup_version_id=self.setup_version_id,
-                action=SignalType.ACK_CANCEL,
-                status=self.status,
-                cancellation_reason=reason,
-            ).model_dump(),
-        )
-
-    async def _handle_pause(self) -> None:
-        """Pause task execution."""
-        if not self._paused.is_set():
-            logger.info("Task paused", extra=self.session_ids)
-            self._paused.set()
-
-        await self.db.update(
-            "tasks",
-            self.signal_record_id,  # type: ignore
-            SignalMessage(
-                task_id=self.task_id,
-                mission_id=self.mission_id,
-                setup_id=self.setup_id,
-                setup_version_id=self.setup_version_id,
-                action=SignalType.ACK_PAUSE,
-                status=self.status,
-            ).model_dump(),
-        )
-
-    async def _handle_resume(self) -> None:
-        """Resume paused task."""
-        if self._paused.is_set():
-            logger.info("Task resumed", extra=self.session_ids)
-            self._paused.clear()
-
-        await self.db.update(
-            "tasks",
-            self.signal_record_id,  # type: ignore
-            SignalMessage(
-                task_id=self.task_id,
-                mission_id=self.mission_id,
-                setup_id=self.setup_id,
-                setup_version_id=self.setup_version_id,
-                action=SignalType.ACK_RESUME,
-                status=self.status,
-            ).model_dump(),
-        )
+        try:
+            await self.db.update(
+                "tasks",
+                self.signal_record_id,  # type: ignore
+                SignalMessage(
+                    task_id=self.task_id,
+                    mission_id=self.mission_id,
+                    setup_id=self.setup_id,
+                    setup_version_id=self.setup_version_id,
+                    action=SignalType.ACK_CANCEL,
+                    status=self.status,
+                    cancellation_reason=reason,
+                ).model_dump(exclude_none=True),
+            )
+        except Exception:
+            logger.warning("Cancel ack failed (best-effort)", extra=self.session_ids)
 
     async def _handle_status_request(self) -> None:
         """Send current task status."""
-        await self.db.update(
-            "tasks",
-            self.signal_record_id,  # type: ignore
-            SignalMessage(
-                task_id=self.task_id,
-                mission_id=self.mission_id,
-                setup_id=self.setup_id,
-                setup_version_id=self.setup_version_id,
-                status=self.status,
-                action=SignalType.ACK_STATUS,
-            ).model_dump(),
-        )
+        try:
+            await self.db.update(
+                "tasks",
+                self.signal_record_id,  # type: ignore
+                SignalMessage(
+                    task_id=self.task_id,
+                    mission_id=self.mission_id,
+                    setup_id=self.setup_id,
+                    setup_version_id=self.setup_version_id,
+                    status=self.status,
+                    action=SignalType.ACK_STATUS,
+                ).model_dump(exclude_none=True),
+            )
+        except Exception:
+            logger.warning("Status ack failed (best-effort)", extra=self.session_ids)
 
         logger.debug("Status report sent", extra=self.session_ids)
 

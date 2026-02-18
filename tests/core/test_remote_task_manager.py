@@ -482,17 +482,24 @@ class TestSignalOperations:
         """Test sending signal to remote task."""
         task_id = "signal_test"
 
-        # Create mock session with db.update
+        # Create mock session with db.create and required attributes
         mock_session = Mock()
         mock_session.db = Mock()
-        mock_session.db.update = AsyncMock()
+        mock_session.db.create = AsyncMock(return_value={"id": "tasks_signal_123"})
+        mock_session.setup_id = "setup:test"
+        mock_session.setup_version_id = "setup_version:test"
+        mock_session.status = TaskStatus.RUNNING
 
         task_manager.channel = mock_surreal_connection
         task_manager.tasks_sessions[task_id] = mock_session
 
-        result = await task_manager.send_signal(task_id, "missions:signal", SignalType.CANCEL, {})
+        result = await task_manager.send_signal(task_id, "missions:signal", "cancel", {})
         assert result is True
-        mock_session.db.update.assert_awaited_once_with("signals", task_id, {"type": SignalType.CANCEL, "payload": {}})
+        mock_session.db.create.assert_awaited_once()
+        call_args = mock_session.db.create.call_args
+        assert call_args[0][0] == "tasks"
+        assert call_args[0][1]["task_id"] == task_id
+        assert call_args[0][1]["action"] == "cancel"
 
     @pytest.mark.asyncio
     async def test_signal_unknown_task(
@@ -501,7 +508,7 @@ class TestSignalOperations:
     ) -> None:
         """Test signal to unknown task returns False."""
         task_manager.channel = Mock()
-        result = await task_manager.send_signal("unknown", "missions:signal", SignalType.CANCEL, {})
+        result = await task_manager.send_signal("unknown", "missions:signal", "cancel", {})
         assert result is False
 
 
