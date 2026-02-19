@@ -36,9 +36,9 @@ class ToolReference(BaseModel):
         """
         resolved: list[ToolModuleInfo] = []
         for entry in self.selected_tools:
-            setup = registry.get_setup(entry.setup_id)
+            setup = await registry.get_setup(entry.setup_id)
             if setup and setup.module_id:
-                info = registry.discover_by_id(setup.module_id)
+                info = await registry.discover_by_id(setup.module_id)
                 if info:
                     tool_info = await module_info_to_tool_module_info(info, entry.setup_id, setup.name, communication)
                     enabled_triggers = {name for name, enabled in entry.triggers.items() if enabled}

@@ -169,7 +169,7 @@ class ModuleContext:
         Returns:
             Dictionary containing schemas: {"input": ..., "output": ..., "setup": ..., "secret": ...}
         """
-        module_info = self.registry.discover_by_id(module_id)
+        module_info = await self.registry.discover_by_id(module_id)
 
         logger.debug(
             "Getting module schemas by ID",

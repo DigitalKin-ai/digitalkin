@@ -36,7 +36,7 @@ class ChatHistoryMixin(UserMessageMixin, StorageMixin, LoggerMixin, Generic[Inpu
         mission_id = context.session.mission_id or "default"
         return f"{self.CHAT_HISTORY_RECORD_ID}_{mission_id}"
 
-    def load_chat_history(self, context: ModuleContext) -> ChatHistory:
+    async def load_chat_history(self, context: ModuleContext) -> ChatHistory:
         """Load chat history for the current session.
 
         Args:
@@ -47,11 +47,11 @@ class ChatHistoryMixin(UserMessageMixin, StorageMixin, LoggerMixin, Generic[Inpu
         """
         history_key = self._get_history_key(context)
 
-        if (raw_history := self.read_storage(context, self.CHAT_HISTORY_COLLECTION, history_key)) is not None:
+        if (raw_history := await self.read_storage(context, self.CHAT_HISTORY_COLLECTION, history_key)) is not None:
             return ChatHistory.model_validate(raw_history.data)
         return ChatHistory(messages=[])
 
-    def append_chat_history_message(
+    async def append_chat_history_message(
         self,
         context: ModuleContext,
         role: Role,
@@ -68,13 +68,13 @@ class ChatHistoryMixin(UserMessageMixin, StorageMixin, LoggerMixin, Generic[Inpu
             StorageServiceError: If history update fails
         """
         history_key = self._get_history_key(context)
-        chat_history = self.load_chat_history(context)
+        chat_history = await self.load_chat_history(context)
 
         chat_history.messages.append(BaseMessage(role=role, content=content))
         if len(chat_history.messages) == 1:
             # Create new record
             self.log_debug(context, f"Creating new chat history for session: {history_key}")
-            self.store_storage(
+            await self.store_storage(
                 context,
                 self.CHAT_HISTORY_COLLECTION,
                 history_key,
@@ -83,7 +83,7 @@ class ChatHistoryMixin(UserMessageMixin, StorageMixin, LoggerMixin, Generic[Inpu
             )
         else:
             self.log_debug(context, f"Updating chat history for session: {history_key}")
-            self.update_storage(
+            await self.update_storage(
                 context,
                 self.CHAT_HISTORY_COLLECTION,
                 history_key,
@@ -103,6 +103,5 @@ class ChatHistoryMixin(UserMessageMixin, StorageMixin, LoggerMixin, Generic[Inpu
             role: Message role (user, assistant, system)
             output: Message content as Pydantic Class
         """
-        # TO-DO: we should define a default output message type to ease user experience
-        self.append_chat_history_message(context=context, role=role, content=output.root)
+        await self.append_chat_history_message(context=context, role=role, content=output.root)
         await self.send_message(context=context, output=output)

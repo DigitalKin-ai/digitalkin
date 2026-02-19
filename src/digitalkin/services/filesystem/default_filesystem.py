@@ -4,8 +4,9 @@ import hashlib
 import os
 import tempfile
 import uuid
-from pathlib import Path
 from typing import Any, Literal
+
+from anyio import Path as AsyncPath
 
 from digitalkin.logger import logger
 from digitalkin.services.filesystem.filesystem_strategy import (
@@ -92,7 +93,7 @@ class DefaultFilesystem(FilesystemStrategy):
             and (not filters.content_type or f.content_type == filters.content_type)
         ]
 
-    def upload_files(
+    async def upload_files(
         self,
         files: list[UploadFileData],
     ) -> tuple[list[FilesystemRecord], int, int]:
@@ -120,13 +121,13 @@ class DefaultFilesystem(FilesystemStrategy):
                 # Check if file with same name exists in the context
                 context_dir = self._get_context_temp_dir(self.setup_id)
                 file_path = os.path.join(context_dir, file.name)
-                if os.path.exists(file_path) and not file.replace_if_exists:
+                if await AsyncPath(file_path).exists() and not file.replace_if_exists:
                     msg = f"File with name {file.name} already exists."
                     logger.error(msg)
                     raise FilesystemServiceError(msg)  # Intentional: wrap in domain exception for caller # noqa: TRY301
 
-                Path(file_path).write_bytes(file.content)
-                storage_uri = str(Path(file_path).resolve())
+                await AsyncPath(file_path).write_bytes(file.content)
+                storage_uri = str(await AsyncPath(file_path).resolve())
                 file_data = FilesystemRecord(
                     id=str(uuid.uuid4()),
                     context=self.setup_id,
@@ -154,7 +155,7 @@ class DefaultFilesystem(FilesystemStrategy):
 
         return uploaded_files, total_uploaded, total_failed
 
-    def get_files(
+    async def get_files(
         self,
         filters: FileFilter,
         *,
@@ -199,7 +200,7 @@ class DefaultFilesystem(FilesystemStrategy):
 
             if include_content:
                 for file in paginated_files:
-                    file.content = Path(file.storage_uri).read_bytes()
+                    file.content = await AsyncPath(file.storage_uri).read_bytes()
 
         except Exception as e:
             msg = f"Error listing files: {e!s}"
@@ -208,7 +209,7 @@ class DefaultFilesystem(FilesystemStrategy):
         else:
             return paginated_files, len(filtered_files)
 
-    def get_file(
+    async def get_file(
         self,
         file_id: str,
         context: Literal["mission", "setup"] = "mission",  # noqa: ARG002
@@ -245,9 +246,8 @@ class DefaultFilesystem(FilesystemStrategy):
 
             if include_content:
                 file_path = file_data.storage_uri
-                if os.path.exists(file_path):
-                    content = Path(file_path).read_bytes()
-                    file_data.content = content
+                if await AsyncPath(file_path).exists():
+                    file_data.content = await AsyncPath(file_path).read_bytes()
 
         except Exception as e:
             msg = f"Error getting file: {e!s}"
@@ -256,7 +256,7 @@ class DefaultFilesystem(FilesystemStrategy):
         else:
             return file_data
 
-    def update_file(
+    async def update_file(
         self,
         file_id: str,
         content: bytes | None = None,
@@ -311,7 +311,7 @@ class DefaultFilesystem(FilesystemStrategy):
             existing_file = self.db[file_id]
 
             if content is not None:
-                Path(file_path).write_bytes(content)
+                await AsyncPath(file_path).write_bytes(content)
                 existing_file.size_bytes = len(content)
                 existing_file.checksum = self._calculate_checksum(content)
 
@@ -329,9 +329,9 @@ class DefaultFilesystem(FilesystemStrategy):
 
             if new_name is not None:
                 new_path = os.path.join(context_dir, new_name)
-                os.rename(file_path, new_path)
+                await AsyncPath(file_path).rename(new_path)
                 existing_file.name = new_name
-                existing_file.storage_uri = str(Path(new_path).resolve())
+                existing_file.storage_uri = str(await AsyncPath(new_path).resolve())
 
             self.db[file_id] = existing_file
 
@@ -342,7 +342,7 @@ class DefaultFilesystem(FilesystemStrategy):
         else:
             return existing_file
 
-    def delete_files(
+    async def delete_files(
         self,
         filters: FileFilter,
         *,
@@ -390,9 +390,9 @@ class DefaultFilesystem(FilesystemStrategy):
 
                 try:
                     file_path = file_data.storage_uri
-                    if os.path.exists(file_path):
+                    if await AsyncPath(file_path).exists():
                         if permanent:
-                            os.remove(file_path)
+                            await AsyncPath(file_path).unlink()
                             del self.db[file_id]
                         else:
                             file_data.status = "DELETED"

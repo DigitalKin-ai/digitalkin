@@ -8,6 +8,8 @@ This test suite validates the GrpcRegistry service implementation, including:
 - Sending heartbeats
 """
 
+import asyncio
+import types
 from concurrent import futures
 
 import grpc
@@ -18,7 +20,7 @@ from agentic_mesh_protocol.registry.v1 import (
     registry_service_pb2,
     registry_service_pb2_grpc,
 )
-from tests.fixtures.grpc_fixtures import FakeContext
+from tests.fixtures.grpc_fixtures import AsyncStubWrapper, FakeContext
 from tests.services.registry.mock_registry_servicer import MockRegistryServicer
 
 from digitalkin.models.grpc_servers.models import ClientConfig, SecurityMode, ServerMode
@@ -104,7 +106,14 @@ def client(
         GrpcRegistry client configured for testing
     """
     registry_client = GrpcRegistry(MISSION_ID, SETUP_ID, SETUP_VERSION_ID, dummy_client_config)
-    registry_client.stub = registry_service_pb2_grpc.RegistryServiceStub(test_channel)
+    registry_client.stub = AsyncStubWrapper(registry_service_pb2_grpc.RegistryServiceStub(test_channel))
+
+    async def _test_exec_grpc_query(self, query_endpoint, request):
+        response = getattr(self.stub, query_endpoint)(request)
+        return await response if asyncio.iscoroutine(response) else response
+
+    registry_client.exec_grpc_query = types.MethodType(_test_exec_grpc_query, registry_client)
+
     return registry_client
 
 
@@ -144,7 +153,7 @@ class TestDiscoverById:
         method_desc = registry_service_pb2.DESCRIPTOR.services_by_name["RegistryService"].methods_by_name["GetModule"]
 
         # Execute client call in thread pool
-        future = thread_pool.submit(client.discover_by_id, module_id)
+        future = thread_pool.submit(asyncio.run, client.discover_by_id(module_id))
 
         # Intercept the call
         _, request, rpc = test_channel.take_unary_unary(method_desc)
@@ -186,7 +195,7 @@ class TestDiscoverById:
 
         method_desc = registry_service_pb2.DESCRIPTOR.services_by_name["RegistryService"].methods_by_name["GetModule"]
 
-        future = thread_pool.submit(client.discover_by_id, module_id)
+        future = thread_pool.submit(asyncio.run, client.discover_by_id(module_id))
 
         _, request, rpc = test_channel.take_unary_unary(method_desc)
 
@@ -241,7 +250,7 @@ class TestSearch:
             "DiscoverModules"
         ]
 
-        future = thread_pool.submit(client.search, name="Searchable")
+        future = thread_pool.submit(asyncio.run, client.search(name="Searchable"))
 
         _, request, rpc = test_channel.take_unary_unary(method_desc)
 
@@ -290,7 +299,7 @@ class TestSearch:
             "DiscoverModules"
         ]
 
-        future = thread_pool.submit(client.search, module_type="tool")
+        future = thread_pool.submit(asyncio.run, client.search(module_type="tool"))
 
         _, request, rpc = test_channel.take_unary_unary(method_desc)
 
@@ -319,7 +328,7 @@ class TestSearch:
             "DiscoverModules"
         ]
 
-        future = thread_pool.submit(client.search, name="NonExistent")
+        future = thread_pool.submit(asyncio.run, client.search(name="NonExistent"))
 
         _, request, rpc = test_channel.take_unary_unary(method_desc)
 
@@ -366,11 +375,13 @@ class TestRegister:
         ]
 
         future = thread_pool.submit(
-            client.register,
-            module_id=module_id,
-            address="localhost",
-            port=50053,
-            version="1.0.0",
+            asyncio.run,
+            client.register(
+                module_id=module_id,
+                address="localhost",
+                port=50053,
+                version="1.0.0",
+            ),
         )
 
         _, request, rpc = test_channel.take_unary_unary(method_desc)
@@ -411,11 +422,13 @@ class TestRegister:
         ]
 
         future = thread_pool.submit(
-            client.register,
-            module_id=module_id,
-            address="localhost",
-            port=50053,
-            version="1.0.0",
+            asyncio.run,
+            client.register(
+                module_id=module_id,
+                address="localhost",
+                port=50053,
+                version="1.0.0",
+            ),
         )
 
         _, request, rpc = test_channel.take_unary_unary(method_desc)
@@ -460,7 +473,7 @@ class TestGetStatus:
 
         method_desc = registry_service_pb2.DESCRIPTOR.services_by_name["RegistryService"].methods_by_name["GetModule"]
 
-        future = thread_pool.submit(client.get_status, module_id)
+        future = thread_pool.submit(asyncio.run, client.get_status(module_id))
 
         _, request, rpc = test_channel.take_unary_unary(method_desc)
 
@@ -504,7 +517,7 @@ class TestHeartbeat:
 
         method_desc = registry_service_pb2.DESCRIPTOR.services_by_name["RegistryService"].methods_by_name["Heartbeat"]
 
-        future = thread_pool.submit(client.heartbeat, module_id)
+        future = thread_pool.submit(asyncio.run, client.heartbeat(module_id))
 
         _, request, rpc = test_channel.take_unary_unary(method_desc)
 
@@ -535,7 +548,7 @@ class TestHeartbeat:
 
         method_desc = registry_service_pb2.DESCRIPTOR.services_by_name["RegistryService"].methods_by_name["Heartbeat"]
 
-        future = thread_pool.submit(client.heartbeat, module_id)
+        future = thread_pool.submit(asyncio.run, client.heartbeat(module_id))
 
         _, request, rpc = test_channel.take_unary_unary(method_desc)
 

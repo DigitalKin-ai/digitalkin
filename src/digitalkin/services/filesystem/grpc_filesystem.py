@@ -126,7 +126,7 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper, GrpcErrorHandlerMixi
         self.stub = filesystem_service_pb2_grpc.FilesystemServiceStub(channel)
         logger.debug("Channel client 'Filesystem' initialized successfully")
 
-    def upload_files(
+    async def upload_files(
         self,
         files: list[UploadFileData],
     ) -> tuple[list[FilesystemRecord], int, int]:
@@ -139,7 +139,7 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper, GrpcErrorHandlerMixi
             tuple[list[FilesystemRecord], int, int]: List of uploaded files, total uploaded count, total failed count
         """
         logger.debug("Uploading %d files", len(files))
-        with self.handle_grpc_errors("UploadFiles", FilesystemServiceError):
+        async with self.handle_grpc_errors("UploadFiles", FilesystemServiceError):
             upload_files: list[filesystem_pb2.UploadFileData] = []
             for file in files:
                 metadata_struct: struct_pb2.Struct | None = None
@@ -159,12 +159,12 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper, GrpcErrorHandlerMixi
                     )
                 )
             request = filesystem_pb2.UploadFilesRequest(files=upload_files)
-            response: filesystem_pb2.UploadFilesResponse = self.exec_grpc_query("UploadFiles", request)
+            response: filesystem_pb2.UploadFilesResponse = await self.exec_grpc_query("UploadFiles", request)
             results = [self._file_proto_to_data(result.file) for result in response.results if result.HasField("file")]
             logger.debug("Uploaded files: %s", results)
             return results, response.total_uploaded, response.total_failed
 
-    def get_file(
+    async def get_file(
         self,
         file_id: str,
         context: Literal["mission", "setup"] = "mission",
@@ -189,18 +189,18 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper, GrpcErrorHandlerMixi
                 context_id = self.setup_id
             case "mission":
                 context_id = self.mission_id
-        with self.handle_grpc_errors("GetFile", FilesystemServiceError):
+        async with self.handle_grpc_errors("GetFile", FilesystemServiceError):
             request = filesystem_pb2.GetFileRequest(
                 context=context_id,
                 file_id=file_id,
                 include_content=include_content,
             )
 
-            response: filesystem_pb2.GetFileResponse = self.exec_grpc_query("GetFile", request)
+            response: filesystem_pb2.GetFileResponse = await self.exec_grpc_query("GetFile", request)
 
             return self._file_proto_to_data(response.file)
 
-    def update_file(
+    async def update_file(
         self,
         file_id: str,
         content: bytes | None = None,
@@ -237,7 +237,7 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper, GrpcErrorHandlerMixi
         Raises:
             FilesystemServiceError: If there is an error during update
         """
-        with self.handle_grpc_errors("UpdateFile", FilesystemServiceError):
+        async with self.handle_grpc_errors("UpdateFile", FilesystemServiceError):
             request = filesystem_pb2.UpdateFileRequest(
                 context=self.mission_id,
                 file_id=file_id,
@@ -251,10 +251,10 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper, GrpcErrorHandlerMixi
             if metadata:
                 request.metadata.update(metadata)
 
-            response: filesystem_pb2.UpdateFileResponse = self.exec_grpc_query("UpdateFile", request)
+            response: filesystem_pb2.UpdateFileResponse = await self.exec_grpc_query("UpdateFile", request)
             return self._file_proto_to_data(response.result.file)
 
-    def delete_files(
+    async def delete_files(
         self,
         filters: FileFilter,
         *,
@@ -271,7 +271,7 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper, GrpcErrorHandlerMixi
         Returns:
             tuple[dict[str, bool], int, int]: Results per file, total deleted count, total failed count
         """
-        with self.handle_grpc_errors("DeleteFiles", FilesystemServiceError):
+        async with self.handle_grpc_errors("DeleteFiles", FilesystemServiceError):
             request = filesystem_pb2.DeleteFilesRequest(
                 context=self.mission_id,
                 filters=self._filter_to_proto(filters),
@@ -279,10 +279,10 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper, GrpcErrorHandlerMixi
                 force=force,
             )
 
-            response: filesystem_pb2.DeleteFilesResponse = self.exec_grpc_query("DeleteFiles", request)
+            response: filesystem_pb2.DeleteFilesResponse = await self.exec_grpc_query("DeleteFiles", request)
             return dict(response.results), response.total_deleted, response.total_failed
 
-    def get_files(
+    async def get_files(
         self,
         filters: FileFilter,
         *,
@@ -308,7 +308,7 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper, GrpcErrorHandlerMixi
                 context_id = self.setup_id
             case "mission":
                 context_id = self.mission_id
-        with self.handle_grpc_errors("GetFiles", FilesystemServiceError):
+        async with self.handle_grpc_errors("GetFiles", FilesystemServiceError):
             request = filesystem_pb2.GetFilesRequest(
                 context=context_id,
                 filters=self._filter_to_proto(filters),
@@ -317,6 +317,6 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper, GrpcErrorHandlerMixi
                 offset=offset,
                 order=order,
             )
-            response: filesystem_pb2.GetFilesResponse = self.exec_grpc_query("GetFiles", request)
+            response: filesystem_pb2.GetFilesResponse = await self.exec_grpc_query("GetFiles", request)
 
             return [self._file_proto_to_data(file) for file in response.files], response.total_count

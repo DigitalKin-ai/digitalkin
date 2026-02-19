@@ -1,6 +1,6 @@
 """Tests for ToolCache functionality."""
 
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -252,7 +252,7 @@ class TestResolvedToolsCacheBehavior:
         tool_ref = ToolReference(selected_tools=[ToolSelection(setup_id="setup-123", triggers={"search": True})])
         setup = TestSetup(my_tool=tool_ref)
 
-        mock_registry = Mock()
+        mock_registry = AsyncMock()
         mock_registry.get_setup.return_value = SetupInfo(
             setup_id="setup-123",
             name="Test Setup",
@@ -291,7 +291,7 @@ class TestResolvedToolsCacheBehavior:
         tool_ref = ToolReference(selected_tools=[ToolSelection(setup_id="setup-123", triggers={"search": True})])
         setup = TestSetup(my_tool=tool_ref)
 
-        mock_registry = Mock()
+        mock_registry = AsyncMock()
         mock_registry.get_setup.return_value = SetupInfo(
             setup_id="setup-123",
             name="Test Setup",
@@ -346,7 +346,7 @@ class TestResolvedToolsCacheBehavior:
         assert restored_setup.resolved_tools["setup-123"] == sample_tool_module_info
 
         # Second resolution uses cache, registry not called
-        mock_registry = Mock()
+        mock_registry = AsyncMock()
         mock_communication = AsyncMock()
 
         await restored_setup.build_tool_cache(mock_registry, mock_communication)
@@ -369,7 +369,7 @@ class TestResolvedToolsCacheBehavior:
             tool_b=ToolReference(selected_tools=[ToolSelection(setup_id="setup-456", triggers={"analyze": True})]),
         )
 
-        mock_registry = Mock()
+        mock_registry = AsyncMock()
         mock_registry.get_setup.side_effect = lambda setup_id: (
             SetupInfo(setup_id="setup-123", name="Tool A", module_id="tool-123")
             if setup_id == "setup-123"
@@ -434,7 +434,7 @@ class TestResolvedToolsCacheBehavior:
         # Pre-populate cache with only tool_a using setup_id as key
         setup.resolved_tools["setup-123"] = sample_tool_module_info
 
-        mock_registry = Mock()
+        mock_registry = AsyncMock()
         mock_registry.get_setup.return_value = SetupInfo(
             setup_id="setup-456",
             name="Tool B",

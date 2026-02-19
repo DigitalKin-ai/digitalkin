@@ -1,7 +1,7 @@
 """Shared error handling utilities for gRPC services."""
 
-from collections.abc import Generator
-from contextlib import contextmanager
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from typing import Any
 
 from digitalkin.grpc_servers.utils.exceptions import ServerError
@@ -11,12 +11,12 @@ from digitalkin.logger import logger
 class GrpcErrorHandlerMixin:
     """Mixin class providing common gRPC error handling functionality."""
 
-    @contextmanager
-    def handle_grpc_errors(  # Mixin: self available for subclass overrides # noqa: PLR6301
+    @asynccontextmanager
+    async def handle_grpc_errors(  # Mixin: self available for subclass overrides # noqa: PLR6301
         self,
         operation: str,
         service_error_class: type[Exception] | None = None,
-    ) -> Generator[Any, Any, Any]:
+    ) -> AsyncGenerator[Any, Any]:
         """Handle gRPC errors for the given operation.
 
         Args:

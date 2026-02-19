@@ -14,7 +14,7 @@ class StorageMixin:
     """
 
     @staticmethod
-    def store_storage(
+    async def store_storage(
         context: ModuleContext,
         collection: str,
         record_id: str | None,
@@ -36,10 +36,10 @@ class StorageMixin:
         Raises:
             StorageServiceError: If storage operation fails
         """
-        return context.storage.store(collection, record_id, data, data_type=data_type)
+        return await context.storage.store(collection, record_id, data, data_type=data_type)
 
     @staticmethod
-    def read_storage(context: ModuleContext, collection: str, record_id: str) -> StorageRecord | None:
+    async def read_storage(context: ModuleContext, collection: str, record_id: str) -> StorageRecord | None:
         """Read data from storage.
 
         Args:
@@ -53,10 +53,10 @@ class StorageMixin:
         Raises:
             StorageServiceError: If read operation fails
         """
-        return context.storage.read(collection, record_id)
+        return await context.storage.read(collection, record_id)
 
     @staticmethod
-    def update_storage(
+    async def update_storage(
         context: ModuleContext,
         collection: str,
         record_id: str,
@@ -76,4 +76,4 @@ class StorageMixin:
         Raises:
             StorageServiceError: If update operation fails
         """
-        return context.storage.update(collection, record_id, data)
+        return await context.storage.update(collection, record_id, data)

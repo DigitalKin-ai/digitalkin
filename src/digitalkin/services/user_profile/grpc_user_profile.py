@@ -40,7 +40,7 @@ class GrpcUserProfile(UserProfileStrategy, GrpcClientWrapper, GrpcErrorHandlerMi
         self.stub = user_profile_service_pb2_grpc.UserProfileServiceStub(channel)
         logger.debug("Channel client 'UserProfile' initialized successfully")
 
-    def get_user_profile(self) -> dict[str, Any]:
+    async def get_user_profile(self) -> dict[str, Any]:
         """Get user profile by mission_id (which maps to user_id).
 
         Returns:
@@ -50,10 +50,10 @@ class GrpcUserProfile(UserProfileStrategy, GrpcClientWrapper, GrpcErrorHandlerMi
             UserProfileServiceError: If the user profile cannot be retrieved
             ServerError: If gRPC operation fails
         """
-        with self.handle_grpc_errors("GetUserProfile", UserProfileServiceError):
+        async with self.handle_grpc_errors("GetUserProfile", UserProfileServiceError):
             # mission_id typically contains user context
             request = user_profile_pb2.GetUserProfileRequest(mission_id=self.mission_id)
-            response = self.exec_grpc_query("GetUserProfile", request)
+            response = await self.exec_grpc_query("GetUserProfile", request)
 
             if not response.success:
                 msg = f"Failed to get user profile for mission_id: {self.mission_id}"

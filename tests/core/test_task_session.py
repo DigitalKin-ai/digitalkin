@@ -1171,8 +1171,7 @@ class TestCleanup:
 
         # Track call order
         mock_module.stop = AsyncMock(side_effect=lambda: call_order.append("module_stop"))
-        original_close = mock_db.close
-        mock_db.close = AsyncMock(side_effect=lambda: call_order.append("db_close") or original_close())
+        mock_db.close = AsyncMock(side_effect=lambda: call_order.append("db_close"))
 
         # Add item to queue to verify it's processed first
         await task_session.queue.put("test_item")

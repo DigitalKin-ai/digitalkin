@@ -94,7 +94,7 @@ class StorageStrategy(BaseStrategy, ABC):
         return value in DataType.__members__
 
     @abstractmethod
-    def _store(self, record: StorageRecord) -> StorageRecord:
+    async def _store(self, record: StorageRecord) -> StorageRecord:
         """Store a new record in the storage.
 
         Args:
@@ -105,7 +105,7 @@ class StorageStrategy(BaseStrategy, ABC):
         """
 
     @abstractmethod
-    def _read(self, collection: str, record_id: str) -> StorageRecord | None:
+    async def _read(self, collection: str, record_id: str) -> StorageRecord | None:
         """Get records from storage by key.
 
         Args:
@@ -117,7 +117,7 @@ class StorageStrategy(BaseStrategy, ABC):
         """
 
     @abstractmethod
-    def _update(self, collection: str, record_id: str, data: BaseModel) -> StorageRecord | None:
+    async def _update(self, collection: str, record_id: str, data: BaseModel) -> StorageRecord | None:
         """Overwrite an existing record's payload.
 
         Args:
@@ -130,7 +130,7 @@ class StorageStrategy(BaseStrategy, ABC):
         """
 
     @abstractmethod
-    def _remove(self, collection: str, record_id: str) -> bool:
+    async def _remove(self, collection: str, record_id: str) -> bool:
         """Delete a record from the storage.
 
         Args:
@@ -142,7 +142,7 @@ class StorageStrategy(BaseStrategy, ABC):
         """
 
     @abstractmethod
-    def _list(self, collection: str) -> list[StorageRecord]:
+    async def _list(self, collection: str) -> list[StorageRecord]:
         """List all records in a collection.
 
         Args:
@@ -153,7 +153,7 @@ class StorageStrategy(BaseStrategy, ABC):
         """
 
     @abstractmethod
-    def _remove_collection(self, collection: str) -> bool:
+    async def _remove_collection(self, collection: str) -> bool:
         """Delete all records in a collection.
 
         Args:
@@ -182,7 +182,7 @@ class StorageStrategy(BaseStrategy, ABC):
         # Schema configuration mapping keys to model classes
         self.config: dict[str, type[BaseModel]] = config
 
-    def store(
+    async def store(
         self,
         collection: str,
         record_id: str | None,
@@ -210,9 +210,9 @@ class StorageStrategy(BaseStrategy, ABC):
         data_type_enum = DataType[data_type]
         validated_data = self._validate_data(collection, {**data, "mission_id": self.mission_id})
         record = self._create_storage_record(collection, record_id, validated_data, data_type_enum)
-        return self._store(record)
+        return await self._store(record)
 
-    def read(self, collection: str, record_id: str) -> StorageRecord | None:
+    async def read(self, collection: str, record_id: str) -> StorageRecord | None:
         """Get records from storage by key.
 
         Args:
@@ -222,9 +222,9 @@ class StorageStrategy(BaseStrategy, ABC):
         Returns:
             A storage record with validated data
         """
-        return self._read(collection, record_id)
+        return await self._read(collection, record_id)
 
-    def update(self, collection: str, record_id: str, data: dict[str, Any]) -> StorageRecord | None:
+    async def update(self, collection: str, record_id: str, data: dict[str, Any]) -> StorageRecord | None:
         """Validate & overwrite an existing record.
 
         Args:
@@ -236,9 +236,9 @@ class StorageStrategy(BaseStrategy, ABC):
             StorageRecord: The modified record
         """
         validated_data = self._validate_data(collection, data)
-        return self._update(collection, record_id, validated_data)
+        return await self._update(collection, record_id, validated_data)
 
-    def remove(self, collection: str, record_id: str) -> bool:
+    async def remove(self, collection: str, record_id: str) -> bool:
         """Delete a record from the storage.
 
         Args:
@@ -248,9 +248,9 @@ class StorageStrategy(BaseStrategy, ABC):
         Returns:
             True if the deletion was successful, False otherwise
         """
-        return self._remove(collection, record_id)
+        return await self._remove(collection, record_id)
 
-    def list(self, collection: str) -> list[StorageRecord]:
+    async def list(self, collection: str) -> list[StorageRecord]:
         """Get all records within a collection.
 
         Args:
@@ -259,9 +259,9 @@ class StorageStrategy(BaseStrategy, ABC):
         Returns:
             A list of storage records
         """
-        return self._list(collection)
+        return await self._list(collection)
 
-    def remove_collection(self, collection: str) -> bool:
+    async def remove_collection(self, collection: str) -> bool:
         """Wipe a record clean.
 
         Args:
@@ -270,4 +270,4 @@ class StorageStrategy(BaseStrategy, ABC):
         Returns:
             True if the deletion was successful, False otherwise
         """
-        return self._remove_collection(collection)
+        return await self._remove_collection(collection)

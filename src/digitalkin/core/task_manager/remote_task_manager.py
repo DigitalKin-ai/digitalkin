@@ -76,6 +76,7 @@ class RemoteTaskManager(BaseTaskManager):
             )
 
         except Exception as e:
+            coro.close()
             logger.error(
                 "Failed to register remote task: '%s'",
                 task_id,

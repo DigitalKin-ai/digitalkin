@@ -223,7 +223,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
 
         # Fetch setup configuration with comprehensive error handling
         try:
-            setup_data_class = self.setup.get_setup(
+            setup_data_class = await self.setup.get_setup(
                 setup_dict={
                     "setup_id": request.setup_id,
                     "mission_id": request.mission_id,

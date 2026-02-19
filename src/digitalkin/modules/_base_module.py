@@ -440,7 +440,7 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
         # Apply cost limits if present in input (field added dynamically by UtilitySchemaExtender)
         cost_limits = input_instance.model_dump().get("cost_limits")
         if cost_limits is not None and self.context.cost is not None:
-            self.context.cost.set_limits(cost_limits)
+            await self.context.cost.set_limits(cost_limits)
 
         handler_instance = self.triggers_discoverer.get_trigger(
             input_instance.root.protocol,

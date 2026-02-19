@@ -31,7 +31,7 @@ class DefaultCost(CostStrategy):
         self._limits: dict[str, QuantityLimit | AmountLimit] = {}
         self._accumulated: dict[str, float] = {}
 
-    def set_limits(self, limits: list[QuantityLimit | AmountLimit]) -> None:
+    async def set_limits(self, limits: list[QuantityLimit | AmountLimit]) -> None:
         """Set cost limits for this session.
 
         Args:
@@ -40,7 +40,7 @@ class DefaultCost(CostStrategy):
         self._limits = {limit.name: limit for limit in limits}
         self._accumulated = {}
 
-    def check_limit(self, cost_config_name: str, quantity: float) -> bool:
+    async def check_limit(self, cost_config_name: str, quantity: float) -> bool:
         """Check if adding this cost would exceed any limits.
 
         Args:
@@ -66,7 +66,7 @@ class DefaultCost(CostStrategy):
         projected = cost_config.rate * quantity
         return current + projected <= limit.max_value
 
-    def add(
+    async def add(
         self,
         name: str,
         cost_config_name: str,
@@ -105,7 +105,7 @@ class DefaultCost(CostStrategy):
             raise CostServiceError(msg)
         self.db[cost_data.mission_id].append(cost_data)
 
-    def get(self, name: str) -> list[CostData]:
+    async def get(self, name: str) -> list[CostData]:
         """Get a record from the database.
 
         Args:
@@ -124,7 +124,7 @@ class DefaultCost(CostStrategy):
 
         return [cost for cost in self.db[self.mission_id] if cost.name == name] or []
 
-    def get_filtered(
+    async def get_filtered(
         self,
         names: list[str] | None = None,
         cost_types: list[Literal["TOKEN_INPUT", "TOKEN_OUTPUT", "API_CALL", "STORAGE", "TIME", "OTHER"]] | None = None,
@@ -152,7 +152,7 @@ class DefaultCost(CostStrategy):
             if (names and cost.name in names) or (cost_types and cost.cost_type in cost_types)
         ]
 
-    def get_cost_config(self) -> list[CostConfig]:
+    async def get_cost_config(self) -> list[CostConfig]:
         """Get cost configuration from in-memory config.
 
         Returns:
@@ -160,7 +160,7 @@ class DefaultCost(CostStrategy):
         """
         return list(self.config.values())
 
-    def set_cost_config(self, configs: list[CostConfig]) -> bool:
+    async def set_cost_config(self, configs: list[CostConfig]) -> bool:
         """Store cost configuration in memory.
 
         Args:

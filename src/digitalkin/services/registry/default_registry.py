@@ -17,7 +17,7 @@ class DefaultRegistry(RegistryStrategy):
 
     _modules: ClassVar[dict[str, ModuleInfo]] = {}
 
-    def discover_by_id(self, module_id: str) -> ModuleInfo:
+    async def discover_by_id(self, module_id: str) -> ModuleInfo:
         """Get module info by ID.
 
         Args:
@@ -33,7 +33,7 @@ class DefaultRegistry(RegistryStrategy):
             raise RegistryModuleNotFoundError(module_id)
         return self._modules[module_id]
 
-    def search(
+    async def search(
         self,
         name: str | None = None,
         module_type: str | None = None,
@@ -60,7 +60,7 @@ class DefaultRegistry(RegistryStrategy):
 
         return results
 
-    def get_status(self, module_id: str) -> ModuleStatusInfo:
+    async def get_status(self, module_id: str) -> ModuleStatusInfo:
         """Get module status.
 
         Args:
@@ -81,7 +81,7 @@ class DefaultRegistry(RegistryStrategy):
             status=module.status or RegistryModuleStatus.UNSPECIFIED,
         )
 
-    def register(
+    async def register(
         self,
         module_id: str,
         address: str,
@@ -113,7 +113,7 @@ class DefaultRegistry(RegistryStrategy):
         )
         return self._modules[module_id]
 
-    def heartbeat(self, module_id: str) -> RegistryModuleStatus:
+    async def heartbeat(self, module_id: str) -> RegistryModuleStatus:
         """Send heartbeat to keep module active.
 
         Args:
@@ -155,7 +155,7 @@ class DefaultRegistry(RegistryStrategy):
             return True
         return False
 
-    def get_setup(self, setup_id: str) -> None:
+    async def get_setup(self, setup_id: str) -> None:
         """Get setup info (not supported in default registry).
 
         Args:
