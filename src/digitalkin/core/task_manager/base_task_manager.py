@@ -489,7 +489,6 @@ class BaseTaskManager(ABC):
         Returns:
             Self for use in async with statements
         """
-        logger.debug("Entering %s context", self.__class__.__name__)
         return self
 
     async def __aexit__(
@@ -505,11 +504,5 @@ class BaseTaskManager(ABC):
             exc_val: Exception value if an exception occurred
             exc_tb: Exception traceback if an exception occurred
         """
-        logger.debug(
-            "Exiting %s context, exception: %s",
-            self.__class__.__name__,
-            exc_type,
-            extra={"exc_type": exc_type, "exc_val": exc_val},
-        )
         # Shutdown with default mission_id for context manager usage
         await self.shutdown(mission_id="context_manager_cleanup")

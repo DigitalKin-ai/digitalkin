@@ -375,12 +375,12 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
                         yield lifecycle_pb2.StartModuleResponse(success=False, job_id=job_id)
                         break
 
-                    logger.info("Yielding message from job %s: %s", job_id, message)
+                    logger.debug("Yielding message from job %s", job_id)
                     proto = json_format.ParseDict(message, struct_pb2.Struct(), ignore_unknown_fields=True)
                     yield lifecycle_pb2.StartModuleResponse(success=True, output=proto, job_id=job_id)
 
                     if message.get("root", {}).get("protocol") == "end_of_stream":
-                        logger.info(
+                        logger.debug(
                             "End of stream signal received",
                             extra={"job_id": job_id, "mission_id": request.mission_id},
                         )
