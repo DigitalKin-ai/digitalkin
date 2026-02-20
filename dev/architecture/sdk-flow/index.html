@@ -261,7 +261,7 @@
   
     
   
-  Getting started
+  Getting Started
 
       </a>
     </li>
@@ -418,7 +418,7 @@
   <span class="md-ellipsis">
     
   
-    Getting started
+    Getting Started
   
 
     
@@ -641,10 +641,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#deux-flux-principaux" class="md-nav__link">
+  <a href="#two-main-flows" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Deux Flux Principaux
+        Two Main Flows
       
     </span>
   </a>
@@ -785,10 +785,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#deux-flux-principaux" class="md-nav__link">
+  <a href="#two-main-flows" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Deux Flux Principaux
+        Two Main Flows
       
     </span>
   </a>
@@ -917,14 +917,14 @@
 <h2 id="architecture-stateless">Architecture Stateless<a class="headerlink" href="#architecture-stateless" title="Permanent link">¤</a></h2>
 <div class="language-text highlight"><pre><span></span><code>┌─────────────────────────────────────────────────────────────────────┐
 │                    ModuleServer (Long-lived)                         │
-│  - Écoute gRPC en continu                                           │
-│  - Ne stocke AUCUN état entre les requêtes                          │
-│  - Chaque requête = nouvelle instance de module                      │
+│  - Listens to gRPC continuously                                      │
+│  - Stores NO state between requests                                  │
+│  - Each request = new module instance                                │
 └─────────────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│                    Per-Request (Éphémère)                           │
+│                    Per-Request (Ephemeral)                           │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐              │
 │  │   job_id     │  │   Module     │  │ TaskSession  │              │
 │  │   (uuid)     │  │   Instance   │  │   + Queue    │              │
@@ -932,7 +932,7 @@
 │         │                 │                  │                       │
 │         └────────────────┼──────────────────┘                       │
 │                          │                                           │
-│                     Détruit après exécution                         │
+│                     Destroyed after execution                       │
 └─────────────────────────────────────────────────────────────────────┘
 </code></pre></div>
 <hr />
@@ -1069,11 +1069,11 @@
     Q3 --&gt; Q4
     Q4 --&gt; C3</code></pre>
 <hr />
-<h2 id="deux-flux-principaux">Deux Flux Principaux<a class="headerlink" href="#deux-flux-principaux" title="Permanent link">¤</a></h2>
+<h2 id="two-main-flows">Two Main Flows<a class="headerlink" href="#two-main-flows" title="Permanent link">¤</a></h2>
 <table>
 <thead>
 <tr>
-<th>Étape</th>
+<th>Step</th>
 <th>ConfigSetupModule</th>
 <th>StartModule</th>
 </tr>
@@ -1097,11 +1097,11 @@
 <tr>
 <td>4</td>
 <td><code>start_config_setup()</code></td>
-<td><code>create_task()</code> avec 3 tasks concurrentes</td>
+<td><code>create_task()</code> with 3 concurrent tasks</td>
 </tr>
 <tr>
 <td>5</td>
-<td><code>_resolve_tools()</code> + <code>run_config_setup()</code> en parallèle</td>
+<td><code>_resolve_tools()</code> + <code>run_config_setup()</code> in parallel</td>
 <td><code>module.start()</code> → <code>run()</code> → TriggerHandler</td>
 </tr>
 <tr>

@@ -73,7 +73,6 @@ cd digitalkin
 
 # Setup development environment
 task setup-dev
-task setup-dev
 source .venv/bin/activate
 ```
 
@@ -102,7 +101,7 @@ task bump-version -- major|minor|patch
 
 1. Update code and commit changes. (following conventional branch/commit standard)
 1. Use `task bump-version -- major|minor|patch` command to commit new version.
-1. Use GitHub "Create Release" workflow to plublish the new version.
+1. Use GitHub "Create Release" workflow to publish the new version.
 1. Workflow automatically publishes to Test PyPI and PyPI.
 
 ## 📄 License

@@ -263,7 +263,7 @@
   
     
   
-  Getting started
+  Getting Started
 
       </a>
     </li>
@@ -420,7 +420,7 @@
   <span class="md-ellipsis">
     
   
-    Getting started
+    Getting Started
   
 
     
@@ -449,6 +449,24 @@
         
       
       
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guides
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
       <a href="./" class="md-nav__link md-nav__link--active">
         
   
@@ -465,6 +483,80 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#creating-custom-modules" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Creating Custom Modules
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#working-with-trigger-handlers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Working with Trigger Handlers
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#service-strategies-local-vs-remote" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Service Strategies (Local vs Remote)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dynamic-schema-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dynamic Schema Configuration
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#module-lifecycle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Module Lifecycle
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
       
     </li>
   
@@ -611,6 +703,69 @@
     
   
   
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#creating-custom-modules" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Creating Custom Modules
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#working-with-trigger-handlers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Working with Trigger Handlers
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#service-strategies-local-vs-remote" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Service Strategies (Local vs Remote)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dynamic-schema-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dynamic Schema Configuration
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#module-lifecycle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Module Lifecycle
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
 </nav>
                   </div>
                 </div>
@@ -651,6 +806,22 @@
 
 
 <h1 id="guides">Guides<a class="headerlink" href="#guides" title="Permanent link">¤</a></h1>
+<p>Practical guides for building modules with the DigitalKin SDK.</p>
+<h2 id="creating-custom-modules">Creating Custom Modules<a class="headerlink" href="#creating-custom-modules" title="Permanent link">¤</a></h2>
+<p>Learn how to subclass <code>BaseModule</code>, <code>ToolModule</code>, or <code>ArchetypeModule</code> to build your own modules. Covers defining the four generic type parameters (input, output, setup, secret), setting up module metadata, and configuring service dependencies.</p>
+<p>See: <a href="https://github.com/DigitalKin-ai/digitalkin/tree/main/examples/modules/text_transform_module.py"><code>examples/modules/text_transform_module.py</code></a></p>
+<h2 id="working-with-trigger-handlers">Working with Trigger Handlers<a class="headerlink" href="#working-with-trigger-handlers" title="Permanent link">¤</a></h2>
+<p>Trigger handlers are the primary mechanism for processing inputs. Each handler declares a <code>protocol</code> class variable (e.g., <code>"message"</code>, <code>"file"</code>) and implements <code>handle()</code>. Handlers are automatically discovered and registered by <code>ModuleDiscoverer</code>, so the module dispatches incoming requests to the correct handler based on the input protocol.</p>
+<p>See: <a href="https://github.com/DigitalKin-ai/digitalkin/tree/main/src/digitalkin/modules/trigger_handler.py"><code>src/digitalkin/modules/trigger_handler.py</code></a></p>
+<h2 id="service-strategies-local-vs-remote">Service Strategies (Local vs Remote)<a class="headerlink" href="#service-strategies-local-vs-remote" title="Permanent link">¤</a></h2>
+<p>The SDK uses a strategy pattern for services such as storage, filesystem, cost, and registry. Each service has a <strong>local</strong> implementation (e.g., <code>DefaultStorage</code>) for single-server deployments and a <strong>remote</strong> implementation (e.g., <code>GrpcStorage</code>) that communicates via gRPC. Configure which strategy to use via <code>services_config_strategies</code> and <code>services_config_params</code> on your module class.</p>
+<p>See: <a href="https://github.com/DigitalKin-ai/digitalkin/tree/main/examples/services/"><code>examples/services/</code></a></p>
+<h2 id="dynamic-schema-configuration">Dynamic Schema Configuration<a class="headerlink" href="#dynamic-schema-configuration" title="Permanent link">¤</a></h2>
+<p>Setup models can include fields whose allowed values are fetched at runtime from external sources. Use the <code>Dynamic</code> metadata class with async fetcher functions to populate enum values, ranges, or other schema properties dynamically. Call <code>SetupModel.get_clean_model(force=True)</code> to trigger resolution.</p>
+<p>See: <a href="https://github.com/DigitalKin-ai/digitalkin/tree/main/examples/modules/dynamic_setup_module.py"><code>examples/modules/dynamic_setup_module.py</code></a>, <a href="../api/dynamic_schema/">Dynamic Schema API</a></p>
+<h2 id="module-lifecycle">Module Lifecycle<a class="headerlink" href="#module-lifecycle" title="Permanent link">¤</a></h2>
+<p>A module goes through a well-defined lifecycle: <code>CREATED</code> -&gt; <code>STARTING</code> -&gt; <code>RUNNING</code> -&gt; <code>STOPPING</code> -&gt; <code>STOPPED</code> (or <code>FAILED</code> / <code>CANCELLED</code>). During execution, three concurrent tasks run inside a <code>TaskSession</code>: the main module coroutine, a heartbeat generator (reports liveness to SurrealDB every 2 seconds), and a signal listener (handles pause/resume/cancel). Understanding this lifecycle is essential for implementing proper <code>initialize()</code> and <code>cleanup()</code> methods.</p>
+<p>See: <a href="../architecture/sdk-flow/">SDK Flow</a></p>
 
 
 
@@ -686,7 +857,7 @@
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../getting_started/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Getting started">
+          <a href="../getting_started/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Getting Started">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
@@ -696,7 +867,7 @@
                 Previous
               </span>
               <div class="md-ellipsis">
-                Getting started
+                Getting Started
               </div>
             </div>
           </a>
