@@ -18,7 +18,7 @@ class HealthcheckServicesTrigger(TriggerHandler, BaseMixin):
     Reports the health status of all configured services (storage, cost, filesystem, etc.).
     """
 
-    protocol: ClassVar[str] = "healthcheck_services"
+    protocol: str = "healthcheck_services"
     description: ClassVar[str] = "Reports health status of all configured services."
     input_format = HealthcheckServicesInput
 

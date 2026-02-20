@@ -201,7 +201,7 @@ class SurrealDBConnection(Generic[TSurreal]):
         self,
         table_name: str,
         data: dict[str, Any],
-    ) -> list[dict[str, Any]] | dict[str, Any]:
+    ) -> dict[str, Any]:
         """Create a new record.
 
         Args:
@@ -209,12 +209,19 @@ class SurrealDBConnection(Generic[TSurreal]):
             data: Data to insert
 
         Returns:
-            Dict[str, Any]: The created record as returned by the database
+            The created record as a single dict.
 
         Raises:
-            RuntimeError: If the database returns an error response
+            RuntimeError: If the database returns an error or empty list.
         """
         result = await self.db.create(table_name, data)
+
+        # Normalize list return (some driver versions return [dict] instead of dict)
+        if isinstance(result, list):
+            if not result:
+                msg = f"SurrealDB create returned empty list for '{table_name}'"
+                raise RuntimeError(msg)
+            result = result[0]
 
         # Check for error response from SurrealDB
         if isinstance(result, dict) and "code" in result:
@@ -223,7 +230,7 @@ class SurrealDBConnection(Generic[TSurreal]):
             msg = f"SurrealDB create failed in '{table_name}': {error_msg}"
             raise RuntimeError(msg)
 
-        return cast("list[dict[str, Any]] | dict[str, Any]", result)
+        return cast("dict[str, Any]", result)
 
     async def merge(
         self,

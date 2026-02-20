@@ -99,7 +99,7 @@ class TaskSession:
         # Cleanup guard
         self._cleanup_done = False
 
-        logger.info(
+        logger.debug(
             "TaskSession initialized (heartbeat_interval=%.1fs)",
             heartbeat_interval.total_seconds(),
             extra={"task_id": task_id, "mission_id": mission_id},
@@ -161,7 +161,6 @@ class TaskSession:
             return await self._send_initial_heartbeat(heartbeat)
 
         if (heartbeat.timestamp - self._last_heartbeat) < self._heartbeat_interval:
-            logger.debug("Heartbeat skipped (rate limited)", extra=self.session_ids)
             return None
 
         return await self._send_heartbeat_update(heartbeat)
@@ -269,7 +268,6 @@ class TaskSession:
         """Periodic heartbeat generator with cancellation support and detailed failure reasons."""
         logger.debug("Heartbeat generator started", extra=self.session_ids)
         while not self.cancelled:
-            logger.debug("Heartbeat tick", extra=self.session_ids)
             failure_reason = await self.send_heartbeat()
             if failure_reason is not None:
                 logger.error("Heartbeat failed, cancelling task (%s)", failure_reason.name, extra=self.session_ids)

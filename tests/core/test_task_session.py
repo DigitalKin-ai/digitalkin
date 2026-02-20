@@ -180,8 +180,8 @@ class TestInitialization:
         assert isinstance(session.queue, asyncio.Queue)
 
         # Verify logger call
-        mock_logger.info.assert_called_once()
-        assert task_id in str(mock_logger.info.call_args)
+        mock_logger.debug.assert_called_once()
+        assert task_id in str(mock_logger.debug.call_args)
 
     def test_init_default_heartbeat_interval(self, mock_db, mock_module):
         """Verify default heartbeat interval when not specified.
@@ -292,8 +292,7 @@ class TestHeartbeats:
         mock_db.merge.assert_not_called()
         # Last heartbeat should remain unchanged
         assert task_session._last_heartbeat == datetime.datetime.now(tz=datetime.timezone.utc)
-        # Should log rate limited
-        assert any("rate limited" in str(call).lower() for call in mock_logger.debug.call_args_list)
+        # Rate-limited path returns None silently (no log)
 
     @freeze_time("2025-10-14 03:21:34")
     @pytest.mark.asyncio
@@ -1744,9 +1743,9 @@ class TestLoggingValidation:
             heartbeat_interval=heartbeat_interval,
         )
 
-        # Verify logger.info was called with task info
-        mock_logger.info.assert_called_once()
-        call_args = mock_logger.info.call_args
+        # Verify logger.debug was called with task info
+        mock_logger.debug.assert_called_once()
+        call_args = mock_logger.debug.call_args
 
         # Check message contains task_id
         assert task_id in str(call_args)

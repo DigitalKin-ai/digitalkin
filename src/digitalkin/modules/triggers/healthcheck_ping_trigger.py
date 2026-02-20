@@ -18,7 +18,7 @@ class HealthcheckPingTrigger(TriggerHandler, BaseMixin):
     Responds immediately with "pong" status to verify the module is responsive.
     """
 
-    protocol: ClassVar[str] = "healthcheck_ping"
+    protocol: str = "healthcheck_ping"
     description: ClassVar[str] = "Simple ping healthcheck that responds with pong status."
     input_format = HealthcheckPingInput
     _request_time: datetime

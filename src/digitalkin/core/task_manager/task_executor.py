@@ -103,7 +103,7 @@ class TaskExecutor:
                             exception_traceback=session._last_traceback,  # noqa: SLF001
                         ).model_dump(exclude_none=True),
                     )
-                logger.info("Signal listener ended", extra={"mission_id": mission_id, "task_id": task_id})
+                logger.debug("Signal listener ended", extra={"mission_id": mission_id, "task_id": task_id})
 
         async def heartbeat_wrapper() -> None:
             """Generate heartbeats for task health monitoring."""
@@ -112,7 +112,7 @@ class TaskExecutor:
             except asyncio.CancelledError:
                 logger.debug("Heartbeat cancelled", extra={"mission_id": mission_id, "task_id": task_id})
             finally:
-                logger.info("Heartbeat task ended", extra={"mission_id": mission_id, "task_id": task_id})
+                logger.debug("Heartbeat task ended", extra={"mission_id": mission_id, "task_id": task_id})
 
         async def supervisor() -> None:  # noqa: C901, PLR0912, PLR0915
             """Supervise the three concurrent tasks and handle outcomes.

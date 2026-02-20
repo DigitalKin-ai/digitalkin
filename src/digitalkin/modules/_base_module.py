@@ -529,7 +529,7 @@ class BaseModule(  # noqa: PLR0904
                 )
             )
 
-            logger.info("Initialize module %s", self.context.session.job_id)
+            logger.debug("Initialize module %s", self.context.session.job_id)
             await self.initialize(self.context, setup_data)
         except Exception as e:
             self._status = ModuleStatus.FAILED
@@ -548,9 +548,7 @@ class BaseModule(  # noqa: PLR0904
             return
 
         try:
-            logger.debug("Init the discovered input handlers.")
             self.triggers_discoverer.init_handlers(self.context)
-            logger.debug("Run lifecycle %s", self.context.session.job_id)
             await self._run_lifecycle(input_data, setup_data)
         except Exception:
             self._status = ModuleStatus.FAILED
@@ -583,10 +581,10 @@ class BaseModule(  # noqa: PLR0904
         Args:
             config_setup_data: Setup data containing tool references.
         """
-        logger.info("Starting tool resolution", extra=self.context.session.current_ids())
+        logger.debug("Starting tool resolution", extra=self.context.session.current_ids())
         tool_cache = await config_setup_data.build_tool_cache(self.context.registry, self.context.communication)
         self.context.tool_cache = tool_cache
-        logger.info(
+        logger.debug(
             "Tool cache built with %d entries: %s",
             len(tool_cache.entries),
             list(tool_cache.entries.keys()),
@@ -605,7 +603,7 @@ class BaseModule(  # noqa: PLR0904
             callback: Callback to send the configured setup model.
         """
         try:
-            logger.info("Run Config Setup lifecycle", extra=self.context.session.current_ids())
+            logger.debug("Run Config Setup lifecycle", extra=self.context.session.current_ids())
             self._status = ModuleStatus.RUNNING
             self.context.callbacks.set_config_setup = callback
 

@@ -16,7 +16,7 @@ class TriggerHandler(ABC, BaseMixin, Generic[InputModelT, SetupModelT, OutputMod
       - handle(): logic to process the validated payload
     """
 
-    protocol: ClassVar[str]
+    protocol: str
     description: ClassVar[str] = ""
     input_format: type[InputModelT]
     output_format: type[OutputModelT]
