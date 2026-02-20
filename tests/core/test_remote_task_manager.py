@@ -598,6 +598,40 @@ class TestCleanupShutdown:
             assert task_id not in task_manager.tasks_sessions
 
     @pytest.mark.asyncio
+    async def test_coroutine_closed_on_registration_failure(
+        self,
+        task_manager: RemoteTaskManager,
+        mock_base_module: Mock,
+        mock_surreal_connection: Mock,
+    ) -> None:
+        """Test that coroutine is closed when session creation fails.
+
+        Prevents 'coroutine was never awaited' RuntimeWarning.
+        """
+        task_id = "init_fail_coro"
+        mission_id = "missions:fail"
+
+        async def tracked_coro() -> None:
+            await asyncio.sleep(0.1)
+
+        coro = tracked_coro()
+
+        mock_surreal_connection.init_surreal_instance = AsyncMock(side_effect=ConnectionError("DB connection failed"))
+
+        with patch(
+            "digitalkin.core.task_manager.base_task_manager.SurrealDBConnection",
+            return_value=mock_surreal_connection,
+        ):
+            task_manager.channel = mock_surreal_connection
+
+            with pytest.raises(ConnectionError):
+                await task_manager.create_task(task_id, mission_id, mock_base_module, coro)
+
+        # Coroutine should be closed — awaiting a closed coroutine raises
+        with pytest.raises((StopIteration, RuntimeError)):
+            await coro
+
+    @pytest.mark.asyncio
     async def test_shutdown_sets_event(
         self,
         task_manager: RemoteTaskManager,

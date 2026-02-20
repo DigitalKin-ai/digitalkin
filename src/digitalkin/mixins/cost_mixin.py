@@ -14,7 +14,7 @@ class CostMixin:
     """
 
     @staticmethod
-    def add_cost(context: ModuleContext, name: str, cost_config_name: str, quantity: float) -> None:
+    async def add_cost(context: ModuleContext, name: str, cost_config_name: str, quantity: float) -> None:
         """Add a cost entry using the cost strategy.
 
         Args:
@@ -26,10 +26,10 @@ class CostMixin:
         Raises:
             CostServiceError: If cost addition fails
         """
-        return context.cost.add(name, cost_config_name, quantity)
+        return await context.cost.add(name, cost_config_name, quantity)
 
     @staticmethod
-    def get_cost(context: ModuleContext, name: str) -> list[CostData]:
+    async def get_cost(context: ModuleContext, name: str) -> list[CostData]:
         """Get cost entries for a specific name.
 
         Args:
@@ -42,10 +42,10 @@ class CostMixin:
         Raises:
             CostServiceError: If cost retrieval fails
         """
-        return context.cost.get(name)
+        return await context.cost.get(name)
 
     @staticmethod
-    def get_costs(
+    async def get_costs(
         context: ModuleContext,
         names: list[str] | None = None,
         cost_types: list[
@@ -73,4 +73,4 @@ class CostMixin:
         Raises:
             CostServiceError: If cost retrieval fails
         """
-        return context.cost.get_filtered(names, cost_types)
+        return await context.cost.get_filtered(names, cost_types)

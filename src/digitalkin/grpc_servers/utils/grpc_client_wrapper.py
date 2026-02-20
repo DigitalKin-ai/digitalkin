@@ -20,7 +20,7 @@ class GrpcClientWrapper:
 
     stub: Any
     service_name: str = "UnknownService"  # Override in subclasses for better logging
-    _channel: grpc.Channel | None = None
+    _channel: grpc.aio.Channel | None = None
 
     @staticmethod
     def _build_channel_credentials(config: ClientConfig) -> grpc.ChannelCredentials | None:
@@ -46,24 +46,7 @@ class GrpcClientWrapper:
             private_key=private_key,
         )
 
-    def _init_channel(self, config: ClientConfig) -> grpc.Channel:
-        """Create a sync gRPC channel.
-
-        Args:
-            config: Client configuration for the channel.
-
-        Returns:
-            A sync gRPC channel.
-        """
-        credentials = self._build_channel_credentials(config)
-        if credentials is not None:
-            channel = grpc.secure_channel(config.address, credentials, options=config.grpc_options)
-        else:
-            channel = grpc.insecure_channel(config.address, options=config.grpc_options)
-        self._channel = channel
-        return channel
-
-    def _init_aio_channel(self, config: ClientConfig) -> grpc.aio.Channel:
+    def _init_channel(self, config: ClientConfig) -> grpc.aio.Channel:
         """Create an async gRPC channel.
 
         Args:
@@ -74,16 +57,23 @@ class GrpcClientWrapper:
         """
         credentials = self._build_channel_credentials(config)
         if credentials is not None:
-            return grpc.aio.secure_channel(config.address, credentials, options=config.grpc_options)
-        return grpc.aio.insecure_channel(config.address, options=config.grpc_options)
+            channel = grpc.aio.secure_channel(config.address, credentials, options=config.grpc_options)
+        else:
+            channel = grpc.aio.insecure_channel(config.address, options=config.grpc_options)
+        self._channel = channel
+        return channel
 
-    def close_channel(self) -> None:
+    async def close_channel(self) -> None:
         """Close the gRPC channel if it exists."""
         if self._channel is not None:
-            self._channel.close()
+            await self._channel.close()
             self._channel = None
 
-    def exec_grpc_query(self, query_endpoint: str, request: Any) -> Any:  # noqa: ANN401
+    async def exec_grpc_query(
+        self,
+        query_endpoint: str,
+        request: Any,
+    ) -> Any:
         """Execute a gRPC query with from the query's rpc endpoint name.
 
         Arguments:
@@ -108,7 +98,8 @@ class GrpcClientWrapper:
                     "request_preview": str(request)[:200],  # Truncate for log readability
                 },
             )
-            response = getattr(self.stub, query_endpoint)(request)
+            # getattr unavoidable: gRPC stubs expose RPC methods as dynamic attributes by endpoint name
+            response = await getattr(self.stub, query_endpoint)(request)
             logger.debug(
                 "gRPC response: %s.%s - received response from remote service",
                 self.service_name,
@@ -120,13 +111,11 @@ class GrpcClientWrapper:
                     "response_preview": str(response)[:200],  # Truncate for log readability
                 },
             )
-            return response  # noqa: TRY300
         except grpc.RpcError as e:
-            status_code = e.code().name if hasattr(e, "code") else "UNKNOWN"
-            status_value = e.code().value[0] if hasattr(e, "code") else -1
-            details = e.details() if hasattr(e, "details") else str(e)
+            status_code = e.code().name
+            status_value = e.code().value[0]
+            details = e.details()
 
-            # Build comprehensive error message for the caller
             error_msg = f"[gRPC-client:{self.service_name}.{query_endpoint}] [{status_code}] {details}"
 
             logger.error(
@@ -147,3 +136,5 @@ class GrpcClientWrapper:
                 },
             )
             raise ServerError(error_msg) from e
+        else:
+            return response

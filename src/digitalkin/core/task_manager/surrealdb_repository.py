@@ -103,17 +103,17 @@ class SurrealDBConnection(Generic[TSurreal]):
         for attempt in range(max_retries):
             try:
                 logger.debug("SurrealDB connecting (attempt %d/%d)", attempt + 1, max_retries)
-                self.db = AsyncSurreal(self.url)  # type: ignore
+                self.db = AsyncSurreal(self.url)  # type: ignore[assignment]  # surrealdb typing not fully resolved
 
                 # Wrap signin with timeout to catch handshake timeouts
                 await asyncio.wait_for(
                     self.db.signin({"username": self.username, "password": self.password}),
                     timeout=self.timeout.total_seconds(),
                 )
-                await self.db.use(self.namespace, self.database)  # type: ignore[arg-type]
-
-                logger.info("SurrealDB connected (attempt %d/%d)", attempt + 1, max_retries)
-                return  # noqa: TRY300
+                await self.db.use(
+                    self.namespace,
+                    self.database,  # type: ignore[arg-type]  # surrealdb.use() accepts str but typed differently
+                )
 
             except TimeoutError as e:
                 last_exception = e
@@ -147,6 +147,10 @@ class SurrealDBConnection(Generic[TSurreal]):
                         error_msg,
                         exc_info=True,
                     )
+
+            else:
+                logger.info("SurrealDB connected (attempt %d/%d)", attempt + 1, max_retries)
+                return
 
             # Retry with exponential backoff (but not after the last attempt)
             if attempt < max_retries - 1:
@@ -227,7 +231,7 @@ class SurrealDBConnection(Generic[TSurreal]):
         if isinstance(result, dict) and "code" in result:
             error_msg = result.get("message", result.get("information", "Unknown error"))
             logger.error("SurrealDB create failed [%s]: %s", result.get("code"), error_msg)
-            msg = f"SurrealDB create failed in '{table_name}': {error_msg}"
+            msg = f"SurrealDB create failed in '{table_name}': {error_msg}"  # type: ignore[str-bytes-safe]
             raise RuntimeError(msg)
 
         return cast("dict[str, Any]", result)

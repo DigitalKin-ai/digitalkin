@@ -42,13 +42,13 @@ class FakeRegistry(RegistryStrategy):
     def add_search_result(self, tag: str, results: list[ModuleInfo]) -> None:
         self._search_results[tag] = results
 
-    def discover_by_id(self, module_id: str) -> ModuleInfo | None:
+    async def discover_by_id(self, module_id: str) -> ModuleInfo | None:
         return self._modules.get(module_id)
 
-    def get_setup(self, setup_id: str) -> SetupInfo | None:
+    async def get_setup(self, setup_id: str) -> SetupInfo | None:
         return self._setups.get(setup_id)
 
-    def search(
+    async def search(
         self,
         name: str | None = None,
         module_type: str | None = None,
@@ -58,10 +58,10 @@ class FakeRegistry(RegistryStrategy):
             return self._search_results[name]
         return []
 
-    def get_status(self, module_id: str) -> None:
+    async def get_status(self, module_id: str) -> None:
         return None
 
-    def register(
+    async def register(
         self,
         module_id: str,
         address: str,
@@ -70,7 +70,7 @@ class FakeRegistry(RegistryStrategy):
     ) -> ModuleInfo | None:
         return None
 
-    def heartbeat(self, module_id: str) -> RegistryModuleStatus:
+    async def heartbeat(self, module_id: str) -> RegistryModuleStatus:
         return RegistryModuleStatus.ACTIVE
 
     async def deregister(self, module_id: str) -> bool:

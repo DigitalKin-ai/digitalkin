@@ -36,9 +36,9 @@ class ToolReference(BaseModel):
         """
         resolved: list[ToolModuleInfo] = []
         for entry in self.selected_tools:
-            setup = registry.get_setup(entry.setup_id)
+            setup = await registry.get_setup(entry.setup_id)
             if setup and setup.module_id:
-                info = registry.discover_by_id(setup.module_id)
+                info = await registry.discover_by_id(setup.module_id)
                 if info:
                     tool_info = await module_info_to_tool_module_info(info, entry.setup_id, setup.name, communication)
                     enabled_triggers = {name for name, enabled in entry.triggers.items() if enabled}
@@ -67,7 +67,7 @@ class _ToolReferenceInputSchema:
         self.min_tools = min_tools
         self.categories = categories
 
-    def __get_pydantic_json_schema__(  # noqa: PLW3201
+    def __get_pydantic_json_schema__(
         self,
         _schema: CoreSchema,
         _handler: GetJsonSchemaHandler,
@@ -140,7 +140,7 @@ def tool_reference_input(
             return ToolReference(
                 selected_tools=[
                     ToolSelection(
-                        setup_id=e.get("setup_id", e.get("setupId", "")),
+                        setup_id=e.get("setup_id", e.get("setupId", "")),  # type: ignore[arg-type]
                         triggers=e.get("triggers", {}),
                     )
                     if isinstance(e, dict)
@@ -176,7 +176,7 @@ def tool_reference_input(
         """
         return [{"setupId": t.setup_id, "triggers": t.triggers} for t in v.selected_tools]
 
-    return Annotated[  # type: ignore[return-value]
+    return Annotated[  # type: ignore[return-value]  # Returns Annotated type, not ToolReference directly
         ToolReference,
         BeforeValidator(convert_to_tool_reference),
         AfterValidator(validate_tools_count),

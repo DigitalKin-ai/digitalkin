@@ -154,7 +154,10 @@ class ChannelConfig(BaseModel):
         credentials: Client credentials for secure mode
     """
 
-    host: str = Field("0.0.0.0", description="Host address to bind the client to")  # noqa: S104
+    host: str = Field(
+        "0.0.0.0",  # noqa: S104
+        description="Host address to bind the client to",
+    )  # Bind to all interfaces by design
     port: int = Field(50051, description="Port to listen on")
     mode: ServerMode = Field(ServerMode.SYNC, description="Client operation mode (sync/async)")
     security: SecurityMode = Field(SecurityMode.INSECURE, description="Security mode (secure/insecure)")
@@ -181,7 +184,7 @@ class ChannelConfig(BaseModel):
         Raises:
             ConfigurationError: If port is outside valid range
         """
-        if not 0 < v < 65536:  # noqa: PLR2004
+        if not 0 < v < 65536:  # TCP port range constant # noqa: PLR2004
             msg = f"Port must be between 1 and 65535, got {v}"
             raise ConfigurationError(msg)
         return v
@@ -210,7 +213,7 @@ class ClientConfig(ChannelConfig):
     """
 
     credentials: ClientCredentials | None = Field(None, description="Client credentials for secure mode")
-    retry_policy: RetryPolicy = Field(default_factory=lambda: RetryPolicy(), description="Retry policy for failed RPCs")  # noqa: PLW0108
+    retry_policy: RetryPolicy = Field(default_factory=RetryPolicy, description="Retry policy for failed RPCs")
     channel_options: list[tuple[str, Any]] = Field(
         default_factory=lambda: [
             ("grpc.max_receive_message_length", 100 * 1024 * 1024),

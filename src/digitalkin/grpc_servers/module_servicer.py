@@ -106,7 +106,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         self._registry_cache = GrpcRegistry("", "", "", client_config)
         return self._registry_cache
 
-    async def ConfigSetupModule(  # noqa: N802
+    async def ConfigSetupModule(
         self,
         request: lifecycle_pb2.ConfigSetupModuleRequest,
         context: grpc.aio.ServicerContext,
@@ -188,14 +188,14 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             return lifecycle_pb2.ConfigSetupModuleResponse(success=False)
 
         logger.debug("Updated setup data", extra={"job_id": job_id, "setup_data": updated_setup_data})
-        setup_version.content = json_format.ParseDict(
+        setup_version.content = json_format.ParseDict(  # type: ignore[misc]  # proto __slots__ not fully typed
             updated_setup_data,
             struct_pb2.Struct(),
             ignore_unknown_fields=True,
         )
         return lifecycle_pb2.ConfigSetupModuleResponse(success=True, setup_version=setup_version)
 
-    async def StartModule(  # noqa: N802, C901, PLR0912, PLR0915
+    async def StartModule(  # noqa: C901, PLR0912, PLR0915
         self,
         request: lifecycle_pb2.StartModuleRequest,
         context: grpc.aio.ServicerContext,
@@ -223,7 +223,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
 
         # Fetch setup configuration with comprehensive error handling
         try:
-            setup_data_class = self.setup.get_setup(
+            setup_data_class = await self.setup.get_setup(
                 setup_dict={
                     "setup_id": request.setup_id,
                     "mission_id": request.mission_id,
@@ -354,7 +354,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             return
 
         try:
-            async with self.job_manager.generate_stream_consumer(job_id) as stream:  # type: ignore
+            async with self.job_manager.generate_stream_consumer(job_id) as stream:
                 async for message in stream:
                     # Early detection of client disconnection
                     if context.cancelled():
@@ -406,7 +406,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
 
         logger.info("Job %s finished", job_id)
 
-    async def StopModule(  # noqa: N802
+    async def StopModule(
         self,
         request: lifecycle_pb2.StopModuleRequest,
         context: grpc.ServicerContext,
@@ -435,7 +435,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         logger.debug("Job stopped successfully", extra={"job_id": request.job_id})
         return lifecycle_pb2.StopModuleResponse(success=True)
 
-    async def GetModuleStatus(  # noqa: N802
+    async def GetModuleStatus(
         self,
         request: monitoring_pb2.GetModuleStatusRequest,
         context: grpc.ServicerContext,
@@ -475,10 +475,10 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             job_id=request.job_id,
         )
 
-    async def GetModuleJobs(  # noqa: N802
+    async def GetModuleJobs(
         self,
-        request: monitoring_pb2.GetModuleJobsRequest,  # noqa: ARG002
-        context: grpc.ServicerContext,  # noqa: ARG002
+        request: monitoring_pb2.GetModuleJobsRequest,  # gRPC servicer signature # noqa: ARG002
+        context: grpc.ServicerContext,  # gRPC servicer signature # noqa: ARG002
     ) -> monitoring_pb2.GetModuleJobsResponse:
         """Get information about the module's jobs.
 
@@ -504,7 +504,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             ],
         )
 
-    async def GetModuleInput(  # noqa: N802
+    async def GetModuleInput(
         self,
         request: information_pb2.GetModuleInputRequest,
         context: grpc.ServicerContext,
@@ -542,10 +542,10 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             input_schema=input_format_struct,
         )
 
-    async def GetModuleSelectInput(  # noqa: N802
+    async def GetModuleSelectInput(
         self,
-        request: information_pb2.GetModuleSelectInputRequest,  # noqa: ARG002
-        context: grpc.ServicerContext,  # noqa: ARG002
+        request: information_pb2.GetModuleSelectInputRequest,  # gRPC servicer signature # noqa: ARG002
+        context: grpc.ServicerContext,  # gRPC servicer signature # noqa: ARG002
     ) -> information_pb2.GetModuleSelectInputResponse:
         """Get the trigger selection schema for the module.
 
@@ -570,7 +570,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             select_input_schema=select_input_format_struct,
         )
 
-    async def GetModuleOutput(  # noqa: N802
+    async def GetModuleOutput(
         self,
         request: information_pb2.GetModuleOutputRequest,
         context: grpc.ServicerContext,
@@ -608,7 +608,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             output_schema=output_format_struct,
         )
 
-    async def GetModuleSetup(  # noqa: N802
+    async def GetModuleSetup(
         self,
         request: information_pb2.GetModuleSetupRequest,
         context: grpc.ServicerContext,
@@ -644,7 +644,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             setup_schema=setup_format_struct,
         )
 
-    async def GetModuleSecret(  # noqa: N802
+    async def GetModuleSecret(
         self,
         request: information_pb2.GetModuleSecretRequest,
         context: grpc.ServicerContext,
@@ -680,7 +680,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             secret_schema=secret_format_struct,
         )
 
-    async def GetConfigSetupModule(  # noqa: N802
+    async def GetConfigSetupModule(
         self,
         request: information_pb2.GetConfigSetupModuleRequest,
         context: grpc.ServicerContext,
@@ -716,7 +716,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             config_setup_schema=config_setup_format_struct,
         )
 
-    async def GetModuleCost(  # noqa: N802
+    async def GetModuleCost(
         self,
         request: information_pb2.GetModuleCostRequest,
         context: grpc.ServicerContext,

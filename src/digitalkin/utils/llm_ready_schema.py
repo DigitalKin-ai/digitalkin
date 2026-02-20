@@ -13,7 +13,11 @@ from pydantic.json_schema import GenerateJsonSchema, JsonSchemaValue
 class CustomOrderSchema(GenerateJsonSchema):
     """Custom schema generator to sort keys in a specific order."""
 
-    def sort(self, value: JsonSchemaValue, parent_key: str | None = None) -> JsonSchemaValue:  # noqa: ARG002
+    def sort(
+        self,
+        value: JsonSchemaValue,
+        parent_key: str | None = None,  # noqa: ARG002
+    ) -> JsonSchemaValue:  # Overrides Pydantic GenerateJsonSchema.sort signature
         """Sort the keys of the schema in a specific order.
 
         Args:
@@ -47,7 +51,7 @@ def inline_refs(schema: dict) -> dict:
     schema = copy.deepcopy(schema)
     defs = schema.pop("$defs", {})
 
-    def _resolve(obj: Any) -> Any:  # noqa: ANN401
+    def _resolve(obj: Any) -> Any:
         if isinstance(obj, dict):
             if "$ref" in obj:
                 ref = obj["$ref"]

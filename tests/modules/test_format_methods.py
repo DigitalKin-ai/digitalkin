@@ -5,7 +5,6 @@ rather than mocked versions, covering schema generation and SchemaSplitter integ
 """
 
 import json
-from types import SimpleNamespace
 from typing import Literal
 from unittest.mock import Mock
 
@@ -16,6 +15,7 @@ from digitalkin.models.module.base_types import DataModel, DataTrigger
 from digitalkin.models.module.module_types import SetupModel
 from digitalkin.models.module.select_schema import SelectSchema
 from digitalkin.modules._base_module import BaseModule
+from digitalkin.services.cost.cost_strategy import CostConfig
 from digitalkin.utils.package_discover import ModuleDiscoverer
 
 
@@ -276,9 +276,9 @@ class TestGetCostFormat:
     @pytest.mark.asyncio
     async def test_cost_format_with_config(self) -> None:
         """Returns cost schema when config is present."""
-        cost_config = SimpleNamespace(
+        cost_config = CostConfig(
             cost_name="api_call",
-            cost_type=SimpleNamespace(value="per_request"),
+            cost_type="API_CALL",
             description="Cost per API call",
             unit="USD",
             rate=0.01,
@@ -296,9 +296,9 @@ class TestGetCostFormat:
     @pytest.mark.asyncio
     async def test_cost_format_llm(self) -> None:
         """LLM format returns json_schema + ui_schema."""
-        cost_config = SimpleNamespace(
+        cost_config = CostConfig(
             cost_name="tokens",
-            cost_type="per_token",
+            cost_type="TOKEN_INPUT",
             description="Cost per token",
             unit="USD",
             rate=0.001,

@@ -218,3 +218,24 @@ class FakeContext(grpc.ServicerContext):
             The current error details
         """
         return self._details
+
+
+class AsyncStubWrapper:
+    """Wraps a sync gRPC stub so its methods return awaitables.
+
+    grpc_testing stubs return sync (non-awaitable) protobuf responses,
+    but async gRPC client code uses ``await stub.Method(request)``.
+    This wrapper makes each stub method return an awaitable.
+    """
+
+    def __init__(self, sync_stub: Any) -> None:
+        self._stub = sync_stub
+
+    def __getattr__(self, name: str) -> Callable[..., Any]:
+        method = object.__getattribute__(self, "_stub")
+        method = getattr(method, name)  # noqa: B009
+
+        async def async_method(*args: Any, **kwargs: Any) -> Any:
+            return method(*args, **kwargs)
+
+        return async_method

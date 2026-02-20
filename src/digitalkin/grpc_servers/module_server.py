@@ -95,12 +95,14 @@ class ModuleServer(BaseServer):
 
     def start(self) -> None:
         """Start the module server and register with the registry if configured."""
+        import asyncio
+
         logger.info("Starting module server", extra={"server_config": self.server_config})
         super().start()
 
         try:
             self._init_registry()
-            self._register_with_registry()
+            asyncio.get_event_loop().run_until_complete(self._register_with_registry())
         except Exception:
             logger.exception("Failed to register with registry")
 
@@ -115,7 +117,7 @@ class ModuleServer(BaseServer):
 
         try:
             self._init_registry()
-            self._register_with_registry()
+            await self._register_with_registry()
         except Exception:
             logger.exception("Failed to register with registry")
 
@@ -140,7 +142,7 @@ class ModuleServer(BaseServer):
 
         await super().stop_async(grace)
 
-    def _register_with_registry(self) -> None:
+    async def _register_with_registry(self) -> None:
         """Register this module with the registry server."""
         if not self.registry:
             logger.debug("No registry configured, skipping registration")
@@ -168,7 +170,7 @@ class ModuleServer(BaseServer):
             },
         )
 
-        result = self.registry.register(
+        result = await self.registry.register(
             module_id=module_id,
             address=advertise_address,
             port=self.server_config.port,

@@ -117,7 +117,7 @@ def mock_setup_strategy():
     setup_data.current_setup_version.content = {"test": "setup"}
     setup_data.current_setup_version.setup_id = "setup-123"
     setup_data.current_setup_version.id = "version-123"
-    setup_mock.get_setup = Mock(return_value=setup_data)
+    setup_mock.get_setup = AsyncMock(return_value=setup_data)
     return setup_mock
 
 
@@ -186,7 +186,7 @@ class TestStartModule:
     async def test_start_module_no_setup_data(self, module_servicer, fake_context):
         """Test module start returns failure response when setup data is not found."""
         # Mock setup to return None
-        module_servicer.setup.get_setup = Mock(return_value=None)
+        module_servicer.setup.get_setup = AsyncMock(return_value=None)
 
         request = lifecycle_pb2.StartModuleRequest(
             setup_id="invalid-setup",

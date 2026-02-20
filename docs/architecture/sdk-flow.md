@@ -5,14 +5,14 @@
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │                    ModuleServer (Long-lived)                         │
-│  - Écoute gRPC en continu                                           │
-│  - Ne stocke AUCUN état entre les requêtes                          │
-│  - Chaque requête = nouvelle instance de module                      │
+│  - Listens to gRPC continuously                                      │
+│  - Stores NO state between requests                                  │
+│  - Each request = new module instance                                │
 └─────────────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│                    Per-Request (Éphémère)                           │
+│                    Per-Request (Ephemeral)                           │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐              │
 │  │   job_id     │  │   Module     │  │ TaskSession  │              │
 │  │   (uuid)     │  │   Instance   │  │   + Queue    │              │
@@ -20,7 +20,7 @@
 │         │                 │                  │                       │
 │         └────────────────┼──────────────────┘                       │
 │                          │                                           │
-│                     Détruit après exécution                         │
+│                     Destroyed after execution                       │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -164,15 +164,15 @@ flowchart TB
 
 ---
 
-## Deux Flux Principaux
+## Two Main Flows
 
-| Étape | ConfigSetupModule | StartModule |
-|-------|-------------------|-------------|
+| Step | ConfigSetupModule | StartModule |
+|------|-------------------|-------------|
 | 1 | Parse ConfigSetupModel | Parse InputModel |
 | 2 | Parse SetupModel (config fields) | Load SetupModel from storage |
 | 3 | Create Module Instance | Create Module Instance |
-| 4 | `start_config_setup()` | `create_task()` avec 3 tasks concurrentes |
-| 5 | `_resolve_tools()` + `run_config_setup()` en parallèle | `module.start()` → `run()` → TriggerHandler |
+| 4 | `start_config_setup()` | `create_task()` with 3 concurrent tasks |
+| 5 | `_resolve_tools()` + `run_config_setup()` in parallel | `module.start()` → `run()` → TriggerHandler |
 | 6 | Return updated SetupModel | Stream outputs via Queue |
 
 ---

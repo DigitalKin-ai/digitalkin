@@ -109,7 +109,7 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
             config=dict(descriptor.config) if descriptor.config else None,
         )
 
-    def discover_by_id(self, module_id: str) -> ModuleInfo:
+    async def discover_by_id(self, module_id: str) -> ModuleInfo:
         """Get module info by ID.
 
         Args:
@@ -124,9 +124,9 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
         """
         logger.debug("Discovering module by ID", extra={"module_id": module_id})
 
-        with self.handle_grpc_errors("GetModule", RegistryServiceError):
+        async with self.handle_grpc_errors("GetModule", RegistryServiceError):
             try:
-                response = self.exec_grpc_query(
+                response = await self.exec_grpc_query(
                     "GetModule",
                     registry_requests_pb2.GetModuleRequest(module_id=module_id),
                 )
@@ -149,7 +149,7 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
             )
             return self._proto_to_module_info(response)
 
-    def search(
+    async def search(
         self,
         name: str | None = None,
         module_type: str | None = None,
@@ -177,14 +177,14 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
             },
         )
 
-        with self.handle_grpc_errors("DiscoverModules", RegistryServiceError):
-            module_types = []
+        async with self.handle_grpc_errors("DiscoverModules", RegistryServiceError):
+            module_types: list[str] = []
             if module_type:
                 enum_val = RegistryModuleType[module_type.upper()]
-                module_types.append(getattr(registry_enums_pb2, f"MODULE_TYPE_{enum_val.name}"))
+                module_types.append(f"MODULE_TYPE_{enum_val.name}")
 
             try:
-                response = self.exec_grpc_query(
+                response = await self.exec_grpc_query(
                     "DiscoverModules",
                     registry_requests_pb2.DiscoverModulesRequest(
                         query=name or "",
@@ -200,7 +200,7 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
             logger.debug("Search returned %d modules", len(response.modules))
             return [self._proto_to_module_info(m) for m in response.modules]
 
-    def get_status(self, module_id: str) -> ModuleStatusInfo:
+    async def get_status(self, module_id: str) -> ModuleStatusInfo:
         """Get module status by fetching the module.
 
         Args:
@@ -215,9 +215,9 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
         """
         logger.debug("Getting module status", extra={"module_id": module_id})
 
-        with self.handle_grpc_errors("GetModule", RegistryServiceError):
+        async with self.handle_grpc_errors("GetModule", RegistryServiceError):
             try:
-                response = self.exec_grpc_query(
+                response = await self.exec_grpc_query(
                     "GetModule",
                     registry_requests_pb2.GetModuleRequest(module_id=module_id),
                 )
@@ -240,7 +240,7 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
                 status=RegistryModuleStatus[status_name],
             )
 
-    def register(
+    async def register(
         self,
         module_id: str,
         address: str,
@@ -274,9 +274,9 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
             },
         )
 
-        with self.handle_grpc_errors("RegisterModule", RegistryServiceError):
+        async with self.handle_grpc_errors("RegisterModule", RegistryServiceError):
             try:
-                response = self.exec_grpc_query(
+                response = await self.exec_grpc_query(
                     "RegisterModule",
                     registry_requests_pb2.RegisterModuleRequest(
                         module_id=module_id,
@@ -307,7 +307,7 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
             )
             return self._proto_to_module_info(response.module)
 
-    def heartbeat(self, module_id: str) -> RegistryModuleStatus:
+    async def heartbeat(self, module_id: str) -> RegistryModuleStatus:
         """Send heartbeat to keep module active.
 
         Args:
@@ -321,9 +321,9 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
         """
         logger.debug("Sending heartbeat", extra={"module_id": module_id})
 
-        with self.handle_grpc_errors("Heartbeat", RegistryServiceError):
+        async with self.handle_grpc_errors("Heartbeat", RegistryServiceError):
             try:
-                response = self.exec_grpc_query(
+                response = await self.exec_grpc_query(
                     "Heartbeat",
                     registry_requests_pb2.HeartbeatRequest(module_id=module_id),
                 )
@@ -339,7 +339,7 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
             )
             return RegistryModuleStatus[status_name]
 
-    def get_setup(self, setup_id: str) -> SetupInfo | None:
+    async def get_setup(self, setup_id: str) -> SetupInfo | None:
         """Get setup info.
 
         Args:
@@ -352,9 +352,9 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
             RegistryServiceError: If gRPC call fails.
         """
         logger.debug("Getting setup", extra={"setup_id": setup_id})
-        with self.handle_grpc_errors("GetSetup", RegistryServiceError):
+        async with self.handle_grpc_errors("GetSetup", RegistryServiceError):
             try:
-                response = self.exec_grpc_query(
+                response = await self.exec_grpc_query(
                     "GetSetup",
                     registry_requests_pb2.GetSetupRequest(setup_id=setup_id),
                 )
@@ -364,7 +364,9 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
                 raise RegistryServiceError(msg) from e
             return self._proto_to_setup_info(response)
 
-    async def deregister(self, module_id: str) -> bool:  # noqa: PLR6301
+    async def deregister(  # noqa: PLR6301
+        self, module_id: str
+    ) -> bool:  # Protocol uses heartbeat expiration; self available for future override
         """Deregister a module from the registry.
 
         Note: The registry protocol uses heartbeat expiration for deregistration.

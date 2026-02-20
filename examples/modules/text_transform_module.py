@@ -114,7 +114,7 @@ class TextTransformModule(BaseModule[TextTransformInput, TextTransformOutput, Te
             self.capabilities,
         )
 
-        self.db_id = self.storage.store(
+        self.db_id = await self.storage.store(
             "monitor",
             {
                 "module": self.metadata["name"],
@@ -173,12 +173,12 @@ class TextTransformModule(BaseModule[TextTransformInput, TextTransformOutput, Te
                 transformed,
             )
 
-            monitor_obj: StorageRecord | None = self.storage.read("monitor")
+            monitor_obj: StorageRecord | None = await self.storage.read("monitor")
             if monitor_obj is None:
                 logger.error("Monitor object not found in storage.")
                 break
             monitor_obj.data.consumption += 1
-            updated_monitor_obj: StorageRecord | None = self.storage.modify("monitor", monitor_obj.data.model_dump())
+            updated_monitor_obj: StorageRecord | None = await self.storage.update("monitor", monitor_obj.data.model_dump())
             self.db_id = updated_monitor_obj.name if updated_monitor_obj else "monitor"
 
             # Send results through callback and wait for acknowledgment
@@ -194,10 +194,10 @@ class TextTransformModule(BaseModule[TextTransformInput, TextTransformOutput, Te
         Use it to close connections, free resources, etc.
         """
         logger.info(f"Cleaning up module {self.metadata['name']}")
-        monitor_obj = self.storage.read("monitor")
+        monitor_obj = await self.storage.read("monitor")
         if monitor_obj is None:
             logger.error("Monitor object not found in storage.")
             return
         monitor_obj.data.ended = True
-        updated_monitor_obj: StorageRecord | None = self.storage.modify("monitor", monitor_obj.data.model_dump())
+        updated_monitor_obj: StorageRecord | None = await self.storage.update("monitor", monitor_obj.data.model_dump())
         self.db_id = updated_monitor_obj.name if updated_monitor_obj else "monitor"

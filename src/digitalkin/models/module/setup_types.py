@@ -94,7 +94,7 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
         extra_bases = tuple(b for b in cls.__bases__ if b is not SetupModel)
         base: type | tuple[type, ...] = (SetupModel, *extra_bases) if extra_bases else SetupModel
 
-        m = create_model(
+        m: type[SetupModel] = create_model(  # type: ignore[assignment]
             f"{cls.__name__}",
             __base__=base,
             __config__=ConfigDict(

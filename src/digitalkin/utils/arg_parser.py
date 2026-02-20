@@ -1,7 +1,12 @@
 """ArgParser and Action classes to ease command lines arguments settings."""
 
 import logging
-from argparse import ArgumentParser, Namespace, _HelpAction, _SubParsersAction  # noqa: PLC2701
+from argparse import (
+    ArgumentParser,
+    Namespace,
+    _HelpAction,  # noqa: PLC2701
+    _SubParsersAction,  # noqa: PLC2701
+)  # Private argparse API needed for custom help display
 from collections.abc import Sequence
 from typing import Any
 
@@ -60,13 +65,17 @@ class ArgParser:
         def __call__(
             self,
             parser: ArgumentParser,
-            namespace: Namespace,  # noqa: ARG002
-            values: str | Sequence[Any] | None,  # noqa: ARG002
-            option_string: str | None = None,  # noqa: ARG002
+            namespace: Namespace,  # argparse _HelpAction.__call__ signature # noqa: ARG002
+            values: str | Sequence[Any] | None,  # argparse _HelpAction.__call__ signature # noqa: ARG002
+            option_string: str | None = None,  # argparse _HelpAction.__call__ signature # noqa: ARG002
         ) -> None:
             """Override the HelpActions as it doesn't handle subparser well."""
             parser.print_help()
-            subparsers_actions = [action for action in parser._actions if isinstance(action, _SubParsersAction)]  # noqa: SLF001
+            subparsers_actions = [
+                action
+                for action in parser._actions  # noqa: SLF001
+                if isinstance(action, _SubParsersAction)
+            ]  # Private argparse API needed for subparser enumeration
             for subparsers_action in subparsers_actions:
                 for choice, subparser in subparsers_action.choices.items():
                     logger.info("Subparser '%s':\n%s", choice, subparser.format_help())

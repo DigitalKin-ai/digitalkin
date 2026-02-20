@@ -29,7 +29,7 @@ class DefaultCommunication(CommunicationStrategy):
         super().__init__(mission_id, setup_id, setup_version_id)
         logger.debug("Initialized DefaultCommunication (local)")
 
-    async def get_module_schemas(  # noqa: PLR6301
+    async def get_module_schemas(  # Default stub implementation; self available for subclass overrides # noqa: PLR6301
         self,
         module_address: str,
         module_port: int,
@@ -61,11 +61,11 @@ class DefaultCommunication(CommunicationStrategy):
             "secret": {},
         }
 
-    async def call_module(  # noqa: PLR6301
+    async def call_module(  # Default stub implementation; self available for subclass overrides # noqa: PLR6301
         self,
         module_address: str,
         module_port: int,
-        input_data: dict,  # noqa: ARG002
+        input_data: dict,  # Strategy interface parameter, not used in local stub # noqa: ARG002
         setup_id: str,
         mission_id: str,
         callback: Callable[[dict], Awaitable[None]] | None = None,

@@ -75,7 +75,7 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
                 credentials=self.client_config.credentials,
                 channel_options=self.client_config.channel_options,
             )
-            self._channel_pool[key] = self._init_aio_channel(config)
+            self._channel_pool[key] = self._init_channel(config)
         return self._channel_pool[key]
 
     async def close_all_channels(self) -> None:

@@ -62,8 +62,9 @@ class SignalMessage(BaseModel):
     payload: dict[str, Any] = Field(default_factory=dict, description="Optional payload for the signal")
 
     # Enhanced logging fields
-    cancellation_reason: CancellationReason | None = Field(
-        default=None,
+    cancellation_reason: CancellationReason = Field(
+        default=CancellationReason.UNKNOWN,
+        validate_default=True,
         description="Reason for cancellation if status is CANCELLED",
     )
     error_message: str | None = Field(

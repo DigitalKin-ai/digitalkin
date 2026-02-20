@@ -8,7 +8,7 @@ from digitalkin.models.module.module_types import (
     SecretModelT,
     SetupModelT,
 )
-from digitalkin.modules._base_module import BaseModule  # type: ignore
+from digitalkin.modules._base_module import BaseModule  # Private module import for SDK subclass # type: ignore
 
 
 class ToolModule(

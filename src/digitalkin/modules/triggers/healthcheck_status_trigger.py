@@ -1,7 +1,7 @@
 """Healthcheck status trigger - comprehensive module status."""
 
 import time
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 
 from digitalkin.mixins import BaseMixin
 from digitalkin.models.module.module_context import ModuleContext
@@ -18,7 +18,7 @@ class HealthcheckStatusTrigger(TriggerHandler, BaseMixin):
     Reports detailed module status including uptime, active jobs, and metadata.
     """
 
-    protocol: str = "healthcheck_status"
+    protocol: Literal["healthcheck_status"] = "healthcheck_status"
     description: ClassVar[str] = "Comprehensive status healthcheck with uptime, active jobs, and metadata."
     input_format = HealthcheckStatusInput
     _start_time: ClassVar[float] = time.time()
@@ -28,8 +28,8 @@ class HealthcheckStatusTrigger(TriggerHandler, BaseMixin):
 
     async def handle(
         self,
-        input_data: HealthcheckStatusInput,  # noqa: ARG002
-        setup_data: Any,  # noqa: ANN401, ARG002
+        input_data: HealthcheckStatusInput,  # Healthcheck needs no input data # noqa: ARG002
+        setup_data: Any,  # Module-agnostic setup; healthcheck ignores it # noqa: ARG002
         context: ModuleContext,
     ) -> None:
         """Handle status healthcheck request.

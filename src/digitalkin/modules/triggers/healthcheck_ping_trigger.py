@@ -1,7 +1,7 @@
 """Healthcheck ping trigger - simple alive check."""
 
 from datetime import datetime
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 
 from digitalkin.mixins import BaseMixin
 from digitalkin.models.module.module_context import ModuleContext
@@ -18,7 +18,7 @@ class HealthcheckPingTrigger(TriggerHandler, BaseMixin):
     Responds immediately with "pong" status to verify the module is responsive.
     """
 
-    protocol: str = "healthcheck_ping"
+    protocol: Literal["healthcheck_ping"] = "healthcheck_ping"
     description: ClassVar[str] = "Simple ping healthcheck that responds with pong status."
     input_format = HealthcheckPingInput
     _request_time: datetime
@@ -29,8 +29,8 @@ class HealthcheckPingTrigger(TriggerHandler, BaseMixin):
 
     async def handle(
         self,
-        input_data: HealthcheckPingInput,  # noqa: ARG002
-        setup_data: Any,  # noqa: ANN401, ARG002
+        input_data: HealthcheckPingInput,  # Healthcheck needs no input data # noqa: ARG002
+        setup_data: Any,  # Module-agnostic setup; healthcheck ignores it # noqa: ARG002
         context: ModuleContext,
     ) -> None:
         """Handle ping healthcheck request.
