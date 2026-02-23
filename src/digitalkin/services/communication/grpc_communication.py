@@ -73,6 +73,7 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
                 mode=self.client_config.mode,
                 security=self.client_config.security,
                 credentials=self.client_config.credentials,
+                compression=self.client_config.compression,
                 channel_options=self.client_config.channel_options,
             )
             self._channel_pool[key] = self._init_channel(config)

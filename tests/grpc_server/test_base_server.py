@@ -302,7 +302,10 @@ class TestServerCreation:
             result = server._create_server()
 
             # Verify server was created with correct parameters
-            mock_server.assert_called_once_with(options=server_config_async_insecure.server_options)
+            mock_server.assert_called_once_with(
+                options=server_config_async_insecure.server_options,
+                compression=grpc.Compression.Gzip,
+            )
 
             # Verify result is the mock server
             if result != mock_server.return_value:

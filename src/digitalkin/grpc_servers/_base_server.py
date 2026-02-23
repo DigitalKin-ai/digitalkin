@@ -195,12 +195,14 @@ class BaseServer(abc.ABC):
         """
         try:
             # Create the server based on mode
+            grpc_compression = self.config.compression.to_grpc()
             if self.config.mode == ServerMode.ASYNC:
-                server = grpc_aio.server(options=self.config.server_options)
+                server = grpc_aio.server(options=self.config.server_options, compression=grpc_compression)
             else:
                 server = grpc.server(  # type: ignore[assignment]  # sync grpc.Server assigned to GrpcServer union
                     futures.ThreadPoolExecutor(max_workers=self.config.max_workers),
                     options=self.config.server_options,
+                    compression=grpc_compression,
                 )
 
             # Add the appropriate port

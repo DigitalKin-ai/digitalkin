@@ -56,10 +56,15 @@ class GrpcClientWrapper:
             An async gRPC channel.
         """
         credentials = self._build_channel_credentials(config)
+        grpc_compression = config.compression.to_grpc()
         if credentials is not None:
-            channel = grpc.aio.secure_channel(config.address, credentials, options=config.grpc_options)
+            channel = grpc.aio.secure_channel(
+                config.address, credentials, options=config.grpc_options, compression=grpc_compression
+            )
         else:
-            channel = grpc.aio.insecure_channel(config.address, options=config.grpc_options)
+            channel = grpc.aio.insecure_channel(
+                config.address, options=config.grpc_options, compression=grpc_compression
+            )
         self._channel = channel
         return channel
 
