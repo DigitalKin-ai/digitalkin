@@ -181,7 +181,7 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
         if cls.select_format is None:
             return json.dumps({}, indent=2)
 
-        protocols_info = cls.triggers_discoverer.get_registered_protocols_with_info()
+        protocols_info = cls.triggers_discoverer.get_registered_protocols_with_info(exclude_utility=True)
         select_schema = cls.select_format.build(protocols_info)
 
         if select_schema is None:

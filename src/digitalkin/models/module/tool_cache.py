@@ -204,8 +204,10 @@ def _extract_tools_from_schema(schema: dict[str, Any]) -> list[ToolDefinition]:
     tools: list[ToolDefinition] = []
     defs = schema.get("$defs", {})
 
-    # Skip SDK utility protocols
-    utility_protocols = {"HealthcheckPingInput", "HealthcheckServicesInput", "HealthcheckStatusInput"}
+    # Skip SDK utility protocols (dynamically derived from UtilityProtocol hierarchy)
+    from digitalkin.models.module.utility import UtilityProtocol
+
+    utility_protocols = {cls.__name__ for cls in UtilityProtocol.__subclasses__()}
 
     for def_name, def_schema in defs.items():
         if def_name in utility_protocols:
