@@ -4,9 +4,39 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+import grpc
 from pydantic import BaseModel, Field, ValidationInfo, field_validator
 
 from digitalkin.grpc_servers.utils.exceptions import ConfigurationError, SecurityError
+
+
+class GrpcCompression(str, Enum):
+    """gRPC compression algorithm.
+
+    Attributes:
+        NONE: No compression
+        GZIP: Gzip compression
+        DEFLATE: Deflate compression
+    """
+
+    NONE = "none"
+    GZIP = "gzip"
+    DEFLATE = "deflate"
+
+    def to_grpc(self) -> grpc.Compression:
+        """Convert to grpc.Compression enum.
+
+        Returns:
+            The corresponding grpc.Compression value.
+        """
+        return _COMPRESSION_MAP[self]
+
+
+_COMPRESSION_MAP: dict[GrpcCompression, grpc.Compression] = {
+    GrpcCompression.NONE: grpc.Compression.NoCompression,
+    GrpcCompression.GZIP: grpc.Compression.Gzip,
+    GrpcCompression.DEFLATE: grpc.Compression.Deflate,
+}
 
 
 class ServerMode(str, Enum):
@@ -210,10 +240,12 @@ class ClientConfig(ChannelConfig):
         credentials: Client credentials for secure mode
         channel_options: Additional channel options
         retry_policy: Retry policy for failed RPCs
+        compression: gRPC compression algorithm for channel-level compression
     """
 
     credentials: ClientCredentials | None = Field(None, description="Client credentials for secure mode")
     retry_policy: RetryPolicy = Field(default_factory=RetryPolicy, description="Retry policy for failed RPCs")
+    compression: GrpcCompression = Field(GrpcCompression.GZIP, description="gRPC compression algorithm")
     channel_options: list[tuple[str, Any]] = Field(
         default_factory=lambda: [
             ("grpc.max_receive_message_length", 100 * 1024 * 1024),
@@ -297,10 +329,12 @@ class ServerConfig(ChannelConfig):
         credentials: Server credentials for secure mode
         server_options: Additional server options
         enable_reflection: Enable reflection for the server
+        compression: gRPC compression algorithm for server-level compression
     """
 
     max_workers: int = Field(10, description="Maximum number of workers for sync mode")
     credentials: ServerCredentials | None = Field(None, description="Server credentials for secure mode")
+    compression: GrpcCompression = Field(GrpcCompression.GZIP, description="gRPC compression algorithm")
     server_options: list[tuple[str, Any]] = Field(
         default_factory=lambda: [
             ("grpc.max_receive_message_length", 100 * 1024 * 1024),

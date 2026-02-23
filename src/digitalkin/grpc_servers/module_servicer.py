@@ -536,6 +536,11 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             context.set_code(grpc.StatusCode.UNIMPLEMENTED)
             context.set_details(str(e))
             return information_pb2.GetModuleInputResponse()
+        except Exception as e:
+            logger.exception("Failed to get input format for module '%s'", self.module_class.__name__)
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details(f"Failed to get input format: {e}")
+            return information_pb2.GetModuleInputResponse()
 
         return information_pb2.GetModuleInputResponse(
             success=True,
@@ -545,7 +550,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
     async def GetModuleSelectInput(
         self,
         request: information_pb2.GetModuleSelectInputRequest,  # gRPC servicer signature # noqa: ARG002
-        context: grpc.ServicerContext,  # gRPC servicer signature # noqa: ARG002
+        context: grpc.ServicerContext,  # gRPC servicer signature
     ) -> information_pb2.GetModuleSelectInputResponse:
         """Get the trigger selection schema for the module.
 
@@ -558,12 +563,18 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         """
         logger.debug("GetModuleSelectInput called for module: '%s'", self.module_class.__name__)
 
-        select_input_schema_proto = await self.module_class.get_select_input_format()
-        select_input_format_struct = json_format.Parse(
-            text=select_input_schema_proto,
-            message=struct_pb2.Struct(),
-            ignore_unknown_fields=True,
-        )
+        try:
+            select_input_schema_proto = await self.module_class.get_select_input_format()
+            select_input_format_struct = json_format.Parse(
+                text=select_input_schema_proto,
+                message=struct_pb2.Struct(),
+                ignore_unknown_fields=True,
+            )
+        except Exception as e:
+            logger.exception("Failed to get select input format for module '%s'", self.module_class.__name__)
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details(f"Failed to get select input format: {e}")
+            return information_pb2.GetModuleSelectInputResponse()
 
         return information_pb2.GetModuleSelectInputResponse(
             success=True,
@@ -602,6 +613,11 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             context.set_code(grpc.StatusCode.UNIMPLEMENTED)
             context.set_details(str(e))
             return information_pb2.GetModuleOutputResponse()
+        except Exception as e:
+            logger.exception("Failed to get output format for module '%s'", self.module_class.__name__)
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details(f"Failed to get output format: {e}")
+            return information_pb2.GetModuleOutputResponse()
 
         return information_pb2.GetModuleOutputResponse(
             success=True,
@@ -637,6 +653,11 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             logger.warning(e)
             context.set_code(grpc.StatusCode.UNIMPLEMENTED)
             context.set_details(str(e))
+            return information_pb2.GetModuleSetupResponse()
+        except Exception as e:
+            logger.exception("Failed to get setup format for module '%s'", self.module_class.__name__)
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details(f"Failed to get setup format: {e}")
             return information_pb2.GetModuleSetupResponse()
 
         return information_pb2.GetModuleSetupResponse(
@@ -674,6 +695,11 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             context.set_code(grpc.StatusCode.UNIMPLEMENTED)
             context.set_details(str(e))
             return information_pb2.GetModuleSecretResponse()
+        except Exception as e:
+            logger.exception("Failed to get secret format for module '%s'", self.module_class.__name__)
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details(f"Failed to get secret format: {e}")
+            return information_pb2.GetModuleSecretResponse()
 
         return information_pb2.GetModuleSecretResponse(
             success=True,
@@ -710,6 +736,11 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             context.set_code(grpc.StatusCode.UNIMPLEMENTED)
             context.set_details(str(e))
             return information_pb2.GetConfigSetupModuleResponse()
+        except Exception as e:
+            logger.exception("Failed to get config setup format for module '%s'", self.module_class.__name__)
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details(f"Failed to get config setup format: {e}")
+            return information_pb2.GetConfigSetupModuleResponse()
 
         return information_pb2.GetConfigSetupModuleResponse(
             success=True,
@@ -743,6 +774,11 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             logger.warning(e)
             context.set_code(grpc.StatusCode.UNIMPLEMENTED)
             context.set_details(str(e))
+            return information_pb2.GetModuleCostResponse()
+        except Exception as e:
+            logger.exception("Failed to get cost format for module '%s'", self.module_class.__name__)
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details(f"Failed to get cost format: {e}")
             return information_pb2.GetModuleCostResponse()
 
         return information_pb2.GetModuleCostResponse(

@@ -1,5 +1,6 @@
 """Tool reference types for module configuration."""
 
+import asyncio
 from typing import Annotated
 
 from pydantic import AfterValidator, BaseModel, BeforeValidator, Field, PlainSerializer
@@ -7,6 +8,7 @@ from pydantic.annotated_handlers import GetJsonSchemaHandler
 from pydantic.json_schema import JsonSchemaValue
 from pydantic_core import CoreSchema
 
+from digitalkin.logger import logger
 from digitalkin.models.module.tool_cache import ToolModuleInfo, module_info_to_tool_module_info
 from digitalkin.services.communication.communication_strategy import CommunicationStrategy
 from digitalkin.services.registry import RegistryStrategy
@@ -34,18 +36,45 @@ class ToolReference(BaseModel):
         Returns:
             List of ToolModuleInfo for resolved tools, filtered by enabled triggers.
         """
+        results = await asyncio.gather(
+            *(ToolReference._resolve_single(entry, registry, communication) for entry in self.selected_tools),
+            return_exceptions=True,
+        )
         resolved: list[ToolModuleInfo] = []
-        for entry in self.selected_tools:
-            setup = await registry.get_setup(entry.setup_id)
-            if setup and setup.module_id:
-                info = await registry.discover_by_id(setup.module_id)
-                if info:
-                    tool_info = await module_info_to_tool_module_info(info, entry.setup_id, setup.name, communication)
-                    enabled_triggers = {name for name, enabled in entry.triggers.items() if enabled}
-                    if enabled_triggers:
-                        tool_info.tools = [t for t in tool_info.tools if t.name in enabled_triggers]
-                    resolved.append(tool_info)
+        for entry, result in zip(self.selected_tools, results):
+            if isinstance(result, BaseException):
+                logger.error("Failed to resolve tool (setup_id=%s): %s", entry.setup_id, result)
+            elif isinstance(result, ToolModuleInfo):
+                resolved.append(result)
         return resolved
+
+    @staticmethod
+    async def _resolve_single(
+        entry: "ToolSelection",
+        registry: RegistryStrategy,
+        communication: CommunicationStrategy,
+    ) -> ToolModuleInfo | None:
+        """Resolve a single tool selection.
+
+        Args:
+            entry: Tool selection to resolve.
+            registry: Registry service for module discovery.
+            communication: Communication service for module schemas.
+
+        Returns:
+            ToolModuleInfo if resolved, None otherwise.
+        """
+        setup = await registry.get_setup(entry.setup_id)
+        if not setup or not setup.module_id:
+            return None
+        info = await registry.discover_by_id(setup.module_id)
+        if not info:
+            return None
+        tool_info = await module_info_to_tool_module_info(info, entry.setup_id, setup.name, communication)
+        enabled_triggers = {name for name, enabled in entry.triggers.items() if enabled}
+        if enabled_triggers:
+            tool_info.tools = [t for t in tool_info.tools if t.name in enabled_triggers]
+        return tool_info
 
 
 class _ToolReferenceInputSchema:
