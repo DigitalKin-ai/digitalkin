@@ -51,6 +51,9 @@ class TaskSession:
     # Cleanup guard for idempotent cleanup
     _cleanup_done: bool
 
+    # Connection ownership: when False, cleanup() skips db.close() (shared connection)
+    _owns_connection: bool
+
     def __init__(
         self,
         task_id: str,
@@ -59,6 +62,8 @@ class TaskSession:
         module: BaseModule,
         heartbeat_interval: datetime.timedelta = datetime.timedelta(seconds=2),
         queue_maxsize: int = 1000,
+        *,
+        owns_connection: bool = True,
     ) -> None:
         """Initialize Task Session.
 
@@ -69,6 +74,8 @@ class TaskSession:
             module: Module instance
             heartbeat_interval: Interval between heartbeats
             queue_maxsize: Maximum size for the queue (0 = unlimited)
+            owns_connection: If True (default), cleanup() closes the DB connection.
+                If False, the connection is shared and cleanup() leaves it open.
         """
         self.db = db
         self.module = module
@@ -98,6 +105,9 @@ class TaskSession:
 
         # Cleanup guard
         self._cleanup_done = False
+
+        # Connection ownership
+        self._owns_connection = owns_connection
 
         logger.debug(
             "TaskSession initialized (heartbeat_interval=%.1fs)",
@@ -432,8 +442,9 @@ class TaskSession:
         except Exception:
             logger.exception("Error stopping module during cleanup", extra=ids)
 
-        # Close DB connection (kills all live queries)
-        await self.db.close()
+        # Close DB connection only if this session owns it (kills all live queries)
+        if self._owns_connection:
+            await self.db.close()
 
         # Clear module reference to allow garbage collection
         self.module = None  # type: ignore[assignment]  # Allow GC; typed as BaseModule but set to None after cleanup

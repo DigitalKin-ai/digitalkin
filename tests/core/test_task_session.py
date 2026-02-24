@@ -1200,6 +1200,58 @@ class TestCleanup:
         assert task_session.queue.empty()
         mock_db.close.assert_awaited_once()
 
+    @pytest.mark.asyncio
+    async def test_cleanup_shared_connection_skips_db_close(self, mock_db, mock_module):
+        """Test that cleanup() skips db.close() when owns_connection=False (shared connection)."""
+        session = TaskSession(
+            task_id="task-shared",
+            mission_id="mission-shared",
+            db=mock_db,
+            module=mock_module,
+            owns_connection=False,
+        )
+        mock_module.stop = AsyncMock()
+
+        await session.cleanup()
+
+        # DB should NOT be closed for shared connections
+        mock_db.close.assert_not_awaited()
+        # Module should still be stopped
+        mock_module.stop.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_cleanup_owned_connection_closes_db(self, mock_db, mock_module):
+        """Test that cleanup() closes db when owns_connection=True (default)."""
+        session = TaskSession(
+            task_id="task-owned",
+            mission_id="mission-owned",
+            db=mock_db,
+            module=mock_module,
+            owns_connection=True,
+        )
+        mock_module.stop = AsyncMock()
+
+        await session.cleanup()
+
+        # DB should be closed for owned connections
+        mock_db.close.assert_awaited_once()
+        mock_module.stop.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_cleanup_default_owns_connection(self, mock_db, mock_module):
+        """Test that owns_connection defaults to True."""
+        session = TaskSession(
+            task_id="task-default",
+            mission_id="mission-default",
+            db=mock_db,
+            module=mock_module,
+        )
+        assert session._owns_connection is True
+
+        mock_module.stop = AsyncMock()
+        await session.cleanup()
+        mock_db.close.assert_awaited_once()
+
 
 # ============================================================================
 # Test Class: Error Handling and Edge Cases

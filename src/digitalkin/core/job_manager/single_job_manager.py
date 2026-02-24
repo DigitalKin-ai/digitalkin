@@ -125,7 +125,7 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         if self.channel is None:
             msg = "JobManager.start() must be called before creating jobs"
             raise RuntimeError(msg)
-        self.tasks_sessions[job_id] = TaskSession(job_id, mission_id, self.channel, module)
+        self.tasks_sessions[job_id] = TaskSession(job_id, mission_id, self.channel, module, owns_connection=False)
 
         try:
             await module.start_config_setup(
@@ -293,6 +293,7 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             mission_id,
             module,
             module.start(input_data, setup_data, callback, done_callback=None),  # type: ignore[arg-type]
+            shared_connection=self.channel,
         )
         logger.info("Managed task started: '%s'", job_id, extra={"task_id": job_id})
         return job_id

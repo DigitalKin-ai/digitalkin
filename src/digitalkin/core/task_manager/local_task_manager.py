@@ -5,6 +5,7 @@ from collections.abc import Coroutine
 from typing import Any
 
 from digitalkin.core.task_manager.base_task_manager import BaseTaskManager
+from digitalkin.core.task_manager.surrealdb_repository import SurrealDBConnection
 from digitalkin.core.task_manager.task_executor import TaskExecutor
 from digitalkin.logger import logger
 from digitalkin.modules._base_module import BaseModule
@@ -41,6 +42,8 @@ class LocalTaskManager(BaseTaskManager):
         coro: Coroutine[Any, Any, None],
         heartbeat_interval: datetime.timedelta = datetime.timedelta(seconds=2),
         connection_timeout: datetime.timedelta = datetime.timedelta(seconds=5),
+        *,
+        shared_connection: SurrealDBConnection | None = None,
     ) -> None:
         """Create and execute a task locally using TaskExecutor.
 
@@ -51,6 +54,8 @@ class LocalTaskManager(BaseTaskManager):
             coro: Coroutine to execute
             heartbeat_interval: Interval between heartbeats
             connection_timeout: Connection timeout for SurrealDB
+            shared_connection: If provided, reuse this SurrealDB connection instead of
+                creating a new one. The session will not close it on cleanup.
 
         Raises:
             ValueError: If task_id duplicated
@@ -73,7 +78,12 @@ class LocalTaskManager(BaseTaskManager):
         try:
             # Create session
             channel, session = await self._create_session(
-                task_id, mission_id, module, heartbeat_interval, connection_timeout
+                task_id,
+                mission_id,
+                module,
+                heartbeat_interval,
+                connection_timeout,
+                shared_connection=shared_connection,
             )
 
             # Execute task using TaskExecutor

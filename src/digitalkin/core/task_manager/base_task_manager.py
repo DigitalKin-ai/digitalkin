@@ -156,6 +156,8 @@ class BaseTaskManager(ABC):
         module: BaseModule,
         heartbeat_interval: datetime.timedelta,
         connection_timeout: datetime.timedelta,
+        *,
+        shared_connection: SurrealDBConnection | None = None,
     ) -> tuple[SurrealDBConnection, TaskSession]:
         """Create SurrealDB connection and task session.
 
@@ -165,18 +167,26 @@ class BaseTaskManager(ABC):
             module: The module instance
             heartbeat_interval: Interval between heartbeats
             connection_timeout: Connection timeout for SurrealDB
+            shared_connection: If provided, reuse this connection instead of creating a new one.
+                The session will not close it on cleanup.
 
         Returns:
             Tuple of (channel, session)
         """
-        channel: SurrealDBConnection = SurrealDBConnection("task_manager", connection_timeout)
-        await channel.init_surreal_instance()
+        if shared_connection is not None:
+            channel = shared_connection
+            owns_connection = False
+        else:
+            channel = SurrealDBConnection("task_manager", connection_timeout)
+            await channel.init_surreal_instance()
+            owns_connection = True
         session = TaskSession(
             task_id=task_id,
             mission_id=mission_id,
             db=channel,
             module=module,
             heartbeat_interval=heartbeat_interval,
+            owns_connection=owns_connection,
         )
         self.tasks_sessions[task_id] = session
         return channel, session
@@ -190,6 +200,8 @@ class BaseTaskManager(ABC):
         coro: Coroutine[Any, Any, None],
         heartbeat_interval: datetime.timedelta = datetime.timedelta(seconds=2),
         connection_timeout: datetime.timedelta = datetime.timedelta(seconds=5),
+        *,
+        shared_connection: SurrealDBConnection | None = None,
     ) -> None:
         """Create and manage a new task.
 
@@ -202,6 +214,8 @@ class BaseTaskManager(ABC):
             coro: Coroutine to execute
             heartbeat_interval: Interval between heartbeats
             connection_timeout: Connection timeout for SurrealDB
+            shared_connection: If provided, reuse this SurrealDB connection instead of
+                creating a new one. The session will not close it on cleanup.
 
         Raises:
             ValueError: If task_id duplicated

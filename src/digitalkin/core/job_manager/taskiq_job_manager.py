@@ -266,6 +266,7 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             mission_id,
             module,
             _dummy_coro(),
+            shared_connection=self.channel,
         )
 
         logger.info("Registered config task: %s, waiting for initial result", job_id)
@@ -408,6 +409,7 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             mission_id,
             module,
             _dummy_coro(),  # Will be closed immediately by TaskManager in remote mode
+            shared_connection=self.channel,
         )
 
         logger.info("Registered remote task: %s, waiting for initial result", job_id)
