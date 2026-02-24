@@ -68,27 +68,28 @@ class ChatHistoryMixin(UserMessageMixin, StorageMixin, LoggerMixin, Generic[Inpu
             StorageServiceError: If history update fails
         """
         history_key = self._get_history_key(context)
-        chat_history = await self.load_chat_history(context)
+        async with context.storage.record_lock(self.CHAT_HISTORY_COLLECTION, history_key):
+            chat_history = await self.load_chat_history(context)
 
-        chat_history.messages.append(BaseMessage(role=role, content=content))
-        if len(chat_history.messages) == 1:
-            # Create new record
-            self.log_debug(context, f"Creating new chat history for session: {history_key}")
-            await self.store_storage(
-                context,
-                self.CHAT_HISTORY_COLLECTION,
-                history_key,
-                chat_history.model_dump(),
-                data_type="OUTPUT",
-            )
-        else:
-            self.log_debug(context, f"Updating chat history for session: {history_key}")
-            await self.update_storage(
-                context,
-                self.CHAT_HISTORY_COLLECTION,
-                history_key,
-                chat_history.model_dump(),
-            )
+            chat_history.messages.append(BaseMessage(role=role, content=content))
+            if len(chat_history.messages) == 1:
+                # Create new record
+                self.log_debug(context, f"Creating new chat history for session: {history_key}")
+                await self.store_storage(
+                    context,
+                    self.CHAT_HISTORY_COLLECTION,
+                    history_key,
+                    chat_history.model_dump(),
+                    data_type="OUTPUT",
+                )
+            else:
+                self.log_debug(context, f"Updating chat history for session: {history_key}")
+                await self.update_storage(
+                    context,
+                    self.CHAT_HISTORY_COLLECTION,
+                    history_key,
+                    chat_history.model_dump(),
+                )
 
     async def save_send_message(
         self,

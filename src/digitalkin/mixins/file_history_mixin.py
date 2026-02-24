@@ -68,24 +68,25 @@ class FileHistoryMixin(StorageMixin, LoggerMixin):
             StorageServiceError: If history update fails
         """
         history_key = self._get_history_key(context)
-        file_history = await self.load_file_history(context)
+        async with context.storage.record_lock(self.FILE_HISTORY_COLLECTION, history_key):
+            file_history = await self.load_file_history(context)
 
-        file_history.files.extend(files)
-        if len(file_history.files) == len(files):
-            # Create new record
-            self.log_debug(context, f"Creating new file history for session: {history_key}")
-            await self.store_storage(
-                context,
-                self.FILE_HISTORY_COLLECTION,
-                history_key,
-                file_history.model_dump(),
-                data_type="OUTPUT",
-            )
-        else:
-            self.log_debug(context, f"Updating file history for session: {history_key}")
-            await self.update_storage(
-                context,
-                self.FILE_HISTORY_COLLECTION,
-                history_key,
-                file_history.model_dump(),
-            )
+            file_history.files.extend(files)
+            if len(file_history.files) == len(files):
+                # Create new record
+                self.log_debug(context, f"Creating new file history for session: {history_key}")
+                await self.store_storage(
+                    context,
+                    self.FILE_HISTORY_COLLECTION,
+                    history_key,
+                    file_history.model_dump(),
+                    data_type="OUTPUT",
+                )
+            else:
+                self.log_debug(context, f"Updating file history for session: {history_key}")
+                await self.update_storage(
+                    context,
+                    self.FILE_HISTORY_COLLECTION,
+                    history_key,
+                    file_history.model_dump(),
+                )

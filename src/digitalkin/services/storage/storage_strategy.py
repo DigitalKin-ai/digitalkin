@@ -1,5 +1,6 @@
 """This module contains the abstract base class for storage strategies."""
 
+import asyncio
 import datetime
 from abc import ABC, abstractmethod
 from enum import Enum
@@ -181,6 +182,22 @@ class StorageStrategy(BaseStrategy, ABC):
         super().__init__(mission_id, setup_id, setup_version_id)
         # Schema configuration mapping keys to model classes
         self.config: dict[str, type[BaseModel]] = config
+        self._record_locks: dict[str, asyncio.Lock] = {}
+
+    def record_lock(self, collection: str, record_id: str) -> asyncio.Lock:
+        """Get or create an asyncio.Lock for a specific record.
+
+        Args:
+            collection: The collection name
+            record_id: The record ID
+
+        Returns:
+            An asyncio.Lock scoped to the given collection:record_id pair.
+        """
+        key = f"{collection}:{record_id}"
+        if key not in self._record_locks:
+            self._record_locks[key] = asyncio.Lock()
+        return self._record_locks[key]
 
     async def store(
         self,
