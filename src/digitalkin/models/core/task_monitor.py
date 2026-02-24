@@ -7,7 +7,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 
-class TaskStatus(Enum):
+class TaskStatus(str, Enum):
     """Task status enumeration."""
 
     PENDING = "pending"
@@ -17,7 +17,7 @@ class TaskStatus(Enum):
     FAILED = "failed"
 
 
-class CancellationReason(Enum):
+class CancellationReason(str, Enum):
     """Reason for task termination."""
 
     COMPLETED = "completed"
@@ -37,7 +37,7 @@ class CancellationReason(Enum):
     UNKNOWN = "unknown"  # Reason not set - investigate code path
 
 
-class SignalType(Enum):
+class SignalType(str, Enum):
     """Signal type enumeration."""
 
     START = "start"
@@ -61,7 +61,6 @@ class SignalMessage(BaseModel):
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     payload: dict[str, Any] = Field(default_factory=dict, description="Optional payload for the signal")
 
-    # Enhanced logging fields
     cancellation_reason: CancellationReason = Field(
         default=CancellationReason.UNKNOWN,
         validate_default=True,
@@ -75,8 +74,6 @@ class SignalMessage(BaseModel):
         default=None,
         description="Full traceback if task failed with exception",
     )
-
-    model_config = {"use_enum_values": True}
 
 
 class HeartbeatMessage(BaseModel):
