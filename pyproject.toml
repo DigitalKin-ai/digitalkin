@@ -25,7 +25,7 @@
         "Programming Language :: Python",
         "Topic :: Software Development :: Libraries",
     ]
-    version = "0.3.2b5"
+    version = "0.3.2b6"
 
     dependencies = [
         "agentic-mesh-protocol==0.2.2",
