@@ -77,3 +77,28 @@ class StorageMixin:
             StorageServiceError: If update operation fails
         """
         return await context.storage.update(collection, record_id, data)
+
+    @staticmethod
+    async def upsert_storage(
+        context: ModuleContext,
+        collection: str,
+        record_id: str,
+        data: dict[str, Any],
+        data_type: Literal["OUTPUT", "VIEW", "LOGS", "OTHER"] = "OUTPUT",
+    ) -> StorageRecord:
+        """Insert or update data in storage atomically.
+
+        Args:
+            context: Module context containing the storage strategy
+            collection: Collection name
+            record_id: Record identifier
+            data: Data to store or update
+            data_type: Type of data being stored
+
+        Returns:
+            The created or updated storage record
+
+        Raises:
+            StorageServiceError: If upsert operation fails
+        """
+        return await context.storage.upsert(collection, record_id, data, data_type=data_type)
