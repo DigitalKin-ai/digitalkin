@@ -29,14 +29,13 @@ class GrpcCompression(str, Enum):
         Returns:
             The corresponding grpc.Compression value.
         """
-        return _COMPRESSION_MAP[self]
-
-
-_COMPRESSION_MAP: dict[GrpcCompression, grpc.Compression] = {
-    GrpcCompression.NONE: grpc.Compression.NoCompression,
-    GrpcCompression.GZIP: grpc.Compression.Gzip,
-    GrpcCompression.DEFLATE: grpc.Compression.Deflate,
-}
+        match self:
+            case GrpcCompression.NONE:
+                return grpc.Compression.NoCompression
+            case GrpcCompression.GZIP:
+                return grpc.Compression.Gzip
+            case GrpcCompression.DEFLATE:
+                return grpc.Compression.Deflate
 
 
 class ServerMode(str, Enum):
@@ -71,8 +70,7 @@ class ServerCredentials(BaseModel):
         "extra": "forbid",
         "arbitrary_types_allowed": True,
         "validate_assignment": True,
-        "use_enum_values": True,
-        "frozen": True,  # Make immutable
+        "frozen": True,
     }
 
     @field_validator("server_key_path", "server_cert_path", "root_cert_path")
@@ -149,8 +147,7 @@ class ClientCredentials(BaseModel):
         "extra": "forbid",
         "arbitrary_types_allowed": True,
         "validate_assignment": True,
-        "use_enum_values": True,
-        "frozen": True,  # Make immutable
+        "frozen": True,
     }
 
     @field_validator("client_key_path", "client_cert_path", "root_cert_path")
@@ -197,7 +194,6 @@ class ChannelConfig(BaseModel):
         "extra": "forbid",
         "arbitrary_types_allowed": True,
         "validate_assignment": True,
-        "use_enum_values": True,
     }
 
     @field_validator("port")

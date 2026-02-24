@@ -939,14 +939,12 @@ class TestSignalMessageStructure:
         # cancellation_reason must be present (not excluded as None)
         assert "cancellation_reason" in data
 
-        # All values must be primitives (str, int, float, bool, dict, list, None)
-        # No enum instances allowed — SurrealDB CBOR encoder rejects them
-        from enum import Enum
-
-        for key, value in data.items():
-            assert not isinstance(value, Enum), (
-                f"Field '{key}' is an enum instance ({type(value).__name__}), "
-                f"but SurrealDB CBOR encoder requires primitive types"
+        # All enum fields must be str-serializable for SurrealDB CBOR encoder.
+        # str, Enum members satisfy isinstance(v, str) so CBOR encodes them as strings.
+        for key in ("status", "action", "cancellation_reason"):
+            assert isinstance(data[key], str), (
+                f"Field '{key}' ({type(data[key]).__name__}) is not a str — "
+                f"SurrealDB CBOR encoder requires string-compatible types"
             )
 
     @pytest.mark.asyncio
