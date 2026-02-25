@@ -1,6 +1,7 @@
 """Module gRPC server implementation for DigitalKin."""
 
-from typing import TYPE_CHECKING
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Any
 
 from agentic_mesh_protocol.module.v1 import (
     module_service_pb2,
@@ -39,6 +40,7 @@ class ModuleServer(BaseServer):
         module_class: type[BaseModule],
         server_config: ModuleServerConfig,
         client_config: ClientConfig | None = None,
+        interceptors: Sequence[Any] | None = None,
     ) -> None:
         """Initialize the module server.
 
@@ -46,8 +48,9 @@ class ModuleServer(BaseServer):
             module_class: The module instance to be served.
             server_config: Server configuration.
             client_config: Client configuration used by services and registry connection.
+            interceptors: Optional sequence of gRPC server interceptors.
         """
-        super().__init__(server_config)
+        super().__init__(server_config, interceptors=interceptors)
         self.module_class = module_class
         self.server_config = server_config
         self.client_config = client_config

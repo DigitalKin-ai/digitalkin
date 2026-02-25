@@ -183,8 +183,8 @@ async def test_create_module_instance_job(
     call_args = mock_taskiq_task.kiq.call_args
     assert call_args is not None
     assert (
-        len(call_args[0]) == 7
-    )  # mission_id, setup_id, setup_version_id, module_class, services_mode, input_data, setup_data
+        len(call_args[0]) == 8
+    )  # mission_id, setup_id, setup_version_id, module_class, services_mode, input_data, setup_data, request_metadata
 
 
 @pytest.mark.asyncio
@@ -238,8 +238,8 @@ async def test_create_config_setup_instance_job(
     call_args = mock_taskiq_task.kiq.call_args
     assert call_args is not None
     assert (
-        len(call_args[0]) == 6
-    )  # mission_id, setup_id, setup_version_id, module_class, services_mode, config_setup_data
+        len(call_args[0]) == 7
+    )  # mission_id, setup_id, setup_version_id, module_class, services_mode, config_setup_data, request_metadata
 
 
 @pytest.mark.asyncio

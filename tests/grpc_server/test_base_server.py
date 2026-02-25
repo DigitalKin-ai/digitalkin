@@ -305,6 +305,7 @@ class TestServerCreation:
             mock_server.assert_called_once_with(
                 options=server_config_async_insecure.server_options,
                 compression=grpc.Compression.Gzip,
+                interceptors=None,
             )
 
             # Verify result is the mock server

@@ -433,7 +433,10 @@ class TaskSession:
             logger.exception("Error stopping module during cleanup", extra=ids)
 
         # Close DB connection (kills all live queries)
-        await self.db.close()
+        try:
+            await self.db.close()
+        except Exception:
+            logger.exception("Error closing DB connection during cleanup", extra=ids)
 
         # Clear module reference to allow garbage collection
         self.module = None  # type: ignore[assignment]  # Allow GC; typed as BaseModule but set to None after cleanup

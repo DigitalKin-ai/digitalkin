@@ -6,6 +6,7 @@ from digitalkin.models.module.module_types import (
     DataTrigger,
     SetupModel,
 )
+from digitalkin.models.module.request_metadata import RequestMetadata
 from digitalkin.models.module.select_schema import SelectSchema
 from digitalkin.models.module.tool_cache import (
     ToolCache,
@@ -31,6 +32,7 @@ __all__ = [
     "EndOfStreamOutput",
     "ModuleContext",
     "ModuleStartInfoOutput",
+    "RequestMetadata",
     "SelectSchema",
     "SetupModel",
     "ToolCache",

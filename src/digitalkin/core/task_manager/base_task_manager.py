@@ -3,6 +3,7 @@
 import asyncio
 import contextlib
 import datetime
+import os
 import types
 from abc import ABC, abstractmethod
 from collections.abc import Coroutine
@@ -38,7 +39,7 @@ class BaseTaskManager(ABC):
     def __init__(
         self,
         default_timeout: float = 10.0,
-        max_concurrent_tasks: int = 100,
+        max_concurrent_tasks: int = int(os.environ.get("DIGITALKIN_MAX_CONCURRENT_TASKS", "100")),
     ) -> None:
         """Initialize task manager properties.
 
@@ -98,17 +99,25 @@ class BaseTaskManager(ABC):
         )
 
         if session:
-            await session.cleanup()
-            self.tasks_sessions.pop(task_id, None)
-            logger.debug(
-                "Task session cleanup completed",
-                extra={
-                    "mission_id": mission_id,
-                    "task_id": task_id,
-                    "final_status": final_status,
-                    "cancellation_reason": cancellation_reason,
-                },
-            )
+            try:
+                await session.cleanup()
+            except Exception:
+                logger.exception(
+                    "Session cleanup failed, forcing removal from tracking",
+                    extra={"mission_id": mission_id, "task_id": task_id},
+                )
+            finally:
+                self.tasks_sessions.pop(task_id, None)
+                logger.debug(
+                    "Task cleaned up (%d remaining)",
+                    len(self.tasks_sessions),
+                    extra={
+                        "mission_id": mission_id,
+                        "task_id": task_id,
+                        "final_status": final_status,
+                        "cancellation_reason": cancellation_reason,
+                    },
+                )
 
         self.tasks.pop(task_id, None)
 
@@ -134,15 +143,27 @@ class BaseTaskManager(ABC):
             msg = f"Task {task_id} already exists"
             raise ValueError(msg)
 
-        if len(self.tasks_sessions) >= self.max_concurrent_tasks:
+        current_count = len(self.tasks_sessions)
+
+        if current_count >= self.max_concurrent_tasks * 8 // 10:
+            logger.warning(
+                "Task capacity at %d/%d (%.0f%%)",
+                current_count,
+                self.max_concurrent_tasks,
+                current_count / self.max_concurrent_tasks * 100,
+                extra={"mission_id": mission_id, "task_id": task_id},
+            )
+
+        if current_count >= self.max_concurrent_tasks:
             coro.close()
             logger.error(
-                "Task creation failed - max concurrent tasks reached: %d",
+                "Task creation failed - max concurrent tasks reached: %d, active sessions: %s",
                 self.max_concurrent_tasks,
+                {tid: s.status.value for tid, s in self.tasks_sessions.items()},
                 extra={
                     "mission_id": mission_id,
                     "task_id": task_id,
-                    "current_count": len(self.tasks_sessions),
+                    "current_count": current_count,
                     "max_concurrent": self.max_concurrent_tasks,
                 },
             )

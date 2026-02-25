@@ -101,6 +101,7 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         mission_id: str,
         setup_id: str,
         setup_version_id: str,
+        request_metadata: dict[str, str] | None = None,
     ) -> str:
         """Create and start a new module setup configuration job.
 
@@ -112,6 +113,7 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             mission_id: The mission ID associated with the job.
             setup_id: The setup ID associated with the module.
             setup_version_id: The setup ID.
+            request_metadata: gRPC request metadata (headers) to forward to the module.
 
         Returns:
             str: The unique identifier (job ID) of the created job.
@@ -121,7 +123,9 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             Exception: If the module fails to start.
         """
         job_id = str(uuid.uuid4())
-        module = ModuleFactory.create_module_instance(self.module_class, job_id, mission_id, setup_id, setup_version_id)
+        module = ModuleFactory.create_module_instance(
+            self.module_class, job_id, mission_id, setup_id, setup_version_id, request_metadata=request_metadata
+        )
         if self.channel is None:
             msg = "JobManager.start() must be called before creating jobs"
             raise RuntimeError(msg)
@@ -265,6 +269,7 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         mission_id: str,
         setup_id: str,
         setup_version_id: str,
+        request_metadata: dict[str, str] | None = None,
     ) -> str:
         """Create and start a new module job.
 
@@ -277,6 +282,7 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             mission_id: The mission ID associated with the job.
             setup_id: The setup ID associated with the module.
             setup_version_id: The setup Version ID associated with the module.
+            request_metadata: gRPC request metadata (headers) to forward to the module.
 
         Returns:
             str: The unique identifier (job ID) of the created job.
@@ -285,7 +291,9 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             Exception: If the module fails to start.
         """
         job_id = str(uuid.uuid4())
-        module = ModuleFactory.create_module_instance(self.module_class, job_id, mission_id, setup_id, setup_version_id)
+        module = ModuleFactory.create_module_instance(
+            self.module_class, job_id, mission_id, setup_id, setup_version_id, request_metadata=request_metadata
+        )
         callback = await self.job_specific_callback(self.add_to_queue, job_id)
 
         await self.create_task(

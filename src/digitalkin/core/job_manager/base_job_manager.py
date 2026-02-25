@@ -180,6 +180,7 @@ class BaseJobManager(abc.ABC, Generic[InputModelT, OutputModelT, SetupModelT]):
         mission_id: str,
         setup_id: str,
         setup_version_id: str,
+        request_metadata: dict[str, str] | None = None,
     ) -> str:
         """Create and start a new job for the module's instance.
 
@@ -189,6 +190,7 @@ class BaseJobManager(abc.ABC, Generic[InputModelT, OutputModelT, SetupModelT]):
             mission_id: The mission ID associated with the job.
             setup_id: The setup ID.
             setup_version_id: The setup version ID associated with the module.
+            request_metadata: gRPC request metadata (headers) to forward to the module.
 
         Returns:
             str: The unique identifier (job ID) of the created job.
@@ -216,6 +218,7 @@ class BaseJobManager(abc.ABC, Generic[InputModelT, OutputModelT, SetupModelT]):
         mission_id: str,
         setup_id: str,
         setup_version_id: str,
+        request_metadata: dict[str, str] | None = None,
     ) -> str:
         """Create and start a new module job.
 
@@ -227,6 +230,7 @@ class BaseJobManager(abc.ABC, Generic[InputModelT, OutputModelT, SetupModelT]):
             mission_id: The mission ID associated with the job.
             setup_id: The setup ID.
             setup_version_id: The setup version ID.
+            request_metadata: gRPC request metadata (headers) to forward to the module.
 
         Returns:
             str: The unique identifier (job ID) of the created job.

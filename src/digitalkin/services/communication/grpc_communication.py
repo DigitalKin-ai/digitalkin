@@ -174,6 +174,7 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
         setup_id: str,
         mission_id: str,
         callback: Callable[[dict], Awaitable[None]] | None = None,
+        metadata: dict[str, str] | None = None,
     ) -> AsyncGenerator[dict, None]:
         """Call a module and stream responses via gRPC.
 
@@ -184,6 +185,7 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
             setup_id: Setup configuration ID
             mission_id: Mission context ID
             callback: Optional callback for each response
+            metadata: Optional gRPC metadata (headers) to send with the request.
 
         Yields:
             Streaming responses from module as dictionaries
@@ -201,6 +203,9 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
             mission_id=mission_id,
         )
 
+        # Convert metadata dict to gRPC metadata format
+        grpc_metadata = list(metadata.items()) if metadata else None
+
         logger.debug(
             "Calling module",
             extra={
@@ -212,8 +217,8 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
         )
 
         try:
-            # Call StartModule with streaming response
-            response_stream = stub.StartModule(request)
+            # Call StartModule with streaming response and optional metadata
+            response_stream = stub.StartModule(request, metadata=grpc_metadata)
 
             # Stream responses
             async for response in response_stream:

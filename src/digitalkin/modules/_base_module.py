@@ -97,8 +97,17 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
         mission_id: str,
         setup_id: str,
         setup_version_id: str,
+        request_metadata: dict[str, str] | None = None,
     ) -> None:
-        """Initialize the module."""
+        """Initialize the module.
+
+        Args:
+            job_id: Unique job identifier.
+            mission_id: Mission identifier.
+            setup_id: Setup identifier.
+            setup_version_id: Setup version identifier.
+            request_metadata: gRPC request metadata (headers) from the incoming request.
+        """
         self._status = ModuleStatus.CREATED
 
         # Initialize minimum context
@@ -112,6 +121,7 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
                 "job_id": job_id,
             },
             callbacks={"logger": logger},
+            request_metadata=request_metadata,
         )
 
     @property

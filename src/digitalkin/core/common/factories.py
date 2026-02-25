@@ -65,6 +65,7 @@ class ModuleFactory:
         mission_id: str,
         setup_id: str,
         setup_version_id: str,
+        request_metadata: dict[str, str] | None = None,
     ) -> BaseModule:
         """Create a module instance with standard parameters.
 
@@ -77,6 +78,7 @@ class ModuleFactory:
             mission_id: Mission identifier
             setup_id: Setup identifier
             setup_version_id: Setup version identifier
+            request_metadata: gRPC request metadata (headers) to forward to the module.
 
         Returns:
             Instantiated module
@@ -119,6 +121,7 @@ class ModuleFactory:
             mission_id=mission_id,
             setup_id=setup_id,
             setup_version_id=setup_version_id,
+            request_metadata=request_metadata,
         )
 
 

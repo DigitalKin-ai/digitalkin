@@ -69,6 +69,7 @@ class DefaultCommunication(CommunicationStrategy):
         setup_id: str,
         mission_id: str,
         callback: Callable[[dict], Awaitable[None]] | None = None,
+        metadata: dict[str, str] | None = None,  # noqa: ARG002
     ) -> AsyncGenerator[dict, None]:
         """Call module (local implementation yields empty response).
 
@@ -79,6 +80,7 @@ class DefaultCommunication(CommunicationStrategy):
             setup_id: Setup ID
             mission_id: Mission ID
             callback: Optional callback
+            metadata: Optional gRPC metadata (headers).
 
         Yields:
             Empty response dictionary

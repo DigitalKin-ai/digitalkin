@@ -208,6 +208,7 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         mission_id: str,
         setup_id: str,
         setup_version_id: str,
+        request_metadata: dict[str, str] | None = None,
     ) -> str:
         """Create and start a new module setup configuration job.
 
@@ -219,6 +220,7 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             mission_id: The mission ID associated with the job.
             setup_id: The setup ID associated with the module.
             setup_version_id: The setup ID.
+            request_metadata: gRPC request metadata (headers) to forward to the module.
 
         Returns:
             str: The unique identifier (job ID) of the created job.
@@ -245,6 +247,7 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             self.module_class,
             self.services_mode,
             config_setup_data.model_dump(mode="json"),  # SetupModelT generic bound to BaseModel # type: ignore
+            request_metadata,
         )
 
         job_id = running_task.task_id
@@ -255,6 +258,7 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             mission_id=mission_id,
             setup_id=setup_id,
             setup_version_id=setup_version_id,
+            request_metadata=request_metadata,
         )
 
         # Register task in TaskManager (remote mode)
@@ -356,6 +360,7 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         mission_id: str,
         setup_id: str,
         setup_version_id: str,
+        request_metadata: dict[str, str] | None = None,
     ) -> str:
         """Launches the module_task in Taskiq, returns the Taskiq task id as job_id.
 
@@ -365,6 +370,7 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             mission_id: Mission ID for the module
             setup_id: The setup ID associated with the module.
             setup_version_id: The setup ID associated with the module.
+            request_metadata: gRPC request metadata (headers) to forward to the module.
 
         Returns:
             job_id: The Taskiq task id.
@@ -387,6 +393,7 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             self.services_mode,
             input_data.model_dump(mode="json"),
             setup_data.model_dump(mode="json"),
+            request_metadata,
         )
         job_id = running_task.task_id
 
@@ -396,6 +403,7 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             mission_id=mission_id,
             setup_id=setup_id,
             setup_version_id=setup_version_id,
+            request_metadata=request_metadata,
         )
 
         # Register task in TaskManager (remote mode)
