@@ -2,7 +2,7 @@
 
 import abc
 import asyncio
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from concurrent import futures
 from pathlib import Path
 from typing import Any, cast
@@ -37,17 +37,23 @@ class BaseServer(abc.ABC):
         _health_servicer: Optional health check servicer.
     """
 
-    def __init__(self, config: ServerConfig) -> None:
+    def __init__(
+        self,
+        config: ServerConfig,
+        interceptors: Sequence[Any] | None = None,
+    ) -> None:
         """Initialize the base gRPC server.
 
         Args:
             config: The server configuration.
+            interceptors: Optional sequence of gRPC server interceptors.
         """
         self.config = config
         self.server: GrpcServer | None = None
         self._servicers: list[Any] = []
         self._service_names: list[str] = []  # Track service names for reflection
         self._health_servicer: Any = None  # For health checking
+        self._interceptors: list[Any] = list(interceptors) if interceptors else []
 
     def register_servicer(
         self,
@@ -197,12 +203,17 @@ class BaseServer(abc.ABC):
             # Create the server based on mode
             grpc_compression = self.config.compression.to_grpc()
             if self.config.mode == ServerMode.ASYNC:
-                server = grpc_aio.server(options=self.config.server_options, compression=grpc_compression)
+                server = grpc_aio.server(
+                    options=self.config.server_options,
+                    compression=grpc_compression,
+                    interceptors=self._interceptors or None,
+                )
             else:
                 server = grpc.server(  # type: ignore[assignment]  # sync grpc.Server assigned to GrpcServer union
                     futures.ThreadPoolExecutor(max_workers=self.config.max_workers),
                     options=self.config.server_options,
                     compression=grpc_compression,
+                    interceptors=self._interceptors or None,
                 )
 
             # Add the appropriate port

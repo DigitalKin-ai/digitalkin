@@ -50,8 +50,15 @@ class MockModule(BaseModule[MockInputModel, MockOutputModel, MockSetupModel, Non
         services_config_strategies={}, services_config_params={}, mode=ServicesMode.LOCAL
     )
 
-    def __init__(self, job_id: str, mission_id: str, setup_id: str, setup_version_id: str) -> None:
-        super().__init__(job_id, mission_id, setup_id, setup_version_id)
+    def __init__(
+        self,
+        job_id: str,
+        mission_id: str,
+        setup_id: str,
+        setup_version_id: str,
+        request_metadata: dict[str, str] | None = None,
+    ) -> None:
+        super().__init__(job_id, mission_id, setup_id, setup_version_id, request_metadata=request_metadata)
         self.job_id = job_id
         self.mission_id = mission_id
         self.setup_id = setup_id

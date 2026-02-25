@@ -1145,21 +1145,22 @@ class TestCleanup:
         assert any("Error stopping module during cleanup" in str(call) for call in exception_calls)
 
     @pytest.mark.asyncio
-    async def test_cleanup_db_close_failure_propagates(self, task_session, mock_db, mock_module):
-        """Test that DB close failures propagate (critical failure).
+    async def test_cleanup_db_close_failure_is_caught(self, task_session, mock_db, mock_module):
+        """Test that DB close failures are caught and logged.
 
-        Unlike module.stop() failures, DB close failures are critical and should
-        propagate to caller for proper error handling.
+        DB close failures must not propagate to prevent session leaks
+        in _cleanup_task() where tasks_sessions.pop() must always execute.
         """
         mock_module.stop = AsyncMock()
         mock_db.close = AsyncMock(side_effect=ConnectionError("DB close failed"))
 
-        # Execute cleanup - exception should propagate
-        with pytest.raises(ConnectionError, match="DB close failed"):
-            await task_session.cleanup()
+        # Execute cleanup - exception should NOT propagate
+        await task_session.cleanup()
 
         # Module should still have been stopped
         mock_module.stop.assert_awaited_once()
+        # DB close was still attempted
+        mock_db.close.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_cleanup_execution_order(self, task_session, mock_db, mock_module):

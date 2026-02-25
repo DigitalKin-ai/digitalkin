@@ -8,6 +8,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from digitalkin.logger import logger
+from digitalkin.models.module.request_metadata import RequestMetadata
 from digitalkin.models.module.tool_cache import ToolCache, ToolDefinition, ToolModuleInfo, ToolParameter
 from digitalkin.services.agent.agent_strategy import AgentStrategy
 from digitalkin.services.communication.communication_strategy import CommunicationStrategy
@@ -102,6 +103,7 @@ class ModuleContext:
     helpers: SimpleNamespace
     state: SimpleNamespace = SimpleNamespace()
     tool_cache: ToolCache
+    request_metadata: RequestMetadata
 
     def __init__(  # All service strategies are mandatory constructor args # noqa: PLR0913, PLR0917
         self,
@@ -119,6 +121,7 @@ class ModuleContext:
         helpers: dict[str, Any] = {},
         callbacks: dict[str, Any] = {},
         tool_cache: ToolCache | None = None,
+        request_metadata: dict[str, str] | None = None,
     ) -> None:
         """Register mandatory services, session, metadata and callbacks.
 
@@ -137,6 +140,7 @@ class ModuleContext:
             session: dict referring the session IDs or informations.
             callbacks: Functions allowing user to agent interaction.
             tool_cache: ToolCache with pre-resolved tool references from setup.
+            request_metadata: gRPC request metadata (headers) from the incoming request.
         """
         self.agent = agent
         self.communication = communication
@@ -153,6 +157,7 @@ class ModuleContext:
         self.helpers = SimpleNamespace(**helpers)
         self.callbacks = SimpleNamespace(**callbacks)
         self.tool_cache = tool_cache or ToolCache()
+        self.request_metadata = RequestMetadata(request_metadata)
 
     async def get_module_schemas_by_id(
         self,
@@ -314,7 +319,9 @@ class ModuleContext:
         result = []
         for tool_def in tool_module_info.tools:
             # Capture tool_def in closure via separate method
-            fn = ModuleContext._create_single_tool_function(communication, session, tool_module_info, tool_def)
+            fn = ModuleContext._create_single_tool_function(
+                communication, session, tool_module_info, tool_def, self.request_metadata
+            )
             result.append((tool_def, fn))
 
         return result
@@ -325,6 +332,7 @@ class ModuleContext:
         session: Session,
         tool_module_info: ToolModuleInfo,
         tool_def: ToolDefinition,
+        request_metadata: RequestMetadata | None = None,
     ) -> Callable[..., AsyncGenerator[dict, None]]:
         """Create a single tool function for a specific protocol.
 
@@ -333,11 +341,13 @@ class ModuleContext:
             session: Current session with setup_id and mission_id.
             tool_module_info: Tool module information containing address and port.
             tool_def: Tool definition with protocol name.
+            request_metadata: Optional request metadata to forward to the called module.
 
         Returns:
             Async generator function that calls the module with protocol injected.
         """
         protocol = tool_def.name
+        grpc_metadata = request_metadata.to_dict() if request_metadata else None
 
         async def tool_function(
             **kwargs: Any,
@@ -350,6 +360,7 @@ class ModuleContext:
                 input_data=wrapped_input,
                 setup_id=tool_module_info.setup_id,
                 mission_id=session.mission_id,
+                metadata=grpc_metadata,
             ):
                 yield response
 

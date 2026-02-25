@@ -64,6 +64,7 @@ class CommunicationStrategy(BaseStrategy, ABC):
         setup_id: str,
         mission_id: str,
         callback: Callable[[dict], Awaitable[None]] | None = None,
+        metadata: dict[str, str] | None = None,
     ) -> AsyncGenerator[dict, None]:
         """Call a module and stream responses.
 
@@ -77,6 +78,7 @@ class CommunicationStrategy(BaseStrategy, ABC):
             setup_id: Setup configuration ID
             mission_id: Mission context ID
             callback: Optional callback for each response
+            metadata: Optional gRPC metadata (headers) to send with the request.
 
         Yields:
             Streaming responses from module as dictionaries

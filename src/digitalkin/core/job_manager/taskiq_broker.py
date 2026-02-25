@@ -164,6 +164,7 @@ async def run_start_module(
     services_mode: ServicesMode,
     input_data: dict,
     setup_data: dict,
+    request_metadata: dict[str, str] | None = None,
     context: Context = TaskiqDepends(),
 ) -> None:
     """TaskIQ task allowing a module to compute in the background asynchronously.
@@ -176,6 +177,7 @@ async def run_start_module(
         services_mode: ServicesMode,
         input_data: dict,
         setup_data: dict,
+        request_metadata: gRPC request metadata (headers) to forward to the module.
         context: Allow TaskIQ context access
     """
     logger.info("Starting module with services_mode: %s", services_mode)
@@ -190,7 +192,9 @@ async def run_start_module(
 
     job_id = context.message.task_id
     callback = await BaseJobManager.job_specific_callback(send_message_to_stream, job_id)
-    module = ModuleFactory.create_module_instance(module_class, job_id, mission_id, setup_id, setup_version_id)
+    module = ModuleFactory.create_module_instance(
+        module_class, job_id, mission_id, setup_id, setup_version_id, request_metadata=request_metadata
+    )
 
     channel = None
     try:
@@ -252,6 +256,7 @@ async def run_config_module(
     module_class: type[BaseModule],
     services_mode: ServicesMode,
     config_setup_data: dict,
+    request_metadata: dict[str, str] | None = None,
     context: Context = TaskiqDepends(),
 ) -> None:
     """TaskIQ task allowing a module to compute in the background asynchronously.
@@ -263,6 +268,7 @@ async def run_config_module(
         module_class: type[BaseModule],
         services_mode: ServicesMode,
         config_setup_data: dict,
+        request_metadata: gRPC request metadata (headers) to forward to the module.
         context: Allow TaskIQ context access
     """
     logger.info("Starting config module with services_mode: %s", services_mode)
@@ -278,7 +284,9 @@ async def run_config_module(
     callback = await BaseJobManager.job_specific_callback(  # type: ignore[type-var]
         send_message_to_stream, job_id
     )
-    module = ModuleFactory.create_module_instance(module_class, job_id, mission_id, setup_id, setup_version_id)
+    module = ModuleFactory.create_module_instance(
+        module_class, job_id, mission_id, setup_id, setup_version_id, request_metadata=request_metadata
+    )
 
     # Override environment variables temporarily to use manager's SurrealDB
     channel = None

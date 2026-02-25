@@ -147,12 +147,17 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             msg = "No config setup data returned."
             raise ServicerError(msg)
 
+        # Extract gRPC request metadata (headers) for propagation
+        raw_metadata = context.invocation_metadata()
+        request_metadata: dict[str, str] = {str(k): str(v) for k, v in raw_metadata.items()} if raw_metadata else {}
+
         # create a task to run the module in background
         job_id = await self.job_manager.create_config_setup_instance_job(
             config_setup_data,
             request.mission_id,
             setup_version.setup_id,
             setup_version.id,
+            request_metadata=request_metadata,
         )
 
         if job_id is None:
@@ -338,6 +343,10 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
 
         setup_data = await self.module_class.create_setup_model(setup_data_class.current_setup_version.content)
 
+        # Extract gRPC request metadata (headers) for propagation
+        raw_metadata = context.invocation_metadata()
+        request_metadata: dict[str, str] = {str(k): str(v) for k, v in raw_metadata.items()} if raw_metadata else {}
+
         # create a task to run the module in background
         job_id = await self.job_manager.create_module_instance_job(
             input_data,
@@ -345,6 +354,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             mission_id=request.mission_id,
             setup_id=setup_data_class.current_setup_version.setup_id,
             setup_version_id=setup_data_class.current_setup_version.id,
+            request_metadata=request_metadata,
         )
 
         if job_id is None:
