@@ -21,13 +21,14 @@ class RegistryStrategy(BaseStrategy, ABC):
 
     def __init__(
         self,
-        mission_id: str,
-        setup_id: str,
-        setup_version_id: str,
         config: dict[str, Any] | None = None,
     ) -> None:
-        """Initialize the strategy."""
-        super().__init__(mission_id, setup_id, setup_version_id)
+        """Initialize the strategy.
+
+        Args:
+            config: Optional configuration dictionary.
+        """
+        super().__init__()
         self.config = config
 
     @abstractmethod

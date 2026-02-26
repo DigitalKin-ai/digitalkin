@@ -9,7 +9,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
-from digitalkin.services.base_strategy import BaseStrategy
+from digitalkin.services.base_strategy import BaseStrategy, RequestContext
 
 
 class StorageServiceError(Exception):
@@ -64,8 +64,9 @@ class StorageStrategy(BaseStrategy, ABC):
             msg = f"Validation failed for '{collection}': {e!s}"
             raise ValueError(msg) from e
 
+    @staticmethod
     def _create_storage_record(
-        self,
+        ctx: RequestContext,
         collection: str,
         record_id: str,
         validated_data: BaseModel,
@@ -74,6 +75,7 @@ class StorageStrategy(BaseStrategy, ABC):
         """Create a storage record with metadata.
 
         Args:
+            ctx: Request context with mission_id.
             collection: The unique name for the record type
             record_id: The unique ID for the record
             validated_data: The validated data model
@@ -83,7 +85,7 @@ class StorageStrategy(BaseStrategy, ABC):
             A complete storage record with metadata
         """
         return StorageRecord(
-            mission_id=self.mission_id,
+            mission_id=ctx.mission_id,
             collection=collection,
             record_id=record_id,
             data=validated_data,
@@ -106,10 +108,11 @@ class StorageStrategy(BaseStrategy, ABC):
         """
 
     @abstractmethod
-    async def _read(self, collection: str, record_id: str) -> StorageRecord | None:
+    async def _read(self, ctx: RequestContext, collection: str, record_id: str) -> StorageRecord | None:
         """Get records from storage by key.
 
         Args:
+            ctx: Request context with mission_id.
             collection: The unique name to retrieve data for
             record_id: The unique ID of the record
 
@@ -118,10 +121,13 @@ class StorageStrategy(BaseStrategy, ABC):
         """
 
     @abstractmethod
-    async def _update(self, collection: str, record_id: str, data: BaseModel) -> StorageRecord | None:
+    async def _update(
+        self, ctx: RequestContext, collection: str, record_id: str, data: BaseModel
+    ) -> StorageRecord | None:
         """Overwrite an existing record's payload.
 
         Args:
+            ctx: Request context with mission_id.
             collection: The unique name for the record type
             record_id: The unique ID of the record
             data: The new data to store
@@ -131,10 +137,11 @@ class StorageStrategy(BaseStrategy, ABC):
         """
 
     @abstractmethod
-    async def _remove(self, collection: str, record_id: str) -> bool:
+    async def _remove(self, ctx: RequestContext, collection: str, record_id: str) -> bool:
         """Delete a record from the storage.
 
         Args:
+            ctx: Request context with mission_id.
             collection: The unique name for the record type
             record_id: The unique ID of the record
 
@@ -143,10 +150,11 @@ class StorageStrategy(BaseStrategy, ABC):
         """
 
     @abstractmethod
-    async def _list(self, collection: str) -> list[StorageRecord]:
+    async def _list(self, ctx: RequestContext, collection: str) -> list[StorageRecord]:
         """List all records in a collection.
 
         Args:
+            ctx: Request context with mission_id.
             collection: The unique name for the record type
 
         Returns:
@@ -154,10 +162,11 @@ class StorageStrategy(BaseStrategy, ABC):
         """
 
     @abstractmethod
-    async def _remove_collection(self, collection: str) -> bool:
+    async def _remove_collection(self, ctx: RequestContext, collection: str) -> bool:
         """Delete all records in a collection.
 
         Args:
+            ctx: Request context with mission_id.
             collection: The unique name for the record type
 
         Returns:
@@ -166,20 +175,14 @@ class StorageStrategy(BaseStrategy, ABC):
 
     def __init__(
         self,
-        mission_id: str,
-        setup_id: str,
-        setup_version_id: str,
         config: dict[str, type[BaseModel]],
     ) -> None:
         """Initialize the storage strategy.
 
         Args:
-            mission_id: The ID of the mission this strategy is associated with
-            setup_id: The ID of the setup
-            setup_version_id: The ID of the setup version
             config: A dictionary mapping names to Pydantic model classes
         """
-        super().__init__(mission_id, setup_id, setup_version_id)
+        super().__init__()
         # Schema configuration mapping keys to model classes
         self.config: dict[str, type[BaseModel]] = config
         self._record_locks: dict[str, asyncio.Lock] = {}
@@ -201,6 +204,7 @@ class StorageStrategy(BaseStrategy, ABC):
 
     async def store(
         self,
+        ctx: RequestContext,
         collection: str,
         record_id: str | None,
         data: dict[str, Any],
@@ -209,6 +213,7 @@ class StorageStrategy(BaseStrategy, ABC):
         """Store a new record in the storage.
 
         Args:
+            ctx: Request context with mission_id.
             collection: The unique name for the record type
             record_id: The unique ID for the record (optional)
             data: The data to store
@@ -225,15 +230,16 @@ class StorageStrategy(BaseStrategy, ABC):
             raise ValueError(msg)
         record_id = record_id or uuid4().hex
         data_type_enum = DataType[data_type]
-        validated_data = self._validate_data(collection, {**data, "mission_id": self.mission_id})
-        record = self._create_storage_record(collection, record_id, validated_data, data_type_enum)
+        validated_data = self._validate_data(collection, {**data, "mission_id": ctx.mission_id})
+        record = self._create_storage_record(ctx, collection, record_id, validated_data, data_type_enum)
         async with self._record_lock(collection, record_id):
             return await self._store(record)
 
-    async def read(self, collection: str, record_id: str) -> StorageRecord | None:
+    async def read(self, ctx: RequestContext, collection: str, record_id: str) -> StorageRecord | None:
         """Get records from storage by key.
 
         Args:
+            ctx: Request context with mission_id.
             collection: The unique name to retrieve data for
             record_id: The unique ID of the record
 
@@ -241,12 +247,15 @@ class StorageStrategy(BaseStrategy, ABC):
             A storage record with validated data
         """
         async with self._record_lock(collection, record_id):
-            return await self._read(collection, record_id)
+            return await self._read(ctx, collection, record_id)
 
-    async def update(self, collection: str, record_id: str, data: dict[str, Any]) -> StorageRecord | None:
+    async def update(
+        self, ctx: RequestContext, collection: str, record_id: str, data: dict[str, Any]
+    ) -> StorageRecord | None:
         """Validate & overwrite an existing record.
 
         Args:
+            ctx: Request context with mission_id.
             collection: The unique name for the record type
             record_id: The unique ID of the record
             data: The new data to store
@@ -256,12 +265,13 @@ class StorageStrategy(BaseStrategy, ABC):
         """
         validated_data = self._validate_data(collection, data)
         async with self._record_lock(collection, record_id):
-            return await self._update(collection, record_id, validated_data)
+            return await self._update(ctx, collection, record_id, validated_data)
 
-    async def remove(self, collection: str, record_id: str) -> bool:
+    async def remove(self, ctx: RequestContext, collection: str, record_id: str) -> bool:
         """Delete a record from the storage.
 
         Args:
+            ctx: Request context with mission_id.
             collection: The unique name for the record type
             record_id: The unique ID of the record
 
@@ -269,32 +279,35 @@ class StorageStrategy(BaseStrategy, ABC):
             True if the deletion was successful, False otherwise
         """
         async with self._record_lock(collection, record_id):
-            return await self._remove(collection, record_id)
+            return await self._remove(ctx, collection, record_id)
 
-    async def list(self, collection: str) -> list[StorageRecord]:
+    async def list(self, ctx: RequestContext, collection: str) -> list[StorageRecord]:
         """Get all records within a collection.
 
         Args:
+            ctx: Request context with mission_id.
             collection: The unique name for the record type
 
         Returns:
             A list of storage records
         """
-        return await self._list(collection)
+        return await self._list(ctx, collection)
 
-    async def remove_collection(self, collection: str) -> bool:
+    async def remove_collection(self, ctx: RequestContext, collection: str) -> bool:
         """Wipe a record clean.
 
         Args:
+            ctx: Request context with mission_id.
             collection: The unique name for the record type
 
         Returns:
             True if the deletion was successful, False otherwise
         """
-        return await self._remove_collection(collection)
+        return await self._remove_collection(ctx, collection)
 
     async def upsert(
         self,
+        ctx: RequestContext,
         collection: str,
         record_id: str,
         data: dict[str, Any],
@@ -307,6 +320,7 @@ class StorageStrategy(BaseStrategy, ABC):
         per-record lock to prevent races.
 
         Args:
+            ctx: Request context with mission_id.
             collection: The unique name for the record type
             record_id: The unique ID for the record
             data: The data to store
@@ -323,14 +337,14 @@ class StorageStrategy(BaseStrategy, ABC):
             msg = f"Invalid data type '{data_type}'. Must be one of {list(DataType.__members__.keys())}"
             raise ValueError(msg)
         data_type_enum = DataType[data_type]
-        validated_data = self._validate_data(collection, {**data, "mission_id": self.mission_id})
+        validated_data = self._validate_data(collection, {**data, "mission_id": ctx.mission_id})
         async with self._record_lock(collection, record_id):
-            existing = await self._read(collection, record_id)
+            existing = await self._read(ctx, collection, record_id)
             if existing:
-                updated = await self._update(collection, record_id, validated_data)
+                updated = await self._update(ctx, collection, record_id, validated_data)
                 if updated is None:
                     msg = f"Update failed for existing record '{collection}:{record_id}'"
                     raise StorageServiceError(msg)
                 return updated
-            record = self._create_storage_record(collection, record_id, validated_data, data_type_enum)
+            record = self._create_storage_record(ctx, collection, record_id, validated_data, data_type_enum)
             return await self._store(record)

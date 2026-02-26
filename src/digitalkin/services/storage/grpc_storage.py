@@ -1,4 +1,4 @@
-"""This module implements the default storage strategy."""
+"""This module implements the gRPC storage strategy."""
 
 from agentic_mesh_protocol.storage.v1 import data_pb2, storage_service_pb2_grpc
 from google.protobuf import json_format
@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
 from digitalkin.logger import logger
 from digitalkin.models.grpc_servers.models import ClientConfig
+from digitalkin.services.base_strategy import RequestContext
 from digitalkin.services.storage.storage_strategy import (
     DataType,
     StorageRecord,
@@ -55,7 +56,7 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
     async def _store(self, record: StorageRecord) -> StorageRecord:
         """Create a new record in the database.
 
-        Parameters:
+        Args:
             record: The record to store
 
         Returns:
@@ -84,15 +85,20 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
             )
             raise StorageServiceError(str(e)) from e
 
-    async def _read(self, collection: str, record_id: str) -> StorageRecord | None:
+    async def _read(self, ctx: RequestContext, collection: str, record_id: str) -> StorageRecord | None:
         """Fetch a single document by collection + record_id.
+
+        Args:
+            ctx: Request context with mission_id.
+            collection: The unique name to retrieve data for
+            record_id: The unique ID of the record
 
         Returns:
             StorageData: The record
         """
         try:
             req = data_pb2.ReadRecordRequest(
-                mission_id=self.mission_id,
+                mission_id=ctx.mission_id,
                 collection=collection,
                 record_id=record_id,
             )
@@ -104,6 +110,7 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
 
     async def _update(
         self,
+        ctx: RequestContext,
         collection: str,
         record_id: str,
         data: BaseModel,
@@ -111,6 +118,7 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
         """Overwrite a document via gRPC.
 
         Args:
+            ctx: Request context with mission_id.
             collection: The unique name for the record type
             record_id: The unique ID for the record
             data: The validated data model
@@ -123,7 +131,7 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
             struct.update(data.model_dump())
             req = data_pb2.UpdateRecordRequest(
                 data=struct,
-                mission_id=self.mission_id,
+                mission_id=ctx.mission_id,
                 collection=collection,
                 record_id=record_id,
             )
@@ -133,10 +141,11 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
             logger.warning("gRPC UpdateRecord failed for %s:%s", collection, record_id)
             return None
 
-    async def _remove(self, collection: str, record_id: str) -> bool:
+    async def _remove(self, ctx: RequestContext, collection: str, record_id: str) -> bool:
         """Delete a document via gRPC.
 
         Args:
+            ctx: Request context with mission_id.
             collection: The unique name for the record type
             record_id: The unique ID for the record
 
@@ -145,7 +154,7 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
         """
         try:
             req = data_pb2.RemoveRecordRequest(
-                mission_id=self.mission_id,
+                mission_id=ctx.mission_id,
                 collection=collection,
                 record_id=record_id,
             )
@@ -159,10 +168,11 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
             return False
         return True
 
-    async def _list(self, collection: str) -> list[StorageRecord]:
+    async def _list(self, ctx: RequestContext, collection: str) -> list[StorageRecord]:
         """List all documents in a collection via gRPC.
 
         Args:
+            ctx: Request context with mission_id.
             collection: The unique name for the record type
 
         Returns:
@@ -170,7 +180,7 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
         """
         try:
             req = data_pb2.ListRecordsRequest(
-                mission_id=self.mission_id,
+                mission_id=ctx.mission_id,
                 collection=collection,
             )
             resp = await self.exec_grpc_query("ListRecords", req)
@@ -179,10 +189,11 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
             logger.warning("gRPC ListRecords failed for %s", collection)
             return []
 
-    async def _remove_collection(self, collection: str) -> bool:
+    async def _remove_collection(self, ctx: RequestContext, collection: str) -> bool:
         """Delete an entire collection via gRPC.
 
         Args:
+            ctx: Request context with mission_id.
             collection: The unique name for the record type
 
         Returns:
@@ -190,7 +201,7 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
         """
         try:
             req = data_pb2.RemoveCollectionRequest(
-                mission_id=self.mission_id,
+                mission_id=ctx.mission_id,
                 collection=collection,
             )
             await self.exec_grpc_query("RemoveCollection", req)
@@ -201,15 +212,11 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
 
     def __init__(
         self,
-        mission_id: str,
-        setup_id: str,
-        setup_version_id: str,
         config: dict[str, type[BaseModel]],
         client_config: ClientConfig,
     ) -> None:
         """Initialize the storage."""
-        super().__init__(mission_id=mission_id, setup_id=setup_id, setup_version_id=setup_version_id, config=config)
-
+        super().__init__(config=config)
         channel = self._init_channel(client_config)
         self.stub = storage_service_pb2_grpc.StorageServiceStub(channel)
         logger.debug("Channel client 'storage' initialized successfully")

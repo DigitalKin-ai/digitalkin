@@ -6,7 +6,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from digitalkin.services.base_strategy import BaseStrategy
+from digitalkin.services.base_strategy import BaseStrategy, RequestContext
 
 
 class FilesystemServiceError(Exception):
@@ -95,34 +95,26 @@ class FilesystemStrategy(BaseStrategy, ABC):
 
     def __init__(
         self,
-        mission_id: str,
-        setup_id: str,
-        setup_version_id: str,
         config: dict[str, Any] | None = None,
     ) -> None:
         """Initialize the strategy.
 
         Args:
-            mission_id: The ID of the mission this strategy is associated with
-            setup_id: The ID of the setup
-            setup_version_id: The ID of the setup version this strategy is associated with
             config: Configuration for the filesystem strategy
         """
-        super().__init__(mission_id, setup_id, setup_version_id)
+        super().__init__()
         self.config = config
 
     @abstractmethod
     async def upload_files(
         self,
+        ctx: RequestContext,
         files: list[UploadFileData],
     ) -> tuple[list[FilesystemRecord], int, int]:
         """Upload multiple files to the system.
 
-        This method allows batch uploading of files with validation and
-        error handling for each individual file. Files are processed
-        atomically - if one fails, others may still succeed.
-
         Args:
+            ctx: Request context carrying mission/setup IDs
             files: List of tuples containing (content, name, file_type, content_type, metadata, replace_if_exists)
 
         Returns:
@@ -132,6 +124,7 @@ class FilesystemStrategy(BaseStrategy, ABC):
     @abstractmethod
     async def get_file(
         self,
+        ctx: RequestContext,
         file_id: str,
         context: Literal["mission", "setup"] = "mission",
         *,
@@ -139,11 +132,8 @@ class FilesystemStrategy(BaseStrategy, ABC):
     ) -> FilesystemRecord:
         """Get a specific file by ID or name.
 
-        This method fetches detailed information about a single file,
-        with optional content inclusion. Supports lookup by either
-        unique ID or name within a context.
-
         Args:
+            ctx: Request context carrying mission/setup IDs
             file_id: The ID of the file to be retrieved
             context: The context of the files (mission or setup)
             include_content: Whether to include file content in response
@@ -155,6 +145,7 @@ class FilesystemStrategy(BaseStrategy, ABC):
     @abstractmethod
     async def get_files(
         self,
+        ctx: RequestContext,
         filters: FileFilter,
         *,
         list_size: int = 100,
@@ -164,16 +155,8 @@ class FilesystemStrategy(BaseStrategy, ABC):
     ) -> tuple[list[FilesystemRecord], int]:
         """Get multiple files by various criteria.
 
-        This method provides efficient retrieval of multiple files using:
-        - File IDs
-        - File names
-        - Path prefix
-        With support for:
-        - Pagination for large result sets
-        - Optional content inclusion
-        - Total count of matching files
-
         Args:
+            ctx: Request context carrying mission/setup IDs
             filters: Filter criteria for the files
             list_size: Number of files to return per page
             offset: Offset to start listing files from
@@ -187,6 +170,7 @@ class FilesystemStrategy(BaseStrategy, ABC):
     @abstractmethod
     async def update_file(
         self,
+        ctx: RequestContext,
         file_id: str,
         content: bytes | None = None,
         file_type: Literal[
@@ -207,13 +191,8 @@ class FilesystemStrategy(BaseStrategy, ABC):
     ) -> FilesystemRecord:
         """Update file metadata, content, or both.
 
-        This method allows updating various aspects of a file:
-        - Rename files
-        - Update content and content type
-        - Modify metadata
-        - Create new versions
-
         Args:
+            ctx: Request context carrying mission/setup IDs
             file_id: The ID of the file to be updated
             content: Optional new content of the file
             file_type: Optional new type of data
@@ -229,6 +208,7 @@ class FilesystemStrategy(BaseStrategy, ABC):
     @abstractmethod
     async def delete_files(
         self,
+        ctx: RequestContext,
         filters: FileFilter,
         *,
         permanent: bool = False,
@@ -236,13 +216,8 @@ class FilesystemStrategy(BaseStrategy, ABC):
     ) -> tuple[dict[str, bool], int, int]:
         """Delete multiple files.
 
-        This method supports batch deletion of files with options for:
-        - Soft deletion (marking as deleted)
-        - Permanent deletion
-        - Force deletion of files in use
-        - Individual error reporting per file
-
         Args:
+            ctx: Request context carrying mission/setup IDs
             filters: Filter criteria for the files
             permanent: Whether to permanently delete the files
             force: Whether to force delete even if files are in use

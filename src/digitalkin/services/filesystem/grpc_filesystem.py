@@ -10,6 +10,7 @@ from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
 from digitalkin.grpc_servers.utils.grpc_error_handler import GrpcErrorHandlerMixin
 from digitalkin.logger import logger
 from digitalkin.models.grpc_servers.models import ClientConfig
+from digitalkin.services.base_strategy import RequestContext
 from digitalkin.services.filesystem.filesystem_strategy import (
     FileFilter,
     FilesystemRecord,
@@ -79,10 +80,11 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper, GrpcErrorHandlerMixi
             content=file.content,
         )
 
-    def _filter_to_proto(self, filters: FileFilter) -> filesystem_pb2.FileFilter:
+    def _filter_to_proto(self, ctx: RequestContext, filters: FileFilter) -> filesystem_pb2.FileFilter:
         """Convert a FileFilter to a FileFilter proto message.
 
         Args:
+            ctx: Request context carrying mission/setup IDs
             filters: The FileFilter to convert
 
         Returns:
@@ -91,9 +93,9 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper, GrpcErrorHandlerMixi
         context_id = "unknown"
         match filters.context:
             case "setup":
-                context_id = self.setup_id
+                context_id = ctx.setup_id
             case "mission":
-                context_id = self.mission_id
+                context_id = ctx.mission_id
         return filesystem_pb2.FileFilter(
             **filters.model_dump(exclude={"file_types", "status", "context"}),
             file_types=[self._file_type_to_enum(file_type) for file_type in filters.file_types]
@@ -105,22 +107,16 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper, GrpcErrorHandlerMixi
 
     def __init__(
         self,
-        mission_id: str,
-        setup_id: str,
-        setup_version_id: str,
         client_config: ClientConfig,
         config: dict[str, Any] | None = None,
     ) -> None:
         """Initialize the gRPC filesystem strategy.
 
         Args:
-            mission_id: The ID of the mission this strategy is associated with
-            setup_id: The ID of the setup
-            setup_version_id: The ID of the setup version this strategy is associated with
             client_config: Configuration for the gRPC client connection
             config: Configuration for the filesystem strategy
         """
-        super().__init__(mission_id, setup_id, setup_version_id, config)
+        super().__init__(config)
         self.service_name = "FilesystemService"
         channel = self._init_channel(client_config)
         self.stub = filesystem_service_pb2_grpc.FilesystemServiceStub(channel)
@@ -128,11 +124,13 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper, GrpcErrorHandlerMixi
 
     async def upload_files(
         self,
+        ctx: RequestContext,
         files: list[UploadFileData],
     ) -> tuple[list[FilesystemRecord], int, int]:
         """Upload multiple files to the filesystem.
 
         Args:
+            ctx: Request context carrying mission/setup IDs
             files: List of tuples containing (content, name, file_type, content_type, metadata, replace_if_exists)
 
         Returns:
@@ -148,7 +146,7 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper, GrpcErrorHandlerMixi
                     metadata_struct.update(file.metadata)
                 upload_files.append(
                     filesystem_pb2.UploadFileData(
-                        context=self.mission_id,
+                        context=ctx.mission_id,
                         name=file.name,
                         file_type=self._file_type_to_enum(file.file_type),
                         content_type=file.content_type or "application/octet-stream",
@@ -166,6 +164,7 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper, GrpcErrorHandlerMixi
 
     async def get_file(
         self,
+        ctx: RequestContext,
         file_id: str,
         context: Literal["mission", "setup"] = "mission",
         *,
@@ -174,6 +173,7 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper, GrpcErrorHandlerMixi
         """Get a file from the filesystem.
 
         Args:
+            ctx: Request context carrying mission/setup IDs
             file_id: The ID of the file to be retrieved
             context: The context of the files (mission or setup)
             include_content: Whether to include file content in response
@@ -186,9 +186,9 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper, GrpcErrorHandlerMixi
         """
         match context:
             case "setup":
-                context_id = self.setup_id
+                context_id = ctx.setup_id
             case "mission":
-                context_id = self.mission_id
+                context_id = ctx.mission_id
         async with self.handle_grpc_errors("GetFile", FilesystemServiceError):
             request = filesystem_pb2.GetFileRequest(
                 context=context_id,
@@ -202,6 +202,7 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper, GrpcErrorHandlerMixi
 
     async def update_file(
         self,
+        ctx: RequestContext,
         file_id: str,
         content: bytes | None = None,
         file_type: Literal[
@@ -223,6 +224,7 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper, GrpcErrorHandlerMixi
         """Update a file in the filesystem.
 
         Args:
+            ctx: Request context carrying mission/setup IDs
             file_id: The id of the file to be updated
             content: Optional new content of the file
             file_type: Optional new type of data
@@ -239,7 +241,7 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper, GrpcErrorHandlerMixi
         """
         async with self.handle_grpc_errors("UpdateFile", FilesystemServiceError):
             request = filesystem_pb2.UpdateFileRequest(
-                context=self.mission_id,
+                context=ctx.mission_id,
                 file_id=file_id,
                 content=content,
                 file_type=self._file_type_to_enum(file_type) if file_type else None,
@@ -256,6 +258,7 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper, GrpcErrorHandlerMixi
 
     async def delete_files(
         self,
+        ctx: RequestContext,
         filters: FileFilter,
         *,
         permanent: bool = False,
@@ -264,6 +267,7 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper, GrpcErrorHandlerMixi
         """Delete multiple files from the filesystem.
 
         Args:
+            ctx: Request context carrying mission/setup IDs
             filters: Filter criteria for the files
             permanent: Whether to permanently delete the files
             force: Whether to force delete even if files are in use
@@ -273,8 +277,8 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper, GrpcErrorHandlerMixi
         """
         async with self.handle_grpc_errors("DeleteFiles", FilesystemServiceError):
             request = filesystem_pb2.DeleteFilesRequest(
-                context=self.mission_id,
-                filters=self._filter_to_proto(filters),
+                context=ctx.mission_id,
+                filters=self._filter_to_proto(ctx, filters),
                 permanent=permanent,
                 force=force,
             )
@@ -284,6 +288,7 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper, GrpcErrorHandlerMixi
 
     async def get_files(
         self,
+        ctx: RequestContext,
         filters: FileFilter,
         *,
         list_size: int = 100,
@@ -294,6 +299,7 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper, GrpcErrorHandlerMixi
         """Get multiple files from the filesystem.
 
         Args:
+            ctx: Request context carrying mission/setup IDs
             filters: Filter criteria for the files
             list_size: Number of files to return per page
             offset: Offset to start from
@@ -305,13 +311,13 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper, GrpcErrorHandlerMixi
         """
         match filters.context:
             case "setup":
-                context_id = self.setup_id
+                context_id = ctx.setup_id
             case "mission":
-                context_id = self.mission_id
+                context_id = ctx.mission_id
         async with self.handle_grpc_errors("GetFiles", FilesystemServiceError):
             request = filesystem_pb2.GetFilesRequest(
                 context=context_id,
-                filters=self._filter_to_proto(filters),
+                filters=self._filter_to_proto(ctx, filters),
                 include_content=include_content,
                 list_size=list_size,
                 offset=offset,

@@ -105,7 +105,7 @@ def client(
     Returns:
         GrpcRegistry client configured for testing
     """
-    registry_client = GrpcRegistry(MISSION_ID, SETUP_ID, SETUP_VERSION_ID, dummy_client_config)
+    registry_client = GrpcRegistry(dummy_client_config)
     registry_client.stub = AsyncStubWrapper(registry_service_pb2_grpc.RegistryServiceStub(test_channel))
 
     async def _test_exec_grpc_query(self, query_endpoint, request):

@@ -17,11 +17,15 @@ class GrpcClientWrapper:
 
     Subclasses should set the service_name class attribute to identify
     the gRPC service in logs (e.g., "SetupService", "RegistryService").
+
+    Channels are shared process-wide via a class-level pool keyed by address.
+    HTTP/2 multiplexing makes a single channel per target optimal.
     """
 
     stub: Any
     service_name: str = "UnknownService"  # Override in subclasses for better logging
     _channel: grpc.aio.Channel | None = None
+    _shared_channels: ClassVar[dict[str, grpc.aio.Channel]] = {}
 
     @staticmethod
     def _build_channel_credentials(config: ClientConfig) -> grpc.ChannelCredentials | None:
@@ -47,8 +51,9 @@ class GrpcClientWrapper:
             private_key=private_key,
         )
 
-    def _init_channel(self, config: ClientConfig) -> grpc.aio.Channel:
-        """Create an async gRPC channel.
+    @classmethod
+    def _create_channel(cls, config: ClientConfig) -> grpc.aio.Channel:
+        """Create an async gRPC channel (internal, no caching).
 
         Args:
             config: Client configuration for the channel.
@@ -56,16 +61,41 @@ class GrpcClientWrapper:
         Returns:
             An async gRPC channel.
         """
-        credentials = self._build_channel_credentials(config)
+        credentials = cls._build_channel_credentials(config)
         grpc_compression = config.compression.to_grpc()
         if credentials is not None:
-            channel = grpc.aio.secure_channel(
+            return grpc.aio.secure_channel(
                 config.address, credentials, options=config.grpc_options, compression=grpc_compression
             )
-        else:
-            channel = grpc.aio.insecure_channel(
-                config.address, options=config.grpc_options, compression=grpc_compression
-            )
+        return grpc.aio.insecure_channel(config.address, options=config.grpc_options, compression=grpc_compression)
+
+    @classmethod
+    def _get_shared_channel(cls, config: ClientConfig) -> grpc.aio.Channel:
+        """Get or create a shared channel for the given config address.
+
+        HTTP/2 channels are multiplexed, so one channel per target is optimal.
+
+        Args:
+            config: Client configuration for the channel.
+
+        Returns:
+            A shared async gRPC channel.
+        """
+        key = config.address
+        if key not in cls._shared_channels:
+            cls._shared_channels[key] = cls._create_channel(config)
+        return cls._shared_channels[key]
+
+    def _init_channel(self, config: ClientConfig) -> grpc.aio.Channel:
+        """Get a shared gRPC channel for this config.
+
+        Args:
+            config: Client configuration for the channel.
+
+        Returns:
+            An async gRPC channel (shared across instances targeting the same address).
+        """
+        channel = self._get_shared_channel(config)
         self._channel = channel
         return channel
 

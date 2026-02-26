@@ -15,12 +15,19 @@ from digitalkin.services.snapshot import DefaultSnapshot, SnapshotStrategy
 from digitalkin.services.storage import DefaultStorage, GrpcStorage, StorageStrategy
 from digitalkin.services.user_profile import DefaultUserProfile, GrpcUserProfile, UserProfileStrategy
 
+# Services that remain per-request (have session-specific state)
+_PER_REQUEST_SERVICES: frozenset[str] = frozenset({"cost"})
+
 
 class ServicesConfig(BaseModel):
     """Service class describing the available services in a Module.
 
     This class manages the strategy implementations for various services,
     allowing them to be switched between local and remote modes.
+
+    Services are categorized as:
+    - Shared singletons: created once via init_shared_services(), reused across requests
+    - Per-request: created fresh each time via init_strategy() (only Cost)
     """
 
     # Mode setting for all strategies
@@ -29,6 +36,7 @@ class ServicesConfig(BaseModel):
     # Strategies and configs stored in dicts for typed lookup (avoids getattr/setattr)
     _strategies: dict[str, ServicesStrategy] = PrivateAttr(default_factory=dict)
     _configs: dict[str, dict[str, Any | None]] = PrivateAttr(default_factory=dict)
+    _shared_services: dict[str, Any] = PrivateAttr(default_factory=dict)
 
     # List of valid strategy names for validation
     _valid_strategy_names: ClassVar[set[str]] = {
@@ -100,8 +108,30 @@ class ServicesConfig(BaseModel):
         """
         return self._configs.get(name, {})
 
+    def init_shared_services(self) -> None:
+        """Initialize shared singleton services (called once at startup).
+
+        Creates instances for all services except per-request ones (Cost).
+        These singletons are reused across all requests.
+        """
+        for name in self._valid_strategy_names:
+            if name in _PER_REQUEST_SERVICES:
+                continue
+            strategy = self._strategies.get(name)
+            if strategy is None:
+                continue
+            strategy_class = strategy[self.mode.value]
+            config = self.get_strategy_config(name)
+            try:
+                self._shared_services[name] = strategy_class(**config) if config else strategy_class()
+            except TypeError:
+                continue  # Requires config not yet available; created per-request via init_strategy()
+
     def init_strategy(self, name: str, mission_id: str, setup_id: str, setup_version_id: str) -> Any:
-        """Initialize a specific strategy.
+        """Get a shared singleton or create a per-request strategy instance.
+
+        For shared services, returns the pre-created singleton.
+        For per-request services (Cost), creates a new instance with the IDs.
 
         Args:
             name: The name of the strategy to initialize
@@ -110,17 +140,21 @@ class ServicesConfig(BaseModel):
             setup_version_id: The setup version ID for the strategy
 
         Returns:
-            The initialized strategy instance
+            The strategy instance (shared singleton or new per-request)
 
         Raises:
             ValueError: If the strategy is not found
         """
+        # Return shared singleton if available
+        if name in self._shared_services:
+            return self._shared_services[name]
+
+        # Per-request strategy (Cost): create fresh with IDs
         strategy = self._strategies.get(name)
         if strategy is None:
             msg = f"Strategy {name} not found in ServicesConfig."
             raise ValueError(msg)
 
-        # Resolve the concrete strategy class via mode, then instantiate
         strategy_class = strategy[self.mode.value]
         return strategy_class(mission_id, setup_id, setup_version_id, **self.get_strategy_config(name) or {})
 

@@ -135,7 +135,7 @@ class ImprovedMockModule(BaseModule):
     """Improved mock module with proper context initialization."""
 
     services_config_strategies: ClassVar[dict[str, ServicesStrategy | None]] = {}
-    services_config_params: ClassVar[dict[str, dict[str, str | None] | None]] = {}
+    services_config_params: ClassVar[dict[str, dict[str, str | None] | None]] = {"storage": {"config": {}}}
     services_config: ClassVar[ServicesConfig] = ServicesConfig(
         services_config_strategies={}, services_config_params={}, mode=ServicesMode.LOCAL
     )

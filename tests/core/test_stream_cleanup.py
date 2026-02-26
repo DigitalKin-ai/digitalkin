@@ -22,7 +22,7 @@ These tests validate production resilience against:
 import asyncio
 import contextlib
 import datetime
-from typing import Any, NoReturn
+from typing import Any, ClassVar, NoReturn
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -34,10 +34,33 @@ from digitalkin.core.task_manager.task_executor import TaskExecutor
 from digitalkin.core.task_manager.task_session import TaskSession
 from digitalkin.models.core.task_monitor import CancellationReason, TaskStatus
 from digitalkin.modules._base_module import BaseModule
-from digitalkin.services.services_models import ServicesMode
+from digitalkin.services.services_models import ServicesMode, ServicesStrategy
 
 # Set timeout for all tests in this file
 pytestmark = pytest.mark.timeout(30)
+
+
+class _StubModule(BaseModule):
+    """Minimal BaseModule subclass for SingleJobManager tests."""
+
+    services_config_strategies: ClassVar[dict[str, ServicesStrategy | None]] = {}
+    services_config_params: ClassVar[dict[str, dict[str, Any | None] | None]] = {"storage": {"config": {}}}
+
+    def __init__(self, job_id: str, mission_id: str, setup_id: str, setup_version_id: str) -> None:
+        super().__init__(job_id, mission_id, setup_id, setup_version_id)
+
+    def _init_strategies(self, mission_id: str, setup_id: str, setup_version_id: str) -> dict[str, Any]:
+        """Skip service initialization in tests."""
+        return {}
+
+    async def initialize(self, context: Any, setup_data: Any) -> None:
+        """No-op."""
+
+    async def run(self) -> None:
+        """No-op."""
+
+    async def cleanup(self) -> None:
+        """No-op."""
 
 
 # ============================================================================
@@ -1093,9 +1116,6 @@ class TestChannelPoolCleanup:
         )
 
         comm = GrpcCommunication(
-            mission_id="missions:test",
-            setup_id="setup:test",
-            setup_version_id="setup_version:test",
             client_config=config,
         )
 
@@ -1120,11 +1140,7 @@ class TestChannelPoolCleanup:
         """Verify DefaultCommunication.cleanup() is a no-op."""
         from digitalkin.services.communication.default_communication import DefaultCommunication
 
-        comm = DefaultCommunication(
-            mission_id="missions:test",
-            setup_id="setup:test",
-            setup_version_id="setup_version:test",
-        )
+        comm = DefaultCommunication()
 
         # Should not raise
         await comm.cleanup()
@@ -1187,7 +1203,7 @@ class TestStreamDrainBehavior:
         job_id = "drain_test"
         mission_id = "missions:drain"
 
-        manager = SingleJobManager(mock_base_module.__class__, ServicesMode.LOCAL)
+        manager = SingleJobManager(_StubModule, ServicesMode.LOCAL)
 
         session = TaskSession(job_id, mission_id, mock_surreal_connection, mock_base_module)
         manager.tasks_sessions[job_id] = session
@@ -1221,7 +1237,7 @@ class TestStreamDrainBehavior:
         job_id = "completed_drain"
         mission_id = "missions:completed_drain"
 
-        manager = SingleJobManager(mock_base_module.__class__, ServicesMode.LOCAL)
+        manager = SingleJobManager(_StubModule, ServicesMode.LOCAL)
 
         session = TaskSession(job_id, mission_id, mock_surreal_connection, mock_base_module)
         manager.tasks_sessions[job_id] = session
@@ -1252,7 +1268,7 @@ class TestStreamDrainBehavior:
         job_id = "failed_drain"
         mission_id = "missions:failed_drain"
 
-        manager = SingleJobManager(mock_base_module.__class__, ServicesMode.LOCAL)
+        manager = SingleJobManager(_StubModule, ServicesMode.LOCAL)
 
         session = TaskSession(job_id, mission_id, mock_surreal_connection, mock_base_module)
         manager.tasks_sessions[job_id] = session
@@ -1278,7 +1294,7 @@ class TestStreamDrainBehavior:
         job_id = "cancel_abort"
         mission_id = "missions:cancel_abort"
 
-        manager = SingleJobManager(mock_base_module.__class__, ServicesMode.LOCAL)
+        manager = SingleJobManager(_StubModule, ServicesMode.LOCAL)
 
         session = TaskSession(job_id, mission_id, mock_surreal_connection, mock_base_module)
         manager.tasks_sessions[job_id] = session
@@ -1308,7 +1324,7 @@ class TestStreamDrainBehavior:
         job_id = "mid_close"
         mission_id = "missions:mid_close"
 
-        manager = SingleJobManager(mock_base_module.__class__, ServicesMode.LOCAL)
+        manager = SingleJobManager(_StubModule, ServicesMode.LOCAL)
 
         session = TaskSession(job_id, mission_id, mock_surreal_connection, mock_base_module)
         manager.tasks_sessions[job_id] = session

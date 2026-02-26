@@ -9,6 +9,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from digitalkin.logger import logger
+from digitalkin.services.base_strategy import RequestContext
 from digitalkin.services.storage.storage_strategy import (
     DataType,
     StorageRecord,
@@ -55,7 +56,6 @@ class DefaultStorage(StorageStrategy):
             out: dict[str, StorageRecord] = {}
 
             for key, rd in raw.items():
-                # rd is a dict with the StorageRecord fields
                 model_cls = self.config.get(rd["collection"])
                 if not model_cls:
                     logger.warning("No model for collection '%s'", rd["collection"])
@@ -89,7 +89,6 @@ class DefaultStorage(StorageStrategy):
             suffix=".tmp",
         ) as temp:
             try:
-                # Convert storage to a serializable format
                 serial: dict[str, dict] = {}
                 for key, record in self.storage.items():
                     serial[key] = {
@@ -131,10 +130,11 @@ class DefaultStorage(StorageStrategy):
         logger.debug("Created %s", key)
         return record
 
-    async def _read(self, collection: str, record_id: str) -> StorageRecord | None:
+    async def _read(self, ctx: RequestContext, collection: str, record_id: str) -> StorageRecord | None:  # noqa: ARG002
         """Get records from the database.
 
         Args:
+            ctx: Request context (unused in local storage).
             collection: The unique name to retrieve data for
             record_id: The unique ID of the record
 
@@ -144,10 +144,17 @@ class DefaultStorage(StorageStrategy):
         key = f"{collection}:{record_id}"
         return self.storage.get(key)
 
-    async def _update(self, collection: str, record_id: str, data: BaseModel) -> StorageRecord | None:
+    async def _update(
+        self,
+        ctx: RequestContext,  # noqa: ARG002
+        collection: str,
+        record_id: str,
+        data: BaseModel,
+    ) -> StorageRecord | None:
         """Update records in the database and persist to file.
 
         Args:
+            ctx: Request context (unused in local storage).
             collection: The unique name to retrieve data for
             record_id: The unique ID of the record
             data: The data to modify
@@ -165,10 +172,11 @@ class DefaultStorage(StorageStrategy):
         logger.debug("Modified %s", key)
         return rec
 
-    async def _remove(self, collection: str, record_id: str) -> bool:
+    async def _remove(self, ctx: RequestContext, collection: str, record_id: str) -> bool:  # noqa: ARG002
         """Delete records from the database and update file.
 
         Args:
+            ctx: Request context (unused in local storage).
             collection: The unique name to retrieve data for
             record_id: The unique ID of the record
 
@@ -183,10 +191,11 @@ class DefaultStorage(StorageStrategy):
         logger.debug("Removed %s", key)
         return True
 
-    async def _list(self, collection: str) -> list[StorageRecord]:
+    async def _list(self, ctx: RequestContext, collection: str) -> list[StorageRecord]:  # noqa: ARG002
         """Implements StorageStrategy._list.
 
         Args:
+            ctx: Request context (unused in local storage).
             collection: The unique name to retrieve data for
 
         Returns:
@@ -195,10 +204,11 @@ class DefaultStorage(StorageStrategy):
         prefix = f"{collection}:"
         return [r for k, r in self.storage.items() if k.startswith(prefix)]
 
-    async def _remove_collection(self, collection: str) -> bool:
+    async def _remove_collection(self, ctx: RequestContext, collection: str) -> bool:  # noqa: ARG002
         """Implements StorageStrategy._remove_collection.
 
         Args:
+            ctx: Request context (unused in local storage).
             collection: The unique name to retrieve data for
 
         Returns:
@@ -214,14 +224,11 @@ class DefaultStorage(StorageStrategy):
 
     def __init__(
         self,
-        mission_id: str,
-        setup_id: str,
-        setup_version_id: str,
         config: dict[str, type[BaseModel]],
         storage_file_path: str = "local_storage",
     ) -> None:
         """Initialize the storage."""
-        super().__init__(mission_id=mission_id, setup_id=setup_id, setup_version_id=setup_version_id, config=config)
-        self.storage_file_path = f"{self.mission_id}_{storage_file_path}.json"
+        super().__init__(config=config)
+        self.storage_file_path = storage_file_path + ".json"
         self.storage_file = Path(self.storage_file_path)
         self.storage = self._load_from_file()

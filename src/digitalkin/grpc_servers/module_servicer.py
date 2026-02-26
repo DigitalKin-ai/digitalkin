@@ -103,7 +103,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         if not client_config:
             return None
 
-        self._registry_cache = GrpcRegistry("", "", "", client_config)
+        self._registry_cache = GrpcRegistry(client_config)
         return self._registry_cache
 
     async def ConfigSetupModule(

@@ -13,20 +13,9 @@ class DefaultCommunication(CommunicationStrategy):
     For production, use GrpcCommunication to connect to remote modules.
     """
 
-    def __init__(
-        self,
-        mission_id: str,
-        setup_id: str,
-        setup_version_id: str,
-    ) -> None:
-        """Initialize the default communication service.
-
-        Args:
-            mission_id: Mission identifier
-            setup_id: Setup identifier
-            setup_version_id: Setup version identifier
-        """
-        super().__init__(mission_id, setup_id, setup_version_id)
+    def __init__(self) -> None:
+        """Initialize the default communication service."""
+        super().__init__()
         logger.debug("Initialized DefaultCommunication (local)")
 
     async def get_module_schemas(  # Default stub implementation; self available for subclass overrides # noqa: PLR6301

@@ -9,6 +9,7 @@ from typing import Any, Literal
 from anyio import Path as AsyncPath
 
 from digitalkin.logger import logger
+from digitalkin.services.base_strategy import RequestContext
 from digitalkin.services.filesystem.filesystem_strategy import (
     FileFilter,
     FilesystemRecord,
@@ -26,15 +27,9 @@ class DefaultFilesystem(FilesystemStrategy):
     Files are stored in a temporary directory with proper metadata tracking.
     """
 
-    def __init__(self, mission_id: str, setup_id: str, setup_version_id: str) -> None:
-        """Initialize the default filesystem strategy.
-
-        Args:
-            mission_id: The ID of the mission this strategy is associated with
-            setup_id: The ID of the setup
-            setup_version_id: The ID of the setup version this strategy is associated with
-        """
-        super().__init__(mission_id, setup_id, setup_version_id)
+    def __init__(self) -> None:
+        """Initialize the default filesystem strategy."""
+        super().__init__()
         self.temp_root: str = tempfile.mkdtemp()
         os.makedirs(self.temp_root, exist_ok=True)
         self.db: dict[str, FilesystemRecord] = {}
@@ -49,7 +44,6 @@ class DefaultFilesystem(FilesystemStrategy):
         Returns:
             str: Path to the context's temporary directory
         """
-        # Create a context-specific directory to organize files
         context_dir = os.path.join(self.temp_root, context.replace(":", "_"))
         os.makedirs(context_dir, exist_ok=True)
         return context_dir
@@ -95,15 +89,13 @@ class DefaultFilesystem(FilesystemStrategy):
 
     async def upload_files(
         self,
+        ctx: RequestContext,
         files: list[UploadFileData],
     ) -> tuple[list[FilesystemRecord], int, int]:
         """Upload multiple files to the system.
 
-        This method allows batch uploading of files with validation and
-        error handling for each individual file. Files are processed
-        atomically - if one fails, others may still succeed.
-
         Args:
+            ctx: Request context carrying mission/setup IDs
             files: List of files to upload
 
         Returns:
@@ -118,8 +110,7 @@ class DefaultFilesystem(FilesystemStrategy):
 
         for file in files:
             try:
-                # Check if file with same name exists in the context
-                context_dir = self._get_context_temp_dir(self.setup_id)
+                context_dir = self._get_context_temp_dir(ctx.setup_id)
                 file_path = os.path.join(context_dir, file.name)
                 if await AsyncPath(file_path).exists() and not file.replace_if_exists:
                     msg = f"File with name {file.name} already exists."
@@ -130,7 +121,7 @@ class DefaultFilesystem(FilesystemStrategy):
                 storage_uri = str(await AsyncPath(file_path).resolve())
                 file_data = FilesystemRecord(
                     id=str(uuid.uuid4()),
-                    context=self.setup_id,
+                    context=ctx.setup_id,
                     name=file.name,
                     file_type=file.file_type,
                     content_type=file.content_type or "application/octet-stream",
@@ -149,7 +140,6 @@ class DefaultFilesystem(FilesystemStrategy):
             except Exception as e:  # Exception in loop: per-file error isolation in batch upload # noqa: PERF203
                 logger.exception("Error uploading file %s: %s", file.name, e)
                 total_failed += 1
-                # If only one file and it failed, propagate the error for pytest.raises
                 if len(files) == 1:
                     raise
 
@@ -157,26 +147,22 @@ class DefaultFilesystem(FilesystemStrategy):
 
     async def get_files(
         self,
+        ctx: RequestContext,  # noqa: ARG002
         filters: FileFilter,
         *,
         list_size: int = 100,
         offset: int = 0,
-        order: str | None = None,  # API interface parameter, not implemented in local filesystem # noqa: ARG002
+        order: str | None = None,  # noqa: ARG002
         include_content: bool = False,
     ) -> tuple[list[FilesystemRecord], int]:
         """List files with filtering, sorting, and pagination.
 
-        This method provides flexible file querying capabilities with support for:
-        - Multiple filter criteria (name, type, dates, size, etc.)
-        - Pagination for large result sets
-        - Sorting by various fields
-        - Scoped access by context
-
         Args:
+            ctx: Request context carrying mission/setup IDs
             filters: Filter criteria for the files
             list_size: Number of files to return per page
             offset: Offset to start listing files from
-            order: Fields to order results by (example: "created_at:asc,name:desc")
+            order: Fields to order results by
             include_content: Whether to include file content in response
 
         Returns:
@@ -187,13 +173,10 @@ class DefaultFilesystem(FilesystemStrategy):
         """
         try:
             logger.debug("Listing files with filters: %s", filters)
-            # Filter files based on provided criteria
             filtered_files = self._filter_db(filters)
             if not filtered_files:
                 return [], 0
-            # Sorting not implemented for local filesystem (only used in development)
 
-            # Apply pagination
             start_idx = offset
             end_idx = start_idx + list_size
             paginated_files = filtered_files[start_idx:end_idx]
@@ -211,6 +194,7 @@ class DefaultFilesystem(FilesystemStrategy):
 
     async def get_file(
         self,
+        ctx: RequestContext,  # noqa: ARG002
         file_id: str,
         context: Literal["mission", "setup"] = "mission",  # noqa: ARG002
         *,
@@ -218,11 +202,8 @@ class DefaultFilesystem(FilesystemStrategy):
     ) -> FilesystemRecord:
         """Get a specific file by ID or name.
 
-        This method fetches detailed information about a single file,
-        with optional content inclusion. Supports lookup by either
-        unique ID or name within a context.
-
         Args:
+            ctx: Request context carrying mission/setup IDs
             file_id: The ID of the file to be retrieved
             context: The context of the files (mission or setup)
             include_content: Whether to include file content in response
@@ -258,6 +239,7 @@ class DefaultFilesystem(FilesystemStrategy):
 
     async def update_file(
         self,
+        ctx: RequestContext,
         file_id: str,
         content: bytes | None = None,
         file_type: Literal[
@@ -278,13 +260,8 @@ class DefaultFilesystem(FilesystemStrategy):
     ) -> FilesystemRecord:
         """Update file metadata, content, or both.
 
-        This method allows updating various aspects of a file:
-        - Rename files
-        - Update content and content type
-        - Modify metadata
-        - Create new versions
-
         Args:
+            ctx: Request context carrying mission/setup IDs
             file_id: The id of the file to be updated
             content: Optional new content of the file
             file_type: Optional new type of data
@@ -306,7 +283,7 @@ class DefaultFilesystem(FilesystemStrategy):
             raise FilesystemServiceError(msg)
 
         try:
-            context_dir = self._get_context_temp_dir(self.setup_id)
+            context_dir = self._get_context_temp_dir(ctx.setup_id)
             file_path = os.path.join(context_dir, file_id)
             existing_file = self.db[file_id]
 
@@ -344,20 +321,16 @@ class DefaultFilesystem(FilesystemStrategy):
 
     async def delete_files(
         self,
+        ctx: RequestContext,  # noqa: ARG002
         filters: FileFilter,
         *,
         permanent: bool = False,
-        force: bool = False,  # API interface parameter, not used in local filesystem # noqa: ARG002
+        force: bool = False,  # noqa: ARG002
     ) -> tuple[dict[str, bool], int, int]:
         """Delete multiple files.
 
-        This method supports batch deletion of files with options for:
-        - Soft deletion (marking as deleted)
-        - Permanent deletion
-        - Force deletion of files in use
-        - Individual error reporting per file
-
         Args:
+            ctx: Request context carrying mission/setup IDs
             filters: Filter criteria for the files to delete
             permanent: Whether to permanently delete the files
             force: Whether to force delete even if files are in use
@@ -369,12 +342,11 @@ class DefaultFilesystem(FilesystemStrategy):
             FilesystemServiceError: If there is an error deleting the files
         """
         logger.debug("Deleting files with filters: %s", filters)
-        results: dict[str, bool] = {}  # id -> success
+        results: dict[str, bool] = {}
         total_deleted = 0
         total_failed = 0
 
         try:
-            # Determine which files to delete
             files_to_delete = [f.id for f in self._filter_db(filters)]
 
             if not files_to_delete:

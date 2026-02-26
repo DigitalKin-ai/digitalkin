@@ -94,7 +94,7 @@ class ModuleServer(BaseServer):
         if not self.client_config:
             return
 
-        self.registry = GrpcRegistry("", "", "", self.client_config)
+        self.registry = GrpcRegistry(self.client_config)
 
     def start(self) -> None:
         """Start the module server and register with the registry if configured."""

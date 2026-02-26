@@ -187,6 +187,7 @@ async def run_start_module(
         mode=services_mode,
     )
     module_class.services_config = services_config
+    services_config.init_shared_services()
     logger.debug("Services config: %s | Module config: %s", services_config, module_class.services_config)
     module_class.discover()
 
@@ -278,6 +279,7 @@ async def run_config_module(
         mode=services_mode,
     )
     module_class.services_config = services_config
+    services_config.init_shared_services()
     logger.debug("Services config: %s | Module config: %s", services_config, module_class.services_config)
 
     job_id = context.message.task_id

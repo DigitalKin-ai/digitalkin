@@ -11,14 +11,12 @@ from digitalkin.logger import logger
 from digitalkin.models.module.request_metadata import RequestMetadata
 from digitalkin.models.module.tool_cache import ToolCache, ToolDefinition, ToolModuleInfo, ToolParameter
 from digitalkin.services.agent.agent_strategy import AgentStrategy
+from digitalkin.services.bound_strategies import BoundFilesystemStrategy, BoundStorageStrategy, BoundUserProfileStrategy
 from digitalkin.services.communication.communication_strategy import CommunicationStrategy
 from digitalkin.services.cost.cost_strategy import CostStrategy
-from digitalkin.services.filesystem.filesystem_strategy import FilesystemStrategy
 from digitalkin.services.identity.identity_strategy import IdentityStrategy
 from digitalkin.services.registry.registry_strategy import RegistryStrategy
 from digitalkin.services.snapshot.snapshot_strategy import SnapshotStrategy
-from digitalkin.services.storage.storage_strategy import StorageStrategy
-from digitalkin.services.user_profile.user_profile_strategy import UserProfileStrategy
 
 
 class Session(SimpleNamespace):
@@ -90,12 +88,12 @@ class ModuleContext:
     agent: AgentStrategy
     communication: CommunicationStrategy
     cost: CostStrategy
-    filesystem: FilesystemStrategy
+    filesystem: BoundFilesystemStrategy
     identity: IdentityStrategy
     registry: RegistryStrategy
     snapshot: SnapshotStrategy
-    storage: StorageStrategy
-    user_profile: UserProfileStrategy
+    storage: BoundStorageStrategy
+    user_profile: BoundUserProfileStrategy
 
     session: Session
     callbacks: SimpleNamespace
@@ -110,12 +108,12 @@ class ModuleContext:
         agent: AgentStrategy,
         communication: CommunicationStrategy,
         cost: CostStrategy,
-        filesystem: FilesystemStrategy,
+        filesystem: BoundFilesystemStrategy,
         identity: IdentityStrategy,
         registry: RegistryStrategy,
         snapshot: SnapshotStrategy,
-        storage: StorageStrategy,
-        user_profile: UserProfileStrategy,
+        storage: BoundStorageStrategy,
+        user_profile: BoundUserProfileStrategy,
         session: dict[str, Any],
         metadata: dict[str, Any] = {},
         helpers: dict[str, Any] = {},

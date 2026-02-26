@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from digitalkin.services.base_strategy import RequestContext
 from digitalkin.services.filesystem import DefaultFilesystem
 from digitalkin.services.filesystem.filesystem_strategy import (
     FileFilter,
@@ -16,7 +17,13 @@ from digitalkin.services.filesystem.filesystem_strategy import (
 @pytest.fixture
 def filesystem() -> DefaultFilesystem:
     """Create a DefaultFilesystem instance for testing with isolated temp_root."""
-    return DefaultFilesystem("test_mission", "test_setup", "test_setup_version")
+    return DefaultFilesystem()
+
+
+@pytest.fixture
+def ctx() -> RequestContext:
+    """Create a test request context."""
+    return RequestContext("test_mission", "test_setup", "test_setup_version")
 
 
 @pytest.fixture
@@ -51,17 +58,18 @@ class TestDefaultFilesystem:
 
     def test_init(self) -> None:
         """Test initialization of DefaultFilesystem."""
-        filesystem = DefaultFilesystem("test_mission", "test_setup", "test_setup_version")
+        filesystem = DefaultFilesystem()
         assert filesystem.temp_root
-        assert filesystem.mission_id == "test_mission"
+        assert filesystem.db == {}
 
     async def test_upload_files_success(
-        self, filesystem: DefaultFilesystem, sample_file_data: bytes, file_metadata: dict
+        self, filesystem: DefaultFilesystem, ctx: RequestContext, sample_file_data: bytes, file_metadata: dict
     ) -> None:
         """Test successful file upload.
 
         Args:
             filesystem: DefaultFilesystem instance
+            ctx: Request context
             sample_file_data: Sample file data
             file_metadata: File metadata
         """
@@ -76,7 +84,7 @@ class TestDefaultFilesystem:
         )
 
         # Upload the file
-        files, total_uploaded, total_failed = await filesystem.upload_files([upload_file])
+        files, total_uploaded, total_failed = await filesystem.upload_files(ctx, [upload_file])
         assert len(files) == 1
         assert total_uploaded == 1
         assert total_failed == 0
@@ -99,12 +107,13 @@ class TestDefaultFilesystem:
         assert file_path.read_bytes() == sample_file_data
 
     async def test_get_file_success(
-        self, filesystem: DefaultFilesystem, sample_file_data: bytes, file_metadata: dict
+        self, filesystem: DefaultFilesystem, ctx: RequestContext, sample_file_data: bytes, file_metadata: dict
     ) -> None:
         """Test successful file retrieval.
 
         Args:
             filesystem: DefaultFilesystem instance
+            ctx: Request context
             sample_file_data: Sample file data
             file_metadata: File metadata
         """
@@ -117,11 +126,11 @@ class TestDefaultFilesystem:
             metadata=file_metadata["metadata"],
             replace_if_exists=False,
         )
-        files, _, _ = await filesystem.upload_files([upload_file])
+        files, _, _ = await filesystem.upload_files(ctx, [upload_file])
         file_id = files[0].id
 
         # Get the file
-        file_data = await filesystem.get_file(file_id)
+        file_data = await filesystem.get_file(ctx, file_id)
         assert isinstance(file_data, FilesystemRecord)
         assert file_data.id == file_id
         assert file_data.context == file_metadata["context"]
@@ -134,12 +143,13 @@ class TestDefaultFilesystem:
         assert file_data.file_url is not None
 
     async def test_get_files_success(
-        self, filesystem: DefaultFilesystem, sample_file_data: bytes, file_metadata: dict
+        self, filesystem: DefaultFilesystem, ctx: RequestContext, sample_file_data: bytes, file_metadata: dict
     ) -> None:
         """Test successful retrieval of multiple files.
 
         Args:
             filesystem: DefaultFilesystem instance
+            ctx: Request context
             sample_file_data: Sample file data
             file_metadata: File metadata
         """
@@ -157,13 +167,14 @@ class TestDefaultFilesystem:
             for name in file_names
         ]
 
-        _files, _, _ = await filesystem.upload_files(upload_files)
+        _files, _, _ = await filesystem.upload_files(ctx, upload_files)
 
         # Create filter criteria
         filters = FileFilter(file_types=[file_metadata["file_type"]])
 
         # Get the files
         result_files, total_count = await filesystem.get_files(
+            ctx,
             filters,
             list_size=10,
             offset=0,
@@ -186,12 +197,13 @@ class TestDefaultFilesystem:
             assert file_data.file_url is not None
 
     async def test_update_file_success(
-        self, filesystem: DefaultFilesystem, sample_file_data: bytes, file_metadata: dict
+        self, filesystem: DefaultFilesystem, ctx: RequestContext, sample_file_data: bytes, file_metadata: dict
     ) -> None:
         """Test successful file update.
 
         Args:
             filesystem: DefaultFilesystem instance
+            ctx: Request context
             sample_file_data: Sample file data
             file_metadata: File metadata
         """
@@ -204,12 +216,13 @@ class TestDefaultFilesystem:
             metadata=file_metadata["metadata"],
             replace_if_exists=False,
         )
-        files, _, _ = await filesystem.upload_files([upload_file])
+        files, _, _ = await filesystem.upload_files(ctx, [upload_file])
         file_id = files[0].id
 
         # Update the file
         updated_content = b"Updated content"
         updated_file = await filesystem.update_file(
+            ctx,
             file_id,
             content=updated_content,
             file_type="DOCUMENT",
@@ -236,12 +249,13 @@ class TestDefaultFilesystem:
         assert file_path.read_bytes() == updated_content
 
     async def test_delete_files_success(
-        self, filesystem: DefaultFilesystem, sample_file_data: bytes, file_metadata: dict
+        self, filesystem: DefaultFilesystem, ctx: RequestContext, sample_file_data: bytes, file_metadata: dict
     ) -> None:
         """Test successful file deletion.
 
         Args:
             filesystem: DefaultFilesystem instance
+            ctx: Request context
             sample_file_data: Sample file data
             file_metadata: File metadata
         """
@@ -259,7 +273,7 @@ class TestDefaultFilesystem:
             for name in file_names
         ]
 
-        files, _, _ = await filesystem.upload_files(upload_files)
+        files, _, _ = await filesystem.upload_files(ctx, upload_files)
         file_ids = [file_data.id for file_data in files]
 
         # Create filter criteria
@@ -267,6 +281,7 @@ class TestDefaultFilesystem:
 
         # Delete the files
         results, total_deleted, total_failed = await filesystem.delete_files(
+            ctx,
             filters,
             permanent=True,
             force=False,
@@ -284,24 +299,29 @@ class TestDefaultFilesystem:
             file_path = Path(filesystem._get_context_temp_dir(file_metadata["context"]), name)
             assert not file_path.exists()
 
-    async def test_get_file_nonexistent(self, filesystem: DefaultFilesystem) -> None:
+    async def test_get_file_nonexistent(self, filesystem: DefaultFilesystem, ctx: RequestContext) -> None:
         """Test getting a non-existent file.
 
         Args:
             filesystem: DefaultFilesystem instance
+            ctx: Request context
         """
         with pytest.raises(FilesystemServiceError):
-            await filesystem.get_file("nonexistent_file_id")
+            await filesystem.get_file(ctx, "nonexistent_file_id")
 
-    async def test_update_file_nonexistent(self, filesystem: DefaultFilesystem, sample_file_data: bytes) -> None:
+    async def test_update_file_nonexistent(
+        self, filesystem: DefaultFilesystem, ctx: RequestContext, sample_file_data: bytes
+    ) -> None:
         """Test updating a non-existent file.
 
         Args:
             filesystem: DefaultFilesystem instance
+            ctx: Request context
             sample_file_data: Sample file data
         """
         with pytest.raises(FilesystemServiceError):
             await filesystem.update_file(
+                ctx,
                 "nonexistent_file_id",
                 content=sample_file_data,
                 file_type="DOCUMENT",
@@ -311,11 +331,12 @@ class TestDefaultFilesystem:
                 status="ACTIVE",
             )
 
-    async def test_delete_files_nonexistent(self, filesystem: DefaultFilesystem) -> None:
+    async def test_delete_files_nonexistent(self, filesystem: DefaultFilesystem, ctx: RequestContext) -> None:
         """Test deleting non-existent files.
 
         Args:
             filesystem: DefaultFilesystem instance
+            ctx: Request context
         """
         # Create filter criteria for non-existent files
         filters = FileFilter(
@@ -325,6 +346,7 @@ class TestDefaultFilesystem:
 
         # Attempt to delete the files
         results, total_deleted, total_failed = await filesystem.delete_files(
+            ctx,
             filters,
             permanent=True,
             force=False,
@@ -335,12 +357,13 @@ class TestDefaultFilesystem:
         assert total_failed == 0
 
     async def test_upload_files_duplicate_error(
-        self, filesystem: DefaultFilesystem, sample_file_data: bytes, file_metadata: dict
+        self, filesystem: DefaultFilesystem, ctx: RequestContext, sample_file_data: bytes, file_metadata: dict
     ) -> None:
         """Test that uploading a duplicate file raises an error when replace_if_exists is False.
 
         Args:
             filesystem: DefaultFilesystem instance
+            ctx: Request context
             sample_file_data: Sample file data
             file_metadata: File metadata
         """
@@ -353,19 +376,20 @@ class TestDefaultFilesystem:
             metadata=file_metadata["metadata"],
             replace_if_exists=False,
         )
-        await filesystem.upload_files([upload_file])
+        await filesystem.upload_files(ctx, [upload_file])
 
         # Try to upload the same file again
         with pytest.raises(FilesystemServiceError):
-            await filesystem.upload_files([upload_file])
+            await filesystem.upload_files(ctx, [upload_file])
 
     async def test_upload_files_replace_existing(
-        self, filesystem: DefaultFilesystem, sample_file_data: bytes, file_metadata: dict
+        self, filesystem: DefaultFilesystem, ctx: RequestContext, sample_file_data: bytes, file_metadata: dict
     ) -> None:
         """Test that uploading a duplicate file succeeds when replace_if_exists is True.
 
         Args:
             filesystem: DefaultFilesystem instance
+            ctx: Request context
             sample_file_data: Sample file data
             file_metadata: File metadata
         """
@@ -378,7 +402,7 @@ class TestDefaultFilesystem:
             metadata=file_metadata["metadata"],
             replace_if_exists=False,
         )
-        await filesystem.upload_files([upload_file])
+        await filesystem.upload_files(ctx, [upload_file])
 
         # Upload the same file with replace_if_exists=True
         new_content = b"New content"
@@ -390,7 +414,7 @@ class TestDefaultFilesystem:
             metadata=file_metadata["metadata"],
             replace_if_exists=True,
         )
-        files, total_uploaded, total_failed = await filesystem.upload_files([upload_file_replace])
+        files, total_uploaded, total_failed = await filesystem.upload_files(ctx, [upload_file_replace])
         assert len(files) == 1
         assert total_uploaded == 1
         assert total_failed == 0
@@ -401,12 +425,13 @@ class TestDefaultFilesystem:
         assert file_path.read_bytes() == new_content
 
     async def test_get_files_with_filters(
-        self, filesystem: DefaultFilesystem, sample_file_data: bytes, file_metadata: dict
+        self, filesystem: DefaultFilesystem, ctx: RequestContext, sample_file_data: bytes, file_metadata: dict
     ) -> None:
         """Test getting files with various filter combinations.
 
         Args:
             filesystem: DefaultFilesystem instance
+            ctx: Request context
             sample_file_data: Sample file data
             file_metadata: File metadata
         """
@@ -437,46 +462,47 @@ class TestDefaultFilesystem:
                 replace_if_exists=False,
             ),
         ]
-        files, _, _ = await filesystem.upload_files(files_to_upload)
+        files, _, _ = await filesystem.upload_files(ctx, files_to_upload)
 
         # Update one file to ARCHIVED status
-        await filesystem.update_file(files[1].id, status="ARCHIVED")
+        await filesystem.update_file(ctx, files[1].id, status="ARCHIVED")
 
         # Test filtering by type
         filters = FileFilter(file_types=["DOCUMENT"])
-        result_files, total_count = await filesystem.get_files(filters)
+        result_files, total_count = await filesystem.get_files(ctx, filters)
         assert len(result_files) == 2
         assert total_count == 2
         assert all(f.file_type == "DOCUMENT" for f in result_files)
 
         # Test filtering by status
         filters = FileFilter(status="ARCHIVED")
-        result_files, total_count = await filesystem.get_files(filters)
+        result_files, total_count = await filesystem.get_files(ctx, filters)
         assert len(result_files) == 1
         assert total_count == 1
         assert result_files[0].status == "ARCHIVED"
 
         # Test filtering by content type
         filters = FileFilter(content_type="image/png")
-        result_files, total_count = await filesystem.get_files(filters)
+        result_files, total_count = await filesystem.get_files(ctx, filters)
         assert len(result_files) == 1
         assert total_count == 1
         assert result_files[0].content_type == "image/png"
 
         # Test filtering by name prefix
         filters = FileFilter(prefix="file1")
-        result_files, total_count = await filesystem.get_files(filters)
+        result_files, total_count = await filesystem.get_files(ctx, filters)
         assert len(result_files) == 1
         assert total_count == 1
         assert result_files[0].name == "file1.txt"
 
     async def test_get_files_pagination(
-        self, filesystem: DefaultFilesystem, sample_file_data: bytes, file_metadata: dict
+        self, filesystem: DefaultFilesystem, ctx: RequestContext, sample_file_data: bytes, file_metadata: dict
     ) -> None:
         """Test getting files with pagination.
 
         Args:
             filesystem: DefaultFilesystem instance
+            ctx: Request context
             sample_file_data: Sample file data
             file_metadata: File metadata
         """
@@ -492,33 +518,34 @@ class TestDefaultFilesystem:
             )
             for i in range(5)
         ]
-        await filesystem.upload_files(files_to_upload)
+        await filesystem.upload_files(ctx, files_to_upload)
 
         # Test pagination with list_size=2
         filters = FileFilter()
 
         # First page
-        result_files, total_count = await filesystem.get_files(filters, list_size=2, offset=0)
+        result_files, total_count = await filesystem.get_files(ctx, filters, list_size=2, offset=0)
         assert len(result_files) == 2
         assert total_count == 5
 
         # Second page
-        result_files, total_count = await filesystem.get_files(filters, list_size=2, offset=2)
+        result_files, total_count = await filesystem.get_files(ctx, filters, list_size=2, offset=2)
         assert len(result_files) == 2
         assert total_count == 5
 
         # Last page
-        result_files, total_count = await filesystem.get_files(filters, list_size=2, offset=4)
+        result_files, total_count = await filesystem.get_files(ctx, filters, list_size=2, offset=4)
         assert len(result_files) == 1
         assert total_count == 5
 
     async def test_delete_files_soft_delete(
-        self, filesystem: DefaultFilesystem, sample_file_data: bytes, file_metadata: dict
+        self, filesystem: DefaultFilesystem, ctx: RequestContext, sample_file_data: bytes, file_metadata: dict
     ) -> None:
         """Test soft deletion of files.
 
         Args:
             filesystem: DefaultFilesystem instance
+            ctx: Request context
             sample_file_data: Sample file data
             file_metadata: File metadata
         """
@@ -531,19 +558,19 @@ class TestDefaultFilesystem:
             metadata=file_metadata["metadata"],
             replace_if_exists=False,
         )
-        files, _, _ = await filesystem.upload_files([upload_file])
+        files, _, _ = await filesystem.upload_files(ctx, [upload_file])
         file_id = files[0].id
 
         # Soft delete the file
         filters = FileFilter(file_ids=[file_id])
-        results, total_deleted, total_failed = await filesystem.delete_files(filters, permanent=False)
+        results, total_deleted, total_failed = await filesystem.delete_files(ctx, filters, permanent=False)
         assert len(results) == 1
         assert total_deleted == 1
         assert total_failed == 0
         assert results[file_id] is True
 
         # Verify the file still exists but is marked as deleted
-        file_data = await filesystem.get_file(file_id)
+        file_data = await filesystem.get_file(ctx, file_id)
         assert file_data.status == "DELETED"
         file_path = Path(filesystem._get_context_temp_dir(file_metadata["context"]), file_metadata["name"])
         assert file_path.exists()

@@ -22,6 +22,8 @@ from digitalkin.models.module.select_schema import SelectSchema
 from digitalkin.models.module.utility import EndOfStreamOutput, ModuleStartInfoOutput, UtilityProtocol
 from digitalkin.models.services.storage import BaseRole
 from digitalkin.modules.trigger_handler import TriggerHandler
+from digitalkin.services.base_strategy import RequestContext
+from digitalkin.services.bound_strategies import BoundFilesystemStrategy, BoundStorageStrategy, BoundUserProfileStrategy
 from digitalkin.services.services_config import ServicesConfig, ServicesStrategy
 from digitalkin.utils.package_discover import ModuleDiscoverer
 from digitalkin.utils.schema_splitter import SchemaSplitter
@@ -69,27 +71,27 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
     def _init_strategies(self, mission_id: str, setup_id: str, setup_version_id: str) -> dict[str, Any]:
         """Initialize the services configuration.
 
+        Shared singletons (storage, filesystem, user_profile, etc.) are wrapped
+        with Bound* proxies that auto-inject the RequestContext.
+        Per-request services (cost) are created fresh.
+
         Returns:
-            dict of services with name: Strategy
-                agent: AgentStrategy
-                cost: CostStrategy
-                filesystem: FilesystemStrategy
-                identity: IdentityStrategy
-                registry: RegistryStrategy
-                snapshot: SnapshotStrategy
-                storage: StorageStrategy
-                user_profile: UserProfileStrategy
+            dict of services with name: Strategy instance or Bound wrapper.
         """
         logger.debug("Service initialisation: %s", self.services_config_strategies.keys())
-        return {
-            service_name: self.services_config.init_strategy(
-                service_name,
-                mission_id,
-                setup_id,
-                setup_version_id,
-            )
-            for service_name in self.services_config.valid_strategy_names()
-        }
+        ctx = RequestContext(mission_id, setup_id, setup_version_id)
+        result: dict[str, Any] = {}
+        for service_name in self.services_config.valid_strategy_names():
+            service = self.services_config.init_strategy(service_name, mission_id, setup_id, setup_version_id)
+            if service_name == "storage":
+                result[service_name] = BoundStorageStrategy(service, ctx)
+            elif service_name == "filesystem":
+                result[service_name] = BoundFilesystemStrategy(service, ctx)
+            elif service_name == "user_profile":
+                result[service_name] = BoundUserProfileStrategy(service, ctx)
+            else:
+                result[service_name] = service
+        return result
 
     def __init__(
         self,

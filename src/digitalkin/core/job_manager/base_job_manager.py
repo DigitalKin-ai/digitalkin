@@ -48,6 +48,7 @@ class BaseJobManager(abc.ABC, Generic[InputModelT, OutputModelT, SetupModelT]):
             mode=services_mode,
         )
         self.module_class.services_config = services_config
+        services_config.init_shared_services()
 
     # Properties to expose task manager attributes
     @property

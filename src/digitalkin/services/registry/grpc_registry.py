@@ -45,14 +45,11 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
 
     def __init__(
         self,
-        mission_id: str,
-        setup_id: str,
-        setup_version_id: str,
         client_config: ClientConfig,
         config: dict[str, Any] | None = None,
     ) -> None:
         """Initialize the gRPC registry client."""
-        RegistryStrategy.__init__(self, mission_id, setup_id, setup_version_id, config)
+        RegistryStrategy.__init__(self, config)
         self.service_name = "RegistryService"
         self.stub = registry_service_pb2_grpc.RegistryServiceStub(self._init_channel(client_config))
         logger.debug("Channel client 'Registry' initialized successfully")

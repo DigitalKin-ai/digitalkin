@@ -29,20 +29,14 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
 
     def __init__(
         self,
-        mission_id: str,
-        setup_id: str,
-        setup_version_id: str,
         client_config: ClientConfig,
     ) -> None:
         """Initialize the gRPC communication client.
 
         Args:
-            mission_id: Mission identifier
-            setup_id: Setup identifier
-            setup_version_id: Setup version identifier
             client_config: Client configuration for gRPC connection
         """
-        BaseStrategy.__init__(self, mission_id, setup_id, setup_version_id)
+        BaseStrategy.__init__(self)
         self.client_config = client_config
         self._channel_pool: dict[tuple[str, int], grpc.aio.Channel] = {}
 

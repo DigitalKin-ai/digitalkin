@@ -12,6 +12,7 @@ from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
 from digitalkin.grpc_servers.utils.grpc_error_handler import GrpcErrorHandlerMixin
 from digitalkin.logger import logger
 from digitalkin.models.grpc_servers.models import ClientConfig
+from digitalkin.services.base_strategy import RequestContext
 from digitalkin.services.user_profile.user_profile_strategy import UserProfileServiceError, UserProfileStrategy
 
 
@@ -22,26 +23,23 @@ class GrpcUserProfile(UserProfileStrategy, GrpcClientWrapper, GrpcErrorHandlerMi
 
     def __init__(
         self,
-        mission_id: str,
-        setup_id: str,
-        setup_version_id: str,
         client_config: ClientConfig,
     ) -> None:
         """Initialize the user profile service.
 
         Args:
-            mission_id: The ID of the mission this strategy is associated with
-            setup_id: The ID of the setup
-            setup_version_id: The ID of the setup version
             client_config: Client configuration for gRPC connection
         """
-        super().__init__(mission_id=mission_id, setup_id=setup_id, setup_version_id=setup_version_id)
+        super().__init__()
         channel = self._init_channel(client_config)
         self.stub = user_profile_service_pb2_grpc.UserProfileServiceStub(channel)
         logger.debug("Channel client 'UserProfile' initialized successfully")
 
-    async def get_user_profile(self) -> dict[str, Any]:
+    async def get_user_profile(self, ctx: RequestContext) -> dict[str, Any]:
         """Get user profile by mission_id (which maps to user_id).
+
+        Args:
+            ctx: Request context carrying mission/setup IDs.
 
         Returns:
             dict[str, Any]: User profile data
@@ -52,11 +50,11 @@ class GrpcUserProfile(UserProfileStrategy, GrpcClientWrapper, GrpcErrorHandlerMi
         """
         async with self.handle_grpc_errors("GetUserProfile", UserProfileServiceError):
             # mission_id typically contains user context
-            request = user_profile_pb2.GetUserProfileRequest(mission_id=self.mission_id)
+            request = user_profile_pb2.GetUserProfileRequest(mission_id=ctx.mission_id)
             response = await self.exec_grpc_query("GetUserProfile", request)
 
             if not response.success:
-                msg = f"Failed to get user profile for mission_id: {self.mission_id}"
+                msg = f"Failed to get user profile for mission_id: {ctx.mission_id}"
                 logger.error(msg)
                 raise UserProfileServiceError(msg)
 
@@ -67,5 +65,5 @@ class GrpcUserProfile(UserProfileStrategy, GrpcClientWrapper, GrpcErrorHandlerMi
                 always_print_fields_with_no_presence=True,
             )
 
-            logger.debug(f"Retrieved user profile for mission_id: {self.mission_id}")
+            logger.debug(f"Retrieved user profile for mission_id: {ctx.mission_id}")
             return user_profile_dict
