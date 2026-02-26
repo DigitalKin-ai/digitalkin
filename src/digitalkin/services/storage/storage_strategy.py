@@ -1,5 +1,6 @@
 """This module contains the abstract base class for storage strategies."""
 
+import asyncio
 import datetime
 from abc import ABC, abstractmethod
 from enum import Enum
@@ -181,6 +182,22 @@ class StorageStrategy(BaseStrategy, ABC):
         super().__init__(mission_id, setup_id, setup_version_id)
         # Schema configuration mapping keys to model classes
         self.config: dict[str, type[BaseModel]] = config
+        self._record_locks: dict[str, asyncio.Lock] = {}
+
+    def _record_lock(self, collection: str, record_id: str) -> asyncio.Lock:
+        """Get or create an asyncio.Lock for a specific record.
+
+        Args:
+            collection: The collection name
+            record_id: The record ID
+
+        Returns:
+            An asyncio.Lock scoped to the given collection:record_id pair.
+        """
+        key = f"{collection}:{record_id}"
+        if key not in self._record_locks:
+            self._record_locks[key] = asyncio.Lock()
+        return self._record_locks[key]
 
     async def store(
         self,
@@ -210,7 +227,8 @@ class StorageStrategy(BaseStrategy, ABC):
         data_type_enum = DataType[data_type]
         validated_data = self._validate_data(collection, {**data, "mission_id": self.mission_id})
         record = self._create_storage_record(collection, record_id, validated_data, data_type_enum)
-        return await self._store(record)
+        async with self._record_lock(collection, record_id):
+            return await self._store(record)
 
     async def read(self, collection: str, record_id: str) -> StorageRecord | None:
         """Get records from storage by key.
@@ -222,7 +240,8 @@ class StorageStrategy(BaseStrategy, ABC):
         Returns:
             A storage record with validated data
         """
-        return await self._read(collection, record_id)
+        async with self._record_lock(collection, record_id):
+            return await self._read(collection, record_id)
 
     async def update(self, collection: str, record_id: str, data: dict[str, Any]) -> StorageRecord | None:
         """Validate & overwrite an existing record.
@@ -236,7 +255,8 @@ class StorageStrategy(BaseStrategy, ABC):
             StorageRecord: The modified record
         """
         validated_data = self._validate_data(collection, data)
-        return await self._update(collection, record_id, validated_data)
+        async with self._record_lock(collection, record_id):
+            return await self._update(collection, record_id, validated_data)
 
     async def remove(self, collection: str, record_id: str) -> bool:
         """Delete a record from the storage.
@@ -248,7 +268,8 @@ class StorageStrategy(BaseStrategy, ABC):
         Returns:
             True if the deletion was successful, False otherwise
         """
-        return await self._remove(collection, record_id)
+        async with self._record_lock(collection, record_id):
+            return await self._remove(collection, record_id)
 
     async def list(self, collection: str) -> list[StorageRecord]:
         """Get all records within a collection.
@@ -271,3 +292,45 @@ class StorageStrategy(BaseStrategy, ABC):
             True if the deletion was successful, False otherwise
         """
         return await self._remove_collection(collection)
+
+    async def upsert(
+        self,
+        collection: str,
+        record_id: str,
+        data: dict[str, Any],
+        data_type: Literal["OUTPUT", "VIEW", "LOGS", "OTHER"] = "OUTPUT",
+    ) -> StorageRecord:
+        """Insert or update a record atomically.
+
+        If a record with the given collection/record_id exists, it is updated;
+        otherwise a new record is created. The operation is protected by a
+        per-record lock to prevent races.
+
+        Args:
+            collection: The unique name for the record type
+            record_id: The unique ID for the record
+            data: The data to store
+            data_type: The type of data being stored (default: OUTPUT)
+
+        Returns:
+            The created or updated storage record
+
+        Raises:
+            ValueError: If the data type is invalid or if validation fails
+            StorageServiceError: If update of an existing record fails unexpectedly
+        """
+        if not self._is_valid_data_type_name(data_type):
+            msg = f"Invalid data type '{data_type}'. Must be one of {list(DataType.__members__.keys())}"
+            raise ValueError(msg)
+        data_type_enum = DataType[data_type]
+        validated_data = self._validate_data(collection, {**data, "mission_id": self.mission_id})
+        async with self._record_lock(collection, record_id):
+            existing = await self._read(collection, record_id)
+            if existing:
+                updated = await self._update(collection, record_id, validated_data)
+                if updated is None:
+                    msg = f"Update failed for existing record '{collection}:{record_id}'"
+                    raise StorageServiceError(msg)
+                return updated
+            record = self._create_storage_record(collection, record_id, validated_data, data_type_enum)
+            return await self._store(record)

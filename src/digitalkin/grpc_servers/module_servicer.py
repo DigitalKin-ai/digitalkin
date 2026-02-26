@@ -3,7 +3,7 @@
 import asyncio
 from argparse import ArgumentParser, Namespace
 from collections.abc import AsyncGenerator
-from typing import Any
+from typing import Any, cast
 
 import grpc
 from agentic_mesh_protocol.module.v1 import (
@@ -148,8 +148,9 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             raise ServicerError(msg)
 
         # Extract gRPC request metadata (headers) for propagation
-        raw_metadata = context.invocation_metadata()
-        request_metadata: dict[str, str] = {str(k): str(v) for k, v in raw_metadata.items()} if raw_metadata else {}
+        request_metadata: dict[str, str] = {
+            str(k): str(v) for k, v in cast("list[tuple[str, str]]", context.invocation_metadata() or ())
+        }
 
         # create a task to run the module in background
         job_id = await self.job_manager.create_config_setup_instance_job(
@@ -200,7 +201,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         )
         return lifecycle_pb2.ConfigSetupModuleResponse(success=True, setup_version=setup_version)
 
-    async def StartModule(  # noqa: C901, PLR0912, PLR0915
+    async def StartModule(  # noqa: C901, PLR0911, PLR0912, PLR0915
         self,
         request: lifecycle_pb2.StartModuleRequest,
         context: grpc.aio.ServicerContext,
@@ -344,18 +345,62 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         setup_data = await self.module_class.create_setup_model(setup_data_class.current_setup_version.content)
 
         # Extract gRPC request metadata (headers) for propagation
-        raw_metadata = context.invocation_metadata()
-        request_metadata: dict[str, str] = {str(k): str(v) for k, v in raw_metadata.items()} if raw_metadata else {}
+        request_metadata: dict[str, str] = {
+            str(k): str(v) for k, v in cast("list[tuple[str, str]]", context.invocation_metadata() or ())
+        }
 
         # create a task to run the module in background
-        job_id = await self.job_manager.create_module_instance_job(
-            input_data,
-            setup_data,
-            mission_id=request.mission_id,
-            setup_id=setup_data_class.current_setup_version.setup_id,
-            setup_version_id=setup_data_class.current_setup_version.id,
-            request_metadata=request_metadata,
-        )
+        try:
+            job_id = await self.job_manager.create_module_instance_job(
+                input_data,
+                setup_data,
+                mission_id=request.mission_id,
+                setup_id=setup_data_class.current_setup_version.setup_id,
+                setup_version_id=setup_data_class.current_setup_version.id,
+                request_metadata=request_metadata,
+            )
+        except ConnectionError as e:
+            logger.error(
+                "Failed to create job, database connection error (setup_id=%s, mission_id=%s): %s",
+                request.setup_id,
+                request.mission_id,
+                e,
+                extra={
+                    "setup_id": request.setup_id,
+                    "mission_id": request.mission_id,
+                    "module_class": self.module_class.__name__,
+                },
+            )
+            context.set_code(grpc.StatusCode.UNAVAILABLE)
+            context.set_details(
+                f"[gRPC-server:ModuleService.StartModule] (setup_id={request.setup_id}, "
+                f"mission_id={request.mission_id}) Database connection failed: {e}"
+            )
+            yield lifecycle_pb2.StartModuleResponse(success=False)
+            return
+        except Exception as e:
+            error_type = type(e).__name__
+            logger.error(
+                "Failed to create job, unexpected %s (setup_id=%s, mission_id=%s): %s",
+                error_type,
+                request.setup_id,
+                request.mission_id,
+                e,
+                extra={
+                    "setup_id": request.setup_id,
+                    "mission_id": request.mission_id,
+                    "module_class": self.module_class.__name__,
+                    "error_type": error_type,
+                },
+                exc_info=True,
+            )
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details(
+                f"[gRPC-server:ModuleService.StartModule] (setup_id={request.setup_id}, "
+                f"mission_id={request.mission_id}) Failed to create job: {error_type}: {e}"
+            )
+            yield lifecycle_pb2.StartModuleResponse(success=False)
+            return
 
         if job_id is None:
             context.set_code(grpc.StatusCode.NOT_FOUND)

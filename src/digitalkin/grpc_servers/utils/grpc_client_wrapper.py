@@ -1,7 +1,8 @@
 """Client wrapper to ease channel creation with specific ServerConfig."""
 
+import asyncio
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import grpc
 import grpc.aio
@@ -74,12 +75,17 @@ class GrpcClientWrapper:
             await self._channel.close()
             self._channel = None
 
+    _RETRYABLE_CODES: ClassVar[set[grpc.StatusCode]] = {grpc.StatusCode.UNAVAILABLE, grpc.StatusCode.INTERNAL}
+
     async def exec_grpc_query(
         self,
         query_endpoint: str,
         request: Any,
     ) -> Any:
         """Execute a gRPC query with from the query's rpc endpoint name.
+
+        Retries up to 2 times on transient errors (UNAVAILABLE, INTERNAL)
+        with exponential backoff (50ms, 100ms).
 
         Arguments:
             query_endpoint: rpc query name (e.g., "GetSetup", "CreateSetupVersion")
@@ -91,55 +97,80 @@ class GrpcClientWrapper:
         Raises:
             ServerError: gRPC error with status code and details for caller to handle.
         """
-        try:
-            logger.debug(
-                "gRPC request: %s.%s - sending request to remote service",
-                self.service_name,
-                query_endpoint,
-                extra={
-                    "service_name": self.service_name,
-                    "endpoint": query_endpoint,
-                    "request_type": type(request).__name__,
-                    "request_preview": str(request)[:200],  # Truncate for log readability
-                },
-            )
-            # getattr unavoidable: gRPC stubs expose RPC methods as dynamic attributes by endpoint name
-            response = await getattr(self.stub, query_endpoint)(request)
-            logger.debug(
-                "gRPC response: %s.%s - received response from remote service",
-                self.service_name,
-                query_endpoint,
-                extra={
-                    "service_name": self.service_name,
-                    "endpoint": query_endpoint,
-                    "response_type": type(response).__name__,
-                    "response_preview": str(response)[:200],  # Truncate for log readability
-                },
-            )
-        except grpc.RpcError as e:
-            status_code = e.code().name
-            status_value = e.code().value[0]
-            details = e.details()
+        max_retries = 2
+        backoff_delays = (0.05, 0.1)
+        last_error: grpc.RpcError | None = None
 
-            error_msg = f"[gRPC-client:{self.service_name}.{query_endpoint}] [{status_code}] {details}"
+        for attempt in range(max_retries + 1):
+            if attempt > 0:
+                await asyncio.sleep(backoff_delays[attempt - 1])
 
-            logger.error(
-                "gRPC call failed: %s.%s returned [%s] %s. "
-                "The remote gRPC service returned an error or is unreachable. "
-                "Check the remote service logs for more details.",
-                self.service_name,
-                query_endpoint,
-                status_code,
-                details,
-                extra={
-                    "service_name": self.service_name,
-                    "endpoint": query_endpoint,
-                    "grpc_status_code": status_code,
-                    "grpc_status_value": status_value,
-                    "grpc_details": details,
-                    "request_type": type(request).__name__,
-                },
-            )
-            raise ServerError(error_msg) from e
-        else:
-            return response
+            try:
+                logger.debug(
+                    "gRPC request: %s.%s - sending request to remote service",
+                    self.service_name,
+                    query_endpoint,
+                    extra={
+                        "service_name": self.service_name,
+                        "endpoint": query_endpoint,
+                        "request_type": type(request).__name__,
+                        "request_preview": str(request)[:200],
+                    },
+                )
+                # getattr unavoidable: gRPC stubs expose RPC methods as dynamic attributes
+                response = await getattr(self.stub, query_endpoint)(request)
+                logger.debug(
+                    "gRPC response: %s.%s - received response from remote service",
+                    self.service_name,
+                    query_endpoint,
+                    extra={
+                        "service_name": self.service_name,
+                        "endpoint": query_endpoint,
+                        "response_type": type(response).__name__,
+                        "response_preview": str(response)[:200],
+                    },
+                )
+            except grpc.RpcError as e:
+                last_error = e
+                if e.code() not in self._RETRYABLE_CODES or attempt == max_retries:
+                    break
+                logger.warning(
+                    "gRPC transient error on %s.%s [%s] (attempt %d/%d), retrying in %.0fms",
+                    self.service_name,
+                    query_endpoint,
+                    e.code().name,
+                    attempt + 1,
+                    max_retries + 1,
+                    backoff_delays[attempt] * 1000,
+                )
+            else:
+                return response
+
+        if last_error is None:
+            msg = f"[gRPC-client:{self.service_name}.{query_endpoint}] Retry loop exited without response or error"
+            raise ServerError(msg)
+        status_code = last_error.code().name
+        status_value = last_error.code().value[0]
+        details = last_error.details()
+        retried = last_error.code() in self._RETRYABLE_CODES
+        suffix = f" (after {max_retries + 1} attempts)" if retried else ""
+
+        logger.error(
+            "gRPC call failed: %s.%s returned [%s] %s. "
+            "The remote gRPC service returned an error or is unreachable. "
+            "Check the remote service logs for more details.",
+            self.service_name,
+            query_endpoint,
+            status_code,
+            details,
+            extra={
+                "service_name": self.service_name,
+                "endpoint": query_endpoint,
+                "grpc_status_code": status_code,
+                "grpc_status_value": status_value,
+                "grpc_details": details,
+                "request_type": type(request).__name__,
+            },
+        )
+        error_msg = f"[gRPC-client:{self.service_name}.{query_endpoint}] [{status_code}] {details}{suffix}"
+        raise ServerError(error_msg) from last_error
