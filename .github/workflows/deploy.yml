@@ -109,7 +109,6 @@ jobs:
             ALIAS="$SAFE_VERSION"
           fi
 
-
           echo "safe_version=$SAFE_VERSION" >> $GITHUB_OUTPUT
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "alias=$ALIAS" >> $GITHUB_OUTPUT
@@ -246,9 +245,11 @@ jobs:
 
       - name: Delete documentation versions
         if: steps.cleanup_version.outputs.should_cleanup == 'true'
+        env:
+          MIKE_OPTS: "--branch gh-pages"
         run: |
           echo "Existing documentation versions:"
-          mike list
+          mike list $MIKE_OPTS
 
           IFS=',' read -ra VERSION_LIST <<< "${{ steps.cleanup_version.outputs.versions }}"
 
@@ -256,15 +257,20 @@ jobs:
           SKIPPED=()
 
           for VERSION in "${VERSION_LIST[@]}"; do
-            if mike list | grep -q "^$VERSION"; then
+            if mike list $MIKE_OPTS | grep -q "^$VERSION"; then
               echo "Deleting: $VERSION"
-              mike delete --push "$VERSION"
+              mike delete $MIKE_OPTS "$VERSION"
               DELETED+=("$VERSION")
             else
               echo "Not found, skipping: $VERSION"
               SKIPPED+=("$VERSION")
             fi
           done
+
+          # Push all deletions at once
+          if [[ ${#DELETED[@]} -gt 0 ]]; then
+            git push origin gh-pages
+          fi
 
           # Summary
           echo "## 🗑️ Documentation Cleanup Summary" >> $GITHUB_STEP_SUMMARY

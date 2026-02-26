@@ -39,29 +39,46 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
     services_mode: ServicesMode
 
     @staticmethod
+    async def _on_consumer_closed(reason: Any) -> None:
+        """Log RStream consumer connection closure for diagnostics.
+
+        Args:
+            reason: Connection close reason from rstream.
+        """
+        logger.error("RStream consumer connection closed: %s", reason)
+
+    @staticmethod
     def _define_consumer() -> Consumer:
-        """Get from the env the connection parameter to RabbitMQ.
+        """Create RStream consumer with connection recovery and diagnostics.
 
         Returns:
-            Consumer
+            Consumer connected to RabbitMQ.
         """
         host: str = os.environ.get("RABBITMQ_RSTREAM_HOST", "localhost")
         port: str = os.environ.get("RABBITMQ_RSTREAM_PORT", "5552")
         username: str = os.environ.get("RABBITMQ_RSTREAM_USERNAME", "guest")
         password: str = os.environ.get("RABBITMQ_RSTREAM_PASSWORD", "guest")
 
-        logger.info("Connection to RabbitMQ: %s:%s.", host, port)
-        return Consumer(host=host, port=int(port), username=username, password=password)
+        logger.info("RStream consumer connecting to %s:%s", host, port)
+        return Consumer(
+            host=host,
+            port=int(port),
+            username=username,
+            password=password,
+            connection_name="digitalkin_consumer",
+            on_close_handler=TaskiqJobManager._on_consumer_closed,
+        )
 
     async def _on_message(
         self,
         message: bytes,
-        message_context: MessageContext,  # noqa: ARG002 #TODO
+        message_context: MessageContext,  # noqa: ARG002
     ) -> None:  # RStream callback signature
         """Internal callback: parse JSON and route to the correct job queue."""
         try:
-            data = json.loads(message.decode("utf-8"))
-        except json.JSONDecodeError:
+            data = json.loads(message)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            logger.warning("RStream message decode failed (size=%d)", len(message))
             return
         job_id = data.get("job_id")
         if not job_id:
@@ -86,12 +103,14 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         await self.stream_consumer.start()
 
         start_spec = ConsumerOffsetSpecification(OffsetType.LAST)
-        # on_message use bytes instead of AMQPMessage
+        # Higher initial_credit allows prefetching more messages from the broker,
+        # reducing round-trip latency for high-throughput streaming.
         await self.stream_consumer.subscribe(
             stream=TaskiqBrokerConfig.STREAM,
             subscriber_name=f"""subscriber_{os.environ.get("SERVER_NAME", "module_servicer")}""",
-            callback=self._on_message,  # RStream expects (bytes, MessageContext) callback # type: ignore
+            callback=self._on_message,  # type: ignore[arg-type]
             offset_specification=start_spec,
+            initial_credit=int(os.environ.get("DIGITALKIN_RSTREAM_INITIAL_CREDIT", "50")),
         )
 
         # Wrap the consumer task with error handling
@@ -101,8 +120,8 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             except asyncio.CancelledError:
                 logger.debug("Stream consumer task cancelled")
                 raise
-            except Exception as e:
-                logger.error("Stream consumer task failed: %s", e, exc_info=True, extra={"error": str(e)})
+            except Exception:
+                logger.exception("Stream consumer task failed")
                 raise
 
         self.stream_consumer_task = asyncio.create_task(
@@ -132,7 +151,7 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         module_class: type[BaseModule],
         services_mode: ServicesMode,
         default_timeout: float = 300.0,
-        stream_timeout: float = 30.0,
+        stream_timeout: float = float(os.environ.get("DIGITALKIN_RSTREAM_TIMEOUT", "30.0")),
     ) -> None:
         """Initialize the Taskiq job manager.
 
@@ -140,7 +159,7 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             module_class: The class of the module to be managed
             services_mode: The mode of operation for the services
             default_timeout: Default timeout for task operations
-            stream_timeout: Timeout for stream consumer operations (default: 15.0s for distributed systems)
+            stream_timeout: Timeout for stream consumer operations
         """
         # Create remote task manager for distributed execution
         task_manager = RemoteTaskManager(default_timeout)
@@ -148,11 +167,15 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         # Initialize base job manager with task manager
         super().__init__(module_class, services_mode, task_manager)
 
-        logger.warning("TaskiqJobManager initialized with app: %s", TASKIQ_BROKER)
         self.job_queues: dict[str, asyncio.Queue] = {}
-        self.max_queue_size = 1000
+        self.max_queue_size = int(os.environ.get("DIGITALKIN_RSTREAM_QUEUE_SIZE", "1000"))
         self.stream_timeout = stream_timeout
         self._config_setup_timeout = float(os.environ.get("DIGITALKIN_CONFIG_SETUP_TIMEOUT", "30.0"))
+        logger.info(
+            "TaskiqJobManager initialized (queue_size=%d, stream_timeout=%.1fs)",
+            self.max_queue_size,
+            self.stream_timeout,
+        )
 
     async def generate_config_setup_module_response(self, job_id: str) -> SetupModelT:
         """Generate a stream consumer for a module's output data.
@@ -285,14 +308,16 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
                     queue.task_done()
                     yield item
 
-                    # Drain all immediately available items (micro-batch optimization)
-                    batch_count = 0
-                    max_batch_size = 100  # Safety limit to prevent memory spikes
-                    while batch_count < max_batch_size and not queue.empty():
-                        item = queue.get_nowait()
+                    # Drain all immediately available items (micro-batch optimization).
+                    # Cap at min(qsize, 100) to bound memory per yield cycle.
+                    drain_limit = min(queue.qsize(), 100)
+                    for _ in range(drain_limit):
+                        try:
+                            item = queue.get_nowait()
+                        except asyncio.QueueEmpty:
+                            break
                         queue.task_done()
                         yield item
-                        batch_count += 1
                     continue
 
                 # Timeout — cancel pending get and check job status
@@ -351,6 +376,9 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             msg = "Task not found"
             raise ValueError(msg)
 
+        # Forward registry config so the worker can initialize GrpcRegistry
+        registry_config = self.module_class.services_config_params.get("registry")
+
         # Submit task to Taskiq
         running_task: AsyncTaskiqTask[Any] = await task.kiq(
             mission_id,
@@ -361,6 +389,7 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             input_data.model_dump(mode="json"),
             setup_data.model_dump(mode="json"),
             request_metadata,
+            registry_config,
         )
         job_id = running_task.task_id
 
@@ -407,6 +436,9 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
     async def wait_for_completion(self, job_id: str) -> None:
         """Wait for a task to complete by polling its status.
 
+        Uses adaptive polling: starts at 50ms for fast jobs, doubles up to 500ms
+        for long-running tasks to reduce CPU overhead while maintaining low latency.
+
         Args:
             job_id: The unique identifier of the job to wait for.
 
@@ -417,14 +449,15 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             msg = f"Job {job_id} not found"
             raise KeyError(msg)
 
-        # Poll task status until terminal state
         terminal_states = {"completed", "failed", "cancelled"}
+        poll_interval = 0.05
         while True:
-            status = await self.get_module_status(job_id)
-            if status in terminal_states:
-                logger.debug("Job %s reached terminal state: %s", job_id, status)
+            session = self.tasks_sessions.get(job_id)
+            if session is None or session.status in terminal_states:
+                logger.debug("Job %s reached terminal state: %s", job_id, session.status if session else "removed")
                 break
-            await asyncio.sleep(0.5)  # Poll interval
+            await asyncio.sleep(poll_interval)
+            poll_interval = min(poll_interval * 2, 0.5)
 
     async def stop_module(self, job_id: str) -> bool:
         """Stop a running module using TaskManager.
