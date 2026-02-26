@@ -52,7 +52,6 @@ class RemoteTaskManager(BaseTaskManager):
         )
 
         try:
-
             # Close coroutine - worker will recreate and execute it
             coro.close()
 

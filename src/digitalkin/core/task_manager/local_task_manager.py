@@ -66,7 +66,6 @@ class LocalTaskManager(BaseTaskManager):
         )
 
         try:
-
             # Execute task using TaskExecutor
             supervisor_task = await self._executor.execute_task(
                 task_id,

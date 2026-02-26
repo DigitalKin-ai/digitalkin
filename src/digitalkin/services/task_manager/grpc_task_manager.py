@@ -199,7 +199,11 @@ class GrpcTaskManager(TaskManagerStrategy, GrpcClientWrapper, GrpcErrorHandlerMi
                         )
                         for task_proto in resp.tasks:
                             # Dedup: skip signals already seen based on timestamp
-                            sig_ts = task_proto.created_at.ToDatetime(tzinfo=timezone.utc) if task_proto.HasField("created_at") else None
+                            sig_ts = (
+                                task_proto.created_at.ToDatetime(tzinfo=timezone.utc)
+                                if task_proto.HasField("created_at")
+                                else None
+                            )
                             if last_seen_ts is not None and sig_ts is not None and sig_ts <= last_seen_ts:
                                 continue
                             if sig_ts is not None:

@@ -381,8 +381,15 @@ class ModuleContext:
         """
         from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
 
-        for service in (self.task_manager, self.communication, self.cost, self.storage,
-                        self.registry, self.filesystem, self.user_profile):
+        for service in (
+            self.task_manager,
+            self.communication,
+            self.cost,
+            self.storage,
+            self.registry,
+            self.filesystem,
+            self.user_profile,
+        ):
             if isinstance(service, GrpcClientWrapper):
                 try:
                     await service.close_channel()
