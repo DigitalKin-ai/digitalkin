@@ -155,6 +155,16 @@ class ModuleServer(BaseServer):
             except Exception:
                 logger.exception("Failed to shutdown module servicer resources")
 
+            try:
+                await self.module_servicer.job_manager.stop_all_modules()
+            except Exception:
+                logger.exception("Failed to stop all modules during shutdown")
+
+            try:
+                await self.module_servicer.job_manager.stop()
+            except Exception:
+                logger.exception("Failed to stop job manager during shutdown")
+
         # Close server-level registry channel
         if isinstance(self.registry, GrpcRegistry):
             try:

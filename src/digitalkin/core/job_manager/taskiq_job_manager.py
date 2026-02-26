@@ -9,6 +9,7 @@ except ImportError:
 
 import asyncio
 import contextlib
+import datetime
 import json
 import os
 from collections.abc import AsyncGenerator, AsyncIterator
@@ -37,37 +38,147 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
     """Taskiq job manager for running modules in Taskiq tasks."""
 
     services_mode: ServicesMode
+    stream_consumer: Consumer
+    stream_consumer_task: asyncio.Task[None]
+    _reaper_task: asyncio.Task[None]
+
+    @staticmethod
+    async def _on_consumer_closed(reason: Any) -> None:
+        """Log RStream consumer connection closure for diagnostics.
+
+        Args:
+            reason: Connection close reason from rstream.
+        """
+        logger.error("RStream consumer connection closed: %s", reason)
 
     @staticmethod
     def _define_consumer() -> Consumer:
-        """Get from the env the connection parameter to RabbitMQ.
+        """Create RStream consumer with connection recovery and diagnostics.
 
         Returns:
-            Consumer
+            Consumer connected to RabbitMQ.
         """
         host: str = os.environ.get("RABBITMQ_RSTREAM_HOST", "localhost")
         port: str = os.environ.get("RABBITMQ_RSTREAM_PORT", "5552")
         username: str = os.environ.get("RABBITMQ_RSTREAM_USERNAME", "guest")
         password: str = os.environ.get("RABBITMQ_RSTREAM_PASSWORD", "guest")
 
-        logger.info("Connection to RabbitMQ: %s:%s.", host, port)
-        return Consumer(host=host, port=int(port), username=username, password=password)
+        from digitalkin.core.job_manager.taskiq_broker import _rstream_ssl_context
+
+        logger.info("RStream consumer connecting to %s:%s", host, port)
+        return Consumer(
+            host=host,
+            port=int(port),
+            username=username,
+            password=password,
+            ssl_context=_rstream_ssl_context(),
+            connection_name="digitalkin_consumer",
+            on_close_handler=TaskiqJobManager._on_consumer_closed,
+        )
 
     async def _on_message(
         self,
         message: bytes,
-        message_context: MessageContext,  # noqa: ARG002 #TODO
+        message_context: MessageContext,  # noqa: ARG002
     ) -> None:  # RStream callback signature
         """Internal callback: parse JSON and route to the correct job queue."""
         try:
-            data = json.loads(message.decode("utf-8"))
-        except json.JSONDecodeError:
+            data = json.loads(message)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            logger.warning("RStream message decode failed (size=%d)", len(message))
             return
         job_id = data.get("job_id")
         if not job_id:
             return
+        output_data = data.get("output_data")
         if queue := self.job_queues.get(job_id):
-            await queue.put(data.get("output_data"))
+            await queue.put(output_data)
+
+        # Bridge session status from RStream terminal markers
+        session = self.tasks_sessions.get(job_id)
+        if session is None or not isinstance(output_data, dict):
+            return
+        if "code" in output_data:
+            if session.status not in {"cancelled", "failed"}:
+                session.status = "failed"
+                logger.info("Job %s marked failed from RStream error (code=%s)", job_id, output_data.get("code"))
+        elif isinstance(output_data.get("root"), dict) and output_data["root"].get("protocol") == "end_of_stream":
+            if session.status not in {"cancelled", "failed"}:
+                session.status = "completed"
+                logger.info("Job %s marked completed from RStream end_of_stream", job_id)
+            session.close_stream()
+
+    async def _run_consumer_with_restart(self) -> None:
+        """Run the RStream consumer with automatic restart on failure.
+
+        Raises:
+            CancelledError: If the task is cancelled.
+        """
+        max_retries = int(os.environ.get("DIGITALKIN_RSTREAM_MAX_RETRIES", "10"))
+        base_delay = 1.0
+        max_delay = 60.0
+        attempt = 0
+
+        while True:
+            try:
+                await self.stream_consumer.run()
+                break  # Normal exit (consumer closed gracefully)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                attempt += 1
+                if attempt > max_retries:
+                    logger.exception("Stream consumer failed after %d retries, giving up", max_retries)
+                    for session in list(self.tasks_sessions.values()):
+                        if session.status == "pending":
+                            session.status = "failed"
+                            session.close_stream()
+                    break
+                delay = min(base_delay * (2 ** (attempt - 1)), max_delay)
+                logger.exception(
+                    "Stream consumer failed (attempt %d/%d), restarting in %.1fs", attempt, max_retries, delay
+                )
+                await asyncio.sleep(delay)
+                # Reconnect
+                self.stream_consumer = self._define_consumer()
+                await self.stream_consumer.create_stream(
+                    TaskiqBrokerConfig.STREAM,
+                    exists_ok=True,
+                    arguments={"max-length-bytes": TaskiqBrokerConfig.STREAM_RETENTION},
+                )
+                await self.stream_consumer.start()
+                await self.stream_consumer.subscribe(
+                    stream=TaskiqBrokerConfig.STREAM,
+                    subscriber_name=f"""subscriber_{os.environ.get("SERVER_NAME", "module_servicer")}""",
+                    callback=self._on_message,  # type: ignore[arg-type]
+                    offset_specification=ConsumerOffsetSpecification(OffsetType.LAST),
+                    initial_credit=int(os.environ.get("DIGITALKIN_RSTREAM_INITIAL_CREDIT", "50")),
+                )
+                logger.info("Stream consumer reconnected (attempt %d)", attempt)
+
+    async def _reap_orphan_sessions(self) -> None:
+        """Mark sessions stuck in pending beyond timeout as failed.
+
+        Handles hard worker crashes where no EndOfStreamOutput arrives.
+        """
+        orphan_timeout = float(os.environ.get("DIGITALKIN_ORPHAN_SESSION_TIMEOUT", "600.0"))
+        check_interval = float(os.environ.get("DIGITALKIN_ORPHAN_CHECK_INTERVAL", "60.0"))
+
+        while True:
+            try:
+                await asyncio.sleep(check_interval)
+            except asyncio.CancelledError:
+                return
+            now = datetime.datetime.now(datetime.timezone.utc)
+            for task_id, session in list(self.tasks_sessions.items()):
+                if session.status != "pending":
+                    continue
+                elapsed = (now - session.created_at).total_seconds()
+                if elapsed > orphan_timeout:
+                    logger.warning("Orphan session: %s (pending %.0fs)", task_id, elapsed)
+                    session.status = "failed"
+                    session.close_stream()
+                    await self._task_manager._cleanup_task(task_id, session.mission_id)  # noqa: SLF001
 
     async def start(self) -> None:
         """Start the TaskiqJobManager (no-op for external connections)."""
@@ -86,45 +197,51 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         await self.stream_consumer.start()
 
         start_spec = ConsumerOffsetSpecification(OffsetType.LAST)
-        # on_message use bytes instead of AMQPMessage
+        # Higher initial_credit allows prefetching more messages from the broker,
+        # reducing round-trip latency for high-throughput streaming.
         await self.stream_consumer.subscribe(
             stream=TaskiqBrokerConfig.STREAM,
             subscriber_name=f"""subscriber_{os.environ.get("SERVER_NAME", "module_servicer")}""",
-            callback=self._on_message,  # RStream expects (bytes, MessageContext) callback # type: ignore
+            callback=self._on_message,  # type: ignore[arg-type]
             offset_specification=start_spec,
+            initial_credit=int(os.environ.get("DIGITALKIN_RSTREAM_INITIAL_CREDIT", "50")),
         )
 
-        # Wrap the consumer task with error handling
-        async def run_consumer_with_error_handling() -> None:
-            try:
-                await self.stream_consumer.run()
-            except asyncio.CancelledError:
-                logger.debug("Stream consumer task cancelled")
-                raise
-            except Exception as e:
-                logger.error("Stream consumer task failed: %s", e, exc_info=True, extra={"error": str(e)})
-                raise
-
         self.stream_consumer_task = asyncio.create_task(
-            run_consumer_with_error_handling(),
+            self._run_consumer_with_restart(),
             name="stream_consumer_task",
         )
 
-    async def _stop(self) -> None:
-        """Stop the TaskiqJobManager and clean up all resources."""
-        # Signal the consumer to stop
+        self._reaper_task = asyncio.create_task(self._reap_orphan_sessions(), name="orphan_session_reaper")
+
+    async def stop(self) -> None:
+        """Stop the TaskiqJobManager, cancel workers, and clean up all resources."""
+        # 1. Cancel reaper
+        self._reaper_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await self._reaper_task
+
+        # 2. Cancel all running modules (sends cancel signals to workers)
+        await self.stop_all_modules()
+
+        # 3. Clean remaining sessions (releases semaphore slots)
+        for task_id in list(self.tasks_sessions.keys()):
+            session = self.tasks_sessions.get(task_id)
+            if session is not None:
+                await self._task_manager._cleanup_task(task_id, session.mission_id)  # noqa: SLF001
+
+        # 4. Close RStream consumer
         await self.stream_consumer.close()
-        # Cancel the background task
         self.stream_consumer_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await self.stream_consumer_task
 
-        # Clean up job queues
+        # 5. Clear job queues
         queue_count = len(self.job_queues)
         self.job_queues.clear()
-        logger.info("TaskiqJobManager: Cleared %d job queues", queue_count)
+        logger.info("TaskiqJobManager stopped: cleared %d queues", queue_count)
 
-        # Call global cleanup for producer and broker
+        # 6. Close producer and broker
         await TaskiqBrokerConfig.cleanup_global_resources()
 
     def __init__(
@@ -132,7 +249,7 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         module_class: type[BaseModule],
         services_mode: ServicesMode,
         default_timeout: float = 300.0,
-        stream_timeout: float = 30.0,
+        stream_timeout: float = float(os.environ.get("DIGITALKIN_RSTREAM_TIMEOUT", "30.0")),
     ) -> None:
         """Initialize the Taskiq job manager.
 
@@ -140,7 +257,7 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             module_class: The class of the module to be managed
             services_mode: The mode of operation for the services
             default_timeout: Default timeout for task operations
-            stream_timeout: Timeout for stream consumer operations (default: 15.0s for distributed systems)
+            stream_timeout: Timeout for stream consumer operations
         """
         # Create remote task manager for distributed execution
         task_manager = RemoteTaskManager(default_timeout)
@@ -148,11 +265,15 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         # Initialize base job manager with task manager
         super().__init__(module_class, services_mode, task_manager)
 
-        logger.warning("TaskiqJobManager initialized with app: %s", TASKIQ_BROKER)
         self.job_queues: dict[str, asyncio.Queue] = {}
-        self.max_queue_size = 1000
+        self.max_queue_size = int(os.environ.get("DIGITALKIN_RSTREAM_QUEUE_SIZE", "1000"))
         self.stream_timeout = stream_timeout
         self._config_setup_timeout = float(os.environ.get("DIGITALKIN_CONFIG_SETUP_TIMEOUT", "30.0"))
+        logger.info(
+            "TaskiqJobManager initialized (queue_size=%d, stream_timeout=%.1fs)",
+            self.max_queue_size,
+            self.stream_timeout,
+        )
 
     async def generate_config_setup_module_response(self, job_id: str) -> SetupModelT:
         """Generate a stream consumer for a module's output data.
@@ -166,11 +287,11 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         Raises:
             asyncio.TimeoutError: If waiting for the setup response times out.
         """
-        queue = QueueFactory.create_bounded_queue(maxsize=self.max_queue_size)
-        self.job_queues[job_id] = queue
+        if job_id not in self.job_queues:
+            self.job_queues[job_id] = QueueFactory.create_bounded_queue(maxsize=self.max_queue_size)
+        queue = self.job_queues[job_id]
 
         try:
-            # Add timeout to prevent indefinite blocking
             item = await asyncio.wait_for(queue.get(), timeout=self._config_setup_timeout)
         except asyncio.TimeoutError:
             logger.error(
@@ -181,8 +302,9 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             queue.task_done()
             return item
         finally:
-            logger.info("generate_config_setup_module_response: job_id=%s: %s", job_id, self.job_queues[job_id].empty())
             self.job_queues.pop(job_id, None)
+            if (session := self.tasks_sessions.get(job_id)) is not None:
+                await self._task_manager._cleanup_task(job_id, session.mission_id)  # noqa: SLF001
 
     async def create_config_setup_instance_job(
         self,
@@ -219,6 +341,8 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             raise TypeError(msg)
 
         # Submit task to Taskiq
+        registry_config = self.module_class.services_config_params.get("registry")
+
         running_task: AsyncTaskiqTask[Any] = await task.kiq(
             mission_id,
             setup_id,
@@ -227,37 +351,50 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             self.services_mode,
             config_setup_data.model_dump(mode="json"),  # SetupModelT generic bound to BaseModel # type: ignore
             request_metadata,
+            registry_config,
         )
 
         job_id = running_task.task_id
 
-        # Create module instance for metadata
-        module = self.module_class(
-            job_id,
-            mission_id=mission_id,
-            setup_id=setup_id,
-            setup_version_id=setup_version_id,
-            request_metadata=request_metadata,
-        )
+        # Pre-create queue to avoid message drop race
+        self.job_queues[job_id] = QueueFactory.create_bounded_queue(maxsize=self.max_queue_size)
 
-        # Register task in TaskManager (remote mode)
-        async def _dummy_coro() -> None:
-            """Dummy coroutine - actual execution happens in worker."""
+        try:
+            # Create module instance for metadata
+            module = self.module_class(
+                job_id,
+                mission_id=mission_id,
+                setup_id=setup_id,
+                setup_version_id=setup_version_id,
+                request_metadata=request_metadata,
+            )
 
-        await self.create_task(
-            job_id,
-            mission_id,
-            module,
-            _dummy_coro(),
-        )
+            # Wire RStream callback so stop() can send EndOfStreamOutput
+            callback = await self.job_specific_callback(TaskiqBrokerConfig.send_message_to_stream, job_id)
+            module.context.callbacks.send_message = callback
 
-        logger.info("Registered config task: %s, waiting for initial result", job_id)
-        result = await running_task.wait_result(timeout=10)
-        logger.info("Job %s with data %s", job_id, result)
+            # Register task in TaskManager (remote mode)
+            async def _dummy_coro() -> None:
+                """Dummy coroutine - actual execution happens in worker."""
+
+            await self.create_task(
+                job_id,
+                mission_id,
+                module,
+                _dummy_coro(),
+            )
+        except Exception:
+            self.job_queues.pop(job_id, None)
+            raise
+
+        logger.info("Registered config task: %s", job_id)
+        if os.environ.get("DIGITALKIN_TASKIQ_RESULT_BACKEND_URL"):
+            result = await running_task.wait_result(timeout=10)
+            logger.debug("Job %s config result: %s", job_id, result)
         return job_id
 
     @asynccontextmanager
-    async def generate_stream_consumer(self, job_id: str) -> AsyncIterator[AsyncGenerator[dict[str, Any], None]]:
+    async def generate_stream_consumer(self, job_id: str) -> AsyncIterator[AsyncGenerator[dict[str, Any], None]]:  # noqa: C901, PLR0915
         """Generate a stream consumer for the RStream stream.
 
         Args:
@@ -266,53 +403,80 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         Yields:
             messages: The stream messages from the associated module.
         """
-        queue = QueueFactory.create_bounded_queue(maxsize=self.max_queue_size)
-        self.job_queues[job_id] = queue
+        if job_id not in self.job_queues:
+            self.job_queues[job_id] = QueueFactory.create_bounded_queue(maxsize=self.max_queue_size)
+        queue = self.job_queues[job_id]
 
-        async def _stream() -> AsyncGenerator[dict[str, Any], Any]:
+        async def _stream() -> AsyncGenerator[dict[str, Any], Any]:  # noqa: C901
             """Generate the stream with batch-drain optimization.
 
             Yields:
                 dict: generated object from the module
             """
+            consecutive_timeouts = 0
+            max_consecutive_timeouts = int(os.environ.get("DIGITALKIN_RSTREAM_MAX_TIMEOUTS", "10"))
+
             while True:
                 # Block for first item with timeout to allow termination checks
                 get_task = asyncio.create_task(queue.get())
                 done, _ = await asyncio.wait([get_task], timeout=self.stream_timeout)
 
                 if done:
+                    consecutive_timeouts = 0
                     item = get_task.result()
                     queue.task_done()
                     yield item
 
-                    # Drain all immediately available items (micro-batch optimization)
-                    batch_count = 0
-                    max_batch_size = 100  # Safety limit to prevent memory spikes
-                    while batch_count < max_batch_size and not queue.empty():
-                        item = queue.get_nowait()
+                    # Drain all immediately available items (micro-batch optimization).
+                    # Cap at min(qsize, 100) to bound memory per yield cycle.
+                    drain_limit = min(queue.qsize(), 100)
+                    for _ in range(drain_limit):
+                        try:
+                            item = queue.get_nowait()
+                        except asyncio.QueueEmpty:
+                            break
                         queue.task_done()
                         yield item
-                        batch_count += 1
                     continue
 
                 # Timeout — cancel pending get and check job status
                 get_task.cancel()
-                logger.warning("Stream consumer timeout for job %s, checking if job is still active", job_id)
+                consecutive_timeouts += 1
+                logger.warning(
+                    "Stream consumer timeout for job %s (%d/%d), checking if job is still active",
+                    job_id,
+                    consecutive_timeouts,
+                    max_consecutive_timeouts,
+                )
+
+                if consecutive_timeouts >= max_consecutive_timeouts:
+                    logger.error(
+                        "Job %s: max consecutive timeouts (%d) reached, ending stream",
+                        job_id,
+                        max_consecutive_timeouts,
+                    )
+                    break
 
                 if job_id not in self.tasks_sessions:
                     logger.info("Job %s no longer registered, ending stream", job_id)
                     break
 
-                status = await self.get_module_status(job_id)
-
-                if status in {"cancelled", "failed"}:
-                    logger.info("Job %s has terminal status %s, draining queue and ending stream", job_id, status)
-
+                session = self.tasks_sessions[job_id]
+                if session.stream_closed:
+                    logger.info("Job %s stream closed, draining queue and ending stream", job_id)
                     while not queue.empty():
                         item = queue.get_nowait()
                         queue.task_done()
                         yield item
+                    break
 
+                status = await self.get_module_status(job_id)
+                if status in {"cancelled", "failed", "completed"}:
+                    logger.info("Job %s has terminal status %s, draining queue and ending stream", job_id, status)
+                    while not queue.empty():
+                        item = queue.get_nowait()
+                        queue.task_done()
+                        yield item
                     break
 
         try:
@@ -351,6 +515,9 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             msg = "Task not found"
             raise ValueError(msg)
 
+        # Forward registry config so the worker can initialize GrpcRegistry
+        registry_config = self.module_class.services_config_params.get("registry")
+
         # Submit task to Taskiq
         running_task: AsyncTaskiqTask[Any] = await task.kiq(
             mission_id,
@@ -361,32 +528,45 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             input_data.model_dump(mode="json"),
             setup_data.model_dump(mode="json"),
             request_metadata,
+            registry_config,
         )
         job_id = running_task.task_id
 
-        # Create module instance for metadata
-        module = self.module_class(
-            job_id,
-            mission_id=mission_id,
-            setup_id=setup_id,
-            setup_version_id=setup_version_id,
-            request_metadata=request_metadata,
-        )
+        # Pre-create queue to avoid message drop race
+        self.job_queues[job_id] = QueueFactory.create_bounded_queue(maxsize=self.max_queue_size)
 
-        # Register task in TaskManager (remote mode)
-        async def _dummy_coro() -> None:
-            """Dummy coroutine - actual execution happens in worker."""
+        try:
+            # Create module instance for metadata
+            module = self.module_class(
+                job_id,
+                mission_id=mission_id,
+                setup_id=setup_id,
+                setup_version_id=setup_version_id,
+                request_metadata=request_metadata,
+            )
 
-        await self.create_task(
-            job_id,
-            mission_id,
-            module,
-            _dummy_coro(),
-        )
+            # Wire RStream callback so stop() can send EndOfStreamOutput
+            callback = await self.job_specific_callback(TaskiqBrokerConfig.send_message_to_stream, job_id)
+            module.context.callbacks.send_message = callback
 
-        logger.info("Registered remote task: %s, waiting for initial result", job_id)
-        result = await running_task.wait_result(timeout=10)
-        logger.debug("Job %s with data %s", job_id, result)
+            # Register task in TaskManager (remote mode)
+            async def _dummy_coro() -> None:
+                """Dummy coroutine - actual execution happens in worker."""
+
+            await self.create_task(
+                job_id,
+                mission_id,
+                module,
+                _dummy_coro(),
+            )
+        except Exception:
+            self.job_queues.pop(job_id, None)
+            raise
+
+        logger.info("Registered remote task: %s", job_id)
+        if os.environ.get("DIGITALKIN_TASKIQ_RESULT_BACKEND_URL"):
+            result = await running_task.wait_result(timeout=10)
+            logger.debug("Job %s result: %s", job_id, result)
         return job_id
 
     async def get_module_status(self, job_id: str) -> str:
@@ -404,27 +584,29 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             return "failed"
         return session.status
 
-    async def wait_for_completion(self, job_id: str) -> None:
-        """Wait for a task to complete by polling its status.
+    async def wait_for_completion(self, job_id: str, max_wait: float = 600.0) -> None:
+        """Wait for a task to complete via stream-closed event.
+
+        Relies on ``_on_message`` setting ``_stream_closed`` when
+        ``end_of_stream`` arrives from RStream. Falls back to ``max_wait``
+        timeout for crash scenarios.
 
         Args:
             job_id: The unique identifier of the job to wait for.
+            max_wait: Maximum time in seconds to wait before giving up.
 
         Raises:
-            KeyError: If the job_id is not found in tasks_sessions.
+            asyncio.TimeoutError: If max_wait is exceeded.
         """
-        if job_id not in self.tasks_sessions:
-            msg = f"Job {job_id} not found"
-            raise KeyError(msg)
-
-        # Poll task status until terminal state
-        terminal_states = {"completed", "failed", "cancelled"}
-        while True:
-            status = await self.get_module_status(job_id)
-            if status in terminal_states:
-                logger.debug("Job %s reached terminal state: %s", job_id, status)
-                break
-            await asyncio.sleep(0.5)  # Poll interval
+        session = self.tasks_sessions.get(job_id)
+        if session is None:
+            return
+        try:
+            await asyncio.wait_for(session._stream_closed.wait(), timeout=max_wait)  # noqa: SLF001
+        except asyncio.TimeoutError:
+            logger.error("Job %s: max wait time (%.1fs) exceeded", job_id, max_wait)
+            raise
+        logger.debug("Job %s: stream closed, completion detected (status=%s)", job_id, session.status)
 
     async def stop_module(self, job_id: str) -> bool:
         """Stop a running module using TaskManager.

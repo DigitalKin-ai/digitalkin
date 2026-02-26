@@ -31,6 +31,7 @@ class TaskSession:
     task_id: str
     mission_id: str
 
+    created_at: datetime.datetime
     started_at: datetime.datetime | None
     completed_at: datetime.datetime | None
 
@@ -73,6 +74,7 @@ class TaskSession:
         self.task_id = task_id
         self.mission_id = mission_id
 
+        self.created_at = datetime.datetime.now(datetime.timezone.utc)
         self.started_at = None
         self.completed_at = None
 

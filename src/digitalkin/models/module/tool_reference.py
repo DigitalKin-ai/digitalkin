@@ -219,18 +219,26 @@ def tool_reference_input(
         """
         return [{"setupId": t.setup_id, "triggers": t.triggers} for t in v.selected_tools]
 
+    schema = _ToolReferenceInputSchema(
+        setup_ids=setup_ids or [],
+        module_ids=module_ids,
+        tag_ids=tag_ids or [],
+        categories=categories or [],
+        max_tools=max_tools,
+        min_tools=min_tools,
+    )
+
+    # When min_tools > 0, omit the default so the field is required — an empty
+    # ToolReference can never satisfy the constraint, and Pydantic v2 ignores
+    # validate_default inside Annotated/Field, so the only reliable way to
+    # prevent silent acceptance of the default is to not have one.
+    field = Field() if min_tools > 0 else Field(default_factory=ToolReference)
+
     return Annotated[  # type: ignore[return-value]  # Returns Annotated type, not ToolReference directly
         ToolReference,
         BeforeValidator(convert_to_tool_reference),
         AfterValidator(validate_tools_count),
         PlainSerializer(serialize_to_list, return_type=list[dict[str, object]]),
-        _ToolReferenceInputSchema(
-            setup_ids=setup_ids or [],
-            module_ids=module_ids,
-            tag_ids=tag_ids or [],
-            categories=categories or [],
-            max_tools=max_tools,
-            min_tools=min_tools,
-        ),
-        Field(default_factory=ToolReference),
+        schema,
+        field,
     ]
