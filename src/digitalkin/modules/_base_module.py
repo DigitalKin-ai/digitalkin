@@ -50,6 +50,7 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
 
     context: ModuleContext
     triggers_discoverer: ClassVar[ModuleDiscoverer]
+    _extended_input_format: ClassVar[type[DataModel] | None] = None
 
     # service config params — subclasses MUST define their own to avoid sharing
     services_config_strategies: ClassVar[dict[str, ServicesStrategy | None]]
@@ -303,7 +304,7 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
     async def get_cost_format(cls, *, llm_format: bool) -> str:
         """Get the JSON schema of the cost configuration.
 
-        Extracts CostConfig from services_config_params["cost"]["config"]
+        Extracts CostConfig from `services_config_params["cost"]["config"]`
         and returns as JSON schema.
 
         Args:
@@ -349,16 +350,18 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
         return cls.setup_format(**config_setup_data)
 
     @classmethod
-    def create_input_model(cls, input_data: dict[str, Any]) -> InputModelT:
+    def create_input_model(cls, input_data: dict[str, Any]) -> DataModel:
         """Create the input model from the input data.
 
         Args:
             input_data: The input data to create the model from.
 
         Returns:
-            The input model.
+            The input model, validated against the extended format that
+            includes SDK utility protocols (healthcheck, etc.).
         """
-        return cls.input_format(**input_data)
+        model_cls = cls._extended_input_format or cls.input_format
+        return model_cls(**input_data)
 
     @classmethod
     async def create_setup_model(cls, setup_data: dict[str, Any], *, config_fields: bool = False) -> SetupModelT:
@@ -426,6 +429,10 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
         for trigger_cls in UtilityRegistry.get_builtin_triggers():
             cls.triggers_discoverer.register_trigger(trigger_cls)
 
+        # Cache extended input model with utility protocols for runtime validation
+        if cls.input_format is not None:
+            cls._extended_input_format = UtilitySchemaExtender.create_extended_input_model(cls.input_format)
+
         logger.debug("discovered: %s", cls.triggers_discoverer)
 
     @classmethod
@@ -459,7 +466,8 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
         Raises:
             ValueError: If no handler for the protocol is found.
         """
-        input_instance = self.input_format.model_validate(input_data)
+        model_cls = self._extended_input_format or self.input_format
+        input_instance = model_cls.model_validate(input_data)
 
         # Apply cost limits if present in input (field added dynamically by UtilitySchemaExtender)
         if (
@@ -527,9 +535,19 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
         except asyncio.CancelledError:
             self._status = ModuleStatus.CANCELLED
             logger.error("Module %s cancelled", self.name, extra=self.context.session.current_ids())
-        except Exception:
+        except Exception as e:
             self._status = ModuleStatus.FAILED
             logger.exception("Error inside module %s", self.name, extra=self.context.session.current_ids())
+            try:
+                await self.context.callbacks.send_message(
+                    ModuleCodeModel(
+                        code="Error",
+                        short_description="Module execution failed",
+                        message=str(e),
+                    )
+                )
+            except Exception:
+                logger.exception("Failed to send error callback")
         else:
             self._status = ModuleStatus.STOPPING
 
@@ -568,12 +586,13 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
         except Exception as e:
             self._status = ModuleStatus.FAILED
             short_description = "Error initializing module"
-            logger.exception("%s: %s", short_description, e)
+            error_detail = f"{type(e).__name__}: {e}" if str(e) else type(e).__name__
+            logger.exception("%s: %s", short_description, error_detail)
             await callback(
                 ModuleCodeModel(
                     code="Error",
                     short_description=short_description,
-                    message=str(e),
+                    message=error_detail,
                 )
             )
             if done_callback is not None:

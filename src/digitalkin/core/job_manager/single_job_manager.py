@@ -285,10 +285,7 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
                 if session.cancelled:
                     break
 
-        try:
-            yield _stream()
-        finally:
-            session.close_stream()
+        yield _stream()
 
     async def create_module_instance_job(
         self,

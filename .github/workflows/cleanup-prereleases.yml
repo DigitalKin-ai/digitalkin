@@ -1,0 +1,153 @@
+name: Cleanup Pre-release Tags
+
+on:
+  push:
+    tags:
+      # Only stable releases: vX.Y.Z (no suffix)
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Stable version to clean pre-releases for (e.g. "0.3.2")'
+        required: true
+        type: string
+      dry_run:
+        description: 'Dry run (list but do not delete)'
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    name: Delete pre-release tags & releases
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Determine version
+        id: version
+        run: |
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION="${{ github.event.inputs.version }}"
+          fi
+
+          # Validate it looks like a stable version
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Invalid stable version: $VERSION (expected X.Y.Z)"
+            exit 1
+          fi
+
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          DRY_RUN="${{ github.event.inputs.dry_run || 'false' }}"
+          echo "dry_run=$DRY_RUN" >> $GITHUB_OUTPUT
+          echo "Cleaning pre-releases for v$VERSION (dry_run=$DRY_RUN)"
+
+      - name: Find pre-release tags
+        id: find
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          # Match tags like v0.3.2.dev1, v0.3.2a1, v0.3.2b1, v0.3.2-rc1, v0.3.2.a1, 0.3.2.dev5
+          # but NOT the stable tag itself (v0.3.2)
+          TAGS=()
+          while IFS= read -r tag; do
+            # Strip v prefix for comparison
+            stripped="${tag#v}"
+            # Skip the stable tag itself
+            if [[ "$stripped" == "$VERSION" ]]; then
+              continue
+            fi
+            # Match if tag starts with the version followed by a pre-release separator
+            if [[ "$stripped" =~ ^${VERSION}[.abr-] ]] || [[ "$stripped" =~ ^${VERSION}(dev|rc|a|b|alpha|beta) ]]; then
+              TAGS+=("$tag")
+            fi
+          done < <(git tag)
+
+          if [[ ${#TAGS[@]} -eq 0 ]]; then
+            echo "No pre-release tags found for v$VERSION"
+            echo "count=0" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          echo "Found ${#TAGS[@]} pre-release tag(s):"
+          printf '  %s\n' "${TAGS[@]}"
+
+          # Save as newline-separated list
+          printf '%s\n' "${TAGS[@]}" > /tmp/tags-to-delete.txt
+          echo "count=${#TAGS[@]}" >> $GITHUB_OUTPUT
+
+      - name: Delete tags and releases
+        if: steps.find.outputs.count != '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DRY_RUN: ${{ steps.version.outputs.dry_run }}
+        run: |
+          DELETED_TAGS=()
+          DELETED_RELEASES=()
+          FAILED=()
+
+          while IFS= read -r tag; do
+            [[ -z "$tag" ]] && continue
+
+            if [[ "$DRY_RUN" == "true" ]]; then
+              echo "[DRY RUN] Would delete tag: $tag"
+              # Check for release
+              if gh release view "$tag" --json tagName &>/dev/null; then
+                echo "[DRY RUN] Would delete release: $tag"
+              fi
+              DELETED_TAGS+=("$tag")
+              continue
+            fi
+
+            # Delete GitHub release if it exists
+            if gh release view "$tag" --json tagName &>/dev/null; then
+              if gh release delete "$tag" --yes --cleanup-tag 2>/dev/null; then
+                echo "Deleted release + tag: $tag"
+                DELETED_RELEASES+=("$tag")
+                DELETED_TAGS+=("$tag")
+                continue
+              fi
+            fi
+
+            # Delete git tag (local + remote)
+            if git tag -d "$tag" 2>/dev/null && git push origin ":refs/tags/$tag" 2>/dev/null; then
+              echo "Deleted tag: $tag"
+              DELETED_TAGS+=("$tag")
+            else
+              echo "::warning::Failed to delete tag: $tag"
+              FAILED+=("$tag")
+            fi
+          done < /tmp/tags-to-delete.txt
+
+          # Summary
+          echo "## 🏷️ Pre-release Cleanup Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Stable Version | v${{ steps.version.outputs.version }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Dry Run | $DRY_RUN |" >> $GITHUB_STEP_SUMMARY
+          echo "| Tags Deleted | ${#DELETED_TAGS[@]} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Releases Deleted | ${#DELETED_RELEASES[@]} |" >> $GITHUB_STEP_SUMMARY
+          if [[ ${#FAILED[@]} -gt 0 ]]; then
+            echo "| Failed | ${#FAILED[@]} |" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [[ ${#DELETED_TAGS[@]} -gt 0 ]]; then
+            echo "### Deleted" >> $GITHUB_STEP_SUMMARY
+            for t in "${DELETED_TAGS[@]}"; do echo "- \`$t\`" >> $GITHUB_STEP_SUMMARY; done
+          fi
+
+          if [[ ${#FAILED[@]} -gt 0 ]]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### Failed" >> $GITHUB_STEP_SUMMARY
+            for t in "${FAILED[@]}"; do echo "- \`$t\`" >> $GITHUB_STEP_SUMMARY; done
+          fi
