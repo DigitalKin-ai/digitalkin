@@ -1,11 +1,3 @@
-x-surrealdb-common: &surrealdb-common
-  image: surrealdb/surrealdb:${SURREALDB_IMAGE_TAG:-v2.3}
-  networks:
-    - services-network
-  environment:
-    - SURREAL_USER=${TEST_SURREALDB_USERNAME:-root}
-    - SURREAL_PASS=${TEST_SURREALDB_PASSWORD:-root}
-
 services:
   tests-rabbitmq:
     container_name: digitalkin-tests-rabbitmq
@@ -40,23 +32,6 @@ services:
       timeout: 5s
       retries: 5
 
-  tests-surrealdb:
-    container_name: digitalkin-tests-surrealdb
-    <<: *surrealdb-common
-    environment:
-      - TEST_SURREALDB_PORT=${TEST_SURREALDB_PORT:-8008}
-      - TEST_SURREALDB_USERNAME=${TEST_SURREALDB_USERNAME:-root}
-      - TEST_SURREALDB_PASSWORD=${TEST_SURREALDB_PASSWORD:-root}
-    command: >
-      start
-      --username=${TEST_SURREALDB_USERNAME:-root}
-      --password=${TEST_SURREALDB_PASSWORD:-root}
-      --bind 0.0.0.0:${TEST_SURREALDB_PORT:-8008}
-    ports:
-      - ${TEST_SURREALDB_PORT:-8008}:${TEST_SURREALDB_PORT:-8008}
-    volumes:
-      - surrealdb-data:/data
-
   tests:
     container_name: digitalkin-tests
     build:
@@ -67,16 +42,9 @@ services:
     networks:
       - services-network
     environment:
-      - TEST_SURREALDB_URL=ws://digitalkin-tests-surrealdb
-      - TEST_SURREALDB_PORT=${TEST_SURREALDB_PORT:-8008}
-      - TEST_SURREALDB_USERNAME=${TEST_SURREALDB_USERNAME:-root}
-      - TEST_SURREALDB_PASSWORD=${TEST_SURREALDB_PASSWORD:-root}
-      - TEST_SURREALDB_DATABASE=${TEST_SURREALDB_DATABASE:-test}
       - TEST_SELECTOR=${TEST_SELECTOR:-tests/}
       - TEST_MARKER=${TEST_MARKER:-}
       - PYTEST_ARGS=${PYTEST_ARGS:-}
-    depends_on:
-      - tests-surrealdb
     volumes:
       - .:/app:cached
       - /app/.venv
@@ -87,5 +55,4 @@ networks:
     driver: bridge
 
 volumes:
-  surrealdb-data:
   rabbitmq-data:

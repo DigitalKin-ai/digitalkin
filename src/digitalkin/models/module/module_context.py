@@ -18,6 +18,7 @@ from digitalkin.services.identity.identity_strategy import IdentityStrategy
 from digitalkin.services.registry.registry_strategy import RegistryStrategy
 from digitalkin.services.snapshot.snapshot_strategy import SnapshotStrategy
 from digitalkin.services.storage.storage_strategy import StorageStrategy
+from digitalkin.services.task_manager.task_manager_strategy import TaskManagerStrategy
 from digitalkin.services.user_profile.user_profile_strategy import UserProfileStrategy
 
 
@@ -95,6 +96,7 @@ class ModuleContext:
     registry: RegistryStrategy
     snapshot: SnapshotStrategy
     storage: StorageStrategy
+    task_manager: TaskManagerStrategy
     user_profile: UserProfileStrategy
 
     session: Session
@@ -115,11 +117,12 @@ class ModuleContext:
         registry: RegistryStrategy,
         snapshot: SnapshotStrategy,
         storage: StorageStrategy,
+        task_manager: TaskManagerStrategy,
         user_profile: UserProfileStrategy,
         session: dict[str, Any],
-        metadata: dict[str, Any] = {},
-        helpers: dict[str, Any] = {},
-        callbacks: dict[str, Any] = {},
+        metadata: dict[str, Any] | None = None,
+        helpers: dict[str, Any] | None = None,
+        callbacks: dict[str, Any] | None = None,
         tool_cache: ToolCache | None = None,
         request_metadata: dict[str, str] | None = None,
     ) -> None:
@@ -134,6 +137,7 @@ class ModuleContext:
             registry: RegistryStrategy.
             snapshot: SnapshotStrategy.
             storage: StorageStrategy.
+            task_manager: TaskManagerStrategy.
             user_profile: UserProfileStrategy.
             metadata: dict defining differents Module metadata.
             helpers: dict different user defined helpers.
@@ -150,12 +154,13 @@ class ModuleContext:
         self.registry = registry
         self.snapshot = snapshot
         self.storage = storage
+        self.task_manager = task_manager
         self.user_profile = user_profile
 
-        self.metadata = SimpleNamespace(**metadata)
+        self.metadata = SimpleNamespace(**(metadata or {}))
         self.session = Session(**session)
-        self.helpers = SimpleNamespace(**helpers)
-        self.callbacks = SimpleNamespace(**callbacks)
+        self.helpers = SimpleNamespace(**(helpers or {}))
+        self.callbacks = SimpleNamespace(**(callbacks or {}))
         self.tool_cache = tool_cache or ToolCache()
         self.request_metadata = RequestMetadata(request_metadata)
 
@@ -370,9 +375,21 @@ class ModuleContext:
         return tool_function
 
     async def cleanup(self) -> None:
-        """Clean up all service resources.
-
-        Currently cleans up communication service (gRPC channel pool).
-        """
-        if self.communication is not None:
-            await self.communication.cleanup()
+        """Close all service strategies and release their resources."""
+        for service in (
+            self.task_manager,
+            self.communication,
+            self.cost,
+            self.storage,
+            self.registry,
+            self.filesystem,
+            self.user_profile,
+            self.agent,
+            self.identity,
+            self.snapshot,
+        ):
+            if service is not None:
+                try:
+                    await service.close()
+                except Exception:
+                    logger.exception("Error closing %s", type(service).__name__)

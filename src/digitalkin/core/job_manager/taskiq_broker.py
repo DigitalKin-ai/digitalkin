@@ -1,7 +1,6 @@
 """Taskiq broker & RSTREAM producer for the job manager."""
 
 import asyncio
-import datetime
 import json
 import logging
 import os
@@ -16,7 +15,7 @@ from taskiq.compat import model_validate
 from taskiq.message import BrokerMessage
 from taskiq_aio_pika import AioPikaBroker
 
-from digitalkin.core.common import ConnectionFactory, ModuleFactory
+from digitalkin.core.common import ModuleFactory
 from digitalkin.core.job_manager.base_job_manager import BaseJobManager
 from digitalkin.core.task_manager.task_executor import TaskExecutor
 from digitalkin.core.task_manager.task_session import TaskSession
@@ -74,85 +73,91 @@ class PickleFormatter(TaskiqFormatter):
         return model_validate(TaskiqMessage, json_str)
 
 
-def define_producer() -> Producer:
-    """Get from the env the connection parameter to RabbitMQ.
+class TaskiqBrokerConfig:
+    """Configuration and lifecycle management for Taskiq broker and RStream producer."""
 
-    Returns:
-        Producer
-    """
-    host: str = os.environ.get("RABBITMQ_RSTREAM_HOST", "localhost")
-    port: str = os.environ.get("RABBITMQ_RSTREAM_PORT", "5552")
-    username: str = os.environ.get("RABBITMQ_RSTREAM_USERNAME", "guest")
-    password: str = os.environ.get("RABBITMQ_RSTREAM_PASSWORD", "guest")
+    STREAM = "taskiq_data"
+    STREAM_RETENTION = 200_000
 
-    logger.info("Connection to RabbitMQ: %s:%s.", host, port)
-    return Producer(host=host, port=int(port), username=username, password=password)
+    @staticmethod
+    def define_producer() -> Producer:
+        """Create RStream producer from environment variables.
 
+        Returns:
+            Producer connected to RabbitMQ.
+        """
+        host = os.environ.get("RABBITMQ_RSTREAM_HOST", "localhost")
+        port = os.environ.get("RABBITMQ_RSTREAM_PORT", "5552")
+        username = os.environ.get("RABBITMQ_RSTREAM_USERNAME", "guest")
+        password = os.environ.get("RABBITMQ_RSTREAM_PASSWORD", "guest")
 
-async def init_rstream() -> None:
-    """Init a stream for every tasks."""
-    try:
-        await RSTREAM_PRODUCER.create_stream(
-            STREAM,
-            exists_ok=True,
-            arguments={"max-length-bytes": STREAM_RETENTION},
+        logger.info("Connection to RabbitMQ: %s:%s.", host, port)
+        return Producer(host=host, port=int(port), username=username, password=password)
+
+    @staticmethod
+    def define_broker() -> AioPikaBroker:
+        """Create AioPikaBroker from environment variables.
+
+        Returns:
+            Broker connected to RabbitMQ with custom formatter.
+        """
+        host = os.environ.get("RABBITMQ_BROKER_HOST", "localhost")
+        port = os.environ.get("RABBITMQ_BROKER_PORT", "5672")
+        username = os.environ.get("RABBITMQ_BROKER_USERNAME", "guest")
+        password = os.environ.get("RABBITMQ_BROKER_PASSWORD", "guest")
+
+        broker = AioPikaBroker(
+            f"amqp://{username}:{password}@{host}:{port}",
+            startup=[TaskiqBrokerConfig.init_rstream],
         )
-    except PreconditionFailed:
-        logger.warning("stream already exist")
+        broker.formatter = PickleFormatter()
+        return broker
+
+    @staticmethod
+    async def init_rstream() -> None:
+        """Init a stream for every tasks."""
+        try:
+            await RSTREAM_PRODUCER.create_stream(
+                TaskiqBrokerConfig.STREAM,
+                exists_ok=True,
+                arguments={"max-length-bytes": TaskiqBrokerConfig.STREAM_RETENTION},
+            )
+        except PreconditionFailed:
+            logger.warning("stream already exist")
+
+    @staticmethod
+    async def cleanup_global_resources() -> None:
+        """Clean up global resources (producer and broker connections).
+
+        This should be called during shutdown to prevent connection leaks.
+        """
+        try:
+            await RSTREAM_PRODUCER.close()
+            logger.info("RStream producer closed successfully")
+        except Exception as e:
+            logger.warning("Failed to close RStream producer: %s", e)
+
+        try:
+            await TASKIQ_BROKER.shutdown()
+            logger.info("Taskiq broker shut down successfully")
+        except Exception as e:
+            logger.warning("Failed to shutdown Taskiq broker: %s", e)
+
+    @staticmethod
+    async def send_message_to_stream(job_id: str, output_data: DataModel | ModuleCodeModel) -> None:
+        """Add a message frame to the RStream.
+
+        Args:
+            job_id: ID of the job that sent the message.
+            output_data: Message body as a OutputModelT or error / stream_code.
+        """
+        body = json.dumps({"job_id": job_id, "output_data": output_data.model_dump(mode="json")}).encode("utf-8")
+        await RSTREAM_PRODUCER.send(stream=TaskiqBrokerConfig.STREAM, message=body)
 
 
-def define_broker() -> AioPikaBroker:
-    """Define broker with from env paramter.
-
-    Returns:
-        Broker: connected to RabbitMQ and with custom formatter.
-    """
-    host: str = os.environ.get("RABBITMQ_BROKER_HOST", "localhost")
-    port: str = os.environ.get("RABBITMQ_BROKER_PORT", "5672")
-    username: str = os.environ.get("RABBITMQ_BROKER_USERNAME", "guest")
-    password: str = os.environ.get("RABBITMQ_BROKER_PASSWORD", "guest")
-
-    broker = AioPikaBroker(
-        f"amqp://{username}:{password}@{host}:{port}",
-        startup=[init_rstream],
-    )
-    broker.formatter = PickleFormatter()
-    return broker
-
-
-STREAM = "taskiq_data"
-STREAM_RETENTION = 200_000
-RSTREAM_PRODUCER = define_producer()
-TASKIQ_BROKER = define_broker()
-
-
-async def cleanup_global_resources() -> None:
-    """Clean up global resources (producer and broker connections).
-
-    This should be called during shutdown to prevent connection leaks.
-    """
-    try:
-        await RSTREAM_PRODUCER.close()
-        logger.info("RStream producer closed successfully")
-    except Exception as e:
-        logger.warning("Failed to close RStream producer: %s", e)
-
-    try:
-        await TASKIQ_BROKER.shutdown()
-        logger.info("Taskiq broker shut down successfully")
-    except Exception as e:
-        logger.warning("Failed to shutdown Taskiq broker: %s", e)
-
-
-async def send_message_to_stream(job_id: str, output_data: DataModel | ModuleCodeModel) -> None:
-    """Callback define to add a message frame to the Rstream.
-
-    Args:
-        job_id: id of the job that sent the message
-        output_data: message body as a OutputModelT or error / stream_code
-    """
-    body = json.dumps({"job_id": job_id, "output_data": output_data.model_dump(mode="json")}).encode("utf-8")
-    await RSTREAM_PRODUCER.send(stream=STREAM, message=body)
+# Module-level globals required by Taskiq framework (decorator needs broker at import time)
+RSTREAM_PRODUCER = TaskiqBrokerConfig.define_producer()
+TASKIQ_BROKER = TaskiqBrokerConfig.define_broker()
 
 
 @TASKIQ_BROKER.task
@@ -191,21 +196,17 @@ async def run_start_module(
     module_class.discover()
 
     job_id = context.message.task_id
-    callback = await BaseJobManager.job_specific_callback(send_message_to_stream, job_id)
+    callback = await BaseJobManager.job_specific_callback(TaskiqBrokerConfig.send_message_to_stream, job_id)
     module = ModuleFactory.create_module_instance(
         module_class, job_id, mission_id, setup_id, setup_version_id, request_metadata=request_metadata
     )
 
-    channel = None
     try:
         # Create TaskExecutor and supporting components for worker execution
         executor = TaskExecutor()
-        # SurrealDB env vars are expected to be set in env.
-        channel = await ConnectionFactory.create_surreal_connection("taskiq_worker", datetime.timedelta(seconds=5))
-        session = TaskSession(job_id, mission_id, channel, module, datetime.timedelta(seconds=2))
+        session = TaskSession(job_id, mission_id, module)
 
         # Execute the task using TaskExecutor
-        # Create a proper done callback that handles errors
         async def send_end_of_stream(_: Any) -> None:
             try:
                 await callback(DataModel(root=EndOfStreamOutput()))
@@ -230,7 +231,6 @@ async def run_start_module(
                 done_callback=lambda result: asyncio.ensure_future(send_end_of_stream(result)),
             ),
             session=session,
-            channel=channel,
         )
 
         # Wait for the supervisor task to complete
@@ -240,12 +240,11 @@ async def run_start_module(
         logger.exception("Error running module %s", job_id)
         raise
     finally:
-        # Cleanup channel
-        if channel is not None:
-            try:
-                await channel.close()
-            except Exception:
-                logger.exception("Error closing channel for job %s", job_id)
+        # Cleanup via module context
+        try:
+            await module.context.cleanup()
+        except Exception:
+            logger.exception("Error cleaning up module context for job %s", job_id)
 
 
 @TASKIQ_BROKER.task
@@ -282,20 +281,16 @@ async def run_config_module(
 
     job_id = context.message.task_id
     callback = await BaseJobManager.job_specific_callback(  # type: ignore[type-var]
-        send_message_to_stream, job_id
+        TaskiqBrokerConfig.send_message_to_stream, job_id
     )
     module = ModuleFactory.create_module_instance(
         module_class, job_id, mission_id, setup_id, setup_version_id, request_metadata=request_metadata
     )
 
-    # Override environment variables temporarily to use manager's SurrealDB
-    channel = None
     try:
         # Create TaskExecutor and supporting components for worker execution
         executor = TaskExecutor()
-        # SurrealDB env vars are expected to be set in env.
-        channel = await ConnectionFactory.create_surreal_connection("taskiq_worker", datetime.timedelta(seconds=5))
-        session = TaskSession(job_id, mission_id, channel, module, datetime.timedelta(seconds=2))
+        session = TaskSession(job_id, mission_id, module)
 
         # Create and run the config setup task with TaskExecutor
         setup_model = module_class.create_config_setup_model(config_setup_data)
@@ -305,7 +300,6 @@ async def run_config_module(
             mission_id=mission_id,
             coro=module.start_config_setup(setup_model, callback),
             session=session,
-            channel=channel,
         )
 
         # Wait for the supervisor task to complete
@@ -315,9 +309,8 @@ async def run_config_module(
         logger.exception("Error running config module %s", job_id)
         raise
     finally:
-        # Cleanup channel
-        if channel is not None:
-            try:
-                await channel.close()
-            except Exception:
-                logger.exception("Error closing channel for job %s", job_id)
+        # Cleanup via module context
+        try:
+            await module.context.cleanup()
+        except Exception:
+            logger.exception("Error cleaning up module context for job %s", job_id)

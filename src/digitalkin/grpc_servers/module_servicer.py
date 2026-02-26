@@ -1,6 +1,7 @@
 """Module servicer implementation for DigitalKin."""
 
 import asyncio
+import os
 from argparse import ArgumentParser, Namespace
 from collections.abc import AsyncGenerator
 from typing import Any, cast
@@ -25,7 +26,7 @@ from digitalkin.services.registry import GrpcRegistry, RegistryStrategy
 from digitalkin.services.services_models import ServicesMode
 from digitalkin.services.setup.default_setup import DefaultSetup
 from digitalkin.services.setup.grpc_setup import GrpcSetup
-from digitalkin.services.setup.setup_strategy import SetupServiceError, SetupStrategy
+from digitalkin.services.setup.setup_strategy import SetupServiceError, SetupStrategy, SetupVersionData
 from digitalkin.utils.arg_parser import ArgParser
 from digitalkin.utils.development_mode_action import DevelopmentModeMappingAction
 
@@ -85,6 +86,27 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             extra={"job_manager": self.job_manager},
         )
         self.setup = GrpcSetup() if self.args.services_mode == ServicesMode.REMOTE else DefaultSetup()
+        self._setup_cache: dict[str, SetupVersionData] = {}
+        self._setup_cache_max = int(os.environ.get("DIGITALKIN_SETUP_CACHE_MAX", "100"))
+        self._setup_inflight: dict[str, asyncio.Future[SetupVersionData]] = {}
+        self._completion_timeout = float(os.environ.get("DIGITALKIN_COMPLETION_TIMEOUT", "300.0"))
+
+    async def shutdown(self) -> None:
+        """Release servicer-level resources (GrpcSetup channel, registry cache)."""
+        if isinstance(self.setup, GrpcSetup):
+            try:
+                await self.setup.close_channel()
+            except Exception:
+                logger.exception("Error closing GrpcSetup channel")
+
+        if isinstance(self._registry_cache, GrpcRegistry):
+            try:
+                await self._registry_cache.close_channel()
+            except Exception:
+                logger.exception("Error closing registry cache channel")
+            self._registry_cache = None
+
+        self._setup_cache.clear()
 
     def _get_registry(self) -> RegistryStrategy | None:
         """Get a cached registry instance if configured.
@@ -105,6 +127,71 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
 
         self._registry_cache = GrpcRegistry("", "", "", client_config)
         return self._registry_cache
+
+    def _cache_setup(self, setup_id: str, version_data: SetupVersionData) -> None:
+        """Cache setup version data, evicting oldest entry if at capacity."""
+        if len(self._setup_cache) >= self._setup_cache_max:
+            oldest_key = next(iter(self._setup_cache))
+            del self._setup_cache[oldest_key]
+        self._setup_cache[setup_id] = version_data
+
+    async def _resolve_setup(self, setup_id: str, mission_id: str) -> SetupVersionData:
+        """Return setup version data from cache or remote service.
+
+        Args:
+            setup_id: The setup identifier.
+            mission_id: The mission identifier (used only on cache miss).
+
+        Returns:
+            SetupVersionData with at least id, setup_id, and content populated.
+
+        Raises:
+            LookupError: No setup data found for setup_id.
+            SetupServiceError: Remote setup service returned an error.
+            ServerError: gRPC communication failed.
+            ValidationError: Setup data failed validation.
+        """
+        # Fast path: cache hit
+        if (cached := self._setup_cache.get(setup_id)) is not None:
+            logger.debug("debug:_resolve_setup cache hit setup_id=%s", setup_id)
+            return cached
+
+        # Coalesce concurrent misses: first caller fetches, others await the same future
+        if setup_id in self._setup_inflight:
+            logger.debug("debug:_resolve_setup coalesced setup_id=%s", setup_id)
+            return await self._setup_inflight[setup_id]
+
+        loop = asyncio.get_running_loop()
+        fut: asyncio.Future[SetupVersionData] = loop.create_future()
+        self._setup_inflight[setup_id] = fut
+        try:
+            result = await self._fetch_setup(setup_id, mission_id)
+        except BaseException as exc:
+            if not fut.done():
+                fut.set_exception(exc)
+            raise
+        else:
+            fut.set_result(result)
+            return result
+        finally:
+            self._setup_inflight.pop(setup_id, None)
+
+    async def _fetch_setup(self, setup_id: str, mission_id: str) -> SetupVersionData:
+        """Fetch setup from remote service and cache it.
+
+        Returns:
+            Resolved SetupVersionData.
+
+        Raises:
+            LookupError: No setup data found for setup_id.
+        """
+        logger.debug("debug:_resolve_setup cache miss setup_id=%s mission_id=%s", setup_id, mission_id)
+        setup_data = await self.setup.get_setup({"setup_id": setup_id, "mission_id": mission_id})
+        if setup_data is None:
+            raise LookupError(setup_id)
+        result = setup_data.current_setup_version
+        self._cache_setup(setup_id, result)
+        return result
 
     async def ConfigSetupModule(
         self,
@@ -194,6 +281,16 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             return lifecycle_pb2.ConfigSetupModuleResponse(success=False)
 
         logger.debug("Updated setup data", extra={"job_id": job_id, "setup_data": updated_setup_data})
+
+        # Update cache
+        self._cache_setup(
+            setup_version.setup_id,
+            SetupVersionData.model_construct(
+                id=setup_version.id,
+                setup_id=setup_version.setup_id,
+                content=updated_setup_data,
+            ),
+        )
         setup_version.content = json_format.ParseDict(  # type: ignore[misc]  # proto __slots__ not fully typed
             updated_setup_data,
             struct_pb2.Struct(),
@@ -227,14 +324,26 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         # TODO: Check failure of input data format
         input_data = self.module_class.create_input_model(json_format.MessageToDict(request.input))
 
-        # Fetch setup configuration with comprehensive error handling
         try:
-            setup_data_class = await self.setup.get_setup(
-                setup_dict={
+            setup_version = await self._resolve_setup(request.setup_id, request.mission_id)
+        except LookupError:
+            logger.error(
+                "No setup data returned (setup_id=%s, mission_id=%s)",
+                request.setup_id,
+                request.mission_id,
+                extra={
                     "setup_id": request.setup_id,
                     "mission_id": request.mission_id,
-                }
+                    "module_class": self.module_class.__name__,
+                },
             )
+            context.set_code(grpc.StatusCode.NOT_FOUND)
+            context.set_details(
+                f"[gRPC-server:ModuleService.StartModule] (setup_id={request.setup_id}, "
+                f"mission_id={request.mission_id}) No setup data found for setup_id"
+            )
+            yield lifecycle_pb2.StartModuleResponse(success=False)
+            return
         except SetupServiceError as e:
             logger.error(
                 "SetupServiceError: %s (setup_id=%s, mission_id=%s, mode=%s)",
@@ -323,26 +432,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             yield lifecycle_pb2.StartModuleResponse(success=False)
             return
 
-        if not setup_data_class:
-            logger.error(
-                "No setup data returned (setup_id=%s, mission_id=%s)",
-                request.setup_id,
-                request.mission_id,
-                extra={
-                    "setup_id": request.setup_id,
-                    "mission_id": request.mission_id,
-                    "module_class": self.module_class.__name__,
-                },
-            )
-            context.set_code(grpc.StatusCode.NOT_FOUND)
-            context.set_details(
-                f"[gRPC-server:ModuleService.StartModule] (setup_id={request.setup_id}, "
-                f"mission_id={request.mission_id}) No setup data found for setup_id"
-            )
-            yield lifecycle_pb2.StartModuleResponse(success=False)
-            return
-
-        setup_data = await self.module_class.create_setup_model(setup_data_class.current_setup_version.content)
+        setup_data = await self.module_class.create_setup_model(setup_version.content)
 
         # Extract gRPC request metadata (headers) for propagation
         request_metadata: dict[str, str] = {
@@ -350,13 +440,19 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         }
 
         # create a task to run the module in background
+        logger.debug(
+            "debug:StartModule creating job mission_id=%s setup_id=%s setup_version_id=%s",
+            request.mission_id,
+            setup_version.setup_id,
+            setup_version.id,
+        )
         try:
             job_id = await self.job_manager.create_module_instance_job(
                 input_data,
                 setup_data,
                 mission_id=request.mission_id,
-                setup_id=setup_data_class.current_setup_version.setup_id,
-                setup_version_id=setup_data_class.current_setup_version.id,
+                setup_id=setup_version.setup_id,
+                setup_version_id=setup_version.id,
                 request_metadata=request_metadata,
             )
         except ConnectionError as e:
@@ -375,6 +471,25 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             context.set_details(
                 f"[gRPC-server:ModuleService.StartModule] (setup_id={request.setup_id}, "
                 f"mission_id={request.mission_id}) Database connection failed: {e}"
+            )
+            yield lifecycle_pb2.StartModuleResponse(success=False)
+            return
+        except RuntimeError as e:
+            logger.error(
+                "Failed to create job, resource exhausted (setup_id=%s, mission_id=%s): %s",
+                request.setup_id,
+                request.mission_id,
+                e,
+                extra={
+                    "setup_id": request.setup_id,
+                    "mission_id": request.mission_id,
+                    "module_class": self.module_class.__name__,
+                },
+            )
+            context.set_code(grpc.StatusCode.RESOURCE_EXHAUSTED)
+            context.set_details(
+                f"[gRPC-server:ModuleService.StartModule] (setup_id={request.setup_id}, "
+                f"mission_id={request.mission_id}) {e}"
             )
             yield lifecycle_pb2.StartModuleResponse(success=False)
             return
@@ -442,10 +557,21 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
                         break
         finally:
             try:
+                completion_timeout = self._completion_timeout
                 await asyncio.wait_for(
                     self.job_manager.wait_for_completion(job_id),
-                    timeout=30.0,
+                    timeout=completion_timeout,
                 )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "Timeout waiting for job completion, forcing cleanup",
+                    extra={"job_id": job_id, "mission_id": request.mission_id},
+                )
+                # Set cancellation reason on the session if it exists
+                if (session := self.job_manager.tasks_sessions.get(job_id)) is not None:
+                    from digitalkin.models.core.task_monitor import CancellationReason
+
+                    session.cancellation_reason = CancellationReason.TIMEOUT
             except Exception:
                 logger.exception(
                     "Error waiting for job completion",
@@ -489,75 +615,6 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
 
         logger.debug("Job stopped successfully", extra={"job_id": request.job_id})
         return lifecycle_pb2.StopModuleResponse(success=True)
-
-    async def GetModuleStatus(
-        self,
-        request: monitoring_pb2.GetModuleStatusRequest,
-        context: grpc.ServicerContext,
-    ) -> monitoring_pb2.GetModuleStatusResponse:
-        """Get the status of a module.
-
-        Args:
-            request: The get module status request.
-            context: The gRPC context.
-
-        Returns:
-            A response with the module status.
-        """
-        logger.debug("GetModuleStatus called for module: '%s'", self.module_class.__name__)
-
-        if not request.job_id:
-            logger.debug("Job %s status: '%s'", request.job_id, ModuleStatus.NOT_FOUND)
-            return monitoring_pb2.GetModuleStatusResponse(
-                success=False,
-                status=ModuleStatus.NOT_FOUND.name,
-                job_id=request.job_id,
-            )
-
-        status = await self.job_manager.get_module_status(request.job_id)
-
-        if status is None:
-            message = f"Job {request.job_id} not found"
-            logger.warning(message)
-            context.set_code(grpc.StatusCode.NOT_FOUND)
-            context.set_details(message)
-            return monitoring_pb2.GetModuleStatusResponse()
-
-        logger.debug("Job %s status: '%s'", request.job_id, status)
-        return monitoring_pb2.GetModuleStatusResponse(
-            success=True,
-            status=status.name,
-            job_id=request.job_id,
-        )
-
-    async def GetModuleJobs(
-        self,
-        request: monitoring_pb2.GetModuleJobsRequest,  # gRPC servicer signature # noqa: ARG002
-        context: grpc.ServicerContext,  # gRPC servicer signature # noqa: ARG002
-    ) -> monitoring_pb2.GetModuleJobsResponse:
-        """Get information about the module's jobs.
-
-        Args:
-            request: The get module jobs request.
-            context: The gRPC context.
-
-        Returns:
-            A response with information about active jobs.
-        """
-        logger.debug("GetModuleJobs called for module: '%s'", self.module_class.__name__)
-
-        modules = await self.job_manager.list_modules()
-
-        # Create job info objects for each active job
-        return monitoring_pb2.GetModuleJobsResponse(
-            jobs=[
-                monitoring_pb2.JobInfo(
-                    job_id=job_id,
-                    job_status=job_data["status"].name,
-                )
-                for job_id, job_data in modules.items()
-            ],
-        )
 
     async def GetModuleInput(
         self,

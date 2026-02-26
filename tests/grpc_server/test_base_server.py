@@ -306,6 +306,8 @@ class TestServerCreation:
                 options=server_config_async_insecure.server_options,
                 compression=grpc.Compression.Gzip,
                 interceptors=None,
+                maximum_concurrent_rpcs=mock.ANY,
+                migration_thread_pool=mock.ANY,
             )
 
             # Verify result is the mock server

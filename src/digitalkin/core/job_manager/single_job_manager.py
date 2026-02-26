@@ -1,23 +1,20 @@
 """Background module manager with single instance."""
 
 import asyncio
-import datetime
+import os
 import uuid
 from collections.abc import AsyncGenerator, AsyncIterator
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import grpc
 
-from digitalkin.core.common import ConnectionFactory, ModuleFactory
+from digitalkin.core.common import ModuleFactory
 from digitalkin.core.job_manager.base_job_manager import BaseJobManager
 from digitalkin.core.task_manager.local_task_manager import LocalTaskManager
 from digitalkin.core.task_manager.task_session import TaskSession
-
-if TYPE_CHECKING:
-    from digitalkin.core.task_manager.surrealdb_repository import SurrealDBConnection
 from digitalkin.logger import logger
-from digitalkin.models.core.task_monitor import TaskStatus
+from digitalkin.models.core.job_manager_models import BackpressureStrategy
 from digitalkin.models.module.base_types import DataModel, InputModelT, OutputModelT, SetupModelT
 from digitalkin.models.module.module import ModuleCodeModel
 from digitalkin.modules._base_module import BaseModule
@@ -36,8 +33,8 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         self,
         module_class: type[BaseModule],
         services_mode: ServicesMode,
-        default_timeout: float = 10.0,
-        max_concurrent_tasks: int = 100,
+        default_timeout: float = 300.0,
+        max_concurrent_tasks: int = int(os.environ.get("DIGITALKIN_MAX_CONCURRENT_TASKS", "100")),
     ) -> None:
         """Initialize the job manager.
 
@@ -48,17 +45,21 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             max_concurrent_tasks: Maximum number of concurrent tasks
         """
         # Create local task manager for same-process execution
-        task_manager = LocalTaskManager(default_timeout, max_concurrent_tasks)
+        task_manager = LocalTaskManager(default_timeout)
+        task_manager.max_concurrent_tasks = max_concurrent_tasks
 
         # Initialize base job manager with task manager
         super().__init__(module_class, services_mode, task_manager)
 
         self._lock = asyncio.Lock()
-        self.channel: SurrealDBConnection | None = None
+        self._config_setup_timeout = float(os.environ.get("DIGITALKIN_CONFIG_SETUP_TIMEOUT", "30.0"))
+
+        # Backpressure configuration
+        self._backpressure_strategy = BackpressureStrategy(os.environ.get("DIGITALKIN_BACKPRESSURE_STRATEGY", "block"))
+        self._backpressure_timeout = float(os.environ.get("DIGITALKIN_BACKPRESSURE_TIMEOUT", "300.0"))
 
     async def start(self) -> None:
-        """Start manager."""
-        self.channel = await ConnectionFactory.create_surreal_connection("task_manager", datetime.timedelta(seconds=5))
+        """Start manager (no-op, no external connections needed)."""
 
     async def generate_config_setup_module_response(self, job_id: str) -> SetupModelT | ModuleCodeModel:
         """Generate a stream consumer for a module's output data.
@@ -82,12 +83,12 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         logger.debug("Module %s found: %s", job_id, session.module)
         try:
             # Add timeout to prevent indefinite blocking
-            return await asyncio.wait_for(session.queue.get(), timeout=30.0)
+            return await asyncio.wait_for(session.queue.get(), timeout=self._config_setup_timeout)
         except asyncio.TimeoutError:
             logger.error("Timeout waiting for config setup response from module %s", job_id)
             return ModuleCodeModel(
                 code=str(grpc.StatusCode.DEADLINE_EXCEEDED),
-                message=f"Module {job_id} did not respond within 30 seconds",
+                message=f"Module {job_id} did not respond within {self._config_setup_timeout} seconds",
             )
         finally:
             logger.debug(
@@ -105,9 +106,6 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
     ) -> str:
         """Create and start a new module setup configuration job.
 
-        This method initializes a new module job, assigns it a unique job ID,
-        and starts the config setup it in the background.
-
         Args:
             config_setup_data: The input data required to start the job.
             mission_id: The mission ID associated with the job.
@@ -119,17 +117,13 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             str: The unique identifier (job ID) of the created job.
 
         Raises:
-            RuntimeError: If start() was not called before creating jobs.
             Exception: If the module fails to start.
         """
         job_id = str(uuid.uuid4())
         module = ModuleFactory.create_module_instance(
             self.module_class, job_id, mission_id, setup_id, setup_version_id, request_metadata=request_metadata
         )
-        if self.channel is None:
-            msg = "JobManager.start() must be called before creating jobs"
-            raise RuntimeError(msg)
-        self.tasks_sessions[job_id] = TaskSession(job_id, mission_id, self.channel, module)
+        self.tasks_sessions[job_id] = TaskSession(job_id, mission_id, module)
 
         try:
             await module.start_config_setup(
@@ -148,33 +142,59 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
     async def add_to_queue(self, job_id: str, output_data: DataModel | ModuleCodeModel) -> None:
         """Add output data to the queue for a specific job.
 
-        Uses timeout-based backpressure: if the queue is full after 5s,
-        drops the oldest message to make room for the new one.
+        Behavior depends on the configured backpressure strategy:
+        - BLOCK: await with timeout, raise TimeoutError if queue stays full.
+        - DROP_OLDEST: wait briefly, then drop oldest message to make room.
+        - REJECT: attempt non-blocking put, discard new message if full.
+
         Rejects writes after stream is closed to prevent message loss.
 
         Args:
             job_id: The unique identifier of the job.
             output_data: The output data produced by the job.
+
+        Raises:
+            asyncio.TimeoutError: When using BLOCK strategy and the queue remains full past the timeout.
         """
         session = self.tasks_sessions.get(job_id)
         if session is None:
-            logger.warning("Queue write rejected - session not found", extra={"job_id": job_id})
+            logger.debug("Queue write rejected - session not found", extra={"job_id": job_id})
             return
 
-        if session.stream_closed:
-            logger.debug("Queue write rejected - stream closed", extra={"job_id": job_id})
-            return
+        async with session._write_lock:  # noqa: SLF001
+            # Re-check after acquiring lock — session may have been cleaned up
+            if self.tasks_sessions.get(job_id) is None:
+                logger.debug("Queue write rejected - session removed during lock wait", extra={"job_id": job_id})
+                return
 
-        try:
-            await asyncio.wait_for(session.queue.put(output_data.model_dump(mode="json")), timeout=5.0)
-        except asyncio.TimeoutError:
-            logger.warning("Queue full, dropping oldest message", extra={"job_id": job_id})
-            try:
-                session.queue.get_nowait()
-                session.queue.task_done()
-            except asyncio.QueueEmpty:
-                pass
-            session.queue.put_nowait(output_data.model_dump(mode="json"))
+            if session.stream_closed:
+                logger.debug("Queue write rejected - stream closed", extra={"job_id": job_id})
+                return
+
+            data = output_data.model_dump(mode="json")
+            logger.debug("debug:add_to_queue job_id=%s queue_depth=%s", job_id, session.queue.qsize())
+
+            match self._backpressure_strategy:
+                case BackpressureStrategy.BLOCK:
+                    await asyncio.wait_for(session.queue.put(data), timeout=self._backpressure_timeout)
+
+                case BackpressureStrategy.DROP_OLDEST:
+                    try:
+                        await asyncio.wait_for(session.queue.put(data), timeout=5.0)
+                    except asyncio.TimeoutError:
+                        logger.warning("Queue full, dropping oldest message", extra={"job_id": job_id})
+                        try:
+                            session.queue.get_nowait()
+                            session.queue.task_done()
+                        except asyncio.QueueEmpty:
+                            pass
+                        session.queue.put_nowait(data)
+
+                case BackpressureStrategy.REJECT:
+                    try:
+                        session.queue.put_nowait(data)
+                    except asyncio.QueueFull:
+                        logger.warning("Queue full, rejecting new message", extra={"job_id": job_id})
 
     @asynccontextmanager
     async def generate_stream_consumer(self, job_id: str) -> AsyncIterator[AsyncGenerator[dict[str, Any], None]]:
@@ -221,7 +241,7 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
 
             Termination behavior:
             - cancelled: abort immediately (abnormal, discard remaining)
-            - stream_closed / COMPLETED / FAILED: drain remaining queue items, then exit
+            - stream_closed / completed / failed: drain remaining queue items, then exit
 
             Yields:
                 dict: Output data generated by the module.
@@ -232,7 +252,7 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
                     break
 
                 # If no more output will be produced, drain remaining items and exit
-                if session.stream_closed or session.status in {TaskStatus.COMPLETED, TaskStatus.FAILED}:
+                if session.stream_closed or session.status in {"completed", "failed"}:
                     while not session.queue.empty():
                         msg = session.queue.get_nowait()
                         try:
@@ -260,7 +280,10 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
                 if session.cancelled:
                     break
 
-        yield _stream()
+        try:
+            yield _stream()
+        finally:
+            session.close_stream()
 
     async def create_module_instance_job(
         self,
@@ -272,9 +295,6 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         request_metadata: dict[str, str] | None = None,
     ) -> str:
         """Create and start a new module job.
-
-        This method initializes a new module job, assigns it a unique job ID,
-        and starts it in the background.
 
         Args:
             input_data: The input data required to start the job.
@@ -291,6 +311,7 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             Exception: If the module fails to start.
         """
         job_id = str(uuid.uuid4())
+        logger.debug("debug:create_module_instance_job job_id=%s mission_id=%s", job_id, mission_id)
         module = ModuleFactory.create_module_instance(
             self.module_class, job_id, mission_id, setup_id, setup_version_id, request_metadata=request_metadata
         )
@@ -331,6 +352,7 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         """
         logger.info("Stop module requested", extra={"job_id": job_id})
 
+        logger.debug("debug:stop_module acquiring lock job_id=%s", job_id)
         async with self._lock:
             session = self.tasks_sessions.get(job_id)
 
@@ -350,38 +372,23 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             else:
                 return True
 
-    async def get_module_status(self, job_id: str) -> TaskStatus:
-        """Retrieve the status of a module job.
-
-        Args:
-            job_id: The unique identifier of the job.
-
-        Returns:
-            ModuleStatus: The status of the module.
-        """
-        session = self.tasks_sessions.get(job_id, None)
-        return session.status if session is not None else TaskStatus.FAILED
-
     async def wait_for_completion(self, job_id: str) -> None:
         """Wait for a task to complete by awaiting its asyncio.Task.
 
+        Idempotent — safe to call after the task has already been cleaned up
+        (e.g. by deferred cleanup during signal cancellation).
+
         Args:
             job_id: The unique identifier of the job to wait for.
-
-        Raises:
-            KeyError: If the job_id is not found in tasks.
         """
-        if job_id not in self._task_manager.tasks:
-            msg = f"Job {job_id} not found"
-            raise KeyError(msg)
-        await self._task_manager.tasks[job_id]
+        task = self._task_manager.tasks.get(job_id)
+        if task is None:
+            logger.debug("Task already cleaned up, skipping wait_for_completion", extra={"job_id": job_id})
+            return
+        await task
 
     async def stop_all_modules(self) -> None:
-        """Stop all currently running module jobs.
-
-        This method ensures that all active jobs are gracefully terminated
-        and closes the SurrealDB connection.
-        """
+        """Stop all currently running module jobs."""
         # Snapshot job IDs while holding lock
         async with self._lock:
             job_ids = list(self.tasks_sessions.keys())
@@ -390,14 +397,6 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         if job_ids:
             stop_tasks = [self.stop_module(job_id) for job_id in job_ids]
             await asyncio.gather(*stop_tasks, return_exceptions=True)
-
-        # Close SurrealDB connection after stopping all modules
-        if self.channel is not None:
-            try:
-                await self.channel.close()
-                logger.info("SingleJobManager: SurrealDB connection closed")
-            except Exception as e:
-                logger.warning("Failed to close SurrealDB connection: %s", e)
 
     async def list_modules(self) -> dict[str, dict[str, Any]]:
         """List all modules along with their statuses.
@@ -412,4 +411,5 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
                 "class": session.module.__class__.__name__,
             }
             for job_id, session in self.tasks_sessions.items()
+            if session.module is not None
         }

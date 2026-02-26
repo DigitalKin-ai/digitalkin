@@ -1,7 +1,8 @@
 """Tool reference types for module configuration."""
 
 import asyncio
-from typing import Annotated
+import os
+from typing import Annotated, ClassVar
 
 from pydantic import AfterValidator, BaseModel, BeforeValidator, Field, PlainSerializer
 from pydantic.annotated_handlers import GetJsonSchemaHandler
@@ -24,10 +25,16 @@ class ToolSelection(BaseModel):
 class ToolReference(BaseModel):
     """Tool selection containing setup IDs and trigger filters."""
 
-    selected_tools: list[ToolSelection] = Field(default=[], description="Selected tools with trigger filters.")
+    _TOOL_RESOLVE_TIMEOUT: ClassVar[float] = float(os.environ.get("DIGITALKIN_TOOL_RESOLVE_TIMEOUT", "10.0"))
+
+    selected_tools: list[ToolSelection] = Field(
+        default_factory=list, description="Selected tools with trigger filters."
+    )
 
     async def resolve(self, registry: RegistryStrategy, communication: CommunicationStrategy) -> list[ToolModuleInfo]:
         """Resolve selected tools using the registry.
+
+        Each tool resolution is bounded by DIGITALKIN_TOOL_RESOLVE_TIMEOUT (default 10s).
 
         Args:
             registry: Registry service for module discovery.
@@ -36,14 +43,22 @@ class ToolReference(BaseModel):
         Returns:
             List of ToolModuleInfo for resolved tools, filtered by enabled triggers.
         """
+        timeout = self._TOOL_RESOLVE_TIMEOUT
+
+        async def _resolve_with_timeout(entry: ToolSelection) -> ToolModuleInfo | None:
+            return await asyncio.wait_for(
+                ToolReference._resolve_single(entry, registry, communication),
+                timeout=timeout,
+            )
+
         results = await asyncio.gather(
-            *(ToolReference._resolve_single(entry, registry, communication) for entry in self.selected_tools),
+            *(_resolve_with_timeout(entry) for entry in self.selected_tools),
             return_exceptions=True,
         )
         resolved: list[ToolModuleInfo] = []
         for entry, result in zip(self.selected_tools, results):
             if isinstance(result, BaseException):
-                logger.error("Failed to resolve tool (setup_id=%s): %s", entry.setup_id, result)
+                logger.warning("Failed to resolve tool (setup_id=%s): %s", entry.setup_id, result)
             elif isinstance(result, ToolModuleInfo):
                 resolved.append(result)
         return resolved
@@ -71,8 +86,7 @@ class ToolReference(BaseModel):
         if not info:
             return None
         tool_info = await module_info_to_tool_module_info(info, entry.setup_id, setup.name, communication)
-        enabled_triggers = {name for name, enabled in entry.triggers.items() if enabled}
-        if enabled_triggers:
+        if enabled_triggers := {name for name, enabled in entry.triggers.items() if enabled}:
             tool_info.tools = [t for t in tool_info.tools if t.name in enabled_triggers]
         return tool_info
 
@@ -82,19 +96,19 @@ class _ToolReferenceInputSchema:
 
     def __init__(
         self,
-        setup_ids: list[str],
+        setup_ids: list[str] | None,
         module_ids: list[str] | None,
-        tag_ids: list[str],
-        categories: list[str],
+        tag_ids: list[str] | None,
+        categories: list[str] | None,
         max_tools: int = 0,
         min_tools: int = 0,
     ) -> None:
-        self.setup_ids = setup_ids
+        self.setup_ids = setup_ids or []
         self.module_ids = module_ids
-        self.tag_ids = tag_ids
+        self.tag_ids = tag_ids or []
         self.max_tools = max_tools
         self.min_tools = min_tools
-        self.categories = categories
+        self.categories = categories or []
 
     def __get_pydantic_json_schema__(
         self,
@@ -128,9 +142,9 @@ class _ToolReferenceInputSchema:
             json_schema["minItems"] = self.min_tools
         json_schema["ui:widget"] = "toolSelect"
         json_schema["ui:options"] = {
-            "setupIds": self.setup_ids,
-            "tagIds": self.tag_ids,
-            "categories": self.categories,
+            "setupIds": self.setup_ids or [],
+            "tagIds": self.tag_ids or [],
+            "categories": self.categories or [],
             "moduleIds": self.module_ids or [],
             "showModules": self.module_ids is not None,
         }
@@ -138,10 +152,10 @@ class _ToolReferenceInputSchema:
 
 
 def tool_reference_input(
-    setup_ids: list[str] = [],
-    module_ids: list[str] | None = [],
-    tag_ids: list[str] = [],
-    categories: list[str] = [],
+    setup_ids: list[str] | None = None,
+    module_ids: list[str] | None = None,
+    tag_ids: list[str] | None = None,
+    categories: list[str] | None = None,
     max_tools: int = 0,
     min_tools: int = 0,
 ) -> type[ToolReference]:
@@ -211,10 +225,10 @@ def tool_reference_input(
         AfterValidator(validate_tools_count),
         PlainSerializer(serialize_to_list, return_type=list[dict[str, object]]),
         _ToolReferenceInputSchema(
-            setup_ids=setup_ids,
+            setup_ids=setup_ids or [],
             module_ids=module_ids,
-            tag_ids=tag_ids,
-            categories=categories,
+            tag_ids=tag_ids or [],
+            categories=categories or [],
             max_tools=max_tools,
             min_tools=min_tools,
         ),

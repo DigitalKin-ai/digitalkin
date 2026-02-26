@@ -51,9 +51,22 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
     context: ModuleContext
     triggers_discoverer: ClassVar[ModuleDiscoverer]
 
-    # service config params
-    services_config_strategies: ClassVar[dict[str, ServicesStrategy | None]] = {}
-    services_config_params: ClassVar[dict[str, dict[str, Any | None] | None]] = {}
+    # service config params — subclasses MUST define their own to avoid sharing
+    services_config_strategies: ClassVar[dict[str, ServicesStrategy | None]]
+    services_config_params: ClassVar[dict[str, dict[str, Any | None] | None]]
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        """Ensure each subclass has its own copy of mutable class variables."""
+        super().__init_subclass__(**kwargs)
+        if "services_config_strategies" not in cls.__dict__:
+            cls.services_config_strategies = (
+                dict(cls.services_config_strategies) if "services_config_strategies" in dir(cls) else {}
+            )
+        if "services_config_params" not in cls.__dict__:
+            cls.services_config_params = (
+                dict(cls.services_config_params) if "services_config_params" in dir(cls) else {}
+            )
+
     services_config: ServicesConfig
 
     @classmethod
@@ -109,6 +122,7 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
             request_metadata: gRPC request metadata (headers) from the incoming request.
         """
         self._status = ModuleStatus.CREATED
+        self.trigger_handlers: dict[str, tuple] = {}
 
         # Initialize minimum context
         self.context = ModuleContext(
@@ -429,7 +443,7 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
     @abstractmethod
     async def initialize(self, context: ModuleContext, setup_data: SetupModelT) -> None:
         """Initialize the module."""
-        raise NotImplementedError
+        ...
 
     async def run(
         self,
@@ -448,25 +462,34 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
         input_instance = self.input_format.model_validate(input_data)
 
         # Apply cost limits if present in input (field added dynamically by UtilitySchemaExtender)
-        cost_limits = input_instance.model_dump().get("cost_limits")
-        if cost_limits is not None and self.context.cost is not None:
+        if (
+            cost_limits := input_instance.model_dump().get("cost_limits")
+        ) is not None and self.context.cost is not None:
             await self.context.cost.set_limits(cost_limits)
 
         handler_instance = self.triggers_discoverer.get_trigger(
+            self.trigger_handlers,
             input_instance.root.protocol,
             input_instance.root,
         )
 
+        logger.debug(
+            "debug:run dispatching protocol=%s handler=%s",
+            input_instance.root.protocol,
+            type(handler_instance).__name__,
+        )
         await handler_instance.handle(
             input_instance.root,
             setup_data,
             self.context,
         )
+        await handler_instance.flush_chat_history(self.context)
+        await handler_instance.flush_file_history(self.context)
 
     @abstractmethod
     async def cleanup(self) -> None:
         """Run the module."""
-        raise NotImplementedError
+        ...
 
     async def run_config_setup(  # Default implementation; subclasses may use self # noqa: PLR6301
         self,
@@ -524,6 +547,7 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
             tool_cache = await setup_data.build_tool_cache(self.context.registry, self.context.communication)
             if tool_cache.entries:
                 self.context.tool_cache = tool_cache
+            logger.debug("debug:start tool_cache entries=%s", len(tool_cache.entries))
 
             await callback(
                 DataModel(
@@ -558,7 +582,7 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
             return
 
         try:
-            self.triggers_discoverer.init_handlers(self.context)
+            self.trigger_handlers = self.triggers_discoverer.init_handlers(self.context)
             await self._run_lifecycle(input_data, setup_data)
         except Exception:
             self._status = ModuleStatus.FAILED
@@ -567,12 +591,22 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
             await self.stop()
 
     async def stop(self) -> None:
-        """Stop the module."""
+        """Stop the module. Idempotent — second call is a no-op."""
+        if self._status in {ModuleStatus.STOPPED, ModuleStatus.FAILED}:
+            return
         logger.info("Stopping module %s | job_id=%s", self.name, self.context.session.job_id)
         try:
             self._status = ModuleStatus.STOPPING
-            logger.debug("Module %s stopped", self.name)
+            # Let module finalize (wait for pending callbacks, close streams, etc.)
             await self.cleanup()
+            # Flush batched histories — all messages are in cache, in correct order
+            try:
+                for handlers in self.trigger_handlers.values():
+                    for handler in handlers:
+                        await handler.flush_chat_history(self.context)
+                        await handler.flush_file_history(self.context)
+            except Exception:
+                logger.warning("Failed to flush handler history during stop", exc_info=True)
             await self.context.callbacks.send_message(
                 DataModel(
                     root=EndOfStreamOutput(),

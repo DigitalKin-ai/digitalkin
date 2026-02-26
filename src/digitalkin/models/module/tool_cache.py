@@ -61,10 +61,10 @@ class ToolDefinition(BaseModel):
 class ToolModuleInfo(ModuleInfo):
     """Module info for tool modules."""
 
-    tools: list[ToolDefinition] = Field(default_factory=list)
-    tool_name: str = ""
     setup_id: str = ""
+    tool_name: str = ""
     cost_config: dict[str, Any] = Field(default_factory=dict)
+    tools: list[ToolDefinition] = Field(default_factory=list)
 
     @property
     def slug(self) -> str:
@@ -137,7 +137,7 @@ class ToolCache(BaseModel):
         Returns:
             List of setup field names in cache.
         """
-        return list[str](self.entries.keys())
+        return list(self.entries.keys())
 
 
 async def module_info_to_tool_module_info(

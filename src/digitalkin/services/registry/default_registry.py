@@ -1,6 +1,6 @@
 """Default registry implementation."""
 
-from typing import ClassVar
+from typing import Any
 
 from digitalkin.models.services.registry import (
     ModuleInfo,
@@ -15,7 +15,10 @@ from digitalkin.services.registry.registry_strategy import RegistryStrategy
 class DefaultRegistry(RegistryStrategy):
     """Default registry strategy using in-memory storage."""
 
-    _modules: ClassVar[dict[str, ModuleInfo]] = {}
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        """Initialize with per-instance module store."""
+        super().__init__(*args, **kwargs)
+        self._modules: dict[str, ModuleInfo] = {}
 
     async def discover_by_id(self, module_id: str) -> ModuleInfo:
         """Get module info by ID.
@@ -50,7 +53,7 @@ class DefaultRegistry(RegistryStrategy):
         Returns:
             List of matching modules.
         """
-        results = list[ModuleInfo](self._modules.values())
+        results = list(self._modules.values())
 
         if name:
             results = [m for m in results if name in m.module_name]

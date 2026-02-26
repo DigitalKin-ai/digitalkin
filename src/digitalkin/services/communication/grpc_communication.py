@@ -44,7 +44,8 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
         """
         BaseStrategy.__init__(self, mission_id, setup_id, setup_version_id)
         self.client_config = client_config
-        self._channel_pool: dict[tuple[str, int], grpc.aio.Channel] = {}
+        # Track cache keys this instance owns refs on, for cleanup
+        self._pool_keys: set[str] = set()
 
         logger.debug(
             "Initialized GrpcCommunication",
@@ -52,7 +53,10 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
         )
 
     def _get_or_create_channel(self, module_address: str, module_port: int) -> grpc.aio.Channel:
-        """Get existing channel or create new one for the target module.
+        """Get or create a shared cached channel for the target module.
+
+        Uses GrpcClientWrapper._channel_cache for ref-counted sharing so
+        multiple tasks calling the same remote module reuse one HTTP/2 connection.
 
         Args:
             module_address: Module host address
@@ -61,32 +65,28 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
         Returns:
             Async gRPC channel for the target module
         """
-        key = (module_address, module_port)
-        if key not in self._channel_pool:
-            logger.debug(
-                "Creating new channel",
-                extra={"address": module_address, "port": module_port},
-            )
-            config = ClientConfig(
-                host=module_address,
-                port=module_port,
-                mode=self.client_config.mode,
-                security=self.client_config.security,
-                credentials=self.client_config.credentials,
-                compression=self.client_config.compression,
-                channel_options=self.client_config.channel_options,
-            )
-            self._channel_pool[key] = self._init_channel(config)
-        return self._channel_pool[key]
+        config = ClientConfig(
+            host=module_address,
+            port=module_port,
+            mode=self.client_config.mode,
+            security=self.client_config.security,
+            credentials=self.client_config.credentials,
+            compression=self.client_config.compression,
+            channel_options=self.client_config.channel_options,
+        )
+        channel = self._init_channel(config)
+        if self._channel_cache_key is not None:
+            self._pool_keys.add(self._channel_cache_key)
+        return channel
 
     async def close_all_channels(self) -> None:
-        """Close all pooled gRPC channels."""
-        for channel in self._channel_pool.values():
-            await channel.close()
-        self._channel_pool.clear()
+        """Release refs on all pooled gRPC channels."""
+        for key in self._pool_keys:
+            await GrpcClientWrapper.release_cached_channel(key)
+        self._pool_keys.clear()
 
-    async def cleanup(self) -> None:
-        """Clean up all gRPC channels."""
+    async def close(self) -> None:
+        """Release all pooled gRPC channels."""
         await self.close_all_channels()
 
     def _create_stub(self, module_address: str, module_port: int) -> module_service_pb2_grpc.ModuleServiceStub:
@@ -131,40 +131,30 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
         cost_request = information_pb2.GetModuleCostRequest(llm_format=False)
 
         # Get all schemas in parallel
-        try:
-            input_response, output_response, setup_response, secret_response, cost_response = await asyncio.gather(
-                stub.GetModuleInput(input_request),
-                stub.GetModuleOutput(output_request),
-                stub.GetModuleSetup(setup_request),
-                stub.GetModuleSecret(secret_request),
-                stub.GetModuleCost(cost_request),
-            )
+        input_response, output_response, setup_response, secret_response, cost_response = await asyncio.gather(
+            stub.GetModuleInput(input_request),
+            stub.GetModuleOutput(output_request),
+            stub.GetModuleSetup(setup_request),
+            stub.GetModuleSecret(secret_request),
+            stub.GetModuleCost(cost_request),
+        )
 
-            logger.debug(
-                "Retrieved module schemas",
-                extra={
-                    "module_address": module_address,
-                    "module_port": module_port,
-                    "llm_format": llm_format,
-                },
-            )
+        logger.debug(
+            "Retrieved module schemas",
+            extra={
+                "module_address": module_address,
+                "module_port": module_port,
+                "llm_format": llm_format,
+            },
+        )
 
-            return {
-                "input": json_format.MessageToDict(input_response.input_schema),
-                "output": json_format.MessageToDict(output_response.output_schema),
-                "setup": json_format.MessageToDict(setup_response.setup_schema),
-                "secret": json_format.MessageToDict(secret_response.secret_schema),
-                "cost": json_format.MessageToDict(cost_response.cost_schema),
-            }
-        except Exception:
-            logger.exception(
-                "Failed to get module schemas",
-                extra={
-                    "module_address": module_address,
-                    "module_port": module_port,
-                },
-            )
-            raise
+        return {
+            "input": json_format.MessageToDict(input_response.input_schema),
+            "output": json_format.MessageToDict(output_response.output_schema),
+            "setup": json_format.MessageToDict(setup_response.setup_schema),
+            "secret": json_format.MessageToDict(secret_response.secret_schema),
+            "cost": json_format.MessageToDict(cost_response.cost_schema),
+        }
 
     async def call_module(
         self,

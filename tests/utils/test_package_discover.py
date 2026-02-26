@@ -202,3 +202,179 @@ def test_large_file_skipped(tmp_path):
     assert "pkg.big_trigger" not in results
 
     sys.path.pop(0)
+
+
+# ---------------------------------------------------------------------------
+# init_handlers / get_trigger unit tests
+# ---------------------------------------------------------------------------
+
+from unittest.mock import Mock  # noqa: E402
+
+
+@pytest.fixture()
+def _clean_trigger_registry():
+    """Save and restore _trigger_handlers_cls to avoid cross-test leaks."""
+    original = dict(ModuleDiscoverer._trigger_handlers_cls)
+    ModuleDiscoverer._trigger_handlers_cls = {}
+    yield
+    ModuleDiscoverer._trigger_handlers_cls = original
+
+
+class _FakeInput:
+    """Minimal input type with protocol attribute for get_trigger tests."""
+
+    protocol = "alpha"
+
+
+class _FakeInputBeta:
+    """Second input type for multi-handler tests."""
+
+    protocol = "beta"
+
+
+class _HandlerAlpha:
+    """Handler matching _FakeInput."""
+
+    protocol = "alpha"
+    input_format = _FakeInput
+
+    def __init__(self, context):
+        self.context = context
+
+
+class _HandlerBeta:
+    """Handler matching _FakeInputBeta."""
+
+    protocol = "beta"
+    input_format = _FakeInputBeta
+
+    def __init__(self, context):
+        self.context = context
+
+
+class TestInitHandlers:
+    """Tests for ModuleDiscoverer.init_handlers."""
+
+    @pytest.mark.usefixtures("_clean_trigger_registry")
+    def test_returns_dict(self):
+        """init_handlers returns a dict, not None."""
+        md = ModuleDiscoverer(packages=["pkg"], file_pattern="*_trigger.py")
+        md._trigger_handlers_cls["alpha"] = [_HandlerAlpha]
+
+        result = md.init_handlers(Mock())
+
+        assert isinstance(result, dict)
+        assert "alpha" in result
+
+    @pytest.mark.usefixtures("_clean_trigger_registry")
+    def test_handler_instances_not_classes(self):
+        """Returned values are instantiated handler objects, not classes."""
+        md = ModuleDiscoverer(packages=["pkg"], file_pattern="*_trigger.py")
+        md._trigger_handlers_cls["alpha"] = [_HandlerAlpha]
+
+        result = md.init_handlers(Mock())
+
+        handler = result["alpha"][0]
+        assert isinstance(handler, _HandlerAlpha)
+        assert not isinstance(handler, type)
+
+    @pytest.mark.usefixtures("_clean_trigger_registry")
+    def test_multiple_protocols(self):
+        """init_handlers returns entries for every registered protocol."""
+        md = ModuleDiscoverer(packages=["pkg"], file_pattern="*_trigger.py")
+        md._trigger_handlers_cls["alpha"] = [_HandlerAlpha]
+        md._trigger_handlers_cls["beta"] = [_HandlerBeta]
+
+        result = md.init_handlers(Mock())
+
+        assert len(result) == 2
+        assert isinstance(result["alpha"][0], _HandlerAlpha)
+        assert isinstance(result["beta"][0], _HandlerBeta)
+
+    @pytest.mark.usefixtures("_clean_trigger_registry")
+    def test_deduplicates_handler_classes(self):
+        """Duplicate class registrations produce a single handler instance."""
+        md = ModuleDiscoverer(packages=["pkg"], file_pattern="*_trigger.py")
+        md._trigger_handlers_cls["alpha"] = [_HandlerAlpha, _HandlerAlpha]
+
+        result = md.init_handlers(Mock())
+
+        assert len(result["alpha"]) == 1
+
+    @pytest.mark.usefixtures("_clean_trigger_registry")
+    def test_passes_context_to_constructors(self):
+        """Each handler receives the provided context."""
+        md = ModuleDiscoverer(packages=["pkg"], file_pattern="*_trigger.py")
+        md._trigger_handlers_cls["alpha"] = [_HandlerAlpha]
+        ctx = Mock()
+
+        result = md.init_handlers(ctx)
+
+        assert result["alpha"][0].context is ctx
+
+    @pytest.mark.usefixtures("_clean_trigger_registry")
+    def test_returns_fresh_dict_each_call(self):
+        """Two calls to init_handlers return independent dicts with separate instances."""
+        md = ModuleDiscoverer(packages=["pkg"], file_pattern="*_trigger.py")
+        md._trigger_handlers_cls["alpha"] = [_HandlerAlpha]
+
+        r1 = md.init_handlers(Mock())
+        r2 = md.init_handlers(Mock())
+
+        assert r1 is not r2
+        assert r1["alpha"][0] is not r2["alpha"][0]
+
+    @pytest.mark.usefixtures("_clean_trigger_registry")
+    def test_empty_registry(self):
+        """init_handlers returns empty dict when no handlers registered."""
+        md = ModuleDiscoverer(packages=["pkg"], file_pattern="*_trigger.py")
+
+        result = md.init_handlers(Mock())
+
+        assert result == {}
+
+
+class TestGetTrigger:
+    """Tests for ModuleDiscoverer.get_trigger (static method)."""
+
+    def test_selects_correct_handler(self):
+        """get_trigger returns the handler whose input_format matches the instance."""
+        handler = _HandlerAlpha(Mock())
+        handlers = {"alpha": (handler,)}
+
+        result = ModuleDiscoverer.get_trigger(handlers, "alpha", _FakeInput())
+
+        assert result is handler
+
+    def test_selects_among_multiple_protocols(self):
+        """get_trigger picks the right protocol group."""
+        ha = _HandlerAlpha(Mock())
+        hb = _HandlerBeta(Mock())
+        handlers = {"alpha": (ha,), "beta": (hb,)}
+
+        assert ModuleDiscoverer.get_trigger(handlers, "alpha", _FakeInput()) is ha
+        assert ModuleDiscoverer.get_trigger(handlers, "beta", _FakeInputBeta()) is hb
+
+    def test_raises_on_unknown_protocol(self):
+        """get_trigger raises ValueError for unregistered protocol."""
+        with pytest.raises(ValueError, match="No handler for protocol"):
+            ModuleDiscoverer.get_trigger({}, "missing", _FakeInput())
+
+    def test_raises_on_mismatched_input_format(self):
+        """get_trigger raises ValueError when no handler matches input type."""
+        handler = _HandlerBeta(Mock())
+        handlers = {"alpha": (handler,)}
+
+        # _FakeInput has protocol="alpha" but handler expects _FakeInputBeta
+        with pytest.raises(ValueError, match="No handler for input format"):
+            ModuleDiscoverer.get_trigger(handlers, "alpha", _FakeInput())
+
+    def test_uses_input_instance_protocol_not_parameter(self):
+        """get_trigger uses input_instance.protocol, ignoring the protocol parameter."""
+        handler = _HandlerAlpha(Mock())
+        handlers = {"alpha": (handler,)}
+
+        # Pass wrong protocol parameter — input_instance.protocol overrides it
+        result = ModuleDiscoverer.get_trigger(handlers, "wrong", _FakeInput())
+
+        assert result is handler

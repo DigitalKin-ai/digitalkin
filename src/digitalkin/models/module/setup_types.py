@@ -79,8 +79,7 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
                 if has_dynamic(field_info):
                     current_field_info = await cls._refresh_field_schema(name, field_info)
 
-                nested_model = cls._get_base_model_type(current_annotation)
-                if nested_model is not None:
+                if (nested_model := cls._get_base_model_type(current_annotation)) is not None:
                     refreshed_nested = await cls._refresh_nested_model(nested_model)
                     if refreshed_nested is not nested_model:
                         current_annotation = refreshed_nested
@@ -220,8 +219,7 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
                 continue
             if skip_ellipsis and arg is ...:
                 continue
-            result = cls._check_base_model(arg)
-            if result is not None:
+            if (result := cls._check_base_model(arg)) is not None:
                 return result
         return None
 
@@ -246,8 +244,7 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
                 current_field_info = await cls._refresh_field_schema(name, field_info)
                 has_changes = True
 
-            nested_model = cls._get_base_model_type(current_annotation)
-            if nested_model is not None:
+            if (nested_model := cls._get_base_model_type(current_annotation)) is not None:
                 refreshed_nested = await cls._refresh_nested_model(nested_model)
                 if refreshed_nested is not nested_model:
                     current_annotation = refreshed_nested

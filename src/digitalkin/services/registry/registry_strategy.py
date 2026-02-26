@@ -33,7 +33,7 @@ class RegistryStrategy(BaseStrategy, ABC):
     @abstractmethod
     async def discover_by_id(self, module_id: str) -> ModuleInfo:
         """Get module info by ID."""
-        raise NotImplementedError
+        ...
 
     @abstractmethod
     async def search(
@@ -52,12 +52,12 @@ class RegistryStrategy(BaseStrategy, ABC):
         Returns:
             List of matching modules.
         """
-        raise NotImplementedError
+        ...
 
     @abstractmethod
     async def get_status(self, module_id: str) -> ModuleStatusInfo:
         """Get module status."""
-        raise NotImplementedError
+        ...
 
     @abstractmethod
     async def register(
@@ -81,7 +81,7 @@ class RegistryStrategy(BaseStrategy, ABC):
         Returns:
             ModuleInfo if successful, None otherwise.
         """
-        raise NotImplementedError
+        ...
 
     @abstractmethod
     async def heartbeat(self, module_id: str) -> RegistryModuleStatus:
@@ -96,12 +96,12 @@ class RegistryStrategy(BaseStrategy, ABC):
         Raises:
             RegistryModuleNotFoundError: If module not found.
         """
-        raise NotImplementedError
+        ...
 
     @abstractmethod
     async def get_setup(self, setup_id: str) -> SetupInfo | None:
         """Get setup info."""
-        raise NotImplementedError
+        ...
 
     @abstractmethod
     async def deregister(self, module_id: str) -> bool:
@@ -113,4 +113,4 @@ class RegistryStrategy(BaseStrategy, ABC):
         Returns:
             True if deregistration was successful, False otherwise.
         """
-        raise NotImplementedError
+        ...

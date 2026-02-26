@@ -24,6 +24,7 @@ class HealthcheckServicesTrigger(TriggerHandler, BaseMixin):
 
     def __init__(self, context: ModuleContext) -> None:
         """Initialize the handler."""
+        super().__init__(context)
 
     async def handle(
         self,
