@@ -18,6 +18,7 @@ from digitalkin.services.identity.identity_strategy import IdentityStrategy
 from digitalkin.services.registry.registry_strategy import RegistryStrategy
 from digitalkin.services.snapshot.snapshot_strategy import SnapshotStrategy
 from digitalkin.services.storage.storage_strategy import StorageStrategy
+from digitalkin.services.task_manager.task_manager_strategy import TaskManagerStrategy
 from digitalkin.services.user_profile.user_profile_strategy import UserProfileStrategy
 
 
@@ -95,6 +96,7 @@ class ModuleContext:
     registry: RegistryStrategy
     snapshot: SnapshotStrategy
     storage: StorageStrategy
+    task_manager: TaskManagerStrategy
     user_profile: UserProfileStrategy
 
     session: Session
@@ -115,6 +117,7 @@ class ModuleContext:
         registry: RegistryStrategy,
         snapshot: SnapshotStrategy,
         storage: StorageStrategy,
+        task_manager: TaskManagerStrategy,
         user_profile: UserProfileStrategy,
         session: dict[str, Any],
         metadata: dict[str, Any] = {},
@@ -134,6 +137,7 @@ class ModuleContext:
             registry: RegistryStrategy.
             snapshot: SnapshotStrategy.
             storage: StorageStrategy.
+            task_manager: TaskManagerStrategy.
             user_profile: UserProfileStrategy.
             metadata: dict defining differents Module metadata.
             helpers: dict different user defined helpers.
@@ -150,6 +154,7 @@ class ModuleContext:
         self.registry = registry
         self.snapshot = snapshot
         self.storage = storage
+        self.task_manager = task_manager
         self.user_profile = user_profile
 
         self.metadata = SimpleNamespace(**metadata)
@@ -372,7 +377,23 @@ class ModuleContext:
     async def cleanup(self) -> None:
         """Clean up all service resources.
 
-        Currently cleans up communication service (gRPC channel pool).
+        Closes gRPC-backed services (task_manager, communication channel pool).
         """
+        from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
+
+        for service in (self.task_manager, self.communication, self.cost, self.storage,
+                        self.registry, self.filesystem, self.user_profile):
+            if isinstance(service, GrpcClientWrapper):
+                try:
+                    await service.close_channel()
+                except Exception:
+                    logger.exception("Error closing gRPC channel for %s", type(service).__name__)
+
+        if self.task_manager is not None:
+            try:
+                await self.task_manager.close()
+            except Exception:
+                logger.exception("Error closing task_manager service")
+
         if self.communication is not None:
             await self.communication.cleanup()

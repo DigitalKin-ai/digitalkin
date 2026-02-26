@@ -1,7 +1,6 @@
 """Taskiq broker & RSTREAM producer for the job manager."""
 
 import asyncio
-import datetime
 import json
 import logging
 import os
@@ -16,7 +15,7 @@ from taskiq.compat import model_validate
 from taskiq.message import BrokerMessage
 from taskiq_aio_pika import AioPikaBroker
 
-from digitalkin.core.common import ConnectionFactory, ModuleFactory
+from digitalkin.core.common import ModuleFactory
 from digitalkin.core.job_manager.base_job_manager import BaseJobManager
 from digitalkin.core.task_manager.task_executor import TaskExecutor
 from digitalkin.core.task_manager.task_session import TaskSession
@@ -196,16 +195,12 @@ async def run_start_module(
         module_class, job_id, mission_id, setup_id, setup_version_id, request_metadata=request_metadata
     )
 
-    channel = None
     try:
         # Create TaskExecutor and supporting components for worker execution
         executor = TaskExecutor()
-        # SurrealDB env vars are expected to be set in env.
-        channel = await ConnectionFactory.create_surreal_connection("taskiq_worker", datetime.timedelta(seconds=5))
-        session = TaskSession(job_id, mission_id, channel, module, datetime.timedelta(seconds=2))
+        session = TaskSession(job_id, mission_id, module)
 
         # Execute the task using TaskExecutor
-        # Create a proper done callback that handles errors
         async def send_end_of_stream(_: Any) -> None:
             try:
                 await callback(DataModel(root=EndOfStreamOutput()))
@@ -230,7 +225,6 @@ async def run_start_module(
                 done_callback=lambda result: asyncio.ensure_future(send_end_of_stream(result)),
             ),
             session=session,
-            channel=channel,
         )
 
         # Wait for the supervisor task to complete
@@ -240,12 +234,11 @@ async def run_start_module(
         logger.exception("Error running module %s", job_id)
         raise
     finally:
-        # Cleanup channel
-        if channel is not None:
-            try:
-                await channel.close()
-            except Exception:
-                logger.exception("Error closing channel for job %s", job_id)
+        # Cleanup via module context
+        try:
+            await module.context.cleanup()
+        except Exception:
+            logger.exception("Error cleaning up module context for job %s", job_id)
 
 
 @TASKIQ_BROKER.task
@@ -288,14 +281,10 @@ async def run_config_module(
         module_class, job_id, mission_id, setup_id, setup_version_id, request_metadata=request_metadata
     )
 
-    # Override environment variables temporarily to use manager's SurrealDB
-    channel = None
     try:
         # Create TaskExecutor and supporting components for worker execution
         executor = TaskExecutor()
-        # SurrealDB env vars are expected to be set in env.
-        channel = await ConnectionFactory.create_surreal_connection("taskiq_worker", datetime.timedelta(seconds=5))
-        session = TaskSession(job_id, mission_id, channel, module, datetime.timedelta(seconds=2))
+        session = TaskSession(job_id, mission_id, module)
 
         # Create and run the config setup task with TaskExecutor
         setup_model = module_class.create_config_setup_model(config_setup_data)
@@ -305,7 +294,6 @@ async def run_config_module(
             mission_id=mission_id,
             coro=module.start_config_setup(setup_model, callback),
             session=session,
-            channel=channel,
         )
 
         # Wait for the supervisor task to complete
@@ -315,9 +303,8 @@ async def run_config_module(
         logger.exception("Error running config module %s", job_id)
         raise
     finally:
-        # Cleanup channel
-        if channel is not None:
-            try:
-                await channel.close()
-            except Exception:
-                logger.exception("Error closing channel for job %s", job_id)
+        # Cleanup via module context
+        try:
+            await module.context.cleanup()
+        except Exception:
+            logger.exception("Error cleaning up module context for job %s", job_id)

@@ -6,37 +6,33 @@ import datetime
 from collections.abc import Coroutine
 from typing import Any
 
-from digitalkin.core.task_manager.surrealdb_repository import SurrealDBConnection
 from digitalkin.core.task_manager.task_session import TaskSession
 from digitalkin.logger import logger
 from digitalkin.models.core.task_monitor import (
     CancellationReason,
     SignalMessage,
     SignalType,
-    TaskStatus,
 )
 
 
 class TaskExecutor:
-    """Executes tasks with the supervisor pattern (main + heartbeat + signal listener).
+    """Executes tasks with the supervisor pattern (main + signal listener).
 
     Pure execution logic - no task registry or orchestration.
     Used by workers to run distributed tasks or by TaskManager for local execution.
     """
 
     @staticmethod
-    async def execute_task(  # noqa: C901, PLR0915 — supervisor pattern, TODO split
+    async def execute_task(  # noqa: C901, PLR0915 — supervisor pattern
         task_id: str,
         mission_id: str,
         coro: Coroutine[Any, Any, None],
         session: TaskSession,
-        channel: SurrealDBConnection,
     ) -> asyncio.Task[None]:
         """Execute a task using the supervisor pattern.
 
-        Runs three concurrent sub-tasks:
+        Runs two concurrent sub-tasks:
         - Main coroutine (the actual work)
-        - Heartbeat generator (sends heartbeats to SurrealDB)
         - Signal listener (watches for stop/cancel signals)
 
         The first task to complete determines the outcome.
@@ -46,98 +42,69 @@ class TaskExecutor:
             mission_id: Mission identifier for the task
             coro: The coroutine to execute (module.start(...))
             session: TaskSession for state management
-            channel: SurrealDB connection for signals
 
         Returns:
             asyncio.Task: The supervisor task managing the lifecycle
         """
 
         async def signal_wrapper() -> None:
-            """Create initial signal record and listen for signals."""
+            """Send initial signal and listen for signals."""
             try:
-                # Create task record and capture the record ID directly
-                # This avoids a race condition where SELECT might run before CREATE completes
-                result = await channel.create(
-                    "tasks",
+                # Send start signal via signal service
+                await session.signal_service.send_signal(
+                    task_id,
                     SignalMessage(
                         task_id=task_id,
                         mission_id=mission_id,
                         setup_id=session.setup_id,
                         setup_version_id=session.setup_version_id,
-                        status=session.status,
                         action=SignalType.START,
                     ).model_dump(exclude_none=True),
                 )
-                # Store the record ID in session - required before starting live query
-                if isinstance(result, dict) and "id" in result:
-                    session.signal_record_id = result["id"]
-                    logger.debug(
-                        "Task signal record created",
-                        extra={"mission_id": mission_id, "task_id": task_id, "record_id": result["id"]},
-                    )
-                    # Only start listening if we have a valid record ID
-                    await session.listen_signals()
-                else:
-                    # Create failed - wait for cancellation instead of listening
-                    logger.error(
-                        "Failed to get record ID from task creation, waiting for cancellation",
-                        extra={"mission_id": mission_id, "task_id": task_id, "result": result},
-                    )
-                    await session.is_cancelled.wait()
+                logger.info(
+                    "Task start signal sent",
+                    extra={"mission_id": mission_id, "task_id": task_id},
+                )
+                # Start listening for signals
+                await session.listen_signals()
 
             except asyncio.CancelledError:
-                logger.debug("Signal listener cancelled", extra={"mission_id": mission_id, "task_id": task_id})
+                logger.info("Signal listener cancelled", extra={"mission_id": mission_id, "task_id": task_id})
             finally:
-                with contextlib.suppress(Exception):  # Connection may already be closed
-                    await channel.create(
-                        "tasks",
+                with contextlib.suppress(Exception):
+                    await session.signal_service.send_signal(
+                        task_id,
                         SignalMessage(
                             task_id=task_id,
                             mission_id=mission_id,
                             setup_id=session.setup_id,
                             setup_version_id=session.setup_version_id,
-                            status=session.status,
                             action=SignalType.STOP,
                             cancellation_reason=session.cancellation_reason,
                             error_message=session._last_exception,  # noqa: SLF001
                             exception_traceback=session._last_traceback,  # noqa: SLF001
                         ).model_dump(exclude_none=True),
                     )
-                logger.debug("Signal listener ended", extra={"mission_id": mission_id, "task_id": task_id})
+                logger.info("Signal listener ended", extra={"mission_id": mission_id, "task_id": task_id})
 
-        async def heartbeat_wrapper() -> None:
-            """Generate heartbeats for task health monitoring."""
-            try:
-                await session.generate_heartbeats()
-            except asyncio.CancelledError:
-                logger.debug("Heartbeat cancelled", extra={"mission_id": mission_id, "task_id": task_id})
-            finally:
-                logger.debug("Heartbeat task ended", extra={"mission_id": mission_id, "task_id": task_id})
-
-        async def supervisor() -> (  # noqa: C901, PLR0912, PLR0915
-            None
-        ):  # Complex: multi-task lifecycle with error handling and cleanup
-            """Supervise the three concurrent tasks and handle outcomes.
+        async def supervisor() -> None:  # noqa: C901, PLR0915
+            """Supervise the two concurrent tasks and handle outcomes.
 
             Raises:
-                RuntimeError: If the heartbeat task stops unexpectedly.
                 asyncio.CancelledError: If the supervisor task is cancelled.
             """
             session.started_at = datetime.datetime.now(datetime.timezone.utc)
-            session.status = TaskStatus.RUNNING
+            session.status = "running"
 
-            # Create tasks with proper exception handling
             main_task = None
-            hb_task = None
             sig_task = None
             cleanup_reason = CancellationReason.UNKNOWN
 
             try:
                 main_task = asyncio.create_task(coro, name=f"{task_id}_main")
-                hb_task = asyncio.create_task(heartbeat_wrapper(), name=f"{task_id}_heartbeat")
                 sig_task = asyncio.create_task(signal_wrapper(), name=f"{task_id}_listener")
                 done, pending = await asyncio.wait(
-                    [main_task, sig_task, hb_task],
+                    [main_task, sig_task],
                     return_when=asyncio.FIRST_COMPLETED,
                 )
 
@@ -145,21 +112,15 @@ class TaskExecutor:
                 completed = next(iter(done))
 
                 if completed is main_task:
-                    # Main task finished - cleanup is due to success
                     cleanup_reason = CancellationReason.SUCCESS_CLEANUP
-                elif completed is sig_task or (completed is hb_task and sig_task.done()):
-                    # Signal task finished - external cancellation
-                    cleanup_reason = CancellationReason.SIGNAL
-                elif completed is hb_task:
-                    # Heartbeat stopped - failure cleanup
-                    cleanup_reason = CancellationReason.FAILURE_CLEANUP
+                elif completed is sig_task:
+                    cleanup_reason = CancellationReason.SIGNAL_SERVICE_CANCEL
 
-                # Signal stream to close — nothing new will be produced after this point.
+                # Signal stream to close
                 session.close_stream()
 
                 # Cancel pending tasks with proper reason logging
                 if pending:
-                    # Give stream time to see the signal and exit gracefully
                     await asyncio.sleep(0.01)  # Allow one event loop cycle
 
                     pending_names = [t.get_name() for t in pending]
@@ -182,43 +143,26 @@ class TaskExecutor:
 
                 # Determine final status based on which task completed
                 if completed is main_task:
-                    session.status = TaskStatus.COMPLETED
+                    session.status = "completed"
                     session.cancellation_reason = CancellationReason.COMPLETED
                     logger.info(
                         "Main task completed successfully",
                         extra={"mission_id": mission_id, "task_id": task_id},
                     )
-                elif completed is sig_task or (completed is hb_task and sig_task.done()):
-                    session.status = TaskStatus.CANCELLED
-                    session.cancellation_reason = CancellationReason.SIGNAL
+                elif completed is sig_task:
+                    session.status = "cancelled"
+                    session.cancellation_reason = CancellationReason.SIGNAL_SERVICE_CANCEL
                     logger.info(
-                        "Task cancelled via external signal",
+                        "Task cancelled via signal service",
                         extra={
                             "mission_id": mission_id,
                             "task_id": task_id,
-                            "cancellation_reason": CancellationReason.SIGNAL.value,
+                            "cancellation_reason": CancellationReason.SIGNAL_SERVICE_CANCEL.value,
                         },
                     )
-                elif completed is hb_task:
-                    session.status = TaskStatus.FAILED
-                    session.cancellation_reason = CancellationReason.HEARTBEAT_FAILURE
-                    logger.error(
-                        "Heartbeat stopped unexpectedly for task: '%s'",
-                        task_id,
-                        extra={
-                            "mission_id": mission_id,
-                            "task_id": task_id,
-                            "cancellation_reason": CancellationReason.HEARTBEAT_FAILURE.value,
-                        },
-                    )
-                    msg = f"Heartbeat stopped for {task_id}"
-                    raise RuntimeError(  # noqa: TRY301
-                        msg
-                    )  # Intentional: propagate heartbeat failure to supervisor caller
 
             except asyncio.CancelledError:
-                session.status = TaskStatus.CANCELLED
-                # Only set reason if not already set (preserve original reason)
+                session.status = "cancelled"
                 logger.info(
                     "Task cancelled externally: '%s', reason: %s",
                     task_id,
@@ -232,7 +176,7 @@ class TaskExecutor:
                 cleanup_reason = CancellationReason.FAILURE_CLEANUP
                 raise
             except Exception as e:
-                session.status = TaskStatus.FAILED
+                session.status = "failed"
                 cleanup_reason = CancellationReason.FAILURE_CLEANUP
                 session.record_exception(e)
                 logger.exception(
@@ -244,7 +188,7 @@ class TaskExecutor:
             finally:
                 session.completed_at = datetime.datetime.now(datetime.timezone.utc)
                 # Ensure all tasks are cleaned up with proper reason
-                tasks_to_cleanup = [t for t in [main_task, hb_task, sig_task] if t is not None and not t.done()]
+                tasks_to_cleanup = [t for t in [main_task, sig_task] if t is not None and not t.done()]
                 if tasks_to_cleanup:
                     cleanup_names = [t.get_name() for t in tasks_to_cleanup]
                     logger.debug(
@@ -272,13 +216,13 @@ class TaskExecutor:
                 logger.info(
                     "Task execution completed: '%s', status: %s, reason: %s, duration: %.2fs",
                     task_id,
-                    session.status.value,
-                    session.cancellation_reason.value if session.status == TaskStatus.CANCELLED else "n/a",
+                    session.status,
+                    session.cancellation_reason.value if session.status == "cancelled" else "n/a",
                     duration or 0,
                     extra={
                         "mission_id": mission_id,
                         "task_id": task_id,
-                        "status": session.status.value,
+                        "status": session.status,
                         "cancellation_reason": session.cancellation_reason.value,
                         "duration": duration,
                     },
