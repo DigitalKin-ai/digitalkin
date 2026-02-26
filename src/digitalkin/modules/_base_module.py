@@ -303,7 +303,7 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
     async def get_cost_format(cls, *, llm_format: bool) -> str:
         """Get the JSON schema of the cost configuration.
 
-        Extracts CostConfig from services_config_params["cost"]["config"]
+        Extracts CostConfig from `services_config_params["cost"]["config"]`
         and returns as JSON schema.
 
         Args:
@@ -527,9 +527,19 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
         except asyncio.CancelledError:
             self._status = ModuleStatus.CANCELLED
             logger.error("Module %s cancelled", self.name, extra=self.context.session.current_ids())
-        except Exception:
+        except Exception as e:
             self._status = ModuleStatus.FAILED
             logger.exception("Error inside module %s", self.name, extra=self.context.session.current_ids())
+            try:
+                await self.context.callbacks.send_message(
+                    ModuleCodeModel(
+                        code="Error",
+                        short_description="Module execution failed",
+                        message=str(e),
+                    )
+                )
+            except Exception:
+                logger.exception("Failed to send error callback")
         else:
             self._status = ModuleStatus.STOPPING
 

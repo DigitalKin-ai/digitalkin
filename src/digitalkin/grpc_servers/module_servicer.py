@@ -432,7 +432,26 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             yield lifecycle_pb2.StartModuleResponse(success=False)
             return
 
-        setup_data = await self.module_class.create_setup_model(setup_version.content)
+        try:
+            setup_data = await self.module_class.create_setup_model(setup_version.content)
+        except ValidationError as e:
+            logger.error(
+                "Setup model validation failed (setup_id=%s, mission_id=%s): %s",
+                request.setup_id,
+                request.mission_id,
+                e,
+                extra={
+                    "setup_id": request.setup_id,
+                    "mission_id": request.mission_id,
+                    "module_class": self.module_class.__name__,
+                    "error_type": "ValidationError",
+                },
+                exc_info=True,
+            )
+            context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+            context.set_details(f"[gRPC-server:ModuleService.StartModule] Setup model validation failed: {e}")
+            yield lifecycle_pb2.StartModuleResponse(success=False)
+            return
 
         # Extract gRPC request metadata (headers) for propagation
         request_metadata: dict[str, str] = {

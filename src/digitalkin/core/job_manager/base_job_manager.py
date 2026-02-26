@@ -130,6 +130,12 @@ class BaseJobManager(abc.ABC, Generic[InputModelT, OutputModelT, SetupModelT]):
         required for the job manager to function.
         """
 
+    async def stop(self) -> None:
+        """Stop the job manager and clean up resources.
+
+        Default no-op. Subclasses with external connections override.
+        """
+
     @staticmethod
     async def job_specific_callback(
         callback: Callable[[str, DataModel | ModuleCodeModel], Coroutine[Any, Any, None]],

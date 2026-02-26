@@ -34,14 +34,14 @@
         "grpcio-status==1.78.0",
         "pydantic==2.12.5",
     ]
-    version = "0.3.2.post0"
+    version = "0.3.3.dev7"
 
     [project.optional-dependencies]
         profiling = [
             "asyncio-inspector==0.1.0",
             "pyinstrument==5.1.2",
             "viztracer==1.1.1",
-            "yappi==1.7.3",
+            "yappi==1.7.6",
         ]
         taskiq = [
             "rstream==1.0.0",
