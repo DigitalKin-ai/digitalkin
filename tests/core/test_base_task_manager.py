@@ -185,9 +185,9 @@ class TestValidation:
         manager = ConcreteTaskManager(max_concurrent_tasks=2)
         mission_id = "missions:max"
 
-        # Fill up to max
-        manager.tasks_sessions["t1"] = Mock()
-        manager.tasks_sessions["t2"] = Mock()
+        # Fill up to max with active sessions
+        manager.tasks_sessions["t1"] = Mock(status=TaskStatus.RUNNING)
+        manager.tasks_sessions["t2"] = Mock(status=TaskStatus.RUNNING)
 
         async def work() -> None:
             await asyncio.sleep(0.1)
@@ -200,6 +200,27 @@ class TestValidation:
         # Verify coroutine was closed
         with pytest.raises((StopIteration, RuntimeError)):
             await coro
+
+    @pytest.mark.asyncio
+    async def test_validate_ignores_terminal_sessions(
+        self,
+    ) -> None:
+        """Test validation counts only PENDING/RUNNING sessions, not terminal ones."""
+        manager = ConcreteTaskManager(max_concurrent_tasks=2)
+
+        # Fill with terminal sessions
+        manager.tasks_sessions["completed"] = Mock(status=TaskStatus.COMPLETED)
+        manager.tasks_sessions["failed"] = Mock(status=TaskStatus.FAILED)
+        manager.tasks_sessions["cancelled"] = Mock(status=TaskStatus.CANCELLED)
+
+        async def work() -> None:
+            await asyncio.sleep(0.1)
+
+        coro = work()
+
+        # Should NOT raise even though len(tasks_sessions) == 3 > max == 2
+        await manager._validate_task_creation("new_task", "missions:terminal", coro)
+        coro.close()
 
     @pytest.mark.asyncio
     async def test_validate_success(
@@ -807,12 +828,18 @@ class TestProperties:
         self,
         task_manager: ConcreteTaskManager,
     ) -> None:
-        """Test task_count property."""
+        """Test task_count counts only active (PENDING/RUNNING) sessions."""
         assert task_manager.task_count == 0
 
-        # Add sessions
-        task_manager.tasks_sessions["t1"] = Mock()
-        task_manager.tasks_sessions["t2"] = Mock()
+        # Add active sessions
+        task_manager.tasks_sessions["t1"] = Mock(status=TaskStatus.RUNNING)
+        task_manager.tasks_sessions["t2"] = Mock(status=TaskStatus.PENDING)
+
+        assert task_manager.task_count == 2
+
+        # Add terminal sessions - should NOT increase count
+        task_manager.tasks_sessions["t3"] = Mock(status=TaskStatus.COMPLETED)
+        task_manager.tasks_sessions["t4"] = Mock(status=TaskStatus.FAILED)
 
         assert task_manager.task_count == 2
 
