@@ -25,13 +25,13 @@
         "Programming Language :: Python",
         "Topic :: Software Development :: Libraries",
     ]
-    version = "0.3.2b8"
+    version = "0.3.2b9"
 
     dependencies = [
         "agentic-mesh-protocol==0.2.2",
-        "grpcio-health-checking>=1.78.1",
-        "grpcio-reflection>=1.78.1",
-        "grpcio-status>=1.78.1",
+        "grpcio-health-checking>=1.78.0",
+        "grpcio-reflection>=1.78.0",
+        "grpcio-status>=1.78.0",
         "pydantic>=2.12.5",
         "surrealdb>=1.0.7",
     ]
