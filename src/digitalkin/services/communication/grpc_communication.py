@@ -54,6 +54,12 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
     def _get_or_create_channel(self, module_address: str, module_port: int) -> grpc.aio.Channel:
         """Get existing channel or create new one for the target module.
 
+        Pool channels are created directly (not via _init_channel) to avoid
+        polluting the shared GrpcClientWrapper._channel_cache. Pool channels
+        have per-job lifetime and are closed by close_all_channels(); placing
+        them in the shared cache causes zombie entries that subsequent jobs
+        pick up as "Channel is closed".
+
         Args:
             module_address: Module host address
             module_port: Module port
@@ -63,10 +69,6 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
         """
         key = (module_address, module_port)
         if key not in self._channel_pool:
-            logger.debug(
-                "Creating new channel",
-                extra={"address": module_address, "port": module_port},
-            )
             config = ClientConfig(
                 host=module_address,
                 port=module_port,
@@ -76,7 +78,16 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
                 compression=self.client_config.compression,
                 channel_options=self.client_config.channel_options,
             )
-            self._channel_pool[key] = self._init_channel(config)
+            credentials = self._build_channel_credentials(config)
+            grpc_compression = config.compression.to_grpc()
+            if credentials is not None:
+                self._channel_pool[key] = grpc.aio.secure_channel(
+                    config.address, credentials, options=config.grpc_options, compression=grpc_compression
+                )
+            else:
+                self._channel_pool[key] = grpc.aio.insecure_channel(
+                    config.address, options=config.grpc_options, compression=grpc_compression
+                )
         return self._channel_pool[key]
 
     async def close_all_channels(self) -> None:
@@ -131,40 +142,30 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
         cost_request = information_pb2.GetModuleCostRequest(llm_format=False)
 
         # Get all schemas in parallel
-        try:
-            input_response, output_response, setup_response, secret_response, cost_response = await asyncio.gather(
-                stub.GetModuleInput(input_request),
-                stub.GetModuleOutput(output_request),
-                stub.GetModuleSetup(setup_request),
-                stub.GetModuleSecret(secret_request),
-                stub.GetModuleCost(cost_request),
-            )
+        input_response, output_response, setup_response, secret_response, cost_response = await asyncio.gather(
+            stub.GetModuleInput(input_request),
+            stub.GetModuleOutput(output_request),
+            stub.GetModuleSetup(setup_request),
+            stub.GetModuleSecret(secret_request),
+            stub.GetModuleCost(cost_request),
+        )
 
-            logger.debug(
-                "Retrieved module schemas",
-                extra={
-                    "module_address": module_address,
-                    "module_port": module_port,
-                    "llm_format": llm_format,
-                },
-            )
+        logger.debug(
+            "Retrieved module schemas",
+            extra={
+                "module_address": module_address,
+                "module_port": module_port,
+                "llm_format": llm_format,
+            },
+        )
 
-            return {
-                "input": json_format.MessageToDict(input_response.input_schema),
-                "output": json_format.MessageToDict(output_response.output_schema),
-                "setup": json_format.MessageToDict(setup_response.setup_schema),
-                "secret": json_format.MessageToDict(secret_response.secret_schema),
-                "cost": json_format.MessageToDict(cost_response.cost_schema),
-            }
-        except Exception:
-            logger.exception(
-                "Failed to get module schemas",
-                extra={
-                    "module_address": module_address,
-                    "module_port": module_port,
-                },
-            )
-            raise
+        return {
+            "input": json_format.MessageToDict(input_response.input_schema),
+            "output": json_format.MessageToDict(output_response.output_schema),
+            "setup": json_format.MessageToDict(setup_response.setup_schema),
+            "secret": json_format.MessageToDict(secret_response.secret_schema),
+            "cost": json_format.MessageToDict(cost_response.cost_schema),
+        }
 
     async def call_module(
         self,

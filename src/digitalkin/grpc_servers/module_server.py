@@ -76,6 +76,11 @@ class ModuleServer(BaseServer):
             module_service_pb2_grpc.add_ModuleServiceServicer_to_server,
             service_descriptor=module_service_pb2.DESCRIPTOR,
         )
+
+        # Initialize setup stub before server starts accepting RPCs
+        if self.client_config is not None:
+            self.module_servicer.setup.__post_init__(self.client_config)
+
         logger.debug("Registered Module servicer")
 
     def _prepare_registry_config(self) -> None:
@@ -109,25 +114,20 @@ class ModuleServer(BaseServer):
         except Exception:
             logger.exception("Failed to register with registry")
 
-        if self.module_servicer is not None:
-            logger.debug("Setup post init started", extra={"client_config": self.client_config})
-            self.module_servicer.setup.__post_init__(self.client_config)
-
     async def start_async(self) -> None:
         """Start the module server and register with the registry if configured."""
         logger.info("Starting module server", extra={"server_config": self.server_config})
         await super().start_async()
+
+        # module_servicer is now set by _register_servicers() during super().start_async()
+        if self.module_servicer is not None:
+            await self.module_servicer.job_manager.start()
 
         try:
             self._init_registry()
             await self._register_with_registry()
         except Exception:
             logger.exception("Failed to register with registry")
-
-        if self.module_servicer is not None:
-            logger.info("Setup post init started", extra={"client_config": self.client_config})
-            await self.module_servicer.job_manager.start()
-            self.module_servicer.setup.__post_init__(self.client_config)
 
     async def stop_async(self, grace: float | None = None) -> None:
         """Stop the module server with async cleanup.

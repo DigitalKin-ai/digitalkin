@@ -2,7 +2,6 @@
 
 import asyncio
 import contextlib
-import datetime
 import os
 import types
 from abc import ABC, abstractmethod
@@ -11,10 +10,9 @@ from typing import Any
 
 from typing_extensions import Self
 
-from digitalkin.core.task_manager.surrealdb_repository import SurrealDBConnection
 from digitalkin.core.task_manager.task_session import TaskSession
 from digitalkin.logger import logger
-from digitalkin.models.core.task_monitor import CancellationReason, SignalMessage, SignalType, TaskStatus
+from digitalkin.models.core.task_monitor import CancellationReason, SignalMessage, SignalType
 from digitalkin.modules._base_module import BaseModule
 
 
@@ -23,47 +21,38 @@ class BaseTaskManager(ABC):
 
     Provides shared functionality for task orchestration, monitoring, signaling, and cancellation.
     Subclasses implement specific execution strategies (local or remote).
-
-    Supports async context manager protocol for automatic resource cleanup:
-        async with LocalTaskManager() as manager:
-            await manager.create_task(...)
-            # Resources automatically cleaned up on exit
     """
 
     tasks: dict[str, asyncio.Task]
     tasks_sessions: dict[str, TaskSession]
     default_timeout: float
-    max_concurrent_tasks: int
+    max_concurrent_tasks: int = int(os.environ.get("DIGITALKIN_MAX_CONCURRENT_TASKS", "100"))
     _shutdown_event: asyncio.Event
+    _tasks_lock: asyncio.Lock
 
-    def __init__(
-        self,
-        default_timeout: float = 10.0,
-        max_concurrent_tasks: int = int(os.environ.get("DIGITALKIN_MAX_CONCURRENT_TASKS", "100")),
-    ) -> None:
+    def __init__(self, default_timeout: float = 10.0) -> None:
         """Initialize task manager properties.
 
         Args:
             default_timeout: Default timeout for task operations in seconds
-            max_concurrent_tasks: Maximum number of concurrent tasks
         """
         self.tasks = {}
         self.tasks_sessions = {}
         self.default_timeout = default_timeout
-        self.max_concurrent_tasks = max_concurrent_tasks
         self._shutdown_event = asyncio.Event()
+        self._tasks_lock = asyncio.Lock()
 
         logger.info(
             "%s initialized (max_concurrent_tasks=%d, default_timeout=%.1fs)",
             self.__class__.__name__,
-            max_concurrent_tasks,
+            self.max_concurrent_tasks,
             default_timeout,
         )
 
     @property
     def task_count(self) -> int:
-        """Number of active tasks (PENDING or RUNNING)."""
-        return sum(1 for s in self.tasks_sessions.values() if s.status in {TaskStatus.PENDING, TaskStatus.RUNNING})
+        """Number of active tasks (pending or running)."""
+        return sum(1 for s in self.tasks_sessions.values() if s.status in {"pending", "running"})
 
     @property
     def running_tasks(self) -> set[str]:
@@ -76,7 +65,7 @@ class BaseTaskManager(ABC):
         Delegates cleanup to TaskSession which handles:
         - Clearing queue items to free memory
         - Stopping module (if not already stopped)
-        - Closing database connection (which kills live queries)
+        - Cleaning up module context services
 
         Then removes task from tracking dictionaries.
 
@@ -86,7 +75,7 @@ class BaseTaskManager(ABC):
         """
         session = self.tasks_sessions.get(task_id)
         cancellation_reason = session.cancellation_reason.value if session else "no_session"
-        final_status = session.status.value if session else "unknown"
+        final_status = session.status if session else "unknown"
 
         logger.debug(
             "Cleaning up resources",
@@ -143,9 +132,7 @@ class BaseTaskManager(ABC):
             msg = f"Task {task_id} already exists"
             raise ValueError(msg)
 
-        current_count = sum(
-            1 for s in self.tasks_sessions.values() if s.status in {TaskStatus.PENDING, TaskStatus.RUNNING}
-        )
+        current_count = sum(1 for s in self.tasks_sessions.values() if s.status in {"pending", "running"})
 
         if current_count >= self.max_concurrent_tasks * 8 // 10:
             logger.warning(
@@ -164,7 +151,7 @@ class BaseTaskManager(ABC):
                 current_count,
                 self.max_concurrent_tasks,
                 len(self.tasks_sessions),
-                {tid: s.status.value for tid, s in self.tasks_sessions.items()},
+                {tid: s.status for tid, s in self.tasks_sessions.items()},
                 extra={
                     "mission_id": mission_id,
                     "task_id": task_id,
@@ -175,37 +162,29 @@ class BaseTaskManager(ABC):
             msg = f"Maximum concurrent tasks ({self.max_concurrent_tasks}) reached"
             raise RuntimeError(msg)
 
-    async def _create_session(
+    def _create_session(
         self,
         task_id: str,
         mission_id: str,
         module: BaseModule,
-        heartbeat_interval: datetime.timedelta,
-        connection_timeout: datetime.timedelta,
-    ) -> tuple[SurrealDBConnection, TaskSession]:
-        """Create SurrealDB connection and task session.
+    ) -> TaskSession:
+        """Create task session.
 
         Args:
             task_id: The ID of the task
             mission_id: The ID of the mission
             module: The module instance
-            heartbeat_interval: Interval between heartbeats
-            connection_timeout: Connection timeout for SurrealDB
 
         Returns:
-            Tuple of (channel, session)
+            TaskSession instance
         """
-        channel: SurrealDBConnection = SurrealDBConnection("task_manager", connection_timeout)
-        await channel.init_surreal_instance()
         session = TaskSession(
             task_id=task_id,
             mission_id=mission_id,
-            db=channel,
             module=module,
-            heartbeat_interval=heartbeat_interval,
         )
         self.tasks_sessions[task_id] = session
-        return channel, session
+        return session
 
     @abstractmethod
     async def create_task(
@@ -214,8 +193,6 @@ class BaseTaskManager(ABC):
         mission_id: str,
         module: BaseModule,
         coro: Coroutine[Any, Any, None],
-        heartbeat_interval: datetime.timedelta = datetime.timedelta(seconds=2),
-        connection_timeout: datetime.timedelta = datetime.timedelta(seconds=5),
     ) -> None:
         """Create and manage a new task.
 
@@ -226,8 +203,6 @@ class BaseTaskManager(ABC):
             mission_id: Mission identifier
             module: Module instance to execute
             coro: Coroutine to execute
-            heartbeat_interval: Interval between heartbeats
-            connection_timeout: Connection timeout for SurrealDB
 
         Raises:
             ValueError: If task_id duplicated
@@ -263,14 +238,13 @@ class BaseTaskManager(ABC):
         )
 
         session = self.tasks_sessions[task_id]
-        await session.db.create(
-            "tasks",
+        await session.signal_service.send_signal(
+            task_id,
             SignalMessage(
                 task_id=task_id,
                 mission_id=mission_id,
                 setup_id=session.setup_id,
                 setup_version_id=session.setup_version_id,
-                status=session.status,
                 action=SignalType[signal_type.upper()],
                 payload=payload,
             ).model_dump(exclude_none=True),
@@ -371,22 +345,15 @@ class BaseTaskManager(ABC):
             )
             return False
 
-        await self.cancel_task(mission_id=mission_id, task_id=task_id)
+        # Check if task is still running before cancelling
+        task = self.tasks.get(task_id)
+        if task is not None and not task.done():
+            await self.cancel_task(mission_id=mission_id, task_id=task_id)
+        else:
+            await self._cleanup_task(task_id, mission_id)
 
         logger.info("Cleaning up session for task: '%s'", task_id, extra={"mission_id": mission_id, "task_id": task_id})
         return True
-
-    async def get_task_status(self, task_id: str, mission_id: str) -> bool:
-        """Request status from a task.
-
-        Args:
-            task_id: The ID of the task
-            mission_id: The ID of the mission
-
-        Returns:
-            True if the status request was sent successfully, False otherwise
-        """
-        return await self.send_signal(task_id=task_id, mission_id=mission_id, signal_type="status", payload={})
 
     async def cancel_all_tasks(self, mission_id: str, timeout: float | None = None) -> dict[str, bool | BaseException]:
         """Cancel all running tasks.

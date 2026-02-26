@@ -7,7 +7,6 @@ from typing import Any, Generic
 
 from digitalkin.core.task_manager.base_task_manager import BaseTaskManager
 from digitalkin.core.task_manager.task_session import TaskSession
-from digitalkin.models.core.task_monitor import TaskStatus
 from digitalkin.models.module.module import ModuleCodeModel
 from digitalkin.models.module.module_types import DataModel, InputModelT, OutputModelT, SetupModelT
 from digitalkin.modules._base_module import BaseModule
@@ -251,14 +250,14 @@ class BaseJobManager(abc.ABC, Generic[InputModelT, OutputModelT, SetupModelT]):
         """
 
     @abc.abstractmethod
-    async def get_module_status(self, job_id: str) -> TaskStatus:
+    async def get_module_status(self, job_id: str) -> str:
         """Retrieve the status of a module job.
 
         Args:
             job_id: The unique identifier of the job.
 
         Returns:
-            ModuleStatu: The status of the job.
+            Status string (e.g. "pending", "running", "completed", "failed", "cancelled").
         """
 
     @abc.abstractmethod

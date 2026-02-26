@@ -3,7 +3,7 @@
 # https://peps.python.org/pep-0440/
 
 [tool.bumpversion]
-    current_version = "0.3.2b9"
+    current_version = "0.3.2b20"
     parse = """(?x)
     (?P<major>0|[1-9]\\d*)\\.
     (?P<minor>0|[1-9]\\d*)\\.
@@ -16,27 +16,15 @@
 
     # Single serialize pattern - dot is encoded in release_type values
     serialize = [
-        "{major}.{minor}.{patch}{release_type}{release_num}",
         "{major}.{minor}.{patch}",
+        "{major}.{minor}.{patch}{release_type}{release_num}",
     ]
 
     # Configuration for version parts
     [tool.bumpversion.parts.release_type]
         # Release progression: .dev -> a -> b -> rc -> final -> .post
-        optional_value = "final" # When "final", the release_type is omitted
-        values = [
-            ".dev",
-
-            "a",
-
-            "b",
-
-            "rc",
-
-            "final",
-
-            ".post",
-        ]
+        optional_value = "final"                                      # When "final", the release_type is omitted
+        values         = [ ".dev", ".post", "a", "b", "final", "rc" ]
 
     # Files to update when bumping version
     [[tool.bumpversion.files]]
