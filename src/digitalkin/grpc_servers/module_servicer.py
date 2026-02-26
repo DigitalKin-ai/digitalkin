@@ -378,6 +378,25 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             )
             yield lifecycle_pb2.StartModuleResponse(success=False)
             return
+        except RuntimeError as e:
+            logger.error(
+                "Failed to create job, resource exhausted (setup_id=%s, mission_id=%s): %s",
+                request.setup_id,
+                request.mission_id,
+                e,
+                extra={
+                    "setup_id": request.setup_id,
+                    "mission_id": request.mission_id,
+                    "module_class": self.module_class.__name__,
+                },
+            )
+            context.set_code(grpc.StatusCode.RESOURCE_EXHAUSTED)
+            context.set_details(
+                f"[gRPC-server:ModuleService.StartModule] (setup_id={request.setup_id}, "
+                f"mission_id={request.mission_id}) {e}"
+            )
+            yield lifecycle_pb2.StartModuleResponse(success=False)
+            return
         except Exception as e:
             error_type = type(e).__name__
             logger.error(
@@ -446,6 +465,17 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
                     self.job_manager.wait_for_completion(job_id),
                     timeout=30.0,
                 )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "Timeout waiting for job completion, forcing cleanup",
+                    extra={"job_id": job_id, "mission_id": request.mission_id},
+                )
+                # Set cancellation reason on the session if it exists
+                session = self.job_manager.tasks_sessions.get(job_id)
+                if session is not None:
+                    from digitalkin.models.core.task_monitor import CancellationReason
+
+                    session.cancellation_reason = CancellationReason.TIMEOUT
             except Exception:
                 logger.exception(
                     "Error waiting for job completion",
@@ -526,7 +556,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         logger.debug("Job %s status: '%s'", request.job_id, status)
         return monitoring_pb2.GetModuleStatusResponse(
             success=True,
-            status=status.name,
+            status=status,
             job_id=request.job_id,
         )
 
@@ -553,7 +583,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             jobs=[
                 monitoring_pb2.JobInfo(
                     job_id=job_id,
-                    job_status=job_data["status"].name,
+                    job_status=str(job_data["status"]),
                 )
                 for job_id, job_data in modules.items()
             ],

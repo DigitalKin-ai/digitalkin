@@ -75,12 +75,17 @@ class GrpcClientWrapper:
             await self._channel.close()
             self._channel = None
 
-    _RETRYABLE_CODES: ClassVar[set[grpc.StatusCode]] = {grpc.StatusCode.UNAVAILABLE, grpc.StatusCode.INTERNAL}
+    _RETRYABLE_CODES: ClassVar[set[grpc.StatusCode]] = {
+        grpc.StatusCode.UNAVAILABLE,
+        grpc.StatusCode.INTERNAL,
+        grpc.StatusCode.DEADLINE_EXCEEDED,
+    }
 
     async def exec_grpc_query(
         self,
         query_endpoint: str,
         request: Any,
+        timeout: float | None = None,
     ) -> Any:
         """Execute a gRPC query with from the query's rpc endpoint name.
 
@@ -90,6 +95,7 @@ class GrpcClientWrapper:
         Arguments:
             query_endpoint: rpc query name (e.g., "GetSetup", "CreateSetupVersion")
             request: gRPC protobuf request object
+            timeout: Optional per-call timeout in seconds (passed to gRPC stub call)
 
         Returns:
             gRPC protobuf response object.
@@ -118,7 +124,7 @@ class GrpcClientWrapper:
                     },
                 )
                 # getattr unavoidable: gRPC stubs expose RPC methods as dynamic attributes
-                response = await getattr(self.stub, query_endpoint)(request)
+                response = await getattr(self.stub, query_endpoint)(request, timeout=timeout)
                 logger.debug(
                     "gRPC response: %s.%s - received response from remote service",
                     self.service_name,

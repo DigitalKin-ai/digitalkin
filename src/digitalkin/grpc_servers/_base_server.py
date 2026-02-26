@@ -2,6 +2,7 @@
 
 import abc
 import asyncio
+import os
 from collections.abc import Callable, Sequence
 from concurrent import futures
 from pathlib import Path
@@ -54,6 +55,7 @@ class BaseServer(abc.ABC):
         self._service_names: list[str] = []  # Track service names for reflection
         self._health_servicer: Any = None  # For health checking
         self._interceptors: list[Any] = list(interceptors) if interceptors else []
+        self._asyncio_monitor: Any = None
 
     def register_servicer(
         self,
@@ -380,12 +382,25 @@ class BaseServer(abc.ABC):
             msg = f"Failed to start server: {e}"
             raise ServerStateError(msg) from e
 
+        # Start asyncio-inspector if enabled
+        if os.environ.get("DIGITALKIN_ASYNCIO_INSPECTOR", "").lower() == "true":
+            try:
+                from digitalkin.core.profiling.asyncio_monitor import AsyncioMonitor
+
+                port = int(os.environ.get("DIGITALKIN_ASYNCIO_INSPECTOR_PORT", "8765"))
+                self._asyncio_monitor = AsyncioMonitor(port=port)
+                await self._asyncio_monitor.start()
+            except Exception:
+                logger.exception("Failed to start asyncio-inspector")
+
     def stop(self, grace: float | None = None) -> None:
         """Stop the gRPC server.
 
         Args:
             grace: Optional grace period in seconds for existing RPCs to complete.
         """
+        self._asyncio_monitor = None
+
         if self.server is None:
             logger.warning("Attempted to stop server, but no server is running")
             return
@@ -448,6 +463,10 @@ class BaseServer(abc.ABC):
         Args:
             grace: Optional grace period in seconds for existing RPCs to complete.
         """
+        if self._asyncio_monitor is not None:
+            await self._asyncio_monitor.stop()
+            self._asyncio_monitor = None
+
         if self.server is None:
             logger.warning("Attempted to stop server, but no server is running")
             return

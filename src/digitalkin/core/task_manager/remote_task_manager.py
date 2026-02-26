@@ -1,6 +1,5 @@
 """Remote task manager for distributed execution."""
 
-import datetime
 from collections.abc import Coroutine
 from typing import Any
 
@@ -22,8 +21,6 @@ class RemoteTaskManager(BaseTaskManager):
         mission_id: str,
         module: BaseModule,
         coro: Coroutine[Any, Any, None],
-        heartbeat_interval: datetime.timedelta = datetime.timedelta(seconds=2),
-        connection_timeout: datetime.timedelta = datetime.timedelta(seconds=5),
     ) -> None:
         """Register task for remote execution (metadata only).
 
@@ -35,15 +32,15 @@ class RemoteTaskManager(BaseTaskManager):
             mission_id: Mission identifier
             module: Module instance for metadata (not executed here)
             coro: Coroutine (will be closed - execution happens in worker)
-            heartbeat_interval: Interval between heartbeats
-            connection_timeout: Connection timeout for SurrealDB
 
         Raises:
             ValueError: If task_id duplicated
             RuntimeError: If task overload
         """
-        # Validation
-        await self._validate_task_creation(task_id, mission_id, coro)
+        # Validate and register session atomically to prevent TOCTOU on max_concurrent_tasks
+        async with self._tasks_lock:
+            await self._validate_task_creation(task_id, mission_id, coro)
+            self._create_session(task_id, mission_id, module)
 
         logger.info(
             "Registering remote task: '%s'",
@@ -51,17 +48,10 @@ class RemoteTaskManager(BaseTaskManager):
             extra={
                 "mission_id": mission_id,
                 "task_id": task_id,
-                "heartbeat_interval": heartbeat_interval,
-                "connection_timeout": connection_timeout,
             },
         )
 
         try:
-            # Create session for metadata and signal handling
-            _channel, _session = await self._create_session(
-                task_id, mission_id, module, heartbeat_interval, connection_timeout
-            )
-
             # Close coroutine - worker will recreate and execute it
             coro.close()
 
