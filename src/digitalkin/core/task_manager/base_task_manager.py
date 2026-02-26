@@ -14,7 +14,7 @@ from typing_extensions import Self
 from digitalkin.core.task_manager.surrealdb_repository import SurrealDBConnection
 from digitalkin.core.task_manager.task_session import TaskSession
 from digitalkin.logger import logger
-from digitalkin.models.core.task_monitor import CancellationReason, SignalMessage, SignalType
+from digitalkin.models.core.task_monitor import CancellationReason, SignalMessage, SignalType, TaskStatus
 from digitalkin.modules._base_module import BaseModule
 
 
@@ -62,8 +62,8 @@ class BaseTaskManager(ABC):
 
     @property
     def task_count(self) -> int:
-        """Number of managed tasks."""
-        return len(self.tasks_sessions)
+        """Number of active tasks (PENDING or RUNNING)."""
+        return sum(1 for s in self.tasks_sessions.values() if s.status in {TaskStatus.PENDING, TaskStatus.RUNNING})
 
     @property
     def running_tasks(self) -> set[str]:
@@ -143,22 +143,27 @@ class BaseTaskManager(ABC):
             msg = f"Task {task_id} already exists"
             raise ValueError(msg)
 
-        current_count = len(self.tasks_sessions)
+        current_count = sum(
+            1 for s in self.tasks_sessions.values() if s.status in {TaskStatus.PENDING, TaskStatus.RUNNING}
+        )
 
         if current_count >= self.max_concurrent_tasks * 8 // 10:
             logger.warning(
-                "Task capacity at %d/%d (%.0f%%)",
+                "Task capacity at %d/%d (%.0f%%), total sessions: %d",
                 current_count,
                 self.max_concurrent_tasks,
                 current_count / self.max_concurrent_tasks * 100,
+                len(self.tasks_sessions),
                 extra={"mission_id": mission_id, "task_id": task_id},
             )
 
         if current_count >= self.max_concurrent_tasks:
             coro.close()
             logger.error(
-                "Task creation failed - max concurrent tasks reached: %d, active sessions: %s",
+                "Task creation failed - max concurrent tasks reached: %d/%d (total sessions: %d), statuses: %s",
+                current_count,
                 self.max_concurrent_tasks,
+                len(self.tasks_sessions),
                 {tid: s.status.value for tid, s in self.tasks_sessions.items()},
                 extra={
                     "mission_id": mission_id,

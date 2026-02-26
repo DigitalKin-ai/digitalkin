@@ -638,3 +638,34 @@ class TestEnumSerializationRegression:
             assert isinstance(result["backend"], str)
 
             await manager.stop_all_modules()
+
+
+class TestTaskAccumulationRegression:
+    """Test regression for task accumulation blocking new task creation."""
+
+    @pytest.mark.asyncio
+    async def test_completed_tasks_dont_block_creation(self):
+        """REGRESSION: Completed/failed sessions in cleanup window blocked new task creation.
+
+        Under high throughput, sessions in terminal states (COMPLETED/FAILED/CANCELLED)
+        accumulated in tasks_sessions faster than cleanup removed them, eventually hitting
+        the max_concurrent_tasks limit even though few tasks were truly active.
+
+        Fix: _validate_task_creation counts only PENDING/RUNNING sessions.
+        """
+        from digitalkin.models.core.task_monitor import TaskStatus
+
+        manager = LocalTaskManager(max_concurrent_tasks=3)
+
+        # Simulate 3 sessions that have completed but haven't been cleaned up yet
+        for i in range(3):
+            manager.tasks_sessions[f"old-{i}"] = Mock(status=TaskStatus.COMPLETED)
+
+        async def work() -> None:
+            pass
+
+        coro = work()
+
+        # Should succeed despite 3 sessions in dict (all are COMPLETED, active count is 0)
+        await manager._validate_task_creation("new-task", "mission", coro)
+        coro.close()
