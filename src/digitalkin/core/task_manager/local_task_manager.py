@@ -1,5 +1,6 @@
 """Local task manager for single-process execution."""
 
+import os
 from collections.abc import Coroutine
 from typing import Any
 
@@ -21,7 +22,7 @@ class LocalTaskManager(BaseTaskManager):
     def __init__(
         self,
         default_timeout: float = 10.0,
-        max_concurrent_tasks: int = 100,
+        max_concurrent_tasks: int = int(os.environ.get("DIGITALKIN_MAX_CONCURRENT_TASKS", "100")),
     ) -> None:
         """Initialize local task manager.
 

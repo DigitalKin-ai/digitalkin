@@ -133,7 +133,7 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         module_class: type[BaseModule],
         services_mode: ServicesMode,
         default_timeout: float = 10.0,
-        max_concurrent_tasks: int = 100,
+        max_concurrent_tasks: int = int(os.environ.get("DIGITALKIN_MAX_CONCURRENT_TASKS", "100")),
         stream_timeout: float = 30.0,
     ) -> None:
         """Initialize the Taskiq job manager.
