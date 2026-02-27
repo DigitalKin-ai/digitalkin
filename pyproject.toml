@@ -25,10 +25,11 @@
         "Programming Language :: Python",
         "Topic :: Software Development :: Libraries",
     ]
-    version = "0.3.2b18"
+    version = "0.3.2b19"
 
     dependencies = [
         "agentic-mesh-protocol==0.2.3.dev4",
+        "anyio",
         "grpcio-health-checking>=1.78.0",
         "grpcio-reflection>=1.78.0",
         "grpcio-status>=1.78.0",

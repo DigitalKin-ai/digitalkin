@@ -809,10 +809,11 @@ wheels = [
 
 [[package]]
 name = "digitalkin"
-version = "0.3.2b14"
+version = "0.3.2b19"
 source = { editable = "." }
 dependencies = [
     { name = "agentic-mesh-protocol" },
+    { name = "anyio" },
     { name = "grpcio-health-checking" },
     { name = "grpcio-reflection" },
     { name = "grpcio-status" },
@@ -890,6 +891,7 @@ tests = [
 [package.metadata]
 requires-dist = [
     { name = "agentic-mesh-protocol", specifier = "==0.2.3.dev4" },
+    { name = "anyio" },
     { name = "asyncio-inspector", marker = "extra == 'profiling'", specifier = ">=0.1.0" },
     { name = "grpcio-health-checking", specifier = ">=1.78.0" },
     { name = "grpcio-reflection", specifier = ">=1.78.0" },
