@@ -206,7 +206,10 @@ class BaseServer(abc.ABC):
             grpc_compression = self.config.compression.to_grpc()
 
             # Machine capabilities
-            cpu_count = os.cpu_count() or 1
+            try:
+                cpu_count = len(os.sched_getaffinity(0))  # type: ignore[attr-defined]  # Linux-only, caught by AttributeError on macOS/Windows
+            except (AttributeError, OSError):
+                cpu_count = os.cpu_count() or 1
 
             # Compute defaults from machine capabilities, overridable via env vars
             max_concurrent_rpcs = int(os.environ.get("DIGITALKIN_MAX_CONCURRENT_RPCS", str(cpu_count * 200)))
