@@ -17,11 +17,18 @@ class GrpcClientWrapper:
 
     Subclasses should set the service_name class attribute to identify
     the gRPC service in logs (e.g., "SetupService", "RegistryService").
+
+    Channels are cached at the class level and ref-counted. gRPC HTTP/2
+    channels natively multiplex concurrent streams on a single connection,
+    so sharing a channel across tasks is safe and efficient.
     """
 
     stub: Any
     service_name: str = "UnknownService"  # Override in subclasses for better logging
     _channel: grpc.aio.Channel | None = None
+    _channel_cache_key: str | None = None
+    _channel_cache: ClassVar[dict[str, grpc.aio.Channel]] = {}
+    _ref_counts: ClassVar[dict[str, int]] = {}
 
     @staticmethod
     def _build_channel_credentials(config: ClientConfig) -> grpc.ChannelCredentials | None:
@@ -48,14 +55,25 @@ class GrpcClientWrapper:
         )
 
     def _init_channel(self, config: ClientConfig) -> grpc.aio.Channel:
-        """Create an async gRPC channel.
+        """Get or create a cached async gRPC channel.
+
+        Channels are keyed by (address, security, compression) and ref-counted.
+        Multiple instances sharing the same config reuse one HTTP/2 connection.
 
         Args:
             config: Client configuration for the channel.
 
         Returns:
-            An async gRPC channel.
+            An async gRPC channel (may be shared with other instances).
         """
+        cache_key = f"{config.address}:{config.security.value}:{config.compression.value}"
+        if cache_key in GrpcClientWrapper._channel_cache:
+            GrpcClientWrapper._ref_counts[cache_key] += 1
+            channel = GrpcClientWrapper._channel_cache[cache_key]
+            self._channel = channel
+            self._channel_cache_key = cache_key
+            return channel
+
         credentials = self._build_channel_credentials(config)
         grpc_compression = config.compression.to_grpc()
         if credentials is not None:
@@ -66,14 +84,40 @@ class GrpcClientWrapper:
             channel = grpc.aio.insecure_channel(
                 config.address, options=config.grpc_options, compression=grpc_compression
             )
+        GrpcClientWrapper._channel_cache[cache_key] = channel
+        GrpcClientWrapper._ref_counts[cache_key] = 1
         self._channel = channel
+        self._channel_cache_key = cache_key
         return channel
 
     async def close_channel(self) -> None:
-        """Close the gRPC channel if it exists."""
-        if self._channel is not None:
+        """Release this instance's ref on the cached channel.
+
+        The underlying channel is only closed when the last ref is released.
+        """
+        if self._channel is None:
+            return
+        key = self._channel_cache_key
+        if key is not None and key in GrpcClientWrapper._ref_counts:
+            GrpcClientWrapper._ref_counts[key] -= 1
+            if GrpcClientWrapper._ref_counts[key] <= 0:
+                GrpcClientWrapper._ref_counts.pop(key, None)
+                GrpcClientWrapper._channel_cache.pop(key, None)
+                await self._channel.close()
+        else:
             await self._channel.close()
-            self._channel = None
+        self._channel = None
+
+    @classmethod
+    async def close_all_cached_channels(cls) -> None:
+        """Close all cached channels and reset the cache.
+
+        Intended for server shutdown to ensure clean resource release.
+        """
+        for channel in cls._channel_cache.values():
+            await channel.close()
+        cls._channel_cache.clear()
+        cls._ref_counts.clear()
 
     _RETRYABLE_CODES: ClassVar[set[grpc.StatusCode]] = {
         grpc.StatusCode.UNAVAILABLE,
@@ -112,30 +156,8 @@ class GrpcClientWrapper:
                 await asyncio.sleep(backoff_delays[attempt - 1])
 
             try:
-                logger.debug(
-                    "gRPC request: %s.%s - sending request to remote service",
-                    self.service_name,
-                    query_endpoint,
-                    extra={
-                        "service_name": self.service_name,
-                        "endpoint": query_endpoint,
-                        "request_type": type(request).__name__,
-                        "request_preview": str(request)[:200],
-                    },
-                )
                 # getattr unavoidable: gRPC stubs expose RPC methods as dynamic attributes
                 response = await getattr(self.stub, query_endpoint)(request, timeout=timeout)
-                logger.debug(
-                    "gRPC response: %s.%s - received response from remote service",
-                    self.service_name,
-                    query_endpoint,
-                    extra={
-                        "service_name": self.service_name,
-                        "endpoint": query_endpoint,
-                        "response_type": type(response).__name__,
-                        "response_preview": str(response)[:200],
-                    },
-                )
             except grpc.RpcError as e:
                 last_error = e
                 if e.code() not in self._RETRYABLE_CODES or attempt == max_retries:
@@ -156,27 +178,18 @@ class GrpcClientWrapper:
             msg = f"[gRPC-client:{self.service_name}.{query_endpoint}] Retry loop exited without response or error"
             raise ServerError(msg)
         status_code = last_error.code().name
-        status_value = last_error.code().value[0]
         details = last_error.details()
         retried = last_error.code() in self._RETRYABLE_CODES
         suffix = f" (after {max_retries + 1} attempts)" if retried else ""
 
         logger.error(
-            "gRPC call failed: %s.%s returned [%s] %s. "
-            "The remote gRPC service returned an error or is unreachable. "
-            "Check the remote service logs for more details.",
+            "gRPC call failed: %s.%s [%s] %s (%s)",
             self.service_name,
             query_endpoint,
             status_code,
             details,
-            extra={
-                "service_name": self.service_name,
-                "endpoint": query_endpoint,
-                "grpc_status_code": status_code,
-                "grpc_status_value": status_value,
-                "grpc_details": details,
-                "request_type": type(request).__name__,
-            },
+            type(request).__name__,
+            extra={"service_name": self.service_name, "endpoint": query_endpoint},
         )
         error_msg = f"[gRPC-client:{self.service_name}.{query_endpoint}] [{status_code}] {details}{suffix}"
         raise ServerError(error_msg) from last_error

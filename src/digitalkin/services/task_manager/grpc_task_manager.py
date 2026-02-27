@@ -8,7 +8,7 @@ import os
 import random
 import uuid
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from google.protobuf.struct_pb2 import Struct
 from google.protobuf.timestamp_pb2 import Timestamp
@@ -31,12 +31,132 @@ from agentic_mesh_protocol.task_manager.v1 import (
 )
 
 
+class _SharedPoller:
+    """Coordinates GetSignals polling for all tasks sharing a gRPC stub.
+
+    Instead of N independent polling loops (one per task), a single poller
+    iterates all registered task_ids with controlled concurrency and
+    distributes results to per-task queues. This reduces RPC storm from
+    N concurrent polls to batched sequential/parallel calls.
+    """
+
+    _instances: ClassVar[dict[str, _SharedPoller]] = {}
+
+    @classmethod
+    def get_or_create(
+        cls,
+        key: str,
+        stub: Any,
+        poll_timeout: float,
+        poll_interval: float,
+        initial_poll_interval: float,
+    ) -> _SharedPoller:
+        """Get existing poller for this address or create a new one."""
+        if key not in cls._instances:
+            cls._instances[key] = cls(stub, poll_timeout, poll_interval, initial_poll_interval)
+        return cls._instances[key]
+
+    @classmethod
+    async def close_all(cls) -> None:
+        """Close all shared pollers. Called during server shutdown."""
+        for poller in cls._instances.values():
+            await poller.close()
+        cls._instances.clear()
+
+    def __init__(
+        self,
+        stub: Any,
+        poll_timeout: float,
+        poll_interval: float,
+        initial_poll_interval: float,
+    ) -> None:
+        self._stub = stub
+        self._poll_timeout = poll_timeout
+        self._poll_interval = poll_interval
+        self._initial_poll_interval = initial_poll_interval
+        self._task_queues: dict[str, asyncio.Queue[task_manager_message_pb2.Task | None]] = {}
+        self._poll_task: asyncio.Task[None] | None = None
+        self._stop_event = asyncio.Event()
+
+    def register(self, task_id: str) -> asyncio.Queue[task_manager_message_pb2.Task | None]:
+        """Register a task_id for polling. Returns queue for signal delivery."""
+        queue: asyncio.Queue[task_manager_message_pb2.Task | None] = asyncio.Queue()
+        self._task_queues[task_id] = queue
+        if self._poll_task is None or self._poll_task.done():
+            # Recreate Event in the current event loop (the old one may belong to a closed loop)
+            self._stop_event = asyncio.Event()
+            self._poll_task = asyncio.create_task(self._poll_loop(), name="shared_signal_poller")
+        return queue
+
+    def unregister(self, task_id: str) -> None:
+        """Remove a task_id from polling. Stops poller when empty."""
+        self._task_queues.pop(task_id, None)
+        if not self._task_queues:
+            self._stop_event.set()
+
+    async def _poll_loop(self) -> None:
+        """Single loop polling GetSignals for all registered task_ids."""
+        current_interval = self._initial_poll_interval
+        try:
+            while not self._stop_event.is_set():
+                task_ids = list(self._task_queues.keys())
+                if not task_ids:
+                    break
+
+                had_signals = False
+                try:
+                    req = task_manager_dto_pb2.GetSignalsRequest(task_ids=task_ids)
+                    resp = await self._stub.GetSignals(req, timeout=self._poll_timeout)
+                    for task_proto in resp.tasks:
+                        queue = self._task_queues.get(task_proto.task_id)
+                        if queue is not None:
+                            await queue.put(task_proto)
+                            had_signals = True
+                except Exception:
+                    logger.debug("GetSignals bulk poll failed for %d tasks", len(task_ids))
+
+                if had_signals:
+                    current_interval = self._initial_poll_interval
+                else:
+                    current_interval = min(current_interval * 2, self._poll_interval)
+
+                jittered = current_interval + random.uniform(0, current_interval * 0.5)  # noqa: S311
+                wait_task = asyncio.ensure_future(self._stop_event.wait())
+                done, _ = await asyncio.wait([wait_task], timeout=jittered)
+                if done:
+                    break
+                wait_task.cancel()
+        except Exception:
+            logger.warning("Shared signal poller crashed, will restart on next register", exc_info=True)
+        finally:
+            self._poll_task = None
+
+    async def close(self) -> None:
+        """Stop the poller and drain all queues."""
+        self._stop_event.set()
+        if self._poll_task is not None and not self._poll_task.done():
+            self._poll_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._poll_task
+        # Wake up any blocked queue consumers
+        for queue in self._task_queues.values():
+            with contextlib.suppress(Exception):
+                queue.put_nowait(None)
+        self._task_queues.clear()
+
+
 class GrpcTaskManager(TaskManagerStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
-    """gRPC-backed task signal service using TaskManagerService."""
+    """gRPC-backed task signal service using TaskManagerService.
+
+    Signal polling is delegated to a shared _SharedPoller per gRPC address,
+    so N concurrent tasks share one controlled polling loop instead of
+    N independent loops hammering the TaskManagerService.
+    """
 
     service_name: str = "TaskManagerService"
 
     _subscriptions: dict[str, asyncio.Event]
+    _sub_task_ids: dict[str, str]
 
     def __init__(
         self,
@@ -46,6 +166,7 @@ class GrpcTaskManager(TaskManagerStrategy, GrpcClientWrapper, GrpcErrorHandlerMi
         client_config: ClientConfig,
         *,
         poll_interval: float = 1.0,
+        initial_poll_interval: float = 0.1,
     ) -> None:
         """Initialize with client config.
 
@@ -54,7 +175,8 @@ class GrpcTaskManager(TaskManagerStrategy, GrpcClientWrapper, GrpcErrorHandlerMi
             setup_id: Setup identifier (unused, required by init_strategy convention).
             setup_version_id: Setup version identifier (unused, required by init_strategy convention).
             client_config: gRPC client configuration.
-            poll_interval: Seconds between GetSignals polls.
+            poll_interval: Maximum seconds between GetSignals polls.
+            initial_poll_interval: Starting poll interval before exponential ramp-up.
 
         Raises:
             ImportError: If agentic_mesh_protocol.task_manager.v1 is not installed.
@@ -68,8 +190,11 @@ class GrpcTaskManager(TaskManagerStrategy, GrpcClientWrapper, GrpcErrorHandlerMi
         channel = self._init_channel(client_config)
         self.stub = task_manager_service_pb2_grpc.TaskManagerServiceStub(channel)
         self._subscriptions = {}
+        self._sub_task_ids = {}
         self._poll_interval = poll_interval
+        self._initial_poll_interval = initial_poll_interval
         self._grpc_timeout = float(os.environ.get("DIGITALKIN_GRPC_TIMEOUT", "30"))
+        self._poll_timeout = float(os.environ.get("DIGITALKIN_POLL_TIMEOUT", "1"))
 
     @staticmethod
     def _signal_to_task_proto(signal: SignalMessage) -> task_manager_message_pb2.Task:
@@ -156,13 +281,13 @@ class GrpcTaskManager(TaskManagerStrategy, GrpcClientWrapper, GrpcErrorHandlerMi
         async with self.handle_grpc_errors("send_signal", TaskManagerServiceError):
             data["task_id"] = task_id
             signal = SignalMessage.model_validate(data)
-            logger.warning("SendSignals request: %s", signal.model_dump(exclude_none=True))
+            logger.debug("SendSignals: task_id=%s action=%s", task_id, signal.action.value)
             task_proto = self._signal_to_task_proto(signal)
 
             req = task_manager_dto_pb2.SendSignalsRequest(tasks=[task_proto])
             resp = await self.exec_grpc_query("SendSignals", req, timeout=self._grpc_timeout)
 
-            logger.warning("SendSignals response: success=%s, resp=%s", resp.success, resp)
+            logger.debug("SendSignals response: success=%s", resp.success)
 
             if not resp.success:
                 msg = f"SendSignals rejected for task {task_id}"
@@ -172,7 +297,10 @@ class GrpcTaskManager(TaskManagerStrategy, GrpcClientWrapper, GrpcErrorHandlerMi
             return data
 
     async def subscribe_signals(self, task_id: str) -> tuple[str, AsyncGenerator[dict[str, Any], None]]:
-        """Subscribe to signal updates by polling GetSignals.
+        """Subscribe to signal updates via the shared poller.
+
+        Instead of an independent polling loop, this registers the task_id
+        with the shared _SharedPoller and yields signals from a queue.
 
         Args:
             task_id: Unique task identifier to poll signals for.
@@ -183,66 +311,70 @@ class GrpcTaskManager(TaskManagerStrategy, GrpcClientWrapper, GrpcErrorHandlerMi
         sub_id = str(uuid.uuid4())
         stop_event = asyncio.Event()
         self._subscriptions[sub_id] = stop_event
-        logger.info("subscribe_signals: created subscription %s for task %s", sub_id, task_id)
+        self._sub_task_ids[sub_id] = task_id
+        logger.debug("subscribe_signals: created subscription %s for task %s", sub_id, task_id)
 
-        async def _poll_generator() -> AsyncGenerator[dict[str, Any], None]:
+        poller = _SharedPoller.get_or_create(
+            key=self._channel_cache_key or "default",
+            stub=self.stub,
+            poll_timeout=self._poll_timeout,
+            poll_interval=self._poll_interval,
+            initial_poll_interval=self._initial_poll_interval,
+        )
+        queue = poller.register(task_id)
+
+        async def _queue_consumer() -> AsyncGenerator[dict[str, Any], None]:
             last_seen_ts: datetime | None = None
             try:
                 while not stop_event.is_set():
-                    try:
-                        req = task_manager_dto_pb2.GetSignalsRequest(task_id=task_id)
-                        resp = await self.exec_grpc_query("GetSignals", req, timeout=self._grpc_timeout)
-                        logger.info(
-                            "GetSignals poll: %d task(s) returned, task_ids=%s",
-                            len(resp.tasks),
-                            [t.task_id for t in resp.tasks],
-                        )
-                        for task_proto in resp.tasks:
-                            # Dedup: skip signals already seen based on timestamp
-                            sig_ts = (
-                                task_proto.created_at.ToDatetime(tzinfo=timezone.utc)
-                                if task_proto.HasField("created_at")
-                                else None
-                            )
-                            if last_seen_ts is not None and sig_ts is not None and sig_ts <= last_seen_ts:
-                                continue
-                            if sig_ts is not None:
-                                last_seen_ts = sig_ts
-
-                            logger.info(
-                                "GetSignals task: task_id=%s, action=%s, cancellation_reason=%s",
-                                task_proto.task_id,
-                                task_proto.action,
-                                task_proto.cancellation_reason,
-                            )
-                            yield self._task_proto_to_signal_dict(task_proto)
-                    except Exception:
-                        logger.warning("GetSignals poll failed, retrying in %ss", self._poll_interval, exc_info=True)
-                    try:
-                        jittered = self._poll_interval + random.uniform(0, self._poll_interval * 0.5)  # noqa: S311
-                        await asyncio.wait_for(stop_event.wait(), timeout=jittered)
+                    get_task = asyncio.ensure_future(queue.get())
+                    done, _ = await asyncio.wait([get_task], timeout=self._poll_interval * 2)
+                    if not done:
+                        get_task.cancel()
+                        continue
+                    task_proto = get_task.result()
+                    if task_proto is None:
                         break
-                    except TimeoutError:
-                        pass
-            finally:
-                with contextlib.suppress(Exception):
-                    self._subscriptions.pop(sub_id, None)
-                logger.info("subscribe_signals: subscription %s ended", sub_id)
 
-        return sub_id, _poll_generator()
+                    # Dedup: skip signals already seen based on timestamp
+                    sig_ts = (
+                        task_proto.created_at.ToDatetime(tzinfo=timezone.utc)
+                        if task_proto.HasField("created_at")
+                        else None
+                    )
+                    if last_seen_ts is not None and sig_ts is not None and sig_ts <= last_seen_ts:
+                        continue
+                    if sig_ts is not None:
+                        last_seen_ts = sig_ts
+
+                    yield self._task_proto_to_signal_dict(task_proto)
+            finally:
+                poller.unregister(task_id)
+                self._subscriptions.pop(sub_id, None)
+                self._sub_task_ids.pop(sub_id, None)
+
+        return sub_id, _queue_consumer()
 
     async def unsubscribe_signals(self, sub_id: str) -> None:
-        """Stop the polling loop for the given subscription.
+        """Stop the subscription and unregister from the shared poller.
 
         Args:
             sub_id: Subscription identifier.
         """
         stop_event = self._subscriptions.pop(sub_id, None)
+        task_id = self._sub_task_ids.pop(sub_id, None)
         if stop_event is not None:
-            try:
-                stop_event.set()
-            except Exception:
-                logger.warning("Failed to set stop event for subscription %s", sub_id)
+            stop_event.set()
+        if task_id is not None:
+            poller_key = self._channel_cache_key or "default"
+            if poller_key in _SharedPoller._instances:
+                poller = _SharedPoller._instances[poller_key]
+                # Wake up blocked queue.get() with sentinel
+                queue = poller._task_queues.get(task_id)
+                if queue is not None:
+                    with contextlib.suppress(Exception):
+                        queue.put_nowait(None)
+                poller.unregister(task_id)
 
     async def close(self) -> None:
         """Stop all subscriptions and close the gRPC channel."""

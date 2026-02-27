@@ -25,10 +25,10 @@
         "Programming Language :: Python",
         "Topic :: Software Development :: Libraries",
     ]
-    version = "0.3.2b13"
+    version = "0.3.2b14"
 
     dependencies = [
-        "agentic-mesh-protocol==0.2.3.dev3",
+        "agentic-mesh-protocol==0.2.3.dev4",
         "grpcio-health-checking>=1.78.0",
         "grpcio-reflection>=1.78.0",
         "grpcio-status>=1.78.0",

@@ -18,6 +18,7 @@ from digitalkin.grpc_servers.utils.exceptions import (
     ServerStateError,
     ServicerError,
 )
+from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
 from digitalkin.logger import logger
 from digitalkin.models.grpc_servers.models import SecurityMode, ServerConfig, ServerMode
 from digitalkin.models.grpc_servers.types import GrpcServer, ServiceDescriptor, T
@@ -394,7 +395,7 @@ class BaseServer(abc.ABC):
                 logger.exception("Failed to start asyncio-inspector")
 
     def stop(self, grace: float | None = None) -> None:
-        """Stop the gRPC server.
+        """Stop the gRPC server and close all cached gRPC client channels.
 
         Args:
             grace: Optional grace period in seconds for existing RPCs to complete.
@@ -426,6 +427,10 @@ class BaseServer(abc.ABC):
                     return
                 # If not in a running event loop, use run_until_complete
                 loop.run_until_complete(self._stop_async(grace))
+                loop.run_until_complete(GrpcClientWrapper.close_all_cached_channels())
+                from digitalkin.services.task_manager.grpc_task_manager import _SharedPoller
+
+                loop.run_until_complete(_SharedPoller.close_all())
             except RuntimeError:
                 # Event loop issues - try with a new loop
                 logger.debug("Creating new event loop for shutdown")
@@ -433,6 +438,10 @@ class BaseServer(abc.ABC):
                     new_loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(new_loop)
                     new_loop.run_until_complete(self._stop_async(grace))
+                    new_loop.run_until_complete(GrpcClientWrapper.close_all_cached_channels())
+                    from digitalkin.services.task_manager.grpc_task_manager import _SharedPoller
+
+                    new_loop.run_until_complete(_SharedPoller.close_all())
                 finally:
                     new_loop.close()
         else:
@@ -456,7 +465,7 @@ class BaseServer(abc.ABC):
         await async_server.stop(grace=grace)
 
     async def stop_async(self, grace: float | None = None) -> None:
-        """Stop the gRPC server asynchronously.
+        """Stop the gRPC server asynchronously and close all cached client channels.
 
         This method should be used in async contexts.
 
@@ -479,6 +488,11 @@ class BaseServer(abc.ABC):
             sync_server = cast("grpc.Server", self.server)
             sync_server.stop(grace=grace)
 
+        await GrpcClientWrapper.close_all_cached_channels()
+        # Lazy import to avoid circular dependency (grpc_task_manager imports from grpc_servers)
+        from digitalkin.services.task_manager.grpc_task_manager import _SharedPoller
+
+        await _SharedPoller.close_all()
         logger.debug("✅ gRPC server stopped")
         self.server = None
 

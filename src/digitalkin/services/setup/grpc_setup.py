@@ -29,6 +29,11 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
 
     service_name: str = "SetupService"
 
+    def __init__(self) -> None:
+        """Initialize setup cache for get_setup deduplication."""
+        super().__init__()
+        self._setup_cache: dict[tuple[str, str], SetupData] = {}
+
     def __post_init__(self, config: ClientConfig) -> None:
         """Init the channel from a config file.
 
@@ -148,13 +153,19 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
             if "setup_id" not in setup_dict:
                 msg = "Setup name is required"
                 raise ValidationError(msg)
+            cache_key = (setup_dict["setup_id"], setup_dict.get("version", ""))
+            cached = self._setup_cache.get(cache_key)
+            if cached is not None:
+                return cached
             request = setup_pb2.GetSetupRequest(
                 setup_id=setup_dict["setup_id"],
                 version=setup_dict.get("version", ""),
             )
             response = await self.exec_grpc_query("GetSetup", request)
             response_data = json_format.MessageToDict(response, preserving_proto_field_name=True)
-            return SetupData(**response_data["setup"])
+            result = SetupData(**response_data["setup"])
+            self._setup_cache[cache_key] = result
+            return result
 
     async def update_setup(self, setup_dict: dict[str, Any]) -> bool:
         """Update an existing setup.

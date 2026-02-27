@@ -123,7 +123,7 @@ def setup_logger(
     # Configure root logger if requested
     if configure_root:
         logging.basicConfig(
-            level=logging.DEBUG,
+            level=logging.WARNING,
             stream=sys.stdout,
             datefmt="%Y-%m-%d %H:%M:%S",
         )
@@ -150,8 +150,4 @@ def setup_logger(
 logger = setup_logger(
     "digitalkin",
     level=logging.INFO,
-    additional_loggers={
-        "grpc": logging.DEBUG,
-        "asyncio": logging.DEBUG,
-    },
 )

@@ -10,7 +10,7 @@ resolution-markers = [
 
 [[package]]
 name = "agentic-mesh-protocol"
-version = "0.2.3.dev3"
+version = "0.2.3.dev4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "bump-my-version" },
@@ -20,9 +20,9 @@ dependencies = [
     { name = "protobuf" },
     { name = "protovalidate" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/25/7e/8a5baa98d981e2e15f18c0c7c60275494e594d2b3139135c3b4c9361c2c0/agentic_mesh_protocol-0.2.3.dev3.tar.gz", hash = "sha256:f496763c2518d6417ba9194a9f177a482ece25708fbd6d70b5c6c185194fccb8", size = 78892, upload-time = "2026-02-26T15:07:04.409Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/12/46/55f01e52ca8f6e912fbe5ead7558dc036497a0ed13f6c1b4f76a1d254932/agentic_mesh_protocol-0.2.3.dev4.tar.gz", hash = "sha256:1e4151c3043292efb4d04adca7bf58a392ff4471e81415adbaeef59120ff6260", size = 78894, upload-time = "2026-02-27T14:36:50.168Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/2e/53/f8a2da41644c41ef9697162ff75f13481cf79d82c9b58bfbe2ff4e18cd85/agentic_mesh_protocol-0.2.3.dev3-py3-none-any.whl", hash = "sha256:dd0b94eba61e7cf73f5edbc62578a97571da8d1c5a446f375643630c3b7408e8", size = 118972, upload-time = "2026-02-26T15:07:02.724Z" },
+    { url = "https://files.pythonhosted.org/packages/8e/0c/e77f182611dc69e24c1c123b3c0687f01a24593ecd0e9f6bc09a0fc279aa/agentic_mesh_protocol-0.2.3.dev4-py3-none-any.whl", hash = "sha256:e9a6557b635a4affdabbe4e25082d8866b7bdaefbaa5eadf7f8c66bb6d846e0f", size = 118940, upload-time = "2026-02-27T14:36:48.01Z" },
 ]
 
 [[package]]
@@ -809,7 +809,7 @@ wheels = [
 
 [[package]]
 name = "digitalkin"
-version = "0.3.2b12"
+version = "0.3.2b14"
 source = { editable = "." }
 dependencies = [
     { name = "agentic-mesh-protocol" },
@@ -889,7 +889,7 @@ tests = [
 
 [package.metadata]
 requires-dist = [
-    { name = "agentic-mesh-protocol", specifier = "==0.2.3.dev3" },
+    { name = "agentic-mesh-protocol", specifier = "==0.2.3.dev4" },
     { name = "asyncio-inspector", marker = "extra == 'profiling'", specifier = ">=0.1.0" },
     { name = "grpcio-health-checking", specifier = ">=1.78.0" },
     { name = "grpcio-reflection", specifier = ">=1.78.0" },

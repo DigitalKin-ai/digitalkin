@@ -26,7 +26,7 @@ from tests.fixtures.grpc_fixtures import AsyncStubWrapper, FakeContext
 
 from digitalkin.models.core.task_monitor import CancellationReason, SignalMessage, SignalType
 from digitalkin.models.grpc_servers.models import ClientConfig, SecurityMode, ServerMode
-from digitalkin.services.task_manager.grpc_task_manager import GrpcTaskManager
+from digitalkin.services.task_manager.grpc_task_manager import GrpcTaskManager, _SharedPoller
 from digitalkin.services.task_manager.task_manager_strategy import TaskManagerServiceError
 
 # Set timeout for all tests in this file (30 seconds)
@@ -47,6 +47,14 @@ TASK_ID = "task_test_001"
 # ============================================================================
 # Fixtures
 # ============================================================================
+
+
+@pytest.fixture(autouse=True)
+def _clear_shared_poller():
+    """Clear _SharedPoller class state between tests to avoid stale stubs/event loops."""
+    _SharedPoller._instances.clear()
+    yield
+    _SharedPoller._instances.clear()
 
 
 @pytest.fixture(scope="module")
@@ -108,6 +116,16 @@ def client(test_channel: grpc_testing.Channel) -> GrpcTaskManager:
     # Override the stub to use the test channel
     client.stub = AsyncStubWrapper(task_manager_service_pb2_grpc.TaskManagerServiceStub(test_channel))
     return client
+
+
+@pytest.fixture(autouse=True)
+async def _clear_shared_pollers():
+    """Clear shared poller singletons between tests to avoid cross-test event loop issues."""
+    _SharedPoller._instances.clear()
+    yield
+    for poller in list(_SharedPoller._instances.values()):
+        await poller.close()
+    _SharedPoller._instances.clear()
 
 
 def _make_signal_data(
@@ -551,8 +569,9 @@ class TestSubscription:
             setup_version_id=SETUP_VERSION_ID, client_config=dummy_config,
             poll_interval=0.1,
         )
-        # Mock exec_grpc_query to return empty response
-        client.exec_grpc_query = AsyncMock(
+        # Mock stub.GetSignals (SharedPoller calls stub directly)
+        client.stub = Mock()
+        client.stub.GetSignals = AsyncMock(
             return_value=task_manager_dto_pb2.GetSignalsResponse(tasks=[]),
         )
 
@@ -580,12 +599,14 @@ class TestSubscription:
 
         call_count = 0
 
-        async def mock_query(endpoint, req, timeout=None):
+        async def mock_get_signals(req, timeout=None):
             nonlocal call_count
             call_count += 1
             return task_manager_dto_pb2.GetSignalsResponse(tasks=[])
 
-        client.exec_grpc_query = mock_query
+        # Mock stub.GetSignals (SharedPoller calls stub directly)
+        client.stub = Mock()
+        client.stub.GetSignals = mock_get_signals
 
         sub_id, gen = await client.subscribe_signals(TASK_ID)
 
@@ -628,7 +649,7 @@ class TestSubscription:
 
         call_count = 0
 
-        async def mock_query(endpoint, req, timeout=None):
+        async def mock_get_signals(req, timeout=None):
             nonlocal call_count
             call_count += 1
             # Return signal on first poll, empty thereafter
@@ -636,7 +657,9 @@ class TestSubscription:
                 return task_manager_dto_pb2.GetSignalsResponse(tasks=[task_proto])
             return task_manager_dto_pb2.GetSignalsResponse(tasks=[])
 
-        client.exec_grpc_query = mock_query
+        # Mock the stub's GetSignals directly (SharedPoller calls stub.GetSignals, not exec_grpc_query)
+        client.stub = Mock()
+        client.stub.GetSignals = mock_get_signals
 
         sub_id, gen = await client.subscribe_signals(TASK_ID)
         received = []
@@ -832,10 +855,12 @@ class TestOverloadResilience:
             poll_interval=0.05,
         )
 
-        async def mock_query(endpoint, req, timeout=None):
+        async def mock_get_signals(req, timeout=None):
             return task_manager_dto_pb2.GetSignalsResponse(tasks=[])
 
-        client.exec_grpc_query = mock_query
+        # Mock stub.GetSignals (SharedPoller calls stub directly)
+        client.stub = Mock()
+        client.stub.GetSignals = mock_get_signals
 
         sub1_id, gen1 = await client.subscribe_signals("task_1")
         sub2_id, gen2 = await client.subscribe_signals("task_2")
@@ -872,10 +897,12 @@ class TestClose:
             poll_interval=0.05,
         )
 
-        async def mock_query(endpoint, req, timeout=None):
+        async def mock_get_signals(req, timeout=None):
             return task_manager_dto_pb2.GetSignalsResponse(tasks=[])
 
-        client.exec_grpc_query = mock_query
+        # Mock stub.GetSignals (SharedPoller calls stub directly)
+        client.stub = Mock()
+        client.stub.GetSignals = mock_get_signals
 
         # Create multiple subscriptions
         sub1_id, _ = await client.subscribe_signals("task_1")
