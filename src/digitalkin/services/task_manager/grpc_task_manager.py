@@ -24,11 +24,16 @@ if TYPE_CHECKING:
 
     from digitalkin.models.grpc_servers.models import ClientConfig
 
-from agentic_mesh_protocol.task_manager.v1 import (
-    task_manager_dto_pb2,
-    task_manager_message_pb2,
-    task_manager_service_pb2_grpc,
-)
+try:
+    from agentic_mesh_protocol.task_manager.v1 import (
+        task_manager_dto_pb2,
+        task_manager_message_pb2,
+        task_manager_service_pb2_grpc,
+    )
+except (ImportError, ModuleNotFoundError):
+    task_manager_dto_pb2 = None  # type: ignore[assignment]
+    task_manager_message_pb2 = None  # type: ignore[assignment]
+    task_manager_service_pb2_grpc = None  # type: ignore[assignment]
 
 
 class GrpcTaskManager(TaskManagerStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):

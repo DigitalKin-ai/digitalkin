@@ -204,11 +204,13 @@ class BaseServer(abc.ABC):
         try:
             # Create the server based on mode
             grpc_compression = self.config.compression.to_grpc()
+            max_concurrent_rpcs = int(os.environ.get("DIGITALKIN_MAX_CONCURRENT_RPCS", "100"))
             if self.config.mode == ServerMode.ASYNC:
                 server = grpc_aio.server(
                     options=self.config.server_options,
                     compression=grpc_compression,
                     interceptors=self._interceptors or None,
+                    maximum_concurrent_rpcs=max_concurrent_rpcs,
                 )
             else:
                 server = grpc.server(  # type: ignore[assignment]  # sync grpc.Server assigned to GrpcServer union
@@ -216,6 +218,7 @@ class BaseServer(abc.ABC):
                     options=self.config.server_options,
                     compression=grpc_compression,
                     interceptors=self._interceptors or None,
+                    maximum_concurrent_rpcs=max_concurrent_rpcs,
                 )
 
             # Add the appropriate port

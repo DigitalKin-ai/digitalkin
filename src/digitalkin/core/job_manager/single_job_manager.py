@@ -1,6 +1,7 @@
 """Background module manager with single instance."""
 
 import asyncio
+import os
 import uuid
 from collections.abc import AsyncGenerator, AsyncIterator
 from contextlib import asynccontextmanager
@@ -32,7 +33,7 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         module_class: type[BaseModule],
         services_mode: ServicesMode,
         default_timeout: float = 10.0,
-        max_concurrent_tasks: int = 100,
+        max_concurrent_tasks: int = int(os.environ.get("DIGITALKIN_MAX_CONCURRENT_TASKS", "100")),
     ) -> None:
         """Initialize the job manager.
 
