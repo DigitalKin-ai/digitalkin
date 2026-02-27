@@ -204,13 +204,29 @@ class BaseServer(abc.ABC):
         try:
             # Create the server based on mode
             grpc_compression = self.config.compression.to_grpc()
-            max_concurrent_rpcs = int(os.environ.get("DIGITALKIN_MAX_CONCURRENT_RPCS", "100"))
+
+            # Machine capabilities
+            cpu_count = os.cpu_count() or 1
+
+            # Compute defaults from machine capabilities, overridable via env vars
+            max_concurrent_rpcs = int(os.environ.get("DIGITALKIN_MAX_CONCURRENT_RPCS", str(cpu_count * 200)))
+            thread_pool_workers = int(os.environ.get("DIGITALKIN_THREAD_POOL_WORKERS", str(min(4, cpu_count))))
+
+            logger.info(
+                "gRPC server config: cpus=%d, max_concurrent_rpcs=%d, thread_pool_workers=%d, mode=%s",
+                cpu_count,
+                max_concurrent_rpcs,
+                thread_pool_workers,
+                self.config.mode.value,
+            )
+
             if self.config.mode == ServerMode.ASYNC:
                 server = grpc_aio.server(
                     options=self.config.server_options,
                     compression=grpc_compression,
                     interceptors=self._interceptors or None,
                     maximum_concurrent_rpcs=max_concurrent_rpcs,
+                    migration_thread_pool=futures.ThreadPoolExecutor(max_workers=thread_pool_workers),
                 )
             else:
                 server = grpc.server(  # type: ignore[assignment]  # sync grpc.Server assigned to GrpcServer union
