@@ -30,7 +30,7 @@ class BaseTaskManager(ABC):
     _shutdown_event: asyncio.Event
     _tasks_lock: asyncio.Lock
 
-    def __init__(self, default_timeout: float = 10.0) -> None:
+    def __init__(self, default_timeout: float = 300.0) -> None:
         """Initialize task manager properties.
 
         Args:
@@ -299,7 +299,8 @@ class BaseTaskManager(ABC):
             return
 
         try:
-            await asyncio.wait_for(session._stream_closed.wait(), timeout=60.0)  # noqa: SLF001
+            stream_drain_timeout = float(os.environ.get("DIGITALKIN_STREAM_DRAIN_TIMEOUT", "300.0"))
+            await asyncio.wait_for(session._stream_closed.wait(), timeout=stream_drain_timeout)  # noqa: SLF001
         except asyncio.TimeoutError:
             logger.warning(
                 "Stream drain timeout, proceeding with cleanup",

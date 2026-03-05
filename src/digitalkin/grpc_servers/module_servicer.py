@@ -514,9 +514,10 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
                         break
         finally:
             try:
+                completion_timeout = float(os.environ.get("DIGITALKIN_COMPLETION_TIMEOUT", "300.0"))
                 await asyncio.wait_for(
                     self.job_manager.wait_for_completion(job_id),
-                    timeout=30.0,
+                    timeout=completion_timeout,
                 )
             except asyncio.TimeoutError:
                 logger.warning(

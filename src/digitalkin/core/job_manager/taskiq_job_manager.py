@@ -131,7 +131,7 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         self,
         module_class: type[BaseModule],
         services_mode: ServicesMode,
-        default_timeout: float = 10.0,
+        default_timeout: float = 300.0,
         stream_timeout: float = 30.0,
     ) -> None:
         """Initialize the Taskiq job manager.

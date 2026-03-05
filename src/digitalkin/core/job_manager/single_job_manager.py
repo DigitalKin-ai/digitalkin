@@ -14,6 +14,7 @@ from digitalkin.core.job_manager.base_job_manager import BaseJobManager
 from digitalkin.core.task_manager.local_task_manager import LocalTaskManager
 from digitalkin.core.task_manager.task_session import TaskSession
 from digitalkin.logger import logger
+from digitalkin.models.core.job_manager_models import BackpressureStrategy
 from digitalkin.models.module.base_types import DataModel, InputModelT, OutputModelT, SetupModelT
 from digitalkin.models.module.module import ModuleCodeModel
 from digitalkin.modules._base_module import BaseModule
@@ -32,7 +33,7 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         self,
         module_class: type[BaseModule],
         services_mode: ServicesMode,
-        default_timeout: float = 10.0,
+        default_timeout: float = 300.0,
         max_concurrent_tasks: int = int(os.environ.get("DIGITALKIN_MAX_CONCURRENT_TASKS", "100")),
     ) -> None:
         """Initialize the job manager.
@@ -51,6 +52,10 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         super().__init__(module_class, services_mode, task_manager)
 
         self._lock = asyncio.Lock()
+
+        # Backpressure configuration
+        self._backpressure_strategy = BackpressureStrategy(os.environ.get("DIGITALKIN_BACKPRESSURE_STRATEGY", "block"))
+        self._backpressure_timeout = float(os.environ.get("DIGITALKIN_BACKPRESSURE_TIMEOUT", "300.0"))
 
     async def start(self) -> None:
         """Start manager (no-op, no external connections needed)."""
@@ -136,13 +141,19 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
     async def add_to_queue(self, job_id: str, output_data: DataModel | ModuleCodeModel) -> None:
         """Add output data to the queue for a specific job.
 
-        Uses timeout-based backpressure: if the queue is full after 5s,
-        drops the oldest message to make room for the new one.
+        Behavior depends on the configured backpressure strategy:
+        - BLOCK: await with timeout, raise TimeoutError if queue stays full.
+        - DROP_OLDEST: wait briefly, then drop oldest message to make room.
+        - REJECT: attempt non-blocking put, discard new message if full.
+
         Rejects writes after stream is closed to prevent message loss.
 
         Args:
             job_id: The unique identifier of the job.
             output_data: The output data produced by the job.
+
+        Raises:
+            asyncio.TimeoutError: When using BLOCK strategy and the queue remains full past the timeout.
         """
         session = self.tasks_sessions.get(job_id)
         if session is None:
@@ -153,17 +164,30 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             logger.debug("Queue write rejected - stream closed", extra={"job_id": job_id})
             return
 
+        data = output_data.model_dump(mode="json")
         logger.debug("debug:add_to_queue job_id=%s queue_depth=%s", job_id, session.queue.qsize())
-        try:
-            await asyncio.wait_for(session.queue.put(output_data.model_dump(mode="json")), timeout=5.0)
-        except asyncio.TimeoutError:
-            logger.warning("Queue full, dropping oldest message", extra={"job_id": job_id})
-            try:
-                session.queue.get_nowait()
-                session.queue.task_done()
-            except asyncio.QueueEmpty:
-                pass
-            session.queue.put_nowait(output_data.model_dump(mode="json"))
+
+        match self._backpressure_strategy:
+            case BackpressureStrategy.BLOCK:
+                await asyncio.wait_for(session.queue.put(data), timeout=self._backpressure_timeout)
+
+            case BackpressureStrategy.DROP_OLDEST:
+                try:
+                    await asyncio.wait_for(session.queue.put(data), timeout=5.0)
+                except asyncio.TimeoutError:
+                    logger.warning("Queue full, dropping oldest message", extra={"job_id": job_id})
+                    try:
+                        session.queue.get_nowait()
+                        session.queue.task_done()
+                    except asyncio.QueueEmpty:
+                        pass
+                    session.queue.put_nowait(data)
+
+            case BackpressureStrategy.REJECT:
+                try:
+                    session.queue.put_nowait(data)
+                except asyncio.QueueFull:
+                    logger.warning("Queue full, rejecting new message", extra={"job_id": job_id})
 
     @asynccontextmanager
     async def generate_stream_consumer(self, job_id: str) -> AsyncIterator[AsyncGenerator[dict[str, Any], None]]:

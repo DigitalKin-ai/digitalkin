@@ -151,7 +151,7 @@ class TestAbstractMethods:
     def test_default_params(self) -> None:
         """Test default parameter values."""
         mgr = ConcreteTaskManager()
-        assert mgr.default_timeout == 10.0
+        assert mgr.default_timeout == 300.0
         assert mgr.max_concurrent_tasks == 100
 
     def test_custom_params(self) -> None:
