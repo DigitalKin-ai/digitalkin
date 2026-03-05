@@ -44,7 +44,8 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             max_concurrent_tasks: Maximum number of concurrent tasks
         """
         # Create local task manager for same-process execution
-        task_manager = LocalTaskManager(default_timeout, max_concurrent_tasks)
+        task_manager = LocalTaskManager(default_timeout)
+        task_manager.max_concurrent_tasks = max_concurrent_tasks
 
         # Initialize base job manager with task manager
         super().__init__(module_class, services_mode, task_manager)
@@ -152,6 +153,7 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             logger.debug("Queue write rejected - stream closed", extra={"job_id": job_id})
             return
 
+        logger.debug("debug:add_to_queue job_id=%s queue_depth=%s", job_id, session.queue.qsize())
         try:
             await asyncio.wait_for(session.queue.put(output_data.model_dump(mode="json")), timeout=5.0)
         except asyncio.TimeoutError:
@@ -247,7 +249,10 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
                 if session.cancelled:
                     break
 
-        yield _stream()
+        try:
+            yield _stream()
+        finally:
+            session.close_stream()
 
     async def create_module_instance_job(
         self,
@@ -275,6 +280,7 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             Exception: If the module fails to start.
         """
         job_id = str(uuid.uuid4())
+        logger.debug("debug:create_module_instance_job job_id=%s mission_id=%s", job_id, mission_id)
         module = ModuleFactory.create_module_instance(
             self.module_class, job_id, mission_id, setup_id, setup_version_id, request_metadata=request_metadata
         )
@@ -315,6 +321,7 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         """
         logger.info("Stop module requested", extra={"job_id": job_id})
 
+        logger.debug("debug:stop_module acquiring lock job_id=%s", job_id)
         async with self._lock:
             session = self.tasks_sessions.get(job_id)
 
@@ -333,18 +340,6 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
                 raise
             else:
                 return True
-
-    async def get_module_status(self, job_id: str) -> str:
-        """Retrieve the status of a module job.
-
-        Args:
-            job_id: The unique identifier of the job.
-
-        Returns:
-            Status string (e.g. "pending", "running", "completed", "failed", "cancelled").
-        """
-        session = self.tasks_sessions.get(job_id, None)
-        return session.status if session is not None else "failed"
 
     async def wait_for_completion(self, job_id: str) -> None:
         """Wait for a task to complete by awaiting its asyncio.Task.
@@ -384,4 +379,5 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
                 "class": session.module.__class__.__name__,
             }
             for job_id, session in self.tasks_sessions.items()
+            if session.module is not None
         }

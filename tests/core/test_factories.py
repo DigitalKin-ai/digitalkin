@@ -11,8 +11,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from digitalkin.core.common import ConnectionFactory, ModuleFactory, QueueFactory
-from digitalkin.core.task_manager.surrealdb_repository import SurrealDBConnection
+from digitalkin.core.common import ModuleFactory, QueueFactory
 from digitalkin.models.module.module_types import DataModel, DataTrigger, SetupModel
 from digitalkin.modules._base_module import BaseModule
 from digitalkin.services.services_config import ServicesConfig
@@ -76,6 +75,7 @@ class MockModule(BaseModule[MockInputModel, MockOutputModel, MockSetupModel, Non
             "registry": None,
             "snapshot": None,
             "storage": None,
+            "task_manager": None,
             "user_profile": None,
         }
 
@@ -88,98 +88,6 @@ class MockModule(BaseModule[MockInputModel, MockOutputModel, MockSetupModel, Non
 
     async def cleanup(self) -> None:
         """Clean up the module."""
-
-
-class TestConnectionFactory:
-    """Test ConnectionFactory for SurrealDB connection creation."""
-
-    @pytest.mark.asyncio
-    async def test_create_surreal_connection_default_params(self):
-        """Test creating connection with default parameters."""
-        with patch("digitalkin.core.common.factories.SurrealDBConnection") as mock_conn_class:
-            mock_conn = AsyncMock(spec=SurrealDBConnection)
-            mock_conn_class.return_value = mock_conn
-
-            connection = await ConnectionFactory.create_surreal_connection()
-
-            # Verify default parameters
-            mock_conn_class.assert_called_once_with("task_manager", datetime.timedelta(seconds=5))
-            mock_conn.init_surreal_instance.assert_awaited_once()
-            assert connection == mock_conn
-
-    @pytest.mark.asyncio
-    async def test_create_surreal_connection_custom_params(self):
-        """Test creating connection with custom parameters."""
-        with patch("digitalkin.core.common.factories.SurrealDBConnection") as mock_conn_class:
-            mock_conn = AsyncMock(spec=SurrealDBConnection)
-            mock_conn_class.return_value = mock_conn
-
-            custom_db = "custom_db"
-            custom_timeout = datetime.timedelta(seconds=10)
-
-            connection = await ConnectionFactory.create_surreal_connection(
-                database=custom_db, timeout=custom_timeout, auto_init=False
-            )
-
-            # Verify custom parameters
-            mock_conn_class.assert_called_once_with(custom_db, custom_timeout)
-            mock_conn.init_surreal_instance.assert_not_awaited()
-            assert connection == mock_conn
-
-    @pytest.mark.asyncio
-    async def test_create_surreal_connection_init_failure(self):
-        """Test handling of initialization failure."""
-        with patch("digitalkin.core.common.factories.SurrealDBConnection") as mock_conn_class:
-            mock_conn = AsyncMock(spec=SurrealDBConnection)
-            mock_conn.init_surreal_instance.side_effect = ConnectionError("Failed to connect")
-            mock_conn_class.return_value = mock_conn
-
-            with pytest.raises(ConnectionError, match="Failed to connect"):
-                await ConnectionFactory.create_surreal_connection()
-
-    @pytest.mark.asyncio
-    async def test_create_surreal_connection_memory_cleanup(self):
-        """Test that connections are properly cleaned up on error."""
-        with patch("digitalkin.core.common.factories.SurrealDBConnection") as mock_conn_class:
-            mock_conn = AsyncMock(spec=SurrealDBConnection)
-            mock_conn.init_surreal_instance.side_effect = Exception("Init failed")
-            mock_conn_class.return_value = mock_conn
-
-            # Track if connection is properly handled
-            connections_created = []
-
-            def track_connection(*args, **kwargs):
-                conn = AsyncMock(spec=SurrealDBConnection)
-                conn.init_surreal_instance.side_effect = Exception("Init failed")
-                connections_created.append(conn)
-                return conn
-
-            mock_conn_class.side_effect = track_connection
-
-            with pytest.raises(Exception, match="Init failed"):
-                await ConnectionFactory.create_surreal_connection()
-
-            # Verify connection was created but exception propagated
-            assert len(connections_created) == 1
-
-    @pytest.mark.asyncio
-    async def test_create_surreal_connection_timeout_handling(self):
-        """Test timeout handling during connection creation."""
-        with patch("digitalkin.core.common.factories.SurrealDBConnection") as mock_conn_class:
-            mock_conn = AsyncMock(spec=SurrealDBConnection)
-
-            async def slow_init() -> None:
-                await asyncio.sleep(10)  # Simulate slow connection
-
-            mock_conn.init_surreal_instance = slow_init
-            mock_conn_class.return_value = mock_conn
-
-            # This should timeout if the factory properly handles timeouts
-            with pytest.raises(asyncio.TimeoutError):
-                await asyncio.wait_for(
-                    ConnectionFactory.create_surreal_connection(timeout=datetime.timedelta(seconds=0.05)),
-                    timeout=0.1,
-                )
 
 
 class TestModuleFactory:
@@ -363,43 +271,3 @@ class TestQueueFactory:
 
         # Queue should be empty after balanced produce/consume
         assert queue.empty()
-
-
-class TestFactoryIntegration:
-    """Test integration between different factories."""
-
-    @pytest.mark.asyncio
-    async def test_factories_combined_usage(self):
-        """Test using multiple factories together."""
-        with patch("digitalkin.core.common.factories.SurrealDBConnection") as mock_conn_class:
-            mock_conn = AsyncMock(spec=SurrealDBConnection)
-            mock_conn_class.return_value = mock_conn
-
-            # Create resources using factories
-            connection = await ConnectionFactory.create_surreal_connection()
-            module = ModuleFactory.create_module_instance(MockModule, "job-1", "mission-1", "setup-1", "version-1")
-            queue = QueueFactory.create_bounded_queue(maxsize=50)
-
-            # Verify all resources created successfully
-            assert connection is not None
-            assert isinstance(module, MockModule)
-            assert isinstance(queue, asyncio.Queue)
-            assert queue.maxsize == 50
-
-    @pytest.mark.asyncio
-    async def test_factory_error_isolation(self):
-        """Test that errors in one factory don't affect others."""
-        # Make ConnectionFactory fail
-        with patch("digitalkin.core.common.factories.SurrealDBConnection") as mock_conn_class:
-            mock_conn_class.side_effect = Exception("Connection failed")
-
-            # ConnectionFactory should fail
-            with pytest.raises(Exception, match="Connection failed"):
-                await ConnectionFactory.create_surreal_connection()
-
-            # But other factories should still work
-            module = ModuleFactory.create_module_instance(MockModule, "job-1", "mission-1", "setup-1", "version-1")
-            queue = QueueFactory.create_bounded_queue()
-
-            assert isinstance(module, MockModule)
-            assert isinstance(queue, asyncio.Queue)

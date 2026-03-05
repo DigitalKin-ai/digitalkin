@@ -1,6 +1,7 @@
 """Client wrapper to ease channel creation with specific ServerConfig."""
 
 import asyncio
+import logging
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -97,8 +98,7 @@ class GrpcClientWrapper:
         """
         if self._channel is None:
             return
-        key = self._channel_cache_key
-        if key is not None and key in GrpcClientWrapper._ref_counts:
+        if (key := self._channel_cache_key) is not None and key in GrpcClientWrapper._ref_counts:
             GrpcClientWrapper._ref_counts[key] -= 1
             if GrpcClientWrapper._ref_counts[key] <= 0:
                 GrpcClientWrapper._ref_counts.pop(key, None)
@@ -107,6 +107,22 @@ class GrpcClientWrapper:
         else:
             await self._channel.close()
         self._channel = None
+
+    @classmethod
+    async def release_cached_channel(cls, key: str) -> None:
+        """Decrement refcount for a cache key and close channel when last ref is released.
+
+        Args:
+            key: Channel cache key to release.
+        """
+        if key not in cls._ref_counts:
+            return
+        cls._ref_counts[key] -= 1
+        if cls._ref_counts[key] <= 0:
+            cls._ref_counts.pop(key, None)
+            channel = cls._channel_cache.pop(key, None)
+            if channel is not None:
+                await channel.close()
 
     @classmethod
     async def close_all_cached_channels(cls) -> None:
@@ -182,7 +198,9 @@ class GrpcClientWrapper:
         retried = last_error.code() in self._RETRYABLE_CODES
         suffix = f" (after {max_retries + 1} attempts)" if retried else ""
 
-        logger.error(
+        log_level = logging.DEBUG if last_error.code() == grpc.StatusCode.NOT_FOUND else logging.ERROR
+        logger.log(
+            log_level,
             "gRPC call failed: %s.%s [%s] %s (%s)",
             self.service_name,
             query_endpoint,
@@ -193,3 +211,30 @@ class GrpcClientWrapper:
         )
         error_msg = f"[gRPC-client:{self.service_name}.{query_endpoint}] [{status_code}] {details}{suffix}"
         raise ServerError(error_msg) from last_error
+
+    async def poll_grpc(self, endpoint: str, request: Any, *, timeout: float) -> Any | None:
+        """Execute a single polling RPC. Returns None on DEADLINE_EXCEEDED (expected empty poll).
+
+        Unlike exec_grpc_query, DEADLINE_EXCEEDED is not an error for polling-style RPCs
+        where the server holds the connection until a result is available or timeout occurs.
+        No retry is performed — the caller is responsible for the retry loop.
+
+        Args:
+            endpoint: RPC method name on self.stub.
+            request: gRPC request protobuf.
+            timeout: Seconds before treating as 'no result available'.
+
+        Returns:
+            gRPC response, or None if DEADLINE_EXCEEDED.
+
+        Raises:
+            ServerError: For any non-DEADLINE_EXCEEDED gRPC error.
+        """
+        try:
+            # getattr unavoidable: gRPC stubs expose RPC methods as dynamic attributes
+            return await getattr(self.stub, endpoint)(request, timeout=timeout)
+        except grpc.RpcError as e:
+            if e.code() == grpc.StatusCode.DEADLINE_EXCEEDED:
+                return None
+            msg = f"[{self.service_name}.{endpoint}] [{e.code().name}] {e.details()}"
+            raise ServerError(msg) from e

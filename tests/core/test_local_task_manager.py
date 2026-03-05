@@ -123,13 +123,17 @@ async def mock_task_session(mock_signal_service: Mock) -> Mock:
 @pytest_asyncio.fixture
 async def task_manager() -> LocalTaskManager:
     """Standard LocalTaskManager with test-friendly settings."""
-    return LocalTaskManager(default_timeout=2.0, max_concurrent_tasks=10)
+    mgr = LocalTaskManager(default_timeout=2.0)
+    mgr.max_concurrent_tasks = 10
+    return mgr
 
 
 @pytest_asyncio.fixture
 async def high_capacity_manager() -> LocalTaskManager:
     """High-capacity manager for stress tests."""
-    return LocalTaskManager(default_timeout=1.0, max_concurrent_tasks=150)
+    mgr = LocalTaskManager(default_timeout=1.0)
+    mgr.max_concurrent_tasks = 150
+    return mgr
 
 
 # ============================================================================
@@ -181,8 +185,10 @@ class TestTaskCreation:
         self,
         mock_base_module: Mock,
     ) -> None:
-        """Negative: Exceeding max tasks raises RuntimeError."""
-        small_manager = LocalTaskManager(default_timeout=1.0, max_concurrent_tasks=2)
+        """Negative: Exceeding max tasks raises RuntimeError after wait timeout."""
+        small_manager = LocalTaskManager(default_timeout=1.0)
+        small_manager.max_concurrent_tasks = 2
+        small_manager._task_wait_timeout = 0.1
 
         async def work() -> None:
             await asyncio.sleep(0.5)
@@ -458,8 +464,10 @@ class TestConcurrencyStress:
         self,
         mock_base_module: Mock,
     ) -> None:
-        """Test that _tasks_lock prevents TOCTOU race on max_concurrent_tasks."""
-        mgr = LocalTaskManager(max_concurrent_tasks=5)
+        """Test that semaphore prevents oversubscription of max_concurrent_tasks."""
+        mgr = LocalTaskManager()
+        mgr.max_concurrent_tasks = 5
+        mgr._task_wait_timeout = 0.1
 
         async def slow_task() -> None:
             await asyncio.sleep(1)

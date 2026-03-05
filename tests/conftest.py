@@ -16,7 +16,6 @@ from digitalkin.models.grpc_servers.models import (
 # Register fixture plugins
 pytest_plugins = [
     "tests.fixtures.core_fixtures",
-    "tests.fixtures.db_fixtures",
 ]
 
 # Configure logging for tests

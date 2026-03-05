@@ -46,21 +46,22 @@ class LocalTaskManager(BaseTaskManager):
             ValueError: If task_id duplicated
             RuntimeError: If task overload
         """
-        # Validate and register session atomically to prevent TOCTOU on max_concurrent_tasks
-        async with self._tasks_lock:
-            await self._validate_task_creation(task_id, mission_id, coro)
-            session = self._create_session(task_id, mission_id, module)
-
-        logger.info(
-            "Creating local task: '%s'",
-            task_id,
-            extra={
-                "mission_id": mission_id,
-                "task_id": task_id,
-            },
-        )
-
+        await self._acquire_task_slot(coro)
         try:
+            # Validate and register session atomically
+            async with self._tasks_lock:
+                await self._validate_task_creation(task_id, mission_id, coro)
+                session = self._create_session(task_id, mission_id, module)
+
+            logger.info(
+                "Creating local task: '%s'",
+                task_id,
+                extra={
+                    "mission_id": mission_id,
+                    "task_id": task_id,
+                },
+            )
+
             # Execute task using TaskExecutor
             supervisor_task = await self._executor.execute_task(
                 task_id,
@@ -69,6 +70,7 @@ class LocalTaskManager(BaseTaskManager):
                 session,
             )
             self.tasks[task_id] = supervisor_task
+            self._register_auto_cleanup(task_id, mission_id)
 
             logger.info(
                 "Local task created and started: '%s'",
@@ -82,12 +84,15 @@ class LocalTaskManager(BaseTaskManager):
 
         except Exception as e:
             coro.close()
+            # Release semaphore if session was never registered (cleanup won't release it)
+            if task_id not in self.tasks_sessions:
+                self._task_slot.release()
+            else:
+                await self._cleanup_task(task_id, mission_id=mission_id)
             logger.error(
                 "Failed to create local task: '%s'",
                 task_id,
                 extra={"mission_id": mission_id, "task_id": task_id, "error": str(e)},
                 exc_info=True,
             )
-            # Cleanup on failure
-            await self._cleanup_task(task_id, mission_id=mission_id)
             raise

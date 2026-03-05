@@ -64,6 +64,7 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
         Raises:
             StorageServiceError: If there is an error while storing the record
         """
+        logger.debug("debug:_store collection=%s id=%s", record.collection, record.record_id)
         try:
             data_struct = Struct()
             data_struct.update(record.data.model_dump())
@@ -90,6 +91,7 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
         Returns:
             StorageData: The record
         """
+        logger.debug("debug:_read collection=%s id=%s", collection, record_id)
         try:
             req = data_pb2.ReadRecordRequest(
                 mission_id=self.mission_id,
@@ -99,7 +101,7 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
             resp = await self.exec_grpc_query("ReadRecord", req)
             return self._build_record_from_proto(resp.stored_data)
         except Exception:
-            logger.warning("gRPC ReadRecord failed for %s:%s", collection, record_id)
+            logger.debug("gRPC ReadRecord failed for %s:%s", collection, record_id)
             return None
 
     async def _update(
@@ -118,6 +120,7 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
         Returns:
             StorageRecord: The updated record
         """
+        logger.debug("debug:_update collection=%s id=%s", collection, record_id)
         try:
             struct = Struct()
             struct.update(data.model_dump())
@@ -143,6 +146,7 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
         Returns:
             bool: True if the record was deleted, False otherwise
         """
+        logger.debug("debug:_remove collection=%s id=%s", collection, record_id)
         try:
             req = data_pb2.RemoveRecordRequest(
                 mission_id=self.mission_id,
@@ -168,6 +172,7 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
         Returns:
             list[StorageRecord]: A list of storage records
         """
+        logger.debug("debug:_list collection=%s", collection)
         try:
             req = data_pb2.ListRecordsRequest(
                 mission_id=self.mission_id,

@@ -45,6 +45,9 @@ class TaskSession:
     # Cleanup guard for idempotent cleanup
     _cleanup_done: bool
 
+    # Signal listener failure tracking
+    _signal_listener_failed: bool
+
     def __init__(
         self,
         task_id: str,
@@ -83,6 +86,9 @@ class TaskSession:
 
         # Cleanup guard
         self._cleanup_done = False
+
+        # Signal listener failure tracking
+        self._signal_listener_failed = False
 
         logger.debug(
             "TaskSession initialized",
@@ -149,11 +155,14 @@ class TaskSession:
 
                 if signal.get("action") == "cancel":
                     await self._handle_cancel(CancellationReason.SIGNAL_SERVICE_CANCEL)
+                elif signal.get("action") == "stop":
+                    await self._handle_stop()
 
         except asyncio.CancelledError:
             logger.info("Signal listener cancelled", extra=self.session_ids)
             raise
         except Exception:
+            self._signal_listener_failed = True
             logger.exception("Signal listener fatal error", extra=self.session_ids)
         finally:
             with contextlib.suppress(Exception):
@@ -200,6 +209,40 @@ class TaskSession:
         except Exception:
             logger.warning("Cancel ack failed (best-effort)", extra=self.session_ids)
 
+    async def _handle_stop(self) -> None:
+        """Idempotent graceful-stop with acknowledgment.
+
+        Mirrors _handle_cancel: marks the task as cancelled with
+        SIGNAL_SERVICE_STOP reason and sends ACK_STOP to the signal service.
+        """
+        if self.cancelled:
+            logger.debug(
+                "Stop ignored - already cancelled (existing=%s)",
+                self.cancellation_reason.value,
+                extra=self.session_ids,
+            )
+            return
+
+        self.cancellation_reason = CancellationReason.SIGNAL_SERVICE_STOP
+        self.status = "cancelled"
+        self.is_cancelled.set()
+        logger.info("Task stop requested via signal", extra=self.session_ids)
+
+        try:
+            await self.signal_service.send_signal(
+                self.task_id,
+                SignalMessage(
+                    task_id=self.task_id,
+                    mission_id=self.mission_id,
+                    setup_id=self.setup_id,
+                    setup_version_id=self.setup_version_id,
+                    action=SignalType.ACK_STOP,
+                    cancellation_reason=CancellationReason.SIGNAL_SERVICE_STOP,
+                ).model_dump(exclude_none=True),
+            )
+        except Exception:
+            logger.warning("Stop ack failed (best-effort)", extra=self.session_ids)
+
     async def cleanup(self) -> None:
         """Clean up task session resources.
 
@@ -221,9 +264,11 @@ class TaskSession:
         self._cleanup_done = True
 
         # Clear queue to free memory
+        logger.debug("debug:cleanup queue size=%s task_id=%s", self.queue.qsize(), self.task_id)
         try:
             while not self.queue.empty():
                 self.queue.get_nowait()
+                self.queue.task_done()
         except asyncio.QueueEmpty:
             pass
 

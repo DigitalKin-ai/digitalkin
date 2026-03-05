@@ -109,7 +109,7 @@ class RetryPolicy(BaseModel):
     max_backoff: str = Field(default="10s", description="Maximum backoff duration (e.g., '10s')")
     backoff_multiplier: float = Field(default=2.0, ge=1.0, description="Multiplier for exponential backoff")
     retryable_status_codes: list[str] = Field(
-        default_factory=lambda: ["UNAVAILABLE", "RESOURCE_EXHAUSTED"],
+        default_factory=lambda: ["UNAVAILABLE", "RESOURCE_EXHAUSTED", "DEADLINE_EXCEEDED"],
         description="gRPC status codes that trigger retry",
     )
 

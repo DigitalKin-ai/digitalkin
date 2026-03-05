@@ -70,11 +70,15 @@ class GrpcCost(CostStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
 
         if limit.limit_type == "quantity":
             current = self._accumulated.get(f"{cost_config_name}_quantity", 0)
-            return current + quantity <= limit.max_value
+            result = current + quantity <= limit.max_value
+            logger.debug("debug:check_limit cost_config_name=%s type=quantity result=%s", cost_config_name, result)
+            return result
 
         current = self._accumulated.get(f"{cost_config_name}_amount", 0)
         projected = cost_config.rate * quantity
-        return current + projected <= limit.max_value
+        result = current + projected <= limit.max_value
+        logger.debug("debug:check_limit cost_config_name=%s type=amount result=%s", cost_config_name, result)
+        return result
 
     async def add(
         self,
@@ -92,6 +96,7 @@ class GrpcCost(CostStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
         Raises:
             CostServiceError: If the cost config is invalid
         """
+        logger.debug("debug:add cost_name=%s cost_config_name=%s quantity=%s", name, cost_config_name, quantity)
         async with self.handle_grpc_errors("AddCost", CostServiceError):
             cost_config = self.config.get(cost_config_name)
             if cost_config is None:

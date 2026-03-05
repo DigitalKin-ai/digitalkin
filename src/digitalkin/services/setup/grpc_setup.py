@@ -1,6 +1,5 @@
 """Digital Kin Setup Service gRPC Client."""
 
-import time
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import Any
@@ -21,30 +20,6 @@ from digitalkin.models.grpc_servers.models import ClientConfig
 from digitalkin.services.setup.setup_strategy import SetupData, SetupServiceError, SetupStrategy, SetupVersionData
 
 
-class _CacheEntry:
-    """Cache entry with TTL tracking.
-
-    Minimal implementation following CLAUDE.md philosophy:
-    - No Pydantic overhead (plain class with __slots__)
-    - Direct time.time() for minimal CPU
-    - Inline expiration check
-    """
-
-    __slots__ = ("created_at", "value")
-
-    def __init__(self, value: SetupData) -> None:
-        self.value: SetupData = value
-        self.created_at: float = time.time()
-
-    def is_expired(self, ttl_seconds: float) -> bool:
-        """Check if entry expired based on TTL.
-
-        Returns:
-            True if entry is expired, False otherwise.
-        """
-        return (time.time() - self.created_at) > ttl_seconds
-
-
 class GrpcSetup(SetupStrategy, GrpcClientWrapper):
     """gRPC client implementation for the Setup service.
 
@@ -53,22 +28,6 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
     """
 
     service_name: str = "SetupService"
-    CACHE_TTL_SECONDS: float = 30.0
-
-    def __init__(self) -> None:
-        """Initialize setup cache with TTL for get_setup deduplication."""
-        super().__init__()
-        self._setup_cache: dict[str, _CacheEntry] = {}
-
-    def _cleanup_expired_cache_entries(self) -> None:
-        """Remove expired entries from cache.
-
-        Called before cache lookups to prevent unbounded growth.
-        Only removes expired entries, does not touch valid ones.
-        """
-        expired_keys = [key for key, entry in self._setup_cache.items() if entry.is_expired(self.CACHE_TTL_SECONDS)]
-        for key in expired_keys:
-            del self._setup_cache[key]
 
     def __post_init__(self, config: ClientConfig) -> None:
         """Init the channel from a config file.
@@ -85,11 +44,11 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
     ) -> AsyncGenerator[Any, Any]:  # Mixin: self available for subclass overrides
         """Context manager for consistent gRPC error handling with detailed logging.
 
-        Yields:
-            Allow error handling in context.
-
         Args:
             operation: Description of the operation being performed (e.g., "Get Setup", "Create Setup Version").
+
+        Yields:
+            Allow error handling in context.
 
         Raises:
             ValueError: Pydantic model validation failed - input data is malformed.
@@ -190,28 +149,13 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
                 msg = "Setup name is required"
                 raise ValidationError(msg)
 
-            # Cleanup expired entries before lookup
-            self._cleanup_expired_cache_entries()
-
-            cache_key = setup_dict["setup_id"]
-            cached_entry = self._setup_cache.get(cache_key)
-
-            # Check cache and TTL
-            if cached_entry is not None and not cached_entry.is_expired(self.CACHE_TTL_SECONDS):
-                return cached_entry.value
-
-            # Cache miss or expired - fetch from server
             request = setup_pb2.GetSetupRequest(
                 setup_id=setup_dict["setup_id"],
                 version=setup_dict.get("version", ""),
             )
             response = await self.exec_grpc_query("GetSetup", request)
             response_data = json_format.MessageToDict(response, preserving_proto_field_name=True)
-            result = SetupData(**response_data["setup"])
-
-            # Store in cache with TTL
-            self._setup_cache[cache_key] = _CacheEntry(result)
-            return result
+            return SetupData(**response_data["setup"])
 
     async def update_setup(self, setup_dict: dict[str, Any]) -> bool:
         """Update an existing setup.

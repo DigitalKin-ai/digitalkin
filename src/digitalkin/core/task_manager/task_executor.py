@@ -92,7 +92,7 @@ class TaskExecutor:
                     )
                 logger.info("Signal listener ended", extra={"mission_id": mission_id, "task_id": task_id})
 
-        async def supervisor() -> None:  # noqa: C901, PLR0915
+        async def supervisor() -> None:  # noqa: C901, PLR0912, PLR0915
             """Supervise the two concurrent tasks and handle outcomes.
 
             Raises:
@@ -122,7 +122,10 @@ class TaskExecutor:
                 if completed is main_task:
                     cleanup_reason = CancellationReason.SUCCESS_CLEANUP
                 elif completed is sig_task:
-                    cleanup_reason = CancellationReason.SIGNAL_SERVICE_CANCEL
+                    if session._signal_listener_failed:  # noqa: SLF001
+                        cleanup_reason = CancellationReason.FAILURE_CLEANUP
+                    else:
+                        cleanup_reason = CancellationReason.SIGNAL_SERVICE_CANCEL
 
                 # Signal stream to close
                 session.close_stream()
@@ -158,16 +161,28 @@ class TaskExecutor:
                         extra={"mission_id": mission_id, "task_id": task_id},
                     )
                 elif completed is sig_task:
-                    session.status = "cancelled"
-                    session.cancellation_reason = CancellationReason.SIGNAL_SERVICE_CANCEL
-                    logger.info(
-                        "Task cancelled via signal service",
-                        extra={
-                            "mission_id": mission_id,
-                            "task_id": task_id,
-                            "cancellation_reason": CancellationReason.SIGNAL_SERVICE_CANCEL.value,
-                        },
-                    )
+                    if session._signal_listener_failed:  # noqa: SLF001
+                        session.status = "failed"
+                        session.cancellation_reason = CancellationReason.GRPC_SERVICE_ERROR
+                        logger.error(
+                            "Signal listener failed, marking task as failed",
+                            extra={
+                                "mission_id": mission_id,
+                                "task_id": task_id,
+                                "cancellation_reason": CancellationReason.GRPC_SERVICE_ERROR.value,
+                            },
+                        )
+                    else:
+                        session.status = "cancelled"
+                        session.cancellation_reason = CancellationReason.SIGNAL_SERVICE_CANCEL
+                        logger.info(
+                            "Task cancelled via signal service",
+                            extra={
+                                "mission_id": mission_id,
+                                "task_id": task_id,
+                                "cancellation_reason": CancellationReason.SIGNAL_SERVICE_CANCEL.value,
+                            },
+                        )
 
             except asyncio.CancelledError:
                 session.status = "cancelled"

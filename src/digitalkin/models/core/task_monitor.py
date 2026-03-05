@@ -14,6 +14,7 @@ class CancellationReason(str, Enum):
     SUCCESS_CLEANUP = "success_cleanup"  # Post-completion, terminating helper tasks
     FAILURE_CLEANUP = "failure_cleanup"  # Post-failure, releasing resources
     SIGNAL_SERVICE_CANCEL = "signal_service_cancel"  # Cancel via TaskManagerStrategy signal service
+    SIGNAL_SERVICE_STOP = "signal_service_stop"  # Graceful stop via TaskManagerStrategy signal service
     GRPC_SETUP_UNAVAILABLE = "grpc_setup_unavailable"  # Setup service unreachable at startup
     GRPC_SERVICE_ERROR = "grpc_service_error"  # Service dependency failed during execution
     TIMEOUT = "timeout"  # Task exceeded time limit

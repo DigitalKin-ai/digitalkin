@@ -53,9 +53,15 @@ class ConcreteTaskManager(BaseTaskManager):
             module: Module instance
             coro: Coroutine to execute
         """
-        async with self._tasks_lock:
-            await self._validate_task_creation(task_id, mission_id, coro)
-            self._create_session(task_id, mission_id, module)
+        await self._acquire_task_slot(coro)
+        try:
+            async with self._tasks_lock:
+                await self._validate_task_creation(task_id, mission_id, coro)
+                self._create_session(task_id, mission_id, module)
+        except Exception:
+            if task_id not in self.tasks_sessions:
+                self._task_slot.release()
+            raise
 
 
 # ============================================================================
@@ -103,7 +109,9 @@ async def mock_base_module(mock_signal_service: Mock) -> Mock:
 @pytest_asyncio.fixture
 async def task_manager() -> ConcreteTaskManager:
     """Standard concrete task manager for testing."""
-    return ConcreteTaskManager(default_timeout=2.0, max_concurrent_tasks=10)
+    mgr = ConcreteTaskManager(default_timeout=2.0)
+    mgr.max_concurrent_tasks = 10
+    return mgr
 
 
 @pytest_asyncio.fixture
@@ -148,7 +156,8 @@ class TestAbstractMethods:
 
     def test_custom_params(self) -> None:
         """Test custom parameter values."""
-        mgr = ConcreteTaskManager(default_timeout=5.0, max_concurrent_tasks=50)
+        mgr = ConcreteTaskManager(default_timeout=5.0)
+        mgr.max_concurrent_tasks = 50
         assert mgr.default_timeout == 5.0
         assert mgr.max_concurrent_tasks == 50
 
@@ -177,8 +186,10 @@ class TestValidation:
 
     @pytest.mark.asyncio
     async def test_max_concurrent_tasks_raises(self, mock_base_module: Mock) -> None:
-        """Test that exceeding max tasks raises RuntimeError."""
-        mgr = ConcreteTaskManager(default_timeout=1.0, max_concurrent_tasks=2)
+        """Test that exceeding max tasks raises RuntimeError after wait timeout."""
+        mgr = ConcreteTaskManager(default_timeout=1.0)
+        mgr.max_concurrent_tasks = 2
+        mgr._task_wait_timeout = 0.1
 
         async def work():
             await asyncio.sleep(1)
@@ -211,7 +222,9 @@ class TestValidation:
     @pytest.mark.asyncio
     async def test_max_tasks_closes_coroutine(self, mock_base_module: Mock) -> None:
         """Test that max tasks validation closes the rejected coroutine."""
-        mgr = ConcreteTaskManager(max_concurrent_tasks=1)
+        mgr = ConcreteTaskManager()
+        mgr.max_concurrent_tasks = 1
+        mgr._task_wait_timeout = 0.1
 
         async def work():
             await asyncio.sleep(1)
@@ -584,7 +597,9 @@ class TestTasksLock:
     @pytest.mark.asyncio
     async def test_concurrent_create_respects_max(self, mock_base_module: Mock) -> None:
         """Test that concurrent creates don't exceed max_concurrent_tasks."""
-        mgr = ConcreteTaskManager(max_concurrent_tasks=3)
+        mgr = ConcreteTaskManager()
+        mgr.max_concurrent_tasks = 3
+        mgr._task_wait_timeout = 0.1
 
         async def work():
             await asyncio.sleep(1)

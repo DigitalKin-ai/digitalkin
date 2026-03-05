@@ -55,11 +55,11 @@ class DefaultSetup(SetupStrategy):
         Args:
             setup_dict: Dictionary with 'name' and optional 'version'.
 
-        Raises:
-            SetupServiceError: setup_id does not exist.
-
         Returns:
             Dict[str, Any]: Setup details including optional setup version.
+
+        Raises:
+            SetupServiceError: setup_id does not exist.
         """
         logger.debug("GET setup_id = %s", setup_dict["setup_id"])
         if setup_dict["setup_id"] not in self.setups:
@@ -74,11 +74,11 @@ class DefaultSetup(SetupStrategy):
         Args:
             setup_dict: Dictionary with setup update details.
 
-        Raises:
-            ValidationError: setup object failed validation.
-
         Returns:
             bool: Success status of the update operation.
+
+        Raises:
+            ValidationError: setup object failed validation.
         """
         if setup_dict["setup_id"] not in self.setups:
             logger.debug("UPDATE setup_id = %s: setup_id DOESN'T EXIST", setup_dict["setup_id"])
@@ -114,11 +114,11 @@ class DefaultSetup(SetupStrategy):
         Args:
             setup_version_dict: Dictionary with setup version details.
 
-        Raises:
-            SetupServiceError: setup object failed validation.
-
         Returns:
             str: version of setup version creation.
+
+        Raises:
+            SetupServiceError: setup object failed validation.
         """
         try:
             valid_data = SetupVersionData.model_validate(setup_version_dict["data"])  # Revalidates instance
@@ -139,11 +139,11 @@ class DefaultSetup(SetupStrategy):
         Args:
             setup_version_dict: Dictionary with the setup version 'name'.
 
-        Raises:
-            SetupServiceError: setup_id does not exist.
-
         Returns:
             Dict[str, Any]: Setup version details.
+
+        Raises:
+            SetupServiceError: setup_id does not exist.
         """
         logger.debug("GET setup_id = %s: version = %s", setup_version_dict["setup_id"], setup_version_dict["version"])
         if setup_version_dict["setup_id"] not in self.setup_versions:
@@ -159,11 +159,11 @@ class DefaultSetup(SetupStrategy):
         Args:
             setup_version_dict: Dictionary with optional 'name' or 'query_versions' filters.
 
-        Raises:
-            SetupServiceError: setup_id does not exist.
-
         Returns:
             List[SetupVersionData]: A list of matching setup version details.
+
+        Raises:
+            SetupServiceError: setup_id does not exist.
         """
         if setup_version_dict["setup_id"] not in self.setup_versions:
             msg = f"GET setup_id = {setup_version_dict['setup_id']}: setup_id DOESN'T EXIST"

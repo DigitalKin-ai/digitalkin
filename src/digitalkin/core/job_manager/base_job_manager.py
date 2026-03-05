@@ -250,24 +250,13 @@ class BaseJobManager(abc.ABC, Generic[InputModelT, OutputModelT, SetupModelT]):
         """
 
     @abc.abstractmethod
-    async def get_module_status(self, job_id: str) -> str:
-        """Retrieve the status of a module job.
-
-        Args:
-            job_id: The unique identifier of the job.
-
-        Returns:
-            Status string (e.g. "pending", "running", "completed", "failed", "cancelled").
-        """
-
-    @abc.abstractmethod
     async def wait_for_completion(self, job_id: str) -> None:
         """Wait for a task to complete.
 
         This method blocks until the specified job has reached a terminal state.
         The implementation varies by job manager type:
         - SingleJobManager: Awaits the asyncio.Task directly
-        - TaskiqJobManager: Polls task status from SurrealDB
+        - TaskiqJobManager: Polls task status
 
         Args:
             job_id: The unique identifier of the job to wait for.

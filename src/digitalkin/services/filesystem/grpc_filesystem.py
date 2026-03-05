@@ -189,6 +189,7 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper, GrpcErrorHandlerMixi
                 context_id = self.setup_id
             case "mission":
                 context_id = self.mission_id
+        logger.debug("debug:get_file file_id=%s context=%s", file_id, context)
         async with self.handle_grpc_errors("GetFile", FilesystemServiceError):
             request = filesystem_pb2.GetFileRequest(
                 context=context_id,
@@ -271,6 +272,7 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper, GrpcErrorHandlerMixi
         Returns:
             tuple[dict[str, bool], int, int]: Results per file, total deleted count, total failed count
         """
+        logger.debug("debug:delete_files permanent=%s force=%s", permanent, force)
         async with self.handle_grpc_errors("DeleteFiles", FilesystemServiceError):
             request = filesystem_pb2.DeleteFilesRequest(
                 context=self.mission_id,

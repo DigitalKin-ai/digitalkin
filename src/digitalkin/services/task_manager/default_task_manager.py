@@ -77,8 +77,7 @@ class DefaultTaskManager(TaskManagerStrategy):
         Args:
             sub_id: Subscription identifier.
         """
-        queue = self._subscribers.pop(sub_id, None)
-        if queue is not None:
+        if (queue := self._subscribers.pop(sub_id, None)) is not None:
             with contextlib.suppress(asyncio.QueueFull):
                 queue.put_nowait(None)
 

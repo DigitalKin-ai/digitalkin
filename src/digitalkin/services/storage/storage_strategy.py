@@ -325,8 +325,7 @@ class StorageStrategy(BaseStrategy, ABC):
         data_type_enum = DataType[data_type]
         validated_data = self._validate_data(collection, {**data, "mission_id": self.mission_id})
         async with self._record_lock(collection, record_id):
-            existing = await self._read(collection, record_id)
-            if existing:
+            if await self._read(collection, record_id):
                 updated = await self._update(collection, record_id, validated_data)
                 if updated is None:
                     msg = f"Update failed for existing record '{collection}:{record_id}'"

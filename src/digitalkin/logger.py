@@ -5,6 +5,7 @@ import logging
 import os
 import sys
 from datetime import datetime, timezone
+from logging.handlers import RotatingFileHandler
 from typing import Any, ClassVar
 
 
@@ -96,6 +97,81 @@ class ColorJSONFormatter(logging.Formatter):
         return f"{color}{json_str}{self.reset}"
 
 
+class PlainJSONFormatter(logging.Formatter):
+    """Plain JSON formatter for log files (no ANSI colors, compact JSON)."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        """Format the log record as compact JSON for file output.
+
+        Args:
+            record: The log record to format.
+
+        Returns:
+            str: The compact JSON formatted log record.
+        """
+        log_obj: dict[str, Any] = {
+            "timestamp": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
+            "level": record.levelname.lower(),
+            "message": record.getMessage(),
+            "module": record.module,
+            "location": f"{record.pathname}:{record.lineno}:{record.funcName}",
+        }
+        if record.exc_info:
+            log_obj["exception"] = self.formatException(record.exc_info)
+
+        skip_attrs = {
+            "name",
+            "msg",
+            "args",
+            "created",
+            "filename",
+            "funcName",
+            "levelname",
+            "levelno",
+            "lineno",
+            "module",
+            "msecs",
+            "message",
+            "pathname",
+            "process",
+            "processName",
+            "relativeCreated",
+            "thread",
+            "threadName",
+            "exc_info",
+            "exc_text",
+            "stack_info",
+        }
+
+        extras = {key: value for key, value in record.__dict__.items() if key not in skip_attrs}
+        if extras:
+            log_obj["extra"] = extras
+
+        return json.dumps(log_obj, default=str, separators=(",", ":"))
+
+
+def add_file_handler(logger: logging.Logger) -> None:
+    """Add a rotating file handler to a logger if a log directory is available.
+
+    Auto-detects ``/app/logs`` (Docker default) or the path given by the
+    ``DIGITALKIN_LOG_DIR`` environment variable.  If the directory exists,
+    a :class:`RotatingFileHandler` (10 MB, 5 backups) with
+    :class:`PlainJSONFormatter` is attached at DEBUG level.
+
+    Args:
+        logger: The logger to attach the file handler to.
+    """
+    log_dir = os.environ.get("DIGITALKIN_LOG_DIR", "/app/logs")
+    if not os.path.isdir(log_dir):
+        return
+
+    log_file = os.path.join(log_dir, f"{logger.name}.log")
+    fh = RotatingFileHandler(log_file, maxBytes=10 * 1024 * 1024, backupCount=5)
+    fh.setLevel(logging.DEBUG)
+    fh.setFormatter(PlainJSONFormatter())
+    logger.addHandler(fh)
+
+
 def setup_logger(
     name: str,
     level: int = logging.INFO,
@@ -143,6 +219,9 @@ def setup_logger(
         ch.setFormatter(ColorJSONFormatter(is_production=is_production))
         logger.addHandler(ch)
         logger.propagate = False
+
+    # Attach a file handler for persistent DEBUG logs (if log dir exists)
+    add_file_handler(logger)
 
     return logger
 

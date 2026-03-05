@@ -1,8 +1,7 @@
 """Comprehensive test suite for TaskSession class.
 
 Tests lifecycle management including initialization, signal handling,
-cancellation logic, and cleanup. No SurrealDB or heartbeats — uses
-TaskManagerStrategy (signal_service) exclusively.
+cancellation logic, and cleanup. Uses TaskManagerStrategy (signal_service).
 """
 
 import asyncio

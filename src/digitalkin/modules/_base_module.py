@@ -51,9 +51,22 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
     context: ModuleContext
     triggers_discoverer: ClassVar[ModuleDiscoverer]
 
-    # service config params
-    services_config_strategies: ClassVar[dict[str, ServicesStrategy | None]] = {}
-    services_config_params: ClassVar[dict[str, dict[str, Any | None] | None]] = {}
+    # service config params — subclasses MUST define their own to avoid sharing
+    services_config_strategies: ClassVar[dict[str, ServicesStrategy | None]]
+    services_config_params: ClassVar[dict[str, dict[str, Any | None] | None]]
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        """Ensure each subclass has its own copy of mutable class variables."""
+        super().__init_subclass__(**kwargs)
+        if "services_config_strategies" not in cls.__dict__:
+            cls.services_config_strategies = (
+                dict(cls.services_config_strategies) if "services_config_strategies" in dir(cls) else {}
+            )
+        if "services_config_params" not in cls.__dict__:
+            cls.services_config_params = (
+                dict(cls.services_config_params) if "services_config_params" in dir(cls) else {}
+            )
+
     services_config: ServicesConfig
 
     @classmethod
@@ -448,8 +461,9 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
         input_instance = self.input_format.model_validate(input_data)
 
         # Apply cost limits if present in input (field added dynamically by UtilitySchemaExtender)
-        cost_limits = input_instance.model_dump().get("cost_limits")
-        if cost_limits is not None and self.context.cost is not None:
+        if (
+            cost_limits := input_instance.model_dump().get("cost_limits")
+        ) is not None and self.context.cost is not None:
             await self.context.cost.set_limits(cost_limits)
 
         handler_instance = self.triggers_discoverer.get_trigger(
@@ -457,6 +471,11 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
             input_instance.root,
         )
 
+        logger.debug(
+            "debug:run dispatching protocol=%s handler=%s",
+            input_instance.root.protocol,
+            type(handler_instance).__name__,
+        )
         await handler_instance.handle(
             input_instance.root,
             setup_data,
@@ -524,6 +543,7 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
             tool_cache = await setup_data.build_tool_cache(self.context.registry, self.context.communication)
             if tool_cache.entries:
                 self.context.tool_cache = tool_cache
+            logger.debug("debug:start tool_cache entries=%s", len(tool_cache.entries))
 
             await callback(
                 DataModel(
@@ -567,11 +587,12 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
             await self.stop()
 
     async def stop(self) -> None:
-        """Stop the module."""
+        """Stop the module. Idempotent — second call is a no-op."""
+        if self._status in {ModuleStatus.STOPPED, ModuleStatus.FAILED}:
+            return
         logger.info("Stopping module %s | job_id=%s", self.name, self.context.session.job_id)
         try:
             self._status = ModuleStatus.STOPPING
-            logger.debug("Module %s stopped", self.name)
             await self.cleanup()
             await self.context.callbacks.send_message(
                 DataModel(

@@ -286,11 +286,11 @@ class ModuleDiscoverer:
     def discover_modules(self) -> dict[str, bool]:
         """Discover and import matching modules across configured packages.
 
-        Raises:
-            DiscoveryError: If initial inputs are invalid.
-
         Returns:
             results infos
+
+        Raises:
+            DiscoveryError: If initial inputs are invalid.
         """
         self._validate_inputs()
         results: dict[str, bool] = {}

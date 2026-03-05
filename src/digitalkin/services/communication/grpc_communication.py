@@ -44,7 +44,8 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
         """
         BaseStrategy.__init__(self, mission_id, setup_id, setup_version_id)
         self.client_config = client_config
-        self._channel_pool: dict[tuple[str, int], grpc.aio.Channel] = {}
+        # Track cache keys this instance owns refs on, for cleanup
+        self._pool_keys: set[str] = set()
 
         logger.debug(
             "Initialized GrpcCommunication",
@@ -52,13 +53,10 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
         )
 
     def _get_or_create_channel(self, module_address: str, module_port: int) -> grpc.aio.Channel:
-        """Get existing channel or create new one for the target module.
+        """Get or create a shared cached channel for the target module.
 
-        Pool channels are created directly (not via _init_channel) to avoid
-        polluting the shared GrpcClientWrapper._channel_cache. Pool channels
-        have per-job lifetime and are closed by close_all_channels(); placing
-        them in the shared cache causes zombie entries that subsequent jobs
-        pick up as "Channel is closed".
+        Uses GrpcClientWrapper._channel_cache for ref-counted sharing so
+        multiple tasks calling the same remote module reuse one HTTP/2 connection.
 
         Args:
             module_address: Module host address
@@ -67,34 +65,25 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
         Returns:
             Async gRPC channel for the target module
         """
-        key = (module_address, module_port)
-        if key not in self._channel_pool:
-            config = ClientConfig(
-                host=module_address,
-                port=module_port,
-                mode=self.client_config.mode,
-                security=self.client_config.security,
-                credentials=self.client_config.credentials,
-                compression=self.client_config.compression,
-                channel_options=self.client_config.channel_options,
-            )
-            credentials = self._build_channel_credentials(config)
-            grpc_compression = config.compression.to_grpc()
-            if credentials is not None:
-                self._channel_pool[key] = grpc.aio.secure_channel(
-                    config.address, credentials, options=config.grpc_options, compression=grpc_compression
-                )
-            else:
-                self._channel_pool[key] = grpc.aio.insecure_channel(
-                    config.address, options=config.grpc_options, compression=grpc_compression
-                )
-        return self._channel_pool[key]
+        config = ClientConfig(
+            host=module_address,
+            port=module_port,
+            mode=self.client_config.mode,
+            security=self.client_config.security,
+            credentials=self.client_config.credentials,
+            compression=self.client_config.compression,
+            channel_options=self.client_config.channel_options,
+        )
+        channel = self._init_channel(config)
+        if self._channel_cache_key is not None:
+            self._pool_keys.add(self._channel_cache_key)
+        return channel
 
     async def close_all_channels(self) -> None:
-        """Close all pooled gRPC channels."""
-        for channel in self._channel_pool.values():
-            await channel.close()
-        self._channel_pool.clear()
+        """Release refs on all pooled gRPC channels."""
+        for key in self._pool_keys:
+            await GrpcClientWrapper.release_cached_channel(key)
+        self._pool_keys.clear()
 
     async def cleanup(self) -> None:
         """Clean up all gRPC channels."""

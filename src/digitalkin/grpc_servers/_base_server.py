@@ -452,9 +452,10 @@ class BaseServer(abc.ABC):
                 # If not in a running event loop, use run_until_complete
                 loop.run_until_complete(self._stop_async(grace))
                 loop.run_until_complete(GrpcClientWrapper.close_all_cached_channels())
-                from digitalkin.services.task_manager.grpc_task_manager import _SharedPoller
+                from digitalkin.services.task_manager.grpc_task_manager import _SharedPoller, _SharedSendBuffer
 
                 loop.run_until_complete(_SharedPoller.close_all())
+                loop.run_until_complete(_SharedSendBuffer.close_all())
             except RuntimeError:
                 # Event loop issues - try with a new loop
                 logger.debug("Creating new event loop for shutdown")
@@ -463,9 +464,10 @@ class BaseServer(abc.ABC):
                     asyncio.set_event_loop(new_loop)
                     new_loop.run_until_complete(self._stop_async(grace))
                     new_loop.run_until_complete(GrpcClientWrapper.close_all_cached_channels())
-                    from digitalkin.services.task_manager.grpc_task_manager import _SharedPoller
+                    from digitalkin.services.task_manager.grpc_task_manager import _SharedPoller, _SharedSendBuffer
 
                     new_loop.run_until_complete(_SharedPoller.close_all())
+                    new_loop.run_until_complete(_SharedSendBuffer.close_all())
                 finally:
                     new_loop.close()
         else:
@@ -514,9 +516,10 @@ class BaseServer(abc.ABC):
 
         await GrpcClientWrapper.close_all_cached_channels()
         # Lazy import to avoid circular dependency (grpc_task_manager imports from grpc_servers)
-        from digitalkin.services.task_manager.grpc_task_manager import _SharedPoller
+        from digitalkin.services.task_manager.grpc_task_manager import _SharedPoller, _SharedSendBuffer
 
         await _SharedPoller.close_all()
+        await _SharedSendBuffer.close_all()
         logger.debug("✅ gRPC server stopped")
         self.server = None
 

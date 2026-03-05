@@ -26,7 +26,7 @@ from tests.fixtures.grpc_fixtures import AsyncStubWrapper, FakeContext
 
 from digitalkin.models.core.task_monitor import CancellationReason, SignalMessage, SignalType
 from digitalkin.models.grpc_servers.models import ClientConfig, SecurityMode, ServerMode
-from digitalkin.services.task_manager.grpc_task_manager import GrpcTaskManager, _SharedPoller
+from digitalkin.services.task_manager.grpc_task_manager import GrpcTaskManager, _SharedPoller, _SharedSendBuffer
 from digitalkin.services.task_manager.task_manager_strategy import TaskManagerServiceError
 
 # Set timeout for all tests in this file (30 seconds)
@@ -51,10 +51,12 @@ TASK_ID = "task_test_001"
 
 @pytest.fixture(autouse=True)
 def _clear_shared_poller():
-    """Clear _SharedPoller class state between tests to avoid stale stubs/event loops."""
+    """Clear _SharedPoller and _SharedSendBuffer class state between tests to avoid stale stubs/event loops."""
     _SharedPoller._instances.clear()
+    _SharedSendBuffer._instances.clear()
     yield
     _SharedPoller._instances.clear()
+    _SharedSendBuffer._instances.clear()
 
 
 @pytest.fixture(scope="module")
@@ -120,12 +122,14 @@ def client(test_channel: grpc_testing.Channel) -> GrpcTaskManager:
 
 @pytest.fixture(autouse=True)
 async def _clear_shared_pollers():
-    """Clear shared poller singletons between tests to avoid cross-test event loop issues."""
+    """Clear shared poller/buffer singletons between tests to avoid cross-test event loop issues."""
     _SharedPoller._instances.clear()
+    _SharedSendBuffer._instances.clear()
     yield
     for poller in list(_SharedPoller._instances.values()):
         await poller.close()
     _SharedPoller._instances.clear()
+    _SharedSendBuffer._instances.clear()
 
 
 def _make_signal_data(
@@ -1023,3 +1027,97 @@ class TestDefaultTaskManager:
         assert len(received2) == 1
 
         await mgr.close()
+
+
+# ============================================================================
+# Test: _SharedPoller._dispatch_signal() auto-removal
+# ============================================================================
+
+
+class TestSharedPollerDispatch:
+    """Tests for auto-removal of terminal tasks in _SharedPoller._dispatch_signal()."""
+
+    def _make_poller(self) -> _SharedPoller:
+        """Return a _SharedPoller with a no-op poll_fn."""
+        async def _noop(task_ids: list) -> list:
+            return []
+
+        return _SharedPoller(_noop, poll_interval=1.0, initial_poll_interval=0.1)
+
+    def _make_task_proto(self, task_id: str, action: str) -> task_manager_message_pb2.Task:
+        proto = task_manager_message_pb2.Task(
+            task_id=task_id,
+            mission_id=MISSION_ID,
+            setup_id=SETUP_ID,
+            setup_version_id=SETUP_VERSION_ID,
+            action=action,
+            cancellation_reason="none",
+        )
+        ts = Timestamp()
+        ts.FromDatetime(datetime.now(timezone.utc))
+        proto.created_at.CopyFrom(ts)
+        from google.protobuf.struct_pb2 import Struct
+        proto.payload.CopyFrom(Struct())
+        return proto
+
+    @pytest.mark.asyncio
+    async def test_dispatch_signal_stop_auto_removes_task(self) -> None:
+        """_dispatch_signal with 'stop' removes task from _task_queues and sends poison pill."""
+        poller = self._make_poller()
+        queue = poller.register(TASK_ID)
+
+        proto = self._make_task_proto(TASK_ID, "stop")
+        result = poller._dispatch_signal(proto)
+
+        assert result is True
+        assert TASK_ID not in poller._task_queues
+
+        # Queue should have the signal and a None poison pill
+        item1 = queue.get_nowait()
+        item2 = queue.get_nowait()
+        assert item1 is proto
+        assert item2 is None
+
+    @pytest.mark.asyncio
+    async def test_dispatch_signal_cancel_auto_removes_task(self) -> None:
+        """_dispatch_signal with 'cancel' removes task from _task_queues and sends poison pill."""
+        poller = self._make_poller()
+        queue = poller.register(TASK_ID)
+
+        proto = self._make_task_proto(TASK_ID, "cancel")
+        result = poller._dispatch_signal(proto)
+
+        assert result is True
+        assert TASK_ID not in poller._task_queues
+
+        item1 = queue.get_nowait()
+        item2 = queue.get_nowait()
+        assert item1 is proto
+        assert item2 is None
+
+    @pytest.mark.asyncio
+    async def test_dispatch_signal_non_terminal_does_not_remove_task(self) -> None:
+        """_dispatch_signal with non-terminal actions leaves task registered."""
+        poller = self._make_poller()
+        poller.register(TASK_ID)
+
+        for action in ("start", "ack_start", "ack_stop", "ack_cancel"):
+            task_id = f"task_{action}"
+            poller.register(task_id)
+            proto = self._make_task_proto(task_id, action)
+            poller._dispatch_signal(proto)
+            assert task_id in poller._task_queues
+
+        assert TASK_ID in poller._task_queues
+
+    @pytest.mark.asyncio
+    async def test_dispatch_stop_stops_poller_when_last_task(self) -> None:
+        """When last task is removed via terminal signal, poller stop_event is set."""
+        poller = self._make_poller()
+        poller.register(TASK_ID)
+
+        proto = self._make_task_proto(TASK_ID, "stop")
+        poller._dispatch_signal(proto)
+
+        assert not poller._task_queues
+        assert poller._stop_event.is_set()

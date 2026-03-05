@@ -119,10 +119,10 @@ task start-taskiq
 - Jobs stream output via asyncio.Queue and callbacks
 
 **Task Management** (`src/digitalkin/core/task_manager/`)
-- `TaskManager`: Lower-level task lifecycle management with concurrent task limits
-- `TaskSession`: Represents running task state with heartbeats to SurrealDB
-- Each task runs 3 concurrent sub-tasks: main coroutine, heartbeat generator, signal listener
-- `SurrealDBConnection`: Repository pattern for SurrealDB operations (CRUD, live queries)
+- `TaskManager`: Lower-level task lifecycle management with concurrent task limits (semaphore-based waiting pool)
+- `TaskSession`: Represents running task state with signal listening via TaskManagerStrategy
+- Each task runs 2 concurrent sub-tasks: main coroutine and signal listener
+- `TaskExecutor`: Supervisor pattern for task lifecycle (main + signal listener)
 
 **Service Strategies** (`src/digitalkin/services/`)
 - Strategy pattern with dependency injection
@@ -160,12 +160,11 @@ gRPC Client
                 → Queue → Stream → gRPC Response
 ```
 
-### Monitoring Flow
+### Signal Flow
 
 ```
 TaskSession
-  → Heartbeat (every 2s) → SurrealDB
-  → Signal Listener → SurrealDB Live Query
+  → Signal Listener → TaskManagerStrategy (gRPC polling or local)
   → Status Updates → TaskManager
 ```
 
@@ -276,7 +275,6 @@ Use `pytest.mark.asyncio` for async tests. The `asyncio_mode = "auto"` setting i
 
 ## Integration Points
 
-- **SurrealDB**: Task coordination, monitoring, heartbeats
 - **RabbitMQ** (via Taskiq): Distributed job execution, message streaming
 - **gRPC**: All inter-service communication
 - **Protobuf**: Message definitions from `digitalkin-proto` package

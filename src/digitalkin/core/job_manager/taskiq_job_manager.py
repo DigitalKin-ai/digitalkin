@@ -66,8 +66,7 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         job_id = data.get("job_id")
         if not job_id:
             return
-        queue = self.job_queues.get(job_id)
-        if queue:
+        if queue := self.job_queues.get(job_id):
             await queue.put(data.get("output_data"))
 
     async def start(self) -> None:
@@ -133,7 +132,6 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         module_class: type[BaseModule],
         services_mode: ServicesMode,
         default_timeout: float = 10.0,
-        max_concurrent_tasks: int = int(os.environ.get("DIGITALKIN_MAX_CONCURRENT_TASKS", "100")),
         stream_timeout: float = 30.0,
     ) -> None:
         """Initialize the Taskiq job manager.
@@ -142,11 +140,10 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             module_class: The class of the module to be managed
             services_mode: The mode of operation for the services
             default_timeout: Default timeout for task operations
-            max_concurrent_tasks: Maximum number of concurrent tasks
             stream_timeout: Timeout for stream consumer operations (default: 15.0s for distributed systems)
         """
         # Create remote task manager for distributed execution
-        task_manager = RemoteTaskManager(default_timeout, max_concurrent_tasks)
+        task_manager = RemoteTaskManager(default_timeout)
 
         # Initialize base job manager with task manager
         super().__init__(module_class, services_mode, task_manager)

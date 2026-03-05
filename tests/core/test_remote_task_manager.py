@@ -80,7 +80,9 @@ async def mock_base_module(mock_signal_service: Mock) -> Mock:
 @pytest_asyncio.fixture
 async def task_manager() -> RemoteTaskManager:
     """Standard RemoteTaskManager with test-friendly settings."""
-    return RemoteTaskManager(default_timeout=2.0, max_concurrent_tasks=10)
+    mgr = RemoteTaskManager(default_timeout=2.0)
+    mgr.max_concurrent_tasks = 10
+    return mgr
 
 
 # ============================================================================
@@ -132,8 +134,10 @@ class TestTaskRegistration:
     async def test_register_task_max_limit(
         self, mock_base_module: Mock,
     ) -> None:
-        """Test exceeding max tasks raises RuntimeError."""
-        small_manager = RemoteTaskManager(default_timeout=1.0, max_concurrent_tasks=2)
+        """Test exceeding max tasks raises RuntimeError after wait timeout."""
+        small_manager = RemoteTaskManager(default_timeout=1.0)
+        small_manager.max_concurrent_tasks = 2
+        small_manager._task_wait_timeout = 0.1
 
         async def work() -> None:
             await asyncio.sleep(0.5)
@@ -344,7 +348,9 @@ class TestTasksLock:
     @pytest.mark.asyncio
     async def test_concurrent_register_respects_max(self, mock_base_module: Mock) -> None:
         """Test concurrent registers don't exceed max_concurrent_tasks."""
-        mgr = RemoteTaskManager(max_concurrent_tasks=3)
+        mgr = RemoteTaskManager()
+        mgr.max_concurrent_tasks = 3
+        mgr._task_wait_timeout = 0.1
 
         async def work():
             await asyncio.sleep(1)

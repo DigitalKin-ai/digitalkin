@@ -120,9 +120,9 @@ class ModuleContext:
         task_manager: TaskManagerStrategy,
         user_profile: UserProfileStrategy,
         session: dict[str, Any],
-        metadata: dict[str, Any] = {},
-        helpers: dict[str, Any] = {},
-        callbacks: dict[str, Any] = {},
+        metadata: dict[str, Any] | None = None,
+        helpers: dict[str, Any] | None = None,
+        callbacks: dict[str, Any] | None = None,
         tool_cache: ToolCache | None = None,
         request_metadata: dict[str, str] | None = None,
     ) -> None:
@@ -157,10 +157,10 @@ class ModuleContext:
         self.task_manager = task_manager
         self.user_profile = user_profile
 
-        self.metadata = SimpleNamespace(**metadata)
+        self.metadata = SimpleNamespace(**(metadata or {}))
         self.session = Session(**session)
-        self.helpers = SimpleNamespace(**helpers)
-        self.callbacks = SimpleNamespace(**callbacks)
+        self.helpers = SimpleNamespace(**(helpers or {}))
+        self.callbacks = SimpleNamespace(**(callbacks or {}))
         self.tool_cache = tool_cache or ToolCache()
         self.request_metadata = RequestMetadata(request_metadata)
 

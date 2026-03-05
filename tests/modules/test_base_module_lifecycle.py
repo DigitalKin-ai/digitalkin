@@ -64,6 +64,7 @@ _SERVICE_NAMES = {
     "registry",
     "snapshot",
     "storage",
+    "task_manager",
     "user_profile",
 }
 
