@@ -87,6 +87,9 @@ class TaskSession:
         # Cleanup guard
         self._cleanup_done = False
 
+        # Write lock — serialises final queue writes with session cleanup
+        self._write_lock = asyncio.Lock()
+
         # Signal listener failure tracking
         self._signal_listener_failed = False
 

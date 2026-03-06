@@ -1,5 +1,7 @@
 """Logger Mixin to ease and merge every logs."""
 
+from typing import Any
+
 from digitalkin.models.module.module_context import ModuleContext
 
 
@@ -11,41 +13,45 @@ class LoggerMixin:
     """
 
     @staticmethod
-    def log_debug(context: ModuleContext, message: str) -> None:
+    def log_debug(context: ModuleContext, message: str, *args: Any) -> None:
         """Log debug message using the callbacks strategy.
 
         Args:
             context: Module context containing the callbacks strategy
-            message: Debug message to log
+            message: Debug message to log (supports %s lazy formatting)
+            *args: Format arguments for lazy string interpolation
         """
-        return context.callbacks.logger.debug(message, extra=context.session.current_ids())
+        return context.callbacks.logger.debug(message, *args, extra=context.session.current_ids())
 
     @staticmethod
-    def log_info(context: ModuleContext, message: str) -> None:
+    def log_info(context: ModuleContext, message: str, *args: Any) -> None:
         """Log info message using the callbacks strategy.
 
         Args:
             context: Module context containing the callbacks strategy
-            message: Info message to log
+            message: Info message to log (supports %s lazy formatting)
+            *args: Format arguments for lazy string interpolation
         """
-        return context.callbacks.logger.info(message, extra=context.session.current_ids())
+        return context.callbacks.logger.info(message, *args, extra=context.session.current_ids())
 
     @staticmethod
-    def log_warning(context: ModuleContext, message: str) -> None:
+    def log_warning(context: ModuleContext, message: str, *args: Any) -> None:
         """Log warning message using the callbacks strategy.
 
         Args:
             context: Module context containing the callbacks strategy
-            message: Warning message to log
+            message: Warning message to log (supports %s lazy formatting)
+            *args: Format arguments for lazy string interpolation
         """
-        return context.callbacks.logger.warning(message, extra=context.session.current_ids())
+        return context.callbacks.logger.warning(message, *args, extra=context.session.current_ids())
 
     @staticmethod
-    def log_error(context: ModuleContext, message: str) -> None:
+    def log_error(context: ModuleContext, message: str, *args: Any) -> None:
         """Log error message using the callbacks strategy.
 
         Args:
             context: Module context containing the callbacks strategy
-            message: Error message to log
+            message: Error message to log (supports %s lazy formatting)
+            *args: Format arguments for lazy string interpolation
         """
-        return context.callbacks.logger.error(message, extra=context.session.current_ids())
+        return context.callbacks.logger.error(message, *args, extra=context.session.current_ids())

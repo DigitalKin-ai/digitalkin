@@ -87,6 +87,8 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         )
         self.setup = GrpcSetup() if self.args.services_mode == ServicesMode.REMOTE else DefaultSetup()
         self._setup_cache: dict[str, SetupVersionData] = {}
+        self._setup_cache_max = int(os.environ.get("DIGITALKIN_SETUP_CACHE_MAX", "100"))
+        self._completion_timeout = float(os.environ.get("DIGITALKIN_COMPLETION_TIMEOUT", "300.0"))
 
     async def shutdown(self) -> None:
         """Release servicer-level resources (GrpcSetup channel, registry cache)."""
@@ -239,7 +241,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         logger.debug("Updated setup data", extra={"job_id": job_id, "setup_data": updated_setup_data})
 
         # Update cache (cap size to prevent unbounded growth)
-        if len(self._setup_cache) >= int(os.environ.get("DIGITALKIN_SETUP_CACHE_MAX", "100")):
+        if len(self._setup_cache) >= self._setup_cache_max:
             # Evict oldest entry (FIFO)
             oldest_key = next(iter(self._setup_cache))
             del self._setup_cache[oldest_key]
@@ -514,7 +516,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
                         break
         finally:
             try:
-                completion_timeout = float(os.environ.get("DIGITALKIN_COMPLETION_TIMEOUT", "300.0"))
+                completion_timeout = self._completion_timeout
                 await asyncio.wait_for(
                     self.job_manager.wait_for_completion(job_id),
                     timeout=completion_timeout,

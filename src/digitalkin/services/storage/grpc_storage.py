@@ -1,7 +1,6 @@
 """This module implements the default storage strategy."""
 
 from agentic_mesh_protocol.storage.v1 import data_pb2, storage_service_pb2_grpc
-from google.protobuf import json_format
 from google.protobuf.struct_pb2 import Struct
 from pydantic import BaseModel
 
@@ -14,6 +13,7 @@ from digitalkin.services.storage.storage_strategy import (
     StorageServiceError,
     StorageStrategy,
 )
+from digitalkin.utils.proto_utils import proto_to_dict
 
 
 class GrpcStorage(StorageStrategy, GrpcClientWrapper):
@@ -24,22 +24,27 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
     def _build_record_from_proto(self, proto: data_pb2.StorageRecord) -> StorageRecord:
         """Convert a protobuf StorageRecord message into our Pydantic model.
 
+        Uses direct field access for scalar fields and selective MessageToDict
+        only for the nested Struct payload, avoiding full-message deserialization.
+
         Args:
             proto: gRPC StorageRecord
 
         Returns:
             A fully validated StorageRecord.
         """
-        raw = json_format.MessageToDict(
-            proto,
-            preserving_proto_field_name=True,
-            always_print_fields_with_no_presence=True,
-        )
-        mission = raw["mission_id"]
-        coll = raw["collection"]
-        rid = raw["record_id"]
-        dtype = DataType[raw["data_type"]]
-        payload = raw.get("data", {})
+        # Direct field access for scalars (avoids full MessageToDict overhead)
+        mission = proto.mission_id
+        coll = proto.collection
+        rid = proto.record_id
+        dtype = DataType[data_pb2.DataType.Name(proto.data_type)]
+
+        # Selective deserialization: only the nested Struct payload
+        payload = proto_to_dict(proto.data) if proto.HasField("data") else {}
+
+        # Timestamp conversion
+        creation_date = proto.creation_date.ToDatetime() if proto.HasField("creation_date") else None
+        update_date = proto.update_date.ToDatetime() if proto.HasField("update_date") else None
 
         validated = self._validate_data(coll, payload)
         return StorageRecord(
@@ -48,8 +53,8 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
             record_id=rid,
             data=validated,
             data_type=dtype,
-            creation_date=raw.get("creation_date"),
-            update_date=raw.get("update_date"),
+            creation_date=creation_date,
+            update_date=update_date,
         )
 
     async def _store(self, record: StorageRecord) -> StorageRecord:

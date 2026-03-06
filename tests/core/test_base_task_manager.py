@@ -127,6 +127,7 @@ async def mock_task_session(mock_signal_service: Mock) -> Mock:
     session.completed_at = None
     session.signal_service = mock_signal_service
     session.cleanup = AsyncMock()
+    session._write_lock = asyncio.Lock()
     return session
 
 

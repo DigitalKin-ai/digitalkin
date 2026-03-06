@@ -32,16 +32,6 @@ def _storage_record_with_history(messages: list[dict[str, Any]]) -> MagicMock:
     return record
 
 
-@pytest.fixture(autouse=True)
-def _fresh_mixin():
-    """Reset class-level caches between tests."""
-    _ConcreteMixin._chat_history_cache = None
-    _ConcreteMixin._persisted_keys = None
-    yield
-    _ConcreteMixin._chat_history_cache = None
-    _ConcreteMixin._persisted_keys = None
-
-
 class TestChatHistoryCache:
     """Tests for in-memory chat history caching."""
 
@@ -71,7 +61,6 @@ class TestChatHistoryCache:
 
         if len(history.messages) != 0:
             pytest.fail(f"Expected empty messages, got {len(history.messages)}")
-        # Second call should not read storage again
         await mixin.load_chat_history(ctx)
         ctx.storage.read.assert_awaited_once()
 
@@ -92,16 +81,16 @@ class TestChatHistoryCache:
 
 
 class TestAppendStorageOptimization:
-    """Tests for upsert vs update optimization."""
+    """Tests for upsert vs update optimization with batched flush."""
 
     @pytest.mark.asyncio
     async def test_first_append_uses_upsert(self) -> None:
-        """First append to a new key uses upsert_storage (record may not exist yet)."""
+        """First append to a new key uses upsert_storage after flush."""
         mixin = _ConcreteMixin()
         ctx = _make_context()
-        ctx.storage.read = AsyncMock(return_value=None)
 
         await mixin.append_chat_history_message(ctx, BaseRole.USER, "hello")
+        await mixin.flush_chat_history(ctx)
 
         ctx.storage.upsert.assert_awaited_once()
         ctx.storage.update.assert_not_awaited()
@@ -111,10 +100,11 @@ class TestAppendStorageOptimization:
         """After first persist, subsequent appends use update_storage (1 call)."""
         mixin = _ConcreteMixin()
         ctx = _make_context()
-        ctx.storage.read = AsyncMock(return_value=None)
 
         await mixin.append_chat_history_message(ctx, BaseRole.USER, "first")
+        await mixin.flush_chat_history(ctx)
         await mixin.append_chat_history_message(ctx, BaseRole.ASSISTANT, "second")
+        await mixin.flush_chat_history(ctx)
 
         if ctx.storage.upsert.await_count != 1:
             pytest.fail(f"Expected exactly 1 upsert call, got {ctx.storage.upsert.await_count}")
@@ -129,9 +119,9 @@ class TestAppendStorageOptimization:
         existing = _storage_record_with_history([{"role": "user", "content": "old"}])
         ctx.storage.read = AsyncMock(return_value=existing)
 
-        # load first to populate cache + persisted_keys
         await mixin.load_chat_history(ctx)
         await mixin.append_chat_history_message(ctx, BaseRole.ASSISTANT, "new")
+        await mixin.flush_chat_history(ctx)
 
         ctx.storage.upsert.assert_not_awaited()
         ctx.storage.update.assert_awaited_once()
@@ -141,7 +131,6 @@ class TestAppendStorageOptimization:
         """Multiple appends accumulate in the cached ChatHistory object."""
         mixin = _ConcreteMixin()
         ctx = _make_context()
-        ctx.storage.read = AsyncMock(return_value=None)
 
         await mixin.append_chat_history_message(ctx, BaseRole.USER, "msg1")
         await mixin.append_chat_history_message(ctx, BaseRole.ASSISTANT, "msg2")
@@ -150,5 +139,49 @@ class TestAppendStorageOptimization:
         history = await mixin.load_chat_history(ctx)
         if len(history.messages) != 3:
             pytest.fail(f"Expected 3 messages in cache, got {len(history.messages)}")
-        # Storage read should only have been called once (first load)
         ctx.storage.read.assert_awaited_once()
+
+
+class TestBatchingBehavior:
+    """Tests for batched flush behavior."""
+
+    @pytest.mark.asyncio
+    async def test_append_does_not_write_below_threshold(self) -> None:
+        """Messages below threshold are buffered, not written to storage."""
+        mixin = _ConcreteMixin()
+        ctx = _make_context()
+
+        await mixin.append_chat_history_message(ctx, BaseRole.USER, "hello")
+
+        ctx.storage.upsert.assert_not_awaited()
+        ctx.storage.update.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_threshold_triggers_flush(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Reaching the threshold auto-flushes to storage."""
+        import digitalkin.mixins.chat_history_mixin as mod
+
+        monkeypatch.setattr(mod, "_FLUSH_THRESHOLD", 3)
+        mixin = _ConcreteMixin()
+        ctx = _make_context()
+
+        await mixin.append_chat_history_message(ctx, BaseRole.USER, "1")
+        await mixin.append_chat_history_message(ctx, BaseRole.USER, "2")
+        ctx.storage.upsert.assert_not_awaited()
+
+        await mixin.append_chat_history_message(ctx, BaseRole.USER, "3")
+        ctx.storage.upsert.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_flush_clears_dirty_state(self) -> None:
+        """After flush, dirty state is cleared — second flush is a no-op."""
+        mixin = _ConcreteMixin()
+        ctx = _make_context()
+
+        await mixin.append_chat_history_message(ctx, BaseRole.USER, "hello")
+        await mixin.flush_chat_history(ctx)
+
+        ctx.storage.upsert.reset_mock()
+        await mixin.flush_chat_history(ctx)
+        ctx.storage.upsert.assert_not_awaited()
+        ctx.storage.update.assert_not_awaited()

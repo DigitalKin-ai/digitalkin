@@ -114,6 +114,8 @@ def module_servicer(mock_job_manager, mock_setup_strategy):
     servicer.job_manager = mock_job_manager
     servicer.setup = mock_setup_strategy
     servicer._setup_cache = {}
+    servicer._setup_cache_max = 100
+    servicer._completion_timeout = 300.0
 
     return servicer
 

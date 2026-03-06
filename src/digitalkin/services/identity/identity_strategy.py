@@ -11,4 +11,4 @@ class IdentityStrategy(BaseStrategy, ABC):
     @abstractmethod
     async def get_identity(self) -> str:
         """Get the identity."""
-        raise NotImplementedError
+        ...

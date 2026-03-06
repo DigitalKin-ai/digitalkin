@@ -160,34 +160,40 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             logger.warning("Queue write rejected - session not found", extra={"job_id": job_id})
             return
 
-        if session.stream_closed:
-            logger.debug("Queue write rejected - stream closed", extra={"job_id": job_id})
-            return
+        async with session._write_lock:  # noqa: SLF001
+            # Re-check after acquiring lock — session may have been cleaned up
+            if self.tasks_sessions.get(job_id) is None:
+                logger.debug("Queue write rejected - session removed during lock wait", extra={"job_id": job_id})
+                return
 
-        data = output_data.model_dump(mode="json")
-        logger.debug("debug:add_to_queue job_id=%s queue_depth=%s", job_id, session.queue.qsize())
+            if session.stream_closed:
+                logger.debug("Queue write rejected - stream closed", extra={"job_id": job_id})
+                return
 
-        match self._backpressure_strategy:
-            case BackpressureStrategy.BLOCK:
-                await asyncio.wait_for(session.queue.put(data), timeout=self._backpressure_timeout)
+            data = output_data.model_dump(mode="json")
+            logger.debug("debug:add_to_queue job_id=%s queue_depth=%s", job_id, session.queue.qsize())
 
-            case BackpressureStrategy.DROP_OLDEST:
-                try:
-                    await asyncio.wait_for(session.queue.put(data), timeout=5.0)
-                except asyncio.TimeoutError:
-                    logger.warning("Queue full, dropping oldest message", extra={"job_id": job_id})
+            match self._backpressure_strategy:
+                case BackpressureStrategy.BLOCK:
+                    await asyncio.wait_for(session.queue.put(data), timeout=self._backpressure_timeout)
+
+                case BackpressureStrategy.DROP_OLDEST:
                     try:
-                        session.queue.get_nowait()
-                        session.queue.task_done()
-                    except asyncio.QueueEmpty:
-                        pass
-                    session.queue.put_nowait(data)
+                        await asyncio.wait_for(session.queue.put(data), timeout=5.0)
+                    except asyncio.TimeoutError:
+                        logger.warning("Queue full, dropping oldest message", extra={"job_id": job_id})
+                        try:
+                            session.queue.get_nowait()
+                            session.queue.task_done()
+                        except asyncio.QueueEmpty:
+                            pass
+                        session.queue.put_nowait(data)
 
-            case BackpressureStrategy.REJECT:
-                try:
-                    session.queue.put_nowait(data)
-                except asyncio.QueueFull:
-                    logger.warning("Queue full, rejecting new message", extra={"job_id": job_id})
+                case BackpressureStrategy.REJECT:
+                    try:
+                        session.queue.put_nowait(data)
+                    except asyncio.QueueFull:
+                        logger.warning("Queue full, rejecting new message", extra={"job_id": job_id})
 
     @asynccontextmanager
     async def generate_stream_consumer(self, job_id: str) -> AsyncIterator[AsyncGenerator[dict[str, Any], None]]:
@@ -368,16 +374,17 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
     async def wait_for_completion(self, job_id: str) -> None:
         """Wait for a task to complete by awaiting its asyncio.Task.
 
+        Idempotent — safe to call after the task has already been cleaned up
+        (e.g. by deferred cleanup during signal cancellation).
+
         Args:
             job_id: The unique identifier of the job to wait for.
-
-        Raises:
-            KeyError: If the job_id is not found in tasks.
         """
-        if job_id not in self._task_manager.tasks:
-            msg = f"Job {job_id} not found"
-            raise KeyError(msg)
-        await self._task_manager.tasks[job_id]
+        task = self._task_manager.tasks.get(job_id)
+        if task is None:
+            logger.debug("Task already cleaned up, skipping wait_for_completion", extra={"job_id": job_id})
+            return
+        await task
 
     async def stop_all_modules(self) -> None:
         """Stop all currently running module jobs."""

@@ -45,4 +45,4 @@ class DefaultUserProfile(UserProfileStrategy):
             user_profile_data: Dictionary containing user profile data
         """
         self.db[self.mission_id] = user_profile_data
-        logger.debug(f"Added user profile for mission_id: {self.mission_id}")
+        logger.debug("Added user profile for mission_id: %s", self.mission_id)

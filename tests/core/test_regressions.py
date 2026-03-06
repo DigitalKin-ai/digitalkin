@@ -232,6 +232,7 @@ class TestMemoryLeakRegressions:
         session = Mock()
         session.db = mock_db
         session.queue = asyncio.Queue()
+        session._write_lock = asyncio.Lock()
 
         # Fill queue with items
         for i in range(100):
@@ -428,6 +429,7 @@ class TestEnumSerializationRegression:
         session = Mock()
         session.queue = asyncio.Queue()
         session.stream_closed = False
+        session._write_lock = asyncio.Lock()
         manager.tasks_sessions["job-enum"] = session
 
         output = _MockEnumSetupModel(backend=_MockBackend.CUSTOM, name="test")

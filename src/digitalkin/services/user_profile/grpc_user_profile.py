@@ -6,13 +6,13 @@ from agentic_mesh_protocol.user_profile.v1 import (
     user_profile_pb2,
     user_profile_service_pb2_grpc,
 )
-from google.protobuf import json_format
 
 from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
 from digitalkin.grpc_servers.utils.grpc_error_handler import GrpcErrorHandlerMixin
 from digitalkin.logger import logger
 from digitalkin.models.grpc_servers.models import ClientConfig
 from digitalkin.services.user_profile.user_profile_strategy import UserProfileServiceError, UserProfileStrategy
+from digitalkin.utils.proto_utils import proto_to_dict
 
 
 class GrpcUserProfile(UserProfileStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
@@ -57,11 +57,7 @@ class GrpcUserProfile(UserProfileStrategy, GrpcClientWrapper, GrpcErrorHandlerMi
                 logger.warning("No user profile found for mission_id: %s", self.mission_id)
                 return None
 
-            user_profile_dict = json_format.MessageToDict(
-                response.user_profile,
-                preserving_proto_field_name=True,
-                always_print_fields_with_no_presence=True,
-            )
+            user_profile_dict = proto_to_dict(response.user_profile, with_defaults=True)
 
             logger.debug("Retrieved user profile for mission_id: %s", self.mission_id)
             return user_profile_dict

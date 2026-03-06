@@ -15,11 +15,18 @@ class FileHistoryMixin(StorageMixin, LoggerMixin):
 
     This mixin provides a higher-level API for managing File history,
     using the storage strategy as the underlying persistence mechanism.
+
+    File histories are cached in memory after first load to avoid redundant
+    gRPC reads.
     """
 
-    file_history_front: FileHistory = FileHistory(files=[])
     FILE_HISTORY_COLLECTION = "file_history"
     FILE_HISTORY_RECORD_ID = "full_file_history"
+
+    def _ensure_state(self) -> None:
+        """Lazily initialise all mixin state once."""
+        if not hasattr(self, "_fh_cache"):
+            self._fh_cache: dict[str, FileHistory] = {}
 
     def _get_history_key(self, context: ModuleContext) -> str:
         """Get session-specific history key.
@@ -36,26 +43,33 @@ class FileHistoryMixin(StorageMixin, LoggerMixin):
     async def load_file_history(self, context: ModuleContext) -> FileHistory:
         """Load File history for the current session.
 
+        Returns cached history on subsequent calls to avoid gRPC reads.
+
         Args:
             context: Module context containing storage strategy
 
         Returns:
             File history object, empty if none exists or loading fails
         """
+        self._ensure_state()
         history_key = self._get_history_key(context)
 
-        if self.file_history_front is None:
-            try:
-                record = await self.read_storage(
-                    context,
-                    self.FILE_HISTORY_COLLECTION,
-                    history_key,
-                )
-                if record and record.data:
-                    return FileHistory.model_validate(record.data)
-            except Exception as e:
-                self.log_warning(context, f"Failed to load File history: {e}")
-        return self.file_history_front
+        if history_key in self._fh_cache:
+            return self._fh_cache[history_key]
+
+        try:
+            record = await self.read_storage(
+                context,
+                self.FILE_HISTORY_COLLECTION,
+                history_key,
+            )
+            history = FileHistory.model_validate(record.data) if record and record.data else FileHistory(files=[])
+        except Exception as e:
+            self.log_warning(context, "Failed to load File history: %s", e)
+            history = FileHistory(files=[])
+
+        self._fh_cache[history_key] = history
+        return history
 
     async def append_files_history(self, context: ModuleContext, files: list[FileModel]) -> None:
         """Append a message to File history.
@@ -70,5 +84,5 @@ class FileHistoryMixin(StorageMixin, LoggerMixin):
         history_key = self._get_history_key(context)
         file_history = await self.load_file_history(context)
         file_history.files.extend(files)
-        self.log_debug(context, f"Upserting file history for session: {history_key}")
+        self.log_debug(context, "Upserting file history for session: %s", history_key)
         await self.upsert_storage(context, self.FILE_HISTORY_COLLECTION, history_key, file_history.model_dump())

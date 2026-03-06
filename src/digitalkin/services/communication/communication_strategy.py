@@ -25,7 +25,7 @@ class CommunicationStrategy(BaseStrategy, ABC):
         This method should release any held resources such as
         gRPC channels, connection pools, etc.
         """
-        raise NotImplementedError
+        ...
 
     @abstractmethod
     async def get_module_schemas(
@@ -53,7 +53,7 @@ class CommunicationStrategy(BaseStrategy, ABC):
                 "cost": {...}
             }
         """
-        raise NotImplementedError
+        ...
 
     @abstractmethod
     async def call_module(
@@ -86,4 +86,3 @@ class CommunicationStrategy(BaseStrategy, ABC):
         # Make this an actual async generator to satisfy type checkers
         if False:  # pragma: no cover
             yield {}
-        raise NotImplementedError

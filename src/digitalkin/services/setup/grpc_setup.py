@@ -18,6 +18,7 @@ from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
 from digitalkin.logger import logger
 from digitalkin.models.grpc_servers.models import ClientConfig
 from digitalkin.services.setup.setup_strategy import SetupData, SetupServiceError, SetupStrategy, SetupVersionData
+from digitalkin.utils.proto_utils import proto_to_dict
 
 
 class GrpcSetup(SetupStrategy, GrpcClientWrapper):
@@ -154,7 +155,7 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
                 version=setup_dict.get("version", ""),
             )
             response = await self.exec_grpc_query("GetSetup", request)
-            response_data = json_format.MessageToDict(response, preserving_proto_field_name=True)
+            response_data = proto_to_dict(response)
             return SetupData(**response_data["setup"])
 
     async def update_setup(self, setup_dict: dict[str, Any]) -> bool:
@@ -264,9 +265,7 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
                 raise ValidationError(msg)
             request = setup_pb2.GetSetupVersionRequest(setup_version_id=setup_version_id)
             response = await self.exec_grpc_query("GetSetupVersion", request)
-            return SetupVersionData(
-                **json_format.MessageToDict(response.setup_version, preserving_proto_field_name=True)
-            )
+            return SetupVersionData(**proto_to_dict(response.setup_version))
 
     async def search_setup_versions(self, setup_version_dict: dict[str, Any]) -> list[SetupVersionData]:
         """Search for setup versions based on filters.
@@ -291,10 +290,7 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
                 version=setup_version_dict.get("version", ""),
             )
             response = await self.exec_grpc_query("SearchSetupVersions", request)
-            return [
-                SetupVersionData(**json_format.MessageToDict(sv, preserving_proto_field_name=True))
-                for sv in response.setup_versions
-            ]
+            return [SetupVersionData(**proto_to_dict(sv)) for sv in response.setup_versions]
 
     async def update_setup_version(self, setup_version_dict: dict[str, Any]) -> bool:
         """Update an existing setup version.
@@ -377,8 +373,6 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
             )
             response = await self.exec_grpc_query("ListSetups", request)
             return {
-                "setups": [
-                    json_format.MessageToDict(setup, preserving_proto_field_name=True) for setup in response.setups
-                ],
+                "setups": [proto_to_dict(setup) for setup in response.setups],
                 "total_count": response.total_count,
             }

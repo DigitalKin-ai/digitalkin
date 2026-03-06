@@ -3,7 +3,6 @@
 from typing import Literal
 
 from agentic_mesh_protocol.cost.v1 import cost_pb2, cost_service_pb2_grpc
-from google.protobuf import json_format
 
 from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
 from digitalkin.grpc_servers.utils.grpc_error_handler import GrpcErrorHandlerMixin
@@ -17,6 +16,7 @@ from digitalkin.services.cost.cost_strategy import (
     CostStrategy,
     CostType,
 )
+from digitalkin.utils.proto_utils import proto_to_dict
 
 
 class GrpcCost(CostStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
@@ -138,14 +138,7 @@ class GrpcCost(CostStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
         async with self.handle_grpc_errors("GetCost", CostServiceError):
             request = cost_pb2.GetCostRequest(name=name, mission_id=self.mission_id)
             response: cost_pb2.GetCostResponse = await self.exec_grpc_query("GetCost", request)
-            cost_data_list = [
-                json_format.MessageToDict(
-                    cost,
-                    preserving_proto_field_name=True,
-                    always_print_fields_with_no_presence=True,
-                )
-                for cost in response.costs
-            ]
+            cost_data_list = [proto_to_dict(cost, with_defaults=True) for cost in response.costs]
             logger.debug("Costs retrieved with cost_dict: %s", cost_data_list)
             return [CostData.model_validate(cost_data) for cost_data in cost_data_list]
 
@@ -172,14 +165,7 @@ class GrpcCost(CostStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
                 ),
             )
             response: cost_pb2.GetCostsResponse = await self.exec_grpc_query("GetCosts", request)
-            cost_data_list = [
-                json_format.MessageToDict(
-                    cost,
-                    preserving_proto_field_name=True,
-                    always_print_fields_with_no_presence=True,
-                )
-                for cost in response.costs
-            ]
+            cost_data_list = [proto_to_dict(cost, with_defaults=True) for cost in response.costs]
             logger.debug("Filtered costs retrieved with cost_dict: %s", cost_data_list)
             return [CostData.model_validate(cost_data) for cost_data in cost_data_list]
 
@@ -194,11 +180,7 @@ class GrpcCost(CostStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
             response: cost_pb2.GetCostConfigResponse = await self.exec_grpc_query("GetCostConfig", request)
             config_list = []
             for config in response.configs:
-                config_dict = json_format.MessageToDict(
-                    config,
-                    preserving_proto_field_name=True,
-                    always_print_fields_with_no_presence=True,
-                )
+                config_dict = proto_to_dict(config, with_defaults=True)
                 # Map proto field names to CostConfig field names
                 config_list.append(
                     CostConfig(

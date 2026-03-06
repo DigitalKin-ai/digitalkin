@@ -178,7 +178,7 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             queue.task_done()
             return item
         finally:
-            logger.info(f"generate_config_setup_module_response: {job_id=}: {self.job_queues[job_id].empty()}")
+            logger.info("generate_config_setup_module_response: job_id=%s: %s", job_id, self.job_queues[job_id].empty())
             self.job_queues.pop(job_id, None)
 
     async def create_config_setup_instance_job(

@@ -44,6 +44,7 @@ class BaseTaskManager(ABC):
         self._max_concurrent_tasks = int(os.environ.get("DIGITALKIN_MAX_CONCURRENT_TASKS", "100"))
         self._task_slot = asyncio.Semaphore(self._max_concurrent_tasks)
         self._task_wait_timeout = float(os.environ.get("DIGITALKIN_TASK_WAIT_TIMEOUT", "30"))
+        self._stream_drain_timeout = float(os.environ.get("DIGITALKIN_STREAM_DRAIN_TIMEOUT", "300.0"))
         self._cleanup_tasks: set[asyncio.Task] = set()
 
         # Admission queue: allows tasks to wait for a slot instead of being rejected.
@@ -112,14 +113,16 @@ class BaseTaskManager(ABC):
 
         if session:
             try:
-                await session.cleanup()
+                async with session._write_lock:  # noqa: SLF001
+                    await session.cleanup()
+                    self.tasks_sessions.pop(task_id, None)
             except Exception:
                 logger.exception(
                     "Session cleanup failed, forcing removal from tracking",
                     extra={"mission_id": mission_id, "task_id": task_id},
                 )
-            finally:
                 self.tasks_sessions.pop(task_id, None)
+            finally:
                 self._task_slot.release()
                 if self._max_queued_tasks > 0:
                     self._system_gate.release()
@@ -299,8 +302,7 @@ class BaseTaskManager(ABC):
             return
 
         try:
-            stream_drain_timeout = float(os.environ.get("DIGITALKIN_STREAM_DRAIN_TIMEOUT", "300.0"))
-            await asyncio.wait_for(session._stream_closed.wait(), timeout=stream_drain_timeout)  # noqa: SLF001
+            await asyncio.wait_for(session._stream_closed.wait(), timeout=self._stream_drain_timeout)  # noqa: SLF001
         except asyncio.TimeoutError:
             logger.warning(
                 "Stream drain timeout, proceeding with cleanup",

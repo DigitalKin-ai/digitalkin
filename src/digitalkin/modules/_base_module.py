@@ -442,7 +442,7 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
     @abstractmethod
     async def initialize(self, context: ModuleContext, setup_data: SetupModelT) -> None:
         """Initialize the module."""
-        raise NotImplementedError
+        ...
 
     async def run(
         self,
@@ -485,7 +485,7 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
     @abstractmethod
     async def cleanup(self) -> None:
         """Run the module."""
-        raise NotImplementedError
+        ...
 
     async def run_config_setup(  # Default implementation; subclasses may use self # noqa: PLR6301
         self,
@@ -593,6 +593,12 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
         logger.info("Stopping module %s | job_id=%s", self.name, self.context.session.job_id)
         try:
             self._status = ModuleStatus.STOPPING
+            # Flush any batched chat history before cleanup
+            if hasattr(self, "flush_chat_history"):
+                try:
+                    await self.flush_chat_history(self.context)
+                except Exception:
+                    logger.warning("Failed to flush chat history during stop", exc_info=True)
             await self.cleanup()
             await self.context.callbacks.send_message(
                 DataModel(
