@@ -25,6 +25,7 @@ class FileHistoryMixin(StorageMixin, LoggerMixin):
 
     def _ensure_state(self) -> None:
         """Lazily initialise all mixin state once."""
+        super()._ensure_state()
         if not hasattr(self, "_fh_cache"):
             self._fh_cache: dict[str, FileHistory] = {}
 
@@ -81,6 +82,7 @@ class FileHistoryMixin(StorageMixin, LoggerMixin):
         Raises:
             StorageServiceError: If history update fails
         """
+        self._ensure_state()
         history_key = self._get_history_key(context)
         file_history = await self.load_file_history(context)
         file_history.files.extend(files)

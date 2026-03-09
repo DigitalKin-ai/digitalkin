@@ -152,6 +152,7 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         self.job_queues: dict[str, asyncio.Queue] = {}
         self.max_queue_size = 1000
         self.stream_timeout = stream_timeout
+        self._config_setup_timeout = float(os.environ.get("DIGITALKIN_CONFIG_SETUP_TIMEOUT", "30.0"))
 
     async def generate_config_setup_module_response(self, job_id: str) -> SetupModelT:
         """Generate a stream consumer for a module's output data.
@@ -170,9 +171,11 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
 
         try:
             # Add timeout to prevent indefinite blocking
-            item = await asyncio.wait_for(queue.get(), timeout=30.0)
+            item = await asyncio.wait_for(queue.get(), timeout=self._config_setup_timeout)
         except asyncio.TimeoutError:
-            logger.error("Timeout waiting for config setup response for job %s", job_id)
+            logger.error(
+                "Timeout waiting for config setup response for job %s (%.1fs)", job_id, self._config_setup_timeout
+            )
             raise
         else:
             queue.task_done()

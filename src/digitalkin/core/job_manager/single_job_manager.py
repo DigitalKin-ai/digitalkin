@@ -52,6 +52,7 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         super().__init__(module_class, services_mode, task_manager)
 
         self._lock = asyncio.Lock()
+        self._config_setup_timeout = float(os.environ.get("DIGITALKIN_CONFIG_SETUP_TIMEOUT", "30.0"))
 
         # Backpressure configuration
         self._backpressure_strategy = BackpressureStrategy(os.environ.get("DIGITALKIN_BACKPRESSURE_STRATEGY", "block"))
@@ -82,12 +83,12 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         logger.debug("Module %s found: %s", job_id, session.module)
         try:
             # Add timeout to prevent indefinite blocking
-            return await asyncio.wait_for(session.queue.get(), timeout=30.0)
+            return await asyncio.wait_for(session.queue.get(), timeout=self._config_setup_timeout)
         except asyncio.TimeoutError:
             logger.error("Timeout waiting for config setup response from module %s", job_id)
             return ModuleCodeModel(
                 code=str(grpc.StatusCode.DEADLINE_EXCEEDED),
-                message=f"Module {job_id} did not respond within 30 seconds",
+                message=f"Module {job_id} did not respond within {self._config_setup_timeout} seconds",
             )
         finally:
             logger.debug(

@@ -35,6 +35,7 @@ class ChatHistoryMixin(UserMessageMixin, StorageMixin, LoggerMixin, Generic[Inpu
 
     def _ensure_state(self) -> None:
         """Lazily initialise all mixin state once."""
+        super()._ensure_state()
         if not hasattr(self, "_ch_cache"):
             self._ch_cache: dict[str, ChatHistory] = {}
             self._ch_persisted: set[str] = set()

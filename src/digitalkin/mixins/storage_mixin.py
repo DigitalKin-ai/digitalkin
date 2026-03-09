@@ -13,6 +13,9 @@ class StorageMixin:
     for trigger handlers.
     """
 
+    def _ensure_state(self) -> None:
+        """Base no-op for cooperative _ensure_state chain."""
+
     @staticmethod
     async def store_storage(
         context: ModuleContext,

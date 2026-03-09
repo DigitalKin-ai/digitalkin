@@ -4,6 +4,7 @@ This module contains comprehensive tests for the ModuleServicer class, which han
 module lifecycle, monitoring, and schema introspection operations.
 """
 
+import asyncio
 from collections.abc import AsyncGenerator
 from typing import Any
 from unittest.mock import AsyncMock, Mock, patch
@@ -115,6 +116,7 @@ def module_servicer(mock_job_manager, mock_setup_strategy):
     servicer.setup = mock_setup_strategy
     servicer._setup_cache = {}
     servicer._setup_cache_max = 100
+    servicer._setup_resolve_locks: dict[str, asyncio.Lock] = {}
     servicer._completion_timeout = 300.0
 
     return servicer

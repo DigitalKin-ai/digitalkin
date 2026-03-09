@@ -1,7 +1,8 @@
 """Tool reference types for module configuration."""
 
 import asyncio
-from typing import Annotated
+import os
+from typing import Annotated, ClassVar
 
 from pydantic import AfterValidator, BaseModel, BeforeValidator, Field, PlainSerializer
 from pydantic.annotated_handlers import GetJsonSchemaHandler
@@ -24,12 +25,16 @@ class ToolSelection(BaseModel):
 class ToolReference(BaseModel):
     """Tool selection containing setup IDs and trigger filters."""
 
+    _TOOL_RESOLVE_TIMEOUT: ClassVar[float] = float(os.environ.get("DIGITALKIN_TOOL_RESOLVE_TIMEOUT", "10.0"))
+
     selected_tools: list[ToolSelection] = Field(
         default_factory=list, description="Selected tools with trigger filters."
     )
 
     async def resolve(self, registry: RegistryStrategy, communication: CommunicationStrategy) -> list[ToolModuleInfo]:
         """Resolve selected tools using the registry.
+
+        Each tool resolution is bounded by DIGITALKIN_TOOL_RESOLVE_TIMEOUT (default 10s).
 
         Args:
             registry: Registry service for module discovery.
@@ -38,8 +43,16 @@ class ToolReference(BaseModel):
         Returns:
             List of ToolModuleInfo for resolved tools, filtered by enabled triggers.
         """
+        timeout = self._TOOL_RESOLVE_TIMEOUT
+
+        async def _resolve_with_timeout(entry: ToolSelection) -> ToolModuleInfo | None:
+            return await asyncio.wait_for(
+                ToolReference._resolve_single(entry, registry, communication),
+                timeout=timeout,
+            )
+
         results = await asyncio.gather(
-            *(ToolReference._resolve_single(entry, registry, communication) for entry in self.selected_tools),
+            *(_resolve_with_timeout(entry) for entry in self.selected_tools),
             return_exceptions=True,
         )
         resolved: list[ToolModuleInfo] = []

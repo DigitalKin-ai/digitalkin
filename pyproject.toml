@@ -25,7 +25,7 @@
         "Programming Language :: Python",
         "Topic :: Software Development :: Libraries",
     ]
-    version = "0.3.2b22"
+    version = "0.3.2b23"
 
     dependencies = [
         "agentic-mesh-protocol==0.2.3",
@@ -49,7 +49,6 @@
             "taskiq-redis==1.2.2",
             "taskiq[reload]==0.12.1",
         ]
-
     [project.urls]
         Documentation = "https://github.com/DigitalKin-ai/digitalkin"
         Homepage      = "https://github.com/DigitalKin-ai/digitalkin"

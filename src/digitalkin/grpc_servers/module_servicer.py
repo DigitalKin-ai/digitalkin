@@ -88,6 +88,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         self.setup = GrpcSetup() if self.args.services_mode == ServicesMode.REMOTE else DefaultSetup()
         self._setup_cache: dict[str, SetupVersionData] = {}
         self._setup_cache_max = int(os.environ.get("DIGITALKIN_SETUP_CACHE_MAX", "100"))
+        self._setup_resolve_locks: dict[str, asyncio.Lock] = {}
         self._completion_timeout = float(os.environ.get("DIGITALKIN_COMPLETION_TIMEOUT", "300.0"))
 
     async def shutdown(self) -> None:
@@ -127,6 +128,13 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         self._registry_cache = GrpcRegistry("", "", "", client_config)
         return self._registry_cache
 
+    def _cache_setup(self, setup_id: str, version_data: SetupVersionData) -> None:
+        """Cache setup version data, evicting oldest entry if at capacity."""
+        if len(self._setup_cache) >= self._setup_cache_max:
+            oldest_key = next(iter(self._setup_cache))
+            del self._setup_cache[oldest_key]
+        self._setup_cache[setup_id] = version_data
+
     async def _resolve_setup(self, setup_id: str, mission_id: str) -> SetupVersionData:
         """Return setup version data from cache or remote service.
 
@@ -143,12 +151,26 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             ServerError: gRPC communication failed.
             ValidationError: Setup data failed validation.
         """
+        # Fast path: cache hit
         if (cached := self._setup_cache.get(setup_id)) is not None:
             logger.debug("debug:_resolve_setup cache hit setup_id=%s", setup_id)
             return cached
-        logger.debug("debug:_resolve_setup cache miss setup_id=%s mission_id=%s", setup_id, mission_id)
-        if (setup_data := await self.setup.get_setup({"setup_id": setup_id, "mission_id": mission_id})) is not None:
-            return setup_data.current_setup_version
+
+        # Slow path: coalesce concurrent misses with per-key lock
+        if setup_id not in self._setup_resolve_locks:
+            self._setup_resolve_locks[setup_id] = asyncio.Lock()
+
+        async with self._setup_resolve_locks[setup_id]:
+            # Re-check after lock — another coroutine may have populated cache
+            if (cached := self._setup_cache.get(setup_id)) is not None:
+                logger.debug("debug:_resolve_setup cache hit after lock setup_id=%s", setup_id)
+                return cached
+
+            logger.debug("debug:_resolve_setup cache miss setup_id=%s mission_id=%s", setup_id, mission_id)
+            if (setup_data := await self.setup.get_setup({"setup_id": setup_id, "mission_id": mission_id})) is not None:
+                self._cache_setup(setup_id, setup_data.current_setup_version)
+                return setup_data.current_setup_version
+
         raise LookupError(setup_id)
 
     async def ConfigSetupModule(
@@ -240,15 +262,14 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
 
         logger.debug("Updated setup data", extra={"job_id": job_id, "setup_data": updated_setup_data})
 
-        # Update cache (cap size to prevent unbounded growth)
-        if len(self._setup_cache) >= self._setup_cache_max:
-            # Evict oldest entry (FIFO)
-            oldest_key = next(iter(self._setup_cache))
-            del self._setup_cache[oldest_key]
-        self._setup_cache[setup_version.setup_id] = SetupVersionData.model_construct(
-            id=setup_version.id,
-            setup_id=setup_version.setup_id,
-            content=updated_setup_data,
+        # Update cache
+        self._cache_setup(
+            setup_version.setup_id,
+            SetupVersionData.model_construct(
+                id=setup_version.id,
+                setup_id=setup_version.setup_id,
+                content=updated_setup_data,
+            ),
         )
         setup_version.content = json_format.ParseDict(  # type: ignore[misc]  # proto __slots__ not fully typed
             updated_setup_data,

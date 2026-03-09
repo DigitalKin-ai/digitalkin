@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import os
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -140,6 +141,8 @@ class GrpcClientWrapper:
         grpc.StatusCode.INTERNAL,
         grpc.StatusCode.DEADLINE_EXCEEDED,
     }
+    _QUERY_MAX_RETRIES: ClassVar[int] = int(os.environ.get("DIGITALKIN_GRPC_QUERY_MAX_RETRIES", "2"))
+    _QUERY_BACKOFF_BASE_MS: ClassVar[float] = float(os.environ.get("DIGITALKIN_GRPC_QUERY_BACKOFF_BASE_MS", "50"))
 
     async def exec_grpc_query(
         self,
@@ -149,8 +152,9 @@ class GrpcClientWrapper:
     ) -> Any:
         """Execute a gRPC query with from the query's rpc endpoint name.
 
-        Retries up to 2 times on transient errors (UNAVAILABLE, INTERNAL)
-        with exponential backoff (50ms, 100ms).
+        Retries on transient errors (UNAVAILABLE, INTERNAL, DEADLINE_EXCEEDED)
+        with exponential backoff. Retry count and backoff base are configurable
+        via DIGITALKIN_GRPC_QUERY_MAX_RETRIES and DIGITALKIN_GRPC_QUERY_BACKOFF_BASE_MS.
 
         Arguments:
             query_endpoint: rpc query name (e.g., "GetSetup", "CreateSetupVersion")
@@ -163,8 +167,8 @@ class GrpcClientWrapper:
         Raises:
             ServerError: gRPC error with status code and details for caller to handle.
         """
-        max_retries = 2
-        backoff_delays = (0.05, 0.1)
+        max_retries = self._QUERY_MAX_RETRIES
+        backoff_delays = tuple(self._QUERY_BACKOFF_BASE_MS / 1000 * (2**i) for i in range(max_retries))
         last_error: grpc.RpcError | None = None
 
         for attempt in range(max_retries + 1):
