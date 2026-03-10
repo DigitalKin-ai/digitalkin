@@ -88,7 +88,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         self.setup = GrpcSetup() if self.args.services_mode == ServicesMode.REMOTE else DefaultSetup()
         self._setup_cache: dict[str, SetupVersionData] = {}
         self._setup_cache_max = int(os.environ.get("DIGITALKIN_SETUP_CACHE_MAX", "100"))
-        self._setup_resolve_locks: dict[str, asyncio.Lock] = {}
+        self._setup_inflight: dict[str, asyncio.Future[SetupVersionData]] = {}
         self._completion_timeout = float(os.environ.get("DIGITALKIN_COMPLETION_TIMEOUT", "300.0"))
 
     async def shutdown(self) -> None:
@@ -156,22 +156,42 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             logger.debug("debug:_resolve_setup cache hit setup_id=%s", setup_id)
             return cached
 
-        # Slow path: coalesce concurrent misses with per-key lock
-        if setup_id not in self._setup_resolve_locks:
-            self._setup_resolve_locks[setup_id] = asyncio.Lock()
+        # Coalesce concurrent misses: first caller fetches, others await the same future
+        if setup_id in self._setup_inflight:
+            logger.debug("debug:_resolve_setup coalesced setup_id=%s", setup_id)
+            return await self._setup_inflight[setup_id]
 
-        async with self._setup_resolve_locks[setup_id]:
-            # Re-check after lock — another coroutine may have populated cache
-            if (cached := self._setup_cache.get(setup_id)) is not None:
-                logger.debug("debug:_resolve_setup cache hit after lock setup_id=%s", setup_id)
-                return cached
+        loop = asyncio.get_running_loop()
+        fut: asyncio.Future[SetupVersionData] = loop.create_future()
+        self._setup_inflight[setup_id] = fut
+        try:
+            result = await self._fetch_setup(setup_id, mission_id)
+        except BaseException as exc:
+            if not fut.done():
+                fut.set_exception(exc)
+            raise
+        else:
+            fut.set_result(result)
+            return result
+        finally:
+            self._setup_inflight.pop(setup_id, None)
 
-            logger.debug("debug:_resolve_setup cache miss setup_id=%s mission_id=%s", setup_id, mission_id)
-            if (setup_data := await self.setup.get_setup({"setup_id": setup_id, "mission_id": mission_id})) is not None:
-                self._cache_setup(setup_id, setup_data.current_setup_version)
-                return setup_data.current_setup_version
+    async def _fetch_setup(self, setup_id: str, mission_id: str) -> SetupVersionData:
+        """Fetch setup from remote service and cache it.
 
-        raise LookupError(setup_id)
+        Returns:
+            Resolved SetupVersionData.
+
+        Raises:
+            LookupError: No setup data found for setup_id.
+        """
+        logger.debug("debug:_resolve_setup cache miss setup_id=%s mission_id=%s", setup_id, mission_id)
+        setup_data = await self.setup.get_setup({"setup_id": setup_id, "mission_id": mission_id})
+        if setup_data is None:
+            raise LookupError(setup_id)
+        result = setup_data.current_setup_version
+        self._cache_setup(setup_id, result)
+        return result
 
     async def ConfigSetupModule(
         self,

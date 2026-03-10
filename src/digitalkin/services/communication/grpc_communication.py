@@ -85,8 +85,8 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
             await GrpcClientWrapper.release_cached_channel(key)
         self._pool_keys.clear()
 
-    async def cleanup(self) -> None:
-        """Clean up all gRPC channels."""
+    async def close(self) -> None:
+        """Release all pooled gRPC channels."""
         await self.close_all_channels()
 
     def _create_stub(self, module_address: str, module_port: int) -> module_service_pb2_grpc.ModuleServiceStub:

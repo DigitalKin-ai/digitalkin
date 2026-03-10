@@ -224,8 +224,10 @@ class _SharedPoller(_SharedChannelResource):
             else:
                 logger.warning("Signal queue full for task_id=%s, dropping signal", task_proto.task_id)
         if task_proto.action in {"stop", "cancel"}:
-            with contextlib.suppress(Exception):
+            try:
                 queue.put_nowait(None)
+            except Exception:
+                logger.debug("Could not enqueue None sentinel for task_id=%s", task_proto.task_id)
             self.unregister(task_proto.task_id)
         return True
 
@@ -392,7 +394,6 @@ class _SharedSendBuffer(_SharedChannelResource):
                         1 + self._max_retries,
                         e.code().name,
                         (delay + jitter) * 1000,
-                        extra={"batch_size": len(task_protos)},
                     )
                     await asyncio.sleep(delay + jitter)
                     continue

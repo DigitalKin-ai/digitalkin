@@ -43,14 +43,16 @@ class BaseTaskManager(ABC):
         self._tasks_lock = asyncio.Lock()
         self._max_concurrent_tasks = int(os.environ.get("DIGITALKIN_MAX_CONCURRENT_TASKS", "100"))
         self._task_slot = asyncio.Semaphore(self._max_concurrent_tasks)
+        self._active_slots = 0
         self._task_wait_timeout = float(os.environ.get("DIGITALKIN_TASK_WAIT_TIMEOUT", "30"))
-        self._stream_drain_timeout = float(os.environ.get("DIGITALKIN_STREAM_DRAIN_TIMEOUT", "300.0"))
+        self._stream_drain_timeout = float(os.environ.get("DIGITALKIN_STREAM_DRAIN_TIMEOUT", "60.0"))
         self._cleanup_tasks: set[asyncio.Task] = set()
 
         # Admission queue: allows tasks to wait for a slot instead of being rejected.
         # Total in-system capacity = max_concurrent + max_queued.
         self._max_queued_tasks = int(os.environ.get("DIGITALKIN_MAX_QUEUED_TASKS", "0"))
         self._admission_timeout = float(os.environ.get("DIGITALKIN_ADMISSION_TIMEOUT", "5.0"))
+        self._queue_slot_timeout = float(os.environ.get("DIGITALKIN_QUEUE_SLOT_TIMEOUT", "600.0"))
         self._system_gate = asyncio.Semaphore(self._max_concurrent_tasks + self._max_queued_tasks)
         self._waiting_count = 0
 
@@ -71,73 +73,72 @@ class BaseTaskManager(ABC):
     def max_concurrent_tasks(self, value: int) -> None:
         self._max_concurrent_tasks = value
         self._task_slot = asyncio.Semaphore(value)
+        self._active_slots = 0
         self._system_gate = asyncio.Semaphore(value + self._max_queued_tasks)
 
     @property
     def task_count(self) -> int:
         """Number of active tasks (pending or running)."""
-        return sum(1 for s in self.tasks_sessions.values() if s.status in {"pending", "running"})
+        return sum(1 for s in list(self.tasks_sessions.values()) if s.status in {"pending", "running"})
 
     @property
     def running_tasks(self) -> set[str]:
         """Get IDs of currently running tasks."""
-        return {task_id for task_id, task in self.tasks.items() if not task.done()}
+        return {task_id for task_id, task in list(self.tasks.items()) if not task.done()}
 
     async def _cleanup_task(self, task_id: str, mission_id: str) -> None:
-        """Clean up task resources.
+        """Clean up task resources (idempotent).
 
-        Delegates cleanup to TaskSession which handles:
-        - Clearing queue items to free memory
-        - Stopping module (if not already stopped)
-        - Cleaning up module context services
+        Graceful drain: closes the stream under the write lock before popping
+        the session so in-flight add_to_queue calls see stream_closed and exit
+        cleanly instead of hitting "session not found".
 
-        Then removes task from tracking dictionaries.
+        Atomic pop still guards semaphore release against concurrent callers
+        (cancel_task finally + deferred_cleanup).
 
         Args:
             task_id: The ID of the task to clean up
             mission_id: The ID of the mission associated with the task
         """
         session = self.tasks_sessions.get(task_id)
-        cancellation_reason = session.cancellation_reason.value if session else "no_session"
-        final_status = session.status if session else "unknown"
+        if session is not None:
+            # Close stream under write lock so pending writes finish first,
+            # then see stream_closed on their next attempt.
+            async with session._write_lock:  # noqa: SLF001
+                session.close_stream()
 
-        logger.debug(
-            "Cleaning up resources",
-            extra={
-                "mission_id": mission_id,
-                "task_id": task_id,
-                "final_status": final_status,
-                "cancellation_reason": cancellation_reason,
-            },
-        )
-
-        if session:
-            try:
-                async with session._write_lock:  # noqa: SLF001
-                    await session.cleanup()
-                    self.tasks_sessions.pop(task_id, None)
-            except Exception:
-                logger.exception(
-                    "Session cleanup failed, forcing removal from tracking",
-                    extra={"mission_id": mission_id, "task_id": task_id},
-                )
-                self.tasks_sessions.pop(task_id, None)
-            finally:
-                self._task_slot.release()
-                if self._max_queued_tasks > 0:
-                    self._system_gate.release()
-                logger.debug(
-                    "Task cleaned up (%d remaining)",
-                    len(self.tasks_sessions),
-                    extra={
-                        "mission_id": mission_id,
-                        "task_id": task_id,
-                        "final_status": final_status,
-                        "cancellation_reason": cancellation_reason,
-                    },
-                )
-
+        # Atomic pop — second concurrent caller gets None and returns
+        session = self.tasks_sessions.pop(task_id, None)
         self.tasks.pop(task_id, None)
+
+        if session is None:
+            return
+
+        cancellation_reason = session.cancellation_reason.value
+        final_status = session.status
+
+        try:
+            await session.cleanup()
+        except Exception:
+            logger.exception(
+                "Session cleanup failed",
+                extra={"mission_id": mission_id, "task_id": task_id},
+            )
+        finally:
+            self._active_slots -= 1  # Safe: no await between read/write (single-threaded asyncio)
+            self._task_slot.release()
+            if self._max_queued_tasks > 0:
+                self._system_gate.release()
+            logger.debug(
+                "Task cleaned up (%d remaining)",
+                len(self.tasks_sessions),
+                extra={
+                    "mission_id": mission_id,
+                    "task_id": task_id,
+                    "final_status": final_status,
+                    "cancellation_reason": cancellation_reason,
+                },
+            )
 
     async def _validate_task_creation(self, task_id: str, mission_id: str, coro: Coroutine[Any, Any, None]) -> None:
         """Validate task creation preconditions.
@@ -194,11 +195,13 @@ class BaseTaskManager(ABC):
             msg = f"Maximum concurrent tasks ({self.max_concurrent_tasks}) reached, waited {self._task_wait_timeout}s"
             raise RuntimeError(msg) from None
 
-        if self._task_slot._value < self.max_concurrent_tasks * 2 // 10:  # noqa: SLF001
+        self._active_slots += 1  # Safe: no await between read/write (single-threaded asyncio)
+        available = self._max_concurrent_tasks - self._active_slots
+        if available < self._max_concurrent_tasks * 2 // 10:
             logger.warning(
                 "Task slot capacity low: %d/%d available",
-                self._task_slot._value,  # noqa: SLF001
-                self.max_concurrent_tasks,
+                available,
+                self._max_concurrent_tasks,
             )
 
     async def _acquire_with_queue(self, coro: Coroutine[Any, Any, None]) -> None:
@@ -219,17 +222,22 @@ class BaseTaskManager(ABC):
             )
             raise RuntimeError(msg) from None
 
-        # Phase 2: Wait for execution slot (patient — no timeout)
+        # Phase 2: Wait for execution slot (bounded to catch zombie slot hoarding)
         self._waiting_count += 1
         if self._waiting_count > 0:
             logger.info(
                 "Task queued for execution (%d waiting, %d/%d slots busy)",
                 self._waiting_count,
-                self._max_concurrent_tasks - self._task_slot._value,  # noqa: SLF001
+                self._active_slots,
                 self._max_concurrent_tasks,
             )
         try:
-            await self._task_slot.acquire()
+            await asyncio.wait_for(self._task_slot.acquire(), timeout=self._queue_slot_timeout)
+        except asyncio.TimeoutError:
+            self._system_gate.release()
+            coro.close()
+            msg = f"Queued task waited {self._queue_slot_timeout}s for execution slot, giving up"
+            raise RuntimeError(msg) from None
         except BaseException:
             self._system_gate.release()
             coro.close()
@@ -237,11 +245,13 @@ class BaseTaskManager(ABC):
         finally:
             self._waiting_count -= 1
 
-        if self._task_slot._value < self.max_concurrent_tasks * 2 // 10:  # noqa: SLF001
+        self._active_slots += 1  # Safe: no await between read/write (single-threaded asyncio)
+        available = self._max_concurrent_tasks - self._active_slots
+        if available < self._max_concurrent_tasks * 2 // 10:
             logger.warning(
                 "Task slot capacity low: %d/%d available",
-                self._task_slot._value,  # noqa: SLF001
-                self.max_concurrent_tasks,
+                available,
+                self._max_concurrent_tasks,
             )
 
     def _create_session(

@@ -375,12 +375,7 @@ class ModuleContext:
         return tool_function
 
     async def cleanup(self) -> None:
-        """Clean up all service resources.
-
-        Closes gRPC-backed services (task_manager, communication channel pool).
-        """
-        from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
-
+        """Close all service strategies and release their resources."""
         for service in (
             self.task_manager,
             self.communication,
@@ -389,18 +384,12 @@ class ModuleContext:
             self.registry,
             self.filesystem,
             self.user_profile,
+            self.agent,
+            self.identity,
+            self.snapshot,
         ):
-            if isinstance(service, GrpcClientWrapper):
+            if service is not None:
                 try:
-                    await service.close_channel()
+                    await service.close()
                 except Exception:
-                    logger.exception("Error closing gRPC channel for %s", type(service).__name__)
-
-        if self.task_manager is not None:
-            try:
-                await self.task_manager.close()
-            except Exception:
-                logger.exception("Error closing task_manager service")
-
-        if self.communication is not None:
-            await self.communication.cleanup()
+                    logger.exception("Error closing %s", type(service).__name__)

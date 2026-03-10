@@ -19,7 +19,7 @@ from rstream import Consumer, ConsumerOffsetSpecification, MessageContext, Offse
 
 from digitalkin.core.common import QueueFactory
 from digitalkin.core.job_manager.base_job_manager import BaseJobManager
-from digitalkin.core.job_manager.taskiq_broker import STREAM, STREAM_RETENTION, TASKIQ_BROKER, cleanup_global_resources
+from digitalkin.core.job_manager.taskiq_broker import TASKIQ_BROKER, TaskiqBrokerConfig
 from digitalkin.core.task_manager.remote_task_manager import RemoteTaskManager
 from digitalkin.logger import logger
 from digitalkin.models.module.module_types import InputModelT, OutputModelT, SetupModelT
@@ -79,16 +79,16 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         self.stream_consumer = self._define_consumer()
 
         await self.stream_consumer.create_stream(
-            STREAM,
+            TaskiqBrokerConfig.STREAM,
             exists_ok=True,
-            arguments={"max-length-bytes": STREAM_RETENTION},
+            arguments={"max-length-bytes": TaskiqBrokerConfig.STREAM_RETENTION},
         )
         await self.stream_consumer.start()
 
         start_spec = ConsumerOffsetSpecification(OffsetType.LAST)
         # on_message use bytes instead of AMQPMessage
         await self.stream_consumer.subscribe(
-            stream=STREAM,
+            stream=TaskiqBrokerConfig.STREAM,
             subscriber_name=f"""subscriber_{os.environ.get("SERVER_NAME", "module_servicer")}""",
             callback=self._on_message,  # RStream expects (bytes, MessageContext) callback # type: ignore
             offset_specification=start_spec,
@@ -125,7 +125,7 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         logger.info("TaskiqJobManager: Cleared %d job queues", queue_count)
 
         # Call global cleanup for producer and broker
-        await cleanup_global_resources()
+        await TaskiqBrokerConfig.cleanup_global_resources()
 
     def __init__(
         self,

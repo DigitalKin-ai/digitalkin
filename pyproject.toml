@@ -25,7 +25,6 @@
         "Programming Language :: Python",
         "Topic :: Software Development :: Libraries",
     ]
-    version = "0.3.2b23"
 
     dependencies = [
         "agentic-mesh-protocol==0.2.3",
@@ -35,6 +34,7 @@
         "grpcio-status==1.78.0",
         "pydantic==2.12.5",
     ]
+    version = "0.3.2b24"
 
     [project.optional-dependencies]
         profiling = [

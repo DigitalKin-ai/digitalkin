@@ -593,12 +593,14 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
         logger.info("Stopping module %s | job_id=%s", self.name, self.context.session.job_id)
         try:
             self._status = ModuleStatus.STOPPING
-            # Flush any batched chat history before cleanup
-            if hasattr(self, "flush_chat_history"):
-                try:
-                    await self.flush_chat_history(self.context)
-                except Exception:
-                    logger.warning("Failed to flush chat history during stop", exc_info=True)
+            # Flush batched histories from all handler instances
+            try:
+                for handlers in self.triggers_discoverer.trigger_handlers.values():
+                    for handler in handlers:
+                        await handler.flush_chat_history(self.context)
+                        await handler.flush_file_history(self.context)
+            except Exception:
+                logger.warning("Failed to flush handler history during stop", exc_info=True)
             await self.cleanup()
             await self.context.callbacks.send_message(
                 DataModel(

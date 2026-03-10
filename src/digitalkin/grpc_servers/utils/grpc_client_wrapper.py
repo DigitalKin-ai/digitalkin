@@ -92,6 +92,10 @@ class GrpcClientWrapper:
         self._channel_cache_key = cache_key
         return channel
 
+    async def close(self) -> None:
+        """Release this instance's gRPC channel ref. Subclasses override to release extra resources."""
+        await self.close_channel()
+
     async def close_channel(self) -> None:
         """Release this instance's ref on the cached channel.
 
@@ -211,7 +215,6 @@ class GrpcClientWrapper:
             status_code,
             details,
             type(request).__name__,
-            extra={"service_name": self.service_name, "endpoint": query_endpoint},
         )
         error_msg = f"[gRPC-client:{self.service_name}.{query_endpoint}] [{status_code}] {details}{suffix}"
         raise ServerError(error_msg) from last_error

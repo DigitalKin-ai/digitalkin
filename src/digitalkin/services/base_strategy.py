@@ -20,3 +20,6 @@ class BaseStrategy(ABC):
         self.mission_id: str = mission_id
         self.setup_id: str = setup_id
         self.setup_version_id: str = setup_version_id
+
+    async def close(self) -> None:
+        """Release resources held by this strategy. No-op by default."""

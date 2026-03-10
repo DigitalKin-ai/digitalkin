@@ -165,9 +165,10 @@ def add_file_handler(logger: logging.Logger) -> None:
     if not os.path.isdir(log_dir):
         return
 
-    log_file = os.path.join(log_dir, f"{logger.name}.log")
+    log_file = os.environ.get("DIGITALKIN_LOG_FILE", os.path.join(log_dir, f"{logger.name}.log"))
     fh = RotatingFileHandler(log_file, maxBytes=10 * 1024 * 1024, backupCount=5)
-    fh.setLevel(logging.DEBUG)
+    file_level = getattr(logging, os.environ.get("DIGITALKIN_FILE_LOG_LEVEL", "DEBUG").upper(), logging.DEBUG)
+    fh.setLevel(file_level)
     fh.setFormatter(PlainJSONFormatter())
     logger.addHandler(fh)
 
@@ -228,5 +229,5 @@ def setup_logger(
 
 logger = setup_logger(
     "digitalkin",
-    level=logging.INFO,
+    level=getattr(logging, os.environ.get("DIGITALKIN_LOG_LEVEL", "INFO").upper(), logging.INFO),
 )

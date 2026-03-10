@@ -16,8 +16,6 @@ from digitalkin.models.module.module_context import ModuleContext
 from digitalkin.models.module.module_types import InputModelT, OutputModelT
 from digitalkin.models.services.storage import BaseMessage, ChatHistory, Role
 
-_FLUSH_THRESHOLD = int(os.environ.get("DIGITALKIN_CHAT_HISTORY_FLUSH_THRESHOLD", "10"))
-
 
 class ChatHistoryMixin(UserMessageMixin, StorageMixin, LoggerMixin, Generic[InputModelT, OutputModelT]):
     """Mixin providing chat history operations through storage strategy.
@@ -33,14 +31,14 @@ class ChatHistoryMixin(UserMessageMixin, StorageMixin, LoggerMixin, Generic[Inpu
     CHAT_HISTORY_COLLECTION = "chat_history"
     CHAT_HISTORY_RECORD_ID = "full_chat_history"
 
-    def _ensure_state(self) -> None:
-        """Lazily initialise all mixin state once."""
-        super()._ensure_state()
-        if not hasattr(self, "_ch_cache"):
-            self._ch_cache: dict[str, ChatHistory] = {}
-            self._ch_persisted: set[str] = set()
-            self._ch_dirty: dict[str, int] = {}  # history_key -> pending count
-            self._ch_flush_lock = asyncio.Lock()
+    def __init__(self) -> None:
+        """Initialize chat history state."""
+        super().__init__()
+        self._ch_cache: dict[str, ChatHistory] = {}
+        self._ch_persisted: set[str] = set()
+        self._ch_dirty: dict[str, int] = {}
+        self._ch_flush_lock = asyncio.Lock()
+        self._ch_flush_threshold: int = int(os.environ.get("DIGITALKIN_CHAT_HISTORY_FLUSH_THRESHOLD", "10"))
 
     def _get_history_key(self, context: ModuleContext) -> str:
         """Get session-specific history key.
@@ -57,12 +55,11 @@ class ChatHistoryMixin(UserMessageMixin, StorageMixin, LoggerMixin, Generic[Inpu
         Returns cached history on subsequent calls to avoid gRPC reads.
 
         Args:
-            context: Module context containing storage strategy
+            context: Module context containing storage strategy.
 
         Returns:
-            Chat history object, empty if none exists or loading fails
+            Chat history object, empty if none exists or loading fails.
         """
-        self._ensure_state()
         history_key = self._get_history_key(context)
 
         if history_key in self._ch_cache:
@@ -91,11 +88,10 @@ class ChatHistoryMixin(UserMessageMixin, StorageMixin, LoggerMixin, Generic[Inpu
         env: DIGITALKIN_CHAT_HISTORY_FLUSH_THRESHOLD) or flush_chat_history().
 
         Args:
-            context: Module context containing storage strategy
-            role: Message role (user, assistant, system)
-            content: Message content
+            context: Module context containing storage strategy.
+            role: Message role (user, assistant, system).
+            content: Message content.
         """
-        self._ensure_state()
         history_key = self._get_history_key(context)
         chat_history = await self.load_chat_history(context)
         chat_history.messages.append(BaseMessage(role=role, content=content))
@@ -103,8 +99,8 @@ class ChatHistoryMixin(UserMessageMixin, StorageMixin, LoggerMixin, Generic[Inpu
         pending = self._ch_dirty.get(history_key, 0) + 1
         self._ch_dirty[history_key] = pending
 
-        if pending >= _FLUSH_THRESHOLD:
-            await self._flush_key(context, history_key)
+        if pending >= self._ch_flush_threshold:
+            await self._flush_ch_key(context, history_key)
 
     async def flush_chat_history(self, context: ModuleContext) -> None:
         """Flush all dirty chat history keys to storage.
@@ -112,13 +108,12 @@ class ChatHistoryMixin(UserMessageMixin, StorageMixin, LoggerMixin, Generic[Inpu
         Call at end of mission / trigger to persist buffered messages.
 
         Args:
-            context: Module context containing storage strategy
+            context: Module context containing storage strategy.
         """
-        self._ensure_state()
         for key in list(self._ch_dirty):
-            await self._flush_key(context, key)
+            await self._flush_ch_key(context, key)
 
-    async def _flush_key(self, context: ModuleContext, history_key: str) -> None:
+    async def _flush_ch_key(self, context: ModuleContext, history_key: str) -> None:
         """Persist a single dirty history key to storage."""
         async with self._ch_flush_lock:
             if history_key not in self._ch_dirty:
@@ -152,9 +147,9 @@ class ChatHistoryMixin(UserMessageMixin, StorageMixin, LoggerMixin, Generic[Inpu
         """Save output to chat history and send response to the module request.
 
         Args:
-            context: Module context containing storage strategy
-            role: Message role (user, assistant, system)
-            output: Message content as Pydantic Class
+            context: Module context containing storage strategy.
+            role: Message role (user, assistant, system).
+            output: Message content as Pydantic Class.
         """
         await self.append_chat_history_message(context=context, role=role, content=output.root)
         await self.send_message(context=context, output=output)
