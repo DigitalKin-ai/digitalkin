@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from digitalkin.models.module.setup_types import SetupModel
-from digitalkin.models.module.tool_cache import ToolCache, ToolDefinition, ToolModuleInfo, ToolParameter
+from digitalkin.models.module.tool_cache import ToolCache, ToolDefinition, ToolModuleInfo
 from digitalkin.models.module.tool_reference import ToolReference, ToolSelection
 from digitalkin.models.services.registry import ModuleInfo, RegistryModuleType, SetupInfo
 
@@ -27,9 +27,11 @@ def sample_tool_module_info() -> ToolModuleInfo:
             ToolDefinition(
                 name="search",
                 description="Search for items",
-                parameters=[
-                    ToolParameter(name="query", type="string", description="Search query", required=True),
-                ],
+                parameters_schema={
+                    "type": "object",
+                    "properties": {"query": {"type": "string", "description": "Search query"}},
+                    "required": ["query"],
+                },
             ),
         ],
     )
@@ -52,9 +54,11 @@ def sample_tool_module_info_2() -> ToolModuleInfo:
             ToolDefinition(
                 name="analyze",
                 description="Analyze data",
-                parameters=[
-                    ToolParameter(name="data", type="string", description="Data to analyze", required=True),
-                ],
+                parameters_schema={
+                    "type": "object",
+                    "properties": {"data": {"type": "string", "description": "Data to analyze"}},
+                    "required": ["data"],
+                },
             ),
         ],
     )

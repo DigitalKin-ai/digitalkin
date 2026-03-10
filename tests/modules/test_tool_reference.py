@@ -10,7 +10,7 @@ import pytest
 from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 
 from digitalkin.models.module.setup_types import SetupModel
-from digitalkin.models.module.tool_cache import ToolDefinition, ToolModuleInfo, ToolParameter
+from digitalkin.models.module.tool_cache import ToolDefinition, ToolModuleInfo
 from digitalkin.models.module.tool_reference import ToolReference, ToolSelection, tool_reference_input
 from digitalkin.models.services.registry import (
     ModuleInfo,
@@ -120,9 +120,11 @@ def create_tool_module_info(
             ToolDefinition(
                 name="search",
                 description="Search for items",
-                parameters=[
-                    ToolParameter(name="query", type="string", description="Search query", required=True),
-                ],
+                parameters_schema={
+                    "type": "object",
+                    "properties": {"query": {"type": "string", "description": "Search query"}},
+                    "required": ["query"],
+                },
             ),
         ],
     )

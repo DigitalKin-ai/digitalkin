@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 
 from digitalkin.logger import logger
 from digitalkin.models.services.registry import ModuleInfo
+from digitalkin.utils.llm_ready_schema import inline_refs
 
 
 class SelectedTool(BaseModel):
@@ -22,40 +23,30 @@ if TYPE_CHECKING:
     from digitalkin.services.communication import CommunicationStrategy
 
 
-class ToolParameter(BaseModel):
-    """Definition of a single tool parameter.
-
-    Attributes:
-        name: Parameter name.
-        type: JSON Schema type (string, integer, number, boolean, array, object).
-        description: Parameter description for the LLM.
-        required: Whether this parameter is required.
-        enum: Optional list of allowed values.
-        items: Optional schema for array item types.
-        properties: Optional schema for object properties.
-    """
-
-    name: str
-    type: str
-    description: str
-    required: bool = True
-    enum: list[str] | None = None
-    items: dict[str, Any] | None = None
-    properties: dict[str, Any] | None = None
-
-
 class ToolDefinition(BaseModel):
-    """Complete definition of an LLM tool with grouped parameters.
+    """Complete definition of an LLM tool with resolved JSON Schema parameters.
 
     Attributes:
         name: Tool name (from protocol const or trigger class name).
         description: Tool description (from trigger docstring).
-        parameters: List of parameter definitions.
+        parameters_schema: JSON Schema object describing the tool's parameters.
     """
 
     name: str
     description: str
-    parameters: list[ToolParameter] = Field(default_factory=list)
+    parameters_schema: dict[str, Any] = Field(
+        default_factory=lambda: {"type": "object", "properties": {}, "required": []}
+    )
+
+    @property
+    def parameter_names(self) -> set[str]:
+        """Return the set of parameter names from the schema."""
+        return set[str](self.parameters_schema.get("properties", {}).keys())
+
+    @property
+    def parameter_count(self) -> int:
+        """Return the number of parameters in the schema."""
+        return len(self.parameters_schema.get("properties", {}))
 
 
 class ToolModuleInfo(ModuleInfo):
@@ -192,14 +183,44 @@ async def module_info_to_tool_module_info(
     )
 
 
+def _build_parameters_from_schema(def_schema: dict[str, Any]) -> dict[str, Any]:
+    """Build parameters_schema directly from an inlined JSON Schema.
+
+    Extracts tool parameters from the trigger's JSON Schema, skipping
+    internal fields (``protocol``, ``created_at``).
+
+    Args:
+        def_schema: JSON Schema for the trigger with all ``$ref`` already inlined.
+
+    Returns:
+        JSON Schema dict with properties and required fields.
+    """
+    properties = def_schema.get("properties", {})
+    required_fields = set[Any](def_schema.get("required", []))
+    param_properties: dict[str, Any] = {}
+    required_list: list[str] = []
+
+    for prop_name, prop_info in properties.items():
+        if prop_name in {"protocol", "created_at"}:
+            continue
+        param_properties[prop_name] = dict[Any, Any](prop_info.items())
+        if prop_name in required_fields:
+            required_list.append(prop_name)
+
+    return {"type": "object", "properties": param_properties, "required": required_list}
+
+
 def _extract_tools_from_schema(schema: dict[str, Any]) -> list[ToolDefinition]:
     """Extract tool definitions from a discriminated union input schema.
+
+    Inlines ``$ref`` references and extracts parameters directly from the
+    JSON Schema — no intermediate Python model reconstruction needed.
 
     Args:
         schema: JSON schema with $defs containing protocol-based types.
 
     Returns:
-        List of ToolDefinition with parameters grouped by trigger.
+        List of ToolDefinition with parameters_schema per trigger.
     """
     tools: list[ToolDefinition] = []
     defs = schema.get("$defs", {})
@@ -220,33 +241,18 @@ def _extract_tools_from_schema(schema: dict[str, Any]) -> list[ToolDefinition]:
         if "const" not in protocol_prop:
             continue
 
-        # Extract tool-level info from trigger
         tool_name = protocol_prop.get("const", def_name)
         tool_description = def_schema.get("description", "")
 
-        required_fields = set[Any](def_schema.get("required", []))
-        parameters: list[ToolParameter] = []
-
-        for prop_name, prop_info in properties.items():
-            if prop_name in {"protocol", "created_at"}:
-                continue
-
-            param = ToolParameter(
-                name=prop_name,
-                type=prop_info.get("type", "string"),
-                description=prop_info.get("description", ""),
-                required=prop_name in required_fields,
-                enum=prop_info.get("enum"),
-                items=prop_info.get("items"),
-                properties=prop_info.get("properties"),
-            )
-            parameters.append(param)
+        # Inline $ref references so properties are self-contained
+        inlined = inline_refs({**def_schema, "$defs": defs})
+        parameters_schema = _build_parameters_from_schema(inlined)
 
         tools.append(
             ToolDefinition(
                 name=tool_name,
                 description=tool_description,
-                parameters=parameters,
+                parameters_schema=parameters_schema,
             )
         )
 

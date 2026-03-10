@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 
 from digitalkin.logger import logger
 from digitalkin.models.module.request_metadata import RequestMetadata
-from digitalkin.models.module.tool_cache import ToolCache, ToolDefinition, ToolModuleInfo, ToolParameter
+from digitalkin.models.module.tool_cache import ToolCache, ToolDefinition, ToolModuleInfo
 from digitalkin.services.agent.agent_strategy import AgentStrategy
 from digitalkin.services.communication.communication_strategy import CommunicationStrategy
 from digitalkin.services.cost.cost_strategy import CostStrategy
@@ -225,28 +225,12 @@ class ModuleContext:
                     "toolkit_name": tool_module_info.tool_name or "undefined",
                     "name": tool_module_info.slug + "__" + tool_def.name,
                     "description": tool_def.description + cost_description,
-                    "parameters": ModuleContext._build_parameters_schema(tool_def.parameters),
+                    "parameters": tool_def.parameters_schema,
                 },
                 "cost_info": cost_info,
             }
             for tool_def in tool_module_info.tools
         ]
-
-    @staticmethod
-    def _build_parameters_schema(params: list[ToolParameter]) -> dict[str, Any]:
-        """Convert ToolParameter list to JSON Schema.
-
-        Args:
-            params: List of tool parameters.
-
-        Returns:
-            JSON Schema object with properties and required fields.
-        """
-        return {
-            "type": "object",
-            "properties": {p.name: {"type": p.type, "description": p.description or ""} for p in params},
-            "required": [p.name for p in params if p.required],
-        }
 
     @staticmethod
     def _build_cost_info(cost_config: dict[str, Any]) -> dict[str, Any]:
