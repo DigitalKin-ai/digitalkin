@@ -1,12 +1,14 @@
 """Tests for ChatHistoryMixin caching and storage optimization."""
 
-from typing import Any
+from typing import Any, ClassVar, Literal
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from digitalkin.mixins.chat_history_mixin import ChatHistoryMixin
+from digitalkin.models.module.module_context import ModuleContext
 from digitalkin.models.services.storage import BaseMessage, BaseRole, ChatHistory
+from digitalkin.modules.trigger_handler import TriggerHandler
 from digitalkin.services.storage.storage_strategy import StorageRecord
 
 
@@ -205,3 +207,114 @@ class TestBatchingBehavior:
         ctx.storage.upsert.assert_awaited_once()
         if mixin._ch_dirty:
             pytest.fail("Expected dirty state to be cleared after successful retry")
+
+
+# ---------------------------------------------------------------------------
+# Tests exercising the real user pattern: TriggerHandler subclass
+# ---------------------------------------------------------------------------
+
+class _FakeInput:
+    protocol: Literal["test"] = "test"
+
+
+class _FakeOutput:
+    pass
+
+
+class _GoodTrigger(TriggerHandler):
+    """User handler that correctly calls super().__init__()."""
+
+    protocol = "test"
+    description: ClassVar[str] = ""
+    input_format = _FakeInput
+    output_format = _FakeOutput
+
+    def __init__(self, context: ModuleContext) -> None:
+        super().__init__(context)
+        self.custom_attr = "ok"
+
+    async def handle(self, input_data: Any, setup_data: Any, context: ModuleContext) -> None:
+        pass  # pragma: no cover
+
+
+class _BadTrigger(TriggerHandler):
+    """User handler that forgets super().__init__() — the exact production bug."""
+
+    protocol = "test"
+    description: ClassVar[str] = ""
+    input_format = _FakeInput
+    output_format = _FakeOutput
+
+    def __init__(self, context: ModuleContext) -> None:
+        # Deliberately missing super().__init__(context)
+        self.custom_attr = "ok"
+
+    async def handle(self, input_data: Any, setup_data: Any, context: ModuleContext) -> None:
+        pass  # pragma: no cover
+
+
+class _NoInitTrigger(TriggerHandler):
+    """User handler that doesn't override __init__ at all (relies on inherited)."""
+
+    protocol = "test"
+    description: ClassVar[str] = ""
+    input_format = _FakeInput
+    output_format = _FakeOutput
+
+    async def handle(self, input_data: Any, setup_data: Any, context: ModuleContext) -> None:
+        pass  # pragma: no cover
+
+
+def _make_mock_context() -> MagicMock:
+    """Build a minimal mock ModuleContext for TriggerHandler instantiation."""
+    ctx = MagicMock()
+    ctx.session.mission_id = "test_mission"
+    ctx.storage = AsyncMock()
+    ctx.storage.read = AsyncMock(return_value=None)
+    ctx.storage.upsert = AsyncMock(return_value=MagicMock(spec=StorageRecord))
+    ctx.storage.update = AsyncMock(return_value=MagicMock(spec=StorageRecord))
+    return ctx
+
+
+class TestTriggerHandlerMixinInit:
+    """Verify ChatHistoryMixin works through TriggerHandler — the real user path."""
+
+    @pytest.mark.asyncio
+    async def test_good_trigger_init_sets_cache(self) -> None:
+        """Handler that calls super().__init__() gets mixin state via __init__ chain."""
+        handler = _GoodTrigger(_make_mock_context())
+        assert handler._ch_cache is not None
+        assert handler.custom_attr == "ok"
+
+    @pytest.mark.asyncio
+    async def test_bad_trigger_lazy_init_on_load(self) -> None:
+        """Handler that forgets super().__init__() still works via lazy init."""
+        handler = _BadTrigger(_make_mock_context())
+        ctx = _make_mock_context()
+
+        # _ch_cache is still None (sentinel) because __init__ chain was broken
+        history = await handler.load_chat_history(ctx)
+        # Lazy init kicked in — no crash, returns empty history
+        assert len(history.messages) == 0
+        assert handler._ch_cache is not None
+
+    @pytest.mark.asyncio
+    async def test_bad_trigger_append_and_flush(self) -> None:
+        """Full append+flush cycle works even with broken __init__ chain."""
+        handler = _BadTrigger(_make_mock_context())
+        ctx = _make_mock_context()
+
+        await handler.append_chat_history_message(ctx, BaseRole.USER, "hello")
+        await handler.flush_chat_history(ctx)
+
+        ctx.storage.upsert.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_no_init_trigger_works(self) -> None:
+        """Handler that doesn't override __init__ inherits working chain."""
+        handler = _NoInitTrigger(_make_mock_context())
+        ctx = _make_mock_context()
+
+        await handler.append_chat_history_message(ctx, BaseRole.USER, "test")
+        history = await handler.load_chat_history(ctx)
+        assert len(history.messages) == 1
