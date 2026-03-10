@@ -31,14 +31,27 @@ class ChatHistoryMixin(UserMessageMixin, StorageMixin, LoggerMixin, Generic[Inpu
     CHAT_HISTORY_COLLECTION = "chat_history"
     CHAT_HISTORY_RECORD_ID = "full_chat_history"
 
+    # Sentinel for lazy init — guards against broken super().__init__() chains
+    _ch_cache: dict[str, ChatHistory] = None  # type: ignore[assignment]
+    _ch_persisted: set[str]
+    _ch_dirty: dict[str, int]
+    _ch_flush_lock: asyncio.Lock
+    _ch_flush_threshold: int
+
     def __init__(self) -> None:
         """Initialize chat history state."""
         super().__init__()
-        self._ch_cache: dict[str, ChatHistory] = {}
-        self._ch_persisted: set[str] = set()
-        self._ch_dirty: dict[str, int] = {}
+        self._ensure_ch_state()
+
+    def _ensure_ch_state(self) -> None:
+        """Idempotent state initialization (defensive against broken __init__ chains)."""
+        if self._ch_cache is not None:
+            return
+        self._ch_cache = {}
+        self._ch_persisted = set()
+        self._ch_dirty = {}
         self._ch_flush_lock = asyncio.Lock()
-        self._ch_flush_threshold: int = int(os.environ.get("DIGITALKIN_CHAT_HISTORY_FLUSH_THRESHOLD", "10"))
+        self._ch_flush_threshold = int(os.environ.get("DIGITALKIN_CHAT_HISTORY_FLUSH_THRESHOLD", "10"))
 
     def _get_history_key(self, context: ModuleContext) -> str:
         """Get session-specific history key.
@@ -60,6 +73,7 @@ class ChatHistoryMixin(UserMessageMixin, StorageMixin, LoggerMixin, Generic[Inpu
         Returns:
             Chat history object, empty if none exists or loading fails.
         """
+        self._ensure_ch_state()
         history_key = self._get_history_key(context)
 
         if history_key in self._ch_cache:
@@ -110,6 +124,7 @@ class ChatHistoryMixin(UserMessageMixin, StorageMixin, LoggerMixin, Generic[Inpu
         Args:
             context: Module context containing storage strategy.
         """
+        self._ensure_ch_state()
         for key in list(self._ch_dirty):
             await self._flush_ch_key(context, key)
 

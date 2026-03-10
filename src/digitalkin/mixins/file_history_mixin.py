@@ -28,14 +28,27 @@ class FileHistoryMixin(StorageMixin, LoggerMixin):
     FILE_HISTORY_COLLECTION = "file_history"
     FILE_HISTORY_RECORD_ID = "full_file_history"
 
+    # Sentinel for lazy init — guards against broken super().__init__() chains
+    _fh_cache: dict[str, FileHistory] = None  # type: ignore[assignment]
+    _fh_persisted: set[str]
+    _fh_dirty: dict[str, int]
+    _fh_flush_lock: asyncio.Lock
+    _fh_flush_threshold: int
+
     def __init__(self) -> None:
         """Initialize file history state."""
         super().__init__()
-        self._fh_cache: dict[str, FileHistory] = {}
-        self._fh_persisted: set[str] = set()
-        self._fh_dirty: dict[str, int] = {}
+        self._ensure_fh_state()
+
+    def _ensure_fh_state(self) -> None:
+        """Idempotent state initialization (defensive against broken __init__ chains)."""
+        if self._fh_cache is not None:
+            return
+        self._fh_cache = {}
+        self._fh_persisted = set()
+        self._fh_dirty = {}
         self._fh_flush_lock = asyncio.Lock()
-        self._fh_flush_threshold: int = int(os.environ.get("DIGITALKIN_FILE_HISTORY_FLUSH_THRESHOLD", "10"))
+        self._fh_flush_threshold = int(os.environ.get("DIGITALKIN_FILE_HISTORY_FLUSH_THRESHOLD", "10"))
 
     def _get_fh_history_key(self, context: ModuleContext) -> str:
         """Get session-specific history key.
@@ -57,6 +70,7 @@ class FileHistoryMixin(StorageMixin, LoggerMixin):
         Returns:
             File history object, empty if none exists or loading fails.
         """
+        self._ensure_fh_state()
         history_key = self._get_fh_history_key(context)
 
         if history_key in self._fh_cache:
@@ -101,6 +115,7 @@ class FileHistoryMixin(StorageMixin, LoggerMixin):
         Args:
             context: Module context containing storage strategy.
         """
+        self._ensure_fh_state()
         for key in list(self._fh_dirty):
             await self._flush_fh_key(context, key)
 
