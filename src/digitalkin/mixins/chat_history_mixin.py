@@ -35,7 +35,7 @@ class ChatHistoryMixin(UserMessageMixin, StorageMixin, LoggerMixin, Generic[Inpu
     _ch_cache: dict[str, ChatHistory] = None  # type: ignore[assignment]
     _ch_persisted: set[str]
     _ch_dirty: dict[str, int]
-    _ch_flush_lock: asyncio.Lock
+    _ch_flush_locks: dict[str, asyncio.Lock]
     _ch_flush_threshold: int
 
     def __init__(self) -> None:
@@ -50,7 +50,7 @@ class ChatHistoryMixin(UserMessageMixin, StorageMixin, LoggerMixin, Generic[Inpu
         self._ch_cache = {}
         self._ch_persisted = set()
         self._ch_dirty = {}
-        self._ch_flush_lock = asyncio.Lock()
+        self._ch_flush_locks = {}
         self._ch_flush_threshold = int(os.environ.get("DIGITALKIN_CHAT_HISTORY_FLUSH_THRESHOLD", "10"))
 
     def _get_history_key(self, context: ModuleContext) -> str:
@@ -117,20 +117,23 @@ class ChatHistoryMixin(UserMessageMixin, StorageMixin, LoggerMixin, Generic[Inpu
             await self._flush_ch_key(context, history_key)
 
     async def flush_chat_history(self, context: ModuleContext) -> None:
-        """Flush all dirty chat history keys to storage.
+        """Flush the current mission's dirty chat history to storage.
 
-        Call at end of mission / trigger to persist buffered messages.
+        Only flushes the key belonging to context's mission_id, preventing
+        cross-mission contamination when handlers are shared.
 
         Args:
             context: Module context containing storage strategy.
         """
         self._ensure_ch_state()
-        for key in list(self._ch_dirty):
-            await self._flush_ch_key(context, key)
+        history_key = self._get_history_key(context)
+        if history_key in self._ch_dirty:
+            await self._flush_ch_key(context, history_key)
 
     async def _flush_ch_key(self, context: ModuleContext, history_key: str) -> None:
         """Persist a single dirty history key to storage."""
-        async with self._ch_flush_lock:
+        lock = self._ch_flush_locks.setdefault(history_key, asyncio.Lock())
+        async with lock:
             if history_key not in self._ch_dirty:
                 return
 
@@ -152,6 +155,19 @@ class ChatHistoryMixin(UserMessageMixin, StorageMixin, LoggerMixin, Generic[Inpu
                 return  # leave dirty for retry on next flush
 
             self._ch_dirty.pop(history_key, None)
+
+    def clear_ch_mission_cache(self, context: ModuleContext) -> None:
+        """Remove a mission's entries from in-memory caches after flush.
+
+        Args:
+            context: Module context identifying the mission to clear.
+        """
+        self._ensure_ch_state()
+        history_key = self._get_history_key(context)
+        self._ch_cache.pop(history_key, None)
+        self._ch_persisted.discard(history_key)
+        self._ch_dirty.pop(history_key, None)
+        self._ch_flush_locks.pop(history_key, None)
 
     async def save_send_message(
         self,

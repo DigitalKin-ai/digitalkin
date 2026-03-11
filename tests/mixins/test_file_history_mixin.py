@@ -1,5 +1,6 @@
 """Tests for FileHistoryMixin caching, batching, and storage optimization."""
 
+import asyncio
 from typing import Any, ClassVar, Literal
 from unittest.mock import AsyncMock, MagicMock
 
@@ -209,8 +210,8 @@ class TestBatchingBehavior:
             pytest.fail("Expected dirty state to be cleared after successful retry")
 
     @pytest.mark.asyncio
-    async def test_multiple_missions_flush_independently(self) -> None:
-        """Each mission's dirty state is tracked and flushed independently."""
+    async def test_flush_only_flushes_own_mission(self) -> None:
+        """Flushing mission_a must not flush mission_b's dirty entries."""
         mixin = _ConcreteMixin()
         ctx_a = _make_context(mission_id="mission_a")
         ctx_b = _make_context(mission_id="mission_b")
@@ -218,12 +219,32 @@ class TestBatchingBehavior:
         await mixin.append_files_history(ctx_a, _make_files(1, "a"))
         await mixin.append_files_history(ctx_b, _make_files(1, "b"))
 
-        # Flush only mission_a's context
         await mixin.flush_file_history(ctx_a)
 
-        # Both were flushed because flush iterates all dirty keys
-        if mixin._fh_dirty:
-            pytest.fail("Expected all dirty state to be cleared after flush")
+        # mission_a flushed via its own context
+        ctx_a.storage.upsert.assert_awaited_once()
+        # mission_b NOT flushed — its dirty entry remains
+        ctx_b.storage.upsert.assert_not_awaited()
+        key_b = mixin._get_fh_history_key(ctx_b)
+        assert key_b in mixin._fh_dirty, "mission_b should still be dirty"
+
+    @pytest.mark.asyncio
+    async def test_concurrent_missions_use_separate_locks(self) -> None:
+        """Each mission gets its own flush lock so they don't block each other."""
+        mixin = _ConcreteMixin()
+        ctx_a = _make_context(mission_id="mission_a")
+        ctx_b = _make_context(mission_id="mission_b")
+
+        await mixin.append_files_history(ctx_a, _make_files(1, "a"))
+        await mixin.append_files_history(ctx_b, _make_files(1, "b"))
+        await mixin.flush_file_history(ctx_a)
+        await mixin.flush_file_history(ctx_b)
+
+        key_a = mixin._get_fh_history_key(ctx_a)
+        key_b = mixin._get_fh_history_key(ctx_b)
+        assert key_a in mixin._fh_flush_locks
+        assert key_b in mixin._fh_flush_locks
+        assert mixin._fh_flush_locks[key_a] is not mixin._fh_flush_locks[key_b]
 
 
 # ---------------------------------------------------------------------------
@@ -309,3 +330,61 @@ class TestTriggerHandlerFileHistoryInit:
         await handler.flush_file_history(ctx)
 
         ctx.storage.upsert.assert_awaited_once()
+
+
+class TestFhCacheCleanup:
+    """Tests for clear_fh_mission_cache."""
+
+    @pytest.mark.asyncio
+    async def test_clear_removes_mission_state(self) -> None:
+        """clear_fh_mission_cache removes all state for a mission."""
+        mixin = _ConcreteMixin()
+        ctx = _make_context()
+        await mixin.append_files_history(ctx, _make_files(1))
+        await mixin.flush_file_history(ctx)
+
+        mixin.clear_fh_mission_cache(ctx)
+
+        key = mixin._get_fh_history_key(ctx)
+        assert key not in mixin._fh_cache
+        assert key not in mixin._fh_persisted
+        assert key not in mixin._fh_dirty
+        assert key not in mixin._fh_flush_locks
+
+    @pytest.mark.asyncio
+    async def test_clear_does_not_affect_other_missions(self) -> None:
+        """Clearing mission_a leaves mission_b intact."""
+        mixin = _ConcreteMixin()
+        ctx_a = _make_context(mission_id="mission_a")
+        ctx_b = _make_context(mission_id="mission_b")
+        await mixin.append_files_history(ctx_a, _make_files(1, "a"))
+        await mixin.append_files_history(ctx_b, _make_files(1, "b"))
+
+        mixin.clear_fh_mission_cache(ctx_a)
+
+        key_b = mixin._get_fh_history_key(ctx_b)
+        assert key_b in mixin._fh_cache
+
+
+class TestFhConcurrentOperations:
+    """Tests for concurrent file history operations."""
+
+    @pytest.mark.asyncio
+    async def test_concurrent_appends_different_missions(self) -> None:
+        """Concurrent appends to different missions don't cross-contaminate."""
+        mixin = _ConcreteMixin()
+        ctx_a = _make_context(mission_id="a")
+        ctx_b = _make_context(mission_id="b")
+
+        coros = []
+        for i in range(10):
+            coros.append(mixin.append_files_history(ctx_a, _make_files(1, f"a_{i}")))
+            coros.append(mixin.append_files_history(ctx_b, _make_files(1, f"b_{i}")))
+        await asyncio.gather(*coros)
+
+        history_a = await mixin.load_file_history(ctx_a)
+        history_b = await mixin.load_file_history(ctx_b)
+        assert len(history_a.files) == 10
+        assert len(history_b.files) == 10
+        assert all(f.file_id.startswith("a_") for f in history_a.files)
+        assert all(f.file_id.startswith("b_") for f in history_b.files)

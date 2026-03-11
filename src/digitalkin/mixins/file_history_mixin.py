@@ -32,7 +32,7 @@ class FileHistoryMixin(StorageMixin, LoggerMixin):
     _fh_cache: dict[str, FileHistory] = None  # type: ignore[assignment]
     _fh_persisted: set[str]
     _fh_dirty: dict[str, int]
-    _fh_flush_lock: asyncio.Lock
+    _fh_flush_locks: dict[str, asyncio.Lock]
     _fh_flush_threshold: int
 
     def __init__(self) -> None:
@@ -47,7 +47,7 @@ class FileHistoryMixin(StorageMixin, LoggerMixin):
         self._fh_cache = {}
         self._fh_persisted = set()
         self._fh_dirty = {}
-        self._fh_flush_lock = asyncio.Lock()
+        self._fh_flush_locks = {}
         self._fh_flush_threshold = int(os.environ.get("DIGITALKIN_FILE_HISTORY_FLUSH_THRESHOLD", "10"))
 
     def _get_fh_history_key(self, context: ModuleContext) -> str:
@@ -108,20 +108,23 @@ class FileHistoryMixin(StorageMixin, LoggerMixin):
             await self._flush_fh_key(context, history_key)
 
     async def flush_file_history(self, context: ModuleContext) -> None:
-        """Flush all dirty file history keys to storage.
+        """Flush the current mission's dirty file history to storage.
 
-        Call at end of mission / trigger to persist buffered files.
+        Only flushes the key belonging to context's mission_id, preventing
+        cross-mission contamination when handlers are shared.
 
         Args:
             context: Module context containing storage strategy.
         """
         self._ensure_fh_state()
-        for key in list(self._fh_dirty):
-            await self._flush_fh_key(context, key)
+        history_key = self._get_fh_history_key(context)
+        if history_key in self._fh_dirty:
+            await self._flush_fh_key(context, history_key)
 
     async def _flush_fh_key(self, context: ModuleContext, history_key: str) -> None:
         """Persist a single dirty history key to storage."""
-        async with self._fh_flush_lock:
+        lock = self._fh_flush_locks.setdefault(history_key, asyncio.Lock())
+        async with lock:
             if history_key not in self._fh_dirty:
                 return
 
@@ -143,3 +146,16 @@ class FileHistoryMixin(StorageMixin, LoggerMixin):
                 return  # leave dirty for retry on next flush
 
             self._fh_dirty.pop(history_key, None)
+
+    def clear_fh_mission_cache(self, context: ModuleContext) -> None:
+        """Remove a mission's entries from in-memory caches after flush.
+
+        Args:
+            context: Module context identifying the mission to clear.
+        """
+        self._ensure_fh_state()
+        history_key = self._get_fh_history_key(context)
+        self._fh_cache.pop(history_key, None)
+        self._fh_persisted.discard(history_key)
+        self._fh_dirty.pop(history_key, None)
+        self._fh_flush_locks.pop(history_key, None)

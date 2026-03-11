@@ -259,7 +259,7 @@ BaseModule.start(input_data, setup_data, callback)
     │
     ├─ await initialize(context, setup_data)
     │
-    ├─ triggers_discoverer.init_handlers(context)
+    ├─ self.trigger_handlers = triggers_discoverer.init_handlers(context)
     │
     ├─ await run(input_data, setup_data)
     │       │

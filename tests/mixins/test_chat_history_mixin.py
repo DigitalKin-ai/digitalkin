@@ -1,5 +1,6 @@
 """Tests for ChatHistoryMixin caching and storage optimization."""
 
+import asyncio
 from typing import Any, ClassVar, Literal
 from unittest.mock import AsyncMock, MagicMock
 
@@ -80,6 +81,43 @@ class TestChatHistoryCache:
 
         if history_a is history_b:
             pytest.fail("Different missions should have separate cache entries")
+
+    @pytest.mark.asyncio
+    async def test_flush_only_flushes_own_mission(self) -> None:
+        """Flushing mission_a must not flush mission_b's dirty entries."""
+        mixin = _ConcreteMixin()
+        ctx_a = _make_context(mission_id="mission_a")
+        ctx_b = _make_context(mission_id="mission_b")
+
+        await mixin.append_chat_history_message(ctx_a, BaseRole.USER, "hello_a")
+        await mixin.append_chat_history_message(ctx_b, BaseRole.USER, "hello_b")
+
+        await mixin.flush_chat_history(ctx_a)
+
+        # mission_a flushed via its own context
+        ctx_a.storage.upsert.assert_awaited_once()
+        # mission_b NOT flushed — its dirty entry remains
+        ctx_b.storage.upsert.assert_not_awaited()
+        key_b = mixin._get_history_key(ctx_b)
+        assert key_b in mixin._ch_dirty, "mission_b should still be dirty"
+
+    @pytest.mark.asyncio
+    async def test_concurrent_missions_use_separate_locks(self) -> None:
+        """Each mission gets its own flush lock so they don't block each other."""
+        mixin = _ConcreteMixin()
+        ctx_a = _make_context(mission_id="mission_a")
+        ctx_b = _make_context(mission_id="mission_b")
+
+        await mixin.append_chat_history_message(ctx_a, BaseRole.USER, "a")
+        await mixin.append_chat_history_message(ctx_b, BaseRole.USER, "b")
+        await mixin.flush_chat_history(ctx_a)
+        await mixin.flush_chat_history(ctx_b)
+
+        key_a = mixin._get_history_key(ctx_a)
+        key_b = mixin._get_history_key(ctx_b)
+        assert key_a in mixin._ch_flush_locks
+        assert key_b in mixin._ch_flush_locks
+        assert mixin._ch_flush_locks[key_a] is not mixin._ch_flush_locks[key_b]
 
 
 class TestAppendStorageOptimization:
@@ -318,3 +356,74 @@ class TestTriggerHandlerMixinInit:
         await handler.append_chat_history_message(ctx, BaseRole.USER, "test")
         history = await handler.load_chat_history(ctx)
         assert len(history.messages) == 1
+
+
+class TestChCacheCleanup:
+    """Tests for clear_ch_mission_cache."""
+
+    @pytest.mark.asyncio
+    async def test_clear_removes_mission_state(self) -> None:
+        """clear_ch_mission_cache removes all state for a mission."""
+        mixin = _ConcreteMixin()
+        ctx = _make_context()
+        await mixin.append_chat_history_message(ctx, BaseRole.USER, "hello")
+        await mixin.flush_chat_history(ctx)
+
+        mixin.clear_ch_mission_cache(ctx)
+
+        key = mixin._get_history_key(ctx)
+        assert key not in mixin._ch_cache
+        assert key not in mixin._ch_persisted
+        assert key not in mixin._ch_dirty
+        assert key not in mixin._ch_flush_locks
+
+    @pytest.mark.asyncio
+    async def test_clear_does_not_affect_other_missions(self) -> None:
+        """Clearing mission_a leaves mission_b intact."""
+        mixin = _ConcreteMixin()
+        ctx_a = _make_context(mission_id="mission_a")
+        ctx_b = _make_context(mission_id="mission_b")
+        await mixin.append_chat_history_message(ctx_a, BaseRole.USER, "a")
+        await mixin.append_chat_history_message(ctx_b, BaseRole.USER, "b")
+
+        mixin.clear_ch_mission_cache(ctx_a)
+
+        key_b = mixin._get_history_key(ctx_b)
+        assert key_b in mixin._ch_cache
+
+
+class TestChConcurrentOperations:
+    """Tests for concurrent chat history operations."""
+
+    @pytest.mark.asyncio
+    async def test_concurrent_appends_same_mission(self) -> None:
+        """Multiple concurrent appends to same mission don't lose messages."""
+        mixin = _ConcreteMixin()
+        ctx = _make_context()
+
+        await asyncio.gather(
+            *(mixin.append_chat_history_message(ctx, BaseRole.USER, f"msg_{i}") for i in range(20))
+        )
+
+        history = await mixin.load_chat_history(ctx)
+        assert len(history.messages) == 20
+
+    @pytest.mark.asyncio
+    async def test_concurrent_appends_different_missions(self) -> None:
+        """Concurrent appends to different missions don't cross-contaminate."""
+        mixin = _ConcreteMixin()
+        ctx_a = _make_context(mission_id="a")
+        ctx_b = _make_context(mission_id="b")
+
+        coros = []
+        for i in range(10):
+            coros.append(mixin.append_chat_history_message(ctx_a, BaseRole.USER, f"a_{i}"))
+            coros.append(mixin.append_chat_history_message(ctx_b, BaseRole.USER, f"b_{i}"))
+        await asyncio.gather(*coros)
+
+        history_a = await mixin.load_chat_history(ctx_a)
+        history_b = await mixin.load_chat_history(ctx_b)
+        assert len(history_a.messages) == 10
+        assert len(history_b.messages) == 10
+        assert all("a_" in str(m.content) for m in history_a.messages)
+        assert all("b_" in str(m.content) for m in history_b.messages)

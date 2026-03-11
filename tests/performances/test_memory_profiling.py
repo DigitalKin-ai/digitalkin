@@ -15,6 +15,7 @@ from typing import Any, ClassVar
 from unittest.mock import patch
 
 import pytest
+from tests.fixtures.stress_reporter import StressReporter
 
 from digitalkin.core.job_manager.single_job_manager import SingleJobManager
 from digitalkin.core.task_manager.local_task_manager import LocalTaskManager
@@ -259,8 +260,17 @@ class TestImprovedTaskManagerMemoryProfile:
         if baseline_memory > 0:
             scale_factor = large_task_count / baseline_task_count
             memory_ratio = large_memory / baseline_memory
+            threshold = scale_factor * 1.5
 
-            assert memory_ratio < scale_factor * 1.5, (
+            rpt = StressReporter(f"Task Manager Memory Scaling ({baseline_task_count} -> {large_task_count} tasks)")
+            rpt.metric(f"Baseline ({baseline_task_count} tasks)", StressReporter.mem(baseline_memory))
+            rpt.metric(f"Scaled ({large_task_count} tasks)", StressReporter.mem(large_memory))
+            rpt.metric("Task scale factor", StressReporter.ratio(scale_factor))
+            rpt.metric("Memory ratio", StressReporter.ratio(memory_ratio))
+            rpt.metric("Threshold", f"< {StressReporter.ratio(threshold)}")
+            rpt.result(memory_ratio < threshold)
+
+            assert memory_ratio < threshold, (
                 f"Memory scaling issue: {scale_factor}x tasks used {memory_ratio:.2f}x memory"
             )
         else:
@@ -304,14 +314,25 @@ class TestImprovedTaskManagerMemoryProfile:
         # With psutil RSS measurement, baseline should always be > 0
         assert baseline_memory > 0, f"Baseline memory is {baseline_memory}, expected > 0"
 
+        rpt = StressReporter("Queue Memory Scaling")
+        for size in sizes:
+            rpt.metric(f"Queue size {size}", StressReporter.mem(memory_by_queue_size[size]))
+
+        all_passed = True
         for i in range(1, len(sizes)):
             size_ratio = sizes[i] / sizes[0]
             memory_ratio = memory_by_queue_size[sizes[i]] / baseline_memory
+            threshold = size_ratio * 2
+            passed = memory_ratio < threshold
+            all_passed = all_passed and passed
+            rpt.metric(f"  {sizes[0]} -> {sizes[i]} ratio", f"{StressReporter.ratio(memory_ratio)} < {StressReporter.ratio(threshold)}")
 
             # Memory should scale sub-linearly (with some overhead tolerance)
-            assert memory_ratio < size_ratio * 2, (
+            assert memory_ratio < threshold, (
                 f"Memory scaling: {sizes[i]} items uses {memory_ratio:.2f}x memory (size ratio: {size_ratio}x)"
             )
+
+        rpt.result(all_passed)
 
 
 class TestImprovedJobManagerMemoryProfile:
@@ -344,9 +365,17 @@ class TestImprovedJobManagerMemoryProfile:
         # Relative comparison - verify memory doesn't grow excessively
         assert init_memory > 0, f"Init memory is {init_memory}, expected > 0"
 
+        cleanup_ratio = cleanup_memory / init_memory
+
+        rpt = StressReporter("SingleJobManager Cleanup")
+        rpt.metric("After init", StressReporter.mem(init_memory))
+        rpt.metric("After cleanup", StressReporter.mem(cleanup_memory))
+        rpt.metric("Cleanup / init ratio", StressReporter.ratio(cleanup_ratio))
+        rpt.metric("Threshold", "< 2.00x")
+        rpt.result(cleanup_ratio < 2.0)
+
         # Note: Due to Python's memory pooling and tracemalloc cumulative tracking,
         # cleanup_memory may be >= init_memory. We verify it doesn't grow excessively.
-        cleanup_ratio = cleanup_memory / init_memory
         assert cleanup_ratio < 2.0, (
             f"Memory grew excessively after cleanup: {cleanup_ratio * 100:.1f}% of init (expected <200%)"
         )
@@ -407,17 +436,26 @@ class TestImprovedJobManagerMemoryProfile:
 
                 tracemalloc.stop()
 
+                rpt = StressReporter(f"Taskiq Queue Clearing ({small_batch_size} / {large_batch_size} items)")
+                rpt.metric("Small batch memory", StressReporter.mem(small_memory))
+                rpt.metric("Large batch memory", StressReporter.mem(large_memory))
+                rpt.metric("After clear", StressReporter.mem(after_clear))
+
                 if small_memory > 0:
-                    # Large batch should use more memory than small batch
                     memory_growth = large_memory / small_memory
+                    rpt.metric("Growth (large/small)", StressReporter.ratio(memory_growth))
                     assert memory_growth > 1.0, "Large batch should use more memory than small batch"
 
-                    # After clearing, memory should drop significantly
                     if after_clear > 0:
                         retention_ratio = after_clear / large_memory
+                        rpt.metric("Retention after clear", StressReporter.pct(retention_ratio * 100))
+                        rpt.metric("Threshold", "< 30.0%")
+                        rpt.result(retention_ratio < 0.3)
                         assert retention_ratio < 0.3, (
                             f"Too much memory retained: {retention_ratio * 100:.1f}% after clearing"
                         )
+                    else:
+                        rpt.result(True)
 
 
 class TestImprovedMemoryLeakDetection:
@@ -464,9 +502,17 @@ class TestImprovedMemoryLeakDetection:
 
         assert early_avg > 0, f"Early average is {early_avg}, expected > 0"
 
+        growth_ratio = (late_avg - early_avg) / early_avg
+
+        rpt = StressReporter(f"Memory Leak Detection ({num_cycles} cycles x {tasks_per_cycle} tasks)")
+        rpt.metric("Early avg (cycles 0-2)", StressReporter.mem(early_avg))
+        rpt.metric("Late avg (cycles 7-9)", StressReporter.mem(late_avg))
+        rpt.metric("Growth", StressReporter.pct(growth_ratio * 100))
+        rpt.metric("Threshold", "< 500.0%")
+        rpt.result(growth_ratio < 5.0)
+
         # Note: With tracemalloc, some growth is expected due to test framework overhead
         # We check that growth is bounded, not zero
-        growth_ratio = (late_avg - early_avg) / early_avg
         assert growth_ratio < 5.0, (
             f"Memory leak detected: {growth_ratio * 100:.2f}% growth over {num_cycles} cycles (expected <500%)"
         )
@@ -502,6 +548,13 @@ class TestImprovedMemoryOptimizations:
         if memory_before > 0:
             memory_reduction = (memory_before - memory_after) / memory_before
 
+            rpt = StressReporter("Queue Clearing (100 x 1KB items)")
+            rpt.metric("Before cleanup", StressReporter.mem(memory_before))
+            rpt.metric("After cleanup", StressReporter.mem(memory_after))
+            rpt.metric("Reduction", StressReporter.pct(memory_reduction * 100))
+            rpt.metric("Threshold", ">= -50.0%")
+            rpt.result(memory_reduction >= -0.5)
+
             # Should free some memory (at least 10%)
             # Note: May not be dramatic due to Python's memory pooling
             assert memory_reduction >= -0.5, f"Memory cleanup verification: {memory_reduction * 100:.1f}% change"
@@ -532,8 +585,16 @@ class TestImprovedMemoryOptimizations:
 
         assert memory_with_objects > 0, f"Memory with objects is {memory_with_objects}, expected > 0"
 
-        # Memory should not grow excessively after clearing
         retention_ratio = memory_after_clear / memory_with_objects
+
+        rpt = StressReporter("Connection Cleanup (500 x 1KB objects)")
+        rpt.metric("With objects", StressReporter.mem(memory_with_objects))
+        rpt.metric("After clear", StressReporter.mem(memory_after_clear))
+        rpt.metric("Retention ratio", StressReporter.ratio(retention_ratio))
+        rpt.metric("Threshold", "< 1.50x")
+        rpt.result(retention_ratio < 1.5)
+
+        # Memory should not grow excessively after clearing
         assert retention_ratio < 1.5, (
             f"Memory grew after clearing objects: {retention_ratio * 100:.1f}% retained (expected <150%)"
         )
@@ -577,10 +638,16 @@ class TestImprovedMemoryBenchmarks:
 
         tracemalloc.stop()
 
-        # Report results (informational)
-
-        # cleanup should work with proper timeout
         assert peak_memory > 0, f"Peak memory is {peak_memory}, expected > 0"
 
         cleanup_ratio = final_memory / peak_memory
+
+        rpt = StressReporter("Benchmark: 100 Tasks Memory")
+        rpt.metric("Peak (100 tasks)", StressReporter.mem(peak_memory))
+        rpt.metric("After shutdown", StressReporter.mem(final_memory))
+        rpt.metric("Per-task avg", StressReporter.mem(peak_memory / 100))
+        rpt.metric("Retained", StressReporter.pct(cleanup_ratio * 100))
+        rpt.metric("Threshold", "< 50.0%")
+        rpt.result(cleanup_ratio < 0.5)
+
         assert cleanup_ratio < 0.5, f"Insufficient cleanup: {cleanup_ratio * 100:.1f}% memory retained"

@@ -122,6 +122,7 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
             request_metadata: gRPC request metadata (headers) from the incoming request.
         """
         self._status = ModuleStatus.CREATED
+        self.trigger_handlers: dict[str, tuple] = {}
 
         # Initialize minimum context
         self.context = ModuleContext(
@@ -467,6 +468,7 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
             await self.context.cost.set_limits(cost_limits)
 
         handler_instance = self.triggers_discoverer.get_trigger(
+            self.trigger_handlers,
             input_instance.root.protocol,
             input_instance.root,
         )
@@ -481,6 +483,8 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
             setup_data,
             self.context,
         )
+        await handler_instance.flush_chat_history(self.context)
+        await handler_instance.flush_file_history(self.context)
 
     @abstractmethod
     async def cleanup(self) -> None:
@@ -578,7 +582,7 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
             return
 
         try:
-            self.triggers_discoverer.init_handlers(self.context)
+            self.trigger_handlers = self.triggers_discoverer.init_handlers(self.context)
             await self._run_lifecycle(input_data, setup_data)
         except Exception:
             self._status = ModuleStatus.FAILED
@@ -595,7 +599,7 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
             self._status = ModuleStatus.STOPPING
             # Flush batched histories from all handler instances
             try:
-                for handlers in self.triggers_discoverer.trigger_handlers.values():
+                for handlers in self.trigger_handlers.values():
                     for handler in handlers:
                         await handler.flush_chat_history(self.context)
                         await handler.flush_file_history(self.context)
