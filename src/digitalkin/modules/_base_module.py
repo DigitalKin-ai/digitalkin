@@ -597,7 +597,9 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
         logger.info("Stopping module %s | job_id=%s", self.name, self.context.session.job_id)
         try:
             self._status = ModuleStatus.STOPPING
-            # Flush batched histories from all handler instances
+            # Let module finalize (wait for pending callbacks, close streams, etc.)
+            await self.cleanup()
+            # Flush batched histories — all messages are in cache, in correct order
             try:
                 for handlers in self.trigger_handlers.values():
                     for handler in handlers:
@@ -605,7 +607,6 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
                         await handler.flush_file_history(self.context)
             except Exception:
                 logger.warning("Failed to flush handler history during stop", exc_info=True)
-            await self.cleanup()
             await self.context.callbacks.send_message(
                 DataModel(
                     root=EndOfStreamOutput(),

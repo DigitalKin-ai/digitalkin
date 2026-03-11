@@ -151,18 +151,17 @@ class PlainJSONFormatter(logging.Formatter):
 
 
 def add_file_handler(logger: logging.Logger) -> None:
-    """Add a rotating file handler to a logger if a log directory is available.
+    """Add a rotating file handler to a logger if ``DIGITALKIN_LOG_DIR`` is set.
 
-    Auto-detects ``/app/logs`` (Docker default) or the path given by the
-    ``DIGITALKIN_LOG_DIR`` environment variable.  If the directory exists,
-    a :class:`RotatingFileHandler` (10 MB, 5 backups) with
-    :class:`PlainJSONFormatter` is attached at DEBUG level.
+    Only creates log files when the environment variable is explicitly set
+    and points to an existing directory.  Attaches a :class:`RotatingFileHandler`
+    (10 MB, 5 backups) with :class:`PlainJSONFormatter` at DEBUG level.
 
     Args:
         logger: The logger to attach the file handler to.
     """
-    log_dir = os.environ.get("DIGITALKIN_LOG_DIR", "/app/logs")
-    if not os.path.isdir(log_dir):
+    log_dir = os.environ.get("DIGITALKIN_LOG_DIR")
+    if not log_dir or not os.path.isdir(log_dir):
         return
 
     log_file = os.environ.get("DIGITALKIN_LOG_FILE", os.path.join(log_dir, f"{logger.name}.log"))
