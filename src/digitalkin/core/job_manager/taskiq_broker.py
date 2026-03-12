@@ -1,7 +1,6 @@
 """Taskiq broker & RSTREAM producer for the job manager."""
 
 import asyncio
-import json
 import logging
 import os
 import pickle
@@ -80,8 +79,23 @@ class TaskiqBrokerConfig:
     STREAM_RETENTION = 200_000
 
     @staticmethod
+    async def _on_producer_closed(reason: Any) -> None:
+        """Log RStream producer connection closure for diagnostics.
+
+        Args:
+            reason: Connection close reason from rstream.
+        """
+        logger.error("RStream producer connection closed: %s", reason)
+
+    @staticmethod
     def define_producer() -> Producer:
-        """Create RStream producer from environment variables.
+        """Create RStream producer with tuned settings for sustained throughput.
+
+        Tuning:
+        - ``default_batch_publishing_delay``: Flush batches every 100ms (default 3s)
+          for lower streaming latency during long-running tasks.
+        - ``default_context_switch_value``: Yield to the event loop every 100 messages
+          (default 1000) to keep concurrent coroutines responsive under heavy output.
 
         Returns:
             Producer connected to RabbitMQ.
@@ -91,12 +105,21 @@ class TaskiqBrokerConfig:
         username = os.environ.get("RABBITMQ_RSTREAM_USERNAME", "guest")
         password = os.environ.get("RABBITMQ_RSTREAM_PASSWORD", "guest")
 
-        logger.info("Connection to RabbitMQ: %s:%s.", host, port)
-        return Producer(host=host, port=int(port), username=username, password=password)
+        logger.info("RStream producer connecting to %s:%s", host, port)
+        return Producer(
+            host=host,
+            port=int(port),
+            username=username,
+            password=password,
+            default_batch_publishing_delay=float(os.environ.get("DIGITALKIN_RSTREAM_BATCH_DELAY", "0.1")),
+            default_context_switch_value=int(os.environ.get("DIGITALKIN_RSTREAM_CONTEXT_SWITCH", "100")),
+            connection_name="digitalkin_producer",
+            on_close_handler=TaskiqBrokerConfig._on_producer_closed,
+        )
 
     @staticmethod
     def define_broker() -> AioPikaBroker:
-        """Create AioPikaBroker from environment variables.
+        """Create AioPikaBroker with tuned QoS for worker prefetch control.
 
         Returns:
             Broker connected to RabbitMQ with custom formatter.
@@ -108,6 +131,7 @@ class TaskiqBrokerConfig:
 
         broker = AioPikaBroker(
             f"amqp://{username}:{password}@{host}:{port}",
+            qos=int(os.environ.get("DIGITALKIN_TASKIQ_PREFETCH", "10")),
             startup=[TaskiqBrokerConfig.init_rstream],
         )
         broker.formatter = PickleFormatter()
@@ -147,11 +171,16 @@ class TaskiqBrokerConfig:
     async def send_message_to_stream(job_id: str, output_data: DataModel | ModuleCodeModel) -> None:
         """Add a message frame to the RStream.
 
+        Uses Pydantic's Rust-based model_dump_json() and direct string embedding
+        to avoid the overhead of model_dump() → dict → json.dumps() → encode().
+
         Args:
             job_id: ID of the job that sent the message.
             output_data: Message body as a OutputModelT or error / stream_code.
         """
-        body = json.dumps({"job_id": job_id, "output_data": output_data.model_dump(mode="json")}).encode("utf-8")
+        # job_id is always a UUID (hex + hyphens), safe to embed without escaping
+        output_json = output_data.model_dump_json()
+        body = f'{{"job_id":"{job_id}","output_data":{output_json}}}'.encode()
         await RSTREAM_PRODUCER.send(stream=TaskiqBrokerConfig.STREAM, message=body)
 
 
