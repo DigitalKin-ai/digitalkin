@@ -147,6 +147,7 @@
         "docs/*",
         "examples/*",
         "factory.py",
+        "*.md",
         "generate_certificates.py",
         "node_modules",
         "tests/*",
