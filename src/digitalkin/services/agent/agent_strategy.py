@@ -11,9 +11,9 @@ class AgentStrategy(BaseStrategy, ABC):
     @abstractmethod
     def start(self) -> None:
         """Start the agent."""
-        raise NotImplementedError
+        ...
 
     @abstractmethod
     def stop(self) -> None:
         """Stop the agent."""
-        raise NotImplementedError
+        ...

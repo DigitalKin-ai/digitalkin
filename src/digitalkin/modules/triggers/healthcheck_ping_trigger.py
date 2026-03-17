@@ -25,6 +25,7 @@ class HealthcheckPingTrigger(TriggerHandler, BaseMixin):
 
     def __init__(self, context: ModuleContext) -> None:
         """Initialize the handler."""
+        super().__init__(context)
         self._request_time = datetime.now(tz=context.session.timezone)
 
     async def handle(

@@ -44,7 +44,6 @@ class ModuleDiscoverer:
         "conftest",
     }
 
-    trigger_handlers: ClassVar[dict[str, tuple[TriggerHandler, ...]]] = {}
     _trigger_handlers_cls: ClassVar[dict[str, list[type[TriggerHandler]]]] = {}
 
     def _validate_inputs(self) -> None:
@@ -286,11 +285,11 @@ class ModuleDiscoverer:
     def discover_modules(self) -> dict[str, bool]:
         """Discover and import matching modules across configured packages.
 
-        Raises:
-            DiscoveryError: If initial inputs are invalid.
-
         Returns:
             results infos
+
+        Raises:
+            DiscoveryError: If initial inputs are invalid.
         """
         self._validate_inputs()
         results: dict[str, bool] = {}
@@ -338,22 +337,30 @@ class ModuleDiscoverer:
                 result[protocol] = handlers[0].description or protocol
         return result
 
-    def init_handlers(self, context: ModuleContext) -> None:
-        """Initialize all registered trigger handler instances.
+    def init_handlers(self, context: ModuleContext) -> dict[str, tuple[TriggerHandler, ...]]:
+        """Instantiate all registered trigger handler classes.
 
-        This method iterates over all registered trigger handler classes in
-        `_trigger_handlers_cls`, instantiates each handler with the current module
-        context, and stores the instance in `_trigger_handlers`.
-        This allows the module to dispatch incoming protocol requests
-        to the correct handler instance at runtime while keeping a shared context.
+        Args:
+            context: Module context to pass to each handler constructor.
+
+        Returns:
+            Mapping of protocol name to handler instance tuples.
         """
-        for protocol, handlers_cls in self._trigger_handlers_cls.items():
-            self.trigger_handlers[protocol] = tuple(handler_cls(context) for handler_cls in set(handlers_cls))
+        return {
+            protocol: tuple(handler_cls(context) for handler_cls in set(handlers_cls))
+            for protocol, handlers_cls in self._trigger_handlers_cls.items()
+        }
 
-    def get_trigger(self, protocol: str, input_instance: DataTrigger) -> TriggerHandler:
+    @staticmethod
+    def get_trigger(
+        handlers: dict[str, tuple[TriggerHandler, ...]],
+        protocol: str,
+        input_instance: DataTrigger,
+    ) -> TriggerHandler:
         """Retrieve a trigger handler instance based on the provided protocol and input instance type.
 
         Args:
+            handlers: Mapping of protocol name to handler instance tuples.
             protocol: The protocol name (ignored internally, `input_instance.protocol` is used instead).
             input_instance: The input trigger instance used to determine the correct handler.
 
@@ -367,7 +374,7 @@ class ModuleDiscoverer:
         logger.debug("Trigger type invoked: %s", input_instance)
         protocol = input_instance.protocol
 
-        if (protocols := self.trigger_handlers.get(protocol)) is None:
+        if (protocols := handlers.get(protocol)) is None:
             msg = f"No handler for protocol '{protocol}'"
             raise ValueError(msg)
 

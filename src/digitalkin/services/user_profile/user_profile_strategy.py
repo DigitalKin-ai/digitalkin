@@ -14,12 +14,12 @@ class UserProfileStrategy(BaseStrategy, ABC):
     """Abstract base class for UserProfile strategies."""
 
     @abstractmethod
-    async def get_user_profile(self) -> dict[str, Any]:
+    async def get_user_profile(self) -> dict[str, Any] | None:
         """Get user profile data.
 
         Returns:
-            dict[str, Any]: User profile data
+            User profile data, or None if not found.
 
         Raises:
-            UserProfileServiceError: If the user profile cannot be retrieved
+            UserProfileServiceError: If the service call fails (not for missing profiles).
         """

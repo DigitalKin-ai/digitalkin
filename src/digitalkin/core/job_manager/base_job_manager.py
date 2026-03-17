@@ -7,7 +7,6 @@ from typing import Any, Generic
 
 from digitalkin.core.task_manager.base_task_manager import BaseTaskManager
 from digitalkin.core.task_manager.task_session import TaskSession
-from digitalkin.models.core.task_monitor import TaskStatus
 from digitalkin.models.module.module import ModuleCodeModel
 from digitalkin.models.module.module_types import DataModel, InputModelT, OutputModelT, SetupModelT
 from digitalkin.modules._base_module import BaseModule
@@ -251,24 +250,13 @@ class BaseJobManager(abc.ABC, Generic[InputModelT, OutputModelT, SetupModelT]):
         """
 
     @abc.abstractmethod
-    async def get_module_status(self, job_id: str) -> TaskStatus:
-        """Retrieve the status of a module job.
-
-        Args:
-            job_id: The unique identifier of the job.
-
-        Returns:
-            ModuleStatu: The status of the job.
-        """
-
-    @abc.abstractmethod
     async def wait_for_completion(self, job_id: str) -> None:
         """Wait for a task to complete.
 
         This method blocks until the specified job has reached a terminal state.
         The implementation varies by job manager type:
         - SingleJobManager: Awaits the asyncio.Task directly
-        - TaskiqJobManager: Polls task status from SurrealDB
+        - TaskiqJobManager: Polls task status
 
         Args:
             job_id: The unique identifier of the job to wait for.

@@ -62,13 +62,12 @@ flowchart TB
         SM5[BaseModule.__init__]
         SM6[Create ModuleContext + Services]
         SM7[LocalTaskManager.create_task]
-        SM8[TaskSession with Queue + SurrealDB]
+        SM8[TaskSession with Queue + Signal Service]
     end
 
-    subgraph TaskExecution["TaskExecutor - 3 Concurrent Tasks"]
+    subgraph TaskExecution["TaskExecutor - 2 Concurrent Tasks"]
         TE1[main_task:<br/>module.start]
-        TE2[heartbeat_task:<br/>SurrealDB heartbeat every 2s]
-        TE3[signal_task:<br/>Listen pause/resume/cancel]
+        TE3[signal_task:<br/>Listen stop/cancel via TaskManagerStrategy]
     end
 
     subgraph ModuleStart["module.start Lifecycle"]
@@ -236,12 +235,11 @@ JobManager.create_module_instance_job()
     ▼
 LocalTaskManager.create_task()
     │
-    ├─ TaskSession(job_id, queue, SurrealDB connection)
+    ├─ TaskSession(job_id, queue, signal_service)
     │
     └─ TaskExecutor.execute_task()
             │
             ├─ main_task: module.start(input_data, setup_data, callback)
-            ├─ heartbeat_task: session.generate_heartbeats()
             └─ signal_task: session.listen_signals()
 ```
 
@@ -261,7 +259,7 @@ BaseModule.start(input_data, setup_data, callback)
     │
     ├─ await initialize(context, setup_data)
     │
-    ├─ triggers_discoverer.init_handlers(context)
+    ├─ self.trigger_handlers = triggers_discoverer.init_handlers(context)
     │
     ├─ await run(input_data, setup_data)
     │       │
@@ -344,7 +342,7 @@ All IDs stored in:
     └─ ModuleContext.session
             │
             ├─ Used in structured logging
-            ├─ Used in SurrealDB records
+            ├─ Used in signal service records
             └─ Returned in responses
 ```
 

@@ -19,13 +19,9 @@ class CommunicationStrategy(BaseStrategy, ABC):
     """
 
     @abstractmethod
-    async def cleanup(self) -> None:
-        """Clean up communication resources.
-
-        This method should release any held resources such as
-        gRPC channels, connection pools, etc.
-        """
-        raise NotImplementedError
+    async def close(self) -> None:
+        """Release communication resources (channels, connection pools)."""
+        ...
 
     @abstractmethod
     async def get_module_schemas(
@@ -53,7 +49,7 @@ class CommunicationStrategy(BaseStrategy, ABC):
                 "cost": {...}
             }
         """
-        raise NotImplementedError
+        ...
 
     @abstractmethod
     async def call_module(
@@ -86,4 +82,3 @@ class CommunicationStrategy(BaseStrategy, ABC):
         # Make this an actual async generator to satisfy type checkers
         if False:  # pragma: no cover
             yield {}
-        raise NotImplementedError

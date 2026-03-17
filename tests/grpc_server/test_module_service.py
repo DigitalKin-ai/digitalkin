@@ -4,6 +4,7 @@ This module contains comprehensive tests for the ModuleServicer class, which han
 module lifecycle, monitoring, and schema introspection operations.
 """
 
+import asyncio
 from collections.abc import AsyncGenerator
 from typing import Any
 from unittest.mock import AsyncMock, Mock, patch
@@ -89,22 +90,6 @@ def mock_job_manager():
     manager.create_module_instance_job = AsyncMock(return_value="test-job-id")
     manager.create_config_setup_instance_job = AsyncMock(return_value="test-config-job-id")
     manager.stop_module = AsyncMock(return_value=True)
-    # Use a mock object with a .name attribute that returns a proto-compatible value
-    mock_status = Mock()
-    mock_status.name = "MODULE_STATUS_PROCESSING"  # Proto-compatible status
-    manager.get_module_status = AsyncMock(return_value=mock_status)
-
-    # For list_modules, create mock status objects too
-    mock_status_1 = Mock()
-    mock_status_1.name = "MODULE_STATUS_PROCESSING"
-    mock_status_2 = Mock()
-    mock_status_2.name = "MODULE_STATUS_STOPPED"
-    manager.list_modules = AsyncMock(
-        return_value={
-            "job-1": {"status": mock_status_1},
-            "job-2": {"status": mock_status_2},
-        }
-    )
     manager.generate_config_setup_module_response = AsyncMock(return_value={"updated": "config"})
     return manager
 
@@ -129,6 +114,10 @@ def module_servicer(mock_job_manager, mock_setup_strategy):
     servicer.module_class = MockModule
     servicer.job_manager = mock_job_manager
     servicer.setup = mock_setup_strategy
+    servicer._setup_cache = {}
+    servicer._setup_cache_max = 100
+    servicer._setup_inflight: dict[str, asyncio.Future] = {}
+    servicer._completion_timeout = 300.0
 
     return servicer
 
@@ -317,80 +306,6 @@ class TestStopModule:
         assert response.success is False
         assert fake_context.get_code() == grpc.StatusCode.NOT_FOUND
         assert "not found" in fake_context.get_details()
-
-
-class TestGetModuleStatus:
-    """Tests for GetModuleStatus endpoint."""
-
-    @pytest.mark.asyncio
-    async def test_get_module_status_success(self, module_servicer, fake_context, mock_job_manager):
-        """Test successful module status retrieval."""
-        request = monitoring_pb2.GetModuleStatusRequest(job_id="test-job-id")
-
-        response = await module_servicer.GetModuleStatus(request, fake_context)
-
-        assert response.success is True
-        # The proto enum returns integer value (2 = MODULE_STATUS_PROCESSING)
-        assert response.status == monitoring_pb2.MODULE_STATUS_PROCESSING
-        assert response.job_id == "test-job-id"
-        mock_job_manager.get_module_status.assert_called_once_with("test-job-id")
-
-    @pytest.mark.asyncio
-    async def test_get_module_status_not_found(self, module_servicer, fake_context, mock_job_manager):
-        """Test get module status when job is not found."""
-        mock_job_manager.get_module_status = AsyncMock(return_value=None)
-
-        request = monitoring_pb2.GetModuleStatusRequest(job_id="nonexistent-job")
-
-        await module_servicer.GetModuleStatus(request, fake_context)
-
-        assert fake_context.get_code() == grpc.StatusCode.NOT_FOUND
-        assert "not found" in fake_context.get_details()
-
-    @pytest.mark.asyncio
-    async def test_get_module_status_empty_job_id(self, module_servicer, fake_context):
-        """Test get module status with empty job_id.
-
-        Note: This test currently has an implementation bug where ModuleStatus.NOT_FOUND
-        is not a valid proto enum. This test validates the error is caught.
-        """
-        request = monitoring_pb2.GetModuleStatusRequest(job_id="")
-
-        # The implementation currently has a bug - ModuleStatus.NOT_FOUND doesn't exist in proto
-        # This test verifies the current behavior (ValueError)
-        with pytest.raises(ValueError, match="unknown enum label"):
-            await module_servicer.GetModuleStatus(request, fake_context)
-
-
-class TestGetModuleJobs:
-    """Tests for GetModuleJobs endpoint."""
-
-    @pytest.mark.asyncio
-    async def test_get_module_jobs_success(self, module_servicer, fake_context, mock_job_manager):
-        """Test successful retrieval of module jobs."""
-        request = monitoring_pb2.GetModuleJobsRequest()
-
-        response = await module_servicer.GetModuleJobs(request, fake_context)
-
-        assert len(response.jobs) == 2
-        assert response.jobs[0].job_id == "job-1"
-        # Proto enum value for MODULE_STATUS_PROCESSING
-        assert response.jobs[0].job_status == monitoring_pb2.MODULE_STATUS_PROCESSING
-        assert response.jobs[1].job_id == "job-2"
-        # Proto enum value for MODULE_STATUS_STOPPED
-        assert response.jobs[1].job_status == monitoring_pb2.MODULE_STATUS_STOPPED
-        mock_job_manager.list_modules.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_get_module_jobs_empty(self, module_servicer, fake_context, mock_job_manager):
-        """Test retrieval of module jobs when no jobs exist."""
-        mock_job_manager.list_modules = AsyncMock(return_value={})
-
-        request = monitoring_pb2.GetModuleJobsRequest()
-
-        response = await module_servicer.GetModuleJobs(request, fake_context)
-
-        assert len(response.jobs) == 0
 
 
 class TestGetModuleInput:

@@ -64,6 +64,7 @@ _SERVICE_NAMES = {
     "registry",
     "snapshot",
     "storage",
+    "task_manager",
     "user_profile",
 }
 
@@ -326,7 +327,7 @@ class TestStart:
             patch.object(module, "stop", new_callable=AsyncMock) as mock_stop,
         ):
             module.triggers_discoverer = Mock()
-            module.triggers_discoverer.init_handlers = Mock()
+            module.triggers_discoverer.init_handlers = Mock(return_value={})
 
             await module.start(input_data, setup_data, callback)
 
@@ -389,7 +390,7 @@ class TestStart:
             patch.object(module, "stop", new_callable=AsyncMock),
         ):
             module.triggers_discoverer = Mock()
-            module.triggers_discoverer.init_handlers = Mock()
+            module.triggers_discoverer.init_handlers = Mock(return_value={})
 
             await module.start(input_data, setup_data, callback)
 
@@ -424,6 +425,51 @@ class TestStop:
             await module.stop()
 
         assert module.status == ModuleStatus.FAILED
+
+    async def test_flushes_instance_trigger_handlers(self) -> None:
+        """stop() calls flush on handlers from self.trigger_handlers."""
+        cls = _make_module_cls()
+        module = _instantiate(cls)
+        module.context.callbacks.send_message = AsyncMock()
+
+        h1 = AsyncMock()
+        h2 = AsyncMock()
+        module.trigger_handlers = {"proto_a": (h1,), "proto_b": (h2,)}
+
+        with patch.object(module, "cleanup", new_callable=AsyncMock):
+            await module.stop()
+
+        h1.flush_chat_history.assert_awaited_once_with(module.context)
+        h1.flush_file_history.assert_awaited_once_with(module.context)
+        h2.flush_chat_history.assert_awaited_once_with(module.context)
+        h2.flush_file_history.assert_awaited_once_with(module.context)
+
+    async def test_does_not_call_clear_mission_cache(self) -> None:
+        """stop() must not call clear_ch_mission_cache or clear_fh_mission_cache (regression)."""
+        cls = _make_module_cls()
+        module = _instantiate(cls)
+        module.context.callbacks.send_message = AsyncMock()
+
+        handler = AsyncMock()
+        module.trigger_handlers = {"proto": (handler,)}
+
+        with patch.object(module, "cleanup", new_callable=AsyncMock):
+            await module.stop()
+
+        handler.clear_ch_mission_cache.assert_not_called()
+        handler.clear_fh_mission_cache.assert_not_called()
+
+    async def test_empty_trigger_handlers_no_error(self) -> None:
+        """stop() succeeds when trigger_handlers is empty (no handlers initialized)."""
+        cls = _make_module_cls()
+        module = _instantiate(cls)
+        module.context.callbacks.send_message = AsyncMock()
+        assert module.trigger_handlers == {}
+
+        with patch.object(module, "cleanup", new_callable=AsyncMock):
+            await module.stop()
+
+        assert module.status == ModuleStatus.STOPPED
 
 
 class TestResolveTools:
@@ -509,3 +555,129 @@ class TestStartConfigSetup:
             await module.start_config_setup(setup_data, callback)
 
         assert module.status == ModuleStatus.FAILED
+
+
+class TestTriggerHandlerIsolation:
+    """Tests for per-instance trigger_handlers (not ClassVar)."""
+
+    def test_init_creates_empty_dict(self) -> None:
+        """__init__ sets trigger_handlers to an empty dict."""
+        cls = _make_module_cls()
+        module = _instantiate(cls)
+
+        assert module.trigger_handlers == {}
+        assert isinstance(module.trigger_handlers, dict)
+
+    def test_two_instances_independent(self) -> None:
+        """Mutating one instance's trigger_handlers does not affect another."""
+        cls = _make_module_cls()
+        m1 = _instantiate(cls)
+        m2 = _instantiate(cls)
+
+        m1.trigger_handlers["proto"] = (Mock(),)
+
+        assert "proto" in m1.trigger_handlers
+        assert "proto" not in m2.trigger_handlers
+
+    def test_not_a_class_attribute(self) -> None:
+        """trigger_handlers lives on the instance, not the class."""
+        cls = _make_module_cls()
+        module = _instantiate(cls)
+
+        assert "trigger_handlers" in module.__dict__
+        assert "trigger_handlers" not in cls.__dict__
+
+    async def test_start_stores_handlers_on_instance(self) -> None:
+        """start() stores init_handlers result on self.trigger_handlers."""
+        cls = _make_module_cls()
+        module = _instantiate(cls)
+
+        fake_handlers = {"proto": (Mock(),)}
+        module.triggers_discoverer = Mock()
+        module.triggers_discoverer.init_handlers = Mock(return_value=fake_handlers)
+
+        callback = AsyncMock()
+        with (
+            patch.object(module, "initialize", new_callable=AsyncMock),
+            patch.object(module, "_run_lifecycle", new_callable=AsyncMock),
+            patch.object(module, "stop", new_callable=AsyncMock),
+        ):
+            await module.start(
+                _LcInputModel(root=_LcInputTrigger()),
+                _LcSetupModel(),
+                callback,
+            )
+
+        assert module.trigger_handlers is fake_handlers
+
+    async def test_run_passes_instance_handlers_to_get_trigger(self) -> None:
+        """run() passes self.trigger_handlers as first arg to get_trigger."""
+        cls = _make_module_cls()
+        module = _instantiate(cls)
+
+        mock_handler = AsyncMock()
+        fake_handlers = {"lc_test": (mock_handler,)}
+        module.trigger_handlers = fake_handlers
+
+        module.triggers_discoverer = Mock()
+        module.triggers_discoverer.get_trigger.return_value = mock_handler
+
+        input_data = _LcInputModel(root=_LcInputTrigger(message="hi"))
+        await module.run(input_data, _LcSetupModel())
+
+        module.triggers_discoverer.get_trigger.assert_called_once_with(
+            fake_handlers,
+            "lc_test",
+            input_data.root,
+        )
+
+    async def test_two_concurrent_modules_isolated_handlers(self) -> None:
+        """Two module instances from the same class get independent handler dicts."""
+        cls = _make_module_cls()
+        m1 = _instantiate(cls)
+        m2 = _instantiate(cls)
+
+        h1 = {"proto": (Mock(),)}
+        h2 = {"proto": (Mock(),)}
+        m1.triggers_discoverer = Mock()
+        m1.triggers_discoverer.init_handlers = Mock(return_value=h1)
+        m2.triggers_discoverer = Mock()
+        m2.triggers_discoverer.init_handlers = Mock(return_value=h2)
+
+        callback = AsyncMock()
+        with (
+            patch.object(m1, "initialize", new_callable=AsyncMock),
+            patch.object(m1, "_run_lifecycle", new_callable=AsyncMock),
+            patch.object(m1, "stop", new_callable=AsyncMock),
+            patch.object(m2, "initialize", new_callable=AsyncMock),
+            patch.object(m2, "_run_lifecycle", new_callable=AsyncMock),
+            patch.object(m2, "stop", new_callable=AsyncMock),
+        ):
+            await asyncio.gather(
+                m1.start(_LcInputModel(root=_LcInputTrigger()), _LcSetupModel(), callback),
+                m2.start(_LcInputModel(root=_LcInputTrigger()), _LcSetupModel(), callback),
+            )
+
+        assert m1.trigger_handlers is h1
+        assert m2.trigger_handlers is h2
+        assert m1.trigger_handlers is not m2.trigger_handlers
+
+    async def test_stop_only_flushes_own_handlers(self) -> None:
+        """Stopping one module does not flush another module's handlers."""
+        cls = _make_module_cls()
+        m1 = _instantiate(cls)
+        m2 = _instantiate(cls)
+        m1.context.callbacks.send_message = AsyncMock()
+        m2.context.callbacks.send_message = AsyncMock()
+
+        h1 = AsyncMock()
+        h2 = AsyncMock()
+        m1.trigger_handlers = {"proto": (h1,)}
+        m2.trigger_handlers = {"proto": (h2,)}
+
+        with patch.object(m1, "cleanup", new_callable=AsyncMock):
+            await m1.stop()
+
+        h1.flush_chat_history.assert_awaited_once()
+        h2.flush_chat_history.assert_not_called()
+        h2.flush_file_history.assert_not_called()

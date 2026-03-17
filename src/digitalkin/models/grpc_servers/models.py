@@ -1,5 +1,6 @@
 """Data models for gRPC server configurations."""
 
+import os
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -104,12 +105,27 @@ class RetryPolicy(BaseModel):
         retryable_status_codes: gRPC status codes that trigger retry
     """
 
-    max_attempts: int = Field(default=5, ge=1, le=10, description="Maximum retry attempts including the original call")
-    initial_backoff: str = Field(default="0.1s", description="Initial backoff duration (e.g., '0.1s')")
-    max_backoff: str = Field(default="10s", description="Maximum backoff duration (e.g., '10s')")
-    backoff_multiplier: float = Field(default=2.0, ge=1.0, description="Multiplier for exponential backoff")
+    max_attempts: int = Field(
+        default_factory=lambda: int(os.environ.get("DIGITALKIN_GRPC_RETRY_MAX_ATTEMPTS", "5")),
+        ge=1,
+        le=10,
+        description="Maximum retry attempts including the original call",
+    )
+    initial_backoff: str = Field(
+        default_factory=lambda: os.environ.get("DIGITALKIN_GRPC_RETRY_INITIAL_BACKOFF", "0.1s"),
+        description="Initial backoff duration (e.g., '0.1s')",
+    )
+    max_backoff: str = Field(
+        default_factory=lambda: os.environ.get("DIGITALKIN_GRPC_RETRY_MAX_BACKOFF", "10s"),
+        description="Maximum backoff duration (e.g., '10s')",
+    )
+    backoff_multiplier: float = Field(
+        default_factory=lambda: float(os.environ.get("DIGITALKIN_GRPC_RETRY_BACKOFF_MULTIPLIER", "2.0")),
+        ge=1.0,
+        description="Multiplier for exponential backoff",
+    )
     retryable_status_codes: list[str] = Field(
-        default_factory=lambda: ["UNAVAILABLE", "RESOURCE_EXHAUSTED"],
+        default_factory=lambda: ["UNAVAILABLE", "RESOURCE_EXHAUSTED", "DEADLINE_EXCEEDED"],
         description="gRPC status codes that trigger retry",
     )
 
@@ -247,34 +263,22 @@ class ClientConfig(ChannelConfig):
             ("grpc.max_receive_message_length", 100 * 1024 * 1024),
             ("grpc.max_send_message_length", 100 * 1024 * 1024),
             # === DNS Re-resolution (Critical for Container Environments) ===
-            # Minimum milliseconds between DNS re-resolution attempts (500 ms)
-            # When connection fails, gRPC will re-query DNS after this interval
-            # Solves: Container restarts with new IPs causing "No route to host"
-            ("grpc.dns_min_time_between_resolutions_ms", 500),
-            # Initial delay before first reconnection attempt (1 second)
-            ("grpc.initial_reconnect_backoff_ms", 1000),
-            # Maximum delay between reconnection attempts (10 seconds)
-            # Prevents overwhelming the network during extended outages
-            ("grpc.max_reconnect_backoff_ms", 10000),
-            # Minimum delay between reconnection attempts (500ms)
-            # Ensures rapid recovery for brief network glitches
-            ("grpc.min_reconnect_backoff_ms", 500),
+            (
+                "grpc.dns_min_time_between_resolutions_ms",
+                int(os.environ.get("DIGITALKIN_GRPC_DNS_RESOLUTION_MS", "500")),
+            ),
+            ("grpc.initial_reconnect_backoff_ms", int(os.environ.get("DIGITALKIN_GRPC_INITIAL_RECONNECT_MS", "1000"))),
+            ("grpc.max_reconnect_backoff_ms", int(os.environ.get("DIGITALKIN_GRPC_MAX_RECONNECT_MS", "10000"))),
+            ("grpc.min_reconnect_backoff_ms", int(os.environ.get("DIGITALKIN_GRPC_MIN_RECONNECT_MS", "500"))),
             # === Keepalive Settings (Detect Dead Connections) ===
-            # Send keepalive ping every 60 seconds when connection is idle
-            # Proactively detects dead connections before RPC calls fail
-            ("grpc.keepalive_time_ms", 60000),
-            # Wait 20 seconds for keepalive response before declaring connection dead
-            # Triggers reconnection (with DNS re-resolution) if pong not received
-            ("grpc.keepalive_timeout_ms", 20000),
-            # Send keepalive pings even when no RPCs are in flight
-            # Essential for long-lived connections that may sit idle
+            ("grpc.keepalive_time_ms", int(os.environ.get("DIGITALKIN_GRPC_KEEPALIVE_TIME_MS", "60000"))),
+            ("grpc.keepalive_timeout_ms", int(os.environ.get("DIGITALKIN_GRPC_KEEPALIVE_TIMEOUT_MS", "20000"))),
             ("grpc.keepalive_permit_without_calls", True),
-            # Minimum interval between HTTP/2 pings (30 seconds)
-            # Must be >= server's grpc.http2.min_ping_interval_without_data_ms (10s)
-            ("grpc.http2.min_time_between_pings_ms", 30000),
+            (
+                "grpc.http2.min_time_between_pings_ms",
+                int(os.environ.get("DIGITALKIN_GRPC_MIN_PING_INTERVAL_MS", "30000")),
+            ),
             # === Retry Configuration ===
-            # Enable automatic retry for failed RPCs (1 = enabled)
-            # Works with retryable status codes: UNAVAILABLE, RESOURCE_EXHAUSTED
             ("grpc.enable_retries", 1),
         ],
         description="Resilient gRPC channel options with DNS re-resolution, keepalive, and retries",

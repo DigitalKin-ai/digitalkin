@@ -17,8 +17,7 @@ class SchemaSplitter:
             Tuple of (jsonschema, uischema).
         """
         defs_ui: dict[str, dict[str, Any]] = {}
-        schema_defs = combined_schema.get("$defs", {})
-        if schema_defs:
+        if schema_defs := combined_schema.get("$defs", {}):
             for def_name, def_value in schema_defs.items():
                 if isinstance(def_value, dict):
                     defs_ui[def_name] = {}

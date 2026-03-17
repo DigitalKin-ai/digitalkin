@@ -1,6 +1,5 @@
 """Remote task manager for distributed execution."""
 
-import datetime
 from collections.abc import Coroutine
 from typing import Any
 
@@ -22,8 +21,6 @@ class RemoteTaskManager(BaseTaskManager):
         mission_id: str,
         module: BaseModule,
         coro: Coroutine[Any, Any, None],
-        heartbeat_interval: datetime.timedelta = datetime.timedelta(seconds=2),
-        connection_timeout: datetime.timedelta = datetime.timedelta(seconds=5),
     ) -> None:
         """Register task for remote execution (metadata only).
 
@@ -35,31 +32,25 @@ class RemoteTaskManager(BaseTaskManager):
             mission_id: Mission identifier
             module: Module instance for metadata (not executed here)
             coro: Coroutine (will be closed - execution happens in worker)
-            heartbeat_interval: Interval between heartbeats
-            connection_timeout: Connection timeout for SurrealDB
 
         Raises:
             ValueError: If task_id duplicated
             RuntimeError: If task overload
         """
-        # Validation
-        await self._validate_task_creation(task_id, mission_id, coro)
-
-        logger.info(
-            "Registering remote task: '%s'",
-            task_id,
-            extra={
-                "mission_id": mission_id,
-                "task_id": task_id,
-                "heartbeat_interval": heartbeat_interval,
-                "connection_timeout": connection_timeout,
-            },
-        )
-
+        await self._acquire_task_slot(coro)
         try:
-            # Create session for metadata and signal handling
-            _channel, _session = await self._create_session(
-                task_id, mission_id, module, heartbeat_interval, connection_timeout
+            # Validate and register session atomically
+            async with self._tasks_lock:
+                await self._validate_task_creation(task_id, mission_id, coro)
+                self._create_session(task_id, mission_id, module)
+
+            logger.info(
+                "Registering remote task: '%s'",
+                task_id,
+                extra={
+                    "mission_id": mission_id,
+                    "task_id": task_id,
+                },
             )
 
             # Close coroutine - worker will recreate and execute it
@@ -77,12 +68,15 @@ class RemoteTaskManager(BaseTaskManager):
 
         except Exception as e:
             coro.close()
+            # Release semaphore if session was never registered (cleanup won't release it)
+            if task_id not in self.tasks_sessions:
+                self._task_slot.release()
+            else:
+                await self._cleanup_task(task_id, mission_id=mission_id)
             logger.error(
                 "Failed to register remote task: '%s'",
                 task_id,
                 extra={"mission_id": mission_id, "task_id": task_id, "error": str(e)},
                 exc_info=True,
             )
-            # Cleanup on failure
-            await self._cleanup_task(task_id, mission_id=mission_id)
             raise

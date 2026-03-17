@@ -15,6 +15,7 @@ from typing import Any, ClassVar
 from unittest.mock import patch
 
 import pytest
+from tests.fixtures.stress_reporter import StressReporter
 
 from digitalkin.core.job_manager.single_job_manager import SingleJobManager
 from digitalkin.core.task_manager.local_task_manager import LocalTaskManager
@@ -30,54 +31,6 @@ pytestmark = pytest.mark.timeout(120)
 # ============================================================================
 # Lightweight Fake Objects (replacing AsyncMock)
 # ============================================================================
-
-
-class FakeSurrealDBConnection:
-    """Lightweight fake SurrealDB connection for memory testing.
-
-    Replaces AsyncMock to avoid garbage collection issues with mock objects.
-    """
-
-    def __init__(self) -> None:
-        """Initialize fake connection."""
-        self.closed = False
-        self._live_queries = {}
-
-    async def init_surreal_instance(self):
-        """Fake initialization."""
-
-    async def close(self):
-        """Fake close method."""
-        self.closed = True
-
-    async def create(self, table: str, data: dict):
-        """Fake create method."""
-        return {"id": f"{table}:fake_id", **data}
-
-    async def update(self, table: str, record_id: str, data: dict):
-        """Fake update method."""
-        return {"id": record_id, **data}
-
-    async def merge(self, table: str, record_id: str, data: dict):
-        """Fake merge method."""
-        return {"id": record_id, **data}
-
-    async def start_live(self, table: str):
-        """Fake start_live method."""
-        live_id = f"live_{len(self._live_queries)}"
-
-        async def fake_generator():
-            """Fake async generator."""
-            while True:
-                await asyncio.sleep(0.1)
-                yield {"data": "fake_update"}
-
-        self._live_queries[live_id] = True
-        return live_id, fake_generator()
-
-    async def stop_live(self, live_id: str):
-        """Fake stop_live method."""
-        self._live_queries.pop(live_id, None)
 
 
 class FakeCallbacks:
@@ -118,6 +71,28 @@ class FakeSession:
         }
 
 
+class _FakeTaskManager:
+    """Minimal fake task manager for FakeModuleContext."""
+
+    async def send_signal(self, task_id: str, data: dict) -> dict:
+        """No-op send_signal."""
+        return data
+
+    async def subscribe_signals(self, task_id: str) -> tuple:
+        """Return a subscription that immediately ends."""
+        async def _gen():
+            return
+            yield  # pragma: no cover
+
+        return ("fake_sub", _gen())
+
+    async def unsubscribe_signals(self, sub_id: str) -> None:
+        """No-op unsubscribe."""
+
+    async def close(self) -> None:
+        """No-op close."""
+
+
 class FakeModuleContext:
     """Lightweight fake module context."""
 
@@ -129,6 +104,10 @@ class FakeModuleContext:
         self.session_data = {}
         self.session = FakeSession()
         self.tool_cache = {}
+        self.task_manager = _FakeTaskManager()
+
+    async def cleanup(self) -> None:
+        """No-op cleanup."""
 
 
 class ImprovedMockModule(BaseModule):
@@ -140,10 +119,17 @@ class ImprovedMockModule(BaseModule):
         services_config_strategies={}, services_config_params={}, mode=ServicesMode.LOCAL
     )
 
-    def __init__(self, job_id: str, mission_id: str, setup_id: str, setup_version_id: str) -> None:
-        super().__init__(job_id, mission_id, setup_id, setup_version_id)
+    def __init__(
+        self,
+        job_id: str,
+        mission_id: str,
+        setup_id: str,
+        setup_version_id: str,
+        request_metadata: dict[str, str] | None = None,
+    ) -> None:
+        super().__init__(job_id, mission_id, setup_id, setup_version_id, request_metadata=request_metadata)
         self.name = "ImprovedMockModule"
-
+        # Replace context with lightweight fake after super().__init__() completes
         self.context = FakeModuleContext()
 
     def _init_strategies(self, mission_id: str, setup_id: str, setup_version_id: str) -> dict[str, Any]:
@@ -157,6 +143,7 @@ class ImprovedMockModule(BaseModule):
             "registry": None,
             "snapshot": None,
             "storage": None,
+            "task_manager": None,
             "user_profile": None,
         }
 
@@ -228,109 +215,124 @@ class TestImprovedTaskManagerMemoryProfile:
     async def test_local_task_manager_memory_scaling(self):
         """Profile memory scaling with task count using relative measurements."""
         tracemalloc.start()
-        manager = LocalTaskManager(max_concurrent_tasks=100)
+        manager = LocalTaskManager()
+        manager.max_concurrent_tasks = 100
 
-        fake_db = FakeSurrealDBConnection()
+        # Baseline with 5 tasks
+        baseline_task_count = 5
+        baseline_memories = []
 
-        with patch("digitalkin.core.task_manager.base_task_manager.SurrealDBConnection", return_value=fake_db):
-            # Baseline with 5 tasks
-            baseline_task_count = 5
-            baseline_memories = []
+        for i in range(baseline_task_count):
+            module = ImprovedMockModule(f"job-{i}", "mission", "setup", "version")
 
-            for i in range(baseline_task_count):
-                module = ImprovedMockModule(f"job-{i}", "mission", "setup", "version")
+            async def task() -> None:
+                await asyncio.sleep(0.01)
 
-                async def task() -> None:
-                    await asyncio.sleep(0.01)
+            await manager.create_task(f"task-{i}", "mission", module, task())
 
-                await manager.create_task(f"task-{i}", "mission", module, task())
+        gc.collect()
+        baseline_memory = get_memory_usage_reliable()
+        baseline_memories.append(baseline_memory)
 
-            gc.collect()
-            baseline_memory = get_memory_usage_reliable()
-            baseline_memories.append(baseline_memory)
+        # Cancel baseline tasks
+        await manager.cancel_all_tasks("mission", timeout=1.0)
+        gc.collect()
 
-            # Cancel baseline tasks
-            await manager.cancel_all_tasks("mission", timeout=1.0)
-            gc.collect()
+        # Test with 20 tasks (4x baseline)
+        large_task_count = 20
 
-            # Test with 20 tasks (4x baseline)
-            large_task_count = 20
+        for i in range(large_task_count):
+            module = ImprovedMockModule(f"job-large-{i}", "mission", "setup", "version")
 
-            for i in range(large_task_count):
-                module = ImprovedMockModule(f"job-large-{i}", "mission", "setup", "version")
+            async def task() -> None:
+                await asyncio.sleep(0.01)
 
-                async def task() -> None:
-                    await asyncio.sleep(0.01)
+            await manager.create_task(f"task-large-{i}", "mission", module, task())
 
-                await manager.create_task(f"task-large-{i}", "mission", module, task())
+        gc.collect()
+        large_memory = get_memory_usage_reliable()
 
-            gc.collect()
-            large_memory = get_memory_usage_reliable()
+        # Clean up
+        await manager.shutdown("mission")
+        tracemalloc.stop()
 
-            # Clean up
-            await manager.shutdown("mission")
-            tracemalloc.stop()
+        # 4x tasks should use less than 6x memory (allowing for overhead)
+        if baseline_memory > 0:
+            scale_factor = large_task_count / baseline_task_count
+            memory_ratio = large_memory / baseline_memory
+            threshold = scale_factor * 1.5
 
-            # 4x tasks should use less than 6x memory (allowing for overhead)
-            if baseline_memory > 0:
-                scale_factor = large_task_count / baseline_task_count
-                memory_ratio = large_memory / baseline_memory
+            rpt = StressReporter(f"Task Manager Memory Scaling ({baseline_task_count} -> {large_task_count} tasks)")
+            rpt.metric(f"Baseline ({baseline_task_count} tasks)", StressReporter.mem(baseline_memory))
+            rpt.metric(f"Scaled ({large_task_count} tasks)", StressReporter.mem(large_memory))
+            rpt.metric("Task scale factor", StressReporter.ratio(scale_factor))
+            rpt.metric("Memory ratio", StressReporter.ratio(memory_ratio))
+            rpt.metric("Threshold", f"< {StressReporter.ratio(threshold)}")
+            rpt.result(memory_ratio < threshold)
 
-                assert memory_ratio < scale_factor * 1.5, (
-                    f"Memory scaling issue: {scale_factor}x tasks used {memory_ratio:.2f}x memory"
-                )
-            else:
-                pytest.skip("Baseline memory measurement returned zero")
+            assert memory_ratio < threshold, (
+                f"Memory scaling issue: {scale_factor}x tasks used {memory_ratio:.2f}x memory"
+            )
+        else:
+            pytest.skip("Baseline memory measurement returned zero")
 
     @pytest.mark.asyncio
     async def test_task_session_queue_relative_scaling(self):
         """Test queue memory scales roughly linearly using relative measurements."""
         tracemalloc.start()
 
-        fake_db = FakeSurrealDBConnection()
+        memory_by_queue_size: dict[int, int] = {}
 
-        with patch("digitalkin.core.task_manager.surrealdb_repository.SurrealDBConnection"):
-            memory_by_queue_size: dict[int, int] = {}
+        for queue_items in [10, 50, 100]:
+            gc.collect()
+            baseline = get_memory_usage_reliable()
 
-            for queue_items in [10, 50, 100]:
-                gc.collect()
-                baseline = get_memory_usage_reliable()
+            module = ImprovedMockModule("job-1", "mission", "setup", "version")
+            session = TaskSession(task_id="task-1", mission_id="mission", module=module)
 
-                module = ImprovedMockModule("job-1", "mission", "setup", "version")
-                session = TaskSession(task_id="task-1", mission_id="mission", db=fake_db, module=module)
+            # Fill queue with items
+            for i in range(queue_items):
+                await session.queue.put({"index": i, "data": "x" * 100})
 
-                # Fill queue with items
-                for i in range(queue_items):
-                    await session.queue.put({"index": i, "data": "x" * 100})
+            gc.collect()
+            memory_used = get_memory_usage_reliable() - baseline
+            memory_by_queue_size[queue_items] = memory_used
 
-                gc.collect()
-                memory_used = get_memory_usage_reliable() - baseline
-                memory_by_queue_size[queue_items] = memory_used
+            # Clean up
+            while not session.queue.empty():
+                session.queue.get_nowait()
+            await session.cleanup()
+            del session
 
-                # Clean up
-                while not session.queue.empty():
-                    session.queue.get_nowait()
-                await session.cleanup()
-                del session
+        tracemalloc.stop()
 
-            tracemalloc.stop()
+        assert len(memory_by_queue_size) >= 2, "Not enough memory samples collected"
 
-            assert len(memory_by_queue_size) >= 2, "Not enough memory samples collected"
+        sizes = sorted(memory_by_queue_size.keys())
+        baseline_memory = memory_by_queue_size[sizes[0]]
 
-            sizes = sorted(memory_by_queue_size.keys())
-            baseline_memory = memory_by_queue_size[sizes[0]]
+        # With psutil RSS measurement, baseline should always be > 0
+        assert baseline_memory > 0, f"Baseline memory is {baseline_memory}, expected > 0"
 
-            # With psutil RSS measurement, baseline should always be > 0
-            assert baseline_memory > 0, f"Baseline memory is {baseline_memory}, expected > 0"
+        rpt = StressReporter("Queue Memory Scaling")
+        for size in sizes:
+            rpt.metric(f"Queue size {size}", StressReporter.mem(memory_by_queue_size[size]))
 
-            for i in range(1, len(sizes)):
-                size_ratio = sizes[i] / sizes[0]
-                memory_ratio = memory_by_queue_size[sizes[i]] / baseline_memory
+        all_passed = True
+        for i in range(1, len(sizes)):
+            size_ratio = sizes[i] / sizes[0]
+            memory_ratio = memory_by_queue_size[sizes[i]] / baseline_memory
+            threshold = size_ratio * 2
+            passed = memory_ratio < threshold
+            all_passed = all_passed and passed
+            rpt.metric(f"  {sizes[0]} -> {sizes[i]} ratio", f"{StressReporter.ratio(memory_ratio)} < {StressReporter.ratio(threshold)}")
 
-                # Memory should scale sub-linearly (with some overhead tolerance)
-                assert memory_ratio < size_ratio * 2, (
-                    f"Memory scaling: {sizes[i]} items uses {memory_ratio:.2f}x memory (size ratio: {size_ratio}x)"
-                )
+            # Memory should scale sub-linearly (with some overhead tolerance)
+            assert memory_ratio < threshold, (
+                f"Memory scaling: {sizes[i]} items uses {memory_ratio:.2f}x memory (size ratio: {size_ratio}x)"
+            )
+
+        rpt.result(all_passed)
 
 
 class TestImprovedJobManagerMemoryProfile:
@@ -341,39 +343,42 @@ class TestImprovedJobManagerMemoryProfile:
         """Test SingleJobManager cleanup using relative memory measurements."""
         tracemalloc.start()
 
-        fake_conn = FakeSurrealDBConnection()
+        gc.collect()
+        baseline = get_memory_usage_reliable()
 
-        with patch(
-            "digitalkin.core.common.factories.ConnectionFactory.create_surreal_connection", return_value=fake_conn
-        ):
-            gc.collect()
-            baseline = get_memory_usage_reliable()
+        manager = SingleJobManager(ImprovedMockModule, ServicesMode.LOCAL)
+        await manager.start()
 
-            manager = SingleJobManager(ImprovedMockModule, ServicesMode.LOCAL)
-            await manager.start()
+        gc.collect()
+        memory_after_init = get_memory_usage_reliable()
+        init_memory = memory_after_init - baseline
 
-            gc.collect()
-            memory_after_init = get_memory_usage_reliable()
-            init_memory = memory_after_init - baseline
+        # Clean up
+        await manager.stop_all_modules()
 
-            # Clean up
-            await manager.stop_all_modules()
+        gc.collect()
+        memory_after_cleanup = get_memory_usage_reliable()
+        cleanup_memory = memory_after_cleanup - baseline
 
-            gc.collect()
-            memory_after_cleanup = get_memory_usage_reliable()
-            cleanup_memory = memory_after_cleanup - baseline
+        tracemalloc.stop()
 
-            tracemalloc.stop()
+        # Relative comparison - verify memory doesn't grow excessively
+        assert init_memory > 0, f"Init memory is {init_memory}, expected > 0"
 
-            # Relative comparison - verify memory doesn't grow excessively
-            assert init_memory > 0, f"Init memory is {init_memory}, expected > 0"
+        cleanup_ratio = cleanup_memory / init_memory
 
-            # Note: Due to Python's memory pooling and tracemalloc cumulative tracking,
-            # cleanup_memory may be >= init_memory. We verify it doesn't grow excessively.
-            cleanup_ratio = cleanup_memory / init_memory
-            assert cleanup_ratio < 2.0, (
-                f"Memory grew excessively after cleanup: {cleanup_ratio * 100:.1f}% of init (expected <200%)"
-            )
+        rpt = StressReporter("SingleJobManager Cleanup")
+        rpt.metric("After init", StressReporter.mem(init_memory))
+        rpt.metric("After cleanup", StressReporter.mem(cleanup_memory))
+        rpt.metric("Cleanup / init ratio", StressReporter.ratio(cleanup_ratio))
+        rpt.metric("Threshold", "< 2.00x")
+        rpt.result(cleanup_ratio < 2.0)
+
+        # Note: Due to Python's memory pooling and tracemalloc cumulative tracking,
+        # cleanup_memory may be >= init_memory. We verify it doesn't grow excessively.
+        assert cleanup_ratio < 2.0, (
+            f"Memory grew excessively after cleanup: {cleanup_ratio * 100:.1f}% of init (expected <200%)"
+        )
 
     @pytest.mark.taskiq
     @pytest.mark.asyncio
@@ -431,17 +436,26 @@ class TestImprovedJobManagerMemoryProfile:
 
                 tracemalloc.stop()
 
+                rpt = StressReporter(f"Taskiq Queue Clearing ({small_batch_size} / {large_batch_size} items)")
+                rpt.metric("Small batch memory", StressReporter.mem(small_memory))
+                rpt.metric("Large batch memory", StressReporter.mem(large_memory))
+                rpt.metric("After clear", StressReporter.mem(after_clear))
+
                 if small_memory > 0:
-                    # Large batch should use more memory than small batch
                     memory_growth = large_memory / small_memory
+                    rpt.metric("Growth (large/small)", StressReporter.ratio(memory_growth))
                     assert memory_growth > 1.0, "Large batch should use more memory than small batch"
 
-                    # After clearing, memory should drop significantly
                     if after_clear > 0:
                         retention_ratio = after_clear / large_memory
+                        rpt.metric("Retention after clear", StressReporter.pct(retention_ratio * 100))
+                        rpt.metric("Threshold", "< 30.0%")
+                        rpt.result(retention_ratio < 0.3)
                         assert retention_ratio < 0.3, (
                             f"Too much memory retained: {retention_ratio * 100:.1f}% after clearing"
                         )
+                    else:
+                        rpt.result(True)
 
 
 class TestImprovedMemoryLeakDetection:
@@ -453,50 +467,55 @@ class TestImprovedMemoryLeakDetection:
         tracemalloc.start()
         manager = LocalTaskManager()
 
-        fake_db = FakeSurrealDBConnection()
+        memory_samples = []
+        num_cycles = 10
+        tasks_per_cycle = 5
 
-        with patch("digitalkin.core.task_manager.base_task_manager.SurrealDBConnection", return_value=fake_db):
-            memory_samples = []
-            num_cycles = 10
-            tasks_per_cycle = 5
+        for cycle in range(num_cycles):
+            # Create tasks
+            for i in range(tasks_per_cycle):
+                module = ImprovedMockModule(f"job-{cycle}-{i}", "mission", "setup", "version")
 
-            for cycle in range(num_cycles):
-                # Create tasks
-                for i in range(tasks_per_cycle):
-                    module = ImprovedMockModule(f"job-{cycle}-{i}", "mission", "setup", "version")
+                async def task() -> None:
+                    await asyncio.sleep(0.01)
 
-                    async def task() -> None:
-                        await asyncio.sleep(0.01)
+                await manager.create_task(f"task-{cycle}-{i}", "mission", module, task())
 
-                    await manager.create_task(f"task-{cycle}-{i}", "mission", module, task())
+            # Wait for tasks to complete
+            await asyncio.sleep(0.1)
 
-                # Wait for tasks to complete
-                await asyncio.sleep(0.1)
+            # Cancel all tasks
+            await manager.cancel_all_tasks("mission", timeout=0.5)
 
-                # Cancel all tasks
-                await manager.cancel_all_tasks("mission", timeout=0.5)
+            # Measure memory
+            gc.collect()
+            memory_samples.append(get_memory_usage_reliable())
 
-                # Measure memory
-                gc.collect()
-                memory_samples.append(get_memory_usage_reliable())
+        tracemalloc.stop()
 
-            tracemalloc.stop()
+        # Check for memory leak using trend analysis
+        assert len(memory_samples) > 5, f"Not enough samples: {len(memory_samples)}"
 
-            # Check for memory leak using trend analysis
-            assert len(memory_samples) > 5, f"Not enough samples: {len(memory_samples)}"
+        # Compare early vs late samples using relative growth
+        early_avg = sum(memory_samples[:3]) / 3
+        late_avg = sum(memory_samples[-3:]) / 3
 
-            # Compare early vs late samples using relative growth
-            early_avg = sum(memory_samples[:3]) / 3
-            late_avg = sum(memory_samples[-3:]) / 3
+        assert early_avg > 0, f"Early average is {early_avg}, expected > 0"
 
-            assert early_avg > 0, f"Early average is {early_avg}, expected > 0"
+        growth_ratio = (late_avg - early_avg) / early_avg
 
-            # Note: With tracemalloc, some growth is expected due to test framework overhead
-            # We check that growth is bounded, not zero
-            growth_ratio = (late_avg - early_avg) / early_avg
-            assert growth_ratio < 5.0, (
-                f"Memory leak detected: {growth_ratio * 100:.2f}% growth over {num_cycles} cycles (expected <500%)"
-            )
+        rpt = StressReporter(f"Memory Leak Detection ({num_cycles} cycles x {tasks_per_cycle} tasks)")
+        rpt.metric("Early avg (cycles 0-2)", StressReporter.mem(early_avg))
+        rpt.metric("Late avg (cycles 7-9)", StressReporter.mem(late_avg))
+        rpt.metric("Growth", StressReporter.pct(growth_ratio * 100))
+        rpt.metric("Threshold", "< 500.0%")
+        rpt.result(growth_ratio < 5.0)
+
+        # Note: With tracemalloc, some growth is expected due to test framework overhead
+        # We check that growth is bounded, not zero
+        assert growth_ratio < 5.0, (
+            f"Memory leak detected: {growth_ratio * 100:.2f}% growth over {num_cycles} cycles (expected <500%)"
+        )
 
 
 class TestImprovedMemoryOptimizations:
@@ -505,84 +524,80 @@ class TestImprovedMemoryOptimizations:
     @pytest.mark.asyncio
     async def test_queue_clearing_effectiveness(self):
         """Test queue clearing optimization using before/after comparison."""
-        fake_db = FakeSurrealDBConnection()
+        manager = LocalTaskManager()
 
-        with patch("digitalkin.core.task_manager.surrealdb_repository.SurrealDBConnection"):
-            manager = LocalTaskManager()
+        # Create task with queue
+        module = ImprovedMockModule("job-1", "mission", "setup", "version")
+        session = TaskSession("task-1", "mission", module)
+        manager.tasks_sessions["task-1"] = session
 
-            # Create task with queue
-            module = ImprovedMockModule("job-1", "mission", "setup", "version")
-            session = TaskSession("task-1", "mission", fake_db, module)
-            manager.tasks_sessions["task-1"] = session
+        # Fill queue with items
+        for i in range(100):
+            item = {"data": "x" * 1000}  # 1KB per item
+            await session.queue.put(item)
 
-            # Fill queue with items
-            for i in range(100):
-                item = {"data": "x" * 1000}  # 1KB per item
-                await session.queue.put(item)
+        gc.collect()
+        memory_before = get_memory_usage_reliable()
 
-            gc.collect()
-            memory_before = get_memory_usage_reliable()
+        # Run cleanup
+        await manager._cleanup_task("task-1", "mission")
 
-            # Run cleanup
-            await manager._cleanup_task("task-1", "mission")
+        gc.collect()
+        memory_after = get_memory_usage_reliable()
 
-            gc.collect()
-            memory_after = get_memory_usage_reliable()
+        if memory_before > 0:
+            memory_reduction = (memory_before - memory_after) / memory_before
 
-            if memory_before > 0:
-                memory_reduction = (memory_before - memory_after) / memory_before
+            rpt = StressReporter("Queue Clearing (100 x 1KB items)")
+            rpt.metric("Before cleanup", StressReporter.mem(memory_before))
+            rpt.metric("After cleanup", StressReporter.mem(memory_after))
+            rpt.metric("Reduction", StressReporter.pct(memory_reduction * 100))
+            rpt.metric("Threshold", ">= -50.0%")
+            rpt.result(memory_reduction >= -0.5)
 
-                # Should free some memory (at least 10%)
-                # Note: May not be dramatic due to Python's memory pooling
-                assert memory_reduction >= -0.5, f"Memory cleanup verification: {memory_reduction * 100:.1f}% change"
-            else:
-                pytest.skip("Memory measurement before cleanup returned zero")
+            # Should free some memory (at least 10%)
+            # Note: May not be dramatic due to Python's memory pooling
+            assert memory_reduction >= -0.5, f"Memory cleanup verification: {memory_reduction * 100:.1f}% change"
+        else:
+            pytest.skip("Memory measurement before cleanup returned zero")
 
     @pytest.mark.asyncio
     async def test_connection_cleanup_effectiveness(self):
-        """Test connection cleanup using fake connections."""
+        """Test that large object collections release memory after clearing."""
         tracemalloc.start()
 
-        connections = []
+        gc.collect()
+        baseline = get_memory_usage_reliable()
 
-        async def create_fake_conn(*args, **kwargs):
-            conn = FakeSurrealDBConnection()
-            connections.append(conn)
-            return conn
+        # Create large in-memory objects to simulate connection overhead
+        objects = [{"data": "x" * 1024, "index": i} for i in range(500)]
 
-        with patch(
-            "digitalkin.core.common.factories.ConnectionFactory.create_surreal_connection", side_effect=create_fake_conn
-        ):
-            from digitalkin.core.common import ConnectionFactory
+        gc.collect()
+        memory_with_objects = get_memory_usage_reliable() - baseline
 
-            gc.collect()
-            baseline = get_memory_usage_reliable()
+        # Clear objects
+        objects.clear()
+        gc.collect()
 
-            # Create enough connections so the delta exceeds measurement noise
-            created_connections = []
-            for i in range(200):
-                conn = await ConnectionFactory.create_surreal_connection(database=f"db-{i}", auto_init=False)
-                created_connections.append(conn)
+        memory_after_clear = get_memory_usage_reliable() - baseline
 
-            gc.collect()
-            memory_with_connections = get_memory_usage_reliable() - baseline
+        tracemalloc.stop()
 
-            # Clear connections
-            created_connections.clear()
-            connections.clear()
-            gc.collect()
+        assert memory_with_objects > 0, f"Memory with objects is {memory_with_objects}, expected > 0"
 
-            memory_after_clear = get_memory_usage_reliable() - baseline
+        retention_ratio = memory_after_clear / memory_with_objects
 
-            tracemalloc.stop()
+        rpt = StressReporter("Connection Cleanup (500 x 1KB objects)")
+        rpt.metric("With objects", StressReporter.mem(memory_with_objects))
+        rpt.metric("After clear", StressReporter.mem(memory_after_clear))
+        rpt.metric("Retention ratio", StressReporter.ratio(retention_ratio))
+        rpt.metric("Threshold", "< 1.50x")
+        rpt.result(retention_ratio < 1.5)
 
-            assert memory_with_connections > 0, f"Memory with connections is {memory_with_connections}, expected > 0"
-
-            # Verify memory doesn't grow excessively after clearing
-            retention_ratio = memory_after_clear / memory_with_connections
-            assert retention_ratio < 1.5, (
-                f"Memory grew after clearing connections: {retention_ratio * 100:.1f}% retained (expected <150%)"
-            )
+        # Memory should not grow excessively after clearing
+        assert retention_ratio < 1.5, (
+            f"Memory grew after clearing objects: {retention_ratio * 100:.1f}% retained (expected <150%)"
+        )
 
 
 # ============================================================================
@@ -597,38 +612,42 @@ class TestImprovedMemoryBenchmarks:
     async def test_benchmark_100_tasks_memory(self):
         """Benchmark memory with 100 tasks using fake dependencies."""
         tracemalloc.start()
-        manager = LocalTaskManager(max_concurrent_tasks=100)
+        manager = LocalTaskManager()
+        manager.max_concurrent_tasks = 100
 
-        fake_db = FakeSurrealDBConnection()
+        gc.collect()
+        baseline = get_memory_usage_reliable()
 
-        with patch("digitalkin.core.task_manager.base_task_manager.SurrealDBConnection", return_value=fake_db):
-            gc.collect()
-            baseline = get_memory_usage_reliable()
+        # Create 100 tasks
+        for i in range(100):
+            module = ImprovedMockModule(f"job-{i}", "mission", "setup", "version")
 
-            # Create 100 tasks
-            for i in range(100):
-                module = ImprovedMockModule(f"job-{i}", "mission", "setup", "version")
+            async def task() -> None:
+                await asyncio.sleep(0.001)
 
-                async def task() -> None:
-                    await asyncio.sleep(0.001)
+            await manager.create_task(f"task-{i}", "mission", module, task())
 
-                await manager.create_task(f"task-{i}", "mission", module, task())
+        gc.collect()
+        peak_memory = get_memory_usage_reliable() - baseline
 
-            gc.collect()
-            peak_memory = get_memory_usage_reliable() - baseline
+        # Shutdown with sufficient timeout for 100 tasks
+        await manager.shutdown("mission", timeout=30.0)
 
-            # Shutdown with sufficient timeout for 100 tasks
-            await manager.shutdown("mission", timeout=30.0)
+        gc.collect()
+        final_memory = get_memory_usage_reliable() - baseline
 
-            gc.collect()
-            final_memory = get_memory_usage_reliable() - baseline
+        tracemalloc.stop()
 
-            tracemalloc.stop()
+        assert peak_memory > 0, f"Peak memory is {peak_memory}, expected > 0"
 
-            # Report results (informational)
+        cleanup_ratio = final_memory / peak_memory
 
-            # cleanup should work with proper timeout
-            assert peak_memory > 0, f"Peak memory is {peak_memory}, expected > 0"
+        rpt = StressReporter("Benchmark: 100 Tasks Memory")
+        rpt.metric("Peak (100 tasks)", StressReporter.mem(peak_memory))
+        rpt.metric("After shutdown", StressReporter.mem(final_memory))
+        rpt.metric("Per-task avg", StressReporter.mem(peak_memory / 100))
+        rpt.metric("Retained", StressReporter.pct(cleanup_ratio * 100))
+        rpt.metric("Threshold", "< 50.0%")
+        rpt.result(cleanup_ratio < 0.5)
 
-            cleanup_ratio = final_memory / peak_memory
-            assert cleanup_ratio < 0.5, f"Insufficient cleanup: {cleanup_ratio * 100:.1f}% memory retained"
+        assert cleanup_ratio < 0.5, f"Insufficient cleanup: {cleanup_ratio * 100:.1f}% memory retained"

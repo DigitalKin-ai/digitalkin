@@ -48,10 +48,8 @@ class UtilitySchemaExtender:
         Returns:
             A tuple of individual types contained in the Union.
         """
-        if get_origin(annotation) is Annotated:
-            inner_args = get_args(annotation)
-            if inner_args:
-                return cls._extract_union_types(inner_args[0])
+        if get_origin(annotation) is Annotated and (inner_args := get_args(annotation)):
+            return cls._extract_union_types(inner_args[0])
         if get_origin(annotation) is Union or isinstance(annotation, types.UnionType):
             return get_args(annotation)
         return (annotation,)

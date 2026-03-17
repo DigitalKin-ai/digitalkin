@@ -5,6 +5,14 @@ from enum import Enum
 from digitalkin.core.job_manager.base_job_manager import BaseJobManager
 
 
+class BackpressureStrategy(str, Enum):
+    """Backpressure strategy for module output queue writes."""
+
+    BLOCK = "block"
+    DROP_OLDEST = "drop_oldest"
+    REJECT = "reject"
+
+
 class JobManagerMode(Enum):
     """Job manager mode."""
 

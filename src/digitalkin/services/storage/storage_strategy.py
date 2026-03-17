@@ -194,10 +194,7 @@ class StorageStrategy(BaseStrategy, ABC):
         Returns:
             An asyncio.Lock scoped to the given collection:record_id pair.
         """
-        key = f"{collection}:{record_id}"
-        if key not in self._record_locks:
-            self._record_locks[key] = asyncio.Lock()
-        return self._record_locks[key]
+        return self._record_locks.setdefault(f"{collection}:{record_id}", asyncio.Lock())
 
     async def store(
         self,
@@ -268,8 +265,12 @@ class StorageStrategy(BaseStrategy, ABC):
         Returns:
             True if the deletion was successful, False otherwise
         """
+        key = f"{collection}:{record_id}"
         async with self._record_lock(collection, record_id):
-            return await self._remove(collection, record_id)
+            result = await self._remove(collection, record_id)
+        if result:
+            self._record_locks.pop(key, None)
+        return result
 
     async def list(self, collection: str) -> list[StorageRecord]:
         """Get all records within a collection.
@@ -291,7 +292,12 @@ class StorageStrategy(BaseStrategy, ABC):
         Returns:
             True if the deletion was successful, False otherwise
         """
-        return await self._remove_collection(collection)
+        result = await self._remove_collection(collection)
+        if result:
+            prefix = f"{collection}:"
+            for key in [k for k in self._record_locks if k.startswith(prefix)]:
+                self._record_locks.pop(key, None)
+        return result
 
     async def upsert(
         self,
@@ -325,8 +331,7 @@ class StorageStrategy(BaseStrategy, ABC):
         data_type_enum = DataType[data_type]
         validated_data = self._validate_data(collection, {**data, "mission_id": self.mission_id})
         async with self._record_lock(collection, record_id):
-            existing = await self._read(collection, record_id)
-            if existing:
+            if await self._read(collection, record_id):
                 updated = await self._update(collection, record_id, validated_data)
                 if updated is None:
                     msg = f"Update failed for existing record '{collection}:{record_id}'"
