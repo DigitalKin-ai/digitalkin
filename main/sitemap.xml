@@ -9,6 +9,10 @@
          <lastmod>2026-03-17</lastmod>
     </url>
     <url>
+         <loc>https://digitalkin.com/main/grpc-tuning/</loc>
+         <lastmod>2026-03-17</lastmod>
+    </url>
+    <url>
          <loc>https://digitalkin.com/main/guides/</loc>
          <lastmod>2026-03-17</lastmod>
     </url>
@@ -18,6 +22,22 @@
     </url>
     <url>
          <loc>https://digitalkin.com/main/api/dynamic_schema/</loc>
+         <lastmod>2026-03-17</lastmod>
+    </url>
+    <url>
+         <loc>https://digitalkin.com/main/architecture/admission-queue/</loc>
+         <lastmod>2026-03-17</lastmod>
+    </url>
+    <url>
+         <loc>https://digitalkin.com/main/architecture/concurrency-model/</loc>
+         <lastmod>2026-03-17</lastmod>
+    </url>
+    <url>
+         <loc>https://digitalkin.com/main/architecture/resilience/</loc>
+         <lastmod>2026-03-17</lastmod>
+    </url>
+    <url>
+         <loc>https://digitalkin.com/main/architecture/sdk-flow/</loc>
          <lastmod>2026-03-17</lastmod>
     </url>
 </urlset>
