@@ -128,9 +128,10 @@ class TaskiqBrokerConfig:
         port = os.environ.get("RABBITMQ_BROKER_PORT", "5672")
         username = os.environ.get("RABBITMQ_BROKER_USERNAME", "guest")
         password = os.environ.get("RABBITMQ_BROKER_PASSWORD", "guest")
+        scheme = os.environ.get("RABBITMQ_BROKER_SCHEME", "amqp")
 
         broker = AioPikaBroker(
-            f"amqp://{username}:{password}@{host}:{port}",
+            f"{scheme}://{username}:{password}@{host}:{port}",
             qos=int(os.environ.get("DIGITALKIN_TASKIQ_PREFETCH", "10")),
             startup=[TaskiqBrokerConfig.init_rstream],
         )
