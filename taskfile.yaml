@@ -27,17 +27,17 @@ tasks:
   dev-deps:
     desc: "Install development dependencies"
     cmds:
-      - uv pip install -e ".[taskiq]" --group dev --group docs
+      - uv sync --extra taskiq --group dev --group docs # uv pip install -e ".[taskiq]" --group dev --group docs
 
   examples-deps:
     desc: "Install examples dependencies"
     cmds:
-      - uv pip install --group examples
+      - uv sync --group examples
 
   tests-deps:
     desc: "Install tests dependencies"
     cmds:
-      - uv pip install --group tests
+      - uv sync --group tests
 
   setup-pre-commit:
     desc: "Install pre-commit hooks"
@@ -75,13 +75,14 @@ tasks:
   run-tests:
     desc: "Run pytest tests"
     cmds:
-      - docker compose run --rm -T tests -m 'not integration'
+      - docker compose run --rm -T tests
 
   linter:
     desc: "run linter on the project"
     cmds:
       - |
         uv run ruff format . && uv run ruff check --select I --fix . && uv run ruff check . --fix
+      - uv run mypy src/{{.PACKAGE_NAME}}
 
   clean:
     desc: "Remove build artifacts and cache directories"
@@ -117,6 +118,23 @@ tasks:
       - task: dev-deps
       - task: tests-deps
       - task: setup-pre-commit
+
+  docs-serve:
+    desc: "Serve documentation locally"
+    cmds:
+      - uv run mkdocs serve
+
+  docs-build:
+    desc: "Build documentation"
+    cmds:
+      - uv run mkdocs build
+
+  check:
+    desc: "Run linter, type check, and tests"
+    cmds:
+      - task: linter
+      - uv run mypy src/{{.PACKAGE_NAME}}
+      - task: run-tests
 
   start-taskiq:
     desc: "Start TaskIQ worker. be sure to enable rabbitMQ stream capability"

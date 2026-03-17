@@ -14,7 +14,7 @@ class StorageMixin:
     """
 
     @staticmethod
-    def store_storage(
+    async def store_storage(
         context: ModuleContext,
         collection: str,
         record_id: str | None,
@@ -36,10 +36,10 @@ class StorageMixin:
         Raises:
             StorageServiceError: If storage operation fails
         """
-        return context.storage.store(collection, record_id, data, data_type=data_type)
+        return await context.storage.store(collection, record_id, data, data_type=data_type)
 
     @staticmethod
-    def read_storage(context: ModuleContext, collection: str, record_id: str) -> StorageRecord | None:
+    async def read_storage(context: ModuleContext, collection: str, record_id: str) -> StorageRecord | None:
         """Read data from storage.
 
         Args:
@@ -53,10 +53,10 @@ class StorageMixin:
         Raises:
             StorageServiceError: If read operation fails
         """
-        return context.storage.read(collection, record_id)
+        return await context.storage.read(collection, record_id)
 
     @staticmethod
-    def update_storage(
+    async def update_storage(
         context: ModuleContext,
         collection: str,
         record_id: str,
@@ -76,4 +76,29 @@ class StorageMixin:
         Raises:
             StorageServiceError: If update operation fails
         """
-        return context.storage.update(collection, record_id, data)
+        return await context.storage.update(collection, record_id, data)
+
+    @staticmethod
+    async def upsert_storage(
+        context: ModuleContext,
+        collection: str,
+        record_id: str,
+        data: dict[str, Any],
+        data_type: Literal["OUTPUT", "VIEW", "LOGS", "OTHER"] = "OUTPUT",
+    ) -> StorageRecord:
+        """Insert or update data in storage atomically.
+
+        Args:
+            context: Module context containing the storage strategy
+            collection: Collection name
+            record_id: Record identifier
+            data: Data to store or update
+            data_type: Type of data being stored
+
+        Returns:
+            The created or updated storage record
+
+        Raises:
+            StorageServiceError: If upsert operation fails
+        """
+        return await context.storage.upsert(collection, record_id, data, data_type=data_type)

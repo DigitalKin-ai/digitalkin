@@ -2,7 +2,8 @@
 
 import abc
 import asyncio
-from collections.abc import Callable
+import os
+from collections.abc import Callable, Sequence
 from concurrent import futures
 from pathlib import Path
 from typing import Any, cast
@@ -17,6 +18,7 @@ from digitalkin.grpc_servers.utils.exceptions import (
     ServerStateError,
     ServicerError,
 )
+from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
 from digitalkin.logger import logger
 from digitalkin.models.grpc_servers.models import SecurityMode, ServerConfig, ServerMode
 from digitalkin.models.grpc_servers.types import GrpcServer, ServiceDescriptor, T
@@ -37,17 +39,24 @@ class BaseServer(abc.ABC):
         _health_servicer: Optional health check servicer.
     """
 
-    def __init__(self, config: ServerConfig) -> None:
+    def __init__(
+        self,
+        config: ServerConfig,
+        interceptors: Sequence[Any] | None = None,
+    ) -> None:
         """Initialize the base gRPC server.
 
         Args:
             config: The server configuration.
+            interceptors: Optional sequence of gRPC server interceptors.
         """
         self.config = config
         self.server: GrpcServer | None = None
         self._servicers: list[Any] = []
         self._service_names: list[str] = []  # Track service names for reflection
         self._health_servicer: Any = None  # For health checking
+        self._interceptors: list[Any] = list(interceptors) if interceptors else []
+        self._asyncio_monitor: Any = None
 
     def register_servicer(
         self,
@@ -87,12 +96,11 @@ class BaseServer(abc.ABC):
                     logger.debug("Registered explicit service name for reflection: %s", name)
 
         # If a descriptor is provided, extract service names
-        if service_descriptor and hasattr(service_descriptor, "services_by_name"):
-            for service_name in service_descriptor.services_by_name:
-                full_name = service_descriptor.services_by_name[service_name].full_name  # ignore: PLC0206
-                if full_name not in self._service_names:
-                    self._service_names.append(full_name)
-                    logger.debug("Registered service name from descriptor: %s", full_name)
+        if service_descriptor is not None:
+            for service in service_descriptor.services_by_name.values():
+                if service.full_name not in self._service_names:
+                    self._service_names.append(service.full_name)
+                    logger.debug("Registered service name from descriptor: %s", service.full_name)
 
     @abc.abstractmethod
     def _register_servicers(self) -> None:
@@ -115,8 +123,9 @@ class BaseServer(abc.ABC):
             return
 
         try:
-            # Import here to avoid dependency if not used
-            from grpc_reflection.v1alpha import reflection  # noqa: PLC0415
+            from grpc_reflection.v1alpha import (
+                reflection,
+            )  # Optional dependency, import only if reflection enabled
 
             # Get all registered service names
             service_names = self._service_names.copy()
@@ -147,9 +156,13 @@ class BaseServer(abc.ABC):
             return
 
         try:
-            # Import here to avoid dependency if not used
-            from grpc_health.v1 import health_pb2, health_pb2_grpc  # noqa: PLC0415
-            from grpc_health.v1.health import HealthServicer  # noqa: PLC0415
+            from grpc_health.v1 import (
+                health_pb2,
+                health_pb2_grpc,
+            )  # Optional dependency, import only if health service needed
+            from grpc_health.v1.health import (
+                HealthServicer,
+            )  # Optional dependency, import only if health service needed
 
             # Create health servicer
             health_servicer = HealthServicer()
@@ -191,12 +204,43 @@ class BaseServer(abc.ABC):
         """
         try:
             # Create the server based on mode
+            grpc_compression = self.config.compression.to_grpc()
+
+            # Machine capabilities
+            try:
+                cpu_count = len(os.sched_getaffinity(0))  # type: ignore[attr-defined]  # Linux-only, caught by AttributeError on macOS/Windows
+                logger.info("vCPU count: %d", cpu_count)
+            except (AttributeError, OSError):
+                cpu_count = os.cpu_count() or 1
+                logger.info("CPU count: %d", cpu_count)
+
+            # Compute defaults from machine capabilities, overridable via env vars
+            max_concurrent_rpcs = int(os.environ.get("DIGITALKIN_MAX_CONCURRENT_RPCS", str(cpu_count * 200)))
+            thread_pool_workers = int(os.environ.get("DIGITALKIN_THREAD_POOL_WORKERS", str(min(4, cpu_count))))
+
+            logger.info(
+                "gRPC server config: cpus=%d, max_concurrent_rpcs=%d, thread_pool_workers=%d, mode=%s",
+                cpu_count,
+                max_concurrent_rpcs,
+                thread_pool_workers,
+                self.config.mode.value,
+            )
+
             if self.config.mode == ServerMode.ASYNC:
-                server = grpc_aio.server(options=self.config.server_options)
+                server = grpc_aio.server(
+                    options=self.config.server_options,
+                    compression=grpc_compression,
+                    interceptors=self._interceptors or None,
+                    maximum_concurrent_rpcs=max_concurrent_rpcs,
+                    migration_thread_pool=futures.ThreadPoolExecutor(max_workers=thread_pool_workers),
+                )
             else:
-                server = grpc.server(
+                server = grpc.server(  # type: ignore[assignment]  # sync grpc.Server assigned to GrpcServer union
                     futures.ThreadPoolExecutor(max_workers=self.config.max_workers),
                     options=self.config.server_options,
+                    compression=grpc_compression,
+                    interceptors=self._interceptors or None,
+                    maximum_concurrent_rpcs=max_concurrent_rpcs,
                 )
 
             # Add the appropriate port
@@ -363,12 +407,25 @@ class BaseServer(abc.ABC):
             msg = f"Failed to start server: {e}"
             raise ServerStateError(msg) from e
 
+        # Start asyncio-inspector if enabled
+        if os.environ.get("DIGITALKIN_ASYNCIO_INSPECTOR", "").lower() == "true":
+            try:
+                from digitalkin.core.profiling.asyncio_monitor import AsyncioMonitor
+
+                port = int(os.environ.get("DIGITALKIN_ASYNCIO_INSPECTOR_PORT", "8765"))
+                self._asyncio_monitor = AsyncioMonitor(port=port)
+                await self._asyncio_monitor.start()
+            except Exception:
+                logger.exception("Failed to start asyncio-inspector")
+
     def stop(self, grace: float | None = None) -> None:
-        """Stop the gRPC server.
+        """Stop the gRPC server and close all cached gRPC client channels.
 
         Args:
             grace: Optional grace period in seconds for existing RPCs to complete.
         """
+        self._asyncio_monitor = None
+
         if self.server is None:
             logger.warning("Attempted to stop server, but no server is running")
             return
@@ -394,6 +451,11 @@ class BaseServer(abc.ABC):
                     return
                 # If not in a running event loop, use run_until_complete
                 loop.run_until_complete(self._stop_async(grace))
+                loop.run_until_complete(GrpcClientWrapper.close_all_cached_channels())
+                from digitalkin.services.task_manager.grpc_task_manager import _SharedPoller, _SharedSendBuffer
+
+                loop.run_until_complete(_SharedPoller.close_all())
+                loop.run_until_complete(_SharedSendBuffer.close_all())
             except RuntimeError:
                 # Event loop issues - try with a new loop
                 logger.debug("Creating new event loop for shutdown")
@@ -401,6 +463,11 @@ class BaseServer(abc.ABC):
                     new_loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(new_loop)
                     new_loop.run_until_complete(self._stop_async(grace))
+                    new_loop.run_until_complete(GrpcClientWrapper.close_all_cached_channels())
+                    from digitalkin.services.task_manager.grpc_task_manager import _SharedPoller, _SharedSendBuffer
+
+                    new_loop.run_until_complete(_SharedPoller.close_all())
+                    new_loop.run_until_complete(_SharedSendBuffer.close_all())
                 finally:
                     new_loop.close()
         else:
@@ -424,13 +491,17 @@ class BaseServer(abc.ABC):
         await async_server.stop(grace=grace)
 
     async def stop_async(self, grace: float | None = None) -> None:
-        """Stop the gRPC server asynchronously.
+        """Stop the gRPC server asynchronously and close all cached client channels.
 
         This method should be used in async contexts.
 
         Args:
             grace: Optional grace period in seconds for existing RPCs to complete.
         """
+        if self._asyncio_monitor is not None:
+            await self._asyncio_monitor.stop()
+            self._asyncio_monitor = None
+
         if self.server is None:
             logger.warning("Attempted to stop server, but no server is running")
             return
@@ -443,6 +514,12 @@ class BaseServer(abc.ABC):
             sync_server = cast("grpc.Server", self.server)
             sync_server.stop(grace=grace)
 
+        await GrpcClientWrapper.close_all_cached_channels()
+        # Lazy import to avoid circular dependency (grpc_task_manager imports from grpc_servers)
+        from digitalkin.services.task_manager.grpc_task_manager import _SharedPoller, _SharedSendBuffer
+
+        await _SharedPoller.close_all()
+        await _SharedSendBuffer.close_all()
         logger.debug("✅ gRPC server stopped")
         self.server = None
 

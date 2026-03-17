@@ -5,16 +5,30 @@ Each test is documented with the original issue and fix.
 """
 
 import asyncio
+from collections.abc import AsyncGenerator
+from enum import Enum
 from typing import Any, ClassVar
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
+from pydantic import BaseModel, Field
 
 from digitalkin.core.job_manager.single_job_manager import SingleJobManager
 from digitalkin.core.task_manager.local_task_manager import LocalTaskManager
+from digitalkin.models.core.task_monitor import CancellationReason
 from digitalkin.modules._base_module import BaseModule
 from digitalkin.services.services_config import ServicesConfig
 from digitalkin.services.services_models import ServicesMode, ServicesStrategy
+from digitalkin.services.task_manager.task_manager_strategy import TaskManagerStrategy
+
+
+async def _empty_signals() -> AsyncGenerator[dict, None]:
+    """Async generator that blocks until cancelled, yielding nothing."""
+    try:
+        await asyncio.Event().wait()
+    except asyncio.CancelledError:
+        return
+    yield  # pragma: no cover
 
 
 class MockModule(BaseModule):
@@ -26,26 +40,42 @@ class MockModule(BaseModule):
         services_config_strategies={}, services_config_params={}, mode=ServicesMode.LOCAL
     )
 
-    def __init__(self, job_id: str, mission_id: str, setup_id: str, setup_version_id: str) -> None:
+    def __init__(
+        self,
+        job_id: str,
+        mission_id: str,
+        setup_id: str,
+        setup_version_id: str,
+        request_metadata: dict[str, str] | None = None,
+    ) -> None:
         # REGRESSION: Module MUST call super().__init__
-        super().__init__(job_id, mission_id, setup_id, setup_version_id)
+        super().__init__(job_id, mission_id, setup_id, setup_version_id, request_metadata=request_metadata)
         self.job_id = job_id
         self.mission_id = mission_id
         self.setup_id = setup_id
         self.setup_version_id = setup_version_id
         self.initialize_called = False
         self.run_called = False
+        # Wire a mock task_manager so ModuleContext is fully functional
+        task_mgr = Mock(spec=TaskManagerStrategy)
+        task_mgr.send_signal = AsyncMock(return_value={})
+        task_mgr.subscribe_signals = AsyncMock(return_value=("sub", _empty_signals()))
+        task_mgr.unsubscribe_signals = AsyncMock()
+        task_mgr.close = AsyncMock()
+        self.context.task_manager = task_mgr
 
     def _init_strategies(self, mission_id: str, setup_id: str, setup_version_id: str) -> dict[str, Any]:
         """Override to skip service initialization in tests."""
         return {
             "agent": None,
+            "communication": None,
             "cost": None,
             "filesystem": None,
             "identity": None,
             "registry": None,
             "snapshot": None,
             "storage": None,
+            "task_manager": None,
             "user_profile": None,
         }
 
@@ -101,61 +131,59 @@ class TestTaskManagerChannelRegression:
 
     @pytest.mark.asyncio
     async def test_base_task_manager_no_channel_attribute(self):
-        """REGRESSION: BaseTaskManager had both 'channel' and sessions with 'db',
-        causing confusion about which to use.
-        Fix: Removed channel attribute, use session.db instead.
+        """REGRESSION: BaseTaskManager had a 'channel' attribute causing confusion.
+        Fix: Removed channel attribute entirely; signal service lives in TaskSession.
         """
         manager = LocalTaskManager()
 
         # BaseTaskManager should NOT have a channel attribute
         assert not hasattr(manager, "channel")
 
-        # Sessions should have db attribute
-        with patch("digitalkin.core.task_manager.base_task_manager.SurrealDBConnection") as mock_conn:
-            mock_db = AsyncMock()
-            mock_conn.return_value = mock_db
+        module = MockModule("job-1", "mission", "setup", "version")
 
-            module = MockModule("job-1", "mission", "setup", "version")
+        async def task() -> None:
+            pass
 
-            async def task() -> None:
-                pass
+        await manager.create_task("task-1", "mission", module, task())
 
-            await manager.create_task("task-1", "mission", module, task())
-
-            # Session should have db, not manager
-            assert "task-1" in manager.tasks_sessions
-            assert hasattr(manager.tasks_sessions["task-1"], "db")
-            assert manager.tasks_sessions["task-1"].db is not None
+        # Session is created and tracked
+        assert "task-1" in manager.tasks_sessions
+        # Signal service comes from the module context, not the manager
+        assert hasattr(manager.tasks_sessions["task-1"], "signal_service")
 
     @pytest.mark.asyncio
-    async def test_send_signal_uses_session_db(self):
-        """REGRESSION: send_signal was trying to use self.channel.update
-        instead of session.db.update.
+    async def test_send_signal_uses_session_service(self):
+        """REGRESSION: send_signal was using self.channel instead of the session's
+        signal service. Fix: delegated to session.signal_service.send_signal().
         """
         manager = LocalTaskManager()
 
-        mock_db = AsyncMock()
-        mock_db.update = AsyncMock(return_value=True)
+        mock_signal_svc = AsyncMock()
+        mock_signal_svc.send_signal = AsyncMock(return_value={})
 
         mock_session = Mock()
-        mock_session.db = mock_db
+        mock_session.status = "pending"
+        mock_session.setup_id = "setup:test"
+        mock_session.setup_version_id = "setup_version:test"
+        mock_session.signal_service = mock_signal_svc
         manager.tasks_sessions["task-1"] = mock_session
 
-        # Should use session.db.update, not self.channel.update
-        result = await manager.send_signal("task-1", "mission", "pause", {})
+        result = await manager.send_signal("task-1", "mission", "cancel", {})
 
         assert result is True
-        mock_db.update.assert_awaited_once_with("signals", "task-1", {"type": "pause", "payload": {}})
+        mock_signal_svc.send_signal.assert_awaited_once()
 
 
 class TestTaskiqInfiniteLoopRegression:
     """Test regression for TaskiqJobManager infinite loop."""
 
+    @pytest.mark.taskiq
     @pytest.mark.asyncio
     async def test_taskiq_stream_consumer_timeout(self):
         """REGRESSION: test_taskiq_job_manager had infinite loop in stream consumer
         Fix: Added asyncio.timeout(2.0) wrapper.
         """
+        pytest.importorskip("taskiq", reason="taskiq not installed")
         with patch("digitalkin.core.job_manager.taskiq_job_manager.TASKIQ_BROKER"):
             with patch("digitalkin.core.job_manager.taskiq_job_manager.TaskiqJobManager._start"):
                 from digitalkin.core.job_manager.taskiq_job_manager import TaskiqJobManager
@@ -205,6 +233,7 @@ class TestMemoryLeakRegressions:
         session = Mock()
         session.db = mock_db
         session.queue = asyncio.Queue()
+        session._write_lock = asyncio.Lock()
 
         # Fill queue with items
         for i in range(100):
@@ -235,102 +264,6 @@ class TestMemoryLeakRegressions:
         # Session should be removed
         assert "task-1" not in manager.tasks_sessions
 
-    @pytest.mark.asyncio
-    async def test_taskiq_job_manager_connection_cleanup(self):
-        """REGRESSION: TaskiqJobManager didn't close SurrealDB connection
-        Fix: Added connection cleanup in _stop().
-        """
-        with (
-            patch("digitalkin.core.job_manager.taskiq_job_manager.TASKIQ_BROKER") as mock_broker,
-            patch(
-                "digitalkin.core.job_manager.taskiq_job_manager.TaskiqJobManager._define_consumer"
-            ) as mock_consumer_factory,
-            patch(
-                "digitalkin.core.job_manager.taskiq_job_manager.ConnectionFactory.create_surreal_connection",
-                new_callable=AsyncMock,
-            ) as mock_create_conn,
-        ):
-            mock_broker.startup = AsyncMock()
-            mock_consumer = AsyncMock()
-            mock_consumer.create_stream = AsyncMock()
-            mock_consumer.start = AsyncMock()
-            mock_consumer.subscribe = AsyncMock()
-            mock_consumer_factory.return_value = mock_consumer
-            mock_conn = AsyncMock()
-            mock_conn.close = AsyncMock()
-            mock_create_conn.return_value = mock_conn
-
-            from digitalkin.core.job_manager.taskiq_job_manager import TaskiqJobManager
-
-            manager = TaskiqJobManager(MockModule, ServicesMode.REMOTE)
-            await manager.start()
-
-            # Should have connection
-            assert hasattr(manager, "channel")
-
-            # Stop should close connection
-            await manager._stop()
-
-            # Connection should be closed
-            mock_conn.close.assert_awaited_once()
-
-
-class TestFireAndForgetRegression:
-    """Test regressions related to fire-and-forget async tasks."""
-
-    @pytest.mark.asyncio
-    async def test_stream_consumer_task_error_handling(self):
-        """REGRESSION: Stream consumer task in TaskiqJobManager was fire-and-forget
-        Fix: Wrapped with error handling and proper task management.
-        """
-        with (
-            patch("digitalkin.core.job_manager.taskiq_job_manager.TASKIQ_BROKER") as mock_broker,
-            patch(
-                "digitalkin.core.job_manager.taskiq_job_manager.TaskiqJobManager._define_consumer"
-            ) as mock_consumer_factory,
-            patch(
-                "digitalkin.core.job_manager.taskiq_job_manager.ConnectionFactory.create_surreal_connection",
-                new_callable=AsyncMock,
-            ) as mock_create_conn,
-        ):
-            mock_broker.startup = AsyncMock()
-
-            # Create consumer that will fail
-            mock_consumer = AsyncMock()
-            mock_consumer.create_stream = AsyncMock()
-            mock_consumer.start = AsyncMock()
-            mock_consumer.subscribe = AsyncMock()
-            mock_consumer.run = AsyncMock(side_effect=Exception("Consumer failed"))
-            mock_consumer.close = AsyncMock()
-
-            mock_consumer_factory.return_value = mock_consumer
-            mock_conn = AsyncMock()
-            mock_create_conn.return_value = mock_conn
-
-            from digitalkin.core.job_manager.taskiq_job_manager import TaskiqJobManager
-
-            manager = TaskiqJobManager(MockModule, ServicesMode.REMOTE)
-
-            # Start should create wrapped task
-            await manager.start()
-
-            # Task should exist and be wrapped
-            assert hasattr(manager, "stream_consumer_task")
-            assert manager.stream_consumer_task is not None
-
-            # Wait a bit for task to fail
-            await asyncio.sleep(0.1)
-
-            # Task should have failed but not cause uncaught exception
-            assert manager.stream_consumer_task.done()
-
-            # Clean up - _stop awaits the failed task so it will raise
-            try:
-                await manager._stop()
-            except Exception:
-                pass  # Expected since task failed
-
-
 class TestContextManagerRegression:
     """Test regressions related to async context managers."""
 
@@ -339,113 +272,43 @@ class TestContextManagerRegression:
         """REGRESSION: Context managers weren't properly cleaning up on exceptions
         Fix: Added __aenter__ and __aexit__ to BaseTaskManager.
         """
-        with patch("digitalkin.core.task_manager.base_task_manager.SurrealDBConnection") as mock_conn:
-            mock_db = AsyncMock()
-            mock_conn.return_value = mock_db
+        manager = LocalTaskManager()
 
-            manager = LocalTaskManager()
+        try:
+            async with manager:
+                module = MockModule("job-1", "mission", "setup", "version")
 
-            try:
-                async with manager:
-                    module = MockModule("job-1", "mission", "setup", "version")
+                async def task() -> None:
+                    await asyncio.sleep(0.1)
 
-                    async def task() -> None:
-                        await asyncio.sleep(0.1)
+                await manager.create_task("task-1", "mission", module, task())
 
-                    await manager.create_task("task-1", "mission", module, task())
+                # Simulate error
+                msg = "Test error"
+                raise ValueError(msg)
+        except ValueError:
+            pass
 
-                    # Simulate error
-                    msg = "Test error"
-                    raise ValueError(msg)
-            except ValueError:
-                pass
-
-            # Shutdown should have been called despite error
-            assert manager._shutdown_event.is_set()
-            assert len(manager.tasks_sessions) == 0
-
-
-class TestQueueTimeoutRegression:
-    """Test regressions related to queue timeout issues."""
-
-    @pytest.mark.asyncio
-    async def test_generate_config_setup_timeout(self):
-        """REGRESSION: generate_config_setup_module_response could hang forever
-        Fix: Added asyncio.wait_for with 30s timeout.
-        """
-        with patch("digitalkin.core.job_manager.taskiq_job_manager.TASKIQ_BROKER"):
-            with patch("digitalkin.core.job_manager.taskiq_job_manager.TaskiqJobManager._start"):
-                from digitalkin.core.job_manager.taskiq_job_manager import TaskiqJobManager
-
-                manager = TaskiqJobManager(MockModule, ServicesMode.REMOTE)
-
-                # Should timeout instead of hanging
-                with pytest.raises(asyncio.TimeoutError):
-                    await asyncio.wait_for(manager.generate_config_setup_module_response("timeout-job"), timeout=1.0)
-
-                # Queue should be cleaned up
-                assert "timeout-job" not in manager.job_queues
-
-    @pytest.mark.timeout(10)
-    @pytest.mark.asyncio
-    async def test_stream_consumer_periodic_timeout(self):
-        """REGRESSION: Stream consumer could hang if job disappeared
-        Fix: Added periodic timeout checks.
-        """
-        with patch("digitalkin.core.job_manager.taskiq_job_manager.TASKIQ_BROKER"):
-            with patch("digitalkin.core.job_manager.taskiq_job_manager.TaskiqJobManager._start"):
-                with patch("digitalkin.core.task_manager.base_task_manager.SurrealDBConnection"):
-                    from digitalkin.core.job_manager.taskiq_job_manager import TaskiqJobManager
-                    from digitalkin.core.task_manager.task_session import TaskSession
-
-                    manager = TaskiqJobManager(MockModule, ServicesMode.REMOTE, stream_timeout=1.0)
-
-                    queue = asyncio.Queue()
-                    manager.job_queues["disappearing-job"] = queue
-
-                    # Create a task session to simulate a registered job
-                    mock_db = Mock()
-                    mock_module = Mock(spec=BaseModule)
-                    manager.tasks_sessions["disappearing-job"] = TaskSession(
-                        "disappearing-job", "test_mission", mock_db, mock_module
-                    )
-
-                    items_consumed = []
-
-                    async with manager.generate_stream_consumer("disappearing-job") as stream:
-                        # Remove job from registry (simulating job disappearance)
-                        del manager.tasks_sessions["disappearing-job"]
-
-                        # Stream should eventually detect job is gone
-                        items_consumed.extend([item async for item in stream])
-                        # Should break due to timeout and job check
-
-                    # Stream should have ended
-                    assert "disappearing-job" not in manager.job_queues
+        # Shutdown should have been called despite error
+        assert manager._shutdown_event.is_set()
+        assert len(manager.tasks_sessions) == 0
 
 
 class TestFactoryPatternRegression:
     """Test regressions related to factory pattern implementation."""
 
-    @pytest.mark.asyncio
-    async def test_connection_factory_auto_init(self):
-        """REGRESSION: Connection factory didn't auto-initialize by default
-        Fix: Added auto_init=True parameter.
+    def test_module_factory_creates_independent_instances(self):
+        """REGRESSION: Factory was reusing module instances instead of creating new ones.
+        Fix: ModuleFactory.create_module_instance always calls the constructor.
         """
-        with patch("digitalkin.core.common.factories.SurrealDBConnection") as mock_conn_class:
-            mock_conn = AsyncMock()
-            mock_conn_class.return_value = mock_conn
+        from digitalkin.core.common import ModuleFactory
 
-            from digitalkin.core.common import ConnectionFactory
+        m1 = ModuleFactory.create_module_instance(MockModule, "job-1", "mission", "setup", "v1")
+        m2 = ModuleFactory.create_module_instance(MockModule, "job-2", "mission", "setup", "v1")
 
-            # Default should auto-initialize
-            await ConnectionFactory.create_surreal_connection()
-            mock_conn.init_surreal_instance.assert_awaited_once()
-
-            # Can disable auto-init
-            mock_conn.init_surreal_instance.reset_mock()
-            await ConnectionFactory.create_surreal_connection(auto_init=False)
-            mock_conn.init_surreal_instance.assert_not_awaited()
+        assert m1 is not m2
+        assert m1.job_id == "job-1"
+        assert m2.job_id == "job-2"
 
     def test_module_factory_validation(self):
         """REGRESSION: ModuleFactory didn't validate empty parameters
@@ -480,40 +343,24 @@ class TestAsyncCleanupRegression:
     """Test regressions related to async resource cleanup."""
 
     @pytest.mark.asyncio
-    async def test_multiple_db_connections_cleanup(self):
-        """REGRESSION: Multiple DB connections weren't all closed during shutdown
+    async def test_multiple_sessions_cleanup_on_shutdown(self):
+        """REGRESSION: Multiple sessions weren't all cleaned during shutdown.
         Fix: Enhanced shutdown to clean all remaining sessions.
         """
         manager = LocalTaskManager()
 
-        with patch("digitalkin.core.task_manager.base_task_manager.SurrealDBConnection") as mock_conn_class:
-            # Create multiple mock connections
-            mock_connections = []
-            for i in range(5):
-                mock_db = AsyncMock()
-                mock_db.close = AsyncMock()
-                mock_connections.append(mock_db)
+        for i in range(5):
+            module = MockModule(f"job-{i}", "mission", "setup", "version")
 
-            mock_conn_class.side_effect = mock_connections
+            async def task() -> None:
+                await asyncio.sleep(0.01)
 
-            # Create multiple tasks
-            for i in range(5):
-                module = MockModule(f"job-{i}", "mission", "setup", "version")
+            await manager.create_task(f"task-{i}", "mission", module, task())
 
-                async def task() -> None:
-                    await asyncio.sleep(0.01)
+        await manager.shutdown("mission")
 
-                await manager.create_task(f"task-{i}", "mission", module, task())
-
-            # Shutdown should close all connections
-            await manager.shutdown("mission")
-
-            # All connections should be closed
-            for mock_db in mock_connections:
-                mock_db.close.assert_awaited_once()
-
-            # All sessions should be cleaned
-            assert len(manager.tasks_sessions) == 0
+        # All sessions should be cleaned
+        assert len(manager.tasks_sessions) == 0
 
 
 class TestConcurrencyRegression:
@@ -524,47 +371,109 @@ class TestConcurrencyRegression:
         """REGRESSION: SingleJobManager.stop_module wasn't thread-safe
         Fix: Added async lock protection.
         """
-        with patch("digitalkin.core.job_manager.single_job_manager.ConnectionFactory") as mock_factory:
-            mock_conn = AsyncMock()
-            mock_factory.create_surreal_connection = AsyncMock(return_value=mock_conn)
+        manager = SingleJobManager(MockModule, ServicesMode.LOCAL)
+        await manager.start()
 
-            manager = SingleJobManager(MockModule, ServicesMode.LOCAL)
-            await manager.start()
+        # Create mock module and session with all attributes _cleanup_task needs
+        module = MockModule("job-1", "mission", "setup", "version")
+        module.stop = AsyncMock()
 
-            # Create mock module and session
-            module = MockModule("job-1", "mission", "setup", "version")
-            module.stop = AsyncMock()
+        session = Mock()
+        session.module = module
+        session.mission_id = "mission"
+        session.cleanup = AsyncMock()
+        session._write_lock = asyncio.Lock()
+        session.close_stream = Mock()
+        session.cancellation_reason = CancellationReason.UNKNOWN
+        session.status = "running"
 
-            mock_db = AsyncMock()
-            mock_db.close = AsyncMock()
+        manager.tasks_sessions["job-1"] = session
 
-            session = Mock()
-            session.module = module
-            session.mission_id = "mission"
-            session.db = mock_db
+        # Mock task
+        manager._task_manager.tasks["job-1"] = asyncio.create_task(asyncio.sleep(0.1))
 
-            # Add cleanup method - DON'T call module.stop() here as TaskSession.cleanup() does that
-            async def mock_cleanup() -> None:
-                await session.db.close()
+        stop_calls = []
 
-            session.cleanup = AsyncMock(side_effect=mock_cleanup)
+        async def track_stop() -> None:
+            result = await manager.stop_module("job-1")
+            stop_calls.append(result)
 
-            manager.tasks_sessions["job-1"] = session
+        # Multiple concurrent stop calls
+        await asyncio.gather(track_stop(), track_stop(), track_stop(), return_exceptions=True)
 
-            # Mock task
-            manager.tasks["job-1"] = asyncio.create_task(asyncio.sleep(0.1))
+        # Module.stop should only be called once (lock prevents multiple);
+        # only one stop_module call returns True (subsequent ones find session already cleaned)
+        assert module.stop.await_count == 1
+        assert sum(1 for r in stop_calls if r is True) == 1
 
-            stop_calls = []
 
-            async def track_stop() -> None:
-                result = await manager.stop_module("job-1")
-                stop_calls.append(result)
+class _MockBackend(Enum):
+    """Test enum for serialization regression."""
 
-            # Multiple concurrent stop calls
-            await asyncio.gather(track_stop(), track_stop(), track_stop(), return_exceptions=True)
+    AUTO = "auto"
+    CUSTOM = "custom"
 
-            # Module.stop should only be called once (lock prevents multiple)
-            assert module.stop.await_count <= 1
 
-            # Clean up
-            await manager.stop_all_modules()
+class _MockEnumSetupModel(BaseModel):
+    """Test model with enum field for serialization regression."""
+
+    backend: _MockBackend = Field(default=_MockBackend.AUTO)
+    name: str = "test"
+
+
+class TestEnumSerializationRegression:
+    """Test regression for enum serialization in job manager queues."""
+
+    @pytest.mark.asyncio
+    async def test_add_to_queue_serializes_enums(self):
+        """REGRESSION: model_dump() without mode='json' left raw Python enums in dict,
+        causing json_format.ParseDict to fail with ParseError.
+        Fix: Changed model_dump() to model_dump(mode='json') in add_to_queue.
+        """
+        manager = SingleJobManager(MockModule, ServicesMode.LOCAL)
+        await manager.start()
+
+        session = Mock()
+        session.queue = asyncio.Queue()
+        session.stream_closed = False
+        session._write_lock = asyncio.Lock()
+        manager.tasks_sessions["job-enum"] = session
+
+        output = _MockEnumSetupModel(backend=_MockBackend.CUSTOM, name="test")
+        await manager.add_to_queue("job-enum", output)
+
+        result = session.queue.get_nowait()
+
+        # Enum must be serialized as string, not raw enum object
+        assert result["backend"] == "custom"
+        assert isinstance(result["backend"], str)
+
+
+class TestTaskAccumulationRegression:
+    """Test regression for task accumulation blocking new task creation."""
+
+    @pytest.mark.asyncio
+    async def test_completed_tasks_dont_block_creation(self):
+        """REGRESSION: Completed/failed sessions in cleanup window blocked new task creation.
+
+        Under high throughput, sessions in terminal states (completed/failed/cancelled)
+        accumulated in tasks_sessions faster than cleanup removed them, eventually hitting
+        the max_concurrent_tasks limit even though few tasks were truly active.
+
+        Fix: _validate_task_creation counts only pending/running sessions.
+        """
+        manager = LocalTaskManager()
+        manager.max_concurrent_tasks = 3
+
+        # Simulate 3 sessions that have completed but haven't been cleaned up yet
+        for i in range(3):
+            manager.tasks_sessions[f"old-{i}"] = Mock(status="completed")
+
+        async def work() -> None:
+            pass
+
+        coro = work()
+
+        # Should succeed despite 3 sessions in dict (all are completed, active count is 0)
+        await manager._validate_task_creation("new-task", "mission", coro)
+        coro.close()

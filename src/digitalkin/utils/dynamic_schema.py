@@ -25,10 +25,10 @@ from dataclasses import dataclass, field
 from itertools import starmap
 from typing import TYPE_CHECKING, Any, TypeVar
 
-from digitalkin.logger import logger
-
 if TYPE_CHECKING:
     from pydantic.fields import FieldInfo
+
+from digitalkin.logger import logger
 
 T = TypeVar("T")
 
@@ -82,7 +82,7 @@ class ResolveResult:
         Returns:
             The resolved value or default.
         """
-        return self.values.get(key, default)  # type: ignore[return-value]
+        return self.values.get(key, default)  # Generic T return, dict.get returns Any # type: ignore[return-value]
 
 
 class DynamicField:
@@ -136,6 +136,10 @@ class DynamicField:
         return hash(tuple(sorted(self.fetchers.keys())))
 
 
+# Alias for cleaner API: `Dynamic` is shorter than `DynamicField`
+Dynamic = DynamicField
+
+
 def get_dynamic_metadata(field_info: FieldInfo) -> DynamicField | None:
     """Extract DynamicField metadata from a FieldInfo's metadata list.
 
@@ -187,10 +191,14 @@ def _get_fetcher_info(fetcher: Fetcher[Any]) -> str:
     Returns:
         A string describing the fetcher (module.name or repr).
     """
-    if hasattr(fetcher, "__module__") and hasattr(fetcher, "__qualname__"):
-        return f"{fetcher.__module__}.{fetcher.__qualname__}"
-    if hasattr(fetcher, "__name__"):
-        return fetcher.__name__
+    # Callable introspection: not all callables have __module__/__qualname__/__name__
+    module = getattr(fetcher, "__module__", None)
+    qualname = getattr(fetcher, "__qualname__", None)
+    if module is not None and qualname is not None:
+        return f"{module}.{qualname}"
+    name = getattr(fetcher, "__name__", None)
+    if name is not None:
+        return name
     return repr(fetcher)
 
 

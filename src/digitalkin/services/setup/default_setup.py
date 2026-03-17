@@ -22,7 +22,7 @@ class DefaultSetup(SetupStrategy):
         self.setups = {}
         self.setup_versions = {}
 
-    def create_setup(self, setup_dict: dict[str, Any]) -> str:
+    async def create_setup(self, setup_dict: dict[str, Any]) -> str:
         """Create a new setup with comprehensive validation.
 
         Args:
@@ -49,17 +49,17 @@ class DefaultSetup(SetupStrategy):
         logger.debug("CREATE SETUP DATA %s:%s successful", setup_id, valid_data)
         return setup_id
 
-    def get_setup(self, setup_dict: dict[str, Any]) -> SetupData:
+    async def get_setup(self, setup_dict: dict[str, Any]) -> SetupData:
         """Retrieve a setup by its unique identifier.
 
         Args:
             setup_dict: Dictionary with 'name' and optional 'version'.
 
-        Raises:
-            SetupServiceError: setup_id does not exist.
-
         Returns:
             Dict[str, Any]: Setup details including optional setup version.
+
+        Raises:
+            SetupServiceError: setup_id does not exist.
         """
         logger.debug("GET setup_id = %s", setup_dict["setup_id"])
         if setup_dict["setup_id"] not in self.setups:
@@ -68,17 +68,17 @@ class DefaultSetup(SetupStrategy):
             raise SetupServiceError(msg)
         return self.setups[setup_dict["setup_id"]]
 
-    def update_setup(self, setup_dict: dict[str, Any]) -> bool:
+    async def update_setup(self, setup_dict: dict[str, Any]) -> bool:
         """Update an existing setup.
 
         Args:
             setup_dict: Dictionary with setup update details.
 
-        Raises:
-            ValidationError: setup object failed validation.
-
         Returns:
             bool: Success status of the update operation.
+
+        Raises:
+            ValidationError: setup object failed validation.
         """
         if setup_dict["setup_id"] not in self.setups:
             logger.debug("UPDATE setup_id = %s: setup_id DOESN'T EXIST", setup_dict["setup_id"])
@@ -93,7 +93,7 @@ class DefaultSetup(SetupStrategy):
         self.setups[setup_dict["update_id"]] = valid_data
         return True
 
-    def delete_setup(self, setup_dict: dict[str, Any]) -> bool:
+    async def delete_setup(self, setup_dict: dict[str, Any]) -> bool:
         """Delete a setup by its unique identifier.
 
         Args:
@@ -108,17 +108,17 @@ class DefaultSetup(SetupStrategy):
         del self.setups[setup_dict["setup_id"]]
         return True
 
-    def create_setup_version(self, setup_version_dict: dict[str, Any]) -> str:
+    async def create_setup_version(self, setup_version_dict: dict[str, Any]) -> str:
         """Create a new setup version.
 
         Args:
             setup_version_dict: Dictionary with setup version details.
 
-        Raises:
-            SetupServiceError: setup object failed validation.
-
         Returns:
             str: version of setup version creation.
+
+        Raises:
+            SetupServiceError: setup object failed validation.
         """
         try:
             valid_data = SetupVersionData.model_validate(setup_version_dict["data"])  # Revalidates instance
@@ -133,17 +133,17 @@ class DefaultSetup(SetupStrategy):
         logger.debug("CREATE SETUP VERSION DATA %s:%s successful", setup_version_dict["setup_id"], valid_data)
         return valid_data.version
 
-    def get_setup_version(self, setup_version_dict: dict[str, Any]) -> SetupVersionData:
+    async def get_setup_version(self, setup_version_dict: dict[str, Any]) -> SetupVersionData:
         """Retrieve a setup version by its unique identifier.
 
         Args:
             setup_version_dict: Dictionary with the setup version 'name'.
 
-        Raises:
-            SetupServiceError: setup_id does not exist.
-
         Returns:
             Dict[str, Any]: Setup version details.
+
+        Raises:
+            SetupServiceError: setup_id does not exist.
         """
         logger.debug("GET setup_id = %s: version = %s", setup_version_dict["setup_id"], setup_version_dict["version"])
         if setup_version_dict["setup_id"] not in self.setup_versions:
@@ -153,17 +153,17 @@ class DefaultSetup(SetupStrategy):
 
         return self.setup_versions[setup_version_dict["setup_id"]][setup_version_dict["version"]]
 
-    def search_setup_versions(self, setup_version_dict: dict[str, Any]) -> list[SetupVersionData]:
+    async def search_setup_versions(self, setup_version_dict: dict[str, Any]) -> list[SetupVersionData]:
         """Search for setup versions based on filters.
 
         Args:
             setup_version_dict: Dictionary with optional 'name' or 'query_versions' filters.
 
-        Raises:
-            SetupServiceError: setup_id does not exist.
-
         Returns:
             List[SetupVersionData]: A list of matching setup version details.
+
+        Raises:
+            SetupServiceError: setup_id does not exist.
         """
         if setup_version_dict["setup_id"] not in self.setup_versions:
             msg = f"GET setup_id = {setup_version_dict['setup_id']}: setup_id DOESN'T EXIST"
@@ -173,10 +173,10 @@ class DefaultSetup(SetupStrategy):
         return [
             value
             for value in self.setup_versions[setup_version_dict["setup_id"]].values()
-            if setup_version_dict["query_versions"] in value.version or setup_version_dict["name"] in value.name
+            if setup_version_dict["query_versions"] in value.version
         ]
 
-    def update_setup_version(self, setup_version_dict: dict[str, Any]) -> bool:
+    async def update_setup_version(self, setup_version_dict: dict[str, Any]) -> bool:
         """Update an existing setup version.
 
         Args:
@@ -202,7 +202,7 @@ class DefaultSetup(SetupStrategy):
         self.setup_versions[setup_version_dict["setup_id"]][setup_version_dict["version"]] = valid_data
         return True
 
-    def delete_setup_version(self, setup_version_dict: dict[str, Any]) -> bool:
+    async def delete_setup_version(self, setup_version_dict: dict[str, Any]) -> bool:
         """Delete a setup version by its unique identifier.
 
         Args:
@@ -217,3 +217,18 @@ class DefaultSetup(SetupStrategy):
 
         del self.setup_versions[setup_version_dict["setup_id"]][setup_version_dict["version"]]
         return True
+
+    async def list_setups(self, list_dict: dict[str, Any]) -> dict[str, Any]:
+        """List setups with optional filtering and pagination.
+
+        Args:
+            list_dict: Dictionary with optional filters.
+
+        Returns:
+            dict[str, Any]: Dictionary with 'setups' list and 'total_count'.
+        """
+        setups = list(self.setups.values())
+        offset = list_dict.get("offset", 0)
+        limit = list_dict.get("limit", 0)
+        setups = setups[offset : offset + limit] if limit > 0 else setups[offset:]
+        return {"setups": [s.model_dump() for s in setups], "total_count": len(self.setups)}

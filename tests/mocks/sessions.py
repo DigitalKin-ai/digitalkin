@@ -9,7 +9,7 @@ Usage:
     # Custom attributes
     session = create_mock_task_session(
         mission_id="missions:custom",
-        status=TaskStatus.RUNNING,
+        status="running",
     )
 
     # Custom async methods
@@ -23,7 +23,6 @@ from typing import Any
 from unittest.mock import AsyncMock, Mock
 
 from digitalkin.core.task_manager.task_session import TaskSession
-from digitalkin.models.core.task_monitor import TaskStatus
 
 
 def create_mock_task_session(**overrides: Any) -> Mock:
@@ -34,7 +33,7 @@ def create_mock_task_session(**overrides: Any) -> Mock:
 
     Args:
         **overrides: Override specific attributes or methods.
-            Example: mission_id="missions:custom", status=TaskStatus.RUNNING
+            Example: mission_id="missions:custom", status="running"
 
     Returns:
         Mock TaskSession with sensible defaults
@@ -42,11 +41,11 @@ def create_mock_task_session(**overrides: Any) -> Mock:
     Example:
         # Basic usage
         session = create_mock_task_session()
-        assert session.status == TaskStatus.PENDING
+        assert session.status == "pending"
 
         # Custom status
-        session = create_mock_task_session(status=TaskStatus.RUNNING)
-        assert session.status == TaskStatus.RUNNING
+        session = create_mock_task_session(status="running")
+        assert session.status == "running"
 
         # Custom async behavior
         async def custom_listen():
@@ -61,18 +60,22 @@ def create_mock_task_session(**overrides: Any) -> Mock:
 
     # Basic attributes
     session.mission_id = "missions:mock"
-    session.status = TaskStatus.PENDING
+    session.status = "pending"
+    session.setup_id = "setup:test"
+    session.setup_version_id = "setup_version:test"
     session.started_at = None
     session.completed_at = None
     session.error = None
 
-    # Database connection mock
-    session.db = Mock()
-    session.db.close = AsyncMock()
+    # Signal service mock (replaces db mock)
+    session.signal_service = Mock()
+    session.signal_service.send_signal = AsyncMock()
+    session.signal_service.subscribe_signals = AsyncMock()
+    session.signal_service.unsubscribe_signals = AsyncMock()
+    session.signal_service.close = AsyncMock()
 
     # Async methods - default to CancelledError for supervisor pattern tests
     session.listen_signals = AsyncMock(side_effect=asyncio.CancelledError())
-    session.generate_heartbeats = AsyncMock(side_effect=asyncio.CancelledError())
 
     # State management methods
     session.update_status = Mock()

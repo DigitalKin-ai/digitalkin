@@ -1,5 +1,6 @@
 """This module contains the abstract base class for storage strategies."""
 
+import asyncio
 import datetime
 from abc import ABC, abstractmethod
 from enum import Enum
@@ -94,7 +95,7 @@ class StorageStrategy(BaseStrategy, ABC):
         return value in DataType.__members__
 
     @abstractmethod
-    def _store(self, record: StorageRecord) -> StorageRecord:
+    async def _store(self, record: StorageRecord) -> StorageRecord:
         """Store a new record in the storage.
 
         Args:
@@ -105,7 +106,7 @@ class StorageStrategy(BaseStrategy, ABC):
         """
 
     @abstractmethod
-    def _read(self, collection: str, record_id: str) -> StorageRecord | None:
+    async def _read(self, collection: str, record_id: str) -> StorageRecord | None:
         """Get records from storage by key.
 
         Args:
@@ -117,7 +118,7 @@ class StorageStrategy(BaseStrategy, ABC):
         """
 
     @abstractmethod
-    def _update(self, collection: str, record_id: str, data: BaseModel) -> StorageRecord | None:
+    async def _update(self, collection: str, record_id: str, data: BaseModel) -> StorageRecord | None:
         """Overwrite an existing record's payload.
 
         Args:
@@ -130,7 +131,7 @@ class StorageStrategy(BaseStrategy, ABC):
         """
 
     @abstractmethod
-    def _remove(self, collection: str, record_id: str) -> bool:
+    async def _remove(self, collection: str, record_id: str) -> bool:
         """Delete a record from the storage.
 
         Args:
@@ -142,7 +143,7 @@ class StorageStrategy(BaseStrategy, ABC):
         """
 
     @abstractmethod
-    def _list(self, collection: str) -> list[StorageRecord]:
+    async def _list(self, collection: str) -> list[StorageRecord]:
         """List all records in a collection.
 
         Args:
@@ -153,7 +154,7 @@ class StorageStrategy(BaseStrategy, ABC):
         """
 
     @abstractmethod
-    def _remove_collection(self, collection: str) -> bool:
+    async def _remove_collection(self, collection: str) -> bool:
         """Delete all records in a collection.
 
         Args:
@@ -181,8 +182,21 @@ class StorageStrategy(BaseStrategy, ABC):
         super().__init__(mission_id, setup_id, setup_version_id)
         # Schema configuration mapping keys to model classes
         self.config: dict[str, type[BaseModel]] = config
+        self._record_locks: dict[str, asyncio.Lock] = {}
 
-    def store(
+    def _record_lock(self, collection: str, record_id: str) -> asyncio.Lock:
+        """Get or create an asyncio.Lock for a specific record.
+
+        Args:
+            collection: The collection name
+            record_id: The record ID
+
+        Returns:
+            An asyncio.Lock scoped to the given collection:record_id pair.
+        """
+        return self._record_locks.setdefault(f"{collection}:{record_id}", asyncio.Lock())
+
+    async def store(
         self,
         collection: str,
         record_id: str | None,
@@ -210,9 +224,10 @@ class StorageStrategy(BaseStrategy, ABC):
         data_type_enum = DataType[data_type]
         validated_data = self._validate_data(collection, {**data, "mission_id": self.mission_id})
         record = self._create_storage_record(collection, record_id, validated_data, data_type_enum)
-        return self._store(record)
+        async with self._record_lock(collection, record_id):
+            return await self._store(record)
 
-    def read(self, collection: str, record_id: str) -> StorageRecord | None:
+    async def read(self, collection: str, record_id: str) -> StorageRecord | None:
         """Get records from storage by key.
 
         Args:
@@ -222,9 +237,10 @@ class StorageStrategy(BaseStrategy, ABC):
         Returns:
             A storage record with validated data
         """
-        return self._read(collection, record_id)
+        async with self._record_lock(collection, record_id):
+            return await self._read(collection, record_id)
 
-    def update(self, collection: str, record_id: str, data: dict[str, Any]) -> StorageRecord | None:
+    async def update(self, collection: str, record_id: str, data: dict[str, Any]) -> StorageRecord | None:
         """Validate & overwrite an existing record.
 
         Args:
@@ -236,9 +252,10 @@ class StorageStrategy(BaseStrategy, ABC):
             StorageRecord: The modified record
         """
         validated_data = self._validate_data(collection, data)
-        return self._update(collection, record_id, validated_data)
+        async with self._record_lock(collection, record_id):
+            return await self._update(collection, record_id, validated_data)
 
-    def remove(self, collection: str, record_id: str) -> bool:
+    async def remove(self, collection: str, record_id: str) -> bool:
         """Delete a record from the storage.
 
         Args:
@@ -248,9 +265,14 @@ class StorageStrategy(BaseStrategy, ABC):
         Returns:
             True if the deletion was successful, False otherwise
         """
-        return self._remove(collection, record_id)
+        key = f"{collection}:{record_id}"
+        async with self._record_lock(collection, record_id):
+            result = await self._remove(collection, record_id)
+        if result:
+            self._record_locks.pop(key, None)
+        return result
 
-    def list(self, collection: str) -> list[StorageRecord]:
+    async def list(self, collection: str) -> list[StorageRecord]:
         """Get all records within a collection.
 
         Args:
@@ -259,9 +281,9 @@ class StorageStrategy(BaseStrategy, ABC):
         Returns:
             A list of storage records
         """
-        return self._list(collection)
+        return await self._list(collection)
 
-    def remove_collection(self, collection: str) -> bool:
+    async def remove_collection(self, collection: str) -> bool:
         """Wipe a record clean.
 
         Args:
@@ -270,4 +292,50 @@ class StorageStrategy(BaseStrategy, ABC):
         Returns:
             True if the deletion was successful, False otherwise
         """
-        return self._remove_collection(collection)
+        result = await self._remove_collection(collection)
+        if result:
+            prefix = f"{collection}:"
+            for key in [k for k in self._record_locks if k.startswith(prefix)]:
+                self._record_locks.pop(key, None)
+        return result
+
+    async def upsert(
+        self,
+        collection: str,
+        record_id: str,
+        data: dict[str, Any],
+        data_type: Literal["OUTPUT", "VIEW", "LOGS", "OTHER"] = "OUTPUT",
+    ) -> StorageRecord:
+        """Insert or update a record atomically.
+
+        If a record with the given collection/record_id exists, it is updated;
+        otherwise a new record is created. The operation is protected by a
+        per-record lock to prevent races.
+
+        Args:
+            collection: The unique name for the record type
+            record_id: The unique ID for the record
+            data: The data to store
+            data_type: The type of data being stored (default: OUTPUT)
+
+        Returns:
+            The created or updated storage record
+
+        Raises:
+            ValueError: If the data type is invalid or if validation fails
+            StorageServiceError: If update of an existing record fails unexpectedly
+        """
+        if not self._is_valid_data_type_name(data_type):
+            msg = f"Invalid data type '{data_type}'. Must be one of {list(DataType.__members__.keys())}"
+            raise ValueError(msg)
+        data_type_enum = DataType[data_type]
+        validated_data = self._validate_data(collection, {**data, "mission_id": self.mission_id})
+        async with self._record_lock(collection, record_id):
+            if await self._read(collection, record_id):
+                updated = await self._update(collection, record_id, validated_data)
+                if updated is None:
+                    msg = f"Update failed for existing record '{collection}:{record_id}'"
+                    raise StorageServiceError(msg)
+                return updated
+            record = self._create_storage_record(collection, record_id, validated_data, data_type_enum)
+            return await self._store(record)

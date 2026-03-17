@@ -3,9 +3,10 @@
 from typing import Annotated
 
 import pytest
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from digitalkin.models.module.module_types import SetupModel
+from digitalkin.models.module.tool_reference import tool_reference_input
 from digitalkin.utils import Dynamic
 from digitalkin.utils.dynamic_schema import has_dynamic
 
@@ -48,21 +49,21 @@ class TestSetupModelGetCleanModel:
 
     @pytest.mark.asyncio
     async def test_get_clean_model_filters_hidden_fields(self) -> None:
-        """Test that hidden fields are properly filtered."""
+        """Test that hidden fields are properly filtered via hidden_fields parameter."""
 
         class TestSetup(SetupModel):
             visible_field: str = Field(default="visible")
             hidden_field: str = Field(
                 default="hidden",
-                json_schema_extra={"hidden": True},
+                json_schema_extra={"ui:widget": "hidden"},
             )
 
-        # Without hidden_fields=True, hidden field should be excluded
-        model = await TestSetup.get_clean_model(config_fields=False, hidden_fields=False)
+        # hidden_fields=False excludes hidden fields
+        model = await TestSetup.get_clean_model(config_fields=True, hidden_fields=False)
         assert "visible_field" in model.model_fields
         assert "hidden_field" not in model.model_fields
 
-        # With hidden_fields=True, hidden field should be included
+        # hidden_fields=True includes hidden fields
         model_with_hidden = await TestSetup.get_clean_model(config_fields=False, hidden_fields=True)
         assert "hidden_field" in model_with_hidden.model_fields
 
@@ -136,7 +137,8 @@ class TestSetupModelGetCleanModel:
         """Test that fetcher errors are handled gracefully."""
 
         def failing_fetcher() -> list[str]:
-            raise RuntimeError("Fetcher failed")
+            msg = "Fetcher failed"
+            raise RuntimeError(msg)
 
         class TestSetup(SetupModel):
             field: Annotated[str, Dynamic(enum=failing_fetcher)] = Field(default="default")
@@ -229,9 +231,7 @@ class TestSetupModelSchema:
         """Test that the generated schema contains resolved enum values."""
 
         class TestSetup(SetupModel):
-            model_name: Annotated[str, Dynamic(enum=lambda: ["gpt-4", "gpt-3.5", "claude"])] = Field(
-                default="gpt-4"
-            )
+            model_name: Annotated[str, Dynamic(enum=lambda: ["gpt-4", "gpt-3.5", "claude"])] = Field(default="gpt-4")
 
         model = await TestSetup.get_clean_model(config_fields=False, hidden_fields=True, force=True)
 
@@ -274,9 +274,7 @@ class TestNestedSetupModels:
         """Test that nested models with dynamic fields work correctly."""
 
         class NestedConfig(BaseModel):
-            nested_option: Annotated[str, Dynamic(enum=lambda: ["opt1", "opt2"])] = Field(
-                default="opt1"
-            )
+            nested_option: Annotated[str, Dynamic(enum=lambda: ["opt1", "opt2"])] = Field(default="opt1")
 
         class TestSetup(SetupModel):
             name: str = Field(default="test")
@@ -309,9 +307,7 @@ class TestNestedSetupModels:
             return ["nested_a", "nested_b"]
 
         class NestedConfig(BaseModel):
-            nested_option: Annotated[str, Dynamic(enum=nested_fetcher)] = Field(
-                default="nested_a"
-            )
+            nested_option: Annotated[str, Dynamic(enum=nested_fetcher)] = Field(default="nested_a")
 
         class TestSetup(SetupModel):
             config: NestedConfig = Field(default_factory=NestedConfig)
@@ -422,7 +418,7 @@ class TestGenericTypeDetection:
         class TestSetup(SetupModel):
             items: list[ItemConfig] = Field(default_factory=list)
 
-        model = await TestSetup.get_clean_model(config_fields=False, hidden_fields=True, force=True)
+        await TestSetup.get_clean_model(config_fields=False, hidden_fields=True, force=True)
 
         # The nested fetcher should have been called
         assert call_count == 1
@@ -443,7 +439,7 @@ class TestGenericTypeDetection:
         class TestSetup(SetupModel):
             optional_config: OptionalConfig | None = Field(default=None)
 
-        model = await TestSetup.get_clean_model(config_fields=False, hidden_fields=True, force=True)
+        await TestSetup.get_clean_model(config_fields=False, hidden_fields=True, force=True)
 
         # The nested fetcher should have been called
         assert call_count == 1
@@ -464,7 +460,196 @@ class TestGenericTypeDetection:
         class TestSetup(SetupModel):
             configs: dict[str, ValueConfig] = Field(default_factory=dict)
 
-        model = await TestSetup.get_clean_model(config_fields=False, hidden_fields=True, force=True)
+        await TestSetup.get_clean_model(config_fields=False, hidden_fields=True, force=True)
 
         # The nested fetcher should have been called
         assert call_count == 1
+
+
+class TestNestedModelUiOrder:
+    """Tests for ui:order preservation in nested models."""
+
+    @pytest.mark.asyncio
+    async def test_nested_model_preserves_own_ui_order(self) -> None:
+        """Test that nested model's ui:order is preserved, not overwritten by parent's."""
+
+        class NestedConfig(BaseModel):
+            """A nested configuration with its own ui:order."""
+
+            model_config = ConfigDict(
+                json_schema_extra={
+                    "ui:order": ["field_b", "field_a"],
+                }
+            )
+
+            field_a: str = Field(default="a")
+            field_b: Annotated[str, Dynamic(enum=lambda: ["opt1", "opt2"])] = Field(default="opt1")
+
+        class ParentSetup(SetupModel):
+            """Parent setup with a different ui:order."""
+
+            model_config = ConfigDict(
+                json_schema_extra={
+                    "ui:order": ["name", "config"],
+                }
+            )
+
+            name: str = Field(default="test")
+            config: NestedConfig = Field(default_factory=NestedConfig)
+
+        model = await ParentSetup.get_clean_model(config_fields=False, hidden_fields=True, force=True)
+
+        # Parent's ui:order should be preserved
+        parent_extra = model.model_config.get("json_schema_extra", {})
+        assert parent_extra.get("ui:order") == ["name", "config"]
+
+        # Nested model's ui:order should be preserved (not parent's)
+        config_field = model.model_fields["config"]
+        nested_model = config_field.annotation
+        nested_extra = nested_model.model_config.get("json_schema_extra", {})
+        assert nested_extra.get("ui:order") == ["field_b", "field_a"], (
+            "Nested model should preserve its own ui:order, not inherit parent's"
+        )
+
+    @pytest.mark.asyncio
+    async def test_deeply_nested_model_ui_order_preserved(self) -> None:
+        """Test that deeply nested models preserve their ui:order at all levels."""
+
+        class DeepNested(BaseModel):
+            """Deepest level config."""
+
+            model_config = ConfigDict(
+                json_schema_extra={
+                    "ui:order": ["deep_z", "deep_y"],
+                }
+            )
+
+            deep_y: str = Field(default="y")
+            deep_z: Annotated[str, Dynamic(enum=lambda: ["z1", "z2"])] = Field(default="z1")
+
+        class MiddleNested(BaseModel):
+            """Middle level config."""
+
+            model_config = ConfigDict(
+                json_schema_extra={
+                    "ui:order": ["middle_b", "deep_config"],
+                }
+            )
+
+            deep_config: DeepNested = Field(default_factory=DeepNested)
+            middle_b: Annotated[str, Dynamic(enum=lambda: ["m1", "m2"])] = Field(default="m1")
+
+        class RootSetup(SetupModel):
+            """Root setup model."""
+
+            model_config = ConfigDict(
+                json_schema_extra={
+                    "ui:order": ["root_field", "middle_config"],
+                }
+            )
+
+            root_field: str = Field(default="root")
+            middle_config: MiddleNested = Field(default_factory=MiddleNested)
+
+        model = await RootSetup.get_clean_model(config_fields=False, hidden_fields=True, force=True)
+
+        # Check root level ui:order
+        root_extra = model.model_config.get("json_schema_extra", {})
+        assert root_extra.get("ui:order") == ["root_field", "middle_config"]
+
+        # Check middle level ui:order
+        middle_model = model.model_fields["middle_config"].annotation
+        middle_extra = middle_model.model_config.get("json_schema_extra", {})
+        assert middle_extra.get("ui:order") == ["middle_b", "deep_config"]
+
+        # Check deep level ui:order
+        deep_model = middle_model.model_fields["deep_config"].annotation
+        deep_extra = deep_model.model_config.get("json_schema_extra", {})
+        assert deep_extra.get("ui:order") == ["deep_z", "deep_y"]
+
+
+class TestCleanModelSchemaIsolation:
+    """Tests that get_clean_model produces schemas without SetupModel internals."""
+
+    @pytest.mark.asyncio
+    async def test_clean_model_inherits_setup_model(self) -> None:
+        """Clean model should inherit from SetupModel and have its methods."""
+
+        class ToolSetup(SetupModel):
+            enabled: bool = Field(default=True)
+
+        model = await ToolSetup.get_clean_model(config_fields=False, hidden_fields=True)
+
+        assert issubclass(model, SetupModel)
+        assert "resolved_tools" in model.model_fields
+        instance = model(enabled=True)
+        assert await instance.build_tool_cache() is not None
+
+    @pytest.mark.asyncio
+    async def test_clean_model_schema_only_contains_declared_fields(self) -> None:
+        """Clean model schema properties should match declared fields plus inherited resolved_tools."""
+
+        class SimpleSetup(SetupModel):
+            name: str = Field(default="test")
+            value: int = Field(default=42)
+
+        model = await SimpleSetup.get_clean_model(config_fields=False, hidden_fields=True)
+        schema = model.model_json_schema()
+
+        properties = schema.get("properties", {})
+        assert {"name", "value"}.issubset(set(properties.keys()))
+
+    @pytest.mark.asyncio
+    async def test_clean_model_with_default_includes_resolved_tools(self) -> None:
+        """Clean model with default config_fields=False should include resolved_tools."""
+
+        class ToolSetup(SetupModel):
+            enabled: bool = Field(default=True)
+
+        model = await ToolSetup.get_clean_model(config_fields=False, hidden_fields=True)
+
+        assert "resolved_tools" in model.model_fields
+
+    @pytest.mark.asyncio
+    async def test_clean_model_with_tool_reference_field(self) -> None:
+        """Clean model with tool_reference_input field produces valid schema without ToolModuleInfo defs."""
+
+        class ArchetypeSetup(SetupModel):
+            name: str = Field(default="test")
+            my_tools: tool_reference_input()  # type: ignore[valid-type]
+
+        model = await ArchetypeSetup.get_clean_model(config_fields=False, hidden_fields=True)
+        schema = model.model_json_schema()
+
+        # Tool reference field should be in properties with custom array schema
+        properties = schema.get("properties", {})
+        assert "my_tools" in properties
+        assert properties["my_tools"]["type"] == "array"
+        assert properties["my_tools"]["items"]["properties"]["setupId"]["type"] == "string"
+        assert properties["my_tools"]["ui:widget"] == "toolSelect"
+
+        # resolved_tools is inherited from SetupModel base
+        assert "resolved_tools" in model.model_fields
+
+
+class TestCleanModelCallableExtra:
+    """Tests for get_clean_model with non-dict json_schema_extra (callable)."""
+
+    @pytest.mark.asyncio
+    async def test_callable_json_schema_extra_treated_as_not_config_not_hidden(self) -> None:
+        """Fields with callable json_schema_extra should not be treated as config or hidden."""
+
+        def custom_extra(schema: dict) -> None:
+            schema["example"] = "hello"
+
+        class TestSetup(SetupModel):
+            normal: str = Field(default="normal")
+            custom: str = Field(default="custom", json_schema_extra=custom_extra)
+
+        # config_fields=True: callable extra → not config, not hidden → included
+        model = await TestSetup.get_clean_model(config_fields=True, hidden_fields=False, force=True)
+        assert "custom" in model.model_fields
+
+        # config_fields=False: callable extra → not config → included
+        model2 = await TestSetup.get_clean_model(config_fields=False, hidden_fields=True, force=True)
+        assert "custom" in model2.model_fields

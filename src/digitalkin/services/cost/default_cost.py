@@ -3,6 +3,7 @@
 from typing import Literal
 
 from digitalkin.logger import logger
+from digitalkin.models.services.cost import AmountLimit, QuantityLimit
 from digitalkin.services.cost.cost_strategy import (
     CostConfig,
     CostData,
@@ -24,10 +25,48 @@ class DefaultCost(CostStrategy):
             setup_version_id: The ID of the setup version this strategy is associated with
             config: The configuration dictionary for the cost
         """
-        super().__init__(mission_id=mission_id, setup_id=setup_id, setup_version_id=setup_version_id, config=config)
+        super().__init__(mission_id=mission_id, setup_id=setup_id, setup_version_id=setup_version_id)
+        self.config = config
         self.db: dict[str, list[CostData]] = {}
+        self._limits: dict[str, QuantityLimit | AmountLimit] = {}
+        self._accumulated: dict[str, float] = {}
 
-    def add(
+    async def set_limits(self, limits: list[QuantityLimit | AmountLimit]) -> None:
+        """Set cost limits for this session.
+
+        Args:
+            limits: List of CostLimit objects to enforce.
+        """
+        self._limits = {limit.name: limit for limit in limits}
+        self._accumulated = {}
+
+    async def check_limit(self, cost_config_name: str, quantity: float) -> bool:
+        """Check if adding this cost would exceed any limits.
+
+        Args:
+            cost_config_name: Name of the cost config.
+            quantity: Quantity to add.
+
+        Returns:
+            True if within limits, False if would exceed.
+        """
+        limit = self._limits.get(cost_config_name)
+        if limit is None:
+            return True
+
+        cost_config = self.config.get(cost_config_name)
+        if cost_config is None:
+            return True
+
+        if limit.limit_type == "quantity":
+            current = self._accumulated.get(f"{cost_config_name}_quantity", 0)
+            return current + quantity <= limit.max_value
+
+        current = self._accumulated.get(f"{cost_config_name}_amount", 0)
+        projected = cost_config.rate * quantity
+        return current + projected <= limit.max_value
+
+    async def add(
         self,
         name: str,
         cost_config_name: str,
@@ -52,7 +91,7 @@ class DefaultCost(CostStrategy):
             "name": name,
             "cost": cost_config.rate * quantity,
             "unit": cost_config.unit,
-            "cost_type": getattr(CostType, cost_config.cost_type),
+            "cost_type": CostType[cost_config.cost_type],
             "mission_id": self.mission_id,
             "rate": cost_config.rate,
             "quantity": quantity,
@@ -66,7 +105,7 @@ class DefaultCost(CostStrategy):
             raise CostServiceError(msg)
         self.db[cost_data.mission_id].append(cost_data)
 
-    def get(self, name: str) -> list[CostData]:
+    async def get(self, name: str) -> list[CostData]:
         """Get a record from the database.
 
         Args:
@@ -85,7 +124,7 @@ class DefaultCost(CostStrategy):
 
         return [cost for cost in self.db[self.mission_id] if cost.name == name] or []
 
-    def get_filtered(
+    async def get_filtered(
         self,
         names: list[str] | None = None,
         cost_types: list[Literal["TOKEN_INPUT", "TOKEN_OUTPUT", "API_CALL", "STORAGE", "TIME", "OTHER"]] | None = None,
@@ -112,3 +151,24 @@ class DefaultCost(CostStrategy):
             for cost in self.db[self.mission_id]
             if (names and cost.name in names) or (cost_types and cost.cost_type in cost_types)
         ]
+
+    async def get_cost_config(self) -> list[CostConfig]:
+        """Get cost configuration from in-memory config.
+
+        Returns:
+            List of CostConfig objects from the config dictionary.
+        """
+        return list(self.config.values())
+
+    async def set_cost_config(self, configs: list[CostConfig]) -> bool:
+        """Store cost configuration in memory.
+
+        Args:
+            configs: List of CostConfig objects to store.
+
+        Returns:
+            True if successfully stored.
+        """
+        self.config = {config.cost_name: config for config in configs}
+        logger.debug("Cost configs stored in memory: %s", self.config)
+        return True

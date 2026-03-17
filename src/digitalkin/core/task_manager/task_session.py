@@ -1,54 +1,58 @@
 """Task session easing task lifecycle management."""
 
 import asyncio
+import contextlib
 import datetime
+import traceback
 from collections.abc import AsyncGenerator
 
-from digitalkin.core.task_manager.surrealdb_repository import SurrealDBConnection
 from digitalkin.logger import logger
 from digitalkin.models.core.task_monitor import (
     CancellationReason,
-    HeartbeatMessage,
     SignalMessage,
     SignalType,
-    TaskStatus,
 )
 from digitalkin.modules._base_module import BaseModule
+from digitalkin.services.task_manager.task_manager_strategy import TaskManagerStrategy
 
 
 class TaskSession:
     """Task Session with lifecycle management.
 
-    The Session defined the whole lifecycle of a task as an epheneral context.
+    The Session defines the whole lifecycle of a task as an ephemeral context.
     """
 
-    db: SurrealDBConnection
+    signal_service: TaskManagerStrategy
     module: BaseModule
 
-    status: TaskStatus
+    status: str
     signal_queue: AsyncGenerator | None
 
     task_id: str
     mission_id: str
-    signal_record_id: str | None
-    heartbeat_record_id: str | None
 
     started_at: datetime.datetime | None
     completed_at: datetime.datetime | None
 
     is_cancelled: asyncio.Event
     cancellation_reason: CancellationReason
-    _paused: asyncio.Event
-    _heartbeat_interval: datetime.timedelta
-    _last_heartbeat: datetime.datetime
+    _stream_closed: asyncio.Event
+
+    # Exception tracking for enhanced logging
+    _last_exception: str | None
+    _last_traceback: str | None
+
+    # Cleanup guard for idempotent cleanup
+    _cleanup_done: bool
+
+    # Signal listener failure tracking
+    _signal_listener_failed: bool
 
     def __init__(
         self,
         task_id: str,
         mission_id: str,
-        db: SurrealDBConnection,
         module: BaseModule,
-        heartbeat_interval: datetime.timedelta = datetime.timedelta(seconds=2),
         queue_maxsize: int = 1000,
     ) -> None:
         """Initialize Task Session.
@@ -56,37 +60,42 @@ class TaskSession:
         Args:
             task_id: Unique task identifier
             mission_id: Mission identifier
-            db: SurrealDB connection
             module: Module instance
-            heartbeat_interval: Interval between heartbeats
             queue_maxsize: Maximum size for the queue (0 = unlimited)
         """
-        self.db = db
+        self.signal_service = module.context.task_manager
         self.module = module
 
-        self.status = TaskStatus.PENDING
+        self.status = "pending"
         # Bounded queue to prevent unbounded memory growth (max 1000 items)
         self.queue: asyncio.Queue = asyncio.Queue(maxsize=queue_maxsize)
 
         self.task_id = task_id
         self.mission_id = mission_id
 
-        self.heartbeat = None
         self.started_at = None
         self.completed_at = None
 
-        self.signal_record_id = None
-        self.heartbeat_record_id = None
-
         self.is_cancelled = asyncio.Event()
         self.cancellation_reason = CancellationReason.UNKNOWN
-        self._paused = asyncio.Event()
-        self._heartbeat_interval = heartbeat_interval
+        self._stream_closed = asyncio.Event()
 
-        logger.info(
-            "TaskContext initialized for task: '%s'",
-            task_id,
-            extra={"task_id": task_id, "mission_id": mission_id, "heartbeat_interval": heartbeat_interval},
+        # Exception tracking
+        self._last_exception = None
+        self._last_traceback = None
+
+        # Cleanup guard
+        self._cleanup_done = False
+
+        # Write lock — serialises final queue writes with session cleanup
+        self._write_lock = asyncio.Lock()
+
+        # Signal listener failure tracking
+        self._signal_listener_failed = False
+
+        logger.debug(
+            "TaskSession initialized",
+            extra={"task_id": task_id, "mission_id": mission_id},
         )
 
     @property
@@ -95,312 +104,189 @@ class TaskSession:
         return self.is_cancelled.is_set()
 
     @property
-    def paused(self) -> bool:
-        """Task paused status."""
-        return self._paused.is_set()
+    def stream_closed(self) -> bool:
+        """Check if stream termination was signaled."""
+        return self._stream_closed.is_set()
 
-    async def send_heartbeat(self) -> bool:
-        """Rate-limited heartbeat with connection resilience.
+    def close_stream(self) -> None:
+        """Signal that the stream should terminate."""
+        self._stream_closed.set()
 
-        Returns:
-            bool: True if heartbeat was successful, False otherwise
+    @property
+    def setup_id(self) -> str:
+        """Get setup_id from module context."""
+        return self.module.context.session.setup_id
+
+    @property
+    def setup_version_id(self) -> str:
+        """Get setup_version_id from module context."""
+        return self.module.context.session.setup_version_id
+
+    @property
+    def session_ids(self) -> dict[str, str]:
+        """Get all session IDs from module context for structured logging."""
+        return self.module.context.session.current_ids()
+
+    def record_exception(self, exc: Exception) -> None:
+        """Record exception details for logging.
+
+        Args:
+            exc: The exception that caused the task to fail.
         """
-        heartbeat = HeartbeatMessage(
-            task_id=self.task_id,
-            mission_id=self.mission_id,
-            timestamp=datetime.datetime.now(datetime.timezone.utc),
-        )
+        self._last_exception = str(exc)
+        self._last_traceback = traceback.format_exc()
 
-        if self.heartbeat_record_id is None:
-            try:
-                success = await self.db.create("heartbeats", heartbeat.model_dump())
-                if "code" not in success:
-                    self.heartbeat_record_id = success.get("id")  # type: ignore
-                    self._last_heartbeat = heartbeat.timestamp
-                    return True
-            except Exception as e:
-                logger.error(
-                    "Heartbeat exception for task: '%s'",
-                    self.task_id,
-                    extra={"task_id": self.task_id, "error": str(e)},
-                    exc_info=True,
-                )
-            logger.error(
-                "Initial heartbeat failed for task: '%s'",
-                self.task_id,
-                extra={"task_id": self.task_id},
-            )
-            return False
+    async def listen_signals(self) -> None:
+        """Signal listener for cancel signals via TaskManagerStrategy.
 
-        if (heartbeat.timestamp - self._last_heartbeat) < self._heartbeat_interval:
-            logger.debug(
-                "Heartbeat skipped due to rate limiting for task: '%s' | delta=%s",
-                self.task_id,
-                heartbeat.timestamp - self._last_heartbeat,
-            )
-            return True
-
-        try:
-            success = await self.db.merge("heartbeats", self.heartbeat_record_id, heartbeat.model_dump())
-            if "code" not in success:
-                self._last_heartbeat = heartbeat.timestamp
-                return True
-        except Exception as e:
-            logger.error(
-                "Heartbeat exception for task: '%s'",
-                self.task_id,
-                extra={"task_id": self.task_id, "error": str(e)},
-                exc_info=True,
-            )
-        logger.warning(
-            "Heartbeat failed for task: '%s'",
-            self.task_id,
-            extra={"task_id": self.task_id},
-        )
-        return False
-
-    async def generate_heartbeats(self) -> None:
-        """Periodic heartbeat generator with cancellation support."""
-        logger.debug(
-            "Heartbeat generator started for task: '%s'",
-            self.task_id,
-            extra={"task_id": self.task_id, "mission_id": self.mission_id},
-        )
-        while not self.cancelled:
-            logger.debug(
-                "Heartbeat tick for task: '%s', cancelled=%s",
-                self.task_id,
-                self.cancelled,
-                extra={"task_id": self.task_id, "mission_id": self.mission_id},
-            )
-            success = await self.send_heartbeat()
-            if not success:
-                logger.error(
-                    "Heartbeat failed, cancelling task: '%s'",
-                    self.task_id,
-                    extra={"task_id": self.task_id, "mission_id": self.mission_id},
-                )
-                await self._handle_cancel(CancellationReason.HEARTBEAT_FAILURE)
-                break
-            await asyncio.sleep(self._heartbeat_interval.total_seconds())
-
-    async def wait_if_paused(self) -> None:
-        """Block execution if task is paused."""
-        if self._paused.is_set():
-            logger.info(
-                "Task paused, waiting for resume: '%s'",
-                self.task_id,
-                extra={"task_id": self.task_id},
-            )
-            await self._paused.wait()
-
-    async def listen_signals(self) -> None:  # noqa: C901
-        """Enhanced signal listener with comprehensive handling.
+        Subscribes to signal updates for this task_id and processes cancel signals.
 
         Raises:
-            CancelledError: Asyncio when task cancelling
+            CancelledError: If task is cancelled during signal listening.
         """
-        logger.info(
-            "Signal listener started for task: '%s'",
-            self.task_id,
-            extra={"task_id": self.task_id},
-        )
-        if self.signal_record_id is None:
-            self.signal_record_id = (await self.db.select_by_task_id("tasks", self.task_id)).get("id")
+        logger.info("Signal listener started", extra=self.session_ids)
 
-        live_id, live_signals = await self.db.start_live("tasks")
+        sub_id, live_signals = await self.signal_service.subscribe_signals(self.task_id)
         try:
             async for signal in live_signals:
-                logger.debug("Signal received for task '%s': %s", self.task_id, signal)
-                if self.cancelled:
+                logger.info("Signal received: %s", signal, extra=self.session_ids)
+                if self.cancelled or self.stream_closed:
                     break
 
-                if signal is None or signal["id"] == self.signal_record_id or "payload" not in signal:
+                if signal is None or signal.get("task_id") != self.task_id:
                     continue
 
-                if signal["action"] == "cancel":
-                    await self._handle_cancel(CancellationReason.SIGNAL)
-                elif signal["action"] == "pause":
-                    await self._handle_pause()
-                elif signal["action"] == "resume":
-                    await self._handle_resume()
-                elif signal["action"] == "status":
-                    await self._handle_status_request()
+                if signal.get("action") == "cancel":
+                    await self._handle_cancel(CancellationReason.SIGNAL_SERVICE_CANCEL)
+                elif signal.get("action") == "stop":
+                    await self._handle_stop()
 
         except asyncio.CancelledError:
-            logger.debug(
-                "Signal listener cancelled for task: '%s'",
-                self.task_id,
-                extra={"task_id": self.task_id},
-            )
+            logger.info("Signal listener cancelled", extra=self.session_ids)
             raise
-        except Exception as e:
-            logger.error(
-                "Signal listener fatal error for task: '%s'",
-                self.task_id,
-                extra={"task_id": self.task_id, "error": str(e)},
-                exc_info=True,
-            )
+        except Exception:
+            self._signal_listener_failed = True
+            logger.exception("Signal listener fatal error", extra=self.session_ids)
         finally:
-            await self.db.stop_live(live_id)
-            logger.info(
-                "Signal listener stopped for task: '%s'",
-                self.task_id,
-                extra={"task_id": self.task_id},
-            )
+            with contextlib.suppress(Exception):
+                await self.signal_service.unsubscribe_signals(sub_id)
+            logger.info("Signal listener stopped", extra=self.session_ids)
 
     async def _handle_cancel(self, reason: CancellationReason = CancellationReason.UNKNOWN) -> None:
         """Idempotent cancellation with acknowledgment and reason tracking.
 
         Args:
-            reason: The reason for cancellation (signal, heartbeat failure, cleanup, etc.)
+            reason: The reason for cancellation (signal, cleanup, etc.)
         """
-        if self.is_cancelled.is_set():
+        if self.cancelled:
             logger.debug(
-                "Cancel ignored - task already cancelled: '%s' (existing reason: %s, new reason: %s)",
-                self.task_id,
+                "Cancel ignored - already cancelled (existing=%s, new=%s)",
                 self.cancellation_reason.value,
                 reason.value,
-                extra={
-                    "task_id": self.task_id,
-                    "mission_id": self.mission_id,
-                    "existing_reason": self.cancellation_reason.value,
-                    "new_reason": reason.value,
-                },
+                extra=self.session_ids,
             )
             return
 
         self.cancellation_reason = reason
-        self.status = TaskStatus.CANCELLED
+        self.status = "cancelled"
         self.is_cancelled.set()
 
         # Log with appropriate level based on reason
         if reason in {CancellationReason.SUCCESS_CLEANUP, CancellationReason.FAILURE_CLEANUP}:
-            logger.debug(
-                "Task cancelled (cleanup): '%s', reason: %s",
-                self.task_id,
-                reason.value,
-                extra={
-                    "task_id": self.task_id,
-                    "mission_id": self.mission_id,
-                    "cancellation_reason": reason.value,
-                },
-            )
+            logger.debug("Task cancelled (%s)", reason.value, extra=self.session_ids)
         else:
-            logger.info(
-                "Task cancelled: '%s', reason: %s",
+            logger.info("Task cancelled (%s)", reason.value, extra=self.session_ids)
+
+        try:
+            await self.signal_service.send_signal(
                 self.task_id,
-                reason.value,
-                extra={
-                    "task_id": self.task_id,
-                    "mission_id": self.mission_id,
-                    "cancellation_reason": reason.value,
-                },
+                SignalMessage(
+                    task_id=self.task_id,
+                    mission_id=self.mission_id,
+                    setup_id=self.setup_id,
+                    setup_version_id=self.setup_version_id,
+                    action=SignalType.ACK_CANCEL,
+                    cancellation_reason=reason,
+                ).model_dump(exclude_none=True),
             )
+        except Exception:
+            logger.warning("Cancel ack failed (best-effort)", extra=self.session_ids)
 
-        # Resume if paused so cancellation can proceed
-        if self._paused.is_set():
-            self._paused.set()
+    async def _handle_stop(self) -> None:
+        """Idempotent graceful-stop with acknowledgment.
 
-        await self.db.update(
-            "tasks",
-            self.signal_record_id,  # type: ignore
-            SignalMessage(
-                task_id=self.task_id,
-                mission_id=self.mission_id,
-                action=SignalType.ACK_CANCEL,
-                status=self.status,
-            ).model_dump(),
-        )
+        Mirrors _handle_cancel: marks the task as cancelled with
+        SIGNAL_SERVICE_STOP reason and sends ACK_STOP to the signal service.
+        """
+        if self.cancelled:
+            logger.debug(
+                "Stop ignored - already cancelled (existing=%s)",
+                self.cancellation_reason.value,
+                extra=self.session_ids,
+            )
+            return
 
-    async def _handle_pause(self) -> None:
-        """Pause task execution."""
-        if not self._paused.is_set():
-            logger.info(
-                "Pausing task: '%s'",
+        self.cancellation_reason = CancellationReason.SIGNAL_SERVICE_STOP
+        self.status = "cancelled"
+        self.is_cancelled.set()
+        logger.info("Task stop requested via signal", extra=self.session_ids)
+
+        try:
+            await self.signal_service.send_signal(
                 self.task_id,
-                extra={"task_id": self.task_id},
+                SignalMessage(
+                    task_id=self.task_id,
+                    mission_id=self.mission_id,
+                    setup_id=self.setup_id,
+                    setup_version_id=self.setup_version_id,
+                    action=SignalType.ACK_STOP,
+                    cancellation_reason=CancellationReason.SIGNAL_SERVICE_STOP,
+                ).model_dump(exclude_none=True),
             )
-            self._paused.set()
-
-        await self.db.update(
-            "tasks",
-            self.signal_record_id,  # type: ignore
-            SignalMessage(
-                task_id=self.task_id,
-                mission_id=self.mission_id,
-                action=SignalType.ACK_PAUSE,
-                status=self.status,
-            ).model_dump(),
-        )
-
-    async def _handle_resume(self) -> None:
-        """Resume paused task."""
-        if self._paused.is_set():
-            logger.info(
-                "Resuming task: '%s'",
-                self.task_id,
-                extra={"task_id": self.task_id},
-            )
-            self._paused.clear()
-
-        await self.db.update(
-            "tasks",
-            self.signal_record_id,  # type: ignore
-            SignalMessage(
-                task_id=self.task_id,
-                mission_id=self.mission_id,
-                action=SignalType.ACK_RESUME,
-                status=self.status,
-            ).model_dump(),
-        )
-
-    async def _handle_status_request(self) -> None:
-        """Send current task status."""
-        await self.db.update(
-            "tasks",
-            self.signal_record_id,  # type: ignore
-            SignalMessage(
-                mission_id=self.mission_id,
-                task_id=self.task_id,
-                status=self.status,
-                action=SignalType.ACK_STATUS,
-            ).model_dump(),
-        )
-
-        logger.debug(
-            "Status report sent for task: '%s'",
-            self.task_id,
-            extra={"task_id": self.task_id},
-        )
+        except Exception:
+            logger.warning("Stop ack failed (best-effort)", extra=self.session_ids)
 
     async def cleanup(self) -> None:
         """Clean up task session resources.
 
+        This method is idempotent - safe to call multiple times.
+        Second and subsequent calls are no-ops.
+
         This includes:
         - Clearing queue to free memory
+        - Cleaning up module context services
         - Stopping module
-        - Closing database connection
         - Clearing module reference
         """
+        # Use basic IDs for logging since module may already be None from previous cleanup
+        ids = {"task_id": self.task_id, "mission_id": self.mission_id}
+
+        if self._cleanup_done:
+            logger.debug("Cleanup already done", extra=ids)
+            return
+        self._cleanup_done = True
+
         # Clear queue to free memory
+        logger.debug("debug:cleanup queue size=%s task_id=%s", self.queue.qsize(), self.task_id)
         try:
             while not self.queue.empty():
                 self.queue.get_nowait()
+                self.queue.task_done()
         except asyncio.QueueEmpty:
             pass
+
+        # Clean up module context services (e.g., gRPC channel pool, task_manager)
+        if self.module is not None and self.module.context is not None:
+            try:
+                await self.module.context.cleanup()
+            except Exception:
+                logger.exception("Error cleaning up module context", extra=ids)
 
         # Stop module
         try:
             await self.module.stop()
         except Exception:
-            logger.exception(
-                "Error stopping module during cleanup",
-                extra={"mission_id": self.mission_id, "task_id": self.task_id},
-            )
-
-        # Close DB connection (kills all live queries)
-        await self.db.close()
+            logger.exception("Error stopping module during cleanup", extra=ids)
 
         # Clear module reference to allow garbage collection
-        self.module = None  # type: ignore
+        self.module = None  # type: ignore[assignment]  # Allow GC; typed as BaseModule but set to None after cleanup

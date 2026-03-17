@@ -7,25 +7,29 @@ from pydantic import BaseModel
 
 from digitalkin.logger import logger
 from digitalkin.services.agent import AgentStrategy
+from digitalkin.services.communication import CommunicationStrategy
 from digitalkin.services.cost import CostStrategy
 from digitalkin.services.filesystem import FilesystemStrategy
 from digitalkin.services.identity import IdentityStrategy
 from digitalkin.services.registry import RegistryStrategy
 from digitalkin.services.snapshot import SnapshotStrategy
 from digitalkin.services.storage import StorageStrategy
+from digitalkin.services.task_manager.task_manager_strategy import TaskManagerStrategy
 from digitalkin.services.user_profile import UserProfileStrategy
 
 # Define type variables
 T = TypeVar(
     "T",
     bound=AgentStrategy
+    | CommunicationStrategy
     | CostStrategy
     | FilesystemStrategy
     | IdentityStrategy
     | RegistryStrategy
     | SnapshotStrategy
     | StorageStrategy
-    | UserProfileStrategy,
+    | UserProfileStrategy
+    | TaskManagerStrategy,
 )
 
 
@@ -56,8 +60,8 @@ class ServicesStrategy(BaseModel, Generic[T]):
         Returns:
             The strategy based on the mode.
         """
-        try:
-            return getattr(self, mode)
-        except AttributeError:
-            logger.exception("Unknown mode: %s, available modes are: %s", mode, ServicesMode.__members__)
-            return getattr(self, ServicesMode.LOCAL.value)
+        modes: dict[str, type[T]] = {ServicesMode.LOCAL.value: self.local, ServicesMode.REMOTE.value: self.remote}
+        if mode not in modes:
+            logger.error("Unknown mode: %s, available modes are: %s. Falling back to LOCAL.", mode, list(modes))
+            return self.local
+        return modes[mode]

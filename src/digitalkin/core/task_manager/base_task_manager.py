@@ -2,16 +2,17 @@
 
 import asyncio
 import contextlib
-import datetime
+import os
 import types
 from abc import ABC, abstractmethod
 from collections.abc import Coroutine
 from typing import Any
 
-from digitalkin.core.task_manager.surrealdb_repository import SurrealDBConnection
+from typing_extensions import Self
+
 from digitalkin.core.task_manager.task_session import TaskSession
 from digitalkin.logger import logger
-from digitalkin.models.core.task_monitor import CancellationReason
+from digitalkin.models.core.task_monitor import CancellationReason, SignalMessage, SignalType
 from digitalkin.modules._base_module import BaseModule
 
 
@@ -20,90 +21,117 @@ class BaseTaskManager(ABC):
 
     Provides shared functionality for task orchestration, monitoring, signaling, and cancellation.
     Subclasses implement specific execution strategies (local or remote).
-
-    Supports async context manager protocol for automatic resource cleanup:
-        async with LocalTaskManager() as manager:
-            await manager.create_task(...)
-            # Resources automatically cleaned up on exit
     """
 
     tasks: dict[str, asyncio.Task]
     tasks_sessions: dict[str, TaskSession]
     default_timeout: float
-    max_concurrent_tasks: int
+    _max_concurrent_tasks: int
     _shutdown_event: asyncio.Event
+    _tasks_lock: asyncio.Lock
 
-    def __init__(
-        self,
-        default_timeout: float = 10.0,
-        max_concurrent_tasks: int = 100,
-    ) -> None:
+    def __init__(self, default_timeout: float = 300.0) -> None:
         """Initialize task manager properties.
 
         Args:
             default_timeout: Default timeout for task operations in seconds
-            max_concurrent_tasks: Maximum number of concurrent tasks
         """
         self.tasks = {}
         self.tasks_sessions = {}
         self.default_timeout = default_timeout
-        self.max_concurrent_tasks = max_concurrent_tasks
         self._shutdown_event = asyncio.Event()
+        self._tasks_lock = asyncio.Lock()
+        self._max_concurrent_tasks = int(os.environ.get("DIGITALKIN_MAX_CONCURRENT_TASKS", "100"))
+        self._task_slot = asyncio.Semaphore(self._max_concurrent_tasks)
+        self._active_slots = 0
+        self._task_wait_timeout = float(os.environ.get("DIGITALKIN_TASK_WAIT_TIMEOUT", "30"))
+        self._stream_drain_timeout = float(os.environ.get("DIGITALKIN_STREAM_DRAIN_TIMEOUT", "60.0"))
+        self._cleanup_tasks: set[asyncio.Task] = set()
+
+        # Admission queue: allows tasks to wait for a slot instead of being rejected.
+        # Total in-system capacity = max_concurrent + max_queued.
+        self._max_queued_tasks = int(os.environ.get("DIGITALKIN_MAX_QUEUED_TASKS", "0"))
+        self._admission_timeout = float(os.environ.get("DIGITALKIN_ADMISSION_TIMEOUT", "5.0"))
+        self._queue_slot_timeout = float(os.environ.get("DIGITALKIN_QUEUE_SLOT_TIMEOUT", "600.0"))
+        self._system_gate = asyncio.Semaphore(self._max_concurrent_tasks + self._max_queued_tasks)
+        self._waiting_count = 0
 
         logger.info(
-            "%s initialized with max_concurrent_tasks: %d, default_timeout: %.1f",
+            "%s initialized (max_concurrent_tasks=%d, max_queued=%d, default_timeout=%.1fs)",
             self.__class__.__name__,
-            max_concurrent_tasks,
+            self._max_concurrent_tasks,
+            self._max_queued_tasks,
             default_timeout,
-            extra={
-                "max_concurrent_tasks": max_concurrent_tasks,
-                "default_timeout": default_timeout,
-            },
         )
 
     @property
+    def max_concurrent_tasks(self) -> int:
+        """Maximum number of concurrent tasks."""
+        return self._max_concurrent_tasks
+
+    @max_concurrent_tasks.setter
+    def max_concurrent_tasks(self, value: int) -> None:
+        self._max_concurrent_tasks = value
+        self._task_slot = asyncio.Semaphore(value)
+        self._active_slots = 0
+        self._system_gate = asyncio.Semaphore(value + self._max_queued_tasks)
+
+    @property
     def task_count(self) -> int:
-        """Number of managed tasks."""
-        return len(self.tasks_sessions)
+        """Number of active tasks (pending or running)."""
+        return sum(1 for s in list(self.tasks_sessions.values()) if s.status in {"pending", "running"})
 
     @property
     def running_tasks(self) -> set[str]:
         """Get IDs of currently running tasks."""
-        return {task_id for task_id, task in self.tasks.items() if not task.done()}
+        return {task_id for task_id, task in list(self.tasks.items()) if not task.done()}
 
     async def _cleanup_task(self, task_id: str, mission_id: str) -> None:
-        """Clean up task resources.
+        """Clean up task resources (idempotent).
 
-        Delegates cleanup to TaskSession which handles:
-        - Clearing queue items to free memory
-        - Stopping module (if not already stopped)
-        - Closing database connection (which kills live queries)
+        Graceful drain: closes the stream under the write lock before popping
+        the session so in-flight add_to_queue calls see stream_closed and exit
+        cleanly instead of hitting "session not found".
 
-        Then removes task from tracking dictionaries.
+        Atomic pop still guards semaphore release against concurrent callers
+        (cancel_task finally + deferred_cleanup).
 
         Args:
             task_id: The ID of the task to clean up
             mission_id: The ID of the mission associated with the task
         """
         session = self.tasks_sessions.get(task_id)
-        cancellation_reason = session.cancellation_reason.value if session else "no_session"
-        final_status = session.status.value if session else "unknown"
+        if session is not None:
+            # Close stream under write lock so pending writes finish first,
+            # then see stream_closed on their next attempt.
+            async with session._write_lock:  # noqa: SLF001
+                session.close_stream()
 
-        logger.debug(
-            "Cleaning up resources",
-            extra={
-                "mission_id": mission_id,
-                "task_id": task_id,
-                "final_status": final_status,
-                "cancellation_reason": cancellation_reason,
-            },
-        )
+        # Atomic pop — second concurrent caller gets None and returns
+        session = self.tasks_sessions.pop(task_id, None)
+        self.tasks.pop(task_id, None)
 
-        if session:
+        if session is None:
+            return
+
+        cancellation_reason = session.cancellation_reason.value
+        final_status = session.status
+
+        try:
             await session.cleanup()
-            self.tasks_sessions.pop(task_id, None)
+        except Exception:
+            logger.exception(
+                "Session cleanup failed",
+                extra={"mission_id": mission_id, "task_id": task_id},
+            )
+        finally:
+            self._active_slots -= 1  # Safe: no await between read/write (single-threaded asyncio)
+            self._task_slot.release()
+            if self._max_queued_tasks > 0:
+                self._system_gate.release()
             logger.debug(
-                "Task session cleanup completed",
+                "Task cleaned up (%d remaining)",
+                len(self.tasks_sessions),
                 extra={
                     "mission_id": mission_id,
                     "task_id": task_id,
@@ -111,8 +139,6 @@ class BaseTaskManager(ABC):
                     "cancellation_reason": cancellation_reason,
                 },
             )
-
-        self.tasks.pop(task_id, None)
 
     async def _validate_task_creation(self, task_id: str, mission_id: str, coro: Coroutine[Any, Any, None]) -> None:
         """Validate task creation preconditions.
@@ -124,7 +150,6 @@ class BaseTaskManager(ABC):
 
         Raises:
             ValueError: If task_id already exists
-            RuntimeError: If max concurrent tasks reached
         """
         if task_id in self.tasks_sessions:
             coro.close()
@@ -136,52 +161,165 @@ class BaseTaskManager(ABC):
             msg = f"Task {task_id} already exists"
             raise ValueError(msg)
 
-        if len(self.tasks_sessions) >= self.max_concurrent_tasks:
-            coro.close()
-            logger.error(
-                "Task creation failed - max concurrent tasks reached: %d",
-                self.max_concurrent_tasks,
-                extra={
-                    "mission_id": mission_id,
-                    "task_id": task_id,
-                    "current_count": len(self.tasks_sessions),
-                    "max_concurrent": self.max_concurrent_tasks,
-                },
-            )
-            msg = f"Maximum concurrent tasks ({self.max_concurrent_tasks}) reached"
-            raise RuntimeError(msg)
+    async def _acquire_task_slot(self, coro: Coroutine[Any, Any, None]) -> None:
+        """Acquire a task slot, queueing if necessary.
 
-    async def _create_session(
+        Two-phase admission:
+        1. Enter system gate (fast reject if running + queued >= total capacity).
+        2. Wait for execution slot (patient wait — released tasks free slots).
+
+        When ``DIGITALKIN_MAX_QUEUED_TASKS=0`` (default) this behaves identically
+        to the previous single-semaphore approach with ``_task_wait_timeout``.
+
+        Args:
+            coro: The coroutine to close if admission is denied.
+
+        Raises:
+            RuntimeError: If the system is at full capacity.
+        """
+        if self._max_queued_tasks > 0:
+            await self._acquire_with_queue(coro)
+        else:
+            await self._acquire_direct(coro)
+
+    async def _acquire_direct(self, coro: Coroutine[Any, Any, None]) -> None:
+        """Legacy path: single semaphore with timeout (DIGITALKIN_MAX_QUEUED_TASKS=0).
+
+        Raises:
+            RuntimeError: If no slot becomes available within the timeout.
+        """
+        try:
+            await asyncio.wait_for(self._task_slot.acquire(), timeout=self._task_wait_timeout)
+        except asyncio.TimeoutError:
+            coro.close()
+            msg = f"Maximum concurrent tasks ({self.max_concurrent_tasks}) reached, waited {self._task_wait_timeout}s"
+            raise RuntimeError(msg) from None
+
+        self._active_slots += 1  # Safe: no await between read/write (single-threaded asyncio)
+        available = self._max_concurrent_tasks - self._active_slots
+        if available < self._max_concurrent_tasks * 2 // 10:
+            logger.warning(
+                "Task slot capacity low: %d/%d available",
+                available,
+                self._max_concurrent_tasks,
+            )
+
+    async def _acquire_with_queue(self, coro: Coroutine[Any, Any, None]) -> None:
+        """Queue-based admission: enter system gate, then wait for execution slot.
+
+        Raises:
+            RuntimeError: If the system is at full capacity.
+        """
+        total_capacity = self._max_concurrent_tasks + self._max_queued_tasks
+
+        # Phase 1: Admit into system (fast reject if completely overloaded)
+        try:
+            await asyncio.wait_for(self._system_gate.acquire(), timeout=self._admission_timeout)
+        except asyncio.TimeoutError:
+            coro.close()
+            msg = (
+                f"System at full capacity ({total_capacity} tasks admitted), rejected after {self._admission_timeout}s"
+            )
+            raise RuntimeError(msg) from None
+
+        # Phase 2: Wait for execution slot (bounded to catch zombie slot hoarding)
+        self._waiting_count += 1
+        if self._waiting_count > 0:
+            logger.info(
+                "Task queued for execution (%d waiting, %d/%d slots busy)",
+                self._waiting_count,
+                self._active_slots,
+                self._max_concurrent_tasks,
+            )
+        try:
+            await asyncio.wait_for(self._task_slot.acquire(), timeout=self._queue_slot_timeout)
+        except asyncio.TimeoutError:
+            self._system_gate.release()
+            coro.close()
+            msg = f"Queued task waited {self._queue_slot_timeout}s for execution slot, giving up"
+            raise RuntimeError(msg) from None
+        except BaseException:
+            self._system_gate.release()
+            coro.close()
+            raise
+        finally:
+            self._waiting_count -= 1
+
+        self._active_slots += 1  # Safe: no await between read/write (single-threaded asyncio)
+        available = self._max_concurrent_tasks - self._active_slots
+        if available < self._max_concurrent_tasks * 2 // 10:
+            logger.warning(
+                "Task slot capacity low: %d/%d available",
+                available,
+                self._max_concurrent_tasks,
+            )
+
+    def _create_session(
         self,
         task_id: str,
         mission_id: str,
         module: BaseModule,
-        heartbeat_interval: datetime.timedelta,
-        connection_timeout: datetime.timedelta,
-    ) -> tuple[SurrealDBConnection, TaskSession]:
-        """Create SurrealDB connection and task session.
+    ) -> TaskSession:
+        """Create task session.
 
         Args:
             task_id: The ID of the task
             mission_id: The ID of the mission
             module: The module instance
-            heartbeat_interval: Interval between heartbeats
-            connection_timeout: Connection timeout for SurrealDB
 
         Returns:
-            Tuple of (channel, session)
+            TaskSession instance
         """
-        channel: SurrealDBConnection = SurrealDBConnection("task_manager", connection_timeout)
-        await channel.init_surreal_instance()
         session = TaskSession(
             task_id=task_id,
             mission_id=mission_id,
-            db=channel,
             module=module,
-            heartbeat_interval=heartbeat_interval,
         )
         self.tasks_sessions[task_id] = session
-        return channel, session
+        return session
+
+    def _register_auto_cleanup(self, task_id: str, mission_id: str) -> None:
+        """Register a done callback on the supervisor task for deferred cleanup.
+
+        When the supervisor finishes, waits for the stream consumer to drain
+        (up to 60s), then runs idempotent cleanup. Safe if the servicer
+        already cleaned up.
+
+        Args:
+            task_id: The ID of the task.
+            mission_id: The ID of the mission.
+        """
+        supervisor = self.tasks.get(task_id)
+        if supervisor is None:
+            return
+
+        def _on_done(_: asyncio.Task) -> None:
+            t = asyncio.ensure_future(self._deferred_cleanup(task_id, mission_id))
+            self._cleanup_tasks.add(t)
+            t.add_done_callback(self._cleanup_tasks.discard)
+
+        supervisor.add_done_callback(_on_done)
+
+    async def _deferred_cleanup(self, task_id: str, mission_id: str) -> None:
+        """Wait for stream drain then cleanup.
+
+        Args:
+            task_id: The ID of the task.
+            mission_id: The ID of the mission.
+        """
+        session = self.tasks_sessions.get(task_id)
+        if session is None:
+            return
+
+        try:
+            await asyncio.wait_for(session._stream_closed.wait(), timeout=self._stream_drain_timeout)  # noqa: SLF001
+        except asyncio.TimeoutError:
+            logger.warning(
+                "Stream drain timeout, proceeding with cleanup",
+                extra={"task_id": task_id, "mission_id": mission_id},
+            )
+
+        await self._cleanup_task(task_id, mission_id)
 
     @abstractmethod
     async def create_task(
@@ -190,8 +328,6 @@ class BaseTaskManager(ABC):
         mission_id: str,
         module: BaseModule,
         coro: Coroutine[Any, Any, None],
-        heartbeat_interval: datetime.timedelta = datetime.timedelta(seconds=2),
-        connection_timeout: datetime.timedelta = datetime.timedelta(seconds=5),
     ) -> None:
         """Create and manage a new task.
 
@@ -202,8 +338,6 @@ class BaseTaskManager(ABC):
             mission_id: Mission identifier
             module: Module instance to execute
             coro: Coroutine to execute
-            heartbeat_interval: Interval between heartbeats
-            connection_timeout: Connection timeout for SurrealDB
 
         Raises:
             ValueError: If task_id duplicated
@@ -232,15 +366,24 @@ class BaseTaskManager(ABC):
             return False
 
         logger.info(
-            "Sending signal '%s' to task: '%s'",
+            "Sending signal '%s' to task '%s'",
             signal_type,
             task_id,
-            extra={"mission_id": mission_id, "task_id": task_id, "signal_type": signal_type, "payload": payload},
+            extra={"mission_id": mission_id, "task_id": task_id},
         )
 
-        # Use the task session's db connection to send the signal
         session = self.tasks_sessions[task_id]
-        await session.db.update("signals", task_id, {"type": signal_type, "payload": payload})
+        await session.signal_service.send_signal(
+            task_id,
+            SignalMessage(
+                task_id=task_id,
+                mission_id=mission_id,
+                setup_id=session.setup_id,
+                setup_version_id=session.setup_version_id,
+                action=SignalType[signal_type.upper()],
+                payload=payload,
+            ).model_dump(exclude_none=True),
+        )
         return True
 
     async def cancel_task(self, task_id: str, mission_id: str, timeout: float | None = None) -> bool:
@@ -273,13 +416,13 @@ class BaseTaskManager(ABC):
         )
 
         try:
-            # Wait for graceful shutdown
+            # Phase 1: Send cancel signal for graceful shutdown
+            await self.send_signal(task_id, mission_id, "cancel", {})
             await asyncio.wait_for(task, timeout=timeout)
 
             logger.info(
                 "Task cancelled gracefully: '%s'", task_id, extra={"mission_id": mission_id, "task_id": task_id}
             )
-
         except asyncio.TimeoutError:
             # Set timeout as cancellation reason
             if task_id in self.tasks_sessions:
@@ -288,14 +431,9 @@ class BaseTaskManager(ABC):
                     session.cancellation_reason = CancellationReason.TIMEOUT
 
             logger.warning(
-                "Graceful cancellation timed out for task: '%s', forcing cancellation",
+                "Graceful cancellation timed out for task '%s', forcing cancellation",
                 task_id,
-                extra={
-                    "mission_id": mission_id,
-                    "task_id": task_id,
-                    "timeout": timeout,
-                    "cancellation_reason": CancellationReason.TIMEOUT.value,
-                },
+                extra={"mission_id": mission_id, "task_id": task_id},
             )
 
             # Phase 2: Force cancellation
@@ -304,22 +442,19 @@ class BaseTaskManager(ABC):
                 await task
 
             logger.warning(
-                "Task force-cancelled: '%s', reason: %s",
+                "Task force-cancelled: '%s' (%s)",
                 task_id,
                 CancellationReason.TIMEOUT.value,
-                extra={
-                    "mission_id": mission_id,
-                    "task_id": task_id,
-                    "cancellation_reason": CancellationReason.TIMEOUT.value,
-                },
+                extra={"mission_id": mission_id, "task_id": task_id},
             )
             return True
 
         except Exception as e:
             logger.error(
-                "Error during task cancellation: '%s'",
+                "Error during task cancellation '%s': %s",
                 task_id,
-                extra={"mission_id": mission_id, "task_id": task_id, "error": str(e)},
+                e,
+                extra={"mission_id": mission_id, "task_id": task_id},
                 exc_info=True,
             )
             return False
@@ -328,7 +463,7 @@ class BaseTaskManager(ABC):
         return True
 
     async def clean_session(self, task_id: str, mission_id: str) -> bool:
-        """Clean up task session without cancelling the task.
+        """Force cleanup of task session, cancelling the task if still running.
 
         Args:
             task_id: The ID of the task
@@ -345,46 +480,14 @@ class BaseTaskManager(ABC):
             )
             return False
 
-        await self.cancel_task(mission_id=mission_id, task_id=task_id)
+        # Check if task is still running before cancelling
+        if (task := self.tasks.get(task_id)) is not None and not task.done():
+            await self.cancel_task(mission_id=mission_id, task_id=task_id)
+        else:
+            await self._cleanup_task(task_id, mission_id)
 
         logger.info("Cleaning up session for task: '%s'", task_id, extra={"mission_id": mission_id, "task_id": task_id})
         return True
-
-    async def pause_task(self, task_id: str, mission_id: str) -> bool:
-        """Pause a running task.
-
-        Args:
-            task_id: The ID of the task
-            mission_id: The ID of the mission
-
-        Returns:
-            True if the task was paused successfully, False otherwise
-        """
-        return await self.send_signal(task_id=task_id, mission_id=mission_id, signal_type="pause", payload={})
-
-    async def resume_task(self, task_id: str, mission_id: str) -> bool:
-        """Resume a paused task.
-
-        Args:
-            task_id: The ID of the task
-            mission_id: The ID of the mission
-
-        Returns:
-            True if the task was resumed successfully, False otherwise
-        """
-        return await self.send_signal(task_id=task_id, mission_id=mission_id, signal_type="resume", payload={})
-
-    async def get_task_status(self, task_id: str, mission_id: str) -> bool:
-        """Request status from a task.
-
-        Args:
-            task_id: The ID of the task
-            mission_id: The ID of the mission
-
-        Returns:
-            True if the status request was sent successfully, False otherwise
-        """
-        return await self.send_signal(task_id=task_id, mission_id=mission_id, signal_type="status", payload={})
 
     async def cancel_all_tasks(self, mission_id: str, timeout: float | None = None) -> dict[str, bool | BaseException]:
         """Cancel all running tasks.
@@ -496,6 +599,11 @@ class BaseTaskManager(ABC):
             cleanup_coros = [self._cleanup_task(task_id, mission_id) for task_id in remaining_sessions]
             await asyncio.gather(*cleanup_coros, return_exceptions=True)
 
+        # Await any deferred cleanup tasks
+        if self._cleanup_tasks:
+            await asyncio.gather(*self._cleanup_tasks, return_exceptions=True)
+            self._cleanup_tasks.clear()
+
         logger.info(
             "TaskManager shutdown completed, cancelled: %d, failed: %d",
             len(results) - len(failed_tasks),
@@ -507,13 +615,12 @@ class BaseTaskManager(ABC):
             },
         )
 
-    async def __aenter__(self) -> "BaseTaskManager":
+    async def __aenter__(self) -> Self:
         """Enter async context manager.
 
         Returns:
             Self for use in async with statements
         """
-        logger.debug("Entering %s context", self.__class__.__name__)
         return self
 
     async def __aexit__(
@@ -529,11 +636,5 @@ class BaseTaskManager(ABC):
             exc_val: Exception value if an exception occurred
             exc_tb: Exception traceback if an exception occurred
         """
-        logger.debug(
-            "Exiting %s context, exception: %s",
-            self.__class__.__name__,
-            exc_type,
-            extra={"exc_type": exc_type, "exc_val": exc_val},
-        )
         # Shutdown with default mission_id for context manager usage
         await self.shutdown(mission_id="context_manager_cleanup")

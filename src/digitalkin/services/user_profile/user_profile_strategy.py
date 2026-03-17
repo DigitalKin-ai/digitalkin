@@ -13,28 +13,13 @@ class UserProfileServiceError(Exception):
 class UserProfileStrategy(BaseStrategy, ABC):
     """Abstract base class for UserProfile strategies."""
 
-    def __init__(
-        self,
-        mission_id: str,
-        setup_id: str,
-        setup_version_id: str,
-    ) -> None:
-        """Initialize the strategy.
-
-        Args:
-            mission_id: The ID of the mission this strategy is associated with
-            setup_id: The ID of the setup
-            setup_version_id: The ID of the setup version this strategy is associated with
-        """
-        super().__init__(mission_id, setup_id, setup_version_id)
-
     @abstractmethod
-    def get_user_profile(self) -> dict[str, Any]:
+    async def get_user_profile(self) -> dict[str, Any] | None:
         """Get user profile data.
 
         Returns:
-            dict[str, Any]: User profile data
+            User profile data, or None if not found.
 
         Raises:
-            UserProfileServiceError: If the user profile cannot be retrieved
+            UserProfileServiceError: If the service call fails (not for missing profiles).
         """

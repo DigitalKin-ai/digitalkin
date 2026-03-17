@@ -144,12 +144,15 @@ class TestServerConfig:
         if config.credentials is not None:
             pytest.fail(f"Expected default credentials to be None, got {config.credentials}")
 
-        # Check server_options
-        if config.server_options != [
-            ("grpc.max_receive_message_length", 100 * 1024 * 1024),  # 100MB
-            ("grpc.max_send_message_length", 100 * 1024 * 1024),  # 100MB
-        ]:
-            pytest.fail(f"Expected default server_options to match 100MB limits, got {config.server_options}")
+        # Check server_options (message limits + keepalive support)
+        expected_server_options = [
+            ("grpc.max_receive_message_length", 100 * 1024 * 1024),
+            ("grpc.max_send_message_length", 100 * 1024 * 1024),
+            ("grpc.keepalive_permit_without_calls", True),
+            ("grpc.http2.min_ping_interval_without_data_ms", 10000),
+        ]
+        if config.server_options != expected_server_options:
+            pytest.fail(f"Expected default server_options to match resilient defaults, got {config.server_options}")
 
         # Check enable_reflection
         if config.enable_reflection is not True:
@@ -293,12 +296,12 @@ class TestServerConfigSubclasses:
 
     def test_module_server_config(self) -> None:
         """Test ModuleServerConfig specific properties."""
-        config = ModuleServerConfig(registry_address="localhost:50051")
-        expected_registry_address = "localhost:50051"
+        config = ModuleServerConfig(advertise_host="digitalkin-sandbox-agno-server")
+        expected_advertise_host = "digitalkin-sandbox-agno-server"
 
-        if config.registry_address != expected_registry_address:
+        if config.advertise_host != expected_advertise_host:
             pytest.fail(
-                f"Expected registry_address to be '{expected_registry_address}', got '{config.registry_address}'"
+                f"Expected advertise_host to be '{expected_advertise_host}', got '{config.advertise_host}'"
             )
 
     def test_registry_server_config(self) -> None:

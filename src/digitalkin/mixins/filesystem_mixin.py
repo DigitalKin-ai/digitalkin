@@ -14,7 +14,7 @@ class FilesystemMixin:
     """
 
     @staticmethod
-    def upload_files(context: ModuleContext, files: list[Any]) -> tuple[list[FilesystemRecord], int, int]:
+    async def upload_files(context: ModuleContext, files: list[Any]) -> tuple[list[FilesystemRecord], int, int]:
         """Upload files using the filesystem strategy.
 
         Args:
@@ -27,10 +27,10 @@ class FilesystemMixin:
         Raises:
             FilesystemServiceError: If upload operation fails
         """
-        return context.filesystem.upload_files(files)
+        return await context.filesystem.upload_files(files)
 
     @staticmethod
-    def get_file(context: ModuleContext, file_id: str) -> FilesystemRecord:
+    async def get_file(context: ModuleContext, file_id: str) -> FilesystemRecord:
         """Retrieve a file by ID with the content.
 
         Args:
@@ -43,4 +43,4 @@ class FilesystemMixin:
         Raises:
             FilesystemServiceError: If file retrieval fails
         """
-        return context.filesystem.get_file(file_id, include_content=True)
+        return await context.filesystem.get_file(file_id, include_content=True)

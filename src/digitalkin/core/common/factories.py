@@ -1,58 +1,9 @@
 """Common factory functions for reducing code duplication in core module."""
 
 import asyncio
-import datetime
 
-from digitalkin.core.task_manager.surrealdb_repository import SurrealDBConnection
 from digitalkin.logger import logger
 from digitalkin.modules._base_module import BaseModule
-
-
-class ConnectionFactory:
-    """Factory for creating SurrealDB connections with consistent configuration."""
-
-    @staticmethod
-    async def create_surreal_connection(
-        database: str = "task_manager",
-        timeout: datetime.timedelta = datetime.timedelta(seconds=5),
-        *,
-        auto_init: bool = True,
-    ) -> SurrealDBConnection:
-        """Create and optionally initialize a SurrealDB connection.
-
-        This factory method centralizes the creation of SurrealDB connections
-        to ensure consistent configuration across the codebase.
-
-        Args:
-            database: Database name to connect to
-            timeout: Connection timeout
-            auto_init: Whether to automatically initialize the connection
-
-        Returns:
-            Initialized or uninitialized SurrealDBConnection instance
-
-        Example:
-            # Create and auto-initialize
-            conn = await ConnectionFactory.create_surreal_connection("taskiq_worker")
-
-            # Create without initialization
-            conn = await ConnectionFactory.create_surreal_connection(auto_init=False)
-            await conn.init_surreal_instance()
-        """
-        logger.debug(
-            "Creating SurrealDB connection for database: %s, timeout: %s",
-            database,
-            timeout,
-            extra={"database": database, "timeout": str(timeout)},
-        )
-
-        connection: SurrealDBConnection = SurrealDBConnection(database, timeout)
-
-        if auto_init:
-            await connection.init_surreal_instance()
-            logger.debug("SurrealDB connection initialized for database: %s", database)
-
-        return connection
 
 
 class ModuleFactory:
@@ -65,6 +16,7 @@ class ModuleFactory:
         mission_id: str,
         setup_id: str,
         setup_version_id: str,
+        request_metadata: dict[str, str] | None = None,
     ) -> BaseModule:
         """Create a module instance with standard parameters.
 
@@ -77,6 +29,7 @@ class ModuleFactory:
             mission_id: Mission identifier
             setup_id: Setup identifier
             setup_version_id: Setup version identifier
+            request_metadata: gRPC request metadata (headers) to forward to the module.
 
         Returns:
             Instantiated module
@@ -119,6 +72,7 @@ class ModuleFactory:
             mission_id=mission_id,
             setup_id=setup_id,
             setup_version_id=setup_version_id,
+            request_metadata=request_metadata,
         )
 
 

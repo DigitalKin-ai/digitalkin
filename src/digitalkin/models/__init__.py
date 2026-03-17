@@ -1,6 +1,6 @@
 """This package contains the models for DigitalKin."""
 
-from digitalkin.models.module import Module, ModuleStatus
+from digitalkin.models.module.module import Module, ModuleStatus
 
 __all__ = [
     "Module",

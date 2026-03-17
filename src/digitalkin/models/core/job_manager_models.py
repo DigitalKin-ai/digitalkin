@@ -2,15 +2,15 @@
 
 from enum import Enum
 
-from pydantic import BaseModel
-
 from digitalkin.core.job_manager.base_job_manager import BaseJobManager
 
 
-class StreamCodeModel(BaseModel):
-    """Typed error/code model."""
+class BackpressureStrategy(str, Enum):
+    """Backpressure strategy for module output queue writes."""
 
-    code: str
+    BLOCK = "block"
+    DROP_OLDEST = "drop_oldest"
+    REJECT = "reject"
 
 
 class JobManagerMode(Enum):
@@ -35,10 +35,14 @@ class JobManagerMode(Enum):
         """
         match self:
             case JobManagerMode.SINGLE:
-                from digitalkin.core.job_manager.single_job_manager import SingleJobManager  # noqa: PLC0415
+                from digitalkin.core.job_manager.single_job_manager import (
+                    SingleJobManager,
+                )  # Lazy import to avoid circular dependency
 
                 return SingleJobManager
             case JobManagerMode.TASKIQ:
-                from digitalkin.core.job_manager.taskiq_job_manager import TaskiqJobManager  # noqa: PLC0415
+                from digitalkin.core.job_manager.taskiq_job_manager import (
+                    TaskiqJobManager,
+                )  # Lazy import to avoid circular dependency
 
                 return TaskiqJobManager

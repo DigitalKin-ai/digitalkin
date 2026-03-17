@@ -1,5 +1,6 @@
 # Dockerfile.test
-FROM python:3.10-slim
+ARG PYTHON_VERSION=3.10
+FROM python:${PYTHON_VERSION}-slim
 
 WORKDIR /app
 
@@ -23,11 +24,8 @@ COPY tests/ /app/tests/
 RUN uv pip install --system -e ".[taskiq]" && \
     uv pip install --system --group dev --group tests
 
-# copy runtime script
-WORKDIR /app
+# copy entrypoint script
+COPY docker/entrypoint-test.sh /entrypoint-test.sh
+RUN chmod +x /entrypoint-test.sh
 
-# ENTRYPOINT directly runs pytest with environment variables
-ENTRYPOINT ["sh", "-c", "pytest ${TEST_SELECTOR:-tests/} ${PYTEST_ARGS:-}"]
-
-# empty CMD, can be overridden by docker-compose
-CMD []
+ENTRYPOINT ["/entrypoint-test.sh"]

@@ -38,11 +38,11 @@ class SetupStrategy(ABC):
     def __init__(self) -> None:
         """Initialize the setup strategy."""
 
-    def __post_init__(self, *args, **kwargs) -> None:  # noqa: ANN002, ANN003
-        """Initialize the setup strategy."""
+    def __post_init__(self, *args: Any, **kwargs: Any) -> None:
+        """Lifecycle hook for post-initialization. Subclasses override with specific params."""
 
     @abstractmethod
-    def create_setup(self, setup_dict: dict[str, Any]) -> str:
+    async def create_setup(self, setup_dict: dict[str, Any]) -> str:
         """Create a new setup with comprehensive validation.
 
         Args:
@@ -57,7 +57,7 @@ class SetupStrategy(ABC):
         """
 
     @abstractmethod
-    def get_setup(self, setup_dict: dict[str, Any]) -> SetupData:
+    async def get_setup(self, setup_dict: dict[str, Any]) -> SetupData:
         """Retrieve a setup by its unique identifier.
 
         Args:
@@ -68,7 +68,7 @@ class SetupStrategy(ABC):
         """
 
     @abstractmethod
-    def update_setup(self, setup_dict: dict[str, Any]) -> bool:
+    async def update_setup(self, setup_dict: dict[str, Any]) -> bool:
         """Update an existing setup.
 
         Args:
@@ -79,7 +79,7 @@ class SetupStrategy(ABC):
         """
 
     @abstractmethod
-    def delete_setup(self, setup_dict: dict[str, Any]) -> bool:
+    async def delete_setup(self, setup_dict: dict[str, Any]) -> bool:
         """Delete a setup by its unique identifier.
 
         Args:
@@ -90,7 +90,7 @@ class SetupStrategy(ABC):
         """
 
     @abstractmethod
-    def create_setup_version(self, setup_version_dict: dict[str, Any]) -> str:
+    async def create_setup_version(self, setup_version_dict: dict[str, Any]) -> str:
         """Create a new setup version.
 
         Args:
@@ -101,7 +101,7 @@ class SetupStrategy(ABC):
         """
 
     @abstractmethod
-    def get_setup_version(self, setup_version_dict: dict[str, Any]) -> SetupVersionData:
+    async def get_setup_version(self, setup_version_dict: dict[str, Any]) -> SetupVersionData:
         """Retrieve a setup version by its unique identifier.
 
         Args:
@@ -112,7 +112,7 @@ class SetupStrategy(ABC):
         """
 
     @abstractmethod
-    def search_setup_versions(self, setup_version_dict: dict[str, Any]) -> list[SetupVersionData]:
+    async def search_setup_versions(self, setup_version_dict: dict[str, Any]) -> list[SetupVersionData]:
         """Search for setup versions based on filters.
 
         Args:
@@ -123,7 +123,7 @@ class SetupStrategy(ABC):
         """
 
     @abstractmethod
-    def update_setup_version(self, setup_version_dict: dict[str, Any]) -> bool:
+    async def update_setup_version(self, setup_version_dict: dict[str, Any]) -> bool:
         """Update an existing setup version.
 
         Args:
@@ -134,7 +134,7 @@ class SetupStrategy(ABC):
         """
 
     @abstractmethod
-    def delete_setup_version(self, setup_version_dict: dict[str, Any]) -> bool:
+    async def delete_setup_version(self, setup_version_dict: dict[str, Any]) -> bool:
         """Delete a setup version by its unique identifier.
 
         Args:
@@ -142,4 +142,19 @@ class SetupStrategy(ABC):
 
         Returns:
             bool: Success status of version deletion.
+        """
+
+    @abstractmethod
+    async def list_setups(self, list_dict: dict[str, Any]) -> dict[str, Any]:
+        """List setups with optional filtering and pagination.
+
+        Args:
+            list_dict: Dictionary with optional filters:
+                - organisation_id: Filter by organisation
+                - owner_id: Filter by owner
+                - limit: Maximum number of results
+                - offset: Number of results to skip
+
+        Returns:
+            dict[str, Any]: Dictionary with 'setups' list and 'total_count'.
         """

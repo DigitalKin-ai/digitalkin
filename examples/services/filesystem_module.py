@@ -3,16 +3,16 @@
 import asyncio
 import datetime
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from pydantic import BaseModel, Field
 
 from digitalkin.logger import logger
 from digitalkin.models.module import ModuleStatus
 from digitalkin.modules.archetype_module import ArchetypeModule
+from digitalkin.services.filesystem.filesystem_strategy import FileFilter, UploadFileData
 from digitalkin.services.services_config import ServicesConfig
 from digitalkin.services.services_models import ServicesMode
-from digitalkin.services.filesystem.filesystem_strategy import FilesystemRecord, FileFilter, UploadFileData
 
 
 class ExampleInput(BaseModel):
@@ -62,7 +62,10 @@ class ExampleModule(ArchetypeModule[ExampleInput, ExampleOutput, ExampleSetup, E
 
     # Define services_config_params with default values
     services_config_strategies = {}
-    services_config_params = {"cost": {"config": {}}, "storage": {"config": {}}} # Filesystem has no config but it's enabled
+    services_config_params = {
+        "cost": {"config": {}},
+        "storage": {"config": {}},
+    }  # Filesystem has no config but it's enabled
 
     def __init__(self, job_id: str, mission_id: str, setup_version_id: str) -> None:
         """Initialize the example module.
@@ -121,13 +124,12 @@ class ExampleModule(ArchetypeModule[ExampleInput, ExampleOutput, ExampleSetup, E
             replace_if_exists=True,
         )
 
-        records, uploaded, failed = self.filesystem.upload_files(files=[file])
+        records, uploaded, failed = await self.filesystem.upload_files(files=[file])
         for record in records:
             logger.info("Uploaded file: %s, uploaded: %d, failed: %d", record, uploaded, failed)
             logger.info("Stored file with ID: %s", record.id)
             callback(record.model_dump())
         # Call the callback with the output data
-
 
         # Wait a bit to simulate processing time
         await asyncio.sleep(1)
@@ -173,16 +175,16 @@ async def test_module() -> None:
 
     # Check the storage
     if module.status == ModuleStatus.STOPPED:
-        files, nb_results = module.filesystem.get_files(
+        files, _nb_results = await module.filesystem.get_files(
             filters=FileFilter(name="example_output.txt", context="test-mission-123"),
         )
         for file in files:
-            module.filesystem.update_file(file.id, file_type="updated")
+            await module.filesystem.update_file(file.id, file_type="updated")
             # module.filesystem.delete_files(filters=FileFilter(name="example_output.txt", context="test-mission-123"), permanent=True)
 
             logger.info("Retrieved file: %s with ID: %s", file.name, file.id)
             try:
-                file_record = module.filesystem.get_file(file_id=file.id, include_content=True)
+                file_record = await module.filesystem.get_file(file_id=file.id, include_content=True)
                 if file_record:
                     logger.info("File ID: %s", file_record.id)
                     logger.info("File name: %s", file_record.name)

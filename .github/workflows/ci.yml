@@ -5,9 +5,6 @@ on:
     branches:
       - main
       - dev
-      - 'feat/**'
-      - 'fix/**'
-      - 'test/**'
   pull_request:
     branches: [main, dev]
   workflow_dispatch:
@@ -20,25 +17,12 @@ on:
         description: "Additional pytest arguments (e.g., -k test_create_job -vv)"
         required: false
         default: ""
-      python_version:
-        description: "Python version to test (leave empty for all)"
-        required: false
-        default: ""
 
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 env:
-  # SurrealDB Configuration
-  TEST_SURREALDB_PORT: 8008
-  TEST_SURREALDB_USERNAME: root
-  TEST_SURREALDB_PASSWORD: root
-  TEST_SURREALDB_NAMESPACE: test
-  TEST_SURREALDB_DATABASE: test
-
-  # Pytest Configuration
-  PYTEST_TIMEOUT_SECONDS: 60
   DEFAULT_PYTEST_ARGS: "--json-report --json-report-file=test-metrics.json --html=pytest-report.html --junitxml=test-results.xml --cov --cov-report=xml:coverage.xml"
 
 jobs:
@@ -50,8 +34,6 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
-        with:
-          submodules: recursive
 
       - name: Set up Python 3.10
         uses: actions/setup-python@v6
@@ -90,7 +72,7 @@ jobs:
         run: task build-package
 
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: package-dist
           path: dist/
@@ -128,17 +110,12 @@ jobs:
             test-description: "Previously fixed bugs"
           - test-name: "Integration Tests"
             test-marker: "integration"
-            test-description: "Tests requiring real SurrealDB"
+            test-description: "Tests requiring external service connections"
           - test-name: "Taskiq Tests"
             test-marker: "taskiq"
             test-description: "Taskiq distributed execution and pickle/unpickle behavior"
 
     env:
-      TEST_SURREALDB_PORT: 8008
-      TEST_SURREALDB_USERNAME: root
-      TEST_SURREALDB_PASSWORD: root
-      TEST_SURREALDB_NAMESPACE: test
-      TEST_SURREALDB_DATABASE: test
       PYTHON_VERSION: ${{ matrix.python-version }}
       TEST_MARKER: ${{ matrix.test-marker }}
 
@@ -149,15 +126,6 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Cache Docker layers
-        uses: actions/cache@v4
-        with:
-          path: /tmp/.buildx-cache
-          key: ${{ runner.os }}-buildx-py${{ matrix.python-version }}-${{ hashFiles('**/Dockerfile', '**/docker-compose.yml', '**/pyproject.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-buildx-py${{ matrix.python-version }}-
-            ${{ runner.os }}-buildx-
-
       - name: Validate Docker Compose configuration
         run: |
           if [ ! -f docker-compose.yml ]; then
@@ -167,24 +135,19 @@ jobs:
           docker compose config --quiet
 
       - name: Build Docker images
-        run: |
-          docker compose build --pull --progress=plain
+        run: docker compose build --progress=plain
         env:
           BUILDKIT_PROGRESS: plain
           DOCKER_BUILDKIT: 1
+          COMPOSE_DOCKER_CLI_BUILD: 1
+          BUILDKIT_INLINE_CACHE: 1
 
       - name: Start services and run tests
         id: run-tests
         run: |
-          # Determine test selector and pytest args
-          TEST_SELECTOR="${{ github.event.inputs.test_selector || 'tests/' }}"
-          PYTEST_CUSTOM_ARGS="${{ github.event.inputs.pytest_args || '' }}"
-          MARKER_ARGS="-m \"${{ matrix.test-marker }}\""
-          PYTEST_ARGS="${{ env.DEFAULT_PYTEST_ARGS }} ${MARKER_ARGS} ${PYTEST_CUSTOM_ARGS}"
-
           echo "::group::Test Configuration"
           echo "Test Type: ${{ matrix.test-name }}"
-          echo "Test Marker: ${{ matrix.test-marker }}"
+          echo "Test Marker: ${TEST_MARKER}"
           echo "Description: ${{ matrix.test-description }}"
           echo "TEST_SELECTOR: ${TEST_SELECTOR}"
           echo "PYTEST_ARGS: ${PYTEST_ARGS}"
@@ -202,7 +165,8 @@ jobs:
           echo "test_exit_code=${TEST_EXIT_CODE}" >> $GITHUB_OUTPUT
         env:
           TEST_SELECTOR: ${{ github.event.inputs.test_selector || 'tests/' }}
-          PYTEST_ARGS: ${{ env.DEFAULT_PYTEST_ARGS }} -m "${{ matrix.test-marker }}" ${{ github.event.inputs.pytest_args }}
+          TEST_MARKER: ${{ matrix.test-marker }}
+          PYTEST_ARGS: ${{ env.DEFAULT_PYTEST_ARGS }} ${{ github.event.inputs.pytest_args }}
 
       - name: Extract test artifacts from container
         if: always()
@@ -234,13 +198,11 @@ jobs:
 
       - name: Stop and cleanup containers
         if: always()
-        run: |
-          docker compose down --volumes --remove-orphans
-          docker system prune -f --volumes
+        run: docker compose down --volumes --remove-orphans
 
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: test-results-${{ matrix.test-name }}-py${{ matrix.python-version }}
           path: test-artifacts/
@@ -248,8 +210,8 @@ jobs:
           if-no-files-found: warn
 
       - name: Upload coverage report
-        if: always() && hashFiles('test-artifacts/coverage.xml') != ''
-        uses: actions/upload-artifact@v4
+        if: always() && steps.run-tests.outputs.test_exit_code == '0'
+        uses: actions/upload-artifact@v6
         with:
           name: coverage-${{ matrix.test-name }}-py${{ matrix.python-version }}
           path: test-artifacts/coverage.xml
@@ -282,11 +244,6 @@ jobs:
             test-description: "Previously fixed bugs"
 
     env:
-      TEST_SURREALDB_PORT: 8008
-      TEST_SURREALDB_USERNAME: root
-      TEST_SURREALDB_PASSWORD: root
-      TEST_SURREALDB_NAMESPACE: test
-      TEST_SURREALDB_DATABASE: test
       PYTHON_VERSION: ${{ matrix.python-version }}
       TEST_MARKER: ${{ matrix.test-marker }}
 
@@ -297,15 +254,6 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Cache Docker layers
-        uses: actions/cache@v4
-        with:
-          path: /tmp/.buildx-cache
-          key: ${{ runner.os }}-buildx-py${{ matrix.python-version }}-${{ hashFiles('**/Dockerfile', '**/docker-compose.yml', '**/pyproject.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-buildx-py${{ matrix.python-version }}-
-            ${{ runner.os }}-buildx-
-
       - name: Validate Docker Compose configuration
         run: |
           if [ ! -f docker-compose.yml ]; then
@@ -315,24 +263,19 @@ jobs:
           docker compose config --quiet
 
       - name: Build Docker images
-        run: |
-          docker compose build --pull --progress=plain
+        run: docker compose build --progress=plain
         env:
           BUILDKIT_PROGRESS: plain
           DOCKER_BUILDKIT: 1
+          COMPOSE_DOCKER_CLI_BUILD: 1
+          BUILDKIT_INLINE_CACHE: 1
 
       - name: Start services and run tests
         id: run-tests
         run: |
-          # Determine test selector and pytest args
-          TEST_SELECTOR="${{ github.event.inputs.test_selector || 'tests/' }}"
-          PYTEST_CUSTOM_ARGS="${{ github.event.inputs.pytest_args || '' }}"
-          MARKER_ARGS="-m \"${{ matrix.test-marker }}\""
-          PYTEST_ARGS="${{ env.DEFAULT_PYTEST_ARGS }} ${MARKER_ARGS} ${PYTEST_CUSTOM_ARGS}"
-
           echo "::group::Test Configuration"
           echo "Test Type: ${{ matrix.test-name }} (Compatibility)"
-          echo "Test Marker: ${{ matrix.test-marker }}"
+          echo "Test Marker: ${TEST_MARKER}"
           echo "Description: ${{ matrix.test-description }}"
           echo "TEST_SELECTOR: ${TEST_SELECTOR}"
           echo "PYTEST_ARGS: ${PYTEST_ARGS}"
@@ -350,7 +293,8 @@ jobs:
           echo "test_exit_code=${TEST_EXIT_CODE}" >> $GITHUB_OUTPUT
         env:
           TEST_SELECTOR: ${{ github.event.inputs.test_selector || 'tests/' }}
-          PYTEST_ARGS: ${{ env.DEFAULT_PYTEST_ARGS }} -m "${{ matrix.test-marker }}" ${{ github.event.inputs.pytest_args }}
+          TEST_MARKER: ${{ matrix.test-marker }}
+          PYTEST_ARGS: ${{ env.DEFAULT_PYTEST_ARGS }} ${{ github.event.inputs.pytest_args }}
 
       - name: Extract test artifacts from container
         if: always()
@@ -382,13 +326,11 @@ jobs:
 
       - name: Stop and cleanup containers
         if: always()
-        run: |
-          docker compose down --volumes --remove-orphans
-          docker system prune -f --volumes
+        run: docker compose down --volumes --remove-orphans
 
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: test-results-${{ matrix.test-name }}-py${{ matrix.python-version }}
           path: test-artifacts/
@@ -409,13 +351,14 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Download all test results
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v7
         with:
           pattern: test-results-*
           path: test-results
+        continue-on-error: true
 
       - name: Download coverage reports
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v7
         with:
           pattern: coverage-*
           path: coverage-reports
@@ -449,7 +392,8 @@ jobs:
           echo "| Test Type | Python | Status | Tests | Passed | Failed | Errors | Skipped | Duration |" >> $GITHUB_STEP_SUMMARY
           echo "|-----------|--------|--------|-------|--------|--------|--------|---------|----------|" >> $GITHUB_STEP_SUMMARY
 
-          # Process each test result
+          # Process each test result (handle case where no results exist)
+          shopt -s nullglob
           for result_dir in test-results/test-results-*; do
             if [ -f "$result_dir/test-results.xml" ]; then
               dir_name=$(basename "$result_dir")
@@ -532,7 +476,7 @@ jobs:
           mkdir -p consolidated-report
 
           # Create index.html that lists all reports
-          cat > consolidated-report/index.html << 'EOF'
+          cat > consolidated-report/index.html << EOF
           <!DOCTYPE html>
           <html>
           <head>
@@ -555,7 +499,8 @@ jobs:
             <ul class="report-list">
           EOF
 
-          # Add links to each report
+          # Add links to each report (handle case where no results exist)
+          shopt -s nullglob
           for result_dir in test-results/test-results-*; do
             if [ -d "$result_dir" ]; then
               dir_name=$(basename "$result_dir")
@@ -580,7 +525,7 @@ jobs:
           echo "::endgroup::"
 
       - name: Upload consolidated report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: consolidated-test-report
           path: consolidated-report/
@@ -591,28 +536,3 @@ jobs:
         run: |
           echo "::error::Tests failed for one or more test categories or Python versions"
           exit 1
-
-  security-scan:
-    name: Security Scan
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v6
-
-      - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@0.33.1
-        with:
-          scan-type: 'fs'
-          scan-ref: '.'
-          format: 'sarif'
-          output: 'trivy-results.sarif'
-        continue-on-error: true
-
-      - name: Check for secrets
-        uses: trufflesecurity/trufflehog@main
-        with:
-          path: ./
-          base: ${{ github.event.repository.default_branch }}
-          head: HEAD
-        continue-on-error: true

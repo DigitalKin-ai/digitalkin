@@ -1,5 +1,6 @@
 """Test the grpc service."""
 
+import asyncio
 import datetime
 import secrets
 import string
@@ -8,14 +9,14 @@ from concurrent import futures
 import grpc
 import grpc_testing
 import pytest
-from digitalkin_proto.agentic_mesh_protocol.setup.v1 import (
+from agentic_mesh_protocol.setup.v1 import (
     setup_pb2,
     setup_service_pb2,
     setup_service_pb2_grpc,
 )
 from freezegun import freeze_time
 from mock_setup_servicer import MockSetupServicer
-from tests.fixtures.grpc_fixtures import FakeContext
+from tests.fixtures.grpc_fixtures import AsyncStubWrapper, FakeContext
 
 from digitalkin.models.grpc_servers.models import ClientConfig, SecurityMode, ServerMode
 from digitalkin.services.setup.grpc_setup import GrpcSetup
@@ -82,7 +83,7 @@ def client(test_channel: grpc_testing.Channel) -> GrpcSetup:
     client.__post_init__(dummy_config)
 
     # Override the channel and stub to use our test channel
-    client.stub = setup_service_pb2_grpc.SetupServiceStub(test_channel)
+    client.stub = AsyncStubWrapper(setup_service_pb2_grpc.SetupServiceStub(test_channel))
     return client
 
 
@@ -143,7 +144,7 @@ class TestCreateSetup:
             grpc_test_server: Mock gRPC server for testing.
         """
         # Start the client call (this call will block until the response is simulated).
-        future = thread_pool.submit(client.create_setup, generate_setup_obj.model_dump())
+        future = thread_pool.submit(asyncio.run, client.create_setup(generate_setup_obj.model_dump()))
 
         # Get the service and method descriptor.
         service_desc = setup_service_pb2.DESCRIPTOR.services_by_name["SetupService"]
@@ -199,7 +200,7 @@ class TestCreateSetup:
             grpc_test_server: Mock gRPC server for testing.
         """
         # Start the client call (this call will block until the response is simulated).
-        future = thread_pool.submit(client.create_setup, generate_setup_obj.model_dump())
+        future = thread_pool.submit(asyncio.run, client.create_setup(generate_setup_obj.model_dump()))
 
         # Get the service and method descriptor.
         service_desc = setup_service_pb2.DESCRIPTOR.services_by_name["SetupService"]
@@ -268,8 +269,8 @@ class TestCreateSetup:
         generate_setup_obj.current_setup_version = None
 
         # Start the client call (this call will block until the response is simulated).
-        future = thread_pool.submit(client.create_setup, generate_setup_obj.model_dump(warnings=False))
-        with pytest.raises(ValueError, match="Invalid data for Setup Creation"):
+        future = thread_pool.submit(asyncio.run, client.create_setup(generate_setup_obj.model_dump(warnings=False)))
+        with pytest.raises(ValueError, match="Validation failed for Setup Creation"):
             future.result()
 
 
@@ -301,7 +302,7 @@ class TestGetSetup:
         get_method_desc = service_desc.methods_by_name["GetSetup"]
 
         # First create a setup
-        create_future = thread_pool.submit(client.create_setup, generate_setup_obj.model_dump())
+        create_future = thread_pool.submit(asyncio.run, client.create_setup(generate_setup_obj.model_dump()))
         _, _create_request, create_rpc = test_channel.take_unary_unary(create_method_desc)
         create_rpc.send_initial_metadata(())
         request_obj = setup_pb2.CreateSetupRequest(**{
@@ -315,7 +316,7 @@ class TestGetSetup:
         created_setup_id = next(iter(mock_servicer.setups.keys()))
 
         # Now get the setup
-        get_future = thread_pool.submit(client.get_setup, {"setup_id": created_setup_id})
+        get_future = thread_pool.submit(asyncio.run, client.get_setup({"setup_id": created_setup_id}))
         _, get_request, get_rpc = test_channel.take_unary_unary(get_method_desc)
 
         assert get_request.setup_id == created_setup_id
@@ -348,7 +349,7 @@ class TestGetSetup:
         service_desc = setup_service_pb2.DESCRIPTOR.services_by_name["SetupService"]
         get_method_desc = service_desc.methods_by_name["GetSetup"]
 
-        get_future = thread_pool.submit(client.get_setup, {"setup_id": "nonexistent_id"})
+        get_future = thread_pool.submit(asyncio.run, client.get_setup({"setup_id": "nonexistent_id"}))
         _, get_request, get_rpc = test_channel.take_unary_unary(get_method_desc)
 
         get_context = FakeContext()
@@ -456,7 +457,7 @@ class TestUpdateSetup:
         }
 
         # Start the update call
-        update_future = thread_pool.submit(client.update_setup, updated_data)
+        update_future = thread_pool.submit(asyncio.run, client.update_setup(updated_data))
 
         # Intercept the call
         update_method_desc = service_desc.methods_by_name["UpdateSetup"]
@@ -505,7 +506,7 @@ class TestUpdateSetup:
         updated_data = generate_setup_obj.model_dump()
         updated_data["id"] = "nonexistent_id"
 
-        update_future = thread_pool.submit(client.update_setup, updated_data)
+        update_future = thread_pool.submit(asyncio.run, client.update_setup(updated_data))
         _, update_request, update_rpc = test_channel.take_unary_unary(update_method_desc)
 
         update_context = FakeContext()
@@ -545,7 +546,7 @@ class TestDeleteSetup:
         delete_method_desc = service_desc.methods_by_name["DeleteSetup"]
 
         # First create a setup
-        create_future = thread_pool.submit(client.create_setup, generate_setup_obj.model_dump())
+        create_future = thread_pool.submit(asyncio.run, client.create_setup(generate_setup_obj.model_dump()))
         _, _create_request, create_rpc = test_channel.take_unary_unary(create_method_desc)
         create_rpc.send_initial_metadata(())
         request_obj = setup_pb2.CreateSetupRequest(**{
@@ -559,7 +560,7 @@ class TestDeleteSetup:
         created_setup_id = next(iter(mock_servicer.setups.keys()))
 
         # Delete the setup
-        delete_future = thread_pool.submit(client.delete_setup, {"setup_id": created_setup_id})
+        delete_future = thread_pool.submit(asyncio.run, client.delete_setup({"setup_id": created_setup_id}))
         _, delete_request, delete_rpc = test_channel.take_unary_unary(delete_method_desc)
 
         assert delete_request.setup_id == created_setup_id
@@ -592,7 +593,7 @@ class TestDeleteSetup:
         service_desc = setup_service_pb2.DESCRIPTOR.services_by_name["SetupService"]
         delete_method_desc = service_desc.methods_by_name["DeleteSetup"]
 
-        delete_future = thread_pool.submit(client.delete_setup, {"setup_id": "nonexistent_id"})
+        delete_future = thread_pool.submit(asyncio.run, client.delete_setup({"setup_id": "nonexistent_id"}))
         _, delete_request, delete_rpc = test_channel.take_unary_unary(delete_method_desc)
 
         delete_context = FakeContext()
@@ -631,7 +632,7 @@ class TestSetupVersionOperations:
             grpc_test_server: Mock gRPC server for testing.
         """
         # Start the client call (this call will block until the response is simulated).
-        future = thread_pool.submit(client.create_setup_version, generate_setup_version_obj.model_dump())
+        future = thread_pool.submit(asyncio.run, client.create_setup_version(generate_setup_version_obj.model_dump()))
 
         # Get the service and method descriptor.
         service_desc = setup_service_pb2.DESCRIPTOR.services_by_name["SetupService"]
@@ -679,7 +680,7 @@ class TestSetupVersionOperations:
             grpc_test_server: Mock gRPC server for testing.
         """
         # Start the client call (this call will block until the response is simulated).
-        future = thread_pool.submit(client.create_setup_version, generate_setup_version_obj.model_dump())
+        future = thread_pool.submit(asyncio.run, client.create_setup_version(generate_setup_version_obj.model_dump()))
 
         # Get the service and method descriptor.
         service_desc = setup_service_pb2.DESCRIPTOR.services_by_name["SetupService"]
@@ -742,8 +743,8 @@ class TestSetupVersionOperations:
         generate_setup_version_obj.content = ""
 
         # Start the client call (this call will block until the response is simulated).
-        future = thread_pool.submit(client.create_setup_version, generate_setup_version_obj.model_dump(warnings=False))
-        with pytest.raises(ValueError, match="Invalid data for Setup Version Creation"):
+        future = thread_pool.submit(asyncio.run, client.create_setup_version(generate_setup_version_obj.model_dump(warnings=False)))
+        with pytest.raises(ValueError, match="Validation failed for Setup Version Creation"):
             future.result()
 
     @freeze_time("2025-04-01 12:00:01")
@@ -767,7 +768,7 @@ class TestSetupVersionOperations:
         get_method_desc = service_desc.methods_by_name["GetSetupVersion"]
 
         # First create a setup version
-        create_future = thread_pool.submit(client.create_setup_version, generate_setup_version_obj.model_dump())
+        create_future = thread_pool.submit(asyncio.run, client.create_setup_version(generate_setup_version_obj.model_dump()))
         _, _create_request, create_rpc = test_channel.take_unary_unary(create_method_desc)
         create_rpc.send_initial_metadata(())
         request_obj = setup_pb2.CreateSetupVersionRequest(**{
@@ -783,7 +784,7 @@ class TestSetupVersionOperations:
         ]
 
         # Now get the setup version by ID
-        get_future = thread_pool.submit(client.get_setup_version, {"setup_version_id": created_version.id})
+        get_future = thread_pool.submit(asyncio.run, client.get_setup_version({"setup_version_id": created_version.id}))
         _, get_request, get_rpc = test_channel.take_unary_unary(get_method_desc)
 
         assert get_request.setup_version_id == created_version.id
@@ -816,7 +817,7 @@ class TestSetupVersionOperations:
         service_desc = setup_service_pb2.DESCRIPTOR.services_by_name["SetupService"]
         get_method_desc = service_desc.methods_by_name["GetSetupVersion"]
 
-        get_future = thread_pool.submit(client.get_setup_version, {"setup_version_id": "nonexistent_version_id"})
+        get_future = thread_pool.submit(asyncio.run, client.get_setup_version({"setup_version_id": "nonexistent_version_id"}))
         _, get_request, get_rpc = test_channel.take_unary_unary(get_method_desc)
 
         get_context = FakeContext()
@@ -848,7 +849,7 @@ class TestSetupVersionOperations:
         search_method_desc = service_desc.methods_by_name["SearchSetupVersions"]
 
         # Create a setup version
-        create_future = thread_pool.submit(client.create_setup_version, generate_setup_version_obj.model_dump())
+        create_future = thread_pool.submit(asyncio.run, client.create_setup_version(generate_setup_version_obj.model_dump()))
         _, _create_request, create_rpc = test_channel.take_unary_unary(create_method_desc)
         create_rpc.send_initial_metadata(())
         request_obj = setup_pb2.CreateSetupVersionRequest(**{
@@ -860,8 +861,10 @@ class TestSetupVersionOperations:
 
         # Search for versions
         search_future = thread_pool.submit(
-            client.search_setup_versions,
-            {"setup_id": generate_setup_version_obj.setup_id, "version": generate_setup_version_obj.version},
+            asyncio.run,
+            client.search_setup_versions(
+                {"setup_id": generate_setup_version_obj.setup_id, "version": generate_setup_version_obj.version}
+            ),
         )
         _, search_request, search_rpc = test_channel.take_unary_unary(search_method_desc)
 
@@ -896,7 +899,7 @@ class TestSetupVersionOperations:
         search_method_desc = service_desc.methods_by_name["SearchSetupVersions"]
 
         search_future = thread_pool.submit(
-            client.search_setup_versions, {"setup_id": "nonexistent_setup", "version": "v1.0.0"}
+            asyncio.run, client.search_setup_versions({"setup_id": "nonexistent_setup", "version": "v1.0.0"})
         )
         _, search_request, search_rpc = test_channel.take_unary_unary(search_method_desc)
 
@@ -929,7 +932,7 @@ class TestSetupVersionOperations:
         update_method_desc = service_desc.methods_by_name["UpdateSetupVersion"]
 
         # First create a setup version
-        create_future = thread_pool.submit(client.create_setup_version, generate_setup_version_obj.model_dump())
+        create_future = thread_pool.submit(asyncio.run, client.create_setup_version(generate_setup_version_obj.model_dump()))
         _, _create_request, create_rpc = test_channel.take_unary_unary(create_method_desc)
         create_rpc.send_initial_metadata(())
         request_obj = setup_pb2.CreateSetupVersionRequest(**{
@@ -949,7 +952,7 @@ class TestSetupVersionOperations:
         updated_data["id"] = created_version.id
         updated_data["content"] = {"updated_key": "updated_value"}
 
-        update_future = thread_pool.submit(client.update_setup_version, updated_data)
+        update_future = thread_pool.submit(asyncio.run, client.update_setup_version(updated_data))
         _, update_request, update_rpc = test_channel.take_unary_unary(update_method_desc)
 
         assert update_request.setup_version_id == created_version.id
@@ -989,7 +992,7 @@ class TestSetupVersionOperations:
         updated_data = generate_setup_version_obj.model_dump()
         updated_data["id"] = "nonexistent_version_id"
 
-        update_future = thread_pool.submit(client.update_setup_version, updated_data)
+        update_future = thread_pool.submit(asyncio.run, client.update_setup_version(updated_data))
         _, update_request, update_rpc = test_channel.take_unary_unary(update_method_desc)
 
         update_context = FakeContext()
@@ -1022,7 +1025,7 @@ class TestSetupVersionOperations:
         delete_method_desc = service_desc.methods_by_name["DeleteSetupVersion"]
 
         # First create a setup version
-        create_future = thread_pool.submit(client.create_setup_version, generate_setup_version_obj.model_dump())
+        create_future = thread_pool.submit(asyncio.run, client.create_setup_version(generate_setup_version_obj.model_dump()))
         _, _create_request, create_rpc = test_channel.take_unary_unary(create_method_desc)
         create_rpc.send_initial_metadata(())
         request_obj = setup_pb2.CreateSetupVersionRequest(**{
@@ -1038,7 +1041,7 @@ class TestSetupVersionOperations:
         ]
 
         # Delete the setup version
-        delete_future = thread_pool.submit(client.delete_setup_version, {"setup_version_id": created_version.id})
+        delete_future = thread_pool.submit(asyncio.run, client.delete_setup_version({"setup_version_id": created_version.id}))
         _, delete_request, delete_rpc = test_channel.take_unary_unary(delete_method_desc)
 
         assert delete_request.setup_version_id == created_version.id
@@ -1071,7 +1074,7 @@ class TestSetupVersionOperations:
         service_desc = setup_service_pb2.DESCRIPTOR.services_by_name["SetupService"]
         delete_method_desc = service_desc.methods_by_name["DeleteSetupVersion"]
 
-        delete_future = thread_pool.submit(client.delete_setup_version, {"setup_version_id": "nonexistent_version_id"})
+        delete_future = thread_pool.submit(asyncio.run, client.delete_setup_version({"setup_version_id": "nonexistent_version_id"}))
         _, delete_request, delete_rpc = test_channel.take_unary_unary(delete_method_desc)
 
         delete_context = FakeContext()
@@ -1110,7 +1113,7 @@ class TestListSetups:
 
         # Create three setups
         for i in range(3):
-            create_future = thread_pool.submit(client.create_setup, generate_setup_obj.model_dump())
+            create_future = thread_pool.submit(asyncio.run, client.create_setup(generate_setup_obj.model_dump()))
             _, create_request, create_rpc = test_channel.take_unary_unary(create_method_desc)
             create_context = FakeContext()
             create_response = mock_servicer.CreateSetup(create_request, create_context)
@@ -1120,7 +1123,7 @@ class TestListSetups:
 
         # List all setups
         list_method_desc = service_desc.methods_by_name["ListSetups"]
-        list_future = thread_pool.submit(client.list_setups, {})
+        list_future = thread_pool.submit(asyncio.run, client.list_setups({}))
         _, list_request, list_rpc = test_channel.take_unary_unary(list_method_desc)
 
         list_context = FakeContext()
@@ -1152,7 +1155,7 @@ class TestListSetups:
 
         # Create 5 setups
         for i in range(5):
-            create_future = thread_pool.submit(client.create_setup, generate_setup_obj.model_dump())
+            create_future = thread_pool.submit(asyncio.run, client.create_setup(generate_setup_obj.model_dump()))
             _, create_request, create_rpc = test_channel.take_unary_unary(create_method_desc)
             create_context = FakeContext()
             create_response = mock_servicer.CreateSetup(create_request, create_context)
@@ -1162,7 +1165,7 @@ class TestListSetups:
 
         # List first 2 setups
         list_method_desc = service_desc.methods_by_name["ListSetups"]
-        list_future = thread_pool.submit(client.list_setups, {"limit": 2, "offset": 0})
+        list_future = thread_pool.submit(asyncio.run, client.list_setups({"limit": 2, "offset": 0}))
         _, list_request, list_rpc = test_channel.take_unary_unary(list_method_desc)
 
         list_context = FakeContext()
@@ -1175,7 +1178,7 @@ class TestListSetups:
         assert len(result["setups"]) == 2
 
         # List next 2 setups (offset 2)
-        list_future2 = thread_pool.submit(client.list_setups, {"limit": 2, "offset": 2})
+        list_future2 = thread_pool.submit(asyncio.run, client.list_setups({"limit": 2, "offset": 2}))
         _, list_request2, list_rpc2 = test_channel.take_unary_unary(list_method_desc)
 
         list_context2 = FakeContext()
@@ -1205,7 +1208,7 @@ class TestListSetups:
         list_method_desc = service_desc.methods_by_name["ListSetups"]
 
         # List setups (empty database)
-        list_future = thread_pool.submit(client.list_setups, {})
+        list_future = thread_pool.submit(asyncio.run, client.list_setups({}))
         _, list_request, list_rpc = test_channel.take_unary_unary(list_method_desc)
 
         list_context = FakeContext()

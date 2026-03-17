@@ -3,10 +3,7 @@
 from typing import Any
 
 from digitalkin.logger import logger
-from digitalkin.services.user_profile.user_profile_strategy import (
-    UserProfileServiceError,
-    UserProfileStrategy,
-)
+from digitalkin.services.user_profile.user_profile_strategy import UserProfileStrategy
 
 
 class DefaultUserProfile(UserProfileStrategy):
@@ -28,21 +25,17 @@ class DefaultUserProfile(UserProfileStrategy):
         super().__init__(mission_id=mission_id, setup_id=setup_id, setup_version_id=setup_version_id)
         self.db: dict[str, dict[str, Any]] = {}
 
-    def get_user_profile(self) -> dict[str, Any]:
+    async def get_user_profile(self) -> dict[str, Any] | None:
         """Get user profile from in-memory storage.
 
         Returns:
-            dict[str, Any]: User profile data
-
-        Raises:
-            UserProfileServiceError: If the user profile is not found
+            User profile data, or None if not found.
         """
         if self.mission_id not in self.db:
-            msg = f"User profile for mission {self.mission_id} not found in the database."
-            logger.warning(msg)
-            raise UserProfileServiceError(msg)
+            logger.warning("No user profile found for mission_id: %s", self.mission_id)
+            return None
 
-        logger.debug(f"Retrieved user profile for mission_id: {self.mission_id}")
+        logger.debug("Retrieved user profile for mission_id: %s", self.mission_id)
         return self.db[self.mission_id]
 
     def add_user_profile(self, user_profile_data: dict[str, Any]) -> None:
@@ -52,4 +45,4 @@ class DefaultUserProfile(UserProfileStrategy):
             user_profile_data: Dictionary containing user profile data
         """
         self.db[self.mission_id] = user_profile_data
-        logger.debug(f"Added user profile for mission_id: {self.mission_id}")
+        logger.debug("Added user profile for mission_id: %s", self.mission_id)

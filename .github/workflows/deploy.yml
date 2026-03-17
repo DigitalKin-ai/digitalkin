@@ -5,7 +5,6 @@ on:
     branches:
       - main
       - dev
-      - 'feat/*'
     tags:
       - 'v*'
   delete:
@@ -21,7 +20,7 @@ on:
           - staging
         default: 'staging'
       cleanup_version:
-        description: 'Version to cleanup (optional - for manual cleanup)'
+        description: 'Versions to cleanup, comma-separated (e.g. "dev,feat-foo,0.2.1")'
         required: false
         type: string
 
@@ -29,6 +28,10 @@ permissions:
   contents: write
   pages: write
   id-token: write
+
+concurrency:
+  group: deploy-docs
+  cancel-in-progress: false
 
 jobs:
   determine-version:
@@ -50,6 +53,13 @@ jobs:
       - name: Determine version and environment
         id: version
         run: |
+          # On delete events, only the cleanup job should run
+          if [[ "${{ github.event_name }}" == "delete" ]]; then
+            echo "Delete event — skipping deploy (cleanup job handles this)"
+            echo "should_deploy=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
           REF_NAME="${{ github.ref_name }}"
           REF_TYPE="${{ github.ref_type }}"
 
@@ -62,39 +72,35 @@ jobs:
           WARNING_MESSAGE=""
 
           if [[ "$REF_TYPE" == "tag" ]] && [[ "$REF_NAME" == v* ]]; then
-            # Release version: v1.0.0 -> 1.0.0
             VERSION="${REF_NAME#v}"
+
+            # Only deploy docs for final releases (skip dev, alpha, beta, rc, post)
+            if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "Skipping pre-release version: $VERSION"
+              echo "should_deploy=false" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+
             ALIAS="latest"
             ENVIRONMENT="production"
             IS_DEV="false"
             WARNING_MESSAGE=""
           elif [[ "$REF_NAME" == "main" ]]; then
-            # Main branch
             VERSION="main"
             ALIAS="stable"
             ENVIRONMENT="production"
             IS_DEV="false"
             WARNING_MESSAGE="⚠️ This is the development version of the documentation for the main branch."
           elif [[ "$REF_NAME" == "dev" ]]; then
-            # Dev branch
             VERSION="dev"
             ALIAS="development"
             ENVIRONMENT="staging"
             IS_DEV="true"
             WARNING_MESSAGE="⚠️ This is the development version of the documentation. Features may change."
-          elif [[ "$REF_NAME" =~ ^dev- ]]; then
-            # Feature branch: dev-feature-name
-            VERSION="$REF_NAME"
-            ALIAS=""
-            ENVIRONMENT="staging"
-            IS_DEV="true"
-            WARNING_MESSAGE="⚠️ This is a preview of documentation for the $REF_NAME branch. This version is experimental."
           else
-            VERSION="$REF_NAME"
-            ALIAS=""
-            ENVIRONMENT="experimental"
-            IS_DEV="true"
-            WARNING_MESSAGE="⚠️ This is a preview of documentation for the $REF_NAME branch. This version is untested."
+            echo "Skipping unrecognized ref: $REF_NAME"
+            echo "should_deploy=false" >> $GITHUB_OUTPUT
+            exit 0
           fi
 
           SAFE_VERSION="${VERSION//\//-}"
@@ -117,84 +123,9 @@ jobs:
           echo "Environment: $ENVIRONMENT"
           echo " Is Dev: $IS_DEV"
 
-  build:
-    name: Build Documentation
-    needs: determine-version
-    if: needs.determine-version.outputs.should_deploy == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-          cache: 'pip'
-
-      - name: Cache pip packages
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/pyproject.toml', '**/requirements*.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
-
-      - name: Install uv
-        run: pip install uv
-
-      - name: Install project and dependencies
-        run: uv pip install -e . --group docs --system
-
-      - name: Display version info
-        run: |
-          echo "Building version: ${{ needs.determine-version.outputs.version }}"
-          echo "Alias: ${{ needs.determine-version.outputs.alias }}"
-          echo "Environment: ${{ needs.determine-version.outputs.environment }}"
-          if [[ "${{ needs.determine-version.outputs.warning_message }}" != "" ]]; then
-            echo "Warning: ${{ needs.determine-version.outputs.warning_message }}"
-          fi
-
-      - name: Build documentation
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          DEPLOY: true
-        run: uv run mkdocs build
-
-      - name: Inject warning banner (if dev)
-        if: needs.determine-version.outputs.is_dev == 'true'
-        run: |
-          # Create a custom CSS file for the warning banner
-          cat > site/custom-warning.css << 'EOF'
-          .md-banner {
-            background-color: #fff3cd;
-            border-bottom: 2px solid #ffc107;
-            padding: 12px 16px;
-            text-align: center;
-            color: #856404;
-            font-weight: 500;
-          }
-          EOF
-
-          # Inject warning into base HTML (if using custom theme)
-          find site -name "*.html" -type f -exec sed -i '/<body/a\    <div class="md-banner">${{ needs.determine-version.outputs.warning_message }}</div>' {} \;
-
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v4
-        with:
-          path: site/
-
-      - name: Upload site artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: docs-${{ needs.determine-version.outputs.safe_version }}-${{ github.run_number }}
-          path: site/
-          retention-days: 30
-
   deploy:
     name: Deploy Documentation
-    needs: [determine-version, build]
+    needs: [determine-version]
     if: needs.determine-version.outputs.should_deploy == 'true'
     runs-on: ubuntu-latest
     environment:
@@ -207,7 +138,7 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.10'
           cache: 'pip'
@@ -249,30 +180,6 @@ jobs:
           echo "✅ Documentation deployed successfully!"
           echo "📖 View at: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}"
 
-      - name: Comment on PR/Release
-        if: github.event_name == 'pull_request' || startsWith(github.ref, 'refs/tags/')
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const version = "${{ needs.determine-version.outputs.version }}";
-            const isDev = "${{ needs.determine-version.outputs.is_dev }}" === "true";
-            const warning = "${{ needs.determine-version.outputs.warning_message }}";
-
-            let message = `📚 **Documentation deployed for version \`${version}\`**\n`;
-            if (isDev) {
-              message += `\n${warning}\n`;
-            }
-            message += `\n🔗 View documentation: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}`;
-
-            if (context.eventName === 'pull_request') {
-              github.rest.issues.createComment({
-                issue_number: context.issue.number,
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                body: message
-              });
-            }
-
   cleanup:
     name: Cleanup Documentation Version
     runs-on: ubuntu-latest
@@ -285,105 +192,112 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.10'
 
       - name: Install uv
         run: pip install uv
 
-      - name: Install project and dependencies
-        run: uv pip install -e . --group docs --system
+      - name: Install mike
+        run: uv pip install mike --system
 
       - name: Configure Git
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Determine version to cleanup
+      - name: Determine versions to cleanup
         id: cleanup_version
         run: |
+          VERSIONS=""
+
           if [[ "${{ github.event_name }}" == "delete" ]]; then
-            # Branch was deleted
             REF_NAME="${{ github.event.ref }}"
             REF_TYPE="${{ github.event.ref_type }}"
 
             echo "Deleted ref: $REF_NAME (type: $REF_TYPE)"
 
-            # Only cleanup branch documentation, not tags
             if [[ "$REF_TYPE" == "branch" ]]; then
-              # Convert branch name to safe version (replace / with -)
               SAFE_VERSION="${REF_NAME//\//-}"
 
-              # Only cleanup feature branches, not main/dev
               if [[ "$REF_NAME" != "main" ]] && [[ "$REF_NAME" != "dev" ]]; then
-                echo "version=$SAFE_VERSION" >> $GITHUB_OUTPUT
-                echo "should_cleanup=true" >> $GITHUB_OUTPUT
+                VERSIONS="$SAFE_VERSION"
               else
                 echo "Skipping cleanup for protected branch: $REF_NAME"
-                echo "should_cleanup=false" >> $GITHUB_OUTPUT
               fi
             else
               echo "Not a branch deletion, skipping"
-              echo "should_cleanup=false" >> $GITHUB_OUTPUT
             fi
           elif [[ "${{ github.event.inputs.cleanup_version }}" != "" ]]; then
-            # Manual cleanup via workflow_dispatch
-            VERSION="${{ github.event.inputs.cleanup_version }}"
-            SAFE_VERSION="${VERSION//\//-}"
-            echo "version=$SAFE_VERSION" >> $GITHUB_OUTPUT
+            # Manual cleanup — comma-separated list supported
+            RAW="${{ github.event.inputs.cleanup_version }}"
+            # Normalize: trim spaces around commas, replace / with -
+            VERSIONS=$(echo "$RAW" | tr ',' '\n' | sed 's/^ *//;s/ *$//' | sed 's|/|-|g' | paste -sd ',' -)
+          fi
+
+          if [[ -n "$VERSIONS" ]]; then
+            echo "versions=$VERSIONS" >> $GITHUB_OUTPUT
             echo "should_cleanup=true" >> $GITHUB_OUTPUT
+            echo "Versions to cleanup: $VERSIONS"
           else
             echo "should_cleanup=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: Check if version exists
-        id: check_version
+      - name: Delete documentation versions
         if: steps.cleanup_version.outputs.should_cleanup == 'true'
         run: |
-          VERSION="${{ steps.cleanup_version.outputs.version }}"
-
-          # List all versions
           echo "Existing documentation versions:"
-          uv run mike list
+          mike list
 
-          # Check if version exists
-          if uv run mike list | grep -q "^$VERSION"; then
-            echo "exists=true" >> $GITHUB_OUTPUT
-            echo "Version $VERSION found in documentation"
-          else
-            echo "exists=false" >> $GITHUB_OUTPUT
-            echo "Version $VERSION not found in documentation"
-          fi
+          IFS=',' read -ra VERSION_LIST <<< "${{ steps.cleanup_version.outputs.versions }}"
 
-      - name: Delete documentation version
-        if: steps.cleanup_version.outputs.should_cleanup == 'true' && steps.check_version.outputs.exists == 'true'
-        run: |
-          VERSION="${{ steps.cleanup_version.outputs.version }}"
+          DELETED=()
+          SKIPPED=()
 
-          echo "Deleting documentation version: $VERSION"
-          uv run mike delete --push "$VERSION"
+          for VERSION in "${VERSION_LIST[@]}"; do
+            if mike list | grep -q "^$VERSION"; then
+              echo "Deleting: $VERSION"
+              mike delete --push "$VERSION"
+              DELETED+=("$VERSION")
+            else
+              echo "Not found, skipping: $VERSION"
+              SKIPPED+=("$VERSION")
+            fi
+          done
 
+          # Summary
           echo "## 🗑️ Documentation Cleanup Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Deleted Version | $VERSION |" >> $GITHUB_STEP_SUMMARY
           echo "| Trigger | ${{ github.event_name }} |" >> $GITHUB_STEP_SUMMARY
           if [[ "${{ github.event_name }}" == "delete" ]]; then
             echo "| Deleted Branch | ${{ github.event.ref }} |" >> $GITHUB_STEP_SUMMARY
           fi
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "✅ Documentation version deleted successfully!"
+
+          if [[ ${#DELETED[@]} -gt 0 ]]; then
+            echo "### Deleted" >> $GITHUB_STEP_SUMMARY
+            for v in "${DELETED[@]}"; do echo "- \`$v\`" >> $GITHUB_STEP_SUMMARY; done
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [[ ${#SKIPPED[@]} -gt 0 ]]; then
+            echo "### Skipped (not found)" >> $GITHUB_STEP_SUMMARY
+            for v in "${SKIPPED[@]}"; do echo "- \`$v\`" >> $GITHUB_STEP_SUMMARY; done
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [[ ${#DELETED[@]} -eq 0 ]]; then
+            echo "ℹ️ No versions were deleted." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "✅ Deleted ${#DELETED[@]} version(s) successfully!" >> $GITHUB_STEP_SUMMARY
+          fi
 
       - name: Skip cleanup
-        if: steps.cleanup_version.outputs.should_cleanup != 'true' || steps.check_version.outputs.exists != 'true'
+        if: steps.cleanup_version.outputs.should_cleanup != 'true'
         run: |
           echo "## ℹ️ Documentation Cleanup Skipped" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-
-          if [[ "${{ steps.cleanup_version.outputs.should_cleanup }}" != "true" ]]; then
-            echo "Reason: Protected branch or not a branch deletion" >> $GITHUB_STEP_SUMMARY
-          elif [[ "${{ steps.check_version.outputs.exists }}" != "true" ]]; then
-            echo "Reason: Version not found in documentation" >> $GITHUB_STEP_SUMMARY
-          fi
+          echo "Reason: Protected branch, not a branch deletion, or no versions specified" >> $GITHUB_STEP_SUMMARY

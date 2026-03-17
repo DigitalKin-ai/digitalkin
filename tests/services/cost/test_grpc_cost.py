@@ -4,6 +4,7 @@ Tests all Cost service methods with success cases, validation errors,
 edge cases, and various cost types.
 """
 
+import asyncio
 import logging
 import secrets
 from concurrent import futures
@@ -11,9 +12,9 @@ from concurrent import futures
 import grpc
 import grpc_testing
 import pytest
-from digitalkin_proto.agentic_mesh_protocol.cost.v1 import cost_service_pb2, cost_service_pb2_grpc
+from agentic_mesh_protocol.cost.v1 import cost_service_pb2, cost_service_pb2_grpc
 from mock_cost_servicer import MockCostServicer
-from tests.fixtures.grpc_fixtures import FakeContext
+from tests.fixtures.grpc_fixtures import AsyncStubWrapper, FakeContext
 
 from digitalkin.grpc_servers.utils.exceptions import ServerError
 from digitalkin.models.grpc_servers.models import ClientConfig, SecurityMode, ServerMode
@@ -143,7 +144,7 @@ def client(test_channel: grpc_testing.Channel, cost_config: dict[str, CostConfig
     client = GrpcCost(mission_id, setup_id, setup_version_id, cost_config, dummy_config)
 
     # Override the channel and stub to use our test channel
-    client.stub = cost_service_pb2_grpc.CostServiceStub(test_channel)
+    client.stub = AsyncStubWrapper(cost_service_pb2_grpc.CostServiceStub(test_channel))
     test_logger.info("Client created")
     return client
 
@@ -182,7 +183,7 @@ class TestAddCost:
         quantity = 1000.0
 
         # Start the client call in a separate thread
-        future = thread_pool.submit(client.add, name, "gpt4_input", quantity)
+        future = thread_pool.submit(asyncio.run, client.add(name, "gpt4_input", quantity))
 
         # Get the method descriptor
         service_desc = cost_service_pb2.DESCRIPTOR.services_by_name["CostService"]
@@ -214,7 +215,7 @@ class TestAddCost:
     @pytest.mark.grpc
     @pytest.mark.integration
     @pytest.mark.validation
-    def test_add_cost_invalid_config_name(
+    async def test_add_cost_invalid_config_name(
         self,
         client: GrpcCost,
         test_channel: grpc_testing.Channel,
@@ -231,7 +232,7 @@ class TestAddCost:
 
         # Try to add cost with invalid config name
         with pytest.raises(CostServiceError, match="Cost config .* not found"):
-            client.add(name, "nonexistent_config", quantity)
+            await client.add(name, "nonexistent_config", quantity)
 
     @pytest.mark.grpc
     @pytest.mark.integration
@@ -263,7 +264,7 @@ class TestAddCost:
             name = f"test_{config_name}_{secrets.token_hex(4)}"
 
             # Start client call
-            future = thread_pool.submit(client.add, name, config_name, quantity)
+            future = thread_pool.submit(asyncio.run, client.add(name, config_name, quantity))
 
             # Intercept and process
             service_desc = cost_service_pb2.DESCRIPTOR.services_by_name["CostService"]
@@ -315,7 +316,7 @@ class TestAddCost:
         for config_name, quantity, expected_cost in test_cases:
             name = f"test_{config_name}_{secrets.token_hex(4)}"
 
-            future = thread_pool.submit(client.add, name, config_name, quantity)
+            future = thread_pool.submit(asyncio.run, client.add(name, config_name, quantity))
 
             service_desc = cost_service_pb2.DESCRIPTOR.services_by_name["CostService"]
             method_desc = service_desc.methods_by_name["AddCost"]
@@ -353,7 +354,7 @@ class TestAddCost:
         """
         name = f"test_zero_{secrets.token_hex(4)}"
 
-        future = thread_pool.submit(client.add, name, "gpt4_input", 0.0)
+        future = thread_pool.submit(asyncio.run, client.add(name, "gpt4_input", 0.0))
 
         service_desc = cost_service_pb2.DESCRIPTOR.services_by_name["CostService"]
         method_desc = service_desc.methods_by_name["AddCost"]
@@ -389,7 +390,7 @@ class TestAddCost:
         """
         name = f"test_negative_{secrets.token_hex(4)}"
 
-        future = thread_pool.submit(client.add, name, "gpt4_input", -100.0)
+        future = thread_pool.submit(asyncio.run, client.add(name, "gpt4_input", -100.0))
 
         service_desc = cost_service_pb2.DESCRIPTOR.services_by_name["CostService"]
         method_desc = service_desc.methods_by_name["AddCost"]
@@ -424,7 +425,7 @@ class TestAddCost:
         """
         name = "test-cost_123.special@chars"
 
-        future = thread_pool.submit(client.add, name, "gpt4_input", 100.0)
+        future = thread_pool.submit(asyncio.run, client.add(name, "gpt4_input", 100.0))
 
         service_desc = cost_service_pb2.DESCRIPTOR.services_by_name["CostService"]
         method_desc = service_desc.methods_by_name["AddCost"]
@@ -478,7 +479,7 @@ class TestGetCost:
         quantity = 1000.0
 
         # Add cost
-        future_add = thread_pool.submit(client.add, name, "gpt4_input", quantity)
+        future_add = thread_pool.submit(asyncio.run, client.add(name, "gpt4_input", quantity))
         service_desc = cost_service_pb2.DESCRIPTOR.services_by_name["CostService"]
         method_desc = service_desc.methods_by_name["AddCost"]
         _, request, rpc = test_channel.take_unary_unary(method_desc)
@@ -489,7 +490,7 @@ class TestGetCost:
         future_add.result(timeout=5.0)
 
         # Now get the cost
-        future_get = thread_pool.submit(client.get, name)
+        future_get = thread_pool.submit(asyncio.run, client.get(name))
 
         method_desc = service_desc.methods_by_name["GetCost"]
         _, request, rpc = test_channel.take_unary_unary(method_desc)
@@ -526,7 +527,7 @@ class TestGetCost:
         """
         name = f"nonexistent_{secrets.token_hex(4)}"
 
-        future = thread_pool.submit(client.get, name)
+        future = thread_pool.submit(asyncio.run, client.get(name))
 
         service_desc = cost_service_pb2.DESCRIPTOR.services_by_name["CostService"]
         method_desc = service_desc.methods_by_name["GetCost"]
@@ -566,7 +567,7 @@ class TestGetCost:
         service_desc = cost_service_pb2.DESCRIPTOR.services_by_name["CostService"]
 
         for quantity in quantities:
-            future_add = thread_pool.submit(client.add, name, "gpt4_input", quantity)
+            future_add = thread_pool.submit(asyncio.run, client.add(name, "gpt4_input", quantity))
             method_desc = service_desc.methods_by_name["AddCost"]
             _, request, rpc = test_channel.take_unary_unary(method_desc)
             context = FakeContext()
@@ -576,7 +577,7 @@ class TestGetCost:
             future_add.result(timeout=5.0)
 
         # Get all costs with this name
-        future_get = thread_pool.submit(client.get, name)
+        future_get = thread_pool.submit(asyncio.run, client.get(name))
 
         method_desc = service_desc.methods_by_name["GetCost"]
         _, request, rpc = test_channel.take_unary_unary(method_desc)
@@ -632,7 +633,7 @@ class TestGetFilteredCost:
         service_desc = cost_service_pb2.DESCRIPTOR.services_by_name["CostService"]
 
         for name in names:
-            future_add = thread_pool.submit(client.add, name, "gpt4_input", 100.0)
+            future_add = thread_pool.submit(asyncio.run, client.add(name, "gpt4_input", 100.0))
             method_desc = service_desc.methods_by_name["AddCost"]
             _, request, rpc = test_channel.take_unary_unary(method_desc)
             context = FakeContext()
@@ -643,7 +644,7 @@ class TestGetFilteredCost:
 
         # Filter by subset of names
         filter_names = names[:3]
-        future_get = thread_pool.submit(client.get_filtered, names=filter_names)
+        future_get = thread_pool.submit(asyncio.run, client.get_filtered(names=filter_names))
 
         method_desc = service_desc.methods_by_name["GetCosts"]
         _, request, rpc = test_channel.take_unary_unary(method_desc)
@@ -687,7 +688,7 @@ class TestGetFilteredCost:
 
         for config_name, _ in configs:
             name = f"test_{config_name}_{secrets.token_hex(4)}"
-            future_add = thread_pool.submit(client.add, name, config_name, 100.0)
+            future_add = thread_pool.submit(asyncio.run, client.add(name, config_name, 100.0))
             method_desc = service_desc.methods_by_name["AddCost"]
             _, request, rpc = test_channel.take_unary_unary(method_desc)
             context = FakeContext()
@@ -697,7 +698,7 @@ class TestGetFilteredCost:
             future_add.result(timeout=5.0)
 
         # Filter by token types only
-        future_get = thread_pool.submit(client.get_filtered, cost_types=["TOKEN_INPUT", "TOKEN_OUTPUT"])
+        future_get = thread_pool.submit(asyncio.run, client.get_filtered(cost_types=["TOKEN_INPUT", "TOKEN_OUTPUT"]))
 
         method_desc = service_desc.methods_by_name["GetCosts"]
         _, request, rpc = test_channel.take_unary_unary(method_desc)
@@ -740,7 +741,7 @@ class TestGetFilteredCost:
         service_desc = cost_service_pb2.DESCRIPTOR.services_by_name["CostService"]
 
         for name, config, _ in test_data:
-            future_add = thread_pool.submit(client.add, name, config, 100.0)
+            future_add = thread_pool.submit(asyncio.run, client.add(name, config, 100.0))
             method_desc = service_desc.methods_by_name["AddCost"]
             _, request, rpc = test_channel.take_unary_unary(method_desc)
             context = FakeContext()
@@ -750,7 +751,7 @@ class TestGetFilteredCost:
             future_add.result(timeout=5.0)
 
         # Filter by names and token input type
-        future_get = thread_pool.submit(client.get_filtered, names=["cost_a", "cost_d"], cost_types=["TOKEN_INPUT"])
+        future_get = thread_pool.submit(asyncio.run, client.get_filtered(names=["cost_a", "cost_d"], cost_types=["TOKEN_INPUT"]))
 
         method_desc = service_desc.methods_by_name["GetCosts"]
         _, request, rpc = test_channel.take_unary_unary(method_desc)
@@ -785,7 +786,7 @@ class TestGetFilteredCost:
             mock_servicer: Mock cost servicer
         """
         # Filter with non-existent names
-        future = thread_pool.submit(client.get_filtered, names=["nonexistent"])
+        future = thread_pool.submit(asyncio.run, client.get_filtered(names=["nonexistent"]))
 
         service_desc = cost_service_pb2.DESCRIPTOR.services_by_name["CostService"]
         method_desc = service_desc.methods_by_name["GetCosts"]
@@ -823,7 +824,7 @@ class TestGetFilteredCost:
 
         for i in range(3):
             name = f"cost_{i}"
-            future_add = thread_pool.submit(client.add, name, "gpt4_input", 100.0)
+            future_add = thread_pool.submit(asyncio.run, client.add(name, "gpt4_input", 100.0))
             method_desc = service_desc.methods_by_name["AddCost"]
             _, request, rpc = test_channel.take_unary_unary(method_desc)
             context = FakeContext()
@@ -833,7 +834,7 @@ class TestGetFilteredCost:
             future_add.result(timeout=5.0)
 
         # Get all costs (no filter)
-        future_get = thread_pool.submit(client.get_filtered)
+        future_get = thread_pool.submit(asyncio.run, client.get_filtered())
 
         method_desc = service_desc.methods_by_name["GetCosts"]
         _, request, rpc = test_channel.take_unary_unary(method_desc)
@@ -881,7 +882,7 @@ class TestCostEdgeCases:
         name = "large_quantity_test"
         quantity = 1_000_000_000.0  # 1 billion
 
-        future = thread_pool.submit(client.add, name, "gpt4_input", quantity)
+        future = thread_pool.submit(asyncio.run, client.add(name, "gpt4_input", quantity))
 
         service_desc = cost_service_pb2.DESCRIPTOR.services_by_name["CostService"]
         method_desc = service_desc.methods_by_name["AddCost"]
@@ -921,7 +922,7 @@ class TestCostEdgeCases:
         name = "fractional_test"
         quantity = 123.456
 
-        future = thread_pool.submit(client.add, name, "gpt4_input", quantity)
+        future = thread_pool.submit(asyncio.run, client.add(name, "gpt4_input", quantity))
 
         service_desc = cost_service_pb2.DESCRIPTOR.services_by_name["CostService"]
         method_desc = service_desc.methods_by_name["AddCost"]
@@ -959,7 +960,7 @@ class TestCostEdgeCases:
         """
         # Add costs for the test client's mission
         name1 = "mission1_cost"
-        future = thread_pool.submit(client.add, name1, "gpt4_input", 100.0)
+        future = thread_pool.submit(asyncio.run, client.add(name1, "gpt4_input", 100.0))
 
         service_desc = cost_service_pb2.DESCRIPTOR.services_by_name["CostService"]
         method_desc = service_desc.methods_by_name["AddCost"]
@@ -986,7 +987,7 @@ class TestCostEdgeCases:
         mock_servicer._validate_and_store_cost(different_mission_cost)
 
         # Get costs for original mission
-        future_get = thread_pool.submit(client.get_filtered)
+        future_get = thread_pool.submit(asyncio.run, client.get_filtered())
 
         method_desc = service_desc.methods_by_name["GetCosts"]
         _, request, rpc = test_channel.take_unary_unary(method_desc)

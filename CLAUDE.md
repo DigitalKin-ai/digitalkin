@@ -119,10 +119,10 @@ task start-taskiq
 - Jobs stream output via asyncio.Queue and callbacks
 
 **Task Management** (`src/digitalkin/core/task_manager/`)
-- `TaskManager`: Lower-level task lifecycle management with concurrent task limits
-- `TaskSession`: Represents running task state with heartbeats to SurrealDB
-- Each task runs 3 concurrent sub-tasks: main coroutine, heartbeat generator, signal listener
-- `SurrealDBConnection`: Repository pattern for SurrealDB operations (CRUD, live queries)
+- `TaskManager`: Lower-level task lifecycle management with concurrent task limits (semaphore-based waiting pool)
+- `TaskSession`: Represents running task state with signal listening via TaskManagerStrategy
+- Each task runs 2 concurrent sub-tasks: main coroutine and signal listener
+- `TaskExecutor`: Supervisor pattern for task lifecycle (main + signal listener)
 
 **Service Strategies** (`src/digitalkin/services/`)
 - Strategy pattern with dependency injection
@@ -160,16 +160,63 @@ gRPC Client
                 → Queue → Stream → gRPC Response
 ```
 
-### Monitoring Flow
+### Signal Flow
 
 ```
 TaskSession
-  → Heartbeat (every 2s) → SurrealDB
-  → Signal Listener → SurrealDB Live Query
+  → Signal Listener → TaskManagerStrategy (gRPC polling or local)
   → Status Updates → TaskManager
 ```
 
 ## Important Conventions
+
+### Code Philosophy (MANDATORY)
+Every code change must be evaluated against these principles:
+
+1. **Minimal Memory Footprint**: Write code as if every byte matters. No unnecessary variables, no redundant storage, no bloated data structures.
+2. **Minimal CPU Cycles**: Avoid unnecessary computation. No extra method calls, no redundant operations, no over-abstraction.
+3. **No Standalone Functions**: All functions must be methods inside classes. No module-level functions.
+4. **No Global Variables**: No module-level constants or variables. Hardcode defaults inline only when used once alongside an env var (e.g., `os.environ.get("VAR", "default")`).
+5. **No Over-Engineering**: No extra abstractions, no helper methods unless truly reused, no wrapper functions for single operations.
+6. **Direct Code**: Prefer inline code over method extraction when the code is used once. Keep the call stack shallow.
+
+Before writing any code, ask: "Is this the most minimal way to achieve this? Can I remove anything?"
+
+### Prohibited Patterns
+The following patterns are **strictly prohibited** in this codebase:
+
+1. **No `hasattr()`, `getattr()`, `setattr()`**: These indicate poor type design. Use explicit type checks (`is None`, `is not None`) or proper type annotations instead. If an attribute might not exist, the class design is wrong.
+
+### Docstring Standard (Google Style)
+All docstrings must follow Google style with these sections (when applicable):
+
+```python
+def method(self, param1: str, param2: int) -> bool:
+    """Brief one-line description.
+
+    Longer description if needed (optional).
+
+    Args:
+        param1: Description of param1.
+        param2: Description of param2.
+
+    Returns:
+        Description of return value.
+
+    Raises:
+        ValueError: When validation fails.
+
+    Yields:
+        Description of yielded values (for generators).
+    """
+```
+
+Keep docstrings lean and professional. No flowery language, no numbered steps, no obvious explanations.
+
+### Code Organization
+- **Encapsulation**: Keep related functionality together within classes
+- **Private methods**: Only create private methods (`_method_name`) if the code is reused within the class
+- **No ClassVar for single-use**: Don't create class attributes for values used only once
 
 ### IDs
 IDs flow through the entire system: `job_id`, `mission_id`, `setup_id`, `setup_version_id`. Always propagate these correctly.
@@ -184,10 +231,19 @@ Most operations are async/await. Use `async def` for handlers and module methods
 Comprehensive type hints are used throughout. Always add type annotations to new code.
 
 ### Structured Logging
-All logs include context via `extra` parameter:
+The `extra` parameter is **only for global context IDs** that help correlate logs across the system (e.g., `job_id`, `mission_id`, `setup_id`, `setup_version_id`, `task_id`). These IDs are typically available via `self.session_ids` or `context.session.current_ids()`.
+
+**Local-scope variables go in the log message, not in `extra`:**
 ```python
-logger.info("Task started", extra={"job_id": job_id, "mission_id": mission_id})
+# GOOD: Global IDs in extra, local vars in message
+logger.info("Task started (attempt %d/%d)", attempt, max_retries, extra=self.session_ids)
+logger.error("Connection failed: %s", error_msg, extra=self.session_ids)
+
+# BAD: Local vars in extra
+logger.info("Task started", extra={"attempt": attempt, "error": error_msg})
 ```
+
+If no global context is available, omit `extra` entirely and put everything in the message.
 
 ### Error Handling
 Exceptions are properly caught and converted to gRPC status codes. Use appropriate error types from `grpc.StatusCode`.
@@ -197,6 +253,14 @@ All managers implement proper cleanup. Always close DB connections, stop tasks, 
 
 ### Schema Introspection
 Modules expose JSON schemas for all formats. Use `get_clean_model()` on SetupModel to filter fields for initial configuration.
+
+### Enums
+- Enums stay as enums - no mapping dictionaries
+- Initialize by name via bracket notation: `MyEnum[name]`
+- Initialize by value: `MyEnum(value)`
+- Compare via enum: `if status == MyEnum.VALUE`
+- For raw string value: use `.value` property
+- For raw name: use `.name` property
 
 ## Testing Patterns
 
@@ -211,7 +275,6 @@ Use `pytest.mark.asyncio` for async tests. The `asyncio_mode = "auto"` setting i
 
 ## Integration Points
 
-- **SurrealDB**: Task coordination, monitoring, heartbeats
 - **RabbitMQ** (via Taskiq): Distributed job execution, message streaming
 - **gRPC**: All inter-service communication
 - **Protobuf**: Message definitions from `digitalkin-proto` package

@@ -1,5 +1,7 @@
 """Exceptions for the DigitalKin gRPC package."""
 
+import grpc
+
 
 class DigitalKinError(Exception):
     """Base exception for all DigitalKin errors."""

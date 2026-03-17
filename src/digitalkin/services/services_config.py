@@ -5,13 +5,16 @@ from typing import Any, ClassVar
 from pydantic import BaseModel, Field, PrivateAttr
 
 from digitalkin.services.agent import AgentStrategy, DefaultAgent
+from digitalkin.services.communication import CommunicationStrategy, DefaultCommunication, GrpcCommunication
 from digitalkin.services.cost import CostStrategy, DefaultCost, GrpcCost
 from digitalkin.services.filesystem import DefaultFilesystem, FilesystemStrategy, GrpcFilesystem
 from digitalkin.services.identity import DefaultIdentity, IdentityStrategy
-from digitalkin.services.registry import DefaultRegistry, RegistryStrategy
+from digitalkin.services.registry import DefaultRegistry, GrpcRegistry, RegistryStrategy
 from digitalkin.services.services_models import ServicesMode, ServicesStrategy
 from digitalkin.services.snapshot import DefaultSnapshot, SnapshotStrategy
 from digitalkin.services.storage import DefaultStorage, GrpcStorage, StorageStrategy
+from digitalkin.services.task_manager import DefaultTaskManager, TaskManagerStrategy
+from digitalkin.services.task_manager.grpc_task_manager import GrpcTaskManager
 from digitalkin.services.user_profile import DefaultUserProfile, GrpcUserProfile, UserProfileStrategy
 
 
@@ -25,39 +28,9 @@ class ServicesConfig(BaseModel):
     # Mode setting for all strategies
     mode: ServicesMode = Field(default=ServicesMode.LOCAL, description="The mode of the services (local or remote)")
 
-    # Strategy definitions with proper type annotations
-    _storage: ServicesStrategy[StorageStrategy] = PrivateAttr(
-        default_factory=lambda: ServicesStrategy(local=DefaultStorage, remote=GrpcStorage)
-    )
-    _config_storage: dict[str, Any | None] = PrivateAttr(default_factory=dict)
-    _cost: ServicesStrategy[CostStrategy] = PrivateAttr(
-        default_factory=lambda: ServicesStrategy(local=DefaultCost, remote=GrpcCost)
-    )
-    _config_cost: dict[str, Any | None] = PrivateAttr(default_factory=dict)
-    _snapshot: ServicesStrategy[SnapshotStrategy] = PrivateAttr(
-        default_factory=lambda: ServicesStrategy(local=DefaultSnapshot, remote=DefaultSnapshot)
-    )
-    _config_snapshot: dict[str, Any | None] = PrivateAttr(default_factory=dict)
-    _registry: ServicesStrategy[RegistryStrategy] = PrivateAttr(
-        default_factory=lambda: ServicesStrategy(local=DefaultRegistry, remote=DefaultRegistry)
-    )
-    _config__registry: dict[str, Any | None] = PrivateAttr(default_factory=dict)
-    _filesystem: ServicesStrategy[FilesystemStrategy] = PrivateAttr(
-        default_factory=lambda: ServicesStrategy(local=DefaultFilesystem, remote=GrpcFilesystem)
-    )
-    _config_filesystem: dict[str, Any | None] = PrivateAttr(default_factory=dict)
-    _agent: ServicesStrategy[AgentStrategy] = PrivateAttr(
-        default_factory=lambda: ServicesStrategy(local=DefaultAgent, remote=DefaultAgent)
-    )
-    _config_agent: dict[str, Any | None] = PrivateAttr(default_factory=dict)
-    _identity: ServicesStrategy[IdentityStrategy] = PrivateAttr(
-        default_factory=lambda: ServicesStrategy(local=DefaultIdentity, remote=DefaultIdentity)
-    )
-    _config_identity: dict[str, Any | None] = PrivateAttr(default_factory=dict)
-    _user_profile: ServicesStrategy[UserProfileStrategy] = PrivateAttr(
-        default_factory=lambda: ServicesStrategy(local=DefaultUserProfile, remote=GrpcUserProfile)
-    )
-    _config_user_profile: dict[str, Any | None] = PrivateAttr(default_factory=dict)
+    # Strategies and configs stored in dicts for typed lookup (avoids getattr/setattr)
+    _strategies: dict[str, ServicesStrategy] = PrivateAttr(default_factory=dict)
+    _configs: dict[str, dict[str, Any | None]] = PrivateAttr(default_factory=dict)
 
     # List of valid strategy names for validation
     _valid_strategy_names: ClassVar[set[str]] = {
@@ -68,7 +41,9 @@ class ServicesConfig(BaseModel):
         "filesystem",
         "agent",
         "identity",
+        "communication",
         "user_profile",
+        "task_manager",
     }
 
     def __init__(
@@ -88,14 +63,26 @@ class ServicesConfig(BaseModel):
         """
         super().__init__(**kwargs)
         self.mode = mode
-        # Apply any strategy overrides
-        if services_config_strategies:
-            for name, strategy in services_config_strategies.items():
-                if strategy is not None and name in self._valid_strategy_names:
-                    setattr(self, f"_{name}", strategy)
 
-        for name in self.valid_strategy_names():
-            setattr(self, f"_config_{name}", services_config_params.get(name, {}))
+        # Default strategy definitions
+        defaults: dict[str, ServicesStrategy] = {
+            "storage": ServicesStrategy(local=DefaultStorage, remote=GrpcStorage),
+            "cost": ServicesStrategy(local=DefaultCost, remote=GrpcCost),
+            "snapshot": ServicesStrategy(local=DefaultSnapshot, remote=DefaultSnapshot),
+            "registry": ServicesStrategy(local=DefaultRegistry, remote=GrpcRegistry),
+            "filesystem": ServicesStrategy(local=DefaultFilesystem, remote=GrpcFilesystem),
+            "agent": ServicesStrategy(local=DefaultAgent, remote=DefaultAgent),
+            "identity": ServicesStrategy(local=DefaultIdentity, remote=DefaultIdentity),
+            "communication": ServicesStrategy(local=DefaultCommunication, remote=GrpcCommunication),
+            "user_profile": ServicesStrategy(local=DefaultUserProfile, remote=GrpcUserProfile),
+            "task_manager": ServicesStrategy(local=DefaultTaskManager, remote=GrpcTaskManager),
+        }
+
+        # Apply strategy overrides
+        for name in self._valid_strategy_names:
+            override = services_config_strategies.get(name)
+            self._strategies[name] = override if override is not None else defaults[name]
+            self._configs[name] = services_config_params.get(name) or {}
 
     @classmethod
     def valid_strategy_names(cls) -> set[str]:
@@ -113,11 +100,11 @@ class ServicesConfig(BaseModel):
             name: The name of the strategy to retrieve the configuration for
 
         Returns:
-            The configuration for the specified strategy, or None if not found
+            The configuration for the specified strategy, or empty dict if not found
         """
-        return getattr(self, f"_config_{name}", {})
+        return self._configs.get(name, {})
 
-    def init_strategy(self, name: str, mission_id: str, setup_id: str, setup_version_id: str) -> ServicesStrategy:
+    def init_strategy(self, name: str, mission_id: str, setup_id: str, setup_version_id: str) -> Any:
         """Initialize a specific strategy.
 
         Args:
@@ -132,53 +119,64 @@ class ServicesConfig(BaseModel):
         Raises:
             ValueError: If the strategy is not found
         """
-        strategy_type = getattr(self, name, None)
-        if strategy_type is None:
+        strategy = self._strategies.get(name)
+        if strategy is None:
             msg = f"Strategy {name} not found in ServicesConfig."
             raise ValueError(msg)
 
-        # Instantiate the strategy with the mission ID, setup version ID, and configuration
-        return strategy_type(mission_id, setup_id, setup_version_id, **self.get_strategy_config(name) or {})
+        # Resolve the concrete strategy class via mode, then instantiate
+        strategy_class = strategy[self.mode.value]
+        return strategy_class(mission_id, setup_id, setup_version_id, **self.get_strategy_config(name) or {})
 
     @property
     def storage(self) -> type[StorageStrategy]:
         """Get the storage service strategy class based on the current mode."""
-        return self._storage[self.mode.value]
+        return self._strategies["storage"][self.mode.value]
 
     @property
     def cost(self) -> type[CostStrategy]:
         """Get the cost service strategy class based on the current mode."""
-        return self._cost[self.mode.value]
+        return self._strategies["cost"][self.mode.value]
 
     @property
     def snapshot(self) -> type[SnapshotStrategy]:
         """Get the snapshot service strategy class based on the current mode."""
-        return self._snapshot[self.mode.value]
+        return self._strategies["snapshot"][self.mode.value]
 
     @property
     def registry(self) -> type[RegistryStrategy]:
         """Get the registry service strategy class based on the current mode."""
-        return self._registry[self.mode.value]
+        return self._strategies["registry"][self.mode.value]
 
     @property
     def filesystem(self) -> type[FilesystemStrategy]:
         """Get the filesystem service strategy class based on the current mode."""
-        return self._filesystem[self.mode.value]
+        return self._strategies["filesystem"][self.mode.value]
 
     @property
     def agent(self) -> type[AgentStrategy]:
         """Get the agent service strategy class based on the current mode."""
-        return self._agent[self.mode.value]
+        return self._strategies["agent"][self.mode.value]
 
     @property
     def identity(self) -> type[IdentityStrategy]:
         """Get the identity service strategy class based on the current mode."""
-        return self._identity[self.mode.value]
+        return self._strategies["identity"][self.mode.value]
+
+    @property
+    def communication(self) -> type[CommunicationStrategy]:
+        """Get the communication service strategy class based on the current mode."""
+        return self._strategies["communication"][self.mode.value]
 
     @property
     def user_profile(self) -> type[UserProfileStrategy]:
         """Get the user_profile service strategy class based on the current mode."""
-        return self._user_profile[self.mode.value]
+        return self._strategies["user_profile"][self.mode.value]
+
+    @property
+    def task_manager(self) -> type[TaskManagerStrategy]:
+        """Get the task_manager service strategy class based on the current mode."""
+        return self._strategies["task_manager"][self.mode.value]
 
     def update_mode(self, mode: ServicesMode) -> None:
         """Update the strategy mode.

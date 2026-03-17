@@ -1,11 +1,11 @@
 """Digital Kin Setup Service gRPC Client."""
 
-from collections.abc import Generator
-from contextlib import contextmanager
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from typing import Any
 
 import grpc
-from digitalkin_proto.agentic_mesh_protocol.setup.v1 import (
+from agentic_mesh_protocol.setup.v1 import (
     setup_pb2,
     setup_service_pb2_grpc,
 )
@@ -18,10 +18,17 @@ from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
 from digitalkin.logger import logger
 from digitalkin.models.grpc_servers.models import ClientConfig
 from digitalkin.services.setup.setup_strategy import SetupData, SetupServiceError, SetupStrategy, SetupVersionData
+from digitalkin.utils.proto_utils import proto_to_dict
 
 
 class GrpcSetup(SetupStrategy, GrpcClientWrapper):
-    """This class implements the gRPC setup service."""
+    """gRPC client implementation for the Setup service.
+
+    Communicates with the remote SetupService gRPC server to manage
+    setup configurations and versions.
+    """
+
+    service_name: str = "SetupService"
 
     def __post_init__(self, config: ClientConfig) -> None:
         """Init the channel from a config file.
@@ -32,37 +39,71 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
         self.stub = setup_service_pb2_grpc.SetupServiceStub(channel)
         logger.debug("Channel client 'setup' initialized successfully")
 
-    @contextmanager
-    def handle_grpc_errors(self, operation: str) -> Generator[Any, Any, Any]:  # noqa: PLR6301
-        """Context manager for consistent gRPC error handling.
+    @asynccontextmanager
+    async def handle_grpc_errors(  # noqa: PLR6301
+        self, operation: str
+    ) -> AsyncGenerator[Any, Any]:  # Mixin: self available for subclass overrides
+        """Context manager for consistent gRPC error handling with detailed logging.
+
+        Args:
+            operation: Description of the operation being performed (e.g., "Get Setup", "Create Setup Version").
 
         Yields:
             Allow error handling in context.
 
-        Args:
-            operation: Description of the operation being performed.
-
         Raises:
-            ValueError: Error wiht the model validation.
-            ServerError: from gRPC Client.
-            SetupServiceError: setup service internal.
+            ValueError: Pydantic model validation failed - input data is malformed.
+            ServerError: gRPC communication failed - remote service returned error or is unreachable.
+            SetupServiceError: Unexpected error during setup operation - includes connection/timeout issues.
         """
         try:
             yield
         except ValidationError as e:
-            msg = f"Invalid data for {operation}"
-            logger.exception(msg)
+            msg = f"Validation failed for {operation}: {e}"
+            logger.error(
+                "ValidationError in %s: %s",
+                operation,
+                e,
+                extra={"operation": operation, "error_type": "ValidationError", "service_name": "SetupService"},
+            )
             raise ValueError(msg) from e
         except grpc.RpcError as e:
-            msg = f"gRPC {operation} failed: {e}"
-            logger.exception(msg)
+            status_code = e.code().name if e.code() else "UNKNOWN"
+            details = e.details() or str(e)
+            msg = f"gRPC {operation} [{status_code}]: {details}"
+            logger.error(
+                "gRPC %s [%s]: %s",
+                operation,
+                status_code,
+                details,
+                extra={"operation": operation, "error_type": "grpc.RpcError", "grpc_code": status_code},
+            )
             raise ServerError(msg) from e
+        except (TimeoutError, ConnectionError, OSError) as e:
+            error_type = type(e).__name__
+            msg = f"{error_type} in {operation}: {e}"
+            logger.error(
+                "%s in %s: %s",
+                error_type,
+                operation,
+                e,
+                extra={"operation": operation, "error_type": error_type, "service_name": "SetupService"},
+            )
+            raise SetupServiceError(msg) from e
         except Exception as e:
-            msg = f"Unexpected error in {operation}"
-            logger.exception(msg)
+            error_type = type(e).__name__
+            msg = f"Unexpected {error_type} in {operation}: {e}"
+            logger.error(
+                "Unexpected %s in %s: %s",
+                error_type,
+                operation,
+                e,
+                extra={"operation": operation, "error_type": error_type, "service_name": "SetupService"},
+                exc_info=True,
+            )
             raise SetupServiceError(msg) from e
 
-    def create_setup(self, setup_dict: dict[str, Any]) -> str:
+    async def create_setup(self, setup_dict: dict[str, Any]) -> str:
         """Create a new setup with comprehensive validation.
 
         Args:
@@ -76,7 +117,7 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
             ServerError: If gRPC operation fails.
             SetupServiceError: For any unexpected internal error.
         """
-        with self.handle_grpc_errors("Setup Creation"):
+        async with self.handle_grpc_errors("Setup Creation"):
             valid_data = SetupData.model_validate(setup_dict)
 
             request = setup_pb2.CreateSetupRequest(
@@ -86,11 +127,11 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
                 module_id=valid_data.module_id,
                 current_setup_version=setup_pb2.SetupVersion(**valid_data.current_setup_version.model_dump()),
             )
-            response = self.exec_grpc_query("CreateSetup", request)
+            response = await self.exec_grpc_query("CreateSetup", request)
             logger.debug("Setup '%s' query sent successfully", valid_data.name)
             return response
 
-    def get_setup(self, setup_dict: dict[str, Any]) -> SetupData:
+    async def get_setup(self, setup_dict: dict[str, Any]) -> SetupData:
         """Retrieve a setup by its unique identifier.
 
         Args:
@@ -104,19 +145,20 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
             ServerError: If gRPC operation fails.
             SetupServiceError: For any unexpected internal error.
         """
-        with self.handle_grpc_errors("Get Setup"):
+        async with self.handle_grpc_errors("Get Setup"):
             if "setup_id" not in setup_dict:
                 msg = "Setup name is required"
                 raise ValidationError(msg)
+
             request = setup_pb2.GetSetupRequest(
                 setup_id=setup_dict["setup_id"],
                 version=setup_dict.get("version", ""),
             )
-            response = self.exec_grpc_query("GetSetup", request)
-            response_data = json_format.MessageToDict(response, preserving_proto_field_name=True)
+            response = await self.exec_grpc_query("GetSetup", request)
+            response_data = proto_to_dict(response)
             return SetupData(**response_data["setup"])
 
-    def update_setup(self, setup_dict: dict[str, Any]) -> bool:
+    async def update_setup(self, setup_dict: dict[str, Any]) -> bool:
         """Update an existing setup.
 
         Args:
@@ -132,7 +174,7 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
         """
         current_setup_version = None
 
-        with self.handle_grpc_errors("Setup Update"):
+        async with self.handle_grpc_errors("Setup Update"):
             valid_data = SetupData.model_validate(setup_dict)
 
             if valid_data.current_setup_version is not None:
@@ -144,11 +186,11 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
                 owner_id=valid_data.owner_id or "",
                 current_setup_version=current_setup_version,
             )
-            response = self.exec_grpc_query("UpdateSetup", request)
+            response = await self.exec_grpc_query("UpdateSetup", request)
             logger.debug("Setup '%s' query sent successfully", valid_data.name)
-            return getattr(response, "success", False)
+            return response.success
 
-    def delete_setup(self, setup_dict: dict[str, Any]) -> bool:
+    async def delete_setup(self, setup_dict: dict[str, Any]) -> bool:
         """Delete a setup by its unique identifier.
 
         Args:
@@ -162,17 +204,17 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
             ServerError: If gRPC operation fails.
             SetupServiceError: For any unexpected internal error.
         """
-        with self.handle_grpc_errors("Setup Deletion"):
+        async with self.handle_grpc_errors("Setup Deletion"):
             setup_id = setup_dict.get("setup_id")
             if not setup_id:
                 msg = "Setup name is required for deletion"
                 raise ValidationError(msg)
             request = setup_pb2.DeleteSetupRequest(setup_id=setup_id)
-            response = self.exec_grpc_query("DeleteSetup", request)
+            response = await self.exec_grpc_query("DeleteSetup", request)
             logger.debug("Setup '%s' query sent successfully", setup_id)
-            return getattr(response, "success", False)
+            return response.success
 
-    def create_setup_version(self, setup_version_dict: dict[str, Any]) -> str:
+    async def create_setup_version(self, setup_version_dict: dict[str, Any]) -> str:
         """Create a new setup version.
 
         Args:
@@ -186,7 +228,7 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
             ServerError: If gRPC operation fails.
             SetupServiceError: For any unexpected internal error.
         """
-        with self.handle_grpc_errors("Setup Version Creation"):
+        async with self.handle_grpc_errors("Setup Version Creation"):
             valid_data = SetupVersionData.model_validate(setup_version_dict)
             content_struct = Struct()
             content_struct.update(valid_data.content)
@@ -200,9 +242,9 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
                 valid_data.version,
                 valid_data.setup_id,
             )
-            return self.exec_grpc_query("CreateSetupVersion", request)
+            return await self.exec_grpc_query("CreateSetupVersion", request)
 
-    def get_setup_version(self, setup_version_dict: dict[str, Any]) -> SetupVersionData:
+    async def get_setup_version(self, setup_version_dict: dict[str, Any]) -> SetupVersionData:
         """Retrieve a setup version by its unique identifier.
 
         Args:
@@ -216,18 +258,16 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
             ServerError: If gRPC operation fails.
             SetupServiceError: For any unexpected internal error.
         """
-        with self.handle_grpc_errors("Get Setup Version"):
+        async with self.handle_grpc_errors("Get Setup Version"):
             setup_version_id = setup_version_dict.get("setup_version_id")
             if not setup_version_id:
                 msg = "Setup version id is required"
                 raise ValidationError(msg)
             request = setup_pb2.GetSetupVersionRequest(setup_version_id=setup_version_id)
-            response = self.exec_grpc_query("GetSetupVersion", request)
-            return SetupVersionData(
-                **json_format.MessageToDict(response.setup_version, preserving_proto_field_name=True)
-            )
+            response = await self.exec_grpc_query("GetSetupVersion", request)
+            return SetupVersionData(**proto_to_dict(response.setup_version))
 
-    def search_setup_versions(self, setup_version_dict: dict[str, Any]) -> list[SetupVersionData]:
+    async def search_setup_versions(self, setup_version_dict: dict[str, Any]) -> list[SetupVersionData]:
         """Search for setup versions based on filters.
 
         Args:
@@ -241,7 +281,7 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
             SetupServiceError: For any unexpected internal error.
             ValidationError: If both name and version are not provided.
         """
-        with self.handle_grpc_errors("Search Setup Versions"):
+        async with self.handle_grpc_errors("Search Setup Versions"):
             if "name" not in setup_version_dict and "version" not in setup_version_dict:
                 msg = "Either name or version must be provided"
                 raise ValidationError(msg)
@@ -249,13 +289,10 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
                 setup_id=setup_version_dict.get("setup_id", ""),
                 version=setup_version_dict.get("version", ""),
             )
-            response = self.exec_grpc_query("SearchSetupVersions", request)
-            return [
-                SetupVersionData(**json_format.MessageToDict(sv, preserving_proto_field_name=True))
-                for sv in response.setup_versions
-            ]
+            response = await self.exec_grpc_query("SearchSetupVersions", request)
+            return [SetupVersionData(**proto_to_dict(sv)) for sv in response.setup_versions]
 
-    def update_setup_version(self, setup_version_dict: dict[str, Any]) -> bool:
+    async def update_setup_version(self, setup_version_dict: dict[str, Any]) -> bool:
         """Update an existing setup version.
 
         Args:
@@ -269,7 +306,7 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
             ServerError: If gRPC operation fails.
             SetupServiceError: For any unexpected internal error.
         """
-        with self.handle_grpc_errors("Setup Version Update"):
+        async with self.handle_grpc_errors("Setup Version Update"):
             valid_data = SetupVersionData.model_validate(setup_version_dict)
             content_struct = Struct()
             content_struct.update(valid_data.content)
@@ -278,15 +315,15 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
                 version=valid_data.version,
                 content=content_struct,
             )
-            response = self.exec_grpc_query("UpdateSetupVersion", request)
+            response = await self.exec_grpc_query("UpdateSetupVersion", request)
             logger.debug(
                 "Setup Version '%s' for setup '%s' query sent successfully",
                 valid_data.id,
                 valid_data.setup_id,
             )
-            return getattr(response, "success", False)
+            return response.success
 
-    def delete_setup_version(self, setup_version_dict: dict[str, Any]) -> bool:
+    async def delete_setup_version(self, setup_version_dict: dict[str, Any]) -> bool:
         """Delete a setup version by its unique identifier.
 
         Args:
@@ -300,17 +337,17 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
             ServerError: If gRPC operation fails.
             SetupServiceError: For any unexpected internal error.
         """
-        with self.handle_grpc_errors("Setup Version Deletion"):
+        async with self.handle_grpc_errors("Setup Version Deletion"):
             setup_version_id = setup_version_dict.get("setup_version_id")
             if not setup_version_id:
                 msg = "Setup version id is required for deletion"
                 raise ValidationError(msg)
             request = setup_pb2.DeleteSetupVersionRequest(setup_version_id=setup_version_id)
-            response = self.exec_grpc_query("DeleteSetupVersion", request)
+            response = await self.exec_grpc_query("DeleteSetupVersion", request)
             logger.debug("Setup Version '%s' query sent successfully", setup_version_id)
-            return getattr(response, "success", False)
+            return response.success
 
-    def list_setups(self, list_dict: dict[str, Any]) -> dict[str, Any]:
+    async def list_setups(self, list_dict: dict[str, Any]) -> dict[str, Any]:
         """List setups with optional filtering and pagination.
 
         Args:
@@ -327,17 +364,15 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
             ServerError: If gRPC operation fails.
             SetupServiceError: For any unexpected internal error.
         """
-        with self.handle_grpc_errors("List Setups"):
+        async with self.handle_grpc_errors("List Setups"):
             request = setup_pb2.ListSetupsRequest(
                 organisation_id=list_dict.get("organisation_id", ""),
                 owner_id=list_dict.get("owner_id", ""),
                 limit=list_dict.get("limit", 0),
                 offset=list_dict.get("offset", 0),
             )
-            response = self.exec_grpc_query("ListSetups", request)
+            response = await self.exec_grpc_query("ListSetups", request)
             return {
-                "setups": [
-                    json_format.MessageToDict(setup, preserving_proto_field_name=True) for setup in response.setups
-                ],
+                "setups": [proto_to_dict(setup) for setup in response.setups],
                 "total_count": response.total_count,
             }

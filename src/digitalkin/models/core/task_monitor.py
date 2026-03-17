@@ -1,4 +1,4 @@
-"""Task monitoring models for signaling and heartbeat messages."""
+"""Task monitoring models for signaling messages."""
 
 from datetime import datetime, timezone
 from enum import Enum
@@ -7,47 +7,31 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 
-class TaskStatus(Enum):
-    """Task status enumeration."""
+class CancellationReason(str, Enum):
+    """Reason for task termination."""
 
-    PENDING = "pending"
-    RUNNING = "running"
-    CANCELLED = "cancelled"
     COMPLETED = "completed"
-    FAILED = "failed"
+    SUCCESS_CLEANUP = "success_cleanup"  # Post-completion, terminating helper tasks
+    FAILURE_CLEANUP = "failure_cleanup"  # Post-failure, releasing resources
+    SIGNAL_SERVICE_CANCEL = "signal_service_cancel"  # Cancel via TaskManagerStrategy signal service
+    SIGNAL_SERVICE_STOP = "signal_service_stop"  # Graceful stop via TaskManagerStrategy signal service
+    GRPC_SETUP_UNAVAILABLE = "grpc_setup_unavailable"  # Setup service unreachable at startup
+    GRPC_SERVICE_ERROR = "grpc_service_error"  # Service dependency failed during execution
+    TIMEOUT = "timeout"  # Task exceeded time limit
+    SHUTDOWN = "shutdown"  # TaskManager shutdown (SIGTERM/SIGINT)
+    UNKNOWN = "unknown"  # Reason not set - investigate code path
 
 
-class CancellationReason(Enum):
-    """Reason for task cancellation - helps distinguish cleanup vs real cancellation."""
-
-    # Cleanup cancellations (not errors)
-    SUCCESS_CLEANUP = "success_cleanup"  # Main task completed, cleaning up helper tasks
-    FAILURE_CLEANUP = "failure_cleanup"  # Main task failed, cleaning up helper tasks
-
-    # Real cancellations
-    SIGNAL = "signal"  # External signal requested cancellation
-    HEARTBEAT_FAILURE = "heartbeat_failure"  # Heartbeat stopped working
-    TIMEOUT = "timeout"  # Task timed out
-    SHUTDOWN = "shutdown"  # Manager is shutting down
-
-    # Unknown/unset
-    UNKNOWN = "unknown"  # Reason not determined
-
-
-class SignalType(Enum):
+class SignalType(str, Enum):
     """Signal type enumeration."""
 
     START = "start"
     STOP = "stop"
     CANCEL = "cancel"
-    PAUSE = "pause"
-    RESUME = "resume"
-    STATUS = "status"
 
+    ACK_START = "ack_start"
     ACK_CANCEL = "ack_cancel"
-    ACK_PAUSE = "ack_pause"
-    ACK_RESUME = "ack_resume"
-    ACK_STATUS = "ack_status"
+    ACK_STOP = "ack_stop"
 
 
 class SignalMessage(BaseModel):
@@ -55,16 +39,21 @@ class SignalMessage(BaseModel):
 
     task_id: str = Field(..., description="Unique identifier for the task")
     mission_id: str = Field(..., description="Identifier for the mission")
-    status: TaskStatus = Field(..., description="Current status of the task")
+    setup_id: str = Field(default="", description="Identifier for the setup")
+    setup_version_id: str = Field(default="", description="Identifier for the setup version")
     action: SignalType = Field(..., description="Type of signal action")
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    payload: dict[str, Any] = Field(default={}, description="Optional payload for the signal")
-    model_config = {"use_enum_values": True}
+    payload: dict[str, Any] = Field(default_factory=dict, description="Optional payload for the signal")
 
-
-class HeartbeatMessage(BaseModel):
-    """Heartbeat message model for task monitoring."""
-
-    task_id: str = Field(..., description="Unique identifier for the task")
-    mission_id: str = Field(..., description="Identifier for the mission")
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    cancellation_reason: CancellationReason | None = Field(
+        default=None,
+        description="Reason for cancellation if status is cancelled",
+    )
+    error_message: str | None = Field(
+        default=None,
+        description="Human-readable error message if task failed",
+    )
+    exception_traceback: str | None = Field(
+        default=None,
+        description="Full traceback if task failed with exception",
+    )

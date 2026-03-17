@@ -1,36 +1,32 @@
 """Module gRPC server implementation for DigitalKin."""
 
-import uuid
-from pathlib import Path
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Any
 
-import grpc
-from digitalkin_proto.agentic_mesh_protocol.module.v1 import (
+from agentic_mesh_protocol.module.v1 import (
     module_service_pb2,
     module_service_pb2_grpc,
-)
-from digitalkin_proto.agentic_mesh_protocol.module_registry.v1 import (
-    metadata_pb2,
-    module_registry_service_pb2_grpc,
-    registration_pb2,
 )
 
 from digitalkin.grpc_servers._base_server import BaseServer
 from digitalkin.grpc_servers.module_servicer import ModuleServicer
-from digitalkin.grpc_servers.utils.exceptions import ServerError
 from digitalkin.logger import logger
 from digitalkin.models.grpc_servers.models import (
     ClientConfig,
     ModuleServerConfig,
-    SecurityMode,
 )
 from digitalkin.modules._base_module import BaseModule
+from digitalkin.services.registry import GrpcRegistry
+
+if TYPE_CHECKING:
+    from digitalkin.services.registry import RegistryStrategy
 
 
 class ModuleServer(BaseServer):
     """gRPC server for a DigitalKin module.
 
     This server exposes the module's functionality through the ModuleService gRPC interface.
-    It can optionally register itself with a ModuleRegistry server.
+    It can optionally register itself with a Registry server.
 
     Attributes:
         module: The module instance being served.
@@ -44,19 +40,24 @@ class ModuleServer(BaseServer):
         module_class: type[BaseModule],
         server_config: ModuleServerConfig,
         client_config: ClientConfig | None = None,
+        interceptors: Sequence[Any] | None = None,
     ) -> None:
         """Initialize the module server.
 
         Args:
             module_class: The module instance to be served.
-            server_config: Server configuration including registry address if auto-registration is desired.
-            client_config: Client configuration used by services.
+            server_config: Server configuration.
+            client_config: Client configuration used by services and registry connection.
+            interceptors: Optional sequence of gRPC server interceptors.
         """
-        super().__init__(server_config)
+        super().__init__(server_config, interceptors=interceptors)
         self.module_class = module_class
         self.server_config = server_config
         self.client_config = client_config
         self.module_servicer: ModuleServicer | None = None
+        self.registry: RegistryStrategy | None = None
+
+        self._prepare_registry_config()
 
     def _register_servicers(self) -> None:
         """Register the module servicer with the gRPC server.
@@ -75,193 +76,141 @@ class ModuleServer(BaseServer):
             module_service_pb2_grpc.add_ModuleServiceServicer_to_server,
             service_descriptor=module_service_pb2.DESCRIPTOR,
         )
+
+        # Initialize setup stub before server starts accepting RPCs
+        if self.client_config is not None:
+            self.module_servicer.setup.__post_init__(self.client_config)
+
         logger.debug("Registered Module servicer")
+
+    def _prepare_registry_config(self) -> None:
+        """Prepare registry client config on module_class before server starts.
+
+        This ensures ServicesConfig created by JobManager will have registry config,
+        allowing spawned module instances to inherit the registry configuration.
+        """
+        if not self.client_config:
+            return
+
+        # Ensure we have a per-class copy (not shared with parent) before mutation
+        if "services_config_params" not in self.module_class.__dict__:
+            self.module_class.services_config_params = dict(self.module_class.services_config_params)
+        self.module_class.services_config_params["registry"] = {"client_config": self.client_config}
+
+    def _init_registry(self) -> None:
+        """Initialize server-level registry client for registration."""
+        if not self.client_config:
+            return
+
+        self.registry = GrpcRegistry("", "", "", self.client_config)
 
     def start(self) -> None:
         """Start the module server and register with the registry if configured."""
+        import asyncio
+
         logger.info("Starting module server", extra={"server_config": self.server_config})
         super().start()
 
-        # If a registry address is provided, register the module
-        if self.server_config.registry_address:
-            try:
-                self._register_with_registry()
-            except Exception:
-                logger.exception("Failed to register with registry")
-
-        if self.module_servicer is not None:
-            logger.debug("Setup post init started", extra={"client_config": self.client_config})
-            self.module_servicer.setup.__post_init__(self.client_config)
+        try:
+            self._init_registry()
+            asyncio.get_event_loop().run_until_complete(self._register_with_registry())
+        except Exception:
+            logger.exception("Failed to register with registry")
 
     async def start_async(self) -> None:
         """Start the module server and register with the registry if configured."""
         logger.info("Starting module server", extra={"server_config": self.server_config})
         await super().start_async()
-        # If a registry address is provided, register the module
-        if self.server_config.registry_address:
-            try:
-                self._register_with_registry()
-            except Exception:
-                logger.exception("Failed to register with registry")
 
+        # module_servicer is now set by _register_servicers() during super().start_async()
         if self.module_servicer is not None:
-            logger.info("Setup post init started", extra={"client_config": self.client_config})
+            logger.debug("debug:start_async job_manager type=%s", type(self.module_servicer.job_manager).__name__)
             await self.module_servicer.job_manager.start()
-            self.module_servicer.setup.__post_init__(self.client_config)
 
-    def stop(self, grace: float | None = None) -> None:
-        """Stop the module server and deregister from the registry if needed."""
-        # If registered with a registry, deregister
-        if self.server_config.registry_address:
+        try:
+            self._init_registry()
+            await self._register_with_registry()
+        except Exception:
+            logger.exception("Failed to register with registry")
+
+    async def stop_async(self, grace: float | None = None) -> None:
+        """Stop the module server with async cleanup.
+
+        Deregisters from registry and stops the server. Modules also become
+        inactive when they stop sending heartbeats as a fallback.
+        """
+        if self.registry is not None:
             try:
-                self._deregister_from_registry()
-            except ServerError:
+                module_id = self.module_class.get_module_id()
+                if module_id and module_id != "unknown":
+                    logger.debug("debug:stop_async deregistering module_id=%s", module_id)
+                    await self.registry.deregister(module_id)
+            except Exception:
                 logger.exception("Failed to deregister from registry")
 
-        super().stop(grace)
-
-    def _register_with_registry(self) -> None:
-        """Register this module with the registry server.
-
-        Raises:
-            ServerError: If communication with the registry server fails.
-        """
-        logger.debug(
-            "Registering module with registry at %s",
-            self.server_config.registry_address,
-            extra={"server_config": self.server_config},
-        )
-
-        # Create appropriate channel based on security mode
-        channel = self._create_registry_channel()
-
-        with channel:
-            # Create a stub (client)
-            stub = module_registry_service_pb2_grpc.ModuleRegistryServiceStub(channel)
-
-            # Determine module type
-            module_type = self._determine_module_type()
-
-            metadata = metadata_pb2.Metadata(
-                name=self.module_class.metadata["name"],
-                tags=[metadata_pb2.Tag(tag=tag) for tag in self.module_class.metadata["tags"]],
-                description=self.module_class.metadata["description"],
-            )
-
-            self.module_class.metadata["module_id"] = f"{self.module_class.metadata['name']}:{uuid.uuid4()}"
-            # Create registration request
-            request = registration_pb2.RegisterRequest(
-                module_id=self.module_class.metadata["module_id"],
-                version=self.module_class.metadata["version"],
-                module_type=module_type,
-                address=self.server_config.address,
-                metadata=metadata,
-            )
-
+        # Shut down servicer-level resources (GrpcSetup channel, registry cache)
+        if self.module_servicer is not None:
             try:
-                # Call the register method
-                logger.debug(
-                    "Request sent to registry for module: %s:%s",
-                    self.module_class.metadata["name"],
-                    self.module_class.metadata["module_id"],
-                    extra={"module_info": self.module_class.metadata},
-                )
-                response = stub.RegisterModule(request)
+                await self.module_servicer.shutdown()
+            except Exception:
+                logger.exception("Failed to shutdown module servicer resources")
 
-                if response.success:
-                    logger.debug("Module registered successfully")
-                else:
-                    logger.error("Module registration failed")
-            except grpc.RpcError:
-                logger.exception("RPC error during registration:")
-                raise ServerError
+        # Close server-level registry channel
+        if isinstance(self.registry, GrpcRegistry):
+            try:
+                await self.registry.close_channel()
+            except Exception:
+                logger.exception("Failed to close server registry channel")
 
-    def _deregister_from_registry(self) -> None:
-        """Deregister this module from the registry server.
+        logger.debug("debug:stop_async stopping gRPC server grace=%s", grace)
+        await super().stop_async(grace)
 
-        Raises:
-            ServerError: If communication with the registry server fails.
-        """
-        logger.debug(
-            "Deregistering module from registry at %s",
-            self.server_config.registry_address,
+    async def _register_with_registry(self) -> None:
+        """Register this module with the registry server."""
+        if not self.registry:
+            logger.debug("No registry configured, skipping registration")
+            return
+
+        module_id = self.module_class.get_module_id()
+        version = self.module_class.metadata.get("version", "0.0.0")
+
+        if not module_id or module_id == "unknown":
+            logger.warning(
+                "Module has no valid module_id, skipping registration",
+                extra={"module_class": self.module_class.__name__},
+            )
+            return
+
+        advertise_address = self.server_config.advertise_host or self.server_config.host
+
+        logger.info(
+            "Attempting to register module with registry",
+            extra={
+                "module_id": module_id,
+                "address": advertise_address,
+                "port": self.server_config.port,
+                "version": version,
+            },
         )
 
-        # Create appropriate channel based on security mode
-        channel = self._create_registry_channel()
+        result = await self.registry.register(
+            module_id=module_id,
+            address=advertise_address,
+            port=self.server_config.port,
+            version=version,
+        )
 
-        with channel:
-            # Create a stub (client)
-            stub = module_registry_service_pb2_grpc.ModuleRegistryServiceStub(channel)
-
-            # Create deregistration request
-            request = registration_pb2.DeregisterRequest(
-                module_id=self.module_class.metadata["module_id"],
+        if result:
+            logger.info(
+                "Module registered successfully",
+                extra={
+                    "module_id": result.module_id,
+                    "address": advertise_address,
+                    "port": self.server_config.port,
+                },
             )
-        try:
-            # Call the deregister method
-            response = stub.DeregisterModule(request)
-
-            if response.success:
-                logger.debug("Module deregistered successfull")
-            else:
-                logger.error("Module deregistration failed")
-        except grpc.RpcError:
-            logger.exception("RPC error during deregistration")
-            raise ServerError
-
-    def _create_registry_channel(self) -> grpc.Channel:
-        """Create an appropriate channel to the registry server.
-
-        Returns:
-            A gRPC channel for communication with the registry.
-
-        Raises:
-            ValueError: If credentials are required but not provided.
-        """
-        if (
-            self.client_config is not None
-            and self.client_config.security == SecurityMode.SECURE
-            and self.client_config.credentials
-        ):
-            # Secure channel
-            # Secure channel
-            root_certificates = Path(self.client_config.credentials.root_cert_path).read_bytes()
-
-            # mTLS channel
-            private_key = None
-            certificate_chain = None
-            if (
-                self.client_config.credentials.client_cert_path is not None
-                and self.client_config.credentials.client_key_path is not None
-            ):
-                private_key = Path(self.client_config.credentials.client_key_path).read_bytes()
-                certificate_chain = Path(self.client_config.credentials.client_cert_path).read_bytes()
-
-            # Create channel credentials
-            channel_credentials = grpc.ssl_channel_credentials(
-                root_certificates=root_certificates,
-                certificate_chain=certificate_chain,
-                private_key=private_key,
+        else:
+            logger.warning(
+                "Module registration returned None (module may not exist in registry)",
+                extra={"module_id": module_id, "address": advertise_address},
             )
-            return grpc.secure_channel(self.server_config.registry_address, channel_credentials)
-        # Insecure channel
-        return grpc.insecure_channel(self.server_config.registry_address)
-
-    def _determine_module_type(self) -> str:
-        """Determine the module type based on its class.
-
-        Returns:
-            A string representing the module type.
-        """
-        module_type = "UNKNOWN"
-        class_name = self.module_class.__name__
-
-        if class_name == "ToolModule":
-            module_type = "TOOL"
-        elif class_name == "TriggerModule":
-            module_type = "TRIGGER"
-        elif class_name == "ArchetypeModule":
-            module_type = "KIN"
-
-        return module_type
