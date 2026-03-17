@@ -86,9 +86,10 @@ jobs:
             echo "Attempt $i/$MAX_ATTEMPTS: checking Test PyPI..."
             if python -m pip install \
               --index-url https://test.pypi.org/simple/ \
-              --extra-index-url https://pypi.org/simple/ \
+              --no-deps \
               digitalkin 2>/dev/null; then
-              echo "Package installed from Test PyPI"
+              echo "Package found on Test PyPI, installing deps from PyPI..."
+              python -m pip install digitalkin
               python -c "import digitalkin; print(f'Version: {digitalkin.__version__}')"
               exit 0
             fi
