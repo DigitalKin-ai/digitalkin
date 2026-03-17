@@ -2,26 +2,42 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
     <url>
          <loc>https://digitalkin.com/dev/</loc>
-         <lastmod>2026-02-26</lastmod>
+         <lastmod>2026-03-17</lastmod>
     </url>
     <url>
          <loc>https://digitalkin.com/dev/getting_started/</loc>
-         <lastmod>2026-02-26</lastmod>
+         <lastmod>2026-03-17</lastmod>
+    </url>
+    <url>
+         <loc>https://digitalkin.com/dev/grpc-tuning/</loc>
+         <lastmod>2026-03-17</lastmod>
     </url>
     <url>
          <loc>https://digitalkin.com/dev/guides/</loc>
-         <lastmod>2026-02-26</lastmod>
+         <lastmod>2026-03-17</lastmod>
     </url>
     <url>
          <loc>https://digitalkin.com/dev/api/api/</loc>
-         <lastmod>2026-02-26</lastmod>
+         <lastmod>2026-03-17</lastmod>
     </url>
     <url>
          <loc>https://digitalkin.com/dev/api/dynamic_schema/</loc>
-         <lastmod>2026-02-26</lastmod>
+         <lastmod>2026-03-17</lastmod>
+    </url>
+    <url>
+         <loc>https://digitalkin.com/dev/architecture/admission-queue/</loc>
+         <lastmod>2026-03-17</lastmod>
+    </url>
+    <url>
+         <loc>https://digitalkin.com/dev/architecture/concurrency-model/</loc>
+         <lastmod>2026-03-17</lastmod>
+    </url>
+    <url>
+         <loc>https://digitalkin.com/dev/architecture/resilience/</loc>
+         <lastmod>2026-03-17</lastmod>
     </url>
     <url>
          <loc>https://digitalkin.com/dev/architecture/sdk-flow/</loc>
-         <lastmod>2026-02-26</lastmod>
+         <lastmod>2026-03-17</lastmod>
     </url>
 </urlset>

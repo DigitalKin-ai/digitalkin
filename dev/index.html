@@ -21,7 +21,7 @@
       
       
       <link rel="icon" href="assets/logo.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.3">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.5">
     
     
       
@@ -276,6 +276,25 @@
   
   
     <li class="md-tabs__item">
+      <a href="grpc-tuning/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  gRPC &amp; Concurrency Tuning Guide
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
       <a href="guides/" class="md-tabs__link">
         
   
@@ -314,7 +333,7 @@
   
   
     <li class="md-tabs__item">
-      <a href="architecture/sdk-flow/" class="md-tabs__link">
+      <a href="architecture/admission-queue/" class="md-tabs__link">
         
   
   
@@ -447,7 +466,7 @@
   <a href="#features" class="md-nav__link">
     <span class="md-ellipsis">
       
-        🚀 Features
+        Features
       
     </span>
   </a>
@@ -458,7 +477,7 @@
   <a href="#installation" class="md-nav__link">
     <span class="md-ellipsis">
       
-        📦 Installation
+        Installation
       
     </span>
   </a>
@@ -466,22 +485,44 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#usage" class="md-nav__link">
+  <a href="#quick-start" class="md-nav__link">
     <span class="md-ellipsis">
       
-        🛠️ Usage
+        Quick Start
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="🛠️ Usage">
+    <nav class="md-nav" aria-label="Quick Start">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#basic-import" class="md-nav__link">
+  <a href="#1-define-your-models" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Basic Import
+        1. Define your models
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2-create-a-module-and-trigger" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Create a module and trigger
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3-run-the-server" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Run the server
       
     </span>
   </a>
@@ -494,30 +535,13 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#features_1" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Features
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Features">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
   <a href="#taskiq-with-rabbitmq" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Taskiq with RabbitMQ
+        TaskIQ with RabbitMQ
       
     </span>
   </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
@@ -525,12 +549,12 @@
   <a href="#development" class="md-nav__link">
     <span class="md-ellipsis">
       
-        👷‍♂️ Development
+        Development
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="👷‍♂️ Development">
+    <nav class="md-nav" aria-label="Development">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -545,10 +569,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#setting-up-your-development-environment" class="md-nav__link">
+  <a href="#setup" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Setting Up Your Development Environment
+        Setup
       
     </span>
   </a>
@@ -556,10 +580,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#common-development-tasks" class="md-nav__link">
+  <a href="#common-tasks" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Common Development Tasks
+        Common Tasks
       
     </span>
   </a>
@@ -586,7 +610,7 @@
   <a href="#license" class="md-nav__link">
     <span class="md-ellipsis">
       
-        📄 License
+        License
       
     </span>
   </a>
@@ -616,6 +640,33 @@
     
   
     Getting Started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="grpc-tuning/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    gRPC &amp; Concurrency Tuning Guide
   
 
     
@@ -675,7 +726,7 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
         
           
           <div class="md-nav__link md-nav__container">
@@ -697,14 +748,14 @@
             </a>
             
               
-              <label class="md-nav__link " for="__nav_4" id="__nav_4_label" tabindex="0">
+              <label class="md-nav__link " for="__nav_5" id="__nav_5_label" tabindex="0">
                 <span class="md-nav__icon md-icon"></span>
               </label>
             
           </div>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_4">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -755,9 +806,26 @@
   
   
   
-    <li class="md-nav__item">
-      <a href="architecture/sdk-flow/" class="md-nav__link">
+    
+    
+    
+    
+      
+      
         
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="architecture/admission-queue/" class="md-nav__link ">
+              
   
   
   <span class="md-ellipsis">
@@ -771,7 +839,113 @@
   
   
 
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_6" id="__nav_6_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="architecture/concurrency-model/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Concurrency Model
+  
+
+    
+  </span>
+  
+  
+
       </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="architecture/resilience/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Retry &amp; Fault Tolerance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="architecture/sdk-flow/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    SDK Flow: Server to Module Execution
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
     </li>
   
 
@@ -806,7 +980,7 @@
   <a href="#features" class="md-nav__link">
     <span class="md-ellipsis">
       
-        🚀 Features
+        Features
       
     </span>
   </a>
@@ -817,7 +991,7 @@
   <a href="#installation" class="md-nav__link">
     <span class="md-ellipsis">
       
-        📦 Installation
+        Installation
       
     </span>
   </a>
@@ -825,22 +999,44 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#usage" class="md-nav__link">
+  <a href="#quick-start" class="md-nav__link">
     <span class="md-ellipsis">
       
-        🛠️ Usage
+        Quick Start
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="🛠️ Usage">
+    <nav class="md-nav" aria-label="Quick Start">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#basic-import" class="md-nav__link">
+  <a href="#1-define-your-models" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Basic Import
+        1. Define your models
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2-create-a-module-and-trigger" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Create a module and trigger
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3-run-the-server" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Run the server
       
     </span>
   </a>
@@ -853,30 +1049,13 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#features_1" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Features
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Features">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
   <a href="#taskiq-with-rabbitmq" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Taskiq with RabbitMQ
+        TaskIQ with RabbitMQ
       
     </span>
   </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
@@ -884,12 +1063,12 @@
   <a href="#development" class="md-nav__link">
     <span class="md-ellipsis">
       
-        👷‍♂️ Development
+        Development
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="👷‍♂️ Development">
+    <nav class="md-nav" aria-label="Development">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -904,10 +1083,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#setting-up-your-development-environment" class="md-nav__link">
+  <a href="#setup" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Setting Up Your Development Environment
+        Setup
       
     </span>
   </a>
@@ -915,10 +1094,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#common-development-tasks" class="md-nav__link">
+  <a href="#common-tasks" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Common Development Tasks
+        Common Tasks
       
     </span>
   </a>
@@ -945,7 +1124,7 @@
   <a href="#license" class="md-nav__link">
     <span class="md-ellipsis">
       
-        📄 License
+        License
       
     </span>
   </a>
@@ -998,103 +1177,169 @@
 <a href="https://pypi.org/project/digitalkin/"><img alt="PyPI" src="https://img.shields.io/pypi/v/digitalkin.svg" /></a>
 <a href="https://pypi.org/project/digitalkin/"><img alt="Python Version" src="https://img.shields.io/pypi/pyversions/digitalkin.svg" /></a>
 <a href="https://github.com/DigitalKin-ai/digitalkin/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/github/license/DigitalKin-ai/digitalkin" /></a></p>
-<p>Welcome to the DigitalKin Python SDK, a powerful tool designed for developers
-who aim to build and manage agents within multi-agent systems according to the
-innovative DigitalKin agentic mesh standards. This SDK streamlines the process
-of creating and managing custom Tools, Triggers, and Kin Archetypes while
-ensuring full compliance with the DigitalKin ecosystem's standards.</p>
-<h2 id="features">🚀 Features<a class="headerlink" href="#features" title="Permanent link">¤</a></h2>
+<p>The DigitalKin Python SDK for building and managing modules within the
+DigitalKin agentic mesh. Create custom <strong>Tools</strong> and <strong>Archetypes</strong> that
+communicate over gRPC, register with a service mesh, and scale independently.</p>
+<h2 id="features">Features<a class="headerlink" href="#features" title="Permanent link">¤</a></h2>
 <ul>
-<li><strong>Seamless Integration</strong>: Easily integrate with DigitalKin's services using
-  our comprehensive gRPC support.</li>
-<li><strong>Customizable Agents</strong>: Build custom agents and manage their lifecycle
-  efficiently.</li>
-<li><strong>Standards Compliance</strong>: Adhere to the latest DigitalKin agentic mesh
-  standards.</li>
-<li><strong>Robust Development Tools</strong>: Utilize advanced development tools for testing,
-  building, and deploying your projects.</li>
+<li><strong>Async-native gRPC module system</strong> — every module is a gRPC server built on
+  <code>grpcio</code> with full async support</li>
+<li><strong>Typed module contracts</strong> — Pydantic models for Input, Output, Setup, and
+  Secret schemas with protocol-based trigger dispatch</li>
+<li><strong>Module-to-module communication</strong> — tools and archetypes discover each other
+  via the registry and exchange requests over gRPC</li>
+<li><strong>Tool resolution</strong> — archetypes dynamically resolve and invoke tool modules
+  at runtime</li>
+<li><strong>Admission queue &amp; backpressure</strong> — built-in request admission with
+  configurable concurrency limits</li>
+<li><strong>Healthcheck protocols</strong> — automatic ping, services, and status healthcheck
+  triggers registered on every module</li>
+<li><strong>Profiling</strong> — optional <code>[profiling]</code> extra with asyncio-inspector,
+  pyinstrument, viztracer, and yappi</li>
+<li><strong>Batched history writes</strong> — efficient storage writes for conversation history</li>
+<li><strong>TaskIQ integration</strong> — optional distributed task execution backed by
+  RabbitMQ and Redis (<code>[taskiq]</code> extra)</li>
 </ul>
-<h2 id="installation">📦 Installation<a class="headerlink" href="#installation" title="Permanent link">¤</a></h2>
-<p>To install the DigitalKin SDK, simply run:</p>
-<div class="language-bash highlight"><pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span>digitalkin
-</code></pre></div>
-<p><strong>Optional Taskiq Integration</strong>: Asynchronous task execution powered by Taskiq, backed by RabbitMQ and Redis
-To enable the Rabbitmq streaming capabilities, run:</p>
-<div class="language-sh highlight"><pre><span></span><code>sudo<span class="w"> </span>rabbitmq-plugins<span class="w"> </span><span class="nb">enable</span><span class="w"> </span>rabbitmq_stream
+<h2 id="installation">Installation<a class="headerlink" href="#installation" title="Permanent link">¤</a></h2>
+<div class="language-bash highlight"><pre><span></span><code><span class="c1"># With uv (recommended)</span>
+uv<span class="w"> </span>add<span class="w"> </span>digitalkin
 
-<span class="c1"># Core + Taskiq integration (RabbitMQ broker)</span>
-pip<span class="w"> </span>install<span class="w"> </span>digitalkin<span class="o">[</span>taskiq<span class="o">]</span>
+<span class="c1"># With pip</span>
+pip<span class="w"> </span>install<span class="w"> </span>digitalkin
 </code></pre></div>
-<h2 id="usage">🛠️ Usage<a class="headerlink" href="#usage" title="Permanent link">¤</a></h2>
-<h3 id="basic-import">Basic Import<a class="headerlink" href="#basic-import" title="Permanent link">¤</a></h3>
-<p>Start by importing the necessary modules:</p>
-<div class="language-python highlight"><pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn">digitalkin</span>
+<p><strong>Optional extras:</strong></p>
+<div class="language-bash highlight"><pre><span></span><code><span class="c1"># Distributed task execution (RabbitMQ + Redis)</span>
+uv<span class="w"> </span>add<span class="w"> </span><span class="s2">&quot;digitalkin[taskiq]&quot;</span>
+
+<span class="c1"># Async profiling tools</span>
+uv<span class="w"> </span>add<span class="w"> </span><span class="s2">&quot;digitalkin[profiling]&quot;</span>
 </code></pre></div>
-<h2 id="features_1">Features<a class="headerlink" href="#features_1" title="Permanent link">¤</a></h2>
-<h3 id="taskiq-with-rabbitmq">Taskiq with RabbitMQ<a class="headerlink" href="#taskiq-with-rabbitmq" title="Permanent link">¤</a></h3>
-<p>TaskIQ intergration allows the module to scale for heavy CPU tasks by having the request's stateless module in a new instance.</p>
+<h2 id="quick-start">Quick Start<a class="headerlink" href="#quick-start" title="Permanent link">¤</a></h2>
+<h3 id="1-define-your-models">1. Define your models<a class="headerlink" href="#1-define-your-models" title="Permanent link">¤</a></h3>
+<div class="language-python highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">pydantic</span><span class="w"> </span><span class="kn">import</span> <span class="n">BaseModel</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">digitalkin.models.module.base_types</span><span class="w"> </span><span class="kn">import</span> <span class="n">DataModel</span><span class="p">,</span> <span class="n">DataTrigger</span>
+
+
+<span class="k">class</span><span class="w"> </span><span class="nc">MessageInput</span><span class="p">(</span><span class="n">DataTrigger</span><span class="p">):</span>
+    <span class="n">protocol</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;message&quot;</span>
+    <span class="n">content</span><span class="p">:</span> <span class="nb">str</span>
+
+
+<span class="k">class</span><span class="w"> </span><span class="nc">InputModel</span><span class="p">(</span><span class="n">DataModel</span><span class="p">[</span><span class="n">MessageInput</span><span class="p">]):</span>
+    <span class="n">root</span><span class="p">:</span> <span class="n">MessageInput</span>
+
+
+<span class="k">class</span><span class="w"> </span><span class="nc">MessageOutput</span><span class="p">(</span><span class="n">DataTrigger</span><span class="p">):</span>
+    <span class="n">protocol</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;message&quot;</span>
+    <span class="n">reply</span><span class="p">:</span> <span class="nb">str</span>
+
+
+<span class="k">class</span><span class="w"> </span><span class="nc">OutputModel</span><span class="p">(</span><span class="n">DataModel</span><span class="p">[</span><span class="n">MessageOutput</span><span class="p">]):</span>
+    <span class="n">root</span><span class="p">:</span> <span class="n">MessageOutput</span>
+</code></pre></div>
+<h3 id="2-create-a-module-and-trigger">2. Create a module and trigger<a class="headerlink" href="#2-create-a-module-and-trigger" title="Permanent link">¤</a></h3>
+<div class="language-python highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">digitalkin</span><span class="w"> </span><span class="kn">import</span> <span class="n">ArchetypeModule</span><span class="p">,</span> <span class="n">ModuleContext</span><span class="p">,</span> <span class="n">TriggerHandler</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">digitalkin.models.module.setup_types</span><span class="w"> </span><span class="kn">import</span> <span class="n">SetupModel</span>
+
+
+<span class="k">class</span><span class="w"> </span><span class="nc">MyArchetype</span><span class="p">(</span><span class="n">ArchetypeModule</span><span class="p">[</span><span class="n">InputModel</span><span class="p">,</span> <span class="n">OutputModel</span><span class="p">,</span> <span class="n">SetupModel</span><span class="p">,</span> <span class="n">BaseModel</span><span class="p">]):</span>
+    <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">initialize</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">context</span><span class="p">:</span> <span class="n">ModuleContext</span><span class="p">,</span> <span class="n">setup_data</span><span class="p">:</span> <span class="n">SetupModel</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">pass</span>
+
+    <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">cleanup</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">context</span><span class="p">:</span> <span class="n">ModuleContext</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">pass</span>
+
+
+<span class="nd">@MyArchetype</span><span class="o">.</span><span class="n">register</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">MessageTrigger</span><span class="p">(</span><span class="n">TriggerHandler</span><span class="p">[</span><span class="n">InputModel</span><span class="p">,</span> <span class="n">SetupModel</span><span class="p">,</span> <span class="n">OutputModel</span><span class="p">]):</span>
+    <span class="n">protocol</span> <span class="o">=</span> <span class="s2">&quot;message&quot;</span>
+    <span class="n">input_format</span> <span class="o">=</span> <span class="n">InputModel</span>
+    <span class="n">output_format</span> <span class="o">=</span> <span class="n">OutputModel</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">context</span><span class="p">:</span> <span class="n">ModuleContext</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">context</span><span class="p">)</span>
+
+    <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">handle</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="n">input_data</span><span class="p">:</span> <span class="n">InputModel</span><span class="p">,</span>
+        <span class="n">setup_data</span><span class="p">:</span> <span class="n">SetupModel</span><span class="p">,</span>
+        <span class="n">context</span><span class="p">:</span> <span class="n">ModuleContext</span><span class="p">,</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">output</span> <span class="o">=</span> <span class="n">OutputModel</span><span class="p">(</span><span class="n">root</span><span class="o">=</span><span class="n">MessageOutput</span><span class="p">(</span><span class="n">reply</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;Echo: </span><span class="si">{</span><span class="n">input_data</span><span class="o">.</span><span class="n">root</span><span class="o">.</span><span class="n">content</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">))</span>
+        <span class="k">await</span> <span class="bp">self</span><span class="o">.</span><span class="n">send_message</span><span class="p">(</span><span class="n">context</span><span class="p">,</span> <span class="n">output</span><span class="p">)</span>
+</code></pre></div>
+<h3 id="3-run-the-server">3. Run the server<a class="headerlink" href="#3-run-the-server" title="Permanent link">¤</a></h3>
+<div class="language-python highlight"><pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn">asyncio</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">digitalkin.grpc_servers.module_server</span><span class="w"> </span><span class="kn">import</span> <span class="n">ModuleServer</span>
+
+<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="n">server</span> <span class="o">=</span> <span class="n">ModuleServer</span><span class="p">(</span><span class="n">MyArchetype</span><span class="p">)</span>
+    <span class="k">await</span> <span class="n">server</span><span class="o">.</span><span class="n">start_async</span><span class="p">()</span>
+    <span class="k">await</span> <span class="n">server</span><span class="o">.</span><span class="n">await_termination</span><span class="p">()</span>
+
+<span class="n">asyncio</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">main</span><span class="p">())</span>
+</code></pre></div>
+<h2 id="taskiq-with-rabbitmq">TaskIQ with RabbitMQ<a class="headerlink" href="#taskiq-with-rabbitmq" title="Permanent link">¤</a></h2>
+<p>TaskIQ integration allows the module to scale for heavy CPU tasks by
+distributing requests to stateless worker instances.</p>
 <ul>
-<li><strong>Decoupled Scalability</strong>: RabbitMQ brokers messages, letting producers and consumers scale independently.</li>
-<li><strong>Reliability</strong>: Durable queues, acknowledgements, and dead-lettering ensure tasks aren’t lost.</li>
-<li><strong>Concurrency Control</strong>: Taskiq’s worker pool manages parallel execution without custom schedulers.</li>
-<li><strong>Flexibility</strong>: Built-in retries, exponential backoff, and Redis result-backend for resilient workflows.</li>
-<li><strong>Ecosystem</strong>: Battle-tested <code>aio-pika</code> AMQP client plus Taskiq’s decorator-based API.</li>
+<li><strong>Decoupled Scalability</strong>: RabbitMQ brokers messages, letting producers and
+  consumers scale independently.</li>
+<li><strong>Reliability</strong>: Durable queues, acknowledgements, and dead-lettering ensure
+  tasks aren't lost.</li>
+<li><strong>Concurrency Control</strong>: TaskIQ's worker pool manages parallel execution
+  without custom schedulers.</li>
+<li><strong>Flexibility</strong>: Built-in retries, exponential backoff, and Redis
+  result-backend for resilient workflows.</li>
 </ul>
-<p>By combining Taskiq’s async API with RabbitMQ’s guarantees, you get a robust, production-ready queue with minimal boilerplate.</p>
-<h2 id="development">👷‍♂️ Development<a class="headerlink" href="#development" title="Permanent link">¤</a></h2>
+<p>To enable RabbitMQ streaming:</p>
+<div class="language-bash highlight"><pre><span></span><code>sudo<span class="w"> </span>rabbitmq-plugins<span class="w"> </span><span class="nb">enable</span><span class="w"> </span>rabbitmq_stream
+task<span class="w"> </span>start-taskiq
+</code></pre></div>
+<h2 id="development">Development<a class="headerlink" href="#development" title="Permanent link">¤</a></h2>
 <h3 id="prerequisites">Prerequisites<a class="headerlink" href="#prerequisites" title="Permanent link">¤</a></h3>
-<p>Ensure you have the following installed:</p>
 <ul>
 <li>Python 3.10+</li>
-<li><a href="https://astral.sh/uv">uv</a> - Modern Python package management</li>
-<li><a href="https://buf.build/docs/installation">buf</a> - Protocol buffer toolkit</li>
-<li><a href="https://grpc.io/docs/protoc-installation/">protoc</a> - Protocol Buffers
-  compiler</li>
-<li><a href="https://taskfile.dev/">Task</a> - Task runner</li>
+<li><a href="https://astral.sh/uv">uv</a> — modern Python package management</li>
+<li><a href="https://taskfile.dev/">Task</a> — task runner</li>
 </ul>
-<h3 id="setting-up-your-development-environment">Setting Up Your Development Environment<a class="headerlink" href="#setting-up-your-development-environment" title="Permanent link">¤</a></h3>
-<p>Clone the repository and set up your environment with these commands:</p>
-<div class="language-bash highlight"><pre><span></span><code><span class="c1"># Clone the repository with submodules</span>
-git<span class="w"> </span>clone<span class="w"> </span>--recurse-submodules<span class="w"> </span>https://github.com/DigitalKin-ai/digitalkin.git
+<h3 id="setup">Setup<a class="headerlink" href="#setup" title="Permanent link">¤</a></h3>
+<div class="language-bash highlight"><pre><span></span><code>git<span class="w"> </span>clone<span class="w"> </span>--recurse-submodules<span class="w"> </span>https://github.com/DigitalKin-ai/digitalkin.git
 <span class="nb">cd</span><span class="w"> </span>digitalkin
 
-<span class="c1"># Setup development environment</span>
 task<span class="w"> </span>setup-dev
 <span class="nb">source</span><span class="w"> </span>.venv/bin/activate
 </code></pre></div>
-<h3 id="common-development-tasks">Common Development Tasks<a class="headerlink" href="#common-development-tasks" title="Permanent link">¤</a></h3>
-<p>Utilize the following commands for common tasks:</p>
-<div class="language-bash highlight"><pre><span></span><code><span class="c1"># Build the package</span>
-task<span class="w"> </span>build-package
+<h3 id="common-tasks">Common Tasks<a class="headerlink" href="#common-tasks" title="Permanent link">¤</a></h3>
+<div class="language-bash highlight"><pre><span></span><code>task<span class="w"> </span>linter<span class="w">               </span><span class="c1"># Format + lint (ruff) + type check (mypy)</span>
+task<span class="w"> </span>check<span class="w">                </span><span class="c1"># Linter + mypy + tests</span>
+task<span class="w"> </span>run-tests<span class="w">            </span><span class="c1"># Run pytest via Docker</span>
+task<span class="w"> </span>build-package<span class="w">        </span><span class="c1"># Build distribution</span>
+task<span class="w"> </span>bump-version<span class="w"> </span>--<span class="w"> </span>patch<span class="p">|</span>minor<span class="p">|</span>major
 
-<span class="c1"># Run tests</span>
-task<span class="w"> </span>run-tests
+task<span class="w"> </span>docs-serve<span class="w">           </span><span class="c1"># Serve docs locally (mkdocs)</span>
+task<span class="w"> </span>docs-build<span class="w">           </span><span class="c1"># Build docs</span>
 
-<span class="c1"># Format code using Ruff linter and formatter</span>
-task<span class="w"> </span>linter
+task<span class="w"> </span>generate-certificates<span class="w">  </span><span class="c1"># Generate mTLS certs for gRPC</span>
+task<span class="w"> </span>start-taskiq<span class="w">           </span><span class="c1"># Start TaskIQ worker</span>
 
-<span class="c1"># Clean build artifacts</span>
-task<span class="w"> </span>clean
-
-<span class="c1"># Bump version (major, minor, patch)</span>
-task<span class="w"> </span>bump-version<span class="w"> </span>--<span class="w"> </span>major<span class="p">|</span>minor<span class="p">|</span>patch
+task<span class="w"> </span>clean<span class="w">                </span><span class="c1"># Remove build artifacts + __pycache__</span>
+task<span class="w"> </span>clean-all<span class="w">            </span><span class="c1"># Above + remove .venv</span>
 </code></pre></div>
 <h3 id="publishing-process">Publishing Process<a class="headerlink" href="#publishing-process" title="Permanent link">¤</a></h3>
 <ol>
-<li>Update code and commit changes. (following conventional branch/commit
-   standard)</li>
-<li>Use <code>task bump-version -- major|minor|patch</code> command to commit new version.</li>
+<li>Update code and commit changes (following conventional branch/commit
+   standard).</li>
+<li>Use <code>task bump-version -- major|minor|patch</code> to commit the new version.</li>
 <li>Use GitHub "Create Release" workflow to publish the new version.</li>
 <li>Workflow automatically publishes to Test PyPI and PyPI.</li>
 </ol>
-<h2 id="license">📄 License<a class="headerlink" href="#license" title="Permanent link">¤</a></h2>
+<h2 id="license">License<a class="headerlink" href="#license" title="Permanent link">¤</a></h2>
 <p>This project is licensed under the terms specified in the LICENSE file.</p>
 <hr />
-<p>For more information, please visit our
-<a href="https://github.com/DigitalKin-ai/digitalkin">Homepage</a>, check our
-<a href="https://github.com/DigitalKin-ai/digitalkin">Documentation</a>, or report issues
-on our <a href="https://github.com/DigitalKin-ai/digitalkin/issues">Issues page</a>.</p>
-<p>Happy coding! 🎉🚀</p>
+<p>For more information, visit our <a href="https://digitalkin.com">Documentation</a> or
+report issues on our
+<a href="https://github.com/DigitalKin-ai/digitalkin/issues">Issues page</a>.</p>
 
 
 
