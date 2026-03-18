@@ -7,11 +7,6 @@
     ]
   },
   {
-    "version": "feat-registry-client",
-    "title": "feat-registry-client",
-    "aliases": []
-  },
-  {
     "version": "feat-refacto-opti",
     "title": "feat-refacto-opti",
     "aliases": []
