@@ -276,6 +276,17 @@ async def run_start_module(
             setup_model = await module_class.create_setup_model(setup_data)
         except Exception as e:
             logger.error("Failed to reconstruct models for job %s: %s", job_id, e, exc_info=True)
+            try:
+                await callback(
+                    ModuleCodeModel(
+                        code="ValidationError",
+                        short_description="Model reconstruction failed",
+                        message=str(e),
+                    )
+                )
+                await callback(DataModel(root=EndOfStreamOutput()))
+            except Exception:
+                logger.exception("Failed to send error to stream for job %s", job_id)
             raise
 
         supervisor_task = await executor.execute_task(
@@ -293,8 +304,19 @@ async def run_start_module(
         # Wait for the supervisor task to complete
         await supervisor_task
         logger.info("Module task %s completed", job_id)
-    except Exception:
+    except Exception as e:
         logger.exception("Error running module %s", job_id)
+        try:
+            await callback(
+                ModuleCodeModel(
+                    code="WorkerError",
+                    short_description="Worker execution failed",
+                    message=str(e),
+                )
+            )
+            await callback(DataModel(root=EndOfStreamOutput()))
+        except Exception:
+            logger.exception("Failed to send error to stream for job %s", job_id)
         raise
     finally:
         # Cleanup via module context
@@ -350,7 +372,22 @@ async def run_config_module(
         session = TaskSession(job_id, mission_id, module)
 
         # Create and run the config setup task with TaskExecutor
-        setup_model = module_class.create_config_setup_model(config_setup_data)
+        try:
+            setup_model = module_class.create_config_setup_model(config_setup_data)
+        except Exception as e:
+            logger.error("Failed to reconstruct config setup model for job %s: %s", job_id, e, exc_info=True)
+            try:
+                await callback(
+                    ModuleCodeModel(
+                        code="ValidationError",
+                        short_description="Config setup model reconstruction failed",
+                        message=str(e),
+                    )
+                )
+                await callback(DataModel(root=EndOfStreamOutput()))
+            except Exception:
+                logger.exception("Failed to send error to stream for job %s", job_id)
+            raise
 
         supervisor_task = await executor.execute_task(
             task_id=job_id,
@@ -362,8 +399,19 @@ async def run_config_module(
         # Wait for the supervisor task to complete
         await supervisor_task
         logger.info("Config module task %s completed", job_id)
-    except Exception:
+    except Exception as e:
         logger.exception("Error running config module %s", job_id)
+        try:
+            await callback(
+                ModuleCodeModel(
+                    code="WorkerError",
+                    short_description="Config worker execution failed",
+                    message=str(e),
+                )
+            )
+            await callback(DataModel(root=EndOfStreamOutput()))
+        except Exception:
+            logger.exception("Failed to send error to stream for job %s", job_id)
         raise
     finally:
         # Cleanup via module context

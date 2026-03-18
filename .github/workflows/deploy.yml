@@ -105,10 +105,6 @@ jobs:
 
           SAFE_VERSION="${VERSION//\//-}"
 
-          if [[ "$ALIAS" == "$REF_NAME" ]]; then
-            ALIAS="$SAFE_VERSION"
-          fi
-
           echo "safe_version=$SAFE_VERSION" >> $GITHUB_OUTPUT
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "alias=$ALIAS" >> $GITHUB_OUTPUT
@@ -140,13 +136,14 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: '3.10'
-          cache: 'pip'
 
       - name: Install uv
-        run: pip install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
 
       - name: Install project and dependencies
-        run: uv pip install -e . --group docs --system
+        run: uv sync --group docs
 
       - name: Configure Git
         run: |
@@ -207,7 +204,12 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Create mkdocs stub for mike
-        run: 'echo "site_name: digitalkin" > mkdocs.yml'
+        run: |
+          cat > mkdocs.yml << 'EOF'
+          site_name: digitalkin
+          docs_dir: .mike_stub_docs
+          EOF
+          mkdir -p .mike_stub_docs
 
       - name: Determine versions to cleanup
         id: cleanup_version

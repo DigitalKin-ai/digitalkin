@@ -301,12 +301,16 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             Yields:
                 dict: generated object from the module
             """
+            consecutive_timeouts = 0
+            max_consecutive_timeouts = int(os.environ.get("DIGITALKIN_RSTREAM_MAX_TIMEOUTS", "10"))
+
             while True:
                 # Block for first item with timeout to allow termination checks
                 get_task = asyncio.create_task(queue.get())
                 done, _ = await asyncio.wait([get_task], timeout=self.stream_timeout)
 
                 if done:
+                    consecutive_timeouts = 0
                     item = get_task.result()
                     queue.task_done()
                     yield item
@@ -325,7 +329,21 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
 
                 # Timeout — cancel pending get and check job status
                 get_task.cancel()
-                logger.warning("Stream consumer timeout for job %s, checking if job is still active", job_id)
+                consecutive_timeouts += 1
+                logger.warning(
+                    "Stream consumer timeout for job %s (%d/%d), checking if job is still active",
+                    job_id,
+                    consecutive_timeouts,
+                    max_consecutive_timeouts,
+                )
+
+                if consecutive_timeouts >= max_consecutive_timeouts:
+                    logger.error(
+                        "Job %s: max consecutive timeouts (%d) reached, ending stream",
+                        job_id,
+                        max_consecutive_timeouts,
+                    )
+                    break
 
                 if job_id not in self.tasks_sessions:
                     logger.info("Job %s no longer registered, ending stream", job_id)
@@ -436,7 +454,7 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             return "failed"
         return session.status
 
-    async def wait_for_completion(self, job_id: str) -> None:
+    async def wait_for_completion(self, job_id: str, max_wait: float = 600.0) -> None:
         """Wait for a task to complete by polling its status.
 
         Uses adaptive polling: starts at 50ms for fast jobs, doubles up to 500ms
@@ -444,9 +462,11 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
 
         Args:
             job_id: The unique identifier of the job to wait for.
+            max_wait: Maximum time in seconds to wait before giving up.
 
         Raises:
             KeyError: If the job_id is not found in tasks_sessions.
+            asyncio.TimeoutError: If max_wait is exceeded.
         """
         if job_id not in self.tasks_sessions:
             msg = f"Job {job_id} not found"
@@ -454,12 +474,17 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
 
         terminal_states = {"completed", "failed", "cancelled"}
         poll_interval = 0.05
+        elapsed = 0.0
         while True:
             session = self.tasks_sessions.get(job_id)
             if session is None or session.status in terminal_states:
                 logger.debug("Job %s reached terminal state: %s", job_id, session.status if session else "removed")
                 break
+            if elapsed >= max_wait:
+                logger.error("Job %s: max wait time (%.1fs) exceeded, giving up", job_id, max_wait)
+                raise asyncio.TimeoutError
             await asyncio.sleep(poll_interval)
+            elapsed += poll_interval
             poll_interval = min(poll_interval * 2, 0.5)
 
     async def stop_module(self, job_id: str) -> bool:
