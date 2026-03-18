@@ -7,11 +7,6 @@
     ]
   },
   {
-    "version": "feat-user-profile-service",
-    "title": "feat-user-profile-service",
-    "aliases": []
-  },
-  {
     "version": "feat-tool_reference",
     "title": "feat-tool_reference",
     "aliases": []
