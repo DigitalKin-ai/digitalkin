@@ -7,11 +7,6 @@
     ]
   },
   {
-    "version": "feat-end_of_stream_protocol",
-    "title": "feat-end_of_stream_protocol",
-    "aliases": []
-  },
-  {
     "version": "feat-dynamic-setup",
     "title": "feat-dynamic-setup",
     "aliases": []
