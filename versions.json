@@ -7,11 +7,6 @@
     ]
   },
   {
-    "version": "feat-normalization",
-    "title": "feat-normalization",
-    "aliases": []
-  },
-  {
     "version": "feat-grpc_aio",
     "title": "feat-grpc_aio",
     "aliases": []
