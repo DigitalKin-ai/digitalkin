@@ -206,6 +206,9 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
+      - name: Create mkdocs stub for mike
+        run: 'echo "site_name: digitalkin" > mkdocs.yml'
+
       - name: Determine versions to cleanup
         id: cleanup_version
         run: |
