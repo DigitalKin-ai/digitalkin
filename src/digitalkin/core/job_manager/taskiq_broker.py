@@ -61,15 +61,36 @@ class PickleFormatter(TaskiqFormatter):
     def loads(self, message: bytes) -> TaskiqMessage:  # Required by TaskiqFormatter interface # noqa: PLR6301
         """Recreate Python object from bytes.
 
+        Non-pickle messages (e.g. raw JSON left in the queue by other producers)
+        are logged and converted to a no-op ``TaskiqMessage`` so that Taskiq
+        acknowledges (consumes) them instead of nack-ing and re-delivering in a loop.
+
         Args:
             message: Broker message from bytes.
 
         Returns:
             message with TaskIQ format
         """
-        json_str = pickle.loads(  # noqa: S301
-            message
-        )  # Pickle: required for Taskiq deserialization (internal broker messages only)
+        try:
+            json_str = pickle.loads(  # noqa: S301
+                message
+            )  # Pickle: required for Taskiq deserialization (internal broker messages only)
+        except Exception as e:
+            logger.warning(
+                "Discarding non-pickle message (size=%d, preview=%r): %s",
+                len(message),
+                message[:80],
+                e,
+            )
+            # Return a no-op message that Taskiq will ack and discard
+            # (no task named "__discarded__" exists, so Taskiq logs a warning and moves on)
+            return TaskiqMessage(
+                task_id="__discarded__",
+                task_name="__discarded__",
+                labels={"_discarded": "true"},
+                args=[],
+                kwargs={},
+            )
         return model_validate(TaskiqMessage, json_str)
 
 
@@ -206,6 +227,17 @@ class TaskiqBrokerConfig:
 # Module-level globals required by Taskiq framework (decorator needs broker at import time)
 RSTREAM_PRODUCER = TaskiqBrokerConfig.define_producer()
 TASKIQ_BROKER = TaskiqBrokerConfig.define_broker()
+
+
+@TASKIQ_BROKER.task(task_name="__discarded__")
+async def _discarded_message() -> None:  # noqa: RUF029
+    """No-op sink for poison messages consumed by PickleFormatter.
+
+    Taskiq's receiver early-returns without acking when a task name is unknown,
+    so we register this dummy task to ensure the message is executed (no-op),
+    acked, and removed from the queue.
+    """
+    logger.debug("Poison message acknowledged and discarded")
 
 
 @TASKIQ_BROKER.task

@@ -11,14 +11,6 @@ on:
     # Trigger when branches are deleted
   workflow_dispatch:
     inputs:
-      environment:
-        description: 'Environment to deploy to'
-        required: true
-        type: choice
-        options:
-          - production
-          - staging
-        default: 'staging'
       cleanup_version:
         description: 'Versions to cleanup, comma-separated (e.g. "dev,feat-foo,0.2.1")'
         required: false
@@ -153,10 +145,11 @@ jobs:
       - name: Deploy with mike
         run: |
           uv run mike deploy \
-            --push \
             --update-aliases \
             ${{ needs.determine-version.outputs.safe_version }} \
             ${{ needs.determine-version.outputs.alias }}
+          uv run mike set-default stable
+          git push origin gh-pages
 
       - name: Deployment Summary
         run: |
