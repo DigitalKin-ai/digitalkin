@@ -34,7 +34,7 @@
         "grpcio-status==1.78.0",
         "pydantic==2.12.5",
     ]
-    version = "0.3.3.dev2"
+    version = "0.3.3.dev3"
 
     [project.optional-dependencies]
         profiling = [

@@ -4,6 +4,7 @@ import asyncio
 import logging
 import os
 import pickle
+import ssl
 from typing import Any
 
 from rstream import Producer
@@ -72,6 +73,22 @@ class PickleFormatter(TaskiqFormatter):
         return model_validate(TaskiqMessage, json_str)
 
 
+def _rstream_ssl_context() -> ssl.SSLContext | None:
+    """Create SSL context for RStream if TLS is enabled via RABBITMQ_RSTREAM_SSL=true.
+
+    Returns:
+        SSL context if TLS is enabled, None otherwise.
+    """
+    if os.environ.get("RABBITMQ_RSTREAM_SSL", "").lower() not in {"true", "1", "yes"}:
+        return None
+    ctx = ssl.create_default_context()
+    # Allow self-signed certs in staging if RABBITMQ_RSTREAM_SSL_VERIFY=false
+    if os.environ.get("RABBITMQ_RSTREAM_SSL_VERIFY", "true").lower() in {"false", "0", "no"}:
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+    return ctx
+
+
 class TaskiqBrokerConfig:
     """Configuration and lifecycle management for Taskiq broker and RStream producer."""
 
@@ -111,6 +128,7 @@ class TaskiqBrokerConfig:
             port=int(port),
             username=username,
             password=password,
+            ssl_context=_rstream_ssl_context(),
             default_batch_publishing_delay=float(os.environ.get("DIGITALKIN_RSTREAM_BATCH_DELAY", "0.1")),
             default_context_switch_value=int(os.environ.get("DIGITALKIN_RSTREAM_CONTEXT_SWITCH", "100")),
             connection_name="digitalkin_producer",

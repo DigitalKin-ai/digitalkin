@@ -59,12 +59,15 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         username: str = os.environ.get("RABBITMQ_RSTREAM_USERNAME", "guest")
         password: str = os.environ.get("RABBITMQ_RSTREAM_PASSWORD", "guest")
 
+        from digitalkin.core.job_manager.taskiq_broker import _rstream_ssl_context
+
         logger.info("RStream consumer connecting to %s:%s", host, port)
         return Consumer(
             host=host,
             port=int(port),
             username=username,
             password=password,
+            ssl_context=_rstream_ssl_context(),
             connection_name="digitalkin_consumer",
             on_close_handler=TaskiqJobManager._on_consumer_closed,
         )
