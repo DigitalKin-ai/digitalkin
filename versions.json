@@ -7,11 +7,6 @@
     ]
   },
   {
-    "version": "feat-tool_reference",
-    "title": "feat-tool_reference",
-    "aliases": []
-  },
-  {
     "version": "feat-setup-tool-registry",
     "title": "feat-setup-tool-registry",
     "aliases": []
