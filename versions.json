@@ -7,11 +7,6 @@
     ]
   },
   {
-    "version": "feat-cost_schema_cleanup",
-    "title": "feat-cost_schema_cleanup",
-    "aliases": []
-  },
-  {
     "version": "dev",
     "title": "dev",
     "aliases": [
