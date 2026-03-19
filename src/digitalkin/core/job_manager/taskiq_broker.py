@@ -367,6 +367,7 @@ async def run_config_module(
     services_mode: ServicesMode,
     config_setup_data: dict,
     request_metadata: dict[str, str] | None = None,
+    registry_config: dict[str, Any] | None = None,
     context: Context = TaskiqDepends(),
 ) -> None:
     """TaskIQ task allowing a module to compute in the background asynchronously.
@@ -379,9 +380,17 @@ async def run_config_module(
         services_mode: ServicesMode,
         config_setup_data: dict,
         request_metadata: gRPC request metadata (headers) to forward to the module.
+        registry_config: Registry config (client_config) forwarded from the main process.
         context: Allow TaskIQ context access
     """
     logger.info("Starting config module with services_mode: %s", services_mode)
+
+    # Restore registry config lost during pickle (worker re-imports class without runtime mutations)
+    if registry_config is not None:
+        if "services_config_params" not in module_class.__dict__:
+            module_class.services_config_params = dict(module_class.services_config_params)
+        module_class.services_config_params["registry"] = registry_config
+
     services_config = ServicesConfig(
         services_config_strategies=module_class.services_config_strategies,
         services_config_params=module_class.services_config_params,

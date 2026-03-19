@@ -245,6 +245,8 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             raise TypeError(msg)
 
         # Submit task to Taskiq
+        registry_config = self.module_class.services_config_params.get("registry")
+
         running_task: AsyncTaskiqTask[Any] = await task.kiq(
             mission_id,
             setup_id,
@@ -253,6 +255,7 @@ class TaskiqJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             self.services_mode,
             config_setup_data.model_dump(mode="json"),  # SetupModelT generic bound to BaseModel # type: ignore
             request_metadata,
+            registry_config,
         )
 
         job_id = running_task.task_id
