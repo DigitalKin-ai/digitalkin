@@ -7,12 +7,15 @@ Tests cover:
 - run_start_module task: registry injection, ServicesConfig wiring, error paths
 - TaskiqJobManager: job dispatch, stream consumer lifecycle, queue routing
 - PickleFormatter: round-trip serialization of TaskiqMessage
+- Shutdown lifecycle, consumer resilience, stream completion, middleware, orphan reaper
 """
 
 import asyncio
+import datetime
 import json
 import os
 import ssl
+import sys
 from typing import Any, ClassVar
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -569,3 +572,723 @@ class TestTaskiqJobManagerInit:
         with patch.dict(os.environ, {"DIGITALKIN_RSTREAM_QUEUE_SIZE": "500"}):
             manager = TaskiqJobManager(MockModule, ServicesMode.REMOTE)
             assert manager.max_queue_size == 500
+
+
+# ===========================================================================
+# 9. Session Lifecycle from RStream
+# ===========================================================================
+
+
+class TestSessionLifecycleFromRStream:
+    """Tests for session status bridging via RStream messages and lifecycle fixes."""
+
+    @pytest.mark.asyncio
+    async def test_on_message_marks_failed_on_error_code(self, _patch_taskiq):
+        """ModuleCodeModel error in RStream marks session as failed."""
+        from digitalkin.core.job_manager.taskiq_job_manager import TaskiqJobManager
+
+        manager = TaskiqJobManager(MockModule, ServicesMode.REMOTE)
+
+        session = Mock()
+        session.status = "pending"
+        session._stream_closed = asyncio.Event()
+        session.close_stream = session._stream_closed.set
+        manager.tasks_sessions["job-err"] = session
+
+        queue: asyncio.Queue = asyncio.Queue()
+        manager.job_queues["job-err"] = queue
+
+        msg = json.dumps({
+            "job_id": "job-err",
+            "output_data": {"code": "WorkerError", "message": "boom", "short_description": "fail"},
+        }).encode()
+        await manager._on_message(msg, Mock())
+
+        assert session.status == "failed"
+        assert not session._stream_closed.is_set()
+
+    @pytest.mark.asyncio
+    async def test_on_message_marks_completed_on_end_of_stream(self, _patch_taskiq):
+        """EndOfStreamOutput in RStream marks session as completed and closes stream."""
+        from digitalkin.core.job_manager.taskiq_job_manager import TaskiqJobManager
+
+        manager = TaskiqJobManager(MockModule, ServicesMode.REMOTE)
+
+        session = Mock()
+        session.status = "pending"
+        session._stream_closed = asyncio.Event()
+        session.close_stream = session._stream_closed.set
+        manager.tasks_sessions["job-eos"] = session
+
+        queue: asyncio.Queue = asyncio.Queue()
+        manager.job_queues["job-eos"] = queue
+
+        msg = json.dumps({
+            "job_id": "job-eos",
+            "output_data": {"root": {"protocol": "end_of_stream", "created_at": "2026-01-01"}, "annotations": {}},
+        }).encode()
+        await manager._on_message(msg, Mock())
+
+        assert session.status == "completed"
+        assert session._stream_closed.is_set()
+
+    @pytest.mark.asyncio
+    async def test_error_then_end_of_stream_preserves_failed(self, _patch_taskiq):
+        """Error then end_of_stream keeps status as failed but still closes stream."""
+        from digitalkin.core.job_manager.taskiq_job_manager import TaskiqJobManager
+
+        manager = TaskiqJobManager(MockModule, ServicesMode.REMOTE)
+
+        session = Mock()
+        session.status = "pending"
+        session._stream_closed = asyncio.Event()
+        session.close_stream = session._stream_closed.set
+        manager.tasks_sessions["job-ef"] = session
+
+        queue: asyncio.Queue = asyncio.Queue()
+        manager.job_queues["job-ef"] = queue
+
+        # First: error
+        err_msg = json.dumps({
+            "job_id": "job-ef",
+            "output_data": {"code": "WorkerError", "message": "boom"},
+        }).encode()
+        await manager._on_message(err_msg, Mock())
+        assert session.status == "failed"
+
+        # Then: end_of_stream
+        eos_msg = json.dumps({
+            "job_id": "job-ef",
+            "output_data": {"root": {"protocol": "end_of_stream", "created_at": "2026-01-01"}, "annotations": {}},
+        }).encode()
+        await manager._on_message(eos_msg, Mock())
+
+        assert session.status == "failed"  # Not overwritten to "completed"
+        assert session._stream_closed.is_set()  # Stream still closed
+
+    @pytest.mark.asyncio
+    async def test_on_message_ignores_if_already_cancelled(self, _patch_taskiq):
+        """Pre-cancelled session status not overwritten by error or eos."""
+        from digitalkin.core.job_manager.taskiq_job_manager import TaskiqJobManager
+
+        manager = TaskiqJobManager(MockModule, ServicesMode.REMOTE)
+
+        session = Mock()
+        session.status = "cancelled"
+        session._stream_closed = asyncio.Event()
+        session.close_stream = session._stream_closed.set
+        manager.tasks_sessions["job-cx"] = session
+
+        queue: asyncio.Queue = asyncio.Queue()
+        manager.job_queues["job-cx"] = queue
+
+        # Error should not overwrite "cancelled"
+        err_msg = json.dumps({
+            "job_id": "job-cx",
+            "output_data": {"code": "WorkerError", "message": "boom"},
+        }).encode()
+        await manager._on_message(err_msg, Mock())
+        assert session.status == "cancelled"
+
+        # End of stream should not overwrite "cancelled" but should close stream
+        eos_msg = json.dumps({
+            "job_id": "job-cx",
+            "output_data": {"root": {"protocol": "end_of_stream", "created_at": "2026-01-01"}, "annotations": {}},
+        }).encode()
+        await manager._on_message(eos_msg, Mock())
+        assert session.status == "cancelled"
+        assert session._stream_closed.is_set()
+
+    @pytest.mark.asyncio
+    async def test_config_setup_cleans_session(self, _patch_taskiq):
+        """Config setup response cleans up session and releases semaphore."""
+        from digitalkin.core.job_manager.taskiq_job_manager import TaskiqJobManager
+
+        manager = TaskiqJobManager(MockModule, ServicesMode.REMOTE)
+
+        session = Mock()
+        session.status = "pending"
+        session.mission_id = "mission:cfg"
+        manager.tasks_sessions["job-cfg"] = session
+
+        queue: asyncio.Queue = asyncio.Queue()
+        queue.put_nowait({"config": "result"})
+        manager.job_queues["job-cfg"] = queue
+
+        with patch.object(manager._task_manager, "_cleanup_task", new_callable=AsyncMock) as mock_cleanup:
+            result = await manager.generate_config_setup_module_response("job-cfg")
+
+        assert result == {"config": "result"}
+        assert "job-cfg" not in manager.job_queues
+        mock_cleanup.assert_awaited_once_with("job-cfg", "mission:cfg")
+
+    @pytest.mark.asyncio
+    async def test_job_queue_pre_created(self, _patch_taskiq):
+        """Queue exists immediately after create_module_instance_job dispatch."""
+        from digitalkin.core.job_manager.taskiq_job_manager import TaskiqJobManager
+
+        manager = TaskiqJobManager(MockModule, ServicesMode.REMOTE)
+
+        mock_task = Mock()
+        mock_running = AsyncMock()
+        mock_running.task_id = "job-pre"
+        mock_running.wait_result = AsyncMock(return_value=Mock(is_err=False))
+        mock_task.kiq = AsyncMock(return_value=mock_running)
+
+        with (
+            patch("digitalkin.core.job_manager.taskiq_job_manager.TASKIQ_BROKER") as mock_broker,
+            patch.object(MockModule, "__init__", return_value=None),
+            patch.object(manager, "create_task", new_callable=AsyncMock),
+        ):
+            mock_broker.find_task.return_value = mock_task
+
+            input_data = MockInputModel(root=MockInputTrigger())
+            setup_data = MockSetupModel()
+
+            await manager.create_module_instance_job(
+                input_data, setup_data, "mission:1", "setup:1", "sv:1"
+            )
+
+        assert "job-pre" in manager.job_queues
+
+    @pytest.mark.asyncio
+    async def test_wait_for_completion_returns_on_stream_closed(self, _patch_taskiq):
+        """wait_for_completion returns instantly when _stream_closed is already set."""
+        from digitalkin.core.job_manager.taskiq_job_manager import TaskiqJobManager
+
+        manager = TaskiqJobManager(MockModule, ServicesMode.REMOTE)
+
+        session = Mock()
+        session.status = "completed"
+        session._stream_closed = asyncio.Event()
+        session._stream_closed.set()
+        manager.tasks_sessions["job-wfc"] = session
+
+        # Should return near-instantly (well under 0.5s)
+        await asyncio.wait_for(
+            manager.wait_for_completion("job-wfc", max_wait=1.0),
+            timeout=0.5,
+        )
+
+    @pytest.mark.asyncio
+    async def test_generate_stream_consumer_reuses_existing_queue(self, _patch_taskiq):
+        """Pre-populated queue items survive through generate_stream_consumer."""
+        from digitalkin.core.job_manager.taskiq_job_manager import TaskiqJobManager
+
+        manager = TaskiqJobManager(MockModule, ServicesMode.REMOTE)
+        manager.stream_timeout = 0.3
+
+        # Pre-create queue with items
+        queue: asyncio.Queue = asyncio.Queue()
+        queue.put_nowait({"data": "pre-existing"})
+        manager.job_queues["job-reuse"] = queue
+
+        outputs = []
+        async with manager.generate_stream_consumer("job-reuse") as stream:
+            assert manager.job_queues["job-reuse"] is queue
+            count = 0
+            async for output in stream:
+                outputs.append(output)
+                count += 1
+                if count >= 1:
+                    break
+
+        assert outputs == [{"data": "pre-existing"}]
+
+    def test_result_backend_wired_when_env_set(self):
+        """RedisAsyncResultBackend attached when DIGITALKIN_TASKIQ_RESULT_BACKEND_URL is set."""
+        pytest.importorskip("taskiq", reason="taskiq not installed")
+        from digitalkin.core.job_manager.taskiq_broker import TaskiqBrokerConfig
+
+        mock_taskiq_redis = Mock()
+        with (
+            patch.dict(os.environ, {"DIGITALKIN_TASKIQ_RESULT_BACKEND_URL": "redis://localhost:6379"}, clear=True),
+            patch("digitalkin.core.job_manager.taskiq_broker.AioPikaBroker") as mock_broker_cls,
+            patch.dict(sys.modules, {"taskiq_redis": mock_taskiq_redis}),
+        ):
+            mock_broker = Mock()
+            mock_broker_cls.return_value = mock_broker
+
+            TaskiqBrokerConfig.define_broker()
+
+            mock_taskiq_redis.RedisAsyncResultBackend.assert_called_once_with("redis://localhost:6379")
+            mock_broker.with_result_backend.assert_called_once()
+
+    def test_no_result_backend_by_default(self):
+        """No result backend attached when DIGITALKIN_TASKIQ_RESULT_BACKEND_URL is unset."""
+        pytest.importorskip("taskiq", reason="taskiq not installed")
+        from digitalkin.core.job_manager.taskiq_broker import TaskiqBrokerConfig
+
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch("digitalkin.core.job_manager.taskiq_broker.AioPikaBroker") as mock_broker_cls,
+        ):
+            mock_broker = Mock()
+            mock_broker_cls.return_value = mock_broker
+
+            TaskiqBrokerConfig.define_broker()
+
+            mock_broker.with_result_backend.assert_not_called()
+
+
+# ===========================================================================
+# 10. Shutdown Lifecycle (Changes 1 & 2)
+# ===========================================================================
+
+
+class TestShutdownLifecycle:
+    """Tests for stop() cleanup: modules, sessions, consumer, queues."""
+
+    @pytest.mark.asyncio
+    async def test_stop_cancels_all_modules_and_cleans_sessions(self, _patch_taskiq):
+        """stop() cancels modules, cleans sessions, closes consumer, clears queues."""
+        from digitalkin.core.job_manager.taskiq_job_manager import TaskiqJobManager
+
+        manager = TaskiqJobManager(MockModule, ServicesMode.REMOTE)
+
+        # Simulate started state
+        manager.stream_consumer = Mock()
+        manager.stream_consumer.close = AsyncMock()
+        manager.stream_consumer_task = asyncio.create_task(asyncio.sleep(100))
+        manager._reaper_task = asyncio.create_task(asyncio.sleep(100))
+
+        # Register mock sessions
+        session1 = Mock()
+        session1.status = "pending"
+        session1.mission_id = "m1"
+        session2 = Mock()
+        session2.status = "completed"
+        session2.mission_id = "m2"
+        manager._task_manager.tasks_sessions["job-1"] = session1
+        manager._task_manager.tasks_sessions["job-2"] = session2
+
+        manager.job_queues["job-1"] = asyncio.Queue()
+        manager.job_queues["job-2"] = asyncio.Queue()
+
+        with (
+            patch.object(manager, "stop_all_modules", new_callable=AsyncMock) as mock_stop_all,
+            patch.object(manager._task_manager, "_cleanup_task", new_callable=AsyncMock) as mock_cleanup,
+            patch("digitalkin.core.job_manager.taskiq_job_manager.TaskiqBrokerConfig.cleanup_global_resources", new_callable=AsyncMock),
+        ):
+            await manager.stop()
+
+        mock_stop_all.assert_awaited_once()
+        assert mock_cleanup.await_count == 2
+        assert len(manager.job_queues) == 0
+        manager.stream_consumer.close.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_stop_releases_semaphore_slots(self, _patch_taskiq):
+        """stop() releases all semaphore slots via _cleanup_task."""
+        from digitalkin.core.job_manager.taskiq_job_manager import TaskiqJobManager
+
+        manager = TaskiqJobManager(MockModule, ServicesMode.REMOTE)
+
+        manager.stream_consumer = Mock()
+        manager.stream_consumer.close = AsyncMock()
+        manager.stream_consumer_task = asyncio.create_task(asyncio.sleep(100))
+        manager._reaper_task = asyncio.create_task(asyncio.sleep(100))
+
+        session = Mock()
+        session.status = "pending"
+        session.mission_id = "m1"
+        manager._task_manager.tasks_sessions["job-s"] = session
+
+        cleanup_called = []
+
+        async def fake_cleanup(task_id, mission_id):
+            cleanup_called.append((task_id, mission_id))
+            manager._task_manager.tasks_sessions.pop(task_id, None)
+
+        with (
+            patch.object(manager, "stop_all_modules", new_callable=AsyncMock),
+            patch.object(manager._task_manager, "_cleanup_task", side_effect=fake_cleanup),
+            patch("digitalkin.core.job_manager.taskiq_job_manager.TaskiqBrokerConfig.cleanup_global_resources", new_callable=AsyncMock),
+        ):
+            await manager.stop()
+
+        assert ("job-s", "m1") in cleanup_called
+        assert len(manager.tasks_sessions) == 0
+
+    @pytest.mark.asyncio
+    async def test_module_server_stop_calls_job_manager_stop(self):
+        """ModuleServer.stop_async() calls job_manager.stop_all_modules() and stop()."""
+        from digitalkin.grpc_servers.module_server import ModuleServer
+
+        mock_servicer = Mock()
+        mock_servicer.shutdown = AsyncMock()
+        mock_servicer.job_manager = Mock()
+        mock_servicer.job_manager.stop_all_modules = AsyncMock()
+        mock_servicer.job_manager.stop = AsyncMock()
+
+        server = ModuleServer.__new__(ModuleServer)
+        server.module_class = MockModule
+        server.server_config = Mock()
+        server.client_config = None
+        server.module_servicer = mock_servicer
+        server.registry = None
+        server.server = Mock()
+        server.server.stop = AsyncMock()
+        server.server.wait_for_termination = AsyncMock()
+
+        with patch("digitalkin.grpc_servers._base_server.BaseServer.stop_async", new_callable=AsyncMock):
+            await server.stop_async()
+
+        mock_servicer.job_manager.stop_all_modules.assert_awaited_once()
+        mock_servicer.job_manager.stop.assert_awaited_once()
+
+
+# ===========================================================================
+# 11. Consumer Resilience (Change 3)
+# ===========================================================================
+
+
+class TestConsumerResilience:
+    """Tests for RStream consumer auto-restart with backoff."""
+
+    @pytest.mark.asyncio
+    async def test_consumer_restarts_on_failure(self, _patch_taskiq):
+        """Consumer.run() raises once then succeeds — verify reconnect."""
+        from digitalkin.core.job_manager.taskiq_job_manager import TaskiqJobManager
+
+        manager = TaskiqJobManager(MockModule, ServicesMode.REMOTE)
+
+        call_count = 0
+        mock_consumer = Mock()
+
+        async def fake_run():
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise ConnectionError("lost connection")
+            # Second call succeeds and returns
+
+        mock_consumer.run = fake_run
+        mock_consumer.create_stream = AsyncMock()
+        mock_consumer.start = AsyncMock()
+        mock_consumer.subscribe = AsyncMock()
+        manager.stream_consumer = mock_consumer
+
+        with (
+            patch.dict(os.environ, {"DIGITALKIN_RSTREAM_MAX_RETRIES": "3"}),
+            patch.object(TaskiqJobManager, "_define_consumer", return_value=mock_consumer),
+            patch("digitalkin.core.job_manager.taskiq_job_manager.asyncio.sleep", new_callable=AsyncMock),
+        ):
+            await manager._run_consumer_with_restart()
+
+        assert call_count == 2
+        mock_consumer.create_stream.assert_awaited_once()
+        mock_consumer.start.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_consumer_gives_up_after_max_retries(self, _patch_taskiq):
+        """Always raises — verify sessions marked failed after max retries."""
+        from digitalkin.core.job_manager.taskiq_job_manager import TaskiqJobManager
+
+        manager = TaskiqJobManager(MockModule, ServicesMode.REMOTE)
+
+        mock_consumer = Mock()
+
+        async def always_fail():
+            raise ConnectionError("down")
+
+        mock_consumer.run = always_fail
+        mock_consumer.create_stream = AsyncMock()
+        mock_consumer.start = AsyncMock()
+        mock_consumer.subscribe = AsyncMock()
+        manager.stream_consumer = mock_consumer
+
+        session = Mock()
+        session.status = "pending"
+        session.close_stream = Mock()
+        manager._task_manager.tasks_sessions["job-f"] = session
+
+        with (
+            patch.dict(os.environ, {"DIGITALKIN_RSTREAM_MAX_RETRIES": "2"}),
+            patch.object(TaskiqJobManager, "_define_consumer", return_value=mock_consumer),
+            patch("digitalkin.core.job_manager.taskiq_job_manager.asyncio.sleep", new_callable=AsyncMock),
+        ):
+            await manager._run_consumer_with_restart()
+
+        assert session.status == "failed"
+        session.close_stream.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_consumer_exits_cleanly_on_cancel(self, _patch_taskiq):
+        """CancelledError propagates without retry."""
+        from digitalkin.core.job_manager.taskiq_job_manager import TaskiqJobManager
+
+        manager = TaskiqJobManager(MockModule, ServicesMode.REMOTE)
+
+        mock_consumer = Mock()
+
+        async def raise_cancelled():
+            raise asyncio.CancelledError()
+
+        mock_consumer.run = raise_cancelled
+        manager.stream_consumer = mock_consumer
+
+        with pytest.raises(asyncio.CancelledError):
+            await manager._run_consumer_with_restart()
+
+
+# ===========================================================================
+# 12. Stream Consumer Completion (Change 4)
+# ===========================================================================
+
+
+class TestStreamConsumerCompletion:
+    """Tests for stream_closed and completed status detection in stream consumer."""
+
+    @pytest.mark.asyncio
+    async def test_stream_exits_on_stream_closed(self, _patch_taskiq):
+        """_stream_closed set — immediate exit after timeout."""
+        from digitalkin.core.job_manager.taskiq_job_manager import TaskiqJobManager
+
+        manager = TaskiqJobManager(MockModule, ServicesMode.REMOTE)
+        manager.stream_timeout = 0.1
+
+        session = Mock()
+        session.status = "completed"
+        session.stream_closed = True
+        manager._task_manager.tasks_sessions["job-sc"] = session
+
+        outputs = []
+        async with manager.generate_stream_consumer("job-sc") as stream:
+            async for output in stream:
+                outputs.append(output)
+
+        assert outputs == []
+
+    @pytest.mark.asyncio
+    async def test_stream_exits_on_completed_status(self, _patch_taskiq):
+        """status='completed' — drains and exits."""
+        from digitalkin.core.job_manager.taskiq_job_manager import TaskiqJobManager
+
+        manager = TaskiqJobManager(MockModule, ServicesMode.REMOTE)
+        manager.stream_timeout = 0.1
+
+        session = Mock()
+        session.status = "completed"
+        session.stream_closed = False
+        manager._task_manager.tasks_sessions["job-comp"] = session
+
+        outputs = []
+        async with manager.generate_stream_consumer("job-comp") as stream:
+            async for output in stream:
+                outputs.append(output)
+
+        assert outputs == []
+
+    @pytest.mark.asyncio
+    async def test_stream_drains_remaining_items_on_completion(self, _patch_taskiq):
+        """Items in queue + completed status — all yielded before exit."""
+        from digitalkin.core.job_manager.taskiq_job_manager import TaskiqJobManager
+
+        manager = TaskiqJobManager(MockModule, ServicesMode.REMOTE)
+        manager.stream_timeout = 0.1
+
+        session = Mock()
+        session.status = "completed"
+        session.stream_closed = False
+        manager._task_manager.tasks_sessions["job-drain"] = session
+
+        # Pre-populate queue
+        queue: asyncio.Queue = asyncio.Queue()
+        queue.put_nowait({"data": "item1"})
+        queue.put_nowait({"data": "item2"})
+        manager.job_queues["job-drain"] = queue
+
+        outputs = []
+        async with manager.generate_stream_consumer("job-drain") as stream:
+            async for output in stream:
+                outputs.append(output)
+
+        assert len(outputs) == 2
+        assert outputs[0] == {"data": "item1"}
+        assert outputs[1] == {"data": "item2"}
+
+
+# ===========================================================================
+# 13. Taskiq Lifecycle Middleware (Change 5)
+# ===========================================================================
+
+
+class TestMiddleware:
+    """Tests for TaskiqLifecycleMiddleware."""
+
+    @pytest.mark.asyncio
+    async def test_middleware_pre_execute_returns_message(self):
+        """pre_execute returns unmodified message."""
+        pytest.importorskip("taskiq", reason="taskiq not installed")
+        from taskiq import TaskiqMessage
+
+        from digitalkin.core.job_manager.taskiq_broker import TaskiqLifecycleMiddleware
+
+        middleware = TaskiqLifecycleMiddleware()
+        msg = TaskiqMessage(
+            task_id="test-id",
+            task_name="test.task",
+            labels={},
+            args=[],
+            kwargs={},
+        )
+
+        result = await middleware.pre_execute(msg)
+        assert result is msg
+
+    @pytest.mark.asyncio
+    async def test_middleware_on_error_sends_end_of_stream(self):
+        """on_error sends ModuleCodeModel + EndOfStreamOutput as safety net."""
+        pytest.importorskip("taskiq", reason="taskiq not installed")
+        from taskiq import TaskiqMessage
+        from taskiq.result import TaskiqResult
+
+        from digitalkin.core.job_manager.taskiq_broker import TaskiqLifecycleMiddleware
+
+        middleware = TaskiqLifecycleMiddleware()
+        msg = TaskiqMessage(
+            task_id="crash-id",
+            task_name="test.task",
+            labels={},
+            args=[],
+            kwargs={},
+        )
+        result = TaskiqResult(is_err=True, return_value=None, execution_time=0.1, log="")
+        exc = RuntimeError("worker crashed")
+
+        sent_messages = []
+
+        async def capture_send(job_id, output_data):
+            sent_messages.append((job_id, type(output_data).__name__))
+
+        with patch("digitalkin.core.job_manager.taskiq_broker.TaskiqBrokerConfig.send_message_to_stream", side_effect=capture_send):
+            await middleware.on_error(msg, result, exc)
+
+        assert len(sent_messages) == 2
+        assert sent_messages[0] == ("crash-id", "ModuleCodeModel")
+        assert sent_messages[1] == ("crash-id", "DataModel")
+
+    @pytest.mark.asyncio
+    async def test_middleware_on_error_handles_send_failure(self):
+        """on_error swallows send failures without propagation."""
+        pytest.importorskip("taskiq", reason="taskiq not installed")
+        from taskiq import TaskiqMessage
+        from taskiq.result import TaskiqResult
+
+        from digitalkin.core.job_manager.taskiq_broker import TaskiqLifecycleMiddleware
+
+        middleware = TaskiqLifecycleMiddleware()
+        msg = TaskiqMessage(
+            task_id="fail-send",
+            task_name="test.task",
+            labels={},
+            args=[],
+            kwargs={},
+        )
+        result = TaskiqResult(is_err=True, return_value=None, execution_time=0.1, log="")
+        exc = RuntimeError("worker crashed")
+
+        with patch(
+            "digitalkin.core.job_manager.taskiq_broker.TaskiqBrokerConfig.send_message_to_stream",
+            side_effect=ConnectionError("stream down"),
+        ):
+            # Should not raise
+            await middleware.on_error(msg, result, exc)
+
+    def test_middleware_registered_on_broker(self):
+        """TaskiqLifecycleMiddleware is registered in TASKIQ_BROKER.middlewares."""
+        pytest.importorskip("taskiq", reason="taskiq not installed")
+        from digitalkin.core.job_manager.taskiq_broker import TASKIQ_BROKER, TaskiqLifecycleMiddleware
+
+        assert any(isinstance(m, TaskiqLifecycleMiddleware) for m in TASKIQ_BROKER.middlewares)
+
+
+# ===========================================================================
+# 14. Orphan Session Reaper (Change 6)
+# ===========================================================================
+
+
+class TestOrphanReaper:
+    """Tests for orphan session reaper and TaskSession.created_at."""
+
+    @pytest.mark.asyncio
+    async def test_reaper_marks_old_pending_as_failed(self, _patch_taskiq):
+        """Old created_at + pending status → marked failed + stream closed."""
+        from digitalkin.core.job_manager.taskiq_job_manager import TaskiqJobManager
+
+        manager = TaskiqJobManager(MockModule, ServicesMode.REMOTE)
+
+        session = Mock()
+        session.status = "pending"
+        session.mission_id = "m1"
+        session.created_at = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=700)
+        session.close_stream = Mock()
+        manager._task_manager.tasks_sessions["job-orphan"] = session
+
+        with (
+            patch.dict(os.environ, {"DIGITALKIN_ORPHAN_SESSION_TIMEOUT": "600", "DIGITALKIN_ORPHAN_CHECK_INTERVAL": "0.01"}),
+            patch.object(manager._task_manager, "_cleanup_task", new_callable=AsyncMock) as mock_cleanup,
+        ):
+            task = asyncio.create_task(manager._reap_orphan_sessions())
+            await asyncio.sleep(0.05)
+            task.cancel()
+            await task  # Reaper catches CancelledError and returns cleanly
+
+        assert session.status == "failed"
+        session.close_stream.assert_called_once()
+        mock_cleanup.assert_awaited_once_with("job-orphan", "m1")
+
+    @pytest.mark.asyncio
+    async def test_reaper_ignores_non_pending_sessions(self, _patch_taskiq):
+        """status='running' + old → not touched."""
+        from digitalkin.core.job_manager.taskiq_job_manager import TaskiqJobManager
+
+        manager = TaskiqJobManager(MockModule, ServicesMode.REMOTE)
+
+        session = Mock()
+        session.status = "running"
+        session.mission_id = "m1"
+        session.created_at = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=700)
+        session.close_stream = Mock()
+        manager._task_manager.tasks_sessions["job-running"] = session
+
+        with (
+            patch.dict(os.environ, {"DIGITALKIN_ORPHAN_SESSION_TIMEOUT": "600", "DIGITALKIN_ORPHAN_CHECK_INTERVAL": "0.01"}),
+            patch.object(manager._task_manager, "_cleanup_task", new_callable=AsyncMock) as mock_cleanup,
+        ):
+            task = asyncio.create_task(manager._reap_orphan_sessions())
+            await asyncio.sleep(0.05)
+            task.cancel()
+            await task  # Reaper catches CancelledError and returns cleanly
+
+        assert session.status == "running"
+        session.close_stream.assert_not_called()
+        mock_cleanup.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_reaper_stops_on_cancel(self, _patch_taskiq):
+        """Cancel task → clean exit."""
+        from digitalkin.core.job_manager.taskiq_job_manager import TaskiqJobManager
+
+        manager = TaskiqJobManager(MockModule, ServicesMode.REMOTE)
+
+        with patch.dict(os.environ, {"DIGITALKIN_ORPHAN_CHECK_INTERVAL": "0.01"}):
+            task = asyncio.create_task(manager._reap_orphan_sessions())
+            await asyncio.sleep(0.02)
+            task.cancel()
+            # Should not raise — reaper catches CancelledError and returns
+            await task
+
+    def test_task_session_has_created_at(self):
+        """TaskSession.created_at is set on construction."""
+        from digitalkin.core.task_manager.task_session import TaskSession
+
+        mock_module = Mock()
+        mock_module.context.task_manager = Mock()
+
+        before = datetime.datetime.now(datetime.timezone.utc)
+        session = TaskSession("t1", "m1", mock_module)
+        after = datetime.datetime.now(datetime.timezone.utc)
+
+        assert before <= session.created_at <= after

@@ -11,8 +11,10 @@ from rstream import Producer
 from rstream.exceptions import PreconditionFailed
 from taskiq import Context, TaskiqDepends, TaskiqMessage
 from taskiq.abc.formatter import TaskiqFormatter
+from taskiq.abc.middleware import TaskiqMiddleware
 from taskiq.compat import model_validate
 from taskiq.message import BrokerMessage
+from taskiq.result import TaskiqResult
 from taskiq_aio_pika import AioPikaBroker
 
 from digitalkin.core.common import ModuleFactory
@@ -175,6 +177,11 @@ class TaskiqBrokerConfig:
             startup=[TaskiqBrokerConfig.init_rstream],
         )
         broker.formatter = PickleFormatter()
+        redis_url = os.environ.get("DIGITALKIN_TASKIQ_RESULT_BACKEND_URL")
+        if redis_url:
+            from taskiq_redis import RedisAsyncResultBackend
+
+            broker.with_result_backend(RedisAsyncResultBackend(redis_url))
         return broker
 
     @staticmethod
@@ -224,9 +231,54 @@ class TaskiqBrokerConfig:
         await RSTREAM_PRODUCER.send(stream=TaskiqBrokerConfig.STREAM, message=body)
 
 
+class TaskiqLifecycleMiddleware(TaskiqMiddleware):
+    """Lifecycle middleware for structured logging and safety-net EndOfStreamOutput."""
+
+    async def pre_execute(self, message: TaskiqMessage) -> TaskiqMessage:  # noqa: PLR6301
+        """Log task start.
+
+        Returns:
+            The unmodified message.
+        """
+        logger.info("Taskiq task starting: %s (task_name=%s)", message.task_id, message.task_name)
+        return message
+
+    async def post_execute(self, message: TaskiqMessage, result: TaskiqResult) -> None:  # noqa: PLR6301
+        """Log task completion."""
+        log_fn = logger.info if not result.is_err else logger.error
+        log_fn(
+            "Taskiq task finished: %s (task_name=%s, is_err=%s, exec_time=%.3fs)",
+            message.task_id,
+            message.task_name,
+            result.is_err,
+            result.execution_time,
+        )
+
+    async def on_error(  # noqa: PLR6301
+        self,
+        message: TaskiqMessage,
+        result: TaskiqResult,  # noqa: ARG002
+        exception: BaseException,
+    ) -> None:
+        """Safety net: send EndOfStreamOutput if worker task failed to."""
+        logger.error("Taskiq task error: %s (task_name=%s, error=%s)", message.task_id, message.task_name, exception)
+        try:
+            await TaskiqBrokerConfig.send_message_to_stream(
+                message.task_id,
+                ModuleCodeModel(code="WorkerCrash", short_description="Middleware safety net", message=str(exception)),
+            )
+            await TaskiqBrokerConfig.send_message_to_stream(
+                message.task_id,
+                DataModel(root=EndOfStreamOutput()),
+            )
+        except Exception:
+            logger.exception("Middleware safety net failed for %s", message.task_id)
+
+
 # Module-level globals required by Taskiq framework (decorator needs broker at import time)
 RSTREAM_PRODUCER = TaskiqBrokerConfig.define_producer()
 TASKIQ_BROKER = TaskiqBrokerConfig.define_broker()
+TASKIQ_BROKER.add_middlewares(TaskiqLifecycleMiddleware())
 
 
 @TASKIQ_BROKER.task(task_name="__discarded__")
