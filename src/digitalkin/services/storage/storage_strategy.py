@@ -9,6 +9,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
+from digitalkin.logger import logger
 from digitalkin.services.base_strategy import BaseStrategy
 
 
@@ -89,6 +90,26 @@ class StorageStrategy(BaseStrategy, ABC):
             data=validated_data,
             data_type=data_type,
         )
+
+    def _verify_mission_id(self, record: StorageRecord) -> bool:
+        """Check that a record belongs to this strategy's mission.
+
+        Args:
+            record: The record to verify.
+
+        Returns:
+            True if the record's mission_id matches, False otherwise.
+        """
+        if record.mission_id != self.mission_id:
+            logger.warning(
+                "Mission ID mismatch: expected %s, got %s (collection=%s, record_id=%s)",
+                self.mission_id,
+                record.mission_id,
+                record.collection,
+                record.record_id,
+            )
+            return False
+        return True
 
     @staticmethod
     def _is_valid_data_type_name(value: str) -> TypeGuard[str]:
@@ -235,10 +256,14 @@ class StorageStrategy(BaseStrategy, ABC):
             record_id: The unique ID of the record
 
         Returns:
-            A storage record with validated data
+            A storage record with validated data, or None if not found
+            or if the record belongs to a different mission.
         """
         async with self._record_lock(collection, record_id):
-            return await self._read(collection, record_id)
+            record = await self._read(collection, record_id)
+        if record is not None and not self._verify_mission_id(record):
+            return None
+        return record
 
     async def update(self, collection: str, record_id: str, data: dict[str, Any]) -> StorageRecord | None:
         """Validate & overwrite an existing record.
@@ -273,15 +298,16 @@ class StorageStrategy(BaseStrategy, ABC):
         return result
 
     async def list(self, collection: str) -> list[StorageRecord]:
-        """Get all records within a collection.
+        """Get all records within a collection scoped to this mission.
 
         Args:
             collection: The unique name for the record type
 
         Returns:
-            A list of storage records
+            A list of storage records belonging to this mission.
         """
-        return await self._list(collection)
+        records = await self._list(collection)
+        return [r for r in records if self._verify_mission_id(r)]
 
     async def remove_collection(self, collection: str) -> bool:
         """Wipe a record clean.
