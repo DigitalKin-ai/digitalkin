@@ -103,6 +103,18 @@ class RegistryStrategy(BaseStrategy, ABC):
         """Get setup info."""
         ...
 
+    async def wait_for_ready(self, timeout: float = 1.0) -> bool:  # noqa: PLR6301
+        """Check if the registry backend is reachable.
+
+        Args:
+            timeout: Max seconds to wait for connectivity.
+
+        Returns:
+            True if ready. Default implementation always returns True.
+        """
+        _ = timeout
+        return True
+
     @abstractmethod
     async def deregister(self, module_id: str) -> bool:
         """Deregister a module from the registry.

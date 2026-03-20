@@ -183,10 +183,12 @@ cython_debug/
 # IDE
 .vscode/
 .idea/
+.DS_Store
 
 # Project
 requirements.txt
 certs/
 .report.json
+docker-compose.override.yml
 
 CLAUDE.md

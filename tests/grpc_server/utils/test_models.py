@@ -3,14 +3,8 @@
 import pytest
 
 from digitalkin.grpc_servers.utils.exceptions import ConfigurationError, SecurityError
-from digitalkin.models.grpc_servers.models import (
-    ModuleServerConfig,
-    RegistryServerConfig,
-    SecurityMode,
-    ServerConfig,
-    ServerCredentials,
-    ServerMode,
-)
+from digitalkin.models.settings.server.server import ServerSettings
+from digitalkin.models.settings.utils.channel import ControlFlow, SecurityMode, Credentials
 
 
 @pytest.mark.grpc
@@ -20,36 +14,29 @@ class TestEnums:
     def test_server_mode_enum(self) -> None:
         """Test the ServerMode enum."""
         # Check SYNC value
-        if ServerMode.SYNC != "sync":
-            pytest.fail(f"Expected ServerMode.SYNC to be 'sync', got '{ServerMode.SYNC}'")
+        assert ControlFlow.SYNC == "sync"
 
         # Check ASYNC value
-        if ServerMode.ASYNC != "async":
-            pytest.fail(f"Expected ServerMode.ASYNC to be 'async', got '{ServerMode.ASYNC}'")
+        assert ControlFlow.ASYNC == "async"
 
         # Check all enum members
-        expected_members = [ServerMode.SYNC, ServerMode.ASYNC]
-        actual_members = list(ServerMode)
+        expected_members = [ControlFlow.SYNC, ControlFlow.ASYNC]
+        actual_members = list(ControlFlow)
 
-        if actual_members != expected_members:
-            pytest.fail(f"Expected ServerMode enum to have members {expected_members}, got {actual_members}")
+        assert actual_members == expected_members
 
     def test_security_mode_enum(self) -> None:
         """Test the SecurityMode enum."""
         # Check SECURE value
-        if SecurityMode.SECURE != "secure":
-            pytest.fail(f"Expected SecurityMode.SECURE to be 'secure', got '{SecurityMode.SECURE}'")
-
+        assert SecurityMode.SECURE == "secure"
         # Check INSECURE value
-        if SecurityMode.INSECURE != "insecure":
-            pytest.fail(f"Expected SecurityMode.INSECURE to be 'insecure', got '{SecurityMode.INSECURE}'")
+        assert SecurityMode.INSECURE == "insecure"
 
         # Check all enum members
         expected_members = [SecurityMode.SECURE, SecurityMode.INSECURE]
         actual_members = list(SecurityMode)
 
-        if actual_members != expected_members:
-            pytest.fail(f"Expected SecurityMode enum to have members {expected_members}, got {actual_members}")
+        assert actual_members == expected_members
 
 
 @pytest.mark.grpc
@@ -69,33 +56,29 @@ class TestServerCredentials:
         ca_cert.write_text("TEST CA CERT")
 
         # Test valid credentials
-        creds = ServerCredentials(
-            server_key_path=server_key,
-            server_cert_path=server_cert,
+        creds = Credentials(
+            key_path=server_key,
+            cert_path=server_cert,
             root_cert_path=ca_cert,
         )
 
         # Check key path
-        if creds.server_key_path != server_key:
-            pytest.fail(f"Expected server_key_path to be {server_key}, got {creds.server_key_path}")
+        assert creds.key_path == server_key
 
         # Check cert path
-        if creds.server_cert_path != server_cert:
-            pytest.fail(f"Expected server_cert_path to be {server_cert}, got {creds.server_cert_path}")
+        assert creds.cert_path == server_cert
 
         # Check root cert path
-        if creds.root_cert_path != ca_cert:
-            pytest.fail(f"Expected root_cert_path to be {ca_cert}, got {creds.root_cert_path}")
+        assert creds.root_cert_path == ca_cert
 
         # Test optional root cert
-        creds_no_ca = ServerCredentials(
-            server_key_path=server_key,
-            server_cert_path=server_cert,
+        creds_no_ca = Credentials(
+            key_path=server_key,
+            cert_path=server_cert,
         )
 
         # Check root cert is None
-        if creds_no_ca.root_cert_path is not None:
-            pytest.fail(f"Expected root_cert_path to be None, got {creds_no_ca.root_cert_path}")
+        assert creds_no_ca.root_cert_path is None
 
     def test_server_credentials_validation_errors(self, tmp_path) -> None:
         """Test validation errors in ServerCredentials."""
@@ -105,9 +88,9 @@ class TestServerCredentials:
 
         # Missing certificate file should raise error
         with pytest.raises(SecurityError):
-            ServerCredentials(
-                server_key_path=server_key,
-                server_cert_path=tmp_path / "nonexistent.crt",
+            Credentials(
+                key_path=server_key,
+                cert_path=tmp_path / "nonexistent.crt",
             )
 
 
@@ -118,199 +101,161 @@ class TestServerConfig:
 
     def test_server_config_defaults(self) -> None:
         """Test default values for ServerConfig."""
-        config = ServerConfig()
+        config = ServerSettings()
 
         # Check host
-        if config.host != "0.0.0.0":  # noqa: S104
-            pytest.fail(f"Expected default host to be '0.0.0.0', got '{config.host}'")
-
+        assert config.channel.host == "[::]"
         # Check port
-        if config.port != 50051:
-            pytest.fail(f"Expected default port to be 50051, got {config.port}")
-
+        assert config.channel.port == 50055
         # Check max_workers
-        if config.max_workers != 10:
-            pytest.fail(f"Expected default max_workers to be 10, got {config.max_workers}")
-
+        assert config.max_workers == 10
         # Check mode
-        if config.mode != ServerMode.SYNC:
-            pytest.fail(f"Expected default mode to be {ServerMode.SYNC}, got {config.mode}")
-
+        assert config.channel.communication_mode == ControlFlow.ASYNC
         # Check security
-        if config.security != SecurityMode.INSECURE:
-            pytest.fail(f"Expected default security to be {SecurityMode.INSECURE}, got {config.security}")
-
+        assert config.channel.security == SecurityMode.INSECURE
         # Check credentials
-        if config.credentials is not None:
-            pytest.fail(f"Expected default credentials to be None, got {config.credentials}")
+        assert config.channel.credentials is None
 
         # Check server_options (message limits + keepalive support)
         expected_server_options = [
-            ("grpc.max_receive_message_length", 100 * 1024 * 1024),
-            ("grpc.max_send_message_length", 100 * 1024 * 1024),
-            ("grpc.keepalive_time_ms", 120000),
-            ("grpc.keepalive_timeout_ms", 20000),
-            ("grpc.keepalive_permit_without_calls", True),
-            ("grpc.http2.max_pings_without_data", 0),
-            ("grpc.http2.min_ping_interval_without_data_ms", 10000),
+            ('grpc.max_receive_message_length', 104857600),
+            ('grpc.max_send_message_length', 104857600),
+            ('grpc.keepalive_time_ms', 120000),
+            ('grpc.keepalive_timeout_ms', 20000),
+            ('grpc.keepalive_permit_without_calls', True),
+            ('grpc.http2.max_pings_without_data', 0),
+            ('grpc.http2.min_ping_interval_without_data_ms', 10000)
         ]
-        if config.server_options != expected_server_options:
-            pytest.fail(f"Expected default server_options to match resilient defaults, got {config.server_options}")
-
+        assert config.grpc.options == expected_server_options
         # Check enable_reflection
-        if config.enable_reflection is not True:
-            pytest.fail(f"Expected default enable_reflection to be True, got {config.enable_reflection}")
-
+        assert config.reflection is True
         # Check enable_health_check
-        if config.enable_health_check is not True:
-            pytest.fail(f"Expected default enable_health_check to be True, got {config.enable_health_check}")
+        assert config.health_check is True
 
-    def test_server_config_custom(self) -> None:
+    def test_server_config_custom(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Test custom values for ServerConfig."""
-        expected_options = [("grpc.max_receive_message_length", 10 * 1024 * 1024)]
+        expected_message_lenght = 10 * 1024 * 1024
 
-        config = ServerConfig(
-            host="localhost",
-            port=8000,
-            max_workers=4,
-            mode=ServerMode.ASYNC,
-            security=SecurityMode.INSECURE,
-            server_options=expected_options,
-            enable_reflection=False,
-            enable_health_check=False,
-        )
+        monkeypatch.setenv("SERVER_CHANNEL_HOST", "localhost")
+        monkeypatch.setenv("SERVER_CHANNEL_PORT", "8000")
+        monkeypatch.setenv("SERVER_CHANNEL_COMMUNICATION_MODE", "async")
+        monkeypatch.setenv("SERVER_CHANNEL_SECURITY", "insecure")
+        monkeypatch.setenv("SERVER_GRPC_OPTIONS_MAX_SEND_MESSAGE_LENGTH", str(expected_message_lenght))
+        monkeypatch.setenv("SERVER_MAX_WORKERS", "4")
+        monkeypatch.setenv("SERVER_REFLECTION", "false")
+        monkeypatch.setenv("SERVER_HEALTH_CHECK", "false")
+
+        config = ServerSettings()
 
         # Check host
-        if config.host != "localhost":
-            pytest.fail(f"Expected host to be 'localhost', got '{config.host}'")
-
+        assert config.channel.host == "localhost"
         # Check port
-        if config.port != 8000:
-            pytest.fail(f"Expected port to be 8000, got {config.port}")
-
+        assert config.channel.port == 8000
         # Check max_workers
-        if config.max_workers != 4:
-            pytest.fail(f"Expected max_workers to be 4, got {config.max_workers}")
-
+        assert config.max_workers == 4
         # Check mode
-        if config.mode != ServerMode.ASYNC:
-            pytest.fail(f"Expected mode to be {ServerMode.ASYNC}, got {config.mode}")
-
+        assert config.channel.communication_mode == ControlFlow.ASYNC
         # Check security
-        if config.security != SecurityMode.INSECURE:
-            pytest.fail(f"Expected security to be {SecurityMode.INSECURE}, got {config.security}")
-
+        assert config.channel.security == SecurityMode.INSECURE
         # Check server_options
-        if config.server_options != expected_options:
-            pytest.fail(f"Expected server_options to be {expected_options}, got {config.server_options}")
-
+        assert config.grpc.max_send_message_length == expected_message_lenght
         # Check enable_reflection
-        if config.enable_reflection is not False:
-            pytest.fail(f"Expected enable_reflection to be False, got {config.enable_reflection}")
-
+        assert config.reflection is False
         # Check enable_health_check
-        if config.enable_health_check is not False:
-            pytest.fail(f"Expected enable_health_check to be False, got {config.enable_health_check}")
+        assert config.health_check is False
 
-    def test_server_config_secure_without_credentials(self) -> None:
+    def test_server_config_secure_without_credentials(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Test error when secure mode is specified without credentials."""
         # When creating a ServerConfig with secure mode but no credentials,
         # it should raise ConfigurationError
         with pytest.raises(ConfigurationError, match="Credentials must be provided when using secure mode"):
-            ServerConfig(
-                security=SecurityMode.SECURE,
-                credentials=None,
-            )
+            monkeypatch.setenv("SERVER_CHANNEL_SECURITY", "secure")
+            monkeypatch.delenv("SERVER_CHANNEL_CREDENTIALS", raising=False)
+            ServerSettings()
 
-    def test_server_config_secure_with_credentials(self, dummy_certs) -> None:
+    def test_server_config_secure_with_credentials(self, dummy_certs, monkeypatch: pytest.MonkeyPatch) -> None:
         """Test that secure mode with proper credentials is valid."""
-        credentials = ServerCredentials(**dummy_certs)
+        monkeypatch.setenv("SERVER_CHANNEL_SECURITY", "secure")
 
-        # This should not raise an exception
-        config = ServerConfig(
-            security=SecurityMode.SECURE,
-            credentials=credentials,
-        )
+        config = ServerSettings()
 
-        if config.security != SecurityMode.SECURE:
-            pytest.fail(f"Expected security to be {SecurityMode.SECURE}, got {config.security}")
+        assert config.channel.security == SecurityMode.SECURE
+        assert config.channel.credentials.key_path == dummy_certs[0]
+        assert config.channel.credentials.cert_path == dummy_certs[1]
+        assert config.channel.credentials.root_cert_path == dummy_certs[2]
 
-        if config.credentials != credentials:
-            pytest.fail(f"Expected credentials to match input, got {config.credentials}")
-
-    def test_server_config_insecure_with_credentials(self, dummy_certs) -> None:
+    def test_server_config_insecure_with_credentials(self, dummy_certs, monkeypatch: pytest.MonkeyPatch) -> None:
         """Test that insecure mode can have credentials (though not required)."""
-        credentials = ServerCredentials(**dummy_certs)
+        monkeypatch.setenv("SERVER_CHANNEL_SECURITY", "insecure")
 
-        # This should not raise an exception
-        config = ServerConfig(
-            security=SecurityMode.INSECURE,
-            credentials=credentials,
-        )
+        config = ServerSettings()
 
-        if config.security != SecurityMode.INSECURE:
-            pytest.fail(f"Expected security to be {SecurityMode.INSECURE}, got {config.security}")
+        assert config.channel.security == SecurityMode.INSECURE
+        assert config.channel.credentials.key_path == dummy_certs[0]
+        assert config.channel.credentials.cert_path == dummy_certs[1]
+        assert config.channel.credentials.root_cert_path == dummy_certs[2]
 
-        if config.credentials != credentials:
-            pytest.fail(f"Expected credentials to match input, got {config.credentials}")
-
-    def test_server_config_insecure_without_credentials(self) -> None:
+    def test_server_config_insecure_without_credentials(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Test that insecure mode without credentials is valid."""
         # This should not raise an exception
-        config = ServerConfig(
-            security=SecurityMode.INSECURE,
-            credentials=None,
-        )
+        monkeypatch.setenv("SERVER_CHANNEL_SECURITY", "insecure")
+        monkeypatch.delenv("SERVER_CHANNEL_CREDENTIALS", raising=False)
 
-        if config.security != SecurityMode.INSECURE:
-            pytest.fail(f"Expected security to be {SecurityMode.INSECURE}, got {config.security}")
+        config = ServerSettings()
 
-        if config.credentials is not None:
-            pytest.fail(f"Expected credentials to be None, got {config.credentials}")
+        assert config.channel.security == SecurityMode.INSECURE
+        assert config.channel.credentials is None
 
-    def test_server_config_port_validation(self) -> None:
-        """Test port validation in ServerConfig."""
-        # Valid ports
+    def test_server_config_port_validation(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Test port assignment behavior in ServerSettings.
+
+        The current model declares ``port`` as ``int`` without explicit range checks,
+        so out-of-range values are accepted.
+        """
+        # Common ports
         try:
-            ServerConfig(port=1)
-            ServerConfig(port=65535)
+            monkeypatch.setenv("SERVER_CHANNEL_PORT", "1")
+            ServerSettings()
+            monkeypatch.setenv("SERVER_CHANNEL_PORT", "65535")
+            ServerSettings()
         except Exception as e:
             pytest.fail(f"Valid port validation failed: {e}")
 
-        # Invalid ports - keep pytest.raises as it's not an assertion
-        with pytest.raises(ConfigurationError):
-            ServerConfig(port=0)
+        # Out-of-range values are currently accepted (no explicit bounds on `port`).
+        with pytest.raises(ConfigurationError, match="Port must be between 1 and 65535, got 0"):
+            monkeypatch.setenv("SERVER_CHANNEL_PORT", "0")
+            config_low = ServerSettings()
 
-        with pytest.raises(ConfigurationError):
-            ServerConfig(port=65536)
+        with pytest.raises(ConfigurationError, match="Port must be between 1 and 65535, got 65536"):
+            monkeypatch.setenv("SERVER_CHANNEL_PORT", "65536")
+            config_low = ServerSettings()
 
-    def test_server_config_address(self) -> None:
-        """Test the address property of ServerConfig."""
-        config = ServerConfig(host="localhost", port=8000)
+    def test_server_config_address(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Test the address property of ServerSettings."""
+        monkeypatch.setenv("SERVER_CHANNEL_HOST", "localhost")
+        monkeypatch.setenv("SERVER_CHANNEL_PORT", "8000")
+        config = ServerSettings()
         expected_address = "localhost:8000"
 
-        if config.address != expected_address:
-            pytest.fail(f"Expected address to be '{expected_address}', got '{config.address}'")
+        assert config.channel.address == expected_address
 
 
 @pytest.mark.grpc
 class TestServerConfigSubclasses:
     """Tests for server configuration subclasses (ModuleServerConfig and RegistryServerConfig)."""
 
-    def test_module_server_config(self) -> None:
+    def test_module_server_config(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Test ModuleServerConfig specific properties."""
-        config = ModuleServerConfig(advertise_host="digitalkin-sandbox-agno-server")
-        expected_advertise_host = "digitalkin-sandbox-agno-server"
+        monkeypatch.setenv("SERVER_CHANNEL_ADVERTISE_HOST", "digitalkin-test-archetype-server")
+        config = ServerSettings()
+        expected_advertise_host = "digitalkin-test-archetype-server"
 
-        if config.advertise_host != expected_advertise_host:
-            pytest.fail(
-                f"Expected advertise_host to be '{expected_advertise_host}', got '{config.advertise_host}'"
-            )
+        assert config.channel.advertise_host == expected_advertise_host
 
-    def test_registry_server_config(self) -> None:
+    def test_registry_server_config(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Test RegistryServerConfig specific properties."""
-        config = RegistryServerConfig(database_url="sqlite:///registry.db")
+        monkeypatch.setenv("SERVER_CHANNEL_DATABASE_URL", "sqlite:///registry.db")
+        config = ServerSettings()
         expected_database_url = "sqlite:///registry.db"
 
-        if config.database_url != expected_database_url:
-            pytest.fail(f"Expected database_url to be '{expected_database_url}', got '{config.database_url}'")
+        assert config.channel.database_url == expected_database_url

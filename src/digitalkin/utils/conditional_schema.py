@@ -207,9 +207,8 @@ class ConditionalSchemaMixin(BaseModel):
         # }
     """
 
-    model_fields: ClassVar[
-        dict[str, FieldInfo]
-    ]  # Pydantic ClassVar redeclaration for mixin type access # type: ignore[misc]
+    model_fields: ClassVar[dict[str, FieldInfo]]
+    # Pydantic ClassVar redeclaration for mixin type access # type: ignore[misc]
 
     @classmethod
     def __get_pydantic_json_schema__(

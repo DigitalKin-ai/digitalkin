@@ -9,6 +9,7 @@ import grpc
 from pydantic import BaseModel, Field, ValidationInfo, field_validator
 
 from digitalkin.grpc_servers.utils.exceptions import ConfigurationError, SecurityError
+from digitalkin.models.settings.utils.channel import ControlFlow, SecurityMode
 
 
 class GrpcCompression(str, Enum):
@@ -37,61 +38,6 @@ class GrpcCompression(str, Enum):
                 return grpc.Compression.Gzip
             case GrpcCompression.DEFLATE:
                 return grpc.Compression.Deflate
-
-
-class ServerMode(str, Enum):
-    """Enum for server operation mode."""
-
-    SYNC = "sync"
-    ASYNC = "async"
-
-
-class SecurityMode(str, Enum):
-    """Enum for server security mode."""
-
-    SECURE = "secure"
-    INSECURE = "insecure"
-
-
-class ServerCredentials(BaseModel):
-    """Model for server credentials in secure mode.
-
-    Attributes:
-        server_key_path: Path to the server private key
-        server_cert_path: Path to the server certificate
-        root_cert_path: Optional path to the root certificate
-    """
-
-    server_key_path: Path = Field(..., description="Path to the server private key")
-    server_cert_path: Path = Field(..., description="Path to the server certificate")
-    root_cert_path: Path | None = Field(None, description="Path to the root certificate")
-
-    # Enable __slots__ for memory efficiency
-    model_config = {
-        "extra": "forbid",
-        "arbitrary_types_allowed": True,
-        "validate_assignment": True,
-        "frozen": True,
-    }
-
-    @field_validator("server_key_path", "server_cert_path", "root_cert_path")
-    @classmethod
-    def check_path_exists(cls, v: Path | None) -> Path | None:
-        """Validate that the file path exists.
-
-        Args:
-            v: Path to validate
-
-        Returns:
-            The validated path
-
-        Raises:
-            SecurityError: If the path does not exist
-        """
-        if v is not None and not v.exists():
-            msg = f"File not found: {v}"
-            raise SecurityError(msg)
-        return v
 
 
 class RetryPolicy(BaseModel):
@@ -202,7 +148,7 @@ class ChannelConfig(BaseModel):
         description="Host address to bind the client to",
     )  # Bind to all interfaces by design
     port: int = Field(50051, description="Port to listen on")
-    mode: ServerMode = Field(ServerMode.SYNC, description="Client operation mode (sync/async)")
+    mode: ControlFlow = Field(ControlFlow.SYNC, description="Client operation mode (sync/async)")
     security: SecurityMode = Field(SecurityMode.INSECURE, description="Security mode (secure/insecure)")
 
     # Enable __slots__ for memory efficiency
@@ -315,101 +261,3 @@ class ClientConfig(ChannelConfig):
             Full list of gRPC channel options.
         """
         return [*self.channel_options, ("grpc.service_config", self.retry_policy.to_service_config_json())]
-
-
-class ServerConfig(ChannelConfig):
-    """Base configuration for gRPC servers.
-
-    Attributes:
-        host: Host address to bind the server to
-        port: Port to listen on
-        max_workers: Maximum number of workers for sync mode
-        mode: Server operation mode (sync/async)
-        security: Security mode (secure/insecure)
-        credentials: Server credentials for secure mode
-        server_options: Additional server options
-        enable_reflection: Enable reflection for the server
-        compression: gRPC compression algorithm for server-level compression
-    """
-
-    max_workers: int = Field(10, description="Maximum number of workers for sync mode")
-    credentials: ServerCredentials | None = Field(None, description="Server credentials for secure mode")
-    compression: GrpcCompression = Field(GrpcCompression.GZIP, description="gRPC compression algorithm")
-    server_options: list[tuple[str, Any]] = Field(
-        default_factory=lambda: [
-            ("grpc.max_receive_message_length", 100 * 1024 * 1024),
-            ("grpc.max_send_message_length", 100 * 1024 * 1024),
-            # === Server-Side Keepalive (Keeps Connections Alive Through Proxies) ===
-            # Server sends keepalive pings to detect dead clients and keep
-            # proxy connections (e.g. Railway) alive during long-running RPCs.
-            (
-                "grpc.keepalive_time_ms",
-                int(os.environ.get("DIGITALKIN_GRPC_SERVER_KEEPALIVE_TIME_MS", "120000")),
-            ),
-            (
-                "grpc.keepalive_timeout_ms",
-                int(os.environ.get("DIGITALKIN_GRPC_SERVER_KEEPALIVE_TIMEOUT_MS", "20000")),
-            ),
-            # === Keepalive Permission (Required for Client Keepalive) ===
-            # Allow clients to send keepalive pings without active RPCs
-            # Without this, server rejects client keepalives with GOAWAY
-            ("grpc.keepalive_permit_without_calls", True),
-            # Allow unlimited pings without data (required for long-running streams)
-            ("grpc.http2.max_pings_without_data", 0),
-            # Minimum interval server allows between client pings
-            # Prevents "too_many_pings" GOAWAY errors
-            # Must match or be less than client's http2.min_time_between_pings_ms
-            (
-                "grpc.http2.min_ping_interval_without_data_ms",
-                int(os.environ.get("DIGITALKIN_GRPC_SERVER_MIN_PING_INTERVAL_MS", "10000")),
-            ),
-        ],
-        description="gRPC server options with keepalive support",
-    )
-    enable_reflection: bool = Field(default=True, description="Enable reflection for the server")
-    enable_health_check: bool = Field(default=True, description="Enable health check service")
-
-    @field_validator("credentials")
-    @classmethod
-    def validate_credentials(cls, v: ServerCredentials | None, info: ValidationInfo) -> ServerCredentials | None:
-        """Validate that credentials are provided when in secure mode.
-
-        Args:
-            v: The credentials value
-            info: ValidationInfo containing other field values
-
-        Returns:
-            The validated credentials
-
-        Raises:
-            ConfigurationError: If credentials are missing in secure mode
-        """
-        # Access security mode from the info.data dictionary
-        security = info.data.get("security")
-
-        if security == SecurityMode.SECURE and v is None:
-            msg = "Credentials must be provided when using secure mode"
-            raise ConfigurationError(msg)
-        return v
-
-
-class ModuleServerConfig(ServerConfig):
-    """Configuration for Module gRPC server.
-
-    Attributes:
-        advertise_host: Public hostname/IP sent to registry for discovery. Falls back to host if not set.
-    """
-
-    advertise_host: str | None = Field(
-        None, description="Public hostname/IP sent to registry for discovery. Falls back to host if not set."
-    )
-
-
-class RegistryServerConfig(ServerConfig):
-    """Configuration for Registry gRPC server.
-
-    Attributes:
-        database_url: Database URL for registry data storage
-    """
-
-    database_url: str | None = Field(None, description="Database URL for registry data storage")

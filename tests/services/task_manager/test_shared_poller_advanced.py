@@ -16,6 +16,7 @@ import asyncio
 import contextlib
 from collections import defaultdict
 from itertools import count
+from unittest.mock import Mock
 
 import pytest
 from agentic_mesh_protocol.task_manager.v1 import (
@@ -24,9 +25,9 @@ from agentic_mesh_protocol.task_manager.v1 import (
 )
 from google.protobuf.struct_pb2 import Struct
 from google.protobuf.timestamp_pb2 import Timestamp
-from unittest.mock import Mock
 
-from digitalkin.models.grpc_servers.models import ClientConfig, SecurityMode, ServerMode
+from digitalkin.models.grpc_servers.models import ClientConfig
+from digitalkin.models.settings.utils.channel import ControlFlow, SecurityMode
 from digitalkin.services.task_manager.grpc_task_manager import GrpcTaskManager, _SharedPoller, _SharedSendBuffer
 
 pytestmark = pytest.mark.timeout(30)
@@ -60,7 +61,7 @@ def _proto(task_id: str, action: str, ts: int | None = None) -> task_manager_mes
 
 
 def _client(poll_interval: float = 0.1, initial: float = 0.05) -> GrpcTaskManager:
-    cfg = ClientConfig(host="[::]", port=50051, mode=ServerMode.ASYNC, security=SecurityMode.INSECURE)
+    cfg = ClientConfig(host="[::]", port=50051, mode=ControlFlow.ASYNC, security=SecurityMode.INSECURE)
     c = GrpcTaskManager(
         mission_id=_MISSION,
         setup_id=_SETUP,
