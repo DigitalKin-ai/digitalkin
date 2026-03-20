@@ -34,7 +34,7 @@
         "grpcio-status==1.78.0",
         "pydantic==2.12.5",
     ]
-    version = "0.3.4"
+    version = "0.3.5.dev0"
 
     [project.optional-dependencies]
         profiling = [
@@ -60,13 +60,13 @@
 
 [dependency-groups]
     dev = [
-        "build==1.4.1",
+        "build==1.4.2",
         "bump-my-version==1.2.7",
-        "cryptography==46.0.5",
+        "cryptography==46.0.6",
         "mypy==1.19.1",
         "pre-commit==4.5.1",
         "pyright==1.1.408",
-        "ruff==0.15.7",
+        "ruff==0.15.8",
         "twine==6.2.0",
         "types-grpcio-health-checking==1.0.0.20250506",
         "types-grpcio-reflection==1.0.0.20250506",
@@ -96,7 +96,7 @@
         "mkdocs==1.6.1",
         "mkdocstrings-python==2.0.3",
         "mkdocstrings==1.0.3",
-        "tomli==2.4.0",
+        "tomli==2.4.1",
     ]
     tests = [
         "freezegun==1.5.5",
