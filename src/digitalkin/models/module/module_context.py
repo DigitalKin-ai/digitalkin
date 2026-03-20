@@ -103,7 +103,7 @@ class ModuleContext:
     callbacks: SimpleNamespace
     metadata: SimpleNamespace
     helpers: SimpleNamespace
-    state: SimpleNamespace = SimpleNamespace()
+    state: SimpleNamespace
     tool_cache: ToolCache
     request_metadata: RequestMetadata
 
@@ -161,6 +161,7 @@ class ModuleContext:
         self.session = Session(**session)
         self.helpers = SimpleNamespace(**(helpers or {}))
         self.callbacks = SimpleNamespace(**(callbacks or {}))
+        self.state = SimpleNamespace()
         self.tool_cache = tool_cache or ToolCache()
         self.request_metadata = RequestMetadata(request_metadata)
 

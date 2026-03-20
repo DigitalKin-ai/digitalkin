@@ -34,7 +34,7 @@
         "grpcio-status==1.78.0",
         "pydantic==2.12.5",
     ]
-    version = "0.3.2"
+    version = "0.3.2.post0"
 
     [project.optional-dependencies]
         profiling = [
@@ -125,6 +125,7 @@
     unsafe-fixes   = true
     # Enable preview features.
     exclude = [
+        "*.md",
         ".bzr",
         ".direnv",
         ".eggs",
@@ -147,7 +148,6 @@
         "docs/*",
         "examples/*",
         "factory.py",
-        "*.md",
         "generate_certificates.py",
         "node_modules",
         "tests/*",
