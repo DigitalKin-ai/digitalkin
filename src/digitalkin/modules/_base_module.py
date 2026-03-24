@@ -7,6 +7,15 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable, Coroutine
 from typing import Any, ClassVar, Generic
 
+from models.module import EndOfStreamOutputPayload, ModuleStartInfoOutputPayload
+from models.module.utility.formats import (
+    DefaultInputFormat,
+    DefaultOutputFormat,
+    DefaultSecretFormat,
+    DefaultSetupFormat,
+)
+from models.module.utility.utility import UtilityProtocol
+
 from digitalkin.grpc_servers.utils.utility_schema_extender import UtilitySchemaExtender
 from digitalkin.logger import logger
 from digitalkin.models.module.module import ModuleCodeModel, ModuleStatus
@@ -19,7 +28,6 @@ from digitalkin.models.module.module_types import (
     SetupModelT,
 )
 from digitalkin.models.module.select_schema import SelectSchema
-from digitalkin.models.module.utility import EndOfStreamOutput, ModuleStartInfoOutput, UtilityProtocol
 from digitalkin.models.services.storage import BaseRole
 from digitalkin.modules.trigger_handler import TriggerHandler
 from digitalkin.services.services_config import ServicesConfig, ServicesStrategy
@@ -38,71 +46,63 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
 ):
     """BaseModule is the abstract base for all modules in the DigitalKin SDK."""
 
-    name: str
-    description: str
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ ATTRIBUTS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ #
 
-    setup_format: type[SetupModelT]
-    input_format: type[InputModelT]
+    tags: list[str] = ["module"]
+    version: str = "0.0.1"
+    metadata: ClassVar[dict[str, Any]] = {
+        "name": "BasicModule",
+        "description": "Basic module template.",
+        "version": version,
+        "tags": tags,
+    }
+
+    setup_format: type[SetupModelT] = DefaultSetupFormat
+    input_format: type[InputModelT] = DefaultInputFormat
     select_format: type[SelectSchema] = SelectSchema
-    output_format: type[OutputModelT]
-    secret_format: type[SecretModelT]
-    metadata: ClassVar[dict[str, Any]]
+    output_format: type[OutputModelT] = DefaultOutputFormat
+    secret_format: type[SecretModelT] = DefaultSecretFormat
 
     context: ModuleContext
-    triggers_discoverer: ClassVar[ModuleDiscoverer]
+    triggers_discoverer: ClassVar[ModuleDiscoverer] = ModuleDiscoverer(packages=[])
 
     # service config params — subclasses MUST define their own to avoid sharing
     services_config_strategies: ClassVar[dict[str, ServicesStrategy | None]]
     services_config_params: ClassVar[dict[str, dict[str, Any | None] | None]]
-
-    def __init_subclass__(cls, **kwargs: Any) -> None:
-        """Ensure each subclass has its own copy of mutable class variables."""
-        super().__init_subclass__(**kwargs)
-        if "services_config_strategies" not in cls.__dict__:
-            cls.services_config_strategies = (
-                dict(cls.services_config_strategies) if "services_config_strategies" in dir(cls) else {}
-            )
-        if "services_config_params" not in cls.__dict__:
-            cls.services_config_params = (
-                dict(cls.services_config_params) if "services_config_params" in dir(cls) else {}
-            )
-
     services_config: ServicesConfig
 
-    @classmethod
-    def get_module_id(cls) -> str:
-        """Get the module ID from environment variable or metadata.
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ PROPERTY ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ #
+
+    @property
+    @abstractmethod
+    def name(self) -> str:
+        """Get the module name.
 
         Returns:
-            The module_id from DIGITALKIN_MODULE_ID env var, or metadata module_id,
-            or "unknown" if neither exists.
+            The module name
         """
-        return os.environ.get("DIGITALKIN_MODULE_ID") or cls.metadata.get("module_id", "unknown")
+        ...
 
-    def _init_strategies(self, mission_id: str, setup_id: str, setup_version_id: str) -> dict[str, Any]:
-        """Initialize the services configuration.
+    @property
+    @abstractmethod
+    def description(self) -> str:
+        """Get the module description.
 
         Returns:
-            dict of services with name: Strategy
-                agent: AgentStrategy
-                cost: CostStrategy
-                filesystem: FilesystemStrategy
-                identity: IdentityStrategy
-                registry: RegistryStrategy
-                snapshot: SnapshotStrategy
-                storage: StorageStrategy
-                user_profile: UserProfileStrategy
+            The module description
         """
-        logger.debug("Service initialisation: %s", self.services_config_strategies.keys())
-        return {
-            service_name: self.services_config.init_strategy(
-                service_name,
-                mission_id,
-                setup_id,
-                setup_version_id,
-            )
-            for service_name in self.services_config.valid_strategy_names()
-        }
+        ...
+
+    @property
+    def status(self) -> ModuleStatus:
+        """Get the module status.
+
+        Returns:
+            The module status
+        """
+        return self._status
+
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ INIT ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ #
 
     def __init__(
         self,
@@ -138,14 +138,63 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
             request_metadata=request_metadata,
         )
 
-    @property
-    def status(self) -> ModuleStatus:
-        """Get the module status.
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        """Ensure each subclass has its own copy of mutable class variables."""
+        super().__init_subclass__(**kwargs)
+        parent_tags: list[str] = list(cls.__bases__[0].tags)
+        child_tags: list[str] = list(cls.__dict__.get("tags", []))
+        cls.tags = parent_tags + [t for t in child_tags if t not in parent_tags]
+        cls.metadata = {"name": cls.name, "description": cls.description, "tags": cls.tags, "version": cls.version}
+        if "services_config_strategies" not in cls.__dict__:
+            cls.services_config_strategies = (
+                dict(cls.services_config_strategies) if "services_config_strategies" in dir(cls) else {}
+            )
+        if "services_config_params" not in cls.__dict__:
+            cls.services_config_params = (
+                dict(cls.services_config_params) if "services_config_params" in dir(cls) else {}
+            )
+
+    def _init_strategies(self, mission_id: str, setup_id: str, setup_version_id: str) -> dict[str, Any]:
+        """Initialize the services configuration.
 
         Returns:
-            The module status
+            dict of services with name: Strategy
+                agent: AgentStrategy
+                cost: CostStrategy
+                filesystem: FilesystemStrategy
+                identity: IdentityStrategy
+                registry: RegistryStrategy
+                snapshot: SnapshotStrategy
+                storage: StorageStrategy
+                user_profile: UserProfileStrategy
         """
-        return self._status
+        logger.debug("Service initialisation: %s", self.services_config_strategies.keys())
+        return {
+            service_name: self.services_config.init_strategy(
+                service_name,
+                mission_id,
+                setup_id,
+                setup_version_id,
+            )
+            for service_name in self.services_config.valid_strategy_names()
+        }
+
+    @abstractmethod
+    async def initialize(self, context: ModuleContext, setup_data: SetupModelT) -> None:
+        """Initialize the module."""
+        ...
+
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ GETTER ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ #
+
+    @classmethod
+    def get_module_id(cls) -> str:
+        """Get the module ID from environment variable or metadata.
+
+        Returns:
+            The module_id from DIGITALKIN_MODULE_ID env var, or metadata module_id,
+            or "unknown" if neither exists.
+        """
+        return os.environ.get("DIGITALKIN_MODULE_ID") or cls.metadata.get("module_id", "unknown")
 
     @classmethod
     async def get_secret_format(cls, *, llm_format: bool) -> str:
@@ -416,7 +465,7 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
         Built-in healthcheck handlers (ping, services, status) are automatically registered
         to provide standard healthcheck functionality for all modules.
         """
-        from digitalkin.models.module.utility import (
+        from models.module.utility.utility import (
             UtilityRegistry,
         )  # Lazy import to avoid circular dependency
 
@@ -439,11 +488,6 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
             type of the trigger handler.
         """
         return cls.triggers_discoverer.register_trigger(handler_cls)
-
-    @abstractmethod
-    async def initialize(self, context: ModuleContext, setup_data: SetupModelT) -> None:
-        """Initialize the module."""
-        ...
 
     async def run(
         self,
@@ -486,10 +530,10 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
         await handler_instance.flush_chat_history(self.context)
         await handler_instance.flush_file_history(self.context)
 
-    @abstractmethod
     async def cleanup(self) -> None:
         """Run the module."""
-        ...
+        logger.info(f"Cleaning up {self.name}...")
+        logger.info(f"{self.name} cleaned up")
 
     async def run_config_setup(  # Default implementation; subclasses may use self # noqa: PLR6301
         self,
@@ -551,7 +595,7 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
 
             await callback(
                 DataModel(
-                    root=ModuleStartInfoOutput(
+                    root=ModuleStartInfoOutputPayload(
                         job_id=self.context.session.job_id,
                         mission_id=self.context.session.mission_id,
                         setup_id=self.context.session.setup_id,
@@ -609,7 +653,7 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
                 logger.warning("Failed to flush handler history during stop", exc_info=True)
             await self.context.callbacks.send_message(
                 DataModel(
-                    root=EndOfStreamOutput(),
+                    root=EndOfStreamOutputPayload(),
                     annotations={"role": BaseRole.SYSTEM},
                 )
             )

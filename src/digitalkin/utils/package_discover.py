@@ -53,7 +53,7 @@ class ModuleDiscoverer:
             DiscoveryError: If packages list is invalid.
             SecurityError: If file pattern or package names are unsafe.
         """
-        if not self.packages or not isinstance(self.packages, list):
+        if not isinstance(self.packages, list):
             msg = "Packages must be a non-empty list"
             raise DiscoveryError(msg)
         self._validate_file_pattern()
@@ -329,7 +329,7 @@ class ModuleDiscoverer:
         for protocol, handlers in self._trigger_handlers_cls.items():
             if handlers:
                 if exclude_utility:
-                    from digitalkin.models.module.utility import UtilityProtocol
+                    from models.module.utility.utility import UtilityProtocol
 
                     input_fmt = handlers[0].input_format  # type: ignore[misc]
                     if isinstance(input_fmt, type) and issubclass(input_fmt, UtilityProtocol):

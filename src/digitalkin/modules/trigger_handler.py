@@ -29,14 +29,14 @@ class TriggerHandler(ABC, BaseMixin, Generic[InputModelT, SetupModelT, OutputMod
     async def handle(
         self,
         input_data: InputModelT,
-        setup_data: SetupModelT,
+        setup_format: SetupModelT,
         context: ModuleContext,
     ) -> None:
         """Asynchronously processes the input data specific to Handler and streams results via the provided callback.
 
         Args:
             input_data (InputModelT): The input data to be processed by the handler.
-            setup_data (SetupModelT): The setup or configuration data required for processing.
+            setup_format (SetupModelT): The setup or configuration data required for processing.
             context (ModuleContext): The context object containing module-specific information and resources.
 
         Returns:

@@ -270,7 +270,7 @@ class _GoodTrigger(TriggerHandler):
     def __init__(self, context: ModuleContext) -> None:
         super().__init__(context)
 
-    async def handle(self, input_data: Any, setup_data: Any, context: ModuleContext) -> None:
+    async def handle(self, input_data: Any, setup_format: Any, context: ModuleContext) -> None:
         pass  # pragma: no cover
 
 
@@ -286,7 +286,7 @@ class _BadTrigger(TriggerHandler):
         # Deliberately missing super().__init__(context)
         pass
 
-    async def handle(self, input_data: Any, setup_data: Any, context: ModuleContext) -> None:
+    async def handle(self, input_data: Any, setup_format: Any, context: ModuleContext) -> None:
         pass  # pragma: no cover
 
 

@@ -21,3 +21,5 @@ class ArchetypeModule(
     ABC,
 ):
     """ArchetypeModule extends BaseModule to implement specific module types."""
+
+    tags = ["archetype"]

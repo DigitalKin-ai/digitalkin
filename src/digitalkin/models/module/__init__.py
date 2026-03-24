@@ -19,9 +19,8 @@ from digitalkin.models.module.tool_reference import (
     ToolSelection,
     tool_reference_input,
 )
-from digitalkin.models.module.utility import (
-    EndOfStreamOutput,
-    ModuleStartInfoOutput,
+from digitalkin.models.module.utility.outputs import EndOfStreamOutputPayload, ModuleStartInfoOutputPayload
+from digitalkin.models.module.utility.utility import (
     UtilityProtocol,
     UtilityRegistry,
 )
@@ -29,9 +28,9 @@ from digitalkin.models.module.utility import (
 __all__ = [
     "DataModel",
     "DataTrigger",
-    "EndOfStreamOutput",
+    "EndOfStreamOutputPayload",
     "ModuleContext",
-    "ModuleStartInfoOutput",
+    "ModuleStartInfoOutputPayload",
     "RequestMetadata",
     "SelectSchema",
     "SetupModel",

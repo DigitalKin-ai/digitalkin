@@ -7,6 +7,7 @@ import os
 import pickle
 from typing import Any
 
+from models.module import EndOfStreamOutputPayload
 from rstream import Producer
 from rstream.exceptions import PreconditionFailed
 from taskiq import Context, TaskiqDepends, TaskiqMessage
@@ -22,7 +23,6 @@ from digitalkin.core.task_manager.task_session import TaskSession
 from digitalkin.logger import logger
 from digitalkin.models.module.module import ModuleCodeModel
 from digitalkin.models.module.module_types import DataModel
-from digitalkin.models.module.utility import EndOfStreamOutput
 from digitalkin.modules._base_module import BaseModule
 from digitalkin.services.services_config import ServicesConfig
 from digitalkin.services.services_models import ServicesMode
@@ -209,7 +209,7 @@ async def run_start_module(
         # Execute the task using TaskExecutor
         async def send_end_of_stream(_: Any) -> None:
             try:
-                await callback(DataModel(root=EndOfStreamOutput()))
+                await callback(DataModel(root=EndOfStreamOutputPayload()))
             except Exception as e:
                 logger.error("Error sending end of stream: %s", e, exc_info=True)
 

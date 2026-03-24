@@ -183,6 +183,7 @@ cython_debug/
 # IDE
 .vscode/
 .idea/
+.DS_Store
 
 # Project
 requirements.txt

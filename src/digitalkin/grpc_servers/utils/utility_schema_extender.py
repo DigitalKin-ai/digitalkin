@@ -6,18 +6,20 @@ This module extends module schemas with SDK utility protocols for API responses.
 import types
 from typing import Annotated, Union, get_args, get_origin
 
+from models.module import EndOfStreamOutputPayload
+from models.module.utility.inputs import (
+    HealthcheckPingInputPayload,
+    HealthcheckServicesInputPayload,
+    HealthcheckStatusInputPayload,
+)
+from models.module.utility.outputs import (
+    HealthcheckPingOutputPayload,
+    HealthcheckServicesOutputPayload,
+    HealthcheckStatusOutputPayload,
+)
 from pydantic import Field, create_model
 
 from digitalkin.models.module.module_types import DataModel
-from digitalkin.models.module.utility import (
-    EndOfStreamOutput,
-    HealthcheckPingInput,
-    HealthcheckPingOutput,
-    HealthcheckServicesInput,
-    HealthcheckServicesOutput,
-    HealthcheckStatusInput,
-    HealthcheckStatusOutput,
-)
 from digitalkin.models.services.cost import CostLimit
 
 
@@ -29,16 +31,16 @@ class UtilitySchemaExtender:
     """
 
     _output_protocols = (
-        EndOfStreamOutput,
-        HealthcheckPingOutput,
-        HealthcheckServicesOutput,
-        HealthcheckStatusOutput,
+        EndOfStreamOutputPayload,
+        HealthcheckPingOutputPayload,
+        HealthcheckServicesOutputPayload,
+        HealthcheckStatusOutputPayload,
     )
 
     _input_protocols = (
-        HealthcheckPingInput,
-        HealthcheckServicesInput,
-        HealthcheckStatusInput,
+        HealthcheckPingInputPayload,
+        HealthcheckServicesInputPayload,
+        HealthcheckStatusInputPayload,
     )
 
     @classmethod

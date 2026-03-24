@@ -21,3 +21,5 @@ class ToolModule(
     ABC,
 ):
     """ToolModule extends BaseModule to implement specific module types."""
+
+    tags = ["tool"]

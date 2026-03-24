@@ -1,12 +1,11 @@
 """Base types for module models."""
 
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Generic, TypeVar
+from typing import Generic, TypeVar
 
 from pydantic import BaseModel, Field
 
-if TYPE_CHECKING:
-    from digitalkin.models.module.setup_types import SetupModel
+from digitalkin.models.module.setup_types import SetupModel
 
 
 class DataTrigger(BaseModel):
@@ -56,4 +55,4 @@ class DataModel(BaseModel, Generic[DataTriggerT]):
 InputModelT = TypeVar("InputModelT", bound=DataModel)
 OutputModelT = TypeVar("OutputModelT", bound=DataModel)
 SecretModelT = TypeVar("SecretModelT", bound=BaseModel)
-SetupModelT = TypeVar("SetupModelT", bound="SetupModel")
+SetupModelT = TypeVar("SetupModelT", bound=SetupModel)
