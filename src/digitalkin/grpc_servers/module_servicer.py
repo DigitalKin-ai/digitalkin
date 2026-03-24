@@ -321,8 +321,28 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             extra={"module_class": self.module_class, "setup_id": request.setup_id, "mission_id": request.mission_id},
         )
         # Process the module input
-        # TODO: Check failure of input data format
-        input_data = self.module_class.create_input_model(json_format.MessageToDict(request.input))
+        try:
+            input_data = self.module_class.create_input_model(json_format.MessageToDict(request.input))
+        except ValidationError as e:
+            logger.error(
+                "Input validation failed (setup_id=%s, mission_id=%s): %s",
+                request.setup_id,
+                request.mission_id,
+                e,
+                extra={
+                    "setup_id": request.setup_id,
+                    "mission_id": request.mission_id,
+                    "module_class": self.module_class.__name__,
+                    "error_type": "ValidationError",
+                },
+            )
+            context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+            context.set_details(
+                f"[gRPC-server:ModuleService.StartModule] (setup_id={request.setup_id}, "
+                f"mission_id={request.mission_id}) Input validation failed: {e}"
+            )
+            yield lifecycle_pb2.StartModuleResponse(success=False)
+            return
 
         try:
             setup_version = await self._resolve_setup(request.setup_id, request.mission_id)

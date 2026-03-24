@@ -50,6 +50,7 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
 
     context: ModuleContext
     triggers_discoverer: ClassVar[ModuleDiscoverer]
+    _extended_input_format: ClassVar[type[DataModel] | None] = None
 
     # service config params — subclasses MUST define their own to avoid sharing
     services_config_strategies: ClassVar[dict[str, ServicesStrategy | None]]
@@ -349,16 +350,18 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
         return cls.setup_format(**config_setup_data)
 
     @classmethod
-    def create_input_model(cls, input_data: dict[str, Any]) -> InputModelT:
+    def create_input_model(cls, input_data: dict[str, Any]) -> DataModel:
         """Create the input model from the input data.
 
         Args:
             input_data: The input data to create the model from.
 
         Returns:
-            The input model.
+            The input model, validated against the extended format that
+            includes SDK utility protocols (healthcheck, etc.).
         """
-        return cls.input_format(**input_data)
+        model_cls = cls._extended_input_format or cls.input_format
+        return model_cls(**input_data)
 
     @classmethod
     async def create_setup_model(cls, setup_data: dict[str, Any], *, config_fields: bool = False) -> SetupModelT:
@@ -425,6 +428,10 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
         # Auto-register built-in SDK triggers (healthcheck, etc.)
         for trigger_cls in UtilityRegistry.get_builtin_triggers():
             cls.triggers_discoverer.register_trigger(trigger_cls)
+
+        # Cache extended input model with utility protocols for runtime validation
+        if cls.input_format is not None:
+            cls._extended_input_format = UtilitySchemaExtender.create_extended_input_model(cls.input_format)
 
         logger.debug("discovered: %s", cls.triggers_discoverer)
 
