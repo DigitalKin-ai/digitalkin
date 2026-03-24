@@ -466,7 +466,8 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
         Raises:
             ValueError: If no handler for the protocol is found.
         """
-        input_instance = self.input_format.model_validate(input_data)
+        model_cls = self._extended_input_format or self.input_format
+        input_instance = model_cls.model_validate(input_data)
 
         # Apply cost limits if present in input (field added dynamically by UtilitySchemaExtender)
         if (
@@ -585,12 +586,13 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
         except Exception as e:
             self._status = ModuleStatus.FAILED
             short_description = "Error initializing module"
-            logger.exception("%s: %s", short_description, e)
+            error_detail = f"{type(e).__name__}: {e}" if str(e) else type(e).__name__
+            logger.exception("%s: %s", short_description, error_detail)
             await callback(
                 ModuleCodeModel(
                     code="Error",
                     short_description=short_description,
-                    message=str(e),
+                    message=error_detail,
                 )
             )
             if done_callback is not None:
