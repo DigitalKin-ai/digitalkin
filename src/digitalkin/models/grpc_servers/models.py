@@ -339,14 +339,30 @@ class ServerConfig(ChannelConfig):
         default_factory=lambda: [
             ("grpc.max_receive_message_length", 100 * 1024 * 1024),
             ("grpc.max_send_message_length", 100 * 1024 * 1024),
+            # === Server-Side Keepalive (Keeps Connections Alive Through Proxies) ===
+            # Server sends keepalive pings to detect dead clients and keep
+            # proxy connections (e.g. Railway) alive during long-running RPCs.
+            (
+                "grpc.keepalive_time_ms",
+                int(os.environ.get("DIGITALKIN_GRPC_SERVER_KEEPALIVE_TIME_MS", "120000")),
+            ),
+            (
+                "grpc.keepalive_timeout_ms",
+                int(os.environ.get("DIGITALKIN_GRPC_SERVER_KEEPALIVE_TIMEOUT_MS", "20000")),
+            ),
             # === Keepalive Permission (Required for Client Keepalive) ===
             # Allow clients to send keepalive pings without active RPCs
             # Without this, server rejects client keepalives with GOAWAY
             ("grpc.keepalive_permit_without_calls", True),
-            # Minimum interval server allows between client pings (10 seconds)
+            # Allow unlimited pings without data (required for long-running streams)
+            ("grpc.http2.max_pings_without_data", 0),
+            # Minimum interval server allows between client pings
             # Prevents "too_many_pings" GOAWAY errors
             # Must match or be less than client's http2.min_time_between_pings_ms
-            ("grpc.http2.min_ping_interval_without_data_ms", 10000),
+            (
+                "grpc.http2.min_ping_interval_without_data_ms",
+                int(os.environ.get("DIGITALKIN_GRPC_SERVER_MIN_PING_INTERVAL_MS", "10000")),
+            ),
         ],
         description="gRPC server options with keepalive support",
     )

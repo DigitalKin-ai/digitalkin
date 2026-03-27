@@ -1,5 +1,6 @@
 site_name: DigitalKin
 site_description: A modular framework for building AI agents with gRPC servers and flexible service strategies
+docs_dir: docs
 site_url: https://digitalkin.com
 repo_url: https://github.com/DigitalKin-ai/digitalkin
 repo_name: DigitalKin-ai/digitalkin
@@ -61,9 +62,6 @@ markdown_extensions:
 - pymdownx.blocks.details
 - pymdownx.blocks.tab:
     alternate_style: true
-    slugify: !!python/object/apply:pymdownx.slugs.slugify
-      kwds:
-        case: lower
 - pymdownx.emoji:
     emoji_index: !!python/name:material.extensions.emoji.twemoji
     emoji_generator: !!python/name:material.extensions.emoji.to_svg
@@ -80,9 +78,6 @@ markdown_extensions:
       format: !!python/name:pymdownx.superfences.fence_code_format
 - pymdownx.tabbed:
     alternate_style: true
-    slugify: !!python/object/apply:pymdownx.slugs.slugify
-      kwds:
-        case: lower
 - pymdownx.tasklist:
     custom_checkbox: true
 - toc:
@@ -139,7 +134,7 @@ plugins:
       Usage:
       - index.md
       API:
-      - reference/api.md
+      - api/api.md
 - git-revision-date-localized:
     enabled: !ENV [DEPLOY, false]
     enable_creation_date: true
@@ -148,11 +143,11 @@ plugins:
     minify_html: !ENV [DEPLOY, false]
 - redirects:
     redirect_maps:
-      reference/mkdocstrings_handlers/python/index.md: reference/api.md
-      reference/mkdocstrings_handlers/python/config.md: reference/api.md#mkdocstrings_handlers.python.config
-      reference/mkdocstrings_handlers/python/debug.md: reference/api.md#mkdocstrings_handlers.python.debug
-      reference/mkdocstrings_handlers/python/handler.md: reference/api.md#mkdocstrings_handlers.python.handler
-      reference/mkdocstrings_handlers/python/rendering.md: reference/api.md#mkdocstrings_handlers.python.rendering
+      reference/mkdocstrings_handlers/python/index.md: api/api.md
+      reference/mkdocstrings_handlers/python/config.md: api/api.md#mkdocstrings_handlers.python.config
+      reference/mkdocstrings_handlers/python/debug.md: api/api.md#mkdocstrings_handlers.python.debug
+      reference/mkdocstrings_handlers/python/handler.md: api/api.md#mkdocstrings_handlers.python.handler
+      reference/mkdocstrings_handlers/python/rendering.md: api/api.md#mkdocstrings_handlers.python.rendering
 
 - group:
     enabled: !ENV [MATERIAL_INSIDERS, false]

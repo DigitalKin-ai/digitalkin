@@ -114,9 +114,7 @@ tasks:
     desc: "Setup development environment"
     cmds:
       - task: venv
-      - task: install-deps
-      - task: dev-deps
-      - task: tests-deps
+      - uv sync --extra taskiq --group dev --group docs --group tests
       - task: setup-pre-commit
 
   docs-serve:

@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 from digitalkin.models.module.module import ModuleCodeModel, ModuleStatus
 from digitalkin.models.module.module_types import DataModel, DataTrigger, SetupModel
 from digitalkin.models.module.tool_cache import ToolCache
+from digitalkin.models.module.utility import HealthcheckPingInput
 from digitalkin.modules._base_module import BaseModule
 from digitalkin.utils.package_discover import ModuleDiscoverer
 
@@ -184,6 +185,13 @@ class TestCreateModels:
         model = cls.create_input_model({"root": {"protocol": "lc_test", "message": "hi"}})
         assert model.root.message == "hi"
 
+    def test_create_input_model_accepts_utility_protocol(self) -> None:
+        """create_input_model accepts utility protocols after discover()."""
+        cls = _make_module_cls()
+        cls.discover()
+        model = cls.create_input_model({"root": {"protocol": "healthcheck_ping"}})
+        assert isinstance(model.root, HealthcheckPingInput)
+
     async def test_create_setup_model(self) -> None:
         """Creates filtered setup model via get_clean_model."""
         cls = _make_module_cls()
@@ -259,6 +267,43 @@ class TestRun:
         call_args = mock_handler.handle.call_args
         assert call_args[0][1] is setup_data
         assert call_args[0][2] is module.context
+
+    async def test_run_accepts_extended_input_model(self) -> None:
+        """run() accepts input created by create_input_model (extended model instance)."""
+        cls = _make_module_cls()
+        cls.discover()
+        module = _instantiate(cls)
+
+        mock_handler = AsyncMock()
+        module.triggers_discoverer = Mock()
+        module.triggers_discoverer.get_trigger.return_value = mock_handler
+
+        # Simulate the real flow: servicer calls create_input_model, passes result to run()
+        input_data = cls.create_input_model({"root": {"protocol": "lc_test", "message": "hi"}})
+        setup_data = _LcSetupModel()
+
+        await module.run(input_data, setup_data)
+
+        mock_handler.handle.assert_awaited_once()
+
+    async def test_run_accepts_utility_protocol_from_create_input_model(self) -> None:
+        """run() dispatches utility protocols created via create_input_model."""
+        cls = _make_module_cls()
+        cls.discover()
+        module = _instantiate(cls)
+
+        mock_handler = AsyncMock()
+        module.triggers_discoverer = Mock()
+        module.triggers_discoverer.get_trigger.return_value = mock_handler
+
+        input_data = cls.create_input_model({"root": {"protocol": "healthcheck_ping"}})
+        setup_data = _LcSetupModel()
+
+        await module.run(input_data, setup_data)
+
+        mock_handler.handle.assert_awaited_once()
+        call_args = mock_handler.handle.call_args
+        assert isinstance(call_args[0][0], HealthcheckPingInput)
 
     async def test_raises_on_unknown_protocol(self) -> None:
         """run() raises ValueError for unregistered protocol."""
