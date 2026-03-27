@@ -176,7 +176,13 @@ class ModuleServer(BaseServer):
         await super().stop_async(grace)
 
     async def _register_with_registry(self) -> None:
-        """Register this module with the registry server."""
+        """Register this module with the registry server.
+
+        Probes the services-provider channel for readiness (1s max) before
+        attempting registration.  When the provider is unreachable the module
+        still starts — it just won't be discoverable until the next restart
+        or a manual re-registration.
+        """
         if not self.registry:
             logger.debug("No registry configured, skipping registration")
             return
@@ -192,6 +198,19 @@ class ModuleServer(BaseServer):
             return
 
         advertise_address = self.server_config.advertise_host or self.server_config.host
+
+        # Fast connectivity probe — detect DOWN in ≤1 s
+        if not await self.registry.wait_for_ready(timeout=1.0):
+            logger.error(
+                "Services provider is DOWN — channel not ready after 1 s, "
+                "skipping registration (module will start without registry)",
+                extra={
+                    "module_id": module_id,
+                    "address": advertise_address,
+                    "port": self.server_config.port,
+                },
+            )
+            return
 
         logger.info(
             "Attempting to register module with registry",

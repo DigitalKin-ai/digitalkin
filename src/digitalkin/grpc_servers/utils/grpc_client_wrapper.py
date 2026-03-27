@@ -32,6 +32,15 @@ class GrpcClientWrapper:
     _channel_cache: ClassVar[dict[str, grpc.aio.Channel]] = {}
     _ref_counts: ClassVar[dict[str, int]] = {}
 
+    _RETRYABLE_CODES: ClassVar[set[grpc.StatusCode]] = {
+        grpc.StatusCode.UNAVAILABLE,
+        grpc.StatusCode.INTERNAL,
+        grpc.StatusCode.DEADLINE_EXCEEDED,
+    }
+    _QUERY_MAX_RETRIES: ClassVar[int] = int(os.environ.get("DIGITALKIN_GRPC_QUERY_MAX_RETRIES", "2"))
+    _QUERY_BACKOFF_BASE_MS: ClassVar[float] = float(os.environ.get("DIGITALKIN_GRPC_QUERY_BACKOFF_BASE_MS", "50"))
+    _QUERY_DEFAULT_TIMEOUT: ClassVar[float] = float(os.environ.get("DIGITALKIN_GRPC_QUERY_TIMEOUT", "30"))
+
     @staticmethod
     def _build_channel_credentials(config: ClientConfig) -> grpc.ChannelCredentials | None:
         """Build SSL channel credentials from config if secure mode.
@@ -140,13 +149,26 @@ class GrpcClientWrapper:
         cls._channel_cache.clear()
         cls._ref_counts.clear()
 
-    _RETRYABLE_CODES: ClassVar[set[grpc.StatusCode]] = {
-        grpc.StatusCode.UNAVAILABLE,
-        grpc.StatusCode.INTERNAL,
-        grpc.StatusCode.DEADLINE_EXCEEDED,
-    }
-    _QUERY_MAX_RETRIES: ClassVar[int] = int(os.environ.get("DIGITALKIN_GRPC_QUERY_MAX_RETRIES", "2"))
-    _QUERY_BACKOFF_BASE_MS: ClassVar[float] = float(os.environ.get("DIGITALKIN_GRPC_QUERY_BACKOFF_BASE_MS", "50"))
+    async def wait_for_ready(self, timeout: float = 1.0) -> bool:
+        """Check if the gRPC channel can connect within timeout.
+
+        Uses channel_ready() which resolves when the HTTP/2 connection is
+        established and the server is accepting RPCs.
+
+        Args:
+            timeout: Max seconds to wait for connectivity.
+
+        Returns:
+            True if channel reached READY state, False if timeout or no channel.
+        """
+        if self._channel is None:
+            return False
+        try:
+            await asyncio.wait_for(self._channel.channel_ready(), timeout=timeout)
+        except asyncio.TimeoutError:
+            return False
+        else:
+            return True
 
     async def exec_grpc_query(
         self,
@@ -163,7 +185,8 @@ class GrpcClientWrapper:
         Arguments:
             query_endpoint: rpc query name (e.g., "GetSetup", "CreateSetupVersion")
             request: gRPC protobuf request object
-            timeout: Optional per-call timeout in seconds (passed to gRPC stub call)
+            timeout: Per-call timeout in seconds. Falls back to _QUERY_DEFAULT_TIMEOUT
+                     (env DIGITALKIN_GRPC_QUERY_TIMEOUT, default 30s) when None.
 
         Returns:
             gRPC protobuf response object.
@@ -171,6 +194,7 @@ class GrpcClientWrapper:
         Raises:
             ServerError: gRPC error with status code and details for caller to handle.
         """
+        effective_timeout = timeout if timeout is not None else self._QUERY_DEFAULT_TIMEOUT
         max_retries = self._QUERY_MAX_RETRIES
         backoff_delays = tuple(self._QUERY_BACKOFF_BASE_MS / 1000 * (2**i) for i in range(max_retries))
         last_error: grpc.RpcError | None = None
@@ -181,7 +205,7 @@ class GrpcClientWrapper:
 
             try:
                 # getattr unavoidable: gRPC stubs expose RPC methods as dynamic attributes
-                response = await getattr(self.stub, query_endpoint)(request, timeout=timeout)
+                response = await getattr(self.stub, query_endpoint)(request, timeout=effective_timeout)
             except grpc.RpcError as e:
                 last_error = e
                 if e.code() not in self._RETRYABLE_CODES or attempt == max_retries:
