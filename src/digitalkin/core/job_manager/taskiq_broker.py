@@ -1,18 +1,20 @@
 """Taskiq broker & RSTREAM producer for the job manager."""
 
 import asyncio
-import json
 import logging
 import os
 import pickle
+import ssl
 from typing import Any
 
 from rstream import Producer
 from rstream.exceptions import PreconditionFailed
 from taskiq import Context, TaskiqDepends, TaskiqMessage
 from taskiq.abc.formatter import TaskiqFormatter
+from taskiq.abc.middleware import TaskiqMiddleware
 from taskiq.compat import model_validate
 from taskiq.message import BrokerMessage
+from taskiq.result import TaskiqResult
 from taskiq_aio_pika import AioPikaBroker
 
 from digitalkin.core.common import ModuleFactory
@@ -61,16 +63,53 @@ class PickleFormatter(TaskiqFormatter):
     def loads(self, message: bytes) -> TaskiqMessage:  # Required by TaskiqFormatter interface # noqa: PLR6301
         """Recreate Python object from bytes.
 
+        Non-pickle messages (e.g. raw JSON left in the queue by other producers)
+        are logged and converted to a no-op ``TaskiqMessage`` so that Taskiq
+        acknowledges (consumes) them instead of nack-ing and re-delivering in a loop.
+
         Args:
             message: Broker message from bytes.
 
         Returns:
             message with TaskIQ format
         """
-        json_str = pickle.loads(  # noqa: S301
-            message
-        )  # Pickle: required for Taskiq deserialization (internal broker messages only)
+        try:
+            json_str = pickle.loads(  # noqa: S301
+                message
+            )  # Pickle: required for Taskiq deserialization (internal broker messages only)
+        except Exception as e:
+            logger.warning(
+                "Discarding non-pickle message (size=%d, preview=%r): %s",
+                len(message),
+                message[:80],
+                e,
+            )
+            # Return a no-op message that Taskiq will ack and discard
+            # (no task named "__discarded__" exists, so Taskiq logs a warning and moves on)
+            return TaskiqMessage(
+                task_id="__discarded__",
+                task_name="__discarded__",
+                labels={"_discarded": "true"},
+                args=[],
+                kwargs={},
+            )
         return model_validate(TaskiqMessage, json_str)
+
+
+def _rstream_ssl_context() -> ssl.SSLContext | None:
+    """Create SSL context for RStream if TLS is enabled via RABBITMQ_RSTREAM_SSL=true.
+
+    Returns:
+        SSL context if TLS is enabled, None otherwise.
+    """
+    if os.environ.get("RABBITMQ_RSTREAM_SSL", "").lower() not in {"true", "1", "yes"}:
+        return None
+    ctx = ssl.create_default_context()
+    # Allow self-signed certs in staging if RABBITMQ_RSTREAM_SSL_VERIFY=false
+    if os.environ.get("RABBITMQ_RSTREAM_SSL_VERIFY", "true").lower() in {"false", "0", "no"}:
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+    return ctx
 
 
 class TaskiqBrokerConfig:
@@ -80,8 +119,23 @@ class TaskiqBrokerConfig:
     STREAM_RETENTION = 200_000
 
     @staticmethod
+    async def _on_producer_closed(reason: Any) -> None:
+        """Log RStream producer connection closure for diagnostics.
+
+        Args:
+            reason: Connection close reason from rstream.
+        """
+        logger.error("RStream producer connection closed: %s", reason)
+
+    @staticmethod
     def define_producer() -> Producer:
-        """Create RStream producer from environment variables.
+        """Create RStream producer with tuned settings for sustained throughput.
+
+        Tuning:
+        - ``default_batch_publishing_delay``: Flush batches every 100ms (default 3s)
+          for lower streaming latency during long-running tasks.
+        - ``default_context_switch_value``: Yield to the event loop every 100 messages
+          (default 1000) to keep concurrent coroutines responsive under heavy output.
 
         Returns:
             Producer connected to RabbitMQ.
@@ -91,12 +145,22 @@ class TaskiqBrokerConfig:
         username = os.environ.get("RABBITMQ_RSTREAM_USERNAME", "guest")
         password = os.environ.get("RABBITMQ_RSTREAM_PASSWORD", "guest")
 
-        logger.info("Connection to RabbitMQ: %s:%s.", host, port)
-        return Producer(host=host, port=int(port), username=username, password=password)
+        logger.info("RStream producer connecting to %s:%s", host, port)
+        return Producer(
+            host=host,
+            port=int(port),
+            username=username,
+            password=password,
+            ssl_context=_rstream_ssl_context(),
+            default_batch_publishing_delay=float(os.environ.get("DIGITALKIN_RSTREAM_BATCH_DELAY", "0.1")),
+            default_context_switch_value=int(os.environ.get("DIGITALKIN_RSTREAM_CONTEXT_SWITCH", "100")),
+            connection_name="digitalkin_producer",
+            on_close_handler=TaskiqBrokerConfig._on_producer_closed,
+        )
 
     @staticmethod
     def define_broker() -> AioPikaBroker:
-        """Create AioPikaBroker from environment variables.
+        """Create AioPikaBroker with tuned QoS for worker prefetch control.
 
         Returns:
             Broker connected to RabbitMQ with custom formatter.
@@ -105,12 +169,19 @@ class TaskiqBrokerConfig:
         port = os.environ.get("RABBITMQ_BROKER_PORT", "5672")
         username = os.environ.get("RABBITMQ_BROKER_USERNAME", "guest")
         password = os.environ.get("RABBITMQ_BROKER_PASSWORD", "guest")
+        scheme = os.environ.get("RABBITMQ_BROKER_SCHEME", "amqp")
 
         broker = AioPikaBroker(
-            f"amqp://{username}:{password}@{host}:{port}",
+            f"{scheme}://{username}:{password}@{host}:{port}",
+            qos=int(os.environ.get("DIGITALKIN_TASKIQ_PREFETCH", "10")),
             startup=[TaskiqBrokerConfig.init_rstream],
         )
         broker.formatter = PickleFormatter()
+        redis_url = os.environ.get("DIGITALKIN_TASKIQ_RESULT_BACKEND_URL")
+        if redis_url:
+            from taskiq_redis import RedisAsyncResultBackend
+
+            broker.with_result_backend(RedisAsyncResultBackend(redis_url))
         return broker
 
     @staticmethod
@@ -147,17 +218,78 @@ class TaskiqBrokerConfig:
     async def send_message_to_stream(job_id: str, output_data: DataModel | ModuleCodeModel) -> None:
         """Add a message frame to the RStream.
 
+        Uses Pydantic's Rust-based model_dump_json() and direct string embedding
+        to avoid the overhead of model_dump() → dict → json.dumps() → encode().
+
         Args:
             job_id: ID of the job that sent the message.
             output_data: Message body as a OutputModelT or error / stream_code.
         """
-        body = json.dumps({"job_id": job_id, "output_data": output_data.model_dump(mode="json")}).encode("utf-8")
+        # job_id is always a UUID (hex + hyphens), safe to embed without escaping
+        output_json = output_data.model_dump_json()
+        body = f'{{"job_id":"{job_id}","output_data":{output_json}}}'.encode()
         await RSTREAM_PRODUCER.send(stream=TaskiqBrokerConfig.STREAM, message=body)
+
+
+class TaskiqLifecycleMiddleware(TaskiqMiddleware):
+    """Lifecycle middleware for structured logging and safety-net EndOfStreamOutput."""
+
+    async def pre_execute(self, message: TaskiqMessage) -> TaskiqMessage:  # noqa: PLR6301
+        """Log task start.
+
+        Returns:
+            The unmodified message.
+        """
+        logger.info("Taskiq task starting: %s (task_name=%s)", message.task_id, message.task_name)
+        return message
+
+    async def post_execute(self, message: TaskiqMessage, result: TaskiqResult) -> None:  # noqa: PLR6301
+        """Log task completion."""
+        log_fn = logger.info if not result.is_err else logger.error
+        log_fn(
+            "Taskiq task finished: %s (task_name=%s, is_err=%s, exec_time=%.3fs)",
+            message.task_id,
+            message.task_name,
+            result.is_err,
+            result.execution_time,
+        )
+
+    async def on_error(  # noqa: PLR6301
+        self,
+        message: TaskiqMessage,
+        result: TaskiqResult,  # noqa: ARG002
+        exception: BaseException,
+    ) -> None:
+        """Safety net: send EndOfStreamOutput if worker task failed to."""
+        logger.error("Taskiq task error: %s (task_name=%s, error=%s)", message.task_id, message.task_name, exception)
+        try:
+            await TaskiqBrokerConfig.send_message_to_stream(
+                message.task_id,
+                ModuleCodeModel(code="WorkerCrash", short_description="Middleware safety net", message=str(exception)),
+            )
+            await TaskiqBrokerConfig.send_message_to_stream(
+                message.task_id,
+                DataModel(root=EndOfStreamOutput()),
+            )
+        except Exception:
+            logger.exception("Middleware safety net failed for %s", message.task_id)
 
 
 # Module-level globals required by Taskiq framework (decorator needs broker at import time)
 RSTREAM_PRODUCER = TaskiqBrokerConfig.define_producer()
 TASKIQ_BROKER = TaskiqBrokerConfig.define_broker()
+TASKIQ_BROKER.add_middlewares(TaskiqLifecycleMiddleware())
+
+
+@TASKIQ_BROKER.task(task_name="__discarded__")
+async def _discarded_message() -> None:  # noqa: RUF029
+    """No-op sink for poison messages consumed by PickleFormatter.
+
+    Taskiq's receiver early-returns without acking when a task name is unknown,
+    so we register this dummy task to ensure the message is executed (no-op),
+    acked, and removed from the queue.
+    """
+    logger.debug("Poison message acknowledged and discarded")
 
 
 @TASKIQ_BROKER.task
@@ -170,6 +302,7 @@ async def run_start_module(
     input_data: dict,
     setup_data: dict,
     request_metadata: dict[str, str] | None = None,
+    registry_config: dict[str, Any] | None = None,
     context: Context = TaskiqDepends(),
 ) -> None:
     """TaskIQ task allowing a module to compute in the background asynchronously.
@@ -183,9 +316,17 @@ async def run_start_module(
         input_data: dict,
         setup_data: dict,
         request_metadata: gRPC request metadata (headers) to forward to the module.
+        registry_config: Registry config (client_config) forwarded from the main process.
         context: Allow TaskIQ context access
     """
     logger.info("Starting module with services_mode: %s", services_mode)
+
+    # Restore registry config lost during pickle (worker re-imports class without runtime mutations)
+    if registry_config is not None:
+        if "services_config_params" not in module_class.__dict__:
+            module_class.services_config_params = dict(module_class.services_config_params)
+        module_class.services_config_params["registry"] = registry_config
+
     services_config = ServicesConfig(
         services_config_strategies=module_class.services_config_strategies,
         services_config_params=module_class.services_config_params,
@@ -219,6 +360,17 @@ async def run_start_module(
             setup_model = await module_class.create_setup_model(setup_data)
         except Exception as e:
             logger.error("Failed to reconstruct models for job %s: %s", job_id, e, exc_info=True)
+            try:
+                await callback(
+                    ModuleCodeModel(
+                        code="ValidationError",
+                        short_description="Model reconstruction failed",
+                        message=str(e),
+                    )
+                )
+                await callback(DataModel(root=EndOfStreamOutput()))
+            except Exception:
+                logger.exception("Failed to send error to stream for job %s", job_id)
             raise
 
         supervisor_task = await executor.execute_task(
@@ -236,8 +388,19 @@ async def run_start_module(
         # Wait for the supervisor task to complete
         await supervisor_task
         logger.info("Module task %s completed", job_id)
-    except Exception:
+    except Exception as e:
         logger.exception("Error running module %s", job_id)
+        try:
+            await callback(
+                ModuleCodeModel(
+                    code="WorkerError",
+                    short_description="Worker execution failed",
+                    message=str(e),
+                )
+            )
+            await callback(DataModel(root=EndOfStreamOutput()))
+        except Exception:
+            logger.exception("Failed to send error to stream for job %s", job_id)
         raise
     finally:
         # Cleanup via module context
@@ -256,6 +419,7 @@ async def run_config_module(
     services_mode: ServicesMode,
     config_setup_data: dict,
     request_metadata: dict[str, str] | None = None,
+    registry_config: dict[str, Any] | None = None,
     context: Context = TaskiqDepends(),
 ) -> None:
     """TaskIQ task allowing a module to compute in the background asynchronously.
@@ -268,9 +432,17 @@ async def run_config_module(
         services_mode: ServicesMode,
         config_setup_data: dict,
         request_metadata: gRPC request metadata (headers) to forward to the module.
+        registry_config: Registry config (client_config) forwarded from the main process.
         context: Allow TaskIQ context access
     """
     logger.info("Starting config module with services_mode: %s", services_mode)
+
+    # Restore registry config lost during pickle (worker re-imports class without runtime mutations)
+    if registry_config is not None:
+        if "services_config_params" not in module_class.__dict__:
+            module_class.services_config_params = dict(module_class.services_config_params)
+        module_class.services_config_params["registry"] = registry_config
+
     services_config = ServicesConfig(
         services_config_strategies=module_class.services_config_strategies,
         services_config_params=module_class.services_config_params,
@@ -293,7 +465,22 @@ async def run_config_module(
         session = TaskSession(job_id, mission_id, module)
 
         # Create and run the config setup task with TaskExecutor
-        setup_model = module_class.create_config_setup_model(config_setup_data)
+        try:
+            setup_model = module_class.create_config_setup_model(config_setup_data)
+        except Exception as e:
+            logger.error("Failed to reconstruct config setup model for job %s: %s", job_id, e, exc_info=True)
+            try:
+                await callback(
+                    ModuleCodeModel(
+                        code="ValidationError",
+                        short_description="Config setup model reconstruction failed",
+                        message=str(e),
+                    )
+                )
+                await callback(DataModel(root=EndOfStreamOutput()))
+            except Exception:
+                logger.exception("Failed to send error to stream for job %s", job_id)
+            raise
 
         supervisor_task = await executor.execute_task(
             task_id=job_id,
@@ -305,8 +492,19 @@ async def run_config_module(
         # Wait for the supervisor task to complete
         await supervisor_task
         logger.info("Config module task %s completed", job_id)
-    except Exception:
+    except Exception as e:
         logger.exception("Error running config module %s", job_id)
+        try:
+            await callback(
+                ModuleCodeModel(
+                    code="WorkerError",
+                    short_description="Config worker execution failed",
+                    message=str(e),
+                )
+            )
+            await callback(DataModel(root=EndOfStreamOutput()))
+        except Exception:
+            logger.exception("Failed to send error to stream for job %s", job_id)
         raise
     finally:
         # Cleanup via module context

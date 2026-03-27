@@ -148,7 +148,10 @@ class TestServerConfig:
         expected_server_options = [
             ("grpc.max_receive_message_length", 100 * 1024 * 1024),
             ("grpc.max_send_message_length", 100 * 1024 * 1024),
+            ("grpc.keepalive_time_ms", 120000),
+            ("grpc.keepalive_timeout_ms", 20000),
             ("grpc.keepalive_permit_without_calls", True),
+            ("grpc.http2.max_pings_without_data", 0),
             ("grpc.http2.min_ping_interval_without_data_ms", 10000),
         ]
         if config.server_options != expected_server_options:

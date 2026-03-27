@@ -91,10 +91,11 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
                 message=f"Module {job_id} did not respond within {self._config_setup_timeout} seconds",
             )
         finally:
-            logger.debug(
-                "Config setup response retrieved",
-                extra={"job_id": job_id, "queue_empty": session.queue.empty()},
-            )
+            self.tasks_sessions.pop(job_id, None)
+            try:
+                await session.cleanup()
+            except Exception:
+                logger.exception("Config setup session cleanup failed", extra={"job_id": job_id})
 
     async def create_config_setup_instance_job(
         self,
@@ -132,8 +133,12 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             )
             logger.debug("Module %s (%s) started successfully", job_id, module.name)
         except Exception:
-            # Remove the module from the manager in case of an error.
-            del self.tasks_sessions[job_id]
+            session = self.tasks_sessions.pop(job_id, None)
+            if session is not None:
+                try:
+                    await session.cleanup()
+                except Exception:
+                    logger.debug("Session cleanup failed during error handling", exc_info=True)
             logger.exception("Failed to start module", extra={"job_id": job_id})
             raise
         else:
@@ -280,10 +285,7 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
                 if session.cancelled:
                     break
 
-        try:
-            yield _stream()
-        finally:
-            session.close_stream()
+        yield _stream()
 
     async def create_module_instance_job(
         self,
