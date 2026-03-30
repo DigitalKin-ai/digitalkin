@@ -79,12 +79,11 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
                 if has_dynamic(field_info):
                     current_field_info = await cls._refresh_field_schema(name, field_info)
 
-                if (nested_model := cls._get_base_model_type(current_annotation)) is not None:
-                    refreshed_nested = await cls._refresh_nested_model(nested_model)
-                    if refreshed_nested is not nested_model:
-                        current_annotation = refreshed_nested
-                        current_field_info = copy.deepcopy(current_field_info)
-                        current_field_info.annotation = current_annotation
+                refreshed_annotation = await cls._refresh_annotation(current_annotation)
+                if refreshed_annotation is not None:
+                    current_annotation = refreshed_annotation
+                    current_field_info = copy.deepcopy(current_field_info)
+                    current_field_info.annotation = current_annotation
 
             clean_fields[name] = (current_annotation, current_field_info)
 
@@ -224,6 +223,119 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
         return None
 
     @classmethod
+    def _find_all_base_models_in_args(
+        cls,
+        args: "tuple[type, ...]",
+    ) -> "list[type[BaseModel]]":
+        """Find all BaseModel subclasses in type args.
+
+        Args:
+            args: Type arguments to search.
+
+        Returns:
+            List of BaseModel subclasses found.
+        """
+        results: list[type[BaseModel]] = []
+        for arg in args:
+            if arg is type(None):
+                continue
+            if (result := cls._check_base_model(arg)) is not None:
+                results.append(result)
+        return results
+
+    @classmethod
+    async def _refresh_annotation(cls, annotation: "type | None") -> "type | None":
+        """Refresh dynamic fields in an annotation, handling Unions and single models.
+
+        Args:
+            annotation: Type annotation to refresh.
+
+        Returns:
+            Refreshed annotation, or None if no changes were made.
+        """
+        if annotation is None:
+            return None
+
+        refreshed_union = await cls._refresh_union_variants(annotation)
+        if refreshed_union is not None:
+            return refreshed_union
+
+        nested_model = cls._get_base_model_type(annotation)
+        if nested_model is None:
+            return None
+
+        refreshed = await cls._refresh_nested_model(nested_model)
+        if refreshed is nested_model:
+            return None
+
+        return cls._rebuild_generic_annotation(annotation, nested_model, refreshed)
+
+    @classmethod
+    def _rebuild_generic_annotation(
+        cls, annotation: type, original: "type[BaseModel]", refreshed: "type[BaseModel]"
+    ) -> type:
+        """Rebuild a generic annotation replacing the original BaseModel with the refreshed one.
+
+        Args:
+            annotation: Original generic annotation (e.g. list[MyModel]).
+            original: The original BaseModel subclass found in the annotation.
+            refreshed: The refreshed replacement model.
+
+        Returns:
+            Rebuilt annotation, or the refreshed model if annotation is not generic.
+        """
+        origin = get_origin(annotation)
+        if origin is None:
+            return refreshed
+
+        args = get_args(annotation)
+        new_args = tuple(refreshed if a is original else a for a in args)
+        if origin in {list, set, frozenset}:
+            return origin[new_args[0]]  # type: ignore[index]
+        if origin is dict:
+            return dict[new_args[0], new_args[1]]  # type: ignore[misc,index,valid-type]
+        if origin is tuple:
+            return tuple[new_args]  # type: ignore[misc,index,valid-type]
+        return refreshed
+
+    @classmethod
+    async def _refresh_union_variants(
+        cls,
+        annotation: "type",
+    ) -> "type | None":
+        """Refresh dynamic fields in all BaseModel variants of a Union annotation.
+
+        Args:
+            annotation: A Union type annotation potentially containing multiple BaseModel subclasses.
+
+        Returns:
+            Rebuilt annotation with refreshed variants, or None if no changes were made.
+        """
+        origin = get_origin(annotation)
+        if origin is not typing.Union and origin is not types.UnionType:
+            return None
+
+        args = get_args(annotation)
+        models = cls._find_all_base_models_in_args(args)
+        if len(models) <= 1:
+            return None
+
+        replacements: dict[type, type] = {}
+        for model in models:
+            refreshed = await cls._refresh_nested_model(model)
+            if refreshed is not model:
+                replacements[model] = refreshed
+
+        if not replacements:
+            return None
+
+        new_args = [replacements.get(a, a) for a in args]  # type: ignore[arg-type]
+        rebuilt = new_args[0]
+        for arg in new_args[1:]:
+            rebuilt |= arg  # type: ignore[operator]
+        return rebuilt  # type: ignore[return-value]
+
+    @classmethod
     async def _refresh_nested_model(cls, model_cls: "type[BaseModel]") -> "type[BaseModel]":
         """Refresh dynamic fields in a nested BaseModel.
 
@@ -244,13 +356,12 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
                 current_field_info = await cls._refresh_field_schema(name, field_info)
                 has_changes = True
 
-            if (nested_model := cls._get_base_model_type(current_annotation)) is not None:
-                refreshed_nested = await cls._refresh_nested_model(nested_model)
-                if refreshed_nested is not nested_model:
-                    current_annotation = refreshed_nested
-                    current_field_info = copy.deepcopy(current_field_info)
-                    current_field_info.annotation = current_annotation
-                    has_changes = True
+            refreshed_annotation = await cls._refresh_annotation(current_annotation)
+            if refreshed_annotation is not None:
+                current_annotation = refreshed_annotation
+                current_field_info = copy.deepcopy(current_field_info)
+                current_field_info.annotation = current_annotation
+                has_changes = True
 
             clean_fields[name] = (current_annotation, current_field_info)
 
