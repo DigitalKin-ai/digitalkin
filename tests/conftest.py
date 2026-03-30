@@ -6,12 +6,9 @@ import grpc_testing
 import pytest
 from _pytest.fixtures import SubRequest
 
-from digitalkin.models.grpc_servers.models import (
-    SecurityMode,
-    ServerConfig,
-    ServerCredentials,
-    ServerMode,
-)
+from digitalkin.grpc_servers._base_server import BaseServer
+from digitalkin.models.settings.utils.channel import CommunicationMode, SecurityMode, Credentials
+from digitalkin.models.settings.server.server import ServerSettings
 
 # Register fixture plugins
 pytest_plugins = [
@@ -26,29 +23,26 @@ logging.getLogger("grpc").setLevel(logging.WARNING)
 
 
 @pytest.fixture
-def server_config_sync_insecure():
-    """Create a sync insecure server configuration."""
-    return ServerConfig(
-        host="localhost",
-        port=50051,
-        mode=ServerMode.SYNC,
-        security=SecurityMode.INSECURE,
-    )
+def server_config_sync_insecure(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SERVER_CHANNEL_HOST", "localhost")
+    monkeypatch.setenv("SERVER_CHANNEL_PORT", "50051")
+    monkeypatch.setenv("SERVER_CHANNEL_COMMUNICATION_MODE", "sync")
+    monkeypatch.setenv("SERVER_CHANNEL_SECURITY", "insecure")
 
+    BaseServer._server_settings = ServerSettings()
 
 @pytest.fixture
-def server_config_async_insecure():
+def server_config_async_insecure(monkeypatch: pytest.MonkeyPatch):
     """Create an async insecure server configuration."""
-    return ServerConfig(
-        host="localhost",
-        port=50052,
-        mode=ServerMode.ASYNC,
-        security=SecurityMode.INSECURE,
-    )
+    monkeypatch.setenv("SERVER_CHANNEL_HOST", "localhost")
+    monkeypatch.setenv("SERVER_CHANNEL_PORT", "50052")
+    monkeypatch.setenv("SERVER_CHANNEL_COMMUNICATION_MODE", "async")
+    monkeypatch.setenv("SERVER_CHANNEL_SECURITY", "insecure")
 
+    BaseServer._server_settings = ServerSettings()
 
 @pytest.fixture
-def dummy_certs(tmp_path):
+def dummy_certs(tmp_path, monkeypatch: pytest.MonkeyPatch):
     """Create dummy certificates for testing secure connections."""
     # Create certificate files
     server_key = tmp_path / "server.key"
@@ -60,39 +54,33 @@ def dummy_certs(tmp_path):
     server_cert.write_text("DUMMY CERT CONTENT")
     ca_cert.write_text("DUMMY CA CERT CONTENT")
 
-    return {
-        "server_key_path": server_key,
-        "server_cert_path": server_cert,
-        "root_cert_path": ca_cert,
-    }
+    monkeypatch.setenv("SERVER_CHANNEL_CREDENTIALS__KEY_PATH", str(server_key))
+    monkeypatch.setenv("SERVER_CHANNEL_CREDENTIALS__CERT_PATH", str(server_cert))
+    monkeypatch.setenv("SERVER_CHANNEL_CREDENTIALS__ROOT_CERT_PATH", str(ca_cert))
+
+    return server_key, server_cert, ca_cert
 
 
 @pytest.fixture
-def server_config_sync_secure(dummy_certs):
+def server_config_sync_secure(dummy_certs, monkeypatch: pytest.MonkeyPatch):
     """Create a sync secure server configuration."""
-    credentials = ServerCredentials(**dummy_certs)
+    monkeypatch.setenv("SERVER_CHANNEL_HOST", "localhost")
+    monkeypatch.setenv("SERVER_CHANNEL_PORT", "50053")
+    monkeypatch.setenv("SERVER_CHANNEL_COMMUNICATION_MODE", "sync")
+    monkeypatch.setenv("SERVER_CHANNEL_SECURITY", "secure")
 
-    return ServerConfig(
-        host="localhost",
-        port=50053,
-        mode=ServerMode.SYNC,
-        security=SecurityMode.SECURE,
-        credentials=credentials,
-    )
+    BaseServer._server_settings = ServerSettings()
 
 
 @pytest.fixture
-def server_config_async_secure(dummy_certs):
+def server_config_async_secure(dummy_certs, monkeypatch: pytest.MonkeyPatch):
     """Create an async secure server configuration."""
-    credentials = ServerCredentials(**dummy_certs)
+    monkeypatch.setenv("SERVER_CHANNEL_HOST", "localhost")
+    monkeypatch.setenv("SERVER_CHANNEL_PORT", "50054")
+    monkeypatch.setenv("SERVER_CHANNEL_COMMUNICATION_MODE", "async")
+    monkeypatch.setenv("SERVER_CHANNEL_SECURITY", "secure")
 
-    return ServerConfig(
-        host="localhost",
-        port=50054,
-        mode=ServerMode.ASYNC,
-        security=SecurityMode.SECURE,
-        credentials=credentials,
-    )
+    BaseServer._server_settings = ServerSettings()
 
 
 @pytest.fixture(scope="module")

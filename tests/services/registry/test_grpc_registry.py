@@ -23,7 +23,8 @@ from agentic_mesh_protocol.registry.v1 import (
 from tests.fixtures.grpc_fixtures import AsyncStubWrapper, FakeContext
 from tests.services.registry.mock_registry_servicer import MockRegistryServicer
 
-from digitalkin.models.grpc_servers.models import ClientConfig, SecurityMode, ServerMode
+from digitalkin.models.grpc_servers.models import ClientConfig
+from digitalkin.models.settings.utils.channel import CommunicationMode, SecurityMode
 from digitalkin.models.services.registry import RegistryModuleStatus, RegistryModuleType
 from digitalkin.services.registry.exceptions import (
     RegistryServiceError,
@@ -85,7 +86,7 @@ def dummy_client_config() -> ClientConfig:
     return ClientConfig(
         host="localhost",
         port=50052,
-        mode=ServerMode.ASYNC,
+        mode=CommunicationMode.ASYNC,
         security=SecurityMode.INSECURE,
         credentials=None,
     )

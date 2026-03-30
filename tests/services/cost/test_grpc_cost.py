@@ -17,7 +17,8 @@ from mock_cost_servicer import MockCostServicer
 from tests.fixtures.grpc_fixtures import AsyncStubWrapper, FakeContext
 
 from digitalkin.grpc_servers.utils.exceptions import ServerError
-from digitalkin.models.grpc_servers.models import ClientConfig, SecurityMode, ServerMode
+from digitalkin.models.grpc_servers.models import ClientConfig
+from digitalkin.models.settings.utils.channel import CommunicationMode, SecurityMode
 from digitalkin.services.cost.cost_strategy import CostConfig, CostData, CostServiceError, CostType
 from digitalkin.services.cost.grpc_cost import GrpcCost
 
@@ -133,7 +134,7 @@ def client(test_channel: grpc_testing.Channel, cost_config: dict[str, CostConfig
     dummy_config = ClientConfig(
         host="[::]",
         port=50051,
-        mode=ServerMode.ASYNC,
+        mode=CommunicationMode.ASYNC,
         security=SecurityMode.INSECURE,
         credentials=None,
     )

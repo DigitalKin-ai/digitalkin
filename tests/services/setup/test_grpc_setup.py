@@ -18,7 +18,8 @@ from freezegun import freeze_time
 from mock_setup_servicer import MockSetupServicer
 from tests.fixtures.grpc_fixtures import AsyncStubWrapper, FakeContext
 
-from digitalkin.models.grpc_servers.models import ClientConfig, SecurityMode, ServerMode
+from digitalkin.models.grpc_servers.models import ClientConfig
+from digitalkin.models.settings.utils.channel import CommunicationMode, SecurityMode
 from digitalkin.services.setup.grpc_setup import GrpcSetup
 from digitalkin.services.setup.setup_strategy import SetupData, SetupVersionData
 
@@ -74,7 +75,7 @@ def client(test_channel: grpc_testing.Channel) -> GrpcSetup:
     dummy_config = ClientConfig(
         host="[::]",
         port=50151,
-        mode=ServerMode.ASYNC,
+        mode=CommunicationMode.ASYNC,
         security=SecurityMode.INSECURE,
         credentials=None,
     )

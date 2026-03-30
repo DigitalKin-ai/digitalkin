@@ -1,0 +1,4 @@
+services:
+  tests:
+    entrypoint: ""
+    command: ""

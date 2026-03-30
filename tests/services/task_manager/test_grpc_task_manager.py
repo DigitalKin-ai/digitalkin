@@ -21,13 +21,13 @@ from agentic_mesh_protocol.task_manager.v1 import (
 )
 from google.protobuf.struct_pb2 import Struct
 from google.protobuf.timestamp_pb2 import Timestamp
-from mock_task_manager_servicer import MockTaskManagerServicer
-from tests.fixtures.grpc_fixtures import AsyncStubWrapper, FakeContext
 
 from digitalkin.models.core.task_monitor import CancellationReason, SignalMessage, SignalType
-from digitalkin.models.grpc_servers.models import ClientConfig, SecurityMode, ServerMode
+from digitalkin.models.grpc_servers.models import ClientConfig
+from digitalkin.models.settings.utils.channel import CommunicationMode, SecurityMode
 from digitalkin.services.task_manager.grpc_task_manager import GrpcTaskManager, _SharedPoller, _SharedSendBuffer
-from digitalkin.services.task_manager.task_manager_strategy import TaskManagerServiceError
+from mock_task_manager_servicer import MockTaskManagerServicer
+from tests.fixtures.grpc_fixtures import AsyncStubWrapper, FakeContext
 
 # Set timeout for all tests in this file (30 seconds)
 pytestmark = pytest.mark.timeout(30)
@@ -102,7 +102,7 @@ def client(test_channel: grpc_testing.Channel) -> GrpcTaskManager:
     dummy_config = ClientConfig(
         host="[::]",
         port=50051,
-        mode=ServerMode.ASYNC,
+        mode=CommunicationMode.ASYNC,
         security=SecurityMode.INSECURE,
         credentials=None,
     )
@@ -112,7 +112,6 @@ def client(test_channel: grpc_testing.Channel) -> GrpcTaskManager:
         setup_id=SETUP_ID,
         setup_version_id=SETUP_VERSION_ID,
         client_config=dummy_config,
-        poll_interval=0.1,
     )
 
     # Override the stub to use the test channel
@@ -566,12 +565,11 @@ class TestSubscription:
         """Test that subscribe returns a subscription ID and async generator."""
         dummy_config = ClientConfig(
             host="[::]", port=50051,
-            mode=ServerMode.ASYNC, security=SecurityMode.INSECURE,
+            mode=CommunicationMode.ASYNC, security=SecurityMode.INSECURE,
         )
         client = GrpcTaskManager(
             mission_id=MISSION_ID, setup_id=SETUP_ID,
             setup_version_id=SETUP_VERSION_ID, client_config=dummy_config,
-            poll_interval=0.1,
         )
         # Mock stub.GetSignals (SharedPoller calls stub directly)
         client.stub = Mock()
@@ -593,12 +591,11 @@ class TestSubscription:
         """Test that unsubscribing stops the poll generator."""
         dummy_config = ClientConfig(
             host="[::]", port=50051,
-            mode=ServerMode.ASYNC, security=SecurityMode.INSECURE,
+            mode=CommunicationMode.ASYNC, security=SecurityMode.INSECURE,
         )
         client = GrpcTaskManager(
             mission_id=MISSION_ID, setup_id=SETUP_ID,
             setup_version_id=SETUP_VERSION_ID, client_config=dummy_config,
-            poll_interval=0.05,
         )
 
         call_count = 0
@@ -629,12 +626,11 @@ class TestSubscription:
         """Test that polling yields signals from GetSignals response."""
         dummy_config = ClientConfig(
             host="[::]", port=50051,
-            mode=ServerMode.ASYNC, security=SecurityMode.INSECURE,
+            mode=CommunicationMode.ASYNC, security=SecurityMode.INSECURE,
         )
         client = GrpcTaskManager(
             mission_id=MISSION_ID, setup_id=SETUP_ID,
             setup_version_id=SETUP_VERSION_ID, client_config=dummy_config,
-            poll_interval=0.05,
         )
 
         # Build a proto task to return
@@ -851,7 +847,7 @@ class TestOverloadResilience:
         """Test that multiple subscriptions are independent."""
         dummy_config = ClientConfig(
             host="[::]", port=50051,
-            mode=ServerMode.ASYNC, security=SecurityMode.INSECURE,
+            mode=CommunicationMode.ASYNC, security=SecurityMode.INSECURE,
         )
         client = GrpcTaskManager(
             mission_id=MISSION_ID, setup_id=SETUP_ID,
@@ -893,7 +889,7 @@ class TestClose:
         """Test that close() stops all active subscriptions."""
         dummy_config = ClientConfig(
             host="[::]", port=50051,
-            mode=ServerMode.ASYNC, security=SecurityMode.INSECURE,
+            mode=CommunicationMode.ASYNC, security=SecurityMode.INSECURE,
         )
         client = GrpcTaskManager(
             mission_id=MISSION_ID, setup_id=SETUP_ID,
@@ -928,7 +924,7 @@ class TestClose:
         """Test that close() can be called multiple times safely."""
         dummy_config = ClientConfig(
             host="[::]", port=50051,
-            mode=ServerMode.ASYNC, security=SecurityMode.INSECURE,
+            mode=CommunicationMode.ASYNC, security=SecurityMode.INSECURE,
         )
         client = GrpcTaskManager(
             mission_id=MISSION_ID, setup_id=SETUP_ID,

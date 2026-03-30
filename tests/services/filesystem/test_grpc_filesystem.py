@@ -19,7 +19,8 @@ from grpc.framework.foundation import logging_pool
 from mock_filesystem_servicer import MockFilesystemServicer
 from tests.fixtures.grpc_fixtures import FakeContext
 
-from digitalkin.models.grpc_servers.models import ClientConfig, SecurityMode, ServerMode
+from digitalkin.models.grpc_servers.models import ClientConfig
+from digitalkin.models.settings.utils.channel import CommunicationMode, SecurityMode
 from digitalkin.services.filesystem.filesystem_strategy import (
     FileFilter,
     FilesystemRecord,
@@ -77,7 +78,7 @@ def client(test_channel: grpc_testing.Channel) -> GrpcFilesystem:
     dummy_config = ClientConfig(
         host="[::]",
         port=50151,
-        mode=ServerMode.ASYNC,
+        mode=CommunicationMode.ASYNC,
         security=SecurityMode.INSECURE,
         credentials=None,
     )

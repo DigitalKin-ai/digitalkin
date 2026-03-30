@@ -5,7 +5,8 @@ from typing import Any, ClassVar, Literal
 
 from pydantic import BaseModel, Field
 
-from digitalkin.models.grpc_servers.models import ClientConfig, SecurityMode, ServerMode
+from digitalkin.models.grpc_servers.models import ClientConfig
+from digitalkin.models.settings.utils.channel import CommunicationMode, SecurityMode
 from digitalkin.models.module.module_context import ModuleContext
 from digitalkin.models.module.setup_types import SetupModel
 from digitalkin.models.module.tool_reference import ToolReference
@@ -98,7 +99,7 @@ class ArchetypeSecret(BaseModel):
 client_config = ClientConfig(
     host="[::]",
     port=50152,
-    mode=ServerMode.ASYNC,
+    mode=CommunicationMode.ASYNC,
     security=SecurityMode.INSECURE,
     credentials=None,
 )

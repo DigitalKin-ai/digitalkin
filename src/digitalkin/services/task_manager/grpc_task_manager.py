@@ -439,9 +439,6 @@ class GrpcTaskManager(TaskManagerStrategy, GrpcClientWrapper, GrpcErrorHandlerMi
         setup_id: str,  # noqa: ARG002
         setup_version_id: str,  # noqa: ARG002
         client_config: ClientConfig,
-        *,
-        poll_interval: float = float(os.environ.get("DIGITALKIN_SIGNAL_POLL_INTERVAL", "1.0")),
-        initial_poll_interval: float = float(os.environ.get("DIGITALKIN_SIGNAL_INITIAL_POLL_INTERVAL", "0.1")),
     ) -> None:
         """Initialize with client config.
 
@@ -450,8 +447,6 @@ class GrpcTaskManager(TaskManagerStrategy, GrpcClientWrapper, GrpcErrorHandlerMi
             setup_id: Setup identifier (unused, required by init_strategy convention).
             setup_version_id: Setup version identifier (unused, required by init_strategy convention).
             client_config: gRPC client configuration.
-            poll_interval: Maximum seconds between GetSignals polls.
-            initial_poll_interval: Starting poll interval before exponential ramp-up.
 
         Raises:
             ImportError: If agentic_mesh_protocol.task_manager.v1 is not installed.
@@ -466,10 +461,6 @@ class GrpcTaskManager(TaskManagerStrategy, GrpcClientWrapper, GrpcErrorHandlerMi
         self.stub = task_manager_service_pb2_grpc.TaskManagerServiceStub(channel)
         self._subscriptions = {}
         self._sub_task_ids = {}
-        self._poll_interval = poll_interval
-        self._initial_poll_interval = initial_poll_interval
-        self._grpc_timeout = float(os.environ.get("DIGITALKIN_GRPC_TIMEOUT", "30"))
-        self._poll_timeout = float(os.environ.get("DIGITALKIN_POLL_TIMEOUT", "1"))
         # Lazy buffer: created on first send_signal to ensure correct event loop and stub
         self._send_buffer_key = self._channel_cache_key or "default"
         self._send_buffer_acquired = False
@@ -570,7 +561,9 @@ class GrpcTaskManager(TaskManagerStrategy, GrpcClientWrapper, GrpcErrorHandlerMi
                 self._send_buffer_acquired = True
                 buffer = None
             if buffer is None:
-                buffer = _SharedSendBuffer.get_or_create(self._send_buffer_key, self.stub, self._grpc_timeout)
+                buffer = _SharedSendBuffer.get_or_create(
+                    self._send_buffer_key, self.stub, self._grpc_settings.timeout.seconds
+                )
             await buffer.send(self._signal_to_task_proto(signal))
             logger.info("SendSignals: task_id=%s action=%s", task_id, signal.action.value)
             return data
@@ -588,7 +581,7 @@ class GrpcTaskManager(TaskManagerStrategy, GrpcClientWrapper, GrpcErrorHandlerMi
             resp = await self.poll_grpc(
                 "GetSignals",
                 task_manager_dto_pb2.GetSignalsRequest(task_ids=task_ids),
-                timeout=self._poll_timeout,
+                timeout=self._grpc_settings.poll_timeout.seconds,
             )
             return list(resp.tasks) if resp is not None else []
         except Exception:
@@ -616,8 +609,8 @@ class GrpcTaskManager(TaskManagerStrategy, GrpcClientWrapper, GrpcErrorHandlerMi
         poller = _SharedPoller.get_or_create(
             key=self._channel_cache_key or "default",
             poll_fn=self._get_signals,
-            poll_interval=self._poll_interval,
-            initial_poll_interval=self._initial_poll_interval,
+            poll_interval=self._grpc_settings.poll_interval.seconds,
+            initial_poll_interval=self._grpc_settings.initial_poll_interval.seconds,
         )
         queue = poller.register(task_id)
 
@@ -626,7 +619,7 @@ class GrpcTaskManager(TaskManagerStrategy, GrpcClientWrapper, GrpcErrorHandlerMi
             try:
                 while not stop_event.is_set():
                     get_task = asyncio.create_task(queue.get())
-                    done, _ = await asyncio.wait([get_task], timeout=self._poll_interval * 2)
+                    done, _ = await asyncio.wait([get_task], timeout=self._grpc_settings.poll_timeout.seconds * 2)
                     if not done:  # type: ignore
                         get_task.cancel()
                         get_task = None

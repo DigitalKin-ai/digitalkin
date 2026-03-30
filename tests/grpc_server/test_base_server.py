@@ -14,6 +14,7 @@ from digitalkin.grpc_servers.utils.exceptions import (
     ServerStateError,
     ServicerError,
 )
+from digitalkin.models.settings.utils.channel import CommunicationMode, SecurityMode
 
 
 # Create a concrete implementation of BaseServer for testing
@@ -37,28 +38,19 @@ class TestBaseServerInitialization:
 
     def test_base_server_init(self, server_config_sync_insecure) -> None:
         """Test initialization of BaseServer."""
-        server = MockServer(server_config_sync_insecure)
+        server = MockServer()
 
-        if server.config != server_config_sync_insecure:
-            pytest.fail(f"Expected config to be {server_config_sync_insecure}, got {server.config}")
-
-        if server.server is not None:
-            pytest.fail(f"Expected server to be None, got {server.server}")
-
-        if server._servicers != []:
-            pytest.fail(f"Expected _servicers to be empty list, got {server._servicers}")
-
-        if server._service_names != []:
-            pytest.fail(f"Expected _service_names to be empty list, got {server._service_names}")
-
-        if server._health_servicer is not None:
-            pytest.fail(f"Expected _health_servicer to be None, got {server._health_servicer}")
+        assert server._server_settings.channel.host == 'localhost'
+        assert server._server_settings.channel.port == 50051
+        assert server._server_settings.channel.communication_mode is CommunicationMode.SYNC
+        assert server._server_settings.channel.security is SecurityMode.INSECURE
+        assert server.server is None
+        assert server._servicers == []
+        assert server._service_names == []
+        assert server._health_servicer is None
 
     def test_base_server_register_servicers_is_abstract(self) -> None:
         """Test that _register_servicers is an abstract method that must be implemented."""
-        from digitalkin.models.grpc_servers.models import ServerConfig  # noqa: PLC0415
-
-        config = ServerConfig()  # type: ignore
 
         # Create a class that doesn't implement _register_servicers
         class BadServer(BaseServer):
@@ -66,7 +58,7 @@ class TestBaseServerInitialization:
 
         # Attempting to instantiate BadServer should raise TypeError
         try:
-            BadServer(config)  # type: ignore
+            BadServer()  # type: ignore
             pytest.fail("Expected TypeError when creating class without implementing _register_servicers")
         except TypeError:
             # This is expected - abstract method must be implemented
@@ -79,7 +71,7 @@ class TestServicerRegistration:
 
     def test_register_servicer_without_server(self, server_config_sync_insecure) -> None:
         """Test that registering a servicer before creating the server raises an error."""
-        server = MockServer(server_config_sync_insecure)
+        server = MockServer()
 
         # Should raise ServicerError since server is not created
         with pytest.raises(ServicerError):
@@ -90,7 +82,7 @@ class TestServicerRegistration:
 
     def test_register_servicer(self, server_config_sync_insecure) -> None:
         """Test registering a servicer with the server."""
-        server = MockServer(server_config_sync_insecure)
+        server = MockServer()
 
         # Create a mock server
         mock_grpc_server = mock.MagicMock(spec=grpc.Server)
@@ -114,7 +106,7 @@ class TestServicerRegistration:
 
     def test_register_servicer_with_explicit_names(self, server_config_sync_insecure) -> None:
         """Test registering a servicer with explicit service names."""
-        server = MockServer(server_config_sync_insecure)
+        server = MockServer()
 
         # Create a mock server
         mock_grpc_server = mock.MagicMock(spec=grpc.Server)
@@ -133,7 +125,7 @@ class TestServicerRegistration:
 
     def test_register_servicer_with_descriptor(self, server_config_sync_insecure) -> None:
         """Test registering a servicer with a service descriptor."""
-        server = MockServer(server_config_sync_insecure)
+        server = MockServer()
 
         # Create a mock server
         mock_grpc_server = mock.MagicMock(spec=grpc.Server)
@@ -158,7 +150,7 @@ class TestServicerRegistration:
 
     def test_register_servicer_failure(self, server_config_sync_insecure) -> None:
         """Test handling of registration failure."""
-        server = MockServer(server_config_sync_insecure)
+        server = MockServer()
 
         # Create a mock server
         mock_grpc_server = mock.MagicMock(spec=grpc.Server)
@@ -182,7 +174,7 @@ class TestServicerRegistration:
     ) -> None:
         """Test that a good implementation of _register_servicers checks for server existence."""
         # MockServer already implements the check
-        server = MockServer(server_config_sync_insecure)
+        server = MockServer()
 
         # Ensure server is None
         server.server = None
@@ -202,7 +194,7 @@ class TestServicerRegistration:
                     raise ServicerError(msg)
                 self.method_called = True
 
-        server = FlagServer(server_config_sync_insecure)
+        server = FlagServer()
 
         # Mock the server
         mock_grpc_server = mock.MagicMock(spec=grpc.Server)
@@ -233,7 +225,7 @@ class TestReflection:
         # Directly patch the module in sys.modules
         with mock.patch.dict("sys.modules", {"grpc_reflection.v1alpha.reflection": mock_reflection}):
             # Create the server
-            server = MockServer(server_config_sync_insecure)
+            server = MockServer()
 
             # Create a mock server
             mock_grpc_server = mock.MagicMock(spec=grpc.Server)
@@ -253,7 +245,7 @@ class TestReflection:
 
     def test_add_reflection_import_error(self, server_config_sync_insecure) -> None:
         """Test handling of import error for reflection."""
-        server = MockServer(server_config_sync_insecure)
+        server = MockServer()
 
         # Create a mock server
         mock_grpc_server = mock.MagicMock(spec=grpc.Server)
@@ -278,7 +270,7 @@ class TestServerCreation:
 
     def test_create_server_sync(self, server_config_sync_insecure) -> None:
         """Test creating a synchronous server."""
-        server = MockServer(server_config_sync_insecure)
+        server = MockServer()
 
         with (
             mock.patch("digitalkin.grpc_servers._base_server.grpc.server") as mock_server,
@@ -287,7 +279,7 @@ class TestServerCreation:
             result = server._create_server()
 
             # Verify server was created with correct parameters
-            mock_executor.assert_called_once_with(max_workers=server_config_sync_insecure.max_workers)
+            mock_executor.assert_called_once_with(max_workers=server._server_settings.max_workers)
             mock_server.assert_called_once()
 
             # Verify result is the mock server
@@ -296,14 +288,14 @@ class TestServerCreation:
 
     def test_create_server_async(self, server_config_async_insecure) -> None:
         """Test creating an asynchronous server."""
-        server = MockServer(server_config_async_insecure)
+        server = MockServer()
 
         with mock.patch("digitalkin.grpc_servers._base_server.grpc_aio.server") as mock_server:
             result = server._create_server()
 
             # Verify server was created with correct parameters
             mock_server.assert_called_once_with(
-                options=server_config_async_insecure.server_options,
+                options=server._server_settings.grpc.options,
                 compression=grpc.Compression.Gzip,
                 interceptors=None,
                 maximum_concurrent_rpcs=mock.ANY,
@@ -321,28 +313,28 @@ class TestPortConfiguration:
 
     def test_add_insecure_port_sync(self, server_config_sync_insecure) -> None:
         """Test adding an insecure port to a sync server."""
-        server = MockServer(server_config_sync_insecure)
+        server = MockServer()
         mock_grpc_server = mock.MagicMock(spec=grpc.Server)
 
         server._add_insecure_port(mock_grpc_server)
 
         # Verify add_insecure_port was called
-        mock_grpc_server.add_insecure_port.assert_called_once_with(server_config_sync_insecure.address)
+        mock_grpc_server.add_insecure_port.assert_called_once_with(server._server_settings.channel.address)
 
     def test_add_insecure_port_async(self, server_config_async_insecure) -> None:
         """Test adding an insecure port to an async server."""
-        server = MockServer(server_config_async_insecure)
+        server = MockServer()
         mock_grpc_server = mock.MagicMock(spec=grpc_aio.Server)
 
         server._add_insecure_port(mock_grpc_server)
 
         # Verify add_insecure_port was called
-        mock_grpc_server.add_insecure_port.assert_called_once_with(server_config_async_insecure.address)
+        mock_grpc_server.add_insecure_port.assert_called_once_with(server._server_settings.channel.address)
 
     @mock.patch("digitalkin.grpc_servers._base_server.grpc.ssl_server_credentials")
     def test_add_secure_port_sync(self, mock_ssl_creds, server_config_sync_secure) -> None:
         """Test adding a secure port to a sync server."""
-        server = MockServer(server_config_sync_secure)
+        server = MockServer()
         mock_grpc_server = mock.MagicMock(spec=grpc.Server)
 
         # Mock the SSL credentials
@@ -353,11 +345,11 @@ class TestPortConfiguration:
             server._add_secure_port(mock_grpc_server)
 
         # Verify add_secure_port was called
-        mock_grpc_server.add_secure_port.assert_called_once_with(server_config_sync_secure.address, "mock_credentials")
+        mock_grpc_server.add_secure_port.assert_called_once_with(server._server_settings.channel.address, "mock_credentials")
 
     def test_add_secure_port_no_credentials(self, server_config_sync_insecure) -> None:
         """Test error when adding secure port with no credentials."""
-        server = MockServer(server_config_sync_insecure)
+        server = MockServer()
         mock_grpc_server = mock.MagicMock(spec=grpc.Server)
 
         # Call add_secure_port
@@ -372,7 +364,7 @@ class TestServerLifecycle:
 
     def test_start_sync(self, server_config_sync_insecure) -> None:
         """Test starting a synchronous server."""
-        server = MockServer(server_config_sync_insecure)
+        server = MockServer()
 
         with (
             mock.patch.object(server, "_create_server") as mock_create,
@@ -402,7 +394,7 @@ class TestServerLifecycle:
 
     def test_start_error(self, server_config_sync_insecure) -> None:
         """Test error handling when starting server fails."""
-        server = MockServer(server_config_sync_insecure)
+        server = MockServer()
 
         with mock.patch.object(server, "_create_server") as mock_create:
             # Create a mock server that raises an exception
@@ -416,7 +408,7 @@ class TestServerLifecycle:
 
     def test_stop_sync(self, server_config_sync_insecure) -> None:
         """Test stopping a synchronous server."""
-        server = MockServer(server_config_sync_insecure)
+        server = MockServer()
 
         # Create a mock server
         mock_grpc_server = mock.MagicMock(spec=grpc.Server)
@@ -434,7 +426,7 @@ class TestServerLifecycle:
 
     def test_stop_no_server(self, server_config_sync_insecure) -> None:
         """Test stopping when no server is running."""
-        server = MockServer(server_config_sync_insecure)
+        server = MockServer()
 
         # Call stop (should not raise an exception)
         server.stop()
@@ -447,7 +439,7 @@ class TestAsyncOperations:
     @pytest.mark.asyncio
     async def test_start_async_method(self, server_config_async_insecure) -> None:
         """Test the _start_async method."""
-        server = MockServer(server_config_async_insecure)
+        server = MockServer()
 
         # Create a mock server
         mock_grpc_server = mock.MagicMock(spec=grpc_aio.Server)
@@ -462,7 +454,7 @@ class TestAsyncOperations:
     @pytest.mark.asyncio
     async def test_start_async_server(self, server_config_async_insecure) -> None:
         """Test the start_async method."""
-        server = MockServer(server_config_async_insecure)
+        server = MockServer()
 
         with (
             mock.patch.object(server, "_create_server") as mock_create,
@@ -492,7 +484,7 @@ class TestAsyncOperations:
     @pytest.mark.asyncio
     async def test_stop_async_method(self, server_config_async_insecure) -> None:
         """Test the _stop_async method."""
-        server = MockServer(server_config_async_insecure)
+        server = MockServer()
 
         # Create a mock server
         mock_grpc_server = mock.MagicMock(spec=grpc_aio.Server)
@@ -507,7 +499,7 @@ class TestAsyncOperations:
     @pytest.mark.asyncio
     async def test_stop_async_server(self, server_config_async_insecure) -> None:
         """Test the stop_async method."""
-        server = MockServer(server_config_async_insecure)
+        server = MockServer()
 
         # Create a mock server
         mock_grpc_server = mock.MagicMock(spec=grpc_aio.Server)
@@ -530,7 +522,7 @@ class TestTermination:
 
     def test_wait_for_termination_sync(self, server_config_sync_insecure) -> None:
         """Test wait_for_termination with a sync server."""
-        server = MockServer(server_config_sync_insecure)
+        server = MockServer()
 
         # Create a mock server
         mock_grpc_server = mock.MagicMock(spec=grpc.Server)
@@ -545,7 +537,7 @@ class TestTermination:
     @pytest.mark.asyncio
     async def test_await_termination_async(self, server_config_async_insecure) -> None:
         """Test await_termination with an async server."""
-        server = MockServer(server_config_async_insecure)
+        server = MockServer()
 
         # Create a mock server
         mock_grpc_server = mock.MagicMock(spec=grpc_aio.Server)
@@ -570,7 +562,7 @@ class TestHealthService:
         except ImportError:
             pytest.skip("grpc_health package not installed")
 
-        server = MockServer(server_config_sync_insecure)
+        server = MockServer()
 
         # Create a mock server
         mock_grpc_server = mock.MagicMock(spec=grpc.Server)

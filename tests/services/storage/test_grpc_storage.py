@@ -118,12 +118,13 @@ def dummy_client_config() -> ClientConfig:
     Returns:
         ClientConfig instance with test values
     """
-    from digitalkin.models.grpc_servers.models import SecurityMode, ServerMode
+    from digitalkin.models.settings.utils.channel import SecurityMode
+    from digitalkin.models.settings.utils.channel import CommunicationMode
 
     return ClientConfig(
         host="localhost",
         port=50051,
-        mode=ServerMode.ASYNC,
+        mode=CommunicationMode.ASYNC,
         security=SecurityMode.INSECURE,
         credentials=None,
     )

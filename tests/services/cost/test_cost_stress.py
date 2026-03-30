@@ -25,7 +25,8 @@ from agentic_mesh_protocol.cost.v1 import cost_service_pb2, cost_service_pb2_grp
 from tests.fixtures.grpc_fixtures import AsyncStubWrapper, FakeContext
 from tests.services.cost.mock_cost_servicer import MockCostServicer
 
-from digitalkin.models.grpc_servers.models import ClientConfig, SecurityMode, ServerMode
+from digitalkin.models.grpc_servers.models import ClientConfig
+from digitalkin.models.settings.utils.channel import CommunicationMode, SecurityMode
 from digitalkin.models.services.cost import AmountLimit, CostTypeEnum, QuantityLimit
 from digitalkin.services.cost.cost_strategy import CostConfig, CostServiceError
 from digitalkin.services.cost.default_cost import DefaultCost
@@ -118,7 +119,7 @@ def grpc_client(
     dummy_config = ClientConfig(
         host="[::]",
         port=50051,
-        mode=ServerMode.ASYNC,
+        mode=CommunicationMode.ASYNC,
         security=SecurityMode.INSECURE,
         credentials=None,
     )
