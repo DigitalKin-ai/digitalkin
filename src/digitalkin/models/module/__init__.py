@@ -12,7 +12,6 @@ from digitalkin.models.module.tool_cache import (
     ToolCache,
     ToolDefinition,
     ToolModuleInfo,
-    ToolParameter,
 )
 from digitalkin.models.module.tool_reference import (
     ToolReference,
@@ -38,7 +37,6 @@ __all__ = [
     "ToolCache",
     "ToolDefinition",
     "ToolModuleInfo",
-    "ToolParameter",
     "ToolReference",
     "ToolSelection",
     "UtilityProtocol",
