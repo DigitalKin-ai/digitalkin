@@ -13,13 +13,14 @@ import grpc
 import grpc_testing
 import pytest
 from agentic_mesh_protocol.cost.v1 import cost_service_pb2, cost_service_pb2_grpc
-from mock_cost_servicer import MockCostServicer
-from tests.fixtures.grpc_fixtures import AsyncStubWrapper, FakeContext
 
 from digitalkin.grpc_servers.utils.exceptions import ServerError
-from digitalkin.models.grpc_servers.models import ClientConfig, SecurityMode, ServerMode
+from digitalkin.models.grpc_servers.models import ClientConfig
+from digitalkin.models.settings.utils.channel import ControlFlow, SecurityMode
 from digitalkin.services.cost.cost_strategy import CostConfig, CostData, CostServiceError, CostType
 from digitalkin.services.cost.grpc_cost import GrpcCost
+from mock_cost_servicer import MockCostServicer
+from tests.fixtures.grpc_fixtures import AsyncStubWrapper, FakeContext
 
 service_instance = MockCostServicer()
 service_name = cost_service_pb2.DESCRIPTOR.services_by_name["CostService"]
@@ -133,7 +134,7 @@ def client(test_channel: grpc_testing.Channel, cost_config: dict[str, CostConfig
     dummy_config = ClientConfig(
         host="[::]",
         port=50051,
-        mode=ServerMode.ASYNC,
+        mode=ControlFlow.ASYNC,
         security=SecurityMode.INSECURE,
         credentials=None,
     )

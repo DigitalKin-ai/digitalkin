@@ -11,7 +11,8 @@ import grpc.aio
 
 from digitalkin.grpc_servers.utils.exceptions import ServerError
 from digitalkin.logger import logger
-from digitalkin.models.grpc_servers.models import ClientConfig, SecurityMode
+from digitalkin.models.grpc_servers.models import ClientConfig
+from digitalkin.models.settings.utils.channel import SecurityMode
 
 
 class GrpcClientWrapper:
@@ -31,6 +32,13 @@ class GrpcClientWrapper:
     _channel_cache_key: str | None = None
     _channel_cache: ClassVar[dict[str, grpc.aio.Channel]] = {}
     _ref_counts: ClassVar[dict[str, int]] = {}
+    _RETRYABLE_CODES: ClassVar[set[grpc.StatusCode]] = {
+        grpc.StatusCode.UNAVAILABLE,
+        grpc.StatusCode.INTERNAL,
+        grpc.StatusCode.DEADLINE_EXCEEDED,
+    }
+    _QUERY_MAX_RETRIES: ClassVar[int] = int(os.environ.get("DIGITALKIN_GRPC_QUERY_MAX_RETRIES", "2"))
+    _QUERY_BACKOFF_BASE_MS: ClassVar[float] = float(os.environ.get("DIGITALKIN_GRPC_QUERY_BACKOFF_BASE_MS", "50"))
 
     @staticmethod
     def _build_channel_credentials(config: ClientConfig) -> grpc.ChannelCredentials | None:
@@ -139,14 +147,6 @@ class GrpcClientWrapper:
             await channel.close()
         cls._channel_cache.clear()
         cls._ref_counts.clear()
-
-    _RETRYABLE_CODES: ClassVar[set[grpc.StatusCode]] = {
-        grpc.StatusCode.UNAVAILABLE,
-        grpc.StatusCode.INTERNAL,
-        grpc.StatusCode.DEADLINE_EXCEEDED,
-    }
-    _QUERY_MAX_RETRIES: ClassVar[int] = int(os.environ.get("DIGITALKIN_GRPC_QUERY_MAX_RETRIES", "2"))
-    _QUERY_BACKOFF_BASE_MS: ClassVar[float] = float(os.environ.get("DIGITALKIN_GRPC_QUERY_BACKOFF_BASE_MS", "50"))
 
     async def exec_grpc_query(
         self,
