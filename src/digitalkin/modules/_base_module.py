@@ -626,12 +626,18 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
                         await handler.flush_file_history(self.context)
             except Exception:
                 logger.warning("Failed to flush handler history during stop", exc_info=True)
-            await self.context.callbacks.send_message(
-                DataModel(
-                    root=EndOfStreamOutput(),
-                    annotations={"role": BaseRole.SYSTEM},
+            try:
+                await self.context.callbacks.send_message(
+                    DataModel[EndOfStreamOutput](
+                        root=EndOfStreamOutput(),
+                        annotations={"role": BaseRole.SYSTEM},
+                    )
                 )
-            )
+            except AttributeError:
+                logger.warning(
+                    "send_message callback not set, skipping end-of-stream"
+                    " (expected for start_config_setup which does not register send_message)"
+                )
             self._status = ModuleStatus.STOPPED
             logger.debug("Module %s cleaned", self.name)
         except Exception:
