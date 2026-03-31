@@ -10585,9 +10585,8 @@ Classes:
 - **`SelectSchema`** – Base class for generating trigger selection schema.
 - **`SetupModel`** – Base setup model with dynamic schema and tool cache support.
 - **`ToolCache`** – Registry cache storing resolved tool references by setup field name.
-- **`ToolDefinition`** – Complete definition of an LLM tool with grouped parameters.
+- **`ToolDefinition`** – Complete definition of an LLM tool with resolved JSON Schema parameters.
 - **`ToolModuleInfo`** – Module info for tool modules.
-- **`ToolParameter`** – Definition of a single tool parameter.
 - **`ToolReference`** – Tool selection containing setup IDs and trigger filters.
 - **`ToolSelection`** – Single tool selection with trigger filtering.
 - **`UtilityProtocol`** – Base class for SDK-provided utility protocols.
@@ -11218,13 +11217,29 @@ Returns:
               click digitalkin.models.module.ToolDefinition href "" "digitalkin.models.module.ToolDefinition"
 ```
 
-Complete definition of an LLM tool with grouped parameters.
+Complete definition of an LLM tool with resolved JSON Schema parameters.
 
 Attributes:
 
 - **`name`** (`str`) – Tool name (from protocol const or trigger class name).
 - **`description`** (`str`) – Tool description (from trigger docstring).
-- **`parameters`** (`list[ToolParameter]`) – List of parameter definitions.
+- **`parameters_schema`** (`dict[str, Any]`) – JSON Schema object describing the tool's parameters.
+
+##### parameter_count
+
+```python
+parameter_count: int
+```
+
+Return the number of parameters in the schema.
+
+##### parameter_names
+
+```python
+parameter_names: set[str]
+```
+
+Return the set of parameter names from the schema.
 
 #### ToolModuleInfo
 
@@ -11254,29 +11269,6 @@ slug: str
 ```
 
 Slugified tool name for cache keys and function naming.
-
-#### ToolParameter
-
-```
-              flowchart TD
-              digitalkin.models.module.ToolParameter[ToolParameter]
-
-              
-
-              click digitalkin.models.module.ToolParameter href "" "digitalkin.models.module.ToolParameter"
-```
-
-Definition of a single tool parameter.
-
-Attributes:
-
-- **`name`** (`str`) – Parameter name.
-- **`type`** (`str`) – JSON Schema type (string, integer, number, boolean, array, object).
-- **`description`** (`str`) – Parameter description for the LLM.
-- **`required`** (`bool`) – Whether this parameter is required.
-- **`enum`** (`list[str] | None`) – Optional list of allowed values.
-- **`items`** (`dict[str, Any] | None`) – Optional schema for array item types.
-- **`properties`** (`dict[str, Any] | None`) – Optional schema for object properties.
 
 #### ToolReference
 
@@ -12195,9 +12187,8 @@ Classes:
 
 - **`SelectedTool`** – Selected tool information.
 - **`ToolCache`** – Registry cache storing resolved tool references by setup field name.
-- **`ToolDefinition`** – Complete definition of an LLM tool with grouped parameters.
+- **`ToolDefinition`** – Complete definition of an LLM tool with resolved JSON Schema parameters.
 - **`ToolModuleInfo`** – Module info for tool modules.
-- **`ToolParameter`** – Definition of a single tool parameter.
 
 Functions:
 
@@ -12299,13 +12290,29 @@ Returns:
               click digitalkin.models.module.tool_cache.ToolDefinition href "" "digitalkin.models.module.tool_cache.ToolDefinition"
 ```
 
-Complete definition of an LLM tool with grouped parameters.
+Complete definition of an LLM tool with resolved JSON Schema parameters.
 
 Attributes:
 
 - **`name`** (`str`) – Tool name (from protocol const or trigger class name).
 - **`description`** (`str`) – Tool description (from trigger docstring).
-- **`parameters`** (`list[ToolParameter]`) – List of parameter definitions.
+- **`parameters_schema`** (`dict[str, Any]`) – JSON Schema object describing the tool's parameters.
+
+###### parameter_count
+
+```python
+parameter_count: int
+```
+
+Return the number of parameters in the schema.
+
+###### parameter_names
+
+```python
+parameter_names: set[str]
+```
+
+Return the set of parameter names from the schema.
 
 ##### ToolModuleInfo
 
@@ -12335,29 +12342,6 @@ slug: str
 ```
 
 Slugified tool name for cache keys and function naming.
-
-##### ToolParameter
-
-```
-              flowchart TD
-              digitalkin.models.module.tool_cache.ToolParameter[ToolParameter]
-
-              
-
-              click digitalkin.models.module.tool_cache.ToolParameter href "" "digitalkin.models.module.tool_cache.ToolParameter"
-```
-
-Definition of a single tool parameter.
-
-Attributes:
-
-- **`name`** (`str`) – Parameter name.
-- **`type`** (`str`) – JSON Schema type (string, integer, number, boolean, array, object).
-- **`description`** (`str`) – Parameter description for the LLM.
-- **`required`** (`bool`) – Whether this parameter is required.
-- **`enum`** (`list[str] | None`) – Optional list of allowed values.
-- **`items`** (`dict[str, Any] | None`) – Optional schema for array item types.
-- **`properties`** (`dict[str, Any] | None`) – Optional schema for object properties.
 
 ##### module_info_to_tool_module_info
 
