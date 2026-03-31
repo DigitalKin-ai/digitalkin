@@ -13,7 +13,6 @@ from digitalkin.grpc_servers.module_servicer import ModuleServicer
 from digitalkin.logger import logger
 from digitalkin.models.grpc_servers.models import (
     ClientConfig,
-    ModuleServerConfig,
 )
 from digitalkin.modules._base_module import BaseModule
 from digitalkin.services.registry import GrpcRegistry
@@ -38,7 +37,6 @@ class ModuleServer(BaseServer):
     def __init__(
         self,
         module_class: type[BaseModule],
-        server_config: ModuleServerConfig,
         client_config: ClientConfig | None = None,
         interceptors: Sequence[Any] | None = None,
     ) -> None:
@@ -46,13 +44,11 @@ class ModuleServer(BaseServer):
 
         Args:
             module_class: The module instance to be served.
-            server_config: Server configuration.
             client_config: Client configuration used by services and registry connection.
             interceptors: Optional sequence of gRPC server interceptors.
         """
-        super().__init__(server_config, interceptors=interceptors)
+        super().__init__(interceptors=interceptors)
         self.module_class = module_class
-        self.server_config = server_config
         self.client_config = client_config
         self.module_servicer: ModuleServicer | None = None
         self.registry: RegistryStrategy | None = None
@@ -108,7 +104,7 @@ class ModuleServer(BaseServer):
         """Start the module server and register with the registry if configured."""
         import asyncio
 
-        logger.info("Starting module server", extra={"server_config": self.server_config})
+        logger.info("Starting module server", extra={"server_config": self._server_settings})
         super().start()
 
         try:
@@ -119,7 +115,7 @@ class ModuleServer(BaseServer):
 
     async def start_async(self) -> None:
         """Start the module server and register with the registry if configured."""
-        logger.info("Starting module server", extra={"server_config": self.server_config})
+        logger.info("Starting module server", extra={"server_config": self._server_settings})
         await super().start_async()
 
         # module_servicer is now set by _register_servicers() during super().start_async()
@@ -197,7 +193,7 @@ class ModuleServer(BaseServer):
             )
             return
 
-        advertise_address = self.server_config.advertise_host or self.server_config.host
+        advertise_address = self._server_settings.channel.advertise_host or self._server_settings.channel.host
 
         # Fast connectivity probe — detect DOWN in ≤1 s
         if not await self.registry.wait_for_ready(timeout=1.0):
@@ -217,7 +213,7 @@ class ModuleServer(BaseServer):
             extra={
                 "module_id": module_id,
                 "address": advertise_address,
-                "port": self.server_config.port,
+                "port": self._server_settings.channel.port,
                 "version": version,
             },
         )
@@ -225,7 +221,7 @@ class ModuleServer(BaseServer):
         result = await self.registry.register(
             module_id=module_id,
             address=advertise_address,
-            port=self.server_config.port,
+            port=self._server_settings.channel.port,
             version=version,
         )
 
@@ -235,7 +231,7 @@ class ModuleServer(BaseServer):
                 extra={
                     "module_id": result.module_id,
                     "address": advertise_address,
-                    "port": self.server_config.port,
+                    "port": self._server_settings.channel.port,
                 },
             )
         else:

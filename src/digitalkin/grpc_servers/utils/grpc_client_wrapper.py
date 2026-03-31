@@ -11,7 +11,8 @@ import grpc.aio
 
 from digitalkin.grpc_servers.utils.exceptions import ServerError
 from digitalkin.logger import logger
-from digitalkin.models.grpc_servers.models import ClientConfig, SecurityMode
+from digitalkin.models.grpc_servers.models import ClientConfig
+from digitalkin.models.settings.utils.channel import SecurityMode
 
 
 class GrpcClientWrapper:
@@ -31,7 +32,6 @@ class GrpcClientWrapper:
     _channel_cache_key: str | None = None
     _channel_cache: ClassVar[dict[str, grpc.aio.Channel]] = {}
     _ref_counts: ClassVar[dict[str, int]] = {}
-
     _RETRYABLE_CODES: ClassVar[set[grpc.StatusCode]] = {
         grpc.StatusCode.UNAVAILABLE,
         grpc.StatusCode.INTERNAL,
@@ -41,6 +41,11 @@ class GrpcClientWrapper:
     _QUERY_BACKOFF_BASE_MS: ClassVar[float] = float(os.environ.get("DIGITALKIN_GRPC_QUERY_BACKOFF_BASE_MS", "50"))
     _QUERY_DEFAULT_TIMEOUT: ClassVar[float] = float(os.environ.get("DIGITALKIN_GRPC_QUERY_TIMEOUT", "30"))
 
+    _RETRYABLE_CODES: ClassVar[set[grpc.StatusCode]] = {
+        grpc.StatusCode.UNAVAILABLE,
+        grpc.StatusCode.INTERNAL,
+        grpc.StatusCode.DEADLINE_EXCEEDED,
+    }
     @staticmethod
     def _build_channel_credentials(config: ClientConfig) -> grpc.ChannelCredentials | None:
         """Build SSL channel credentials from config if secure mode.

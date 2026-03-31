@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = ">=3.10"
 resolution-markers = [
     "python_full_version >= '3.15'",
@@ -838,7 +838,7 @@ wheels = [
 
 [[package]]
 name = "digitalkin"
-version = "0.3.3a0"
+version = "0.3.3"
 source = { editable = "." }
 dependencies = [
     { name = "agentic-mesh-protocol" },

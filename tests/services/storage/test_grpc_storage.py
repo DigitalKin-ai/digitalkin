@@ -15,12 +15,12 @@ import grpc_testing
 import pytest
 from agentic_mesh_protocol.storage.v1 import data_pb2, storage_service_pb2, storage_service_pb2_grpc
 from pydantic import BaseModel, Field
-from tests.fixtures.grpc_fixtures import AsyncStubWrapper, FakeContext
-from tests.services.storage.mock_storage_servicer import MockStorageServicer
 
 from digitalkin.models.grpc_servers.models import ClientConfig
 from digitalkin.services.storage.grpc_storage import GrpcStorage
 from digitalkin.services.storage.storage_strategy import DataType, StorageServiceError
+from tests.fixtures.grpc_fixtures import AsyncStubWrapper, FakeContext
+from tests.services.storage.mock_storage_servicer import MockStorageServicer
 
 # Set timeout for all tests in this file (20 seconds)
 pytestmark = pytest.mark.timeout(20)
@@ -118,12 +118,13 @@ def dummy_client_config() -> ClientConfig:
     Returns:
         ClientConfig instance with test values
     """
-    from digitalkin.models.grpc_servers.models import SecurityMode, ServerMode
+    from digitalkin.models.settings.utils.channel import SecurityMode
+    from digitalkin.models.settings.utils.channel import ControlFlow
 
     return ClientConfig(
         host="localhost",
         port=50051,
-        mode=ServerMode.ASYNC,
+        mode=ControlFlow.ASYNC,
         security=SecurityMode.INSECURE,
         credentials=None,
     )

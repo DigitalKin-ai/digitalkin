@@ -6,7 +6,7 @@ import os
 from collections.abc import Callable, Sequence
 from concurrent import futures
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, ClassVar, cast
 
 import grpc
 from grpc import aio as grpc_aio
@@ -20,8 +20,9 @@ from digitalkin.grpc_servers.utils.exceptions import (
 )
 from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
 from digitalkin.logger import logger
-from digitalkin.models.grpc_servers.models import SecurityMode, ServerConfig, ServerMode
 from digitalkin.models.grpc_servers.types import GrpcServer, ServiceDescriptor, T
+from digitalkin.models.settings.server.server import ServerSettings
+from digitalkin.models.settings.utils.channel import ControlFlow, SecurityMode
 
 
 class BaseServer(abc.ABC):
@@ -32,25 +33,23 @@ class BaseServer(abc.ABC):
     communication modes.
 
     Attributes:
-        config: The server configuration.
         server: The gRPC server instance (either sync or async).
         _servicers: List of registered servicers.
         _service_names: List of service names for reflection.
         _health_servicer: Optional health check servicer.
     """
 
+    _server_settings: ClassVar[ServerSettings] = ServerSettings()
+
     def __init__(
         self,
-        config: ServerConfig,
         interceptors: Sequence[Any] | None = None,
     ) -> None:
         """Initialize the base gRPC server.
 
         Args:
-            config: The server configuration.
             interceptors: Optional sequence of gRPC server interceptors.
         """
-        self.config = config
         self.server: GrpcServer | None = None
         self._servicers: list[Any] = []
         self._service_names: list[str] = []  # Track service names for reflection
@@ -119,7 +118,7 @@ class BaseServer(abc.ABC):
         Raises:
             ReflectionError: If reflection initialization fails.
         """
-        if not self.config.enable_reflection or self.server is None or not self._service_names:
+        if not self._server_settings.reflection or self.server is None or not self._service_names:
             return
 
         try:
@@ -194,17 +193,17 @@ class BaseServer(abc.ABC):
             logger.warning("Failed to enable health service: %s", e)
 
     def _create_server(self) -> GrpcServer:
-        """Create a gRPC server instance based on the configuration.
+        """Create a gRPC server instance based on the server settings.
 
         Returns:
             A configured gRPC server instance.
 
         Raises:
-            ConfigurationError: If the server configuration is invalid.
+            ConfigurationError: If the server settings are invalid.
         """
         try:
             # Create the server based on mode
-            grpc_compression = self.config.compression.to_grpc()
+            grpc_compression = self._server_settings.grpc.compression.to_grpc()
 
             # Machine capabilities
             try:
@@ -215,36 +214,36 @@ class BaseServer(abc.ABC):
                 logger.info("CPU count: %d", cpu_count)
 
             # Compute defaults from machine capabilities, overridable via env vars
-            max_concurrent_rpcs = int(os.environ.get("DIGITALKIN_MAX_CONCURRENT_RPCS", str(cpu_count * 200)))
-            thread_pool_workers = int(os.environ.get("DIGITALKIN_THREAD_POOL_WORKERS", str(min(4, cpu_count))))
 
             logger.info(
-                "gRPC server config: cpus=%d, max_concurrent_rpcs=%d, thread_pool_workers=%d, mode=%s",
+                "gRPC server settings.server: cpus=%d, max_concurrent_rpcs=%d, thread_pool_workers=%d, mode=%s",
                 cpu_count,
-                max_concurrent_rpcs,
-                thread_pool_workers,
-                self.config.mode.value,
+                self._server_settings.max_concurrent_rpcs,
+                self._server_settings.thread_pool_workers,
+                self._server_settings.channel.communication_mode.value,
             )
 
-            if self.config.mode == ServerMode.ASYNC:
+            if self._server_settings.channel.communication_mode == ControlFlow.ASYNC:
                 server = grpc_aio.server(
-                    options=self.config.server_options,
+                    options=self._server_settings.grpc.options,
                     compression=grpc_compression,
                     interceptors=self._interceptors or None,
-                    maximum_concurrent_rpcs=max_concurrent_rpcs,
-                    migration_thread_pool=futures.ThreadPoolExecutor(max_workers=thread_pool_workers),
+                    maximum_concurrent_rpcs=self._server_settings.max_concurrent_rpcs,
+                    migration_thread_pool=futures.ThreadPoolExecutor(
+                        max_workers=self._server_settings.thread_pool_workers
+                    ),
                 )
             else:
                 server = grpc.server(  # type: ignore[assignment]  # sync grpc.Server assigned to GrpcServer union
-                    futures.ThreadPoolExecutor(max_workers=self.config.max_workers),
-                    options=self.config.server_options,
+                    futures.ThreadPoolExecutor(max_workers=self._server_settings.max_workers),
+                    options=self._server_settings.grpc.options,
                     compression=grpc_compression,
                     interceptors=self._interceptors or None,
-                    maximum_concurrent_rpcs=max_concurrent_rpcs,
+                    maximum_concurrent_rpcs=self._server_settings.max_concurrent_rpcs,
                 )
 
             # Add the appropriate port
-            if self.config.security == SecurityMode.SECURE:
+            if self._server_settings.channel.security == SecurityMode.SECURE:
                 self._add_secure_port(server)
             else:
                 self._add_insecure_port(server)
@@ -264,19 +263,26 @@ class BaseServer(abc.ABC):
         Raises:
             SecurityError: If credentials are not configured correctly.
         """
-        if not self.config.credentials:
+        if not self._server_settings.channel.credentials:
             msg = "Credentials must be provided for secure server"
             raise SecurityError(msg)
 
         try:
             # Read key and certificate files
-            private_key = Path(self.config.credentials.server_key_path).read_bytes()
-            certificate_chain = Path(self.config.credentials.server_cert_path).read_bytes()
+            if (
+                self._server_settings.channel.credentials.key_path
+                and self._server_settings.channel.credentials.cert_path
+            ):
+                private_key = Path(self._server_settings.channel.credentials.key_path).read_bytes()
+                certificate_chain = Path(self._server_settings.channel.credentials.cert_path).read_bytes()
+            else:
+                msg = "Key path and certificate path must be provided for secure server"
+                raise SecurityError(msg)
 
             # Read root certificate if provided
             root_certificates = None
-            if self.config.credentials.root_cert_path:
-                root_certificates = Path(self.config.credentials.root_cert_path).read_bytes()
+            if self._server_settings.channel.credentials.root_cert_path:
+                root_certificates = Path(self._server_settings.channel.credentials.root_cert_path).read_bytes()
         except OSError as e:
             msg = f"Failed to read credential files: {e}"
             raise SecurityError(msg) from e
@@ -290,16 +296,16 @@ class BaseServer(abc.ABC):
             )
 
             # Add secure port to server
-            if self.config.mode == ServerMode.ASYNC:
+            if self._server_settings.channel.communication_mode == ControlFlow.ASYNC:
                 async_server = cast("grpc_aio.Server", server)
-                async_server.add_secure_port(self.config.address, server_credentials)
+                async_server.add_secure_port(self._server_settings.channel.address, server_credentials)
             else:
                 sync_server = cast("grpc.Server", server)
-                sync_server.add_secure_port(self.config.address, server_credentials)
+                sync_server.add_secure_port(self._server_settings.channel.address, server_credentials)
 
-            logger.debug("Added secure port %s", self.config.address)
+            logger.debug("Added secure port %s", self._server_settings.channel.address)
         except Exception as e:
-            msg = f"Failed to configure secure port: {e}"
+            msg = f"Failed to configure with actual settings secure port: {e}"
             raise SecurityError(msg) from e
 
     def _add_insecure_port(self, server: GrpcServer) -> None:
@@ -312,14 +318,14 @@ class BaseServer(abc.ABC):
             ConfigurationError: If adding the insecure port fails.
         """
         try:
-            if self.config.mode == ServerMode.ASYNC:
+            if self._server_settings.channel.communication_mode == ControlFlow.ASYNC:
                 async_server = cast("grpc_aio.Server", server)
-                async_server.add_insecure_port(self.config.address)
+                async_server.add_insecure_port(self._server_settings.channel.address)
             else:
                 sync_server = cast("grpc.Server", server)
-                sync_server.add_insecure_port(self.config.address)
+                sync_server.add_insecure_port(self._server_settings.channel.address)
 
-            logger.debug("Added insecure port %s", self.config.address)
+            logger.debug("Added insecure port %s", self._server_settings.channel.address)
         except Exception as e:
             msg = f"Failed to add insecure port: {e}"
             raise ConfigurationError(msg) from e
@@ -343,9 +349,11 @@ class BaseServer(abc.ABC):
         self._add_reflection()
 
         # Start the server
-        logger.debug("Starting gRPC server on %s", self.config.address, extra={"config": self.config})
+        logger.debug(
+            "Starting gRPC server on %s", self._server_settings.channel.address, extra={"config": ServerSettings}
+        )
         try:
-            if self.config.mode == ServerMode.ASYNC:
+            if self._server_settings.channel.communication_mode == ControlFlow.ASYNC:
                 # For async server, use the event loop
                 loop = asyncio.get_event_loop()
                 if loop.is_closed():
@@ -356,7 +364,7 @@ class BaseServer(abc.ABC):
                 # For sync server, directly call start
                 sync_server = cast("grpc.Server", self.server)
                 sync_server.start()
-            logger.debug("✅ gRPC server started on %s", self.config.address)
+            logger.debug("✅ gRPC server started on %s", self._server_settings.channel.address)
         except Exception as e:
             logger.exception("❎ Error starting server")
             msg = f"Failed to start server: {e}"
@@ -393,15 +401,15 @@ class BaseServer(abc.ABC):
         self._add_reflection()
 
         # Start the server
-        logger.debug("Starting gRPC server on %s", self.config.address)
+        logger.debug("Starting gRPC server on %s", self._server_settings.channel.address)
         try:
-            if self.config.mode == ServerMode.ASYNC:
+            if self._server_settings.channel.communication_mode == ControlFlow.ASYNC:
                 await self._start_async()
             else:
                 # For sync server in async context
                 sync_server = cast("grpc.Server", self.server)
                 sync_server.start()
-            logger.debug("✅ gRPC server started on %s", self.config.address)
+            logger.debug("✅ gRPC server started on %s", self._server_settings.channel.address)
         except Exception as e:
             logger.exception("❎ Error starting server")
             msg = f"Failed to start server: {e}"
@@ -431,7 +439,7 @@ class BaseServer(abc.ABC):
             return
 
         logger.debug("Stopping gRPC server...")
-        if self.config.mode == ServerMode.ASYNC:
+        if self._server_settings.channel.communication_mode == ControlFlow.ASYNC:
             # We'll use a different approach that works whether we're in a running event loop or not
             try:
                 # Get the current event loop
@@ -507,7 +515,7 @@ class BaseServer(abc.ABC):
             return
 
         logger.debug("Stopping gRPC server asynchronously...")
-        if self.config.mode == ServerMode.ASYNC:
+        if self._server_settings.channel.communication_mode == ControlFlow.ASYNC:
             await self._stop_async(grace)
         else:
             # For sync server, we can just call stop
@@ -533,7 +541,7 @@ class BaseServer(abc.ABC):
             logger.warning("Attempted to wait for termination, but no server is running")
             return
 
-        if self.config.mode == ServerMode.SYNC:
+        if self._server_settings.channel.communication_mode == ControlFlow.SYNC:
             # For sync server
             sync_server = cast("grpc.Server", self.server)
             sync_server.wait_for_termination()
@@ -548,7 +556,7 @@ class BaseServer(abc.ABC):
 
         This method should only be used with async servers.
         """
-        if self.config.mode == ServerMode.SYNC:
+        if self._server_settings.channel.communication_mode == ControlFlow.SYNC:
             logger.warning(
                 "Called await_termination on sync server. Use wait_for_termination instead for sync servers.",
             )
