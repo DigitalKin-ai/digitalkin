@@ -491,7 +491,6 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
             setup_data,
             self.context,
         )
-        await handler_instance.flush_chat_history(self.context)
         await handler_instance.flush_file_history(self.context)
 
     @abstractmethod
@@ -622,7 +621,6 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
             try:
                 for handlers in self.trigger_handlers.values():
                     for handler in handlers:
-                        await handler.flush_chat_history(self.context)
                         await handler.flush_file_history(self.context)
             except Exception:
                 logger.warning("Failed to flush handler history during stop", exc_info=True)

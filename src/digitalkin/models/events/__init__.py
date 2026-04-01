@@ -1,6 +1,10 @@
-"""This package contains the models for DigitalKin."""
+"""Agent run event models for DigitalKin.
 
-from digitalkin.models.events import (
+This module provides framework-agnostic event models for agent runs.
+These models can be used as a common interface across different AI frameworks.
+"""
+
+from digitalkin.models.events.agent_events import (
     AgentRunEvent,
     BaseAgentRunEvent,
     ReasoningCompletedEvent,
@@ -11,20 +15,17 @@ from digitalkin.models.events import (
     RunContentEvent,
     RunErrorEvent,
     RunStartedEvent,
+    TextMessageCompletedEvent,
+    TextMessageStartedEvent,
     ToolCallCompletedEvent,
     ToolCallErrorEvent,
     ToolCallStartedEvent,
     ToolInfo,
 )
-from digitalkin.models.module.module import Module, ModuleStatus
 
 __all__ = [
-    # Agent events
     "AgentRunEvent",
     "BaseAgentRunEvent",
-    # Module
-    "Module",
-    "ModuleStatus",
     "ReasoningCompletedEvent",
     "ReasoningContentDeltaEvent",
     "ReasoningStartedEvent",
@@ -33,6 +34,8 @@ __all__ = [
     "RunContentEvent",
     "RunErrorEvent",
     "RunStartedEvent",
+    "TextMessageCompletedEvent",
+    "TextMessageStartedEvent",
     "ToolCallCompletedEvent",
     "ToolCallErrorEvent",
     "ToolCallStartedEvent",

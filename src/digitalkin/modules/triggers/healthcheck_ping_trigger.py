@@ -44,4 +44,4 @@ class HealthcheckPingTrigger(TriggerHandler, BaseMixin):
         elapsed = datetime.now(tz=context.session.timezone) - self._request_time
         latency_ms = elapsed.total_seconds() * 1000
         output = HealthcheckPingOutput(latency_ms=latency_ms)
-        await self.send_message(context, output)
+        await context.callbacks.send_message(output)
