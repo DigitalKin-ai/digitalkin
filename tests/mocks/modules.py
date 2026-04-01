@@ -28,7 +28,8 @@ from typing import ClassVar
 
 from digitalkin.models.module.module_context import ModuleContext
 from digitalkin.modules._base_module import BaseModule
-from digitalkin.services.services_models import ServicesStrategy
+from digitalkin.services.services_config import ServicesConfig
+from digitalkin.services.services_models import ServicesMode, ServicesStrategy
 from tests.mocks.models import MockInputModel, MockOutputModel, MockSecretModel, MockSetupModel
 
 
@@ -59,6 +60,9 @@ class SimpleMockModule(
     secret_format = MockSecretModel
     services_config_strategies: ClassVar[dict[str, ServicesStrategy | None]] = {}
     services_config_params: ClassVar[dict[str, dict[str, str | None] | None]] = {}
+    services_config: ClassVar[ServicesConfig] = ServicesConfig(
+        services_config_strategies={}, services_config_params={}, mode=ServicesMode.LOCAL,
+    )
 
     def __init__(
         self,
@@ -66,6 +70,8 @@ class SimpleMockModule(
         mission_id: str,
         setup_id: str,
         setup_version_id: str,
+        request_metadata: dict[str, str] | None = None,
+        tool_cache=None,
     ) -> None:
         """Initialize simple mock module.
 
@@ -75,13 +81,17 @@ class SimpleMockModule(
             setup_id: Setup identifier
             setup_version_id: Setup version identifier
         """
-        super().__init__(job_id, mission_id, setup_id, setup_version_id)
+        super().__init__(job_id, mission_id, setup_id, setup_version_id, request_metadata=request_metadata, tool_cache=tool_cache)
 
         # State tracking for test assertions
         self.initialize_called = False
         self.cleanup_called = False
         self.initialize_count = 0
         self.cleanup_count = 0
+
+    def _init_strategies(self, mission_id: str, setup_id: str, setup_version_id: str) -> dict:
+        """Skip service initialization in tests."""
+        return {n: None for n in self.services_config.valid_strategy_names()}
 
     async def initialize(self, context: ModuleContext, setup_data: MockSetupModel) -> None:
         """No-op initialize for testing.
@@ -149,6 +159,9 @@ class ConfigurableMockModule(
     secret_format = MockSecretModel
     services_config_strategies: ClassVar[dict[str, ServicesStrategy | None]] = {}
     services_config_params: ClassVar[dict[str, dict[str, str | None] | None]] = {}
+    services_config: ClassVar[ServicesConfig] = ServicesConfig(
+        services_config_strategies={}, services_config_params={}, mode=ServicesMode.LOCAL,
+    )
 
     def __init__(
         self,
@@ -156,6 +169,8 @@ class ConfigurableMockModule(
         mission_id: str,
         setup_id: str,
         setup_version_id: str,
+        request_metadata: dict[str, str] | None = None,
+        tool_cache=None,
         *,
         initialize_delay: float = 0.0,
         initialize_error: Exception | None = None,
@@ -174,13 +189,17 @@ class ConfigurableMockModule(
             cleanup_delay: Delay in seconds before cleanup completes
             cleanup_error: Exception to raise during cleanup
         """
-        super().__init__(job_id, mission_id, setup_id, setup_version_id)
+        super().__init__(job_id, mission_id, setup_id, setup_version_id, request_metadata=request_metadata, tool_cache=tool_cache)
 
         # Configuration
         self.initialize_delay = initialize_delay
         self.initialize_error = initialize_error
         self.cleanup_delay = cleanup_delay
         self.cleanup_error = cleanup_error
+
+    def _init_strategies(self, mission_id: str, setup_id: str, setup_version_id: str) -> dict:
+        """Skip service initialization in tests."""
+        return {n: None for n in self.services_config.valid_strategy_names()}
 
         # State tracking for test assertions
         self.initialize_called = False

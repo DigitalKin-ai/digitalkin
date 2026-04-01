@@ -1,11 +1,18 @@
-"""Background module manager with single instance."""
+"""Background module manager with single instance.
+
+Supports optional Redis Streams for durable output persistence.
+When a ``RedisClient`` is provided, output is written to both
+the in-memory queue (for local consumers) and a Redis Stream
+(for crash recovery and reconnection via ``from_seq``).
+"""
+
+from __future__ import annotations
 
 import asyncio
 import os
 import uuid
-from collections.abc import AsyncGenerator, AsyncIterator
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import grpc
 
@@ -17,8 +24,14 @@ from digitalkin.logger import logger
 from digitalkin.models.core.job_manager_models import BackpressureStrategy
 from digitalkin.models.module.base_types import DataModel, InputModelT, OutputModelT, SetupModelT
 from digitalkin.models.module.module import ModuleCodeModel
-from digitalkin.modules._base_module import BaseModule
-from digitalkin.services.services_models import ServicesMode
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator, AsyncIterator
+
+    from digitalkin.core.task_manager.redis.redis_client import RedisClient
+    from digitalkin.core.task_manager.redis.redis_streams import RedisStreamWriter
+    from digitalkin.modules._base_module import BaseModule
+    from digitalkin.services.services_models import ServicesMode
 
 
 class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
@@ -27,7 +40,14 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
     This class ensures that only one instance of a module job is active at a time.
     It provides functionality to create, stop, and monitor module jobs, as well as
     to handle their output data.
+
+    When ``redis_client`` is provided, output is dual-written to both the
+    in-memory queue and a Redis Stream for crash recovery and reconnection.
     """
+
+    # Defaults — safe when __init__ is bypassed (e.g., tests using object.__new__)
+    _redis_client: RedisClient | None = None
+    _stream_writers: dict[str, RedisStreamWriter] | None = None
 
     def __init__(
         self,
@@ -35,6 +55,7 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         services_mode: ServicesMode,
         default_timeout: float = 300.0,
         max_concurrent_tasks: int = int(os.environ.get("DIGITALKIN_MAX_CONCURRENT_TASKS", "100")),
+        redis_client: RedisClient | None = None,
     ) -> None:
         """Initialize the job manager.
 
@@ -43,6 +64,7 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             services_mode: The mode of operation for the services (e.g., ASYNC or SYNC).
             default_timeout: Default timeout for task operations
             max_concurrent_tasks: Maximum number of concurrent tasks
+            redis_client: Optional Redis client for durable stream persistence
         """
         # Create local task manager for same-process execution
         task_manager = LocalTaskManager(default_timeout)
@@ -57,6 +79,10 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         # Backpressure configuration
         self._backpressure_strategy = BackpressureStrategy(os.environ.get("DIGITALKIN_BACKPRESSURE_STRATEGY", "block"))
         self._backpressure_timeout = float(os.environ.get("DIGITALKIN_BACKPRESSURE_TIMEOUT", "300.0"))
+
+        # Optional Redis Streams for durable output persistence
+        self._redis_client = redis_client
+        self._stream_writers = {} if redis_client is not None else None
 
     async def start(self) -> None:
         """Start manager (no-op, no external connections needed)."""
@@ -166,40 +192,52 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             logger.debug("Queue write rejected - session not found", extra={"job_id": job_id})
             return
 
+        # Serialize outside the lock — pure computation, no contention
+        data = output_data.model_dump(mode="json")
+
+        # P1: Redis write outside lock — XADD is idempotent, safe without serialization.
+        # Removes Redis latency from the lock hold time.
+        if self._stream_writers is not None and job_id in self._stream_writers:
+            try:
+                await self._stream_writers[job_id].write(data)
+            except Exception:
+                logger.warning("Redis stream write failed, using in-memory queue", extra={"job_id": job_id})
+
+        # Lock only guards the session validity check — NOT the queue.put().
+        # asyncio.Queue is task-safe; holding the lock during blocking put()
+        # would serialize ALL writers for up to 300s (P0 latency violation).
         async with session._write_lock:  # noqa: SLF001
-            # Re-check after acquiring lock — session may have been cleaned up
             if self.tasks_sessions.get(job_id) is None:
                 logger.debug("Queue write rejected - session removed during lock wait", extra={"job_id": job_id})
                 return
-
             if session.stream_closed:
                 logger.debug("Queue write rejected - stream closed", extra={"job_id": job_id})
                 return
 
-            data = output_data.model_dump(mode="json")
-            logger.debug("debug:add_to_queue job_id=%s queue_depth=%s", job_id, session.queue.qsize())
+        # Queue operations outside lock — no serialization on the hot path
+        logger.debug("debug:add_to_queue job_id=%s queue_depth=%s", job_id, session.queue.qsize())
 
-            match self._backpressure_strategy:
-                case BackpressureStrategy.BLOCK:
-                    await asyncio.wait_for(session.queue.put(data), timeout=self._backpressure_timeout)
+        match self._backpressure_strategy:
+            case BackpressureStrategy.BLOCK:
+                await asyncio.wait_for(session.queue.put(data), timeout=self._backpressure_timeout)
 
-                case BackpressureStrategy.DROP_OLDEST:
+            case BackpressureStrategy.DROP_OLDEST:
+                try:
+                    await asyncio.wait_for(session.queue.put(data), timeout=5.0)
+                except asyncio.TimeoutError:
+                    logger.warning("Queue full, dropping oldest message", extra={"job_id": job_id})
                     try:
-                        await asyncio.wait_for(session.queue.put(data), timeout=5.0)
-                    except asyncio.TimeoutError:
-                        logger.warning("Queue full, dropping oldest message", extra={"job_id": job_id})
-                        try:
-                            session.queue.get_nowait()
-                            session.queue.task_done()
-                        except asyncio.QueueEmpty:
-                            pass
-                        session.queue.put_nowait(data)
+                        session.queue.get_nowait()
+                        session.queue.task_done()
+                    except asyncio.QueueEmpty:
+                        pass
+                    session.queue.put_nowait(data)
 
-                case BackpressureStrategy.REJECT:
-                    try:
-                        session.queue.put_nowait(data)
-                    except asyncio.QueueFull:
-                        logger.warning("Queue full, rejecting new message", extra={"job_id": job_id})
+            case BackpressureStrategy.REJECT:
+                try:
+                    session.queue.put_nowait(data)
+                except asyncio.QueueFull:
+                    logger.warning("Queue full, rejecting new message", extra={"job_id": job_id})
 
     @asynccontextmanager
     async def generate_stream_consumer(self, job_id: str) -> AsyncIterator[AsyncGenerator[dict[str, Any], None]]:
@@ -273,7 +311,7 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
                     break
 
                 try:
-                    msg = await asyncio.wait_for(session.queue.get(), timeout=1.0)
+                    msg = await asyncio.wait_for(session.queue.get(), timeout=0.25)
                 except asyncio.TimeoutError:
                     continue
 
@@ -285,7 +323,16 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
                 if session.cancelled:
                     break
 
-        yield _stream()
+        try:
+            yield _stream()
+        finally:
+            # Write EOS to Redis Stream if writer exists (cleanup on stream close)
+            writer = self._stream_writers.pop(job_id, None) if self._stream_writers is not None else None
+            if writer is not None:
+                try:
+                    await writer.write_eos()
+                except Exception:
+                    logger.warning("Redis stream EOS write failed", extra={"job_id": job_id})
 
     async def create_module_instance_job(
         self,
@@ -295,6 +342,8 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         setup_id: str,
         setup_version_id: str,
         request_metadata: dict[str, str] | None = None,
+        job_id: str | None = None,
+        tool_cache: Any = None,
     ) -> str:
         """Create and start a new module job.
 
@@ -305,6 +354,10 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             setup_id: The setup ID associated with the module.
             setup_version_id: The setup Version ID associated with the module.
             request_metadata: gRPC request metadata (headers) to forward to the module.
+            job_id: Optional externally-provided job ID (e.g., Gateway's task_id).
+                    If None, a UUID is minted. Allows all Redis keys, signals,
+                    and metrics to align on the same ID from client to module.
+            tool_cache: Pre-resolved ToolCache to inject (skips per-request resolution).
 
         Returns:
             str: The unique identifier (job ID) of the created job.
@@ -312,11 +365,29 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         Raises:
             Exception: If the module fails to start.
         """
-        job_id = str(uuid.uuid4())
-        logger.debug("debug:create_module_instance_job job_id=%s mission_id=%s", job_id, mission_id)
+        job_id = job_id or str(uuid.uuid4())
         module = ModuleFactory.create_module_instance(
-            self.module_class, job_id, mission_id, setup_id, setup_version_id, request_metadata=request_metadata
+            self.module_class,
+            job_id,
+            mission_id,
+            setup_id,
+            setup_version_id,
+            request_metadata=request_metadata,
+            tool_cache=tool_cache,
         )
+
+        # Inject Redis-backed signal service for cross-process signal delivery
+        if self._redis_client is not None:
+            from digitalkin.services.task_manager.redis_task_manager import RedisTaskManager
+
+            module.context.task_manager = RedisTaskManager(self._redis_client)
+
+        # Create durable stream writer if Redis is configured
+        if self._redis_client is not None and self._stream_writers is not None:
+            from digitalkin.core.task_manager.redis.redis_streams import RedisStreamWriter
+
+            self._stream_writers[job_id] = RedisStreamWriter(job_id, self._redis_client)
+
         callback = await self.job_specific_callback(self.add_to_queue, job_id)
 
         await self.create_task(
@@ -373,6 +444,15 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
                 raise
             else:
                 return True
+            finally:
+                # Clean up stream writer if consumer never started
+                if self._stream_writers is not None:
+                    writer = self._stream_writers.pop(job_id, None)
+                    if writer is not None:
+                        try:
+                            await writer.write_eos()
+                        except Exception:
+                            logger.debug("EOS write failed during stop", extra={"job_id": job_id})
 
     async def wait_for_completion(self, job_id: str) -> None:
         """Wait for a task to complete by awaiting its asyncio.Task.

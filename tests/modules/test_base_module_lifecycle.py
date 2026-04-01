@@ -57,13 +57,11 @@ class _LcSecretModel(BaseModel):
 # ---------------------------------------------------------------------------
 
 _SERVICE_NAMES = {
-    "agent",
     "communication",
     "cost",
     "filesystem",
     "identity",
     "registry",
-    "snapshot",
     "storage",
     "task_manager",
     "user_profile",

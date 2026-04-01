@@ -118,6 +118,9 @@ def module_servicer(mock_job_manager, mock_setup_strategy):
     servicer._setup_cache_max = 100
     servicer._setup_inflight: dict[str, asyncio.Future] = {}
     servicer._completion_timeout = 300.0
+    servicer._registry_cache = None
+    servicer._tool_cache_by_setup = {}
+    servicer._communication_cache = None
 
     return servicer
 

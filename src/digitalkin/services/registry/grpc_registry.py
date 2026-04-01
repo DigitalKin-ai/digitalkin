@@ -54,8 +54,32 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
         """Initialize the gRPC registry client."""
         RegistryStrategy.__init__(self, mission_id, setup_id, setup_version_id, config)
         self.service_name = "RegistryService"
-        self.stub = registry_service_pb2_grpc.RegistryServiceStub(self._init_channel(client_config))
+        self._init_channel(client_config)
+        self.stub = self._get_or_create_stub(registry_service_pb2_grpc.RegistryServiceStub)
         logger.debug("Channel client 'Registry' initialized successfully")
+
+    async def wait_for_ready(self, timeout: float = 1.0) -> bool:
+        """Ping the registry by issuing a real GetModule RPC.
+
+        Any gRPC response (including NOT_FOUND) means the server is alive.
+        Only connection failure (UNAVAILABLE/DEADLINE_EXCEEDED after retries)
+        returns False.
+
+        Args:
+            timeout: Max seconds for the round-trip.
+
+        Returns:
+            True if the server responded, False if unreachable.
+        """
+        try:
+            await self.exec_grpc_query(
+                "GetModule",
+                registry_requests_pb2.GetModuleRequest(module_id="__ping__"),
+                timeout=timeout,
+            )
+        except ServerError as e:
+            return "UNAVAILABLE" not in str(e) and "DEADLINE_EXCEEDED" not in str(e)
+        return True
 
     @staticmethod
     def _proto_to_module_info(

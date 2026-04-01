@@ -19,12 +19,18 @@ from digitalkin.models.module.module_types import (
     SetupModelT,
 )
 from digitalkin.models.module.select_schema import SelectSchema
+from digitalkin.models.module.tool_cache import ToolCache
 from digitalkin.models.module.utility import EndOfStreamOutput, ModuleStartInfoOutput, UtilityProtocol
 from digitalkin.models.services.storage import BaseRole
 from digitalkin.modules.trigger_handler import TriggerHandler
 from digitalkin.services.services_config import ServicesConfig, ServicesStrategy
 from digitalkin.utils.package_discover import ModuleDiscoverer
 from digitalkin.utils.schema_splitter import SchemaSplitter
+
+# Pre-create generic DataModel subclasses to avoid Pydantic
+# creating new generic classes on every start()/stop() call.
+_ModuleStartInfoDataModel: type[DataModel] = DataModel[ModuleStartInfoOutput]
+_EndOfStreamDataModel: type[DataModel] = DataModel[EndOfStreamOutput]
 
 
 class BaseModule(  # Module SDK base class requires many public methods # noqa: PLR0904
@@ -51,6 +57,7 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
     context: ModuleContext
     triggers_discoverer: ClassVar[ModuleDiscoverer]
     _extended_input_format: ClassVar[type[DataModel] | None] = None
+    _shared: ClassVar[dict[str, Any]] = {}
 
     # service config params — subclasses MUST define their own to avoid sharing
     services_config_strategies: ClassVar[dict[str, ServicesStrategy | None]]
@@ -85,12 +92,10 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
 
         Returns:
             dict of services with name: Strategy
-                agent: AgentStrategy
                 cost: CostStrategy
                 filesystem: FilesystemStrategy
                 identity: IdentityStrategy
                 registry: RegistryStrategy
-                snapshot: SnapshotStrategy
                 storage: StorageStrategy
                 user_profile: UserProfileStrategy
         """
@@ -112,6 +117,7 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
         setup_id: str,
         setup_version_id: str,
         request_metadata: dict[str, str] | None = None,
+        tool_cache: ToolCache | None = None,
     ) -> None:
         """Initialize the module.
 
@@ -121,8 +127,10 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
             setup_id: Setup identifier.
             setup_version_id: Setup version identifier.
             request_metadata: gRPC request metadata (headers) from the incoming request.
+            tool_cache: Pre-resolved ToolCache (skips per-request gRPC resolution).
         """
         self._status = ModuleStatus.CREATED
+        self._prebuilt_tool_cache = tool_cache
         self.trigger_handlers: dict[str, tuple] = {}
 
         # Initialize minimum context
@@ -135,8 +143,10 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
                 "setup_version_id": setup_version_id,
                 "job_id": job_id,
             },
+            borrowed=self.services_config._stateless_strategies,  # noqa: SLF001
             callbacks={"logger": logger},
             request_metadata=request_metadata,
+            shared=self._shared,
         )
 
     @property
@@ -561,13 +571,16 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
         try:
             self.context.callbacks.send_message = callback
 
-            tool_cache = await setup_data.build_tool_cache(self.context.registry, self.context.communication)
+            tool_cache = self._prebuilt_tool_cache or await setup_data.build_tool_cache(
+                self.context.registry,
+                self.context.communication,
+            )
             if tool_cache.entries:
                 self.context.tool_cache = tool_cache
             logger.debug("debug:start tool_cache entries=%s", len(tool_cache.entries))
 
             await callback(
-                DataModel(
+                _ModuleStartInfoDataModel(
                     root=ModuleStartInfoOutput(
                         job_id=self.context.session.job_id,
                         mission_id=self.context.session.mission_id,
@@ -626,7 +639,7 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
                 logger.warning("Failed to flush handler history during stop", exc_info=True)
             try:
                 await self.context.callbacks.send_message(
-                    DataModel[EndOfStreamOutput](
+                    _EndOfStreamDataModel(
                         root=EndOfStreamOutput(),
                         annotations={"role": BaseRole.SYSTEM},
                     )

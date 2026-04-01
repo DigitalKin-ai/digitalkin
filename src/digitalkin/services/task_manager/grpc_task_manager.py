@@ -462,8 +462,8 @@ class GrpcTaskManager(TaskManagerStrategy, GrpcClientWrapper, GrpcErrorHandlerMi
                 "Install the proto package to use remote task manager signals."
             )
             raise ImportError(msg)
-        channel = self._init_channel(client_config)
-        self.stub = task_manager_service_pb2_grpc.TaskManagerServiceStub(channel)
+        self._init_channel(client_config)
+        self.stub = self._get_or_create_stub(task_manager_service_pb2_grpc.TaskManagerServiceStub)
         self._subscriptions = {}
         self._sub_task_ids = {}
         self._poll_interval = poll_interval

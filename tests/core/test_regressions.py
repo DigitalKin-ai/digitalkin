@@ -47,9 +47,10 @@ class MockModule(BaseModule):
         setup_id: str,
         setup_version_id: str,
         request_metadata: dict[str, str] | None = None,
+        tool_cache=None,
     ) -> None:
         # REGRESSION: Module MUST call super().__init__
-        super().__init__(job_id, mission_id, setup_id, setup_version_id, request_metadata=request_metadata)
+        super().__init__(job_id, mission_id, setup_id, setup_version_id, request_metadata=request_metadata, tool_cache=tool_cache)
         self.job_id = job_id
         self.mission_id = mission_id
         self.setup_id = setup_id
@@ -67,13 +68,11 @@ class MockModule(BaseModule):
     def _init_strategies(self, mission_id: str, setup_id: str, setup_version_id: str) -> dict[str, Any]:
         """Override to skip service initialization in tests."""
         return {
-            "agent": None,
             "communication": None,
             "cost": None,
             "filesystem": None,
             "identity": None,
             "registry": None,
-            "snapshot": None,
             "storage": None,
             "task_manager": None,
             "user_profile": None,
@@ -172,49 +171,6 @@ class TestTaskManagerChannelRegression:
 
         assert result is True
         mock_signal_svc.send_signal.assert_awaited_once()
-
-
-class TestTaskiqInfiniteLoopRegression:
-    """Test regression for TaskiqJobManager infinite loop."""
-
-    @pytest.mark.taskiq
-    @pytest.mark.asyncio
-    async def test_taskiq_stream_consumer_timeout(self):
-        """REGRESSION: test_taskiq_job_manager had infinite loop in stream consumer
-        Fix: Added asyncio.timeout(2.0) wrapper.
-        """
-        pytest.importorskip("taskiq", reason="taskiq not installed")
-        with patch("digitalkin.core.job_manager.taskiq_job_manager.TASKIQ_BROKER"):
-            with patch("digitalkin.core.job_manager.taskiq_job_manager.TaskiqJobManager._start"):
-                from digitalkin.core.job_manager.taskiq_job_manager import TaskiqJobManager
-
-                manager = TaskiqJobManager(MockModule, ServicesMode.REMOTE)
-
-                outputs = []
-                count = 0
-
-                # This should not hang due to timeout
-                async def consume_stream() -> None:
-                    async with manager.generate_stream_consumer("test-job") as stream:
-                        # Add items to queue AFTER context manager creates it
-                        queue = manager.job_queues["test-job"]
-                        await queue.put({"data": "item1"})
-                        await queue.put({"data": "item2"})
-
-                        async for output in stream:
-                            outputs.append(output)
-                            nonlocal count
-                            count += 1
-                            if count >= 2:
-                                break
-
-                try:
-                    await asyncio.wait_for(consume_stream(), timeout=2.0)
-                except asyncio.TimeoutError:
-                    pass  # Expected timeout
-
-                # Should have consumed available items
-                assert len(outputs) >= 2
 
 
 class TestMemoryLeakRegressions:

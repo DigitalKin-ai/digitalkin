@@ -94,10 +94,10 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.12"]
-        test-name: ["Unit Tests", "Smoke Tests", "gRPC Tests", "Validation Tests", "Edge Case Tests", "Regression Tests", "Integration Tests", "Taskiq Tests"]
+        test-name: ["Unit Tests", "Smoke Tests", "gRPC Tests", "Validation Tests", "Edge Case Tests", "Regression Tests", "Integration Tests"]
         include:
           - test-name: "Unit Tests"
-            test-marker: "not integration and not grpc and not smoke and not validation and not edge_case and not regression and not taskiq"
+            test-marker: "not integration and not grpc and not smoke and not validation and not edge_case and not regression"
             test-description: "Basic unit tests without markers"
           - test-name: "Smoke Tests"
             test-marker: "smoke"
@@ -117,9 +117,6 @@ jobs:
           - test-name: "Integration Tests"
             test-marker: "integration"
             test-description: "Tests requiring external service connections"
-          - test-name: "Taskiq Tests"
-            test-marker: "taskiq"
-            test-description: "Taskiq distributed execution and pickle/unpickle behavior"
 
     env:
       PYTHON_VERSION: ${{ matrix.python-version }}

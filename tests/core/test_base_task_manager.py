@@ -58,6 +58,8 @@ class ConcreteTaskManager(BaseTaskManager):
             async with self._tasks_lock:
                 await self._validate_task_creation(task_id, mission_id, coro)
                 self._create_session(task_id, mission_id, module)
+            # Close the coroutine — this test impl doesn't execute it
+            coro.close()
         except Exception:
             if task_id not in self.tasks_sessions:
                 self._task_slot.release()

@@ -99,8 +99,8 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
         Returns:
             ModuleServiceStub for the target module
         """
-        channel = self._get_or_create_channel(module_address, module_port)
-        return module_service_pb2_grpc.ModuleServiceStub(channel)
+        self._get_or_create_channel(module_address, module_port)
+        return self._get_or_create_stub(module_service_pb2_grpc.ModuleServiceStub)
 
     async def get_module_schemas(
         self,
@@ -160,7 +160,7 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
         self,
         module_address: str,
         module_port: int,
-        input_data: dict,
+        input_data: dict | struct_pb2.Struct,
         setup_id: str,
         mission_id: str,
         callback: Callable[[dict], Awaitable[None]] | None = None,
@@ -169,24 +169,25 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
         """Call a module and stream responses via gRPC.
 
         Args:
-            module_address: Target module address
-            module_port: Target module port
-            input_data: Input data as dictionary
-            setup_id: Setup configuration ID
-            mission_id: Mission context ID
-            callback: Optional callback for each response
+            module_address: Target module address.
+            module_port: Target module port.
+            input_data: Input data as dict or proto Struct (avoids double conversion).
+            setup_id: Setup configuration ID.
+            mission_id: Mission context ID.
+            callback: Optional callback for each response.
             metadata: Optional gRPC metadata (headers) to send with the request.
 
         Yields:
-            Streaming responses from module as dictionaries
+            Streaming responses from module as proto Struct.
         """
         stub = self._create_stub(module_address, module_port)
 
-        # Convert input data to protobuf Struct
-        input_struct = struct_pb2.Struct()
-        input_struct.update(input_data)
+        if isinstance(input_data, struct_pb2.Struct):
+            input_struct = input_data
+        else:
+            input_struct = struct_pb2.Struct()
+            input_struct.update(input_data)
 
-        # Create request
         request = lifecycle_pb2.StartModuleRequest(
             input=input_struct,
             setup_id=setup_id,
@@ -210,28 +211,23 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
             # Call StartModule with streaming response and optional metadata
             response_stream = stub.StartModule(request, metadata=grpc_metadata)
 
-            # Stream responses
+            # Stream responses — yield raw proto Struct (zero-copy to Redis)
             async for response in response_stream:
-                # Convert protobuf Struct to dict
-                output_dict = json_format.MessageToDict(response.output)
+                output_proto = response.output
 
-                # Check for end_of_stream signal
-                if output_dict.get("root", {}).get("protocol") == "end_of_stream":
-                    logger.debug(
-                        "End of stream received",
-                        extra={
-                            "module_address": module_address,
-                            "module_port": module_port,
-                        },
-                    )
-                    break
-
-                # Add job_id and success flag
-                response_dict = {
-                    "success": response.success,
-                    "job_id": response.job_id,
-                    "output": output_dict,
-                }
+                # Check for end_of_stream signal on proto
+                root = output_proto.fields.get("root")
+                if root is not None:
+                    protocol_field = root.struct_value.fields.get("protocol")
+                    if protocol_field is not None and protocol_field.string_value == "end_of_stream":
+                        logger.debug(
+                            "End of stream received",
+                            extra={
+                                "module_address": module_address,
+                                "module_port": module_port,
+                            },
+                        )
+                        break
 
                 logger.debug(
                     "Received module response",
@@ -243,11 +239,10 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
                     },
                 )
 
-                # Call callback if provided
                 if callback:
-                    await callback(response_dict)
+                    await callback(output_proto)
 
-                yield response_dict
+                yield output_proto
 
         except Exception:
             logger.exception(

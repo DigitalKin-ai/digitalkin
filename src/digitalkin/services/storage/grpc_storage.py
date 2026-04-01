@@ -220,6 +220,6 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
         """Initialize the storage."""
         super().__init__(mission_id=mission_id, setup_id=setup_id, setup_version_id=setup_version_id, config=config)
 
-        channel = self._init_channel(client_config)
-        self.stub = storage_service_pb2_grpc.StorageServiceStub(channel)
+        self._init_channel(client_config)
+        self.stub = self._get_or_create_stub(storage_service_pb2_grpc.StorageServiceStub)
         logger.debug("Channel client 'storage' initialized successfully")

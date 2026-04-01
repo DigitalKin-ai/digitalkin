@@ -35,8 +35,8 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
 
         Need to be call if the user register a gRPC channel.
         """
-        channel = self._init_channel(config)
-        self.stub = setup_service_pb2_grpc.SetupServiceStub(channel)
+        self._init_channel(config)
+        self.stub = self._get_or_create_stub(setup_service_pb2_grpc.SetupServiceStub)
         logger.debug("Channel client 'setup' initialized successfully")
 
     @asynccontextmanager

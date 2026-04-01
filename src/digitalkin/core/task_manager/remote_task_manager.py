@@ -12,7 +12,7 @@ class RemoteTaskManager(BaseTaskManager):
     """Task manager for distributed/remote execution.
 
     Only manages task metadata and signals - actual execution happens in remote workers.
-    Suitable for horizontally scaled deployments with Taskiq/Celery workers.
+    Suitable for horizontally scaled deployments with remote workers.
     """
 
     async def create_task(

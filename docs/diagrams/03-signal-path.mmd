@@ -1,0 +1,11 @@
+flowchart LR
+    A[Client\nSendSignal] --> B[Gateway\nServicer]
+    B --> C[TaskManager\nStrategy]
+    C --> D[RedisSend\nBuffer]
+    D -->|"Pipeline:\nHSET+EXPIRE+PUBLISH"| E[(Redis)]
+    E -->|PubSub| F[SharedRedis\nListener]
+    F --> G[Per-task\nQueue]
+    G --> H[TaskSession\nlisten_signals]
+    H --> I{action?}
+    I -->|cancel| J[_handle_cancel]
+    I -->|stop| K[_handle_stop]

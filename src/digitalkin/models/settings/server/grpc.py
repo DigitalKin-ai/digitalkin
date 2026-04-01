@@ -24,18 +24,28 @@ class GrpcServerSettings(BaseSettings):
     """
 
     model_config = SettingsConfigDict(
-        env_prefix="SERVER_GRPC_", extra="forbid", arbitrary_types_allowed=True, validate_assignment=True
+        env_prefix="SERVER_GRPC_",
+        extra="forbid",
+        arbitrary_types_allowed=True,
+        validate_assignment=True,
     )
 
-    compression: GrpcCompression = Field(GrpcCompression.GZIP, description="gRPC compression algorithm")
+    compression: GrpcCompression = Field(
+        GrpcCompression.GZIP,
+        description="gRPC compression algorithm",
+    )
 
     # ── Options ───────────────────────────────────────────────────────────────────── #
 
     keepalive_time: NonNegativeFloat = Field(
-        120000, description="Interval for server keepalive pings.", alias="SERVER_GRPC_OPTIONS_KEEPALIVE_TIME"
+        120000,
+        description="Interval for server keepalive pings.",
+        alias="SERVER_GRPC_OPTIONS_KEEPALIVE_TIME",
     )
     keepalive_timeout: NonNegativeFloat = Field(
-        20000, description="Timeout for server keepalive pings.", alias="SERVER_GRPC_OPTIONS_KEEPALIVE_TIMEOUT"
+        20000,
+        description="Timeout for server keepalive pings.",
+        alias="SERVER_GRPC_OPTIONS_KEEPALIVE_TIMEOUT",
     )
     min_ping_interval: NonNegativeFloat = Field(
         10000,

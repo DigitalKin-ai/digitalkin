@@ -2,6 +2,7 @@
 
 from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator, Awaitable, Callable
+from typing import Any
 
 from digitalkin.services.base_strategy import BaseStrategy
 
@@ -56,12 +57,12 @@ class CommunicationStrategy(BaseStrategy, ABC):
         self,
         module_address: str,
         module_port: int,
-        input_data: dict,
+        input_data: dict | Any,
         setup_id: str,
         mission_id: str,
         callback: Callable[[dict], Awaitable[None]] | None = None,
         metadata: dict[str, str] | None = None,
-    ) -> AsyncGenerator[dict, None]:
+    ) -> AsyncGenerator[Any, None]:
         """Call a module and stream responses.
 
         Uses Module Service StartModule RPC to execute the module.

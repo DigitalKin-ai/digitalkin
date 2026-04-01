@@ -56,8 +56,9 @@ class MockModule(BaseModule[MockInputModel, MockOutputModel, MockSetupModel, Non
         setup_id: str,
         setup_version_id: str,
         request_metadata: dict[str, str] | None = None,
+        tool_cache=None,
     ) -> None:
-        super().__init__(job_id, mission_id, setup_id, setup_version_id, request_metadata=request_metadata)
+        super().__init__(job_id, mission_id, setup_id, setup_version_id, request_metadata=request_metadata, tool_cache=tool_cache)
         self.job_id = job_id
         self.mission_id = mission_id
         self.setup_id = setup_id
@@ -67,13 +68,11 @@ class MockModule(BaseModule[MockInputModel, MockOutputModel, MockSetupModel, Non
     def _init_strategies(self, mission_id: str, setup_id: str, setup_version_id: str) -> dict[str, Any]:
         """Override to skip service initialization in tests."""
         return {
-            "agent": None,
             "communication": None,
             "cost": None,
             "filesystem": None,
             "identity": None,
             "registry": None,
-            "snapshot": None,
             "storage": None,
             "task_manager": None,
             "user_profile": None,
@@ -141,7 +140,7 @@ class TestModuleFactory:
         """Test handling of module constructor errors."""
 
         class FailingModule(BaseModule):
-            def __init__(self, job_id: str, mission_id: str, setup_id: str, setup_version_id: str) -> None:
+            def __init__(self, job_id: str, mission_id: str, setup_id: str, setup_version_id: str, request_metadata=None, tool_cache=None) -> None:
                 msg = "Constructor failed"
                 raise ValueError(msg)
 

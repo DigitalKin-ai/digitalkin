@@ -1,4 +1,10 @@
-"""Client wrapper to ease channel creation with specific ServerConfig."""
+"""Client wrapper to ease channel creation with specific ServerConfig.
+
+Includes per-service circuit breaker protection: when a downstream service
+fails repeatedly, subsequent calls fail fast with ``CircuitOpenError``
+instead of waiting for the full timeout. This prevents cascade failure
+amplification across the mesh.
+"""
 
 import asyncio
 import logging
@@ -9,6 +15,7 @@ from typing import Any, ClassVar
 import grpc
 import grpc.aio
 
+from digitalkin.grpc_servers.utils.circuit_breaker import CircuitBreaker, CircuitOpenError
 from digitalkin.grpc_servers.utils.exceptions import ServerError
 from digitalkin.logger import logger
 from digitalkin.models.grpc_servers.models import ClientConfig
@@ -32,6 +39,7 @@ class GrpcClientWrapper:
     _channel_cache_key: str | None = None
     _channel_cache: ClassVar[dict[str, grpc.aio.Channel]] = {}
     _ref_counts: ClassVar[dict[str, int]] = {}
+    _stub_cache: ClassVar[dict[tuple[str, type], Any]] = {}
 
     _RETRYABLE_CODES: ClassVar[set[grpc.StatusCode]] = {
         grpc.StatusCode.UNAVAILABLE,
@@ -102,6 +110,29 @@ class GrpcClientWrapper:
         self._channel_cache_key = cache_key
         return channel
 
+    def _get_or_create_stub(self, stub_class: type) -> Any:
+        """Get a cached stub or create one for the current channel.
+
+        Stubs are stateless wrappers — same class on same channel is identical.
+        Caching avoids per-request object allocation.
+
+        Args:
+            stub_class: gRPC stub class (e.g., StorageServiceStub).
+
+        Returns:
+            Cached or newly created stub instance.
+        """
+        cache_key = self._channel_cache_key
+        if cache_key is not None:
+            key = (cache_key, stub_class)
+            cached = GrpcClientWrapper._stub_cache.get(key)
+            if cached is not None:
+                return cached
+            stub = stub_class(self._channel)
+            GrpcClientWrapper._stub_cache[key] = stub
+            return stub
+        return stub_class(self._channel)
+
     async def close(self) -> None:
         """Release this instance's gRPC channel ref. Subclasses override to release extra resources."""
         await self.close_channel()
@@ -110,6 +141,8 @@ class GrpcClientWrapper:
         """Release this instance's ref on the cached channel.
 
         The underlying channel is only closed when the last ref is released.
+        When the last ref is released, the corresponding circuit breaker
+        singleton is also removed to prevent unbounded accumulation.
         """
         if self._channel is None:
             return
@@ -118,7 +151,10 @@ class GrpcClientWrapper:
             if GrpcClientWrapper._ref_counts[key] <= 0:
                 GrpcClientWrapper._ref_counts.pop(key, None)
                 GrpcClientWrapper._channel_cache.pop(key, None)
+                GrpcClientWrapper._stub_cache = {k: v for k, v in GrpcClientWrapper._stub_cache.items() if k[0] != key}
                 await self._channel.close()
+                # Clean up circuit breaker for this service to prevent accumulation
+                CircuitBreaker.remove(self.service_name)
         else:
             await self._channel.close()
         self._channel = None
@@ -141,35 +177,18 @@ class GrpcClientWrapper:
 
     @classmethod
     async def close_all_cached_channels(cls) -> None:
-        """Close all cached channels and reset the cache.
+        """Close all cached channels, reset cache, and clear circuit breakers.
 
         Intended for server shutdown to ensure clean resource release.
+        Clears circuit breaker singletons to prevent unbounded growth
+        from dynamically discovered services.
         """
         for channel in cls._channel_cache.values():
             await channel.close()
         cls._channel_cache.clear()
         cls._ref_counts.clear()
-
-    async def wait_for_ready(self, timeout: float = 1.0) -> bool:
-        """Check if the gRPC channel can connect within timeout.
-
-        Uses channel_ready() which resolves when the HTTP/2 connection is
-        established and the server is accepting RPCs.
-
-        Args:
-            timeout: Max seconds to wait for connectivity.
-
-        Returns:
-            True if channel reached READY state, False if timeout or no channel.
-        """
-        if self._channel is None:
-            return False
-        try:
-            await asyncio.wait_for(self._channel.channel_ready(), timeout=timeout)
-        except asyncio.TimeoutError:
-            return False
-        else:
-            return True
+        cls._stub_cache.clear()
+        CircuitBreaker.clear_all()
 
     async def exec_grpc_query(
         self,
@@ -177,7 +196,11 @@ class GrpcClientWrapper:
         request: Any,
         timeout: float | None = None,
     ) -> Any:
-        """Execute a gRPC query with from the query's rpc endpoint name.
+        """Execute a gRPC query with circuit breaker protection and retry.
+
+        The circuit breaker is per-service (keyed on ``service_name``).
+        When the circuit is OPEN, calls fail immediately with ``CircuitOpenError``
+        wrapped in ``ServerError`` — no network round-trip, no timeout wait.
 
         Retries on transient errors (UNAVAILABLE, INTERNAL, DEADLINE_EXCEEDED)
         with exponential backoff. Retry count and backoff base are configurable
@@ -195,7 +218,14 @@ class GrpcClientWrapper:
         Raises:
             ServerError: gRPC error with status code and details for caller to handle.
         """
-        effective_timeout = timeout if timeout is not None else self._QUERY_DEFAULT_TIMEOUT
+        # Circuit breaker: fail fast if service is known-bad
+        cb = CircuitBreaker.get_or_create(self.service_name)
+        try:
+            cb.check()
+        except CircuitOpenError as e:
+            error_msg = f"[gRPC-client:{self.service_name}.{query_endpoint}] {e}"
+            raise ServerError(error_msg) from e
+
         max_retries = self._QUERY_MAX_RETRIES
         backoff_delays = tuple(self._QUERY_BACKOFF_BASE_MS / 1000 * (2**i) for i in range(max_retries))
         last_error: grpc.RpcError | None = None
@@ -206,10 +236,16 @@ class GrpcClientWrapper:
 
             try:
                 # getattr unavoidable: gRPC stubs expose RPC methods as dynamic attributes
-                response = await getattr(self.stub, query_endpoint)(request, timeout=effective_timeout)
+                rpc_method = getattr(self.stub, query_endpoint, None)  # type: ignore[arg-type]
+                if rpc_method is None:
+                    msg = f"[gRPC-client:{self.service_name}] RPC method '{query_endpoint}' not found on stub"
+                    raise ServerError(msg)
+                response = await rpc_method(request, timeout=timeout)
             except grpc.RpcError as e:
                 last_error = e
                 if e.code() not in self._RETRYABLE_CODES or attempt == max_retries:
+                    # Non-retryable or exhausted retries — record failure for circuit breaker
+                    cb.record_failure()
                     break
                 logger.warning(
                     "gRPC transient error on %s.%s [%s] (attempt %d/%d), retrying in %.0fms",
@@ -221,6 +257,8 @@ class GrpcClientWrapper:
                     backoff_delays[attempt] * 1000,
                 )
             else:
+                # Success — reset circuit breaker failure counter
+                cb.record_success()
                 return response
 
         if last_error is None:

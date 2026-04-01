@@ -1,36 +1,38 @@
 services:
-  tests-rabbitmq:
-    container_name: digitalkin-tests-rabbitmq
-    profiles: ["taskiq"]
-    build:
-      context: ${RABBITMQ_CONTEXT:-.}
-      dockerfile: ${RABBITMQ_DOCKERFILE:-dockerfiles/Dockerfile_rabbitmq}
-      args:
-        RABBITMQ_URL: ${RABBITMQ_URL:-digitalkin-tests-rabbitmq}
-        RABBITMQ_CERTIFICATE_VOLUME: ${RABBITMQ_CERTIFICATE_VOLUME:-/certificates/digitalkin-tests-rabbitmq}
-        RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:-guest}
-        RABBITMQ_DEFAULT_PASSWORD: ${RABBITMQ_DEFAULT_PASSWORD:-guest}
-        RABBITMQ_RSTREAM_ADVERTISED_HOST: ${RABBITMQ_RSTREAM_ADVERTISED_HOST:-localhost}
-        RABBITMQ_RSTREAM_ADVERTISED_PORT: ${RABBITMQ_RSTREAM_ADVERTISED_PORT:-5553}
-        RABBITMQ_BROKER_PORT: ${RABBITMQ_BROKER_PORT:-5553}
-        RABBITMQ_MANAGEMENT_PORT: ${RABBITMQ_MANAGEMENT_PORT:-16573}
-        RABBITMQ_RSTREAM_PORT: ${RABBITMQ_RSTREAM_PORT:-5673}
+  tests-redis:
+    container_name: digitalkin-tests-redis
+    profiles: ["redis"]
+    image: redis:7-alpine
     ports:
-      - ${RABBITMQ_BROKER_PORT:-5673}:${RABBITMQ_BROKER_PORT:-5673}
-      - ${RABBITMQ_MANAGEMENT_PORT:-15673}:${RABBITMQ_MANAGEMENT_PORT:-15673}
-      - ${RABBITMQ_RSTREAM_PORT:-5553}:${RABBITMQ_RSTREAM_PORT:-5553}
+      - "${REDIS_PORT:-6399}:6379"
     networks:
       - services-network
-    volumes:
-      - rabbitmq-data:/var/lib/rabbitmq
-    environment:
-      - RABBITMQ_DEFAULT_USER=${RABBITMQ_DEFAULT_USER:-guest}
-      - RABBITMQ_DEFAULT_PASSWORD=${RABBITMQ_DEFAULT_PASSWORD:-guest}
+    command: >
+      redis-server
+        --maxmemory 256mb
+        --maxmemory-policy allkeys-lru
+        --save ""
+        --appendonly no
+        --protected-mode no
+        --loglevel warning
     healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "ping"]
-      interval: 10s
-      timeout: 5s
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
       retries: 5
+
+  tests-toxiproxy:
+    container_name: digitalkin-tests-toxiproxy
+    profiles: ["chaos"]
+    image: ghcr.io/shopify/toxiproxy:2.9.0
+    ports:
+      - "8474:8474"
+      - "26379:26379"
+    networks:
+      - services-network
+    depends_on:
+      tests-redis:
+        condition: service_healthy
 
   tests:
     container_name: digitalkin-tests
@@ -54,5 +56,4 @@ networks:
   services-network:
     driver: bridge
 
-volumes:
-  rabbitmq-data:
+volumes: {}

@@ -3,6 +3,15 @@
 import abc
 import asyncio
 import os
+
+# uvloop: faster event loop. Activated by DIGITALKIN_UVLOOP=true.
+if os.environ.get("DIGITALKIN_UVLOOP", "false").lower() == "true":
+    try:
+        import uvloop
+
+        asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+    except ImportError:
+        pass  # uvloop not installed — use default loop
 from collections.abc import Callable, Sequence
 from concurrent import futures
 from pathlib import Path

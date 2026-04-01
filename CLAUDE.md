@@ -81,15 +81,6 @@ uv run mkdocs build
 uv run mike deploy --push --update-aliases 0.3 latest
 ```
 
-### Taskiq (Distributed Job Execution)
-```bash
-# Enable RabbitMQ stream capability (required for Taskiq)
-sudo rabbitmq-plugins enable rabbitmq_stream
-
-# Start Taskiq worker
-task start-taskiq
-```
-
 ## Architecture Overview
 
 ### Core Components
@@ -115,7 +106,6 @@ task start-taskiq
 **Job Management** (`src/digitalkin/core/job_manager/`)
 - `BaseJobManager`: Abstract base extending TaskManager
 - `SingleJobManager`: In-memory execution for single-server deployments
-- `TaskiqJobManager`: Distributed execution using Taskiq + RabbitMQ for horizontal scaling
 - Jobs stream output via asyncio.Queue and callbacks
 
 **Task Management** (`src/digitalkin/core/task_manager/`)
@@ -275,10 +265,9 @@ Use `pytest.mark.asyncio` for async tests. The `asyncio_mode = "auto"` setting i
 
 ## Integration Points
 
-- **RabbitMQ** (via Taskiq): Distributed job execution, message streaming
+- **Redis**: Durable message passing via Redis Streams, session state, signal pub/sub
 - **gRPC**: All inter-service communication
 - **Protobuf**: Message definitions from `digitalkin-proto` package
-- **Taskiq**: Optional distributed task execution (install with `pip install digitalkin[taskiq]`)
 
 ## Examples
 

@@ -186,6 +186,8 @@ class BaseJobManager(abc.ABC, Generic[InputModelT, OutputModelT, SetupModelT]):
         setup_id: str,
         setup_version_id: str,
         request_metadata: dict[str, str] | None = None,
+        job_id: str | None = None,
+        tool_cache: Any = None,
     ) -> str:
         """Create and start a new job for the module's instance.
 
@@ -196,6 +198,9 @@ class BaseJobManager(abc.ABC, Generic[InputModelT, OutputModelT, SetupModelT]):
             setup_id: The setup ID.
             setup_version_id: The setup version ID associated with the module.
             request_metadata: gRPC request metadata (headers) to forward to the module.
+            job_id: Optional externally-provided job ID (e.g., Gateway's task_id).
+                    If None, a UUID is minted internally.
+            tool_cache: Pre-resolved ToolCache to inject (skips per-request resolution).
 
         Returns:
             str: The unique identifier (job ID) of the created job.
@@ -260,9 +265,7 @@ class BaseJobManager(abc.ABC, Generic[InputModelT, OutputModelT, SetupModelT]):
         """Wait for a task to complete.
 
         This method blocks until the specified job has reached a terminal state.
-        The implementation varies by job manager type:
-        - SingleJobManager: Awaits the asyncio.Task directly
-        - TaskiqJobManager: Polls task status
+        SingleJobManager awaits the asyncio.Task directly.
 
         Args:
             job_id: The unique identifier of the job to wait for.

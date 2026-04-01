@@ -1,0 +1,45 @@
+sequenceDiagram
+    participant B as Module B
+    participant GW as Gateway
+    participant R as Redis
+    participant A as Module A
+
+    rect rgb(219, 234, 254)
+    Note over B,A: Handshake (once)
+    B->>GW: StartStream(task_id, input)
+    GW->>A: StartModule + x-task-id
+    GW-->>B: ACK(task_id)
+    A->>GW: ProduceStream(init)
+    A->>GW: ModuleStartInfo
+    GW->>R: XADD seq=1 (ModuleStartInfo)
+    B->>GW: ConsumeStream(init: task_id)
+    GW->>R: XREAD
+    GW-->>B: ModuleStartInfo
+    end
+
+    rect rgb(220, 252, 231)
+    Note over B,A: Main loop (99% of traffic — repeats)
+    B->>GW: data / prompt / instructions
+    GW->>R: XADD input stream
+    R-->>A: read input (via ProduceStreamResponse)
+
+    Note over A: Module A processes
+
+    A->>GW: output / answer
+    GW->>R: XADD output stream
+    GW-->>B: StreamOutput(seq=N)
+
+    B->>GW: more data
+    GW->>R: XADD input stream
+    R-->>A: read input
+
+    A->>GW: more output
+    GW->>R: XADD output stream
+    GW-->>B: StreamOutput(seq=N+1)
+    end
+
+    rect rgb(254, 243, 199)
+    Note over B,A: Termination
+    A->>GW: StreamStatus(COMPLETED)
+    GW-->>B: StreamStatus(COMPLETED)
+    end

@@ -36,8 +36,8 @@ class GrpcUserProfile(UserProfileStrategy, GrpcClientWrapper, GrpcErrorHandlerMi
             client_config: Client configuration for gRPC connection
         """
         super().__init__(mission_id=mission_id, setup_id=setup_id, setup_version_id=setup_version_id)
-        channel = self._init_channel(client_config)
-        self.stub = user_profile_service_pb2_grpc.UserProfileServiceStub(channel)
+        self._init_channel(client_config)
+        self.stub = self._get_or_create_stub(user_profile_service_pb2_grpc.UserProfileServiceStub)
         logger.debug("Channel client 'UserProfile' initialized successfully")
 
     async def get_user_profile(self) -> dict[str, Any] | None:

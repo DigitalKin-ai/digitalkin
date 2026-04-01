@@ -1,9 +1,15 @@
 """Common factory functions for reducing code duplication in core module."""
 
+from __future__ import annotations
+
 import asyncio
+from typing import TYPE_CHECKING
 
 from digitalkin.logger import logger
-from digitalkin.modules._base_module import BaseModule
+
+if TYPE_CHECKING:
+    from digitalkin.models.module.tool_cache import ToolCache
+    from digitalkin.modules._base_module import BaseModule
 
 
 class ModuleFactory:
@@ -17,6 +23,7 @@ class ModuleFactory:
         setup_id: str,
         setup_version_id: str,
         request_metadata: dict[str, str] | None = None,
+        tool_cache: ToolCache | None = None,
     ) -> BaseModule:
         """Create a module instance with standard parameters.
 
@@ -30,6 +37,7 @@ class ModuleFactory:
             setup_id: Setup identifier
             setup_version_id: Setup version identifier
             request_metadata: gRPC request metadata (headers) to forward to the module.
+            tool_cache: Pre-resolved ToolCache to inject on the module instance.
 
         Returns:
             Instantiated module
@@ -73,6 +81,7 @@ class ModuleFactory:
             setup_id=setup_id,
             setup_version_id=setup_version_id,
             request_metadata=request_metadata,
+            tool_cache=tool_cache,
         )
 
 

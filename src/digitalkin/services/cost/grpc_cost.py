@@ -37,8 +37,8 @@ class GrpcCost(CostStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
         self.config = config
         self._limits: dict[str, QuantityLimit | AmountLimit] = {}
         self._accumulated: dict[str, float] = {}
-        channel = self._init_channel(client_config)
-        self.stub = cost_service_pb2_grpc.CostServiceStub(channel)
+        self._init_channel(client_config)
+        self.stub = self._get_or_create_stub(cost_service_pb2_grpc.CostServiceStub)
         logger.debug("Channel client 'Cost' initialized successfully")
 
     async def set_limits(self, limits: list[QuantityLimit | AmountLimit]) -> None:

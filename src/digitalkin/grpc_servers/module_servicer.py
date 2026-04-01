@@ -21,6 +21,7 @@ from digitalkin.grpc_servers.utils.exceptions import ServerError, ServicerError
 from digitalkin.logger import logger
 from digitalkin.models.core.job_manager_models import JobManagerMode
 from digitalkin.models.module.module import ModuleCodeModel, ModuleStatus
+from digitalkin.models.module.setup_types import SetupModel
 from digitalkin.modules._base_module import BaseModule
 from digitalkin.services.registry import GrpcRegistry, RegistryStrategy
 from digitalkin.services.services_models import ServicesMode
@@ -44,7 +45,9 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
     args: Namespace
     setup: SetupStrategy
     job_manager: BaseJobManager
-    _registry_cache: RegistryStrategy | None = None
+    _registry_cache: RegistryStrategy | None
+    _tool_cache_by_setup: dict[str, Any]
+    _communication_cache: Any
 
     def _add_parser_args(self, parser: ArgumentParser) -> None:
         super()._add_parser_args(parser)
@@ -91,6 +94,10 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         self._setup_inflight: dict[str, asyncio.Future[SetupVersionData]] = {}
         self._completion_timeout = float(os.environ.get("DIGITALKIN_COMPLETION_TIMEOUT", "300.0"))
 
+        self._registry_cache = None
+        self._tool_cache_by_setup = {}
+        self._communication_cache = None
+
     async def shutdown(self) -> None:
         """Release servicer-level resources (GrpcSetup channel, registry cache)."""
         if isinstance(self.setup, GrpcSetup):
@@ -107,6 +114,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             self._registry_cache = None
 
         self._setup_cache.clear()
+        self._tool_cache_by_setup.clear()
 
     def _get_registry(self) -> RegistryStrategy | None:
         """Get a cached registry instance if configured.
@@ -127,6 +135,28 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
 
         self._registry_cache = GrpcRegistry("", "", "", client_config)
         return self._registry_cache
+
+    def _get_communication(self) -> Any:
+        """Get a cached communication instance for tool resolution.
+
+        Returns:
+            CommunicationStrategy if configured, None otherwise.
+        """
+        if self._communication_cache is not None:
+            return self._communication_cache
+
+        comm_config = self.module_class.services_config_params.get("communication")
+        if not comm_config:
+            return None
+
+        client_config = comm_config.get("client_config")
+        if not client_config:
+            return None
+
+        from digitalkin.services.communication.grpc_communication import GrpcCommunication
+
+        self._communication_cache = GrpcCommunication("", "", "", client_config)
+        return self._communication_cache
 
     def _cache_setup(self, setup_id: str, version_data: SetupVersionData) -> None:
         """Cache setup version data, evicting oldest entry if at capacity."""
@@ -282,7 +312,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
 
         logger.debug("Updated setup data", extra={"job_id": job_id, "setup_data": updated_setup_data})
 
-        # Update cache
+        # Update cache + invalidate tool cache (setup changed)
         self._cache_setup(
             setup_version.setup_id,
             SetupVersionData.model_construct(
@@ -291,6 +321,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
                 content=updated_setup_data,
             ),
         )
+        self._tool_cache_by_setup.pop(setup_version.setup_id, None)
         setup_version.content = json_format.ParseDict(  # type: ignore[misc]  # proto __slots__ not fully typed
             updated_setup_data,
             struct_pb2.Struct(),
@@ -478,6 +509,15 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             str(k): str(v) for k, v in cast("list[tuple[str, str]]", context.invocation_metadata() or ())
         }
 
+        # Resolve tool cache (shared across requests with same setup_id)
+        tool_cache = self._tool_cache_by_setup.get(setup_version.setup_id)
+        if tool_cache is None and isinstance(setup_data, SetupModel):
+            tool_cache = await setup_data.build_tool_cache(self._get_registry(), self._get_communication())
+            if len(self._tool_cache_by_setup) >= self._setup_cache_max:
+                oldest_key = next(iter(self._tool_cache_by_setup))
+                del self._tool_cache_by_setup[oldest_key]
+            self._tool_cache_by_setup[setup_version.setup_id] = tool_cache
+
         # create a task to run the module in background
         logger.debug(
             "debug:StartModule creating job mission_id=%s setup_id=%s setup_version_id=%s",
@@ -486,6 +526,8 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             setup_version.id,
         )
         try:
+            # Use Gateway's task_id as job_id if provided (aligns all IDs)
+            external_job_id = request_metadata.get("x-task-id")
             job_id = await self.job_manager.create_module_instance_job(
                 input_data,
                 setup_data,
@@ -493,6 +535,8 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
                 setup_id=setup_version.setup_id,
                 setup_version_id=setup_version.id,
                 request_metadata=request_metadata,
+                job_id=external_job_id,
+                tool_cache=tool_cache,
             )
         except ConnectionError as e:
             logger.error(

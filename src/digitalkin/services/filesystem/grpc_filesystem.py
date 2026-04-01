@@ -122,8 +122,8 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper, GrpcErrorHandlerMixi
         """
         super().__init__(mission_id, setup_id, setup_version_id, config)
         self.service_name = "FilesystemService"
-        channel = self._init_channel(client_config)
-        self.stub = filesystem_service_pb2_grpc.FilesystemServiceStub(channel)
+        self._init_channel(client_config)
+        self.stub = self._get_or_create_stub(filesystem_service_pb2_grpc.FilesystemServiceStub)
         logger.debug("Channel client 'Filesystem' initialized successfully")
 
     async def upload_files(

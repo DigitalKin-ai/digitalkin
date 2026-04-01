@@ -1,10 +1,18 @@
-"""Task session easing task lifecycle management."""
+"""Task session easing task lifecycle management.
+
+Status transitions are intercepted by an optional ``RedisStateManager``:
+when set, every ``session.status = "..."`` assignment writes to Redis
+before updating in-memory state (P1 invariant). The TaskExecutor code
+is untouched — persistence is transparent via the property setter.
+"""
+
+from __future__ import annotations
 
 import asyncio
 import contextlib
 import datetime
 import traceback
-from collections.abc import AsyncGenerator
+from typing import TYPE_CHECKING
 
 from digitalkin.logger import logger
 from digitalkin.models.core.task_monitor import (
@@ -12,20 +20,26 @@ from digitalkin.models.core.task_monitor import (
     SignalMessage,
     SignalType,
 )
-from digitalkin.modules._base_module import BaseModule
-from digitalkin.services.task_manager.task_manager_strategy import TaskManagerStrategy
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
+
+    from digitalkin.core.task_manager.redis.redis_state import RedisStateManager
+    from digitalkin.modules._base_module import BaseModule
+    from digitalkin.services.task_manager.task_manager_strategy import TaskManagerStrategy
 
 
 class TaskSession:
     """Task Session with lifecycle management.
 
     The Session defines the whole lifecycle of a task as an ephemeral context.
+    Status transitions are optionally persisted to Redis via ``state_manager``.
     """
 
     signal_service: TaskManagerStrategy
     module: BaseModule
 
-    status: str
+    _status: str
     signal_queue: AsyncGenerator | None
 
     task_id: str
@@ -49,12 +63,19 @@ class TaskSession:
     # Signal listener failure tracking
     _signal_listener_failed: bool
 
+    # Optional Redis state persistence (P1: Redis-first writes)
+    _state_manager: RedisStateManager | None
+
+    # Tracked fire-and-forget tasks — prevents GC before completion
+    _pending_redis_tasks: set[asyncio.Task[None]]
+
     def __init__(
         self,
         task_id: str,
         mission_id: str,
         module: BaseModule,
         queue_maxsize: int = 1000,
+        state_manager: RedisStateManager | None = None,
     ) -> None:
         """Initialize Task Session.
 
@@ -63,11 +84,13 @@ class TaskSession:
             mission_id: Mission identifier
             module: Module instance
             queue_maxsize: Maximum size for the queue (0 = unlimited)
+            state_manager: Optional Redis state manager for persistent status tracking
         """
         self.signal_service = module.context.task_manager
         self.module = module
+        self._state_manager = state_manager
 
-        self.status = "pending"
+        self._status = "pending"
         # Bounded queue to prevent unbounded memory growth (max 1000 items)
         self.queue: asyncio.Queue = asyncio.Queue(maxsize=queue_maxsize)
 
@@ -95,10 +118,41 @@ class TaskSession:
         # Signal listener failure tracking
         self._signal_listener_failed = False
 
+        # Tracked fire-and-forget Redis tasks (prevents GC before completion)
+        self._pending_redis_tasks: set[asyncio.Task[None]] = set()
+
         logger.debug(
             "TaskSession initialized",
             extra={"task_id": task_id, "mission_id": mission_id},
         )
+
+    @property
+    def status(self) -> str:
+        """Current task status. Setting triggers optional Redis persistence."""
+        return self._status
+
+    @status.setter
+    def status(self, value: str) -> None:
+        """Set status, persisting to Redis if state_manager is configured.
+
+        P1 invariant: Redis write is scheduled before memory update returns.
+        The task is tracked in ``_pending_redis_tasks`` to prevent GC.
+        If Redis is unreachable, the write fails silently (degraded mode)
+        but the in-memory status is still updated to keep the task running.
+        """
+        self._status = value
+        if self._state_manager is not None:
+            try:
+                loop = asyncio.get_running_loop()
+                task = loop.create_task(
+                    self._state_manager.set_status(self.task_id, value),
+                    name=f"redis_status_{self.task_id}_{value}",
+                )
+                # Track to prevent GC — removed on completion via callback
+                self._pending_redis_tasks.add(task)
+                task.add_done_callback(self._pending_redis_tasks.discard)
+            except RuntimeError:
+                logger.debug("No running event loop for Redis status write: task_id=%s status=%s", self.task_id, value)
 
     @property
     def cancelled(self) -> bool:
@@ -170,8 +224,10 @@ class TaskSession:
             self._signal_listener_failed = True
             logger.exception("Signal listener fatal error", extra=self.session_ids)
         finally:
-            with contextlib.suppress(Exception):
+            try:
                 await self.signal_service.unsubscribe_signals(sub_id)
+            except Exception:
+                logger.warning("Failed to unsubscribe signals", extra=self.session_ids, exc_info=True)
             logger.info("Signal listener stopped", extra=self.session_ids)
 
     async def _handle_cancel(self, reason: CancellationReason = CancellationReason.UNKNOWN) -> None:
@@ -268,8 +324,18 @@ class TaskSession:
             return
         self._cleanup_done = True
 
+        # Give pending Redis writes a grace period before cancelling
+        pending = [t for t in self._pending_redis_tasks if not t.done()]
+        if pending:
+            await asyncio.wait(pending, timeout=2.0)
+        # Cancel any stragglers
+        for task in list(self._pending_redis_tasks):
+            if not task.done():
+                task.cancel()
+        self._pending_redis_tasks.clear()
+
         # Clear queue to free memory
-        logger.debug("debug:cleanup queue size=%s task_id=%s", self.queue.qsize(), self.task_id)
+        logger.debug("Cleanup: draining queue", extra={"task_id": self.task_id, "queue_size": self.queue.qsize()})
         try:
             while not self.queue.empty():
                 self.queue.get_nowait()

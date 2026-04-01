@@ -17,7 +17,6 @@ class JobManagerMode(Enum):
     """Job manager mode."""
 
     SINGLE = "single"
-    TASKIQ = "taskiq"
 
     def __str__(self) -> str:
         """Get the string representation of the job manager mode.
@@ -33,16 +32,8 @@ class JobManagerMode(Enum):
         Returns:
             type: The job manager class.
         """
-        match self:
-            case JobManagerMode.SINGLE:
-                from digitalkin.core.job_manager.single_job_manager import (
-                    SingleJobManager,
-                )  # Lazy import to avoid circular dependency
+        from digitalkin.core.job_manager.single_job_manager import (
+            SingleJobManager,
+        )
 
-                return SingleJobManager
-            case JobManagerMode.TASKIQ:
-                from digitalkin.core.job_manager.taskiq_job_manager import (
-                    TaskiqJobManager,
-                )  # Lazy import to avoid circular dependency
-
-                return TaskiqJobManager
+        return SingleJobManager

@@ -20,6 +20,17 @@ class DefaultRegistry(RegistryStrategy):
         super().__init__(*args, **kwargs)
         self._modules: dict[str, ModuleInfo] = {}
 
+    async def wait_for_ready(self, timeout: float = 1.0) -> bool:  # noqa: ARG002, PLR6301
+        """Local registry is always ready (in-memory store).
+
+        Args:
+            timeout: Ignored for local registry.
+
+        Returns:
+            Always True — no network dependency.
+        """
+        return True
+
     async def discover_by_id(self, module_id: str) -> ModuleInfo:
         """Get module info by ID.
 
