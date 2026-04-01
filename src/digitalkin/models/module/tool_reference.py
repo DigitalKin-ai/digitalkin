@@ -104,7 +104,7 @@ class _ToolReferenceInputSchema:
         min_tools: int = 0,
     ) -> None:
         self.setup_ids = setup_ids or []
-        self.module_ids = module_ids
+        self.module_ids = module_ids or []
         self.tag_ids = tag_ids or []
         self.max_tools = max_tools
         self.min_tools = min_tools
@@ -146,7 +146,7 @@ class _ToolReferenceInputSchema:
             "tagIds": self.tag_ids or [],
             "categories": self.categories or [],
             "moduleIds": self.module_ids or [],
-            "showModules": self.module_ids is not None,
+            "showModules": self.setup_ids == [],
         }
         return json_schema
 
@@ -221,7 +221,7 @@ def tool_reference_input(
 
     schema = _ToolReferenceInputSchema(
         setup_ids=setup_ids or [],
-        module_ids=module_ids,
+        module_ids=module_ids or [],
         tag_ids=tag_ids or [],
         categories=categories or [],
         max_tools=max_tools,
