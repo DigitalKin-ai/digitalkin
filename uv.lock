@@ -10,6 +10,18 @@ resolution-markers = [
 ]
 
 [[package]]
+name = "ag-ui-protocol"
+version = "0.1.14"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pydantic" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/53/ee/319d189343e1dc67b1109c950a0d1091fe32498104b5917fbbd806ff58dd/ag_ui_protocol-0.1.14.tar.gz", hash = "sha256:d8e86b308f86a6cf6a5e18ca7154d7642895de2fe94cd2cece57723cdbba6406", size = 5687, upload-time = "2026-03-18T00:43:13.358Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/0c/99/eaa83816924791fc25ebb44ac7987196b687a3fdf597b1e7a62c69306a8d/ag_ui_protocol-0.1.14-py3-none-any.whl", hash = "sha256:ec072e6a45e0d45b8714e6d54919cc9bde3d097fdc36f7e82953b2f21f1cdbef", size = 8069, upload-time = "2026-03-18T00:43:12.1Z" },
+]
+
+[[package]]
 name = "agentic-mesh-protocol"
 version = "0.2.3"
 source = { registry = "https://pypi.org/simple" }
@@ -838,9 +850,10 @@ wheels = [
 
 [[package]]
 name = "digitalkin"
-version = "0.3.5.dev0"
+version = "0.3.5.dev13"
 source = { editable = "." }
 dependencies = [
+    { name = "ag-ui-protocol" },
     { name = "agentic-mesh-protocol" },
     { name = "anyio" },
     { name = "grpcio-health-checking" },
@@ -918,6 +931,7 @@ tests = [
 
 [package.metadata]
 requires-dist = [
+    { name = "ag-ui-protocol", specifier = ">=0.1.14" },
     { name = "agentic-mesh-protocol", specifier = "==0.2.3" },
     { name = "anyio", specifier = "==4.13.0" },
     { name = "asyncio-inspector", marker = "extra == 'profiling'", specifier = "==0.1.0" },

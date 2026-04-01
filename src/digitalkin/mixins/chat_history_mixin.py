@@ -1,11 +1,12 @@
 """Context mixins providing ergonomic access to service strategies.
 
-This module provides mixins that wrap service strategy calls with cleaner APIs,
-following Django/FastAPI patterns where context is passed explicitly to each method.
+.. deprecated::
+    Use :class:`digitalkin.mixins.agui_mixin.AgUiMixin` instead.
 """
 
 import asyncio
 import os
+import warnings
 from typing import Any, Generic
 
 from digitalkin.logger import logger
@@ -20,13 +21,18 @@ from digitalkin.models.services.storage import BaseMessage, ChatHistory, Role
 class ChatHistoryMixin(UserMessageMixin, StorageMixin, LoggerMixin, Generic[InputModelT, OutputModelT]):
     """Mixin providing chat history operations through storage strategy.
 
-    Chat histories are cached in memory after first load to avoid redundant
-    gRPC reads.  Known-persisted keys use update_storage (1 call) instead of
-    upsert_storage (2 calls).
-
-    Writes are batched: messages accumulate in the cache and are flushed when
-    the batch threshold is reached or flush_chat_history() is called.
+    .. deprecated::
+        Use :class:`digitalkin.mixins.agui_mixin.AgUiMixin` instead.
     """
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        """Deprecated warning."""
+        super().__init_subclass__(**kwargs)
+        warnings.warn(
+            f"{cls.__name__} inherits from ChatHistoryMixin which is deprecated. Use AgUiMixin.send_message instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
 
     CHAT_HISTORY_COLLECTION = "chat_history"
     CHAT_HISTORY_RECORD_ID = "full_chat_history"
