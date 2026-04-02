@@ -78,7 +78,7 @@ class AgUiMixin:
         self._text_started: bool = False
         self._reasoning_started: bool = False
 
-    async def send_message(  # noqa: C901
+    async def agui_send_message(  # noqa: C901
         self,
         context: ModuleContext,
         event: BaseAgentRunEvent,
