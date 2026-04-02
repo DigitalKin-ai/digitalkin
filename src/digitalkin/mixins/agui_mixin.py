@@ -27,23 +27,7 @@ from digitalkin.models.events import (
 )
 
 if TYPE_CHECKING:
-    from digitalkin.models.module.ag_ui import (
-        AgUiReasoningEndOutput,
-        AgUiReasoningMessageContentOutput,
-        AgUiReasoningMessageEndOutput,
-        AgUiReasoningMessageStartOutput,
-        AgUiReasoningStartOutput,
-        AgUiRunErrorOutput,
-        AgUiRunFinishedOutput,
-        AgUiRunStartedOutput,
-        AgUiTextMessageContentOutput,
-        AgUiTextMessageEndOutput,
-        AgUiTextMessageStartOutput,
-        AgUiToolCallArgsOutput,
-        AgUiToolCallEndOutput,
-        AgUiToolCallResultOutput,
-        AgUiToolCallStartOutput,
-    )
+    from digitalkin.models.module.ag_ui import AgUiEventOutput
     from digitalkin.models.module.module_context import ModuleContext
 
 
@@ -77,6 +61,15 @@ class AgUiMixin:
         # Open-sequence tracking
         self._text_started: bool = False
         self._reasoning_started: bool = False
+
+    async def _send_agui(  # noqa: PLR6301
+        self,
+        context: ModuleContext,
+        output: AgUiEventOutput,
+    ) -> None:
+        from digitalkin.models.module.ag_ui import AgUiOutput  # pylint: disable=C0415
+
+        await context.callbacks.send_message(AgUiOutput(root=output))
 
     async def agui_send_message(  # noqa: C901
         self,
@@ -165,7 +158,7 @@ class AgUiMixin:
                 run_id=self._run_id,
             )
         )
-        await context.callbacks.send_message(output)
+        await self._send_agui(context, output)
 
     async def _handle_run_content(
         self,
@@ -197,7 +190,7 @@ class AgUiMixin:
                     role="assistant",
                 )
             )
-            await context.callbacks.send_message(start_output)
+            await self._send_agui(context, start_output)
             self._text_started = True
 
         # Emit content delta
@@ -207,7 +200,7 @@ class AgUiMixin:
                 delta=content,
             )
         )
-        await context.callbacks.send_message(content_output)
+        await self._send_agui(context, content_output)
 
     async def _handle_run_completed(
         self,
@@ -228,7 +221,7 @@ class AgUiMixin:
             end_output = AgUiTextMessageEndOutput(
                 event=AgUiTextMessageEndEvent(message_id=self._message_id),
             )
-            await context.callbacks.send_message(end_output)
+            await self._send_agui(context, end_output)
             self._text_started = False
 
         # Close any open reasoning sequence
@@ -242,9 +235,9 @@ class AgUiMixin:
                 run_id=run_id,
             )
         )
-        await context.callbacks.send_message(finished_output)
+        await self._send_agui(context, finished_output)
 
-    async def _handle_run_error(  # noqa: PLR6301
+    async def _handle_run_error(
         self,
         context: ModuleContext,
         event: RunErrorEvent,
@@ -261,7 +254,7 @@ class AgUiMixin:
                 code=event.error_type,
             )
         )
-        await context.callbacks.send_message(output)
+        await self._send_agui(context, output)
 
     async def _handle_tool_call_started(
         self,
@@ -293,7 +286,7 @@ class AgUiMixin:
             end_output = AgUiTextMessageEndOutput(
                 event=AgUiTextMessageEndEvent(message_id=self._message_id),
             )
-            await context.callbacks.send_message(end_output)
+            await self._send_agui(context, end_output)
             self._text_started = False
 
         tool_call_id = tool.tool_call_id or str(uuid.uuid4())
@@ -306,7 +299,7 @@ class AgUiMixin:
                 parent_message_id=self._message_id,
             )
         )
-        await context.callbacks.send_message(start_output)
+        await self._send_agui(context, start_output)
 
         # Emit tool args if available
         if tool.tool_args:
@@ -317,9 +310,9 @@ class AgUiMixin:
                     delta=args_str,
                 )
             )
-            await context.callbacks.send_message(args_output)
+            await self._send_agui(context, args_output)
 
-    async def _handle_tool_call_completed(  # noqa: PLR6301
+    async def _handle_tool_call_completed(
         self,
         context: ModuleContext,
         event: ToolCallCompletedEvent,
@@ -341,7 +334,7 @@ class AgUiMixin:
 
         # Emit tool call end
         end_output = AgUiToolCallEndOutput(event=AgUiToolCallEndEvent(tool_call_id=tool_call_id))
-        await context.callbacks.send_message(end_output)
+        await self._send_agui(context, end_output)
 
         # Emit result if available
         result_content = tool.result or str(event.content or "")
@@ -355,9 +348,9 @@ class AgUiMixin:
                     role="tool",
                 )
             )
-            await context.callbacks.send_message(result_output)
+            await self._send_agui(context, result_output)
 
-    async def _handle_tool_call_error(  # noqa: PLR6301
+    async def _handle_tool_call_error(
         self,
         context: ModuleContext,
         event: ToolCallErrorEvent,
@@ -373,7 +366,7 @@ class AgUiMixin:
 
         tool_call_id = tool.tool_call_id or str(uuid.uuid4())
         output = AgUiToolCallEndOutput(event=AgUiToolCallEndEvent(tool_call_id=tool_call_id))
-        await context.callbacks.send_message(output)
+        await self._send_agui(context, output)
 
     async def _handle_reasoning_started(
         self,
@@ -402,13 +395,13 @@ class AgUiMixin:
         start_output = AgUiReasoningStartOutput(
             event=AgUiReasoningStartEvent(message_id=self._reasoning_id),
         )
-        await context.callbacks.send_message(start_output)
+        await self._send_agui(context, start_output)
 
         # Emit ReasoningMessageStart
         message_start_output = AgUiReasoningMessageStartOutput(
             event=AgUiReasoningMessageStartEvent(message_id=self._reasoning_id, role="reasoning")
         )
-        await context.callbacks.send_message(message_start_output)
+        await self._send_agui(context, message_start_output)
 
     async def _handle_reasoning_delta(
         self,
@@ -439,7 +432,7 @@ class AgUiMixin:
         content_output = AgUiReasoningMessageContentOutput(
             event=AgUiReasoningMessageContentEvent(message_id=self._reasoning_id, delta=delta)
         )
-        await context.callbacks.send_message(content_output)
+        await self._send_agui(context, content_output)
 
     async def _handle_reasoning_step(
         self,
@@ -470,7 +463,7 @@ class AgUiMixin:
         content_output = AgUiReasoningMessageContentOutput(
             event=AgUiReasoningMessageContentEvent(message_id=self._reasoning_id, delta=delta)
         )
-        await context.callbacks.send_message(content_output)
+        await self._send_agui(context, content_output)
 
     async def _handle_reasoning_completed(
         self,
@@ -501,13 +494,13 @@ class AgUiMixin:
         message_end_output = AgUiReasoningMessageEndOutput(
             event=AgUiReasoningMessageEndEvent(message_id=self._reasoning_id)
         )
-        await context.callbacks.send_message(message_end_output)
+        await self._send_agui(context, message_end_output)
 
         # Emit ReasoningEnd
         end_output = AgUiReasoningEndOutput(
             event=AgUiReasoningEndEvent(message_id=self._reasoning_id),
         )
-        await context.callbacks.send_message(end_output)
+        await self._send_agui(context, end_output)
 
         self._reasoning_started = False
         self._reasoning_id = str(uuid.uuid4())
