@@ -41,7 +41,7 @@ from ag_ui.core.events import (
 from pydantic import ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
-from digitalkin.models.module import DataModel, DataTrigger
+from digitalkin.models.module.module_types import DataModel, DataTrigger
 
 # ── AG-UI base class with camelCase aliases ──────────────────────────────────
 

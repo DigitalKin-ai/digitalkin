@@ -25,25 +25,25 @@ from digitalkin.models.events import (
     ToolCallErrorEvent,
     ToolCallStartedEvent,
 )
-from digitalkin.models.module.ag_ui import (
-    AgUiReasoningEndOutput,
-    AgUiReasoningMessageContentOutput,
-    AgUiReasoningMessageEndOutput,
-    AgUiReasoningMessageStartOutput,
-    AgUiReasoningStartOutput,
-    AgUiRunErrorOutput,
-    AgUiRunFinishedOutput,
-    AgUiRunStartedOutput,
-    AgUiTextMessageContentOutput,
-    AgUiTextMessageEndOutput,
-    AgUiTextMessageStartOutput,
-    AgUiToolCallArgsOutput,
-    AgUiToolCallEndOutput,
-    AgUiToolCallResultOutput,
-    AgUiToolCallStartOutput,
-)
 
 if TYPE_CHECKING:
+    from digitalkin.models.module.ag_ui import (
+        AgUiReasoningEndOutput,
+        AgUiReasoningMessageContentOutput,
+        AgUiReasoningMessageEndOutput,
+        AgUiReasoningMessageStartOutput,
+        AgUiReasoningStartOutput,
+        AgUiRunErrorOutput,
+        AgUiRunFinishedOutput,
+        AgUiRunStartedOutput,
+        AgUiTextMessageContentOutput,
+        AgUiTextMessageEndOutput,
+        AgUiTextMessageStartOutput,
+        AgUiToolCallArgsOutput,
+        AgUiToolCallEndOutput,
+        AgUiToolCallResultOutput,
+        AgUiToolCallStartOutput,
+    )
     from digitalkin.models.module.module_context import ModuleContext
 
 
@@ -153,6 +153,8 @@ class AgUiMixin:
         """Handle run started event - emit AG-UI RunStarted."""
         from ag_ui.core.events import RunStartedEvent as AgUiRunStartedEvent  # pylint: disable=C0415
 
+        from digitalkin.models.module.ag_ui import AgUiRunStartedOutput  # pylint: disable=C0415
+
         self._run_id = event.run_id or str(uuid.uuid4())
         if event.thread_id:
             self._thread_id = event.thread_id
@@ -176,6 +178,11 @@ class AgUiMixin:
         )
         from ag_ui.core.events import (  # pylint: disable=C0415
             TextMessageStartEvent as AgUiTextMessageStartEvent,
+        )
+
+        from digitalkin.models.module.ag_ui import (  # pylint: disable=C0415
+            AgUiTextMessageContentOutput,
+            AgUiTextMessageStartOutput,
         )
 
         content = event.content
@@ -211,6 +218,11 @@ class AgUiMixin:
         from ag_ui.core.events import RunFinishedEvent as AgUiRunFinishedEvent  # pylint: disable=C0415
         from ag_ui.core.events import TextMessageEndEvent as AgUiTextMessageEndEvent  # pylint: disable=C0415
 
+        from digitalkin.models.module.ag_ui import (  # pylint: disable=C0415
+            AgUiRunFinishedOutput,
+            AgUiTextMessageEndOutput,
+        )
+
         # Close any open text message
         if self._text_started:
             end_output = AgUiTextMessageEndOutput(
@@ -240,6 +252,8 @@ class AgUiMixin:
         """Handle run error event - emit AG-UI RunError."""
         from ag_ui.core.events import RunErrorEvent as AgUiRunErrorEvent  # pylint: disable=C0415
 
+        from digitalkin.models.module.ag_ui import AgUiRunErrorOutput  # pylint: disable=C0415
+
         error_msg = event.content or "Agent run failed"
         output = AgUiRunErrorOutput(
             event=AgUiRunErrorEvent(
@@ -259,6 +273,12 @@ class AgUiMixin:
 
         from ag_ui.core.events import ToolCallArgsEvent as AgUiToolCallArgsEvent  # pylint: disable=C0415
         from ag_ui.core.events import ToolCallStartEvent as AgUiToolCallStartEvent  # pylint: disable=C0415
+
+        from digitalkin.models.module.ag_ui import (  # pylint: disable=C0415
+            AgUiTextMessageEndOutput,
+            AgUiToolCallArgsOutput,
+            AgUiToolCallStartOutput,
+        )
 
         tool = event.tool
         if not tool or not tool.tool_name:
@@ -308,6 +328,11 @@ class AgUiMixin:
         from ag_ui.core.events import ToolCallEndEvent as AgUiToolCallEndEvent  # pylint: disable=C0415
         from ag_ui.core.events import ToolCallResultEvent as AgUiToolCallResultEvent  # pylint: disable=C0415
 
+        from digitalkin.models.module.ag_ui import (  # pylint: disable=C0415
+            AgUiToolCallEndOutput,
+            AgUiToolCallResultOutput,
+        )
+
         tool = event.tool
         if not tool:
             return
@@ -340,6 +365,8 @@ class AgUiMixin:
         """Handle tool call error event - emit AG-UI ToolCallEnd."""
         from ag_ui.core.events import ToolCallEndEvent as AgUiToolCallEndEvent  # pylint: disable=C0415
 
+        from digitalkin.models.module.ag_ui import AgUiToolCallEndOutput  # pylint: disable=C0415
+
         tool = event.tool
         if not tool:
             return
@@ -357,8 +384,13 @@ class AgUiMixin:
         from ag_ui.core.events import (  # pylint: disable=import-outside-toplevel
             ReasoningMessageStartEvent as AgUiReasoningMessageStartEvent,
         )
-        from ag_ui.core.events import (
-            ReasoningStartEvent as AgUiReasoningStartEvent,  # pylint: disable=import-outside-toplevel
+        from ag_ui.core.events import (  # pylint: disable=import-outside-toplevel
+            ReasoningStartEvent as AgUiReasoningStartEvent,
+        )
+
+        from digitalkin.models.module.ag_ui import (  # pylint: disable=C0415
+            AgUiReasoningMessageStartOutput,
+            AgUiReasoningStartOutput,
         )
 
         if self._reasoning_started:
@@ -388,6 +420,8 @@ class AgUiMixin:
             ReasoningMessageContentEvent as AgUiReasoningMessageContentEvent,
         )
 
+        from digitalkin.models.module.ag_ui import AgUiReasoningMessageContentOutput  # pylint: disable=C0415
+
         delta = event.delta
         if not delta:
             return
@@ -416,6 +450,8 @@ class AgUiMixin:
         from ag_ui.core.events import (  # pylint: disable=import-outside-toplevel
             ReasoningMessageContentEvent as AgUiReasoningMessageContentEvent,
         )
+
+        from digitalkin.models.module.ag_ui import AgUiReasoningMessageContentOutput  # pylint: disable=C0415
 
         delta = event.delta
         if not delta:
@@ -453,6 +489,11 @@ class AgUiMixin:
             ReasoningMessageEndEvent as AgUiReasoningMessageEndEvent,
         )
 
+        from digitalkin.models.module.ag_ui import (  # pylint: disable=C0415
+            AgUiReasoningEndOutput,
+            AgUiReasoningMessageEndOutput,
+        )
+
         if not self._reasoning_started:
             return
 
@@ -463,7 +504,9 @@ class AgUiMixin:
         await context.callbacks.send_message(message_end_output)
 
         # Emit ReasoningEnd
-        end_output = AgUiReasoningEndOutput(event=AgUiReasoningEndEvent(message_id=self._reasoning_id))
+        end_output = AgUiReasoningEndOutput(
+            event=AgUiReasoningEndEvent(message_id=self._reasoning_id),
+        )
         await context.callbacks.send_message(end_output)
 
         self._reasoning_started = False
