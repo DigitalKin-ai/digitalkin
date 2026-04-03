@@ -73,7 +73,7 @@ class AgnoStreamAdapter:
             raise ImportError(message) from exc
 
         event_type = agno_event.event
-        event_types = agno_event.events
+        event_types = getattr(agno_event, "events", None)
 
         logger.info("[DK STREAM-DEBUG => agno_adapter] Converting Agno event type: %s", event_type)
         logger.info("[DK STREAM-DEBUG => agno_adapter event_types] Converting Agno event types: %s", event_types)
