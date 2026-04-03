@@ -169,6 +169,20 @@ class AgnoStreamAdapter:
         # ── Tool Call Events ─────────────────────────────────────────────
 
         if event_type == RunEvent.tool_call_started:
+            events: list[BaseAgentRunEvent] = []
+
+            # Auto-close reasoning before tool calls
+            if self._reasoning_active:
+                logger.info("[DK STREAM-DEBUG => agno_adapter] Reasoning auto-completed (tool call started)")
+                events.append(
+                    ReasoningCompletedEvent(
+                        event=AgentRunEvent.REASONING_COMPLETED,
+                        timestamp=timestamp,
+                        metadata=None,
+                    )
+                )
+                self._reasoning_active = False
+
             tool = getattr(agno_event, "tool", None)
             tool_info = None
             if tool:
@@ -178,14 +192,15 @@ class AgnoStreamAdapter:
                     tool_args=getattr(tool, "tool_args", None),
                     result=None,
                 )
-            return [
+            events.append(
                 ToolCallStartedEvent(
                     event=AgentRunEvent.TOOL_CALL_STARTED,
                     tool=tool_info,
                     timestamp=timestamp,
                     metadata=None,
                 )
-            ]
+            )
+            return events
 
         if event_type == RunEvent.tool_call_completed:
             tool = getattr(agno_event, "tool", None)
