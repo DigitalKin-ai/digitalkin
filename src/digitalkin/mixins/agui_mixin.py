@@ -93,7 +93,7 @@ class AgUiMixin:
         """
         event_type = event.event
 
-        context.callbacks.logger.error(
+        context.callbacks.logger.debug(
             "Processing event: %s, content: %s",
             event_type,
             event.model_dump_json(indent=2),

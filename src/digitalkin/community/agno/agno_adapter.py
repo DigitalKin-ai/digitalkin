@@ -29,7 +29,7 @@ from digitalkin.models.events import (
 logger = logging.getLogger(__name__)
 
 
-def to_digitalkin_event(agno_event: Any) -> BaseAgentRunEvent:  # noqa: PLR0911, C901, PLR0912
+def to_digitalkin_event(agno_event: Any) -> BaseAgentRunEvent | None:  # noqa: PLR0911, C901, PLR0912
     """Convert an Agno event to a DigitalKin framework-agnostic event.
 
     Args:
@@ -180,9 +180,6 @@ Install it with: pip install agno"
             metadata=None,
         )
 
-    # Unknown event - create a generic base event
-    return BaseAgentRunEvent(
-        event=AgentRunEvent.RUN_CONTENT,  # Default fallback
-        timestamp=timestamp,
-        metadata={"original_event_type": str(event_type)},
-    )
+    # Unknown event - skip (internal framework events with no streamable content)
+    logger.debug("Skipping unhandled Agno event type: %s", event_type)
+    return None
