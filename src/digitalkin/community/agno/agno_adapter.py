@@ -6,6 +6,7 @@ allowing the core DigitalKin SDK to remain independent of Agno.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from digitalkin.models.events import (
@@ -24,6 +25,8 @@ from digitalkin.models.events import (
     ToolCallStartedEvent,
     ToolInfo,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def to_digitalkin_event(agno_event: Any) -> BaseAgentRunEvent:  # noqa: PLR0911, C901, PLR0912
@@ -47,6 +50,8 @@ Install it with: pip install agno"
         raise ImportError(message) from exc
 
     event_type = agno_event.event
+
+    logger.info("[DK STREAM-DEBUG => agno_adapter] Converting Agno event type: %s", event_type)
 
     # Import timestamp if available
     timestamp = getattr(agno_event, "timestamp", None)
