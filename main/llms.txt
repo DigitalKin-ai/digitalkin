@@ -8,5 +8,4 @@
 
 ## API
 
-- [Api](https://digitalkin.com/main/api/api/index.md)
 
