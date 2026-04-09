@@ -16,10 +16,9 @@ from agentic_mesh_protocol.filesystem.v1 import (
 )
 from google.protobuf import struct_pb2
 from grpc.framework.foundation import logging_pool
-from mock_filesystem_servicer import MockFilesystemServicer
-from tests.fixtures.grpc_fixtures import FakeContext
 
-from digitalkin.models.grpc_servers.models import ClientConfig, SecurityMode, ServerMode
+from digitalkin.models.grpc_servers.models import ClientConfig
+from digitalkin.models.settings.utils.channel import ControlFlow, SecurityMode
 from digitalkin.services.filesystem.filesystem_strategy import (
     FileFilter,
     FilesystemRecord,
@@ -27,6 +26,8 @@ from digitalkin.services.filesystem.filesystem_strategy import (
     UploadFileData,
 )
 from digitalkin.services.filesystem.grpc_filesystem import GrpcFilesystem
+from mock_filesystem_servicer import MockFilesystemServicer
+from tests.fixtures.grpc_fixtures import FakeContext
 
 service_instance = MockFilesystemServicer()
 service_name = filesystem_service_pb2.DESCRIPTOR.services_by_name["FilesystemService"]
@@ -77,7 +78,7 @@ def client(test_channel: grpc_testing.Channel) -> GrpcFilesystem:
     dummy_config = ClientConfig(
         host="[::]",
         port=50151,
-        mode=ServerMode.ASYNC,
+        mode=ControlFlow.ASYNC,
         security=SecurityMode.INSECURE,
         credentials=None,
     )

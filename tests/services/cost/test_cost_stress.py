@@ -22,15 +22,16 @@ import grpc
 import grpc_testing
 import pytest
 from agentic_mesh_protocol.cost.v1 import cost_service_pb2, cost_service_pb2_grpc
-from tests.fixtures.grpc_fixtures import AsyncStubWrapper, FakeContext
-from tests.services.cost.mock_cost_servicer import MockCostServicer
 
-from digitalkin.models.grpc_servers.models import ClientConfig, SecurityMode, ServerMode
+from digitalkin.models.grpc_servers.models import ClientConfig
 from digitalkin.models.services.cost import AmountLimit, CostTypeEnum, QuantityLimit
+from digitalkin.models.settings.utils.channel import ControlFlow, SecurityMode
 from digitalkin.services.cost.cost_strategy import CostConfig, CostServiceError
 from digitalkin.services.cost.default_cost import DefaultCost
 from digitalkin.services.cost.grpc_cost import GrpcCost
+from tests.fixtures.grpc_fixtures import AsyncStubWrapper, FakeContext
 from tests.fixtures.stress_reporter import StressReporter
+from tests.services.cost.mock_cost_servicer import MockCostServicer
 
 # Set timeout for stress tests
 pytestmark = pytest.mark.timeout(60)
@@ -118,7 +119,7 @@ def grpc_client(
     dummy_config = ClientConfig(
         host="[::]",
         port=50051,
-        mode=ServerMode.ASYNC,
+        mode=ControlFlow.ASYNC,
         security=SecurityMode.INSECURE,
         credentials=None,
     )
