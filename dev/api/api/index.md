@@ -5290,7 +5290,6 @@ Classes:
 ```python
 ModuleServer(
     module_class: type[BaseModule],
-    server_config: ModuleServerConfig,
     client_config: ClientConfig | None = None,
     interceptors: Sequence[Any] | None = None,
 )
@@ -5325,10 +5324,6 @@ Parameters:
 - ##### **`module_class`**
 
   (`type[BaseModule]`) – The module instance to be served.
-
-- ##### **`server_config`**
-
-  (`ModuleServerConfig`) – Server configuration.
 
 - ##### **`client_config`**
 
@@ -5971,6 +5966,7 @@ Methods:
 - **`exec_grpc_query`** – Execute a gRPC query with from the query's rpc endpoint name.
 - **`poll_grpc`** – Execute a single polling RPC. Returns None on DEADLINE_EXCEEDED (expected empty poll).
 - **`release_cached_channel`** – Decrement refcount for a cache key and close channel when last ref is released.
+- **`wait_for_ready`** – Check if the gRPC channel can connect within timeout.
 
 ###### close
 
@@ -6022,7 +6018,7 @@ Parameters:
 
 - ###### **`timeout`**
 
-  (`float | None`, default: `None` ) – Optional per-call timeout in seconds (passed to gRPC stub call)
+  (`float | None`, default: `None` ) – Per-call timeout in seconds. Falls back to \_QUERY_DEFAULT_TIMEOUT (env DIGITALKIN_GRPC_QUERY_TIMEOUT, default 30s) when None.
 
 Returns:
 
@@ -6077,6 +6073,26 @@ Parameters:
 - ###### **`key`**
 
   (`str`) – Channel cache key to release.
+
+###### wait_for_ready
+
+```python
+wait_for_ready(timeout: float = 1.0) -> bool
+```
+
+Check if the gRPC channel can connect within timeout.
+
+Uses channel_ready() which resolves when the HTTP/2 connection is established and the server is accepting RPCs.
+
+Parameters:
+
+- ###### **`timeout`**
+
+  (`float`, default: `1.0` ) – Max seconds to wait for connectivity.
+
+Returns:
+
+- `bool` – True if channel reached READY state, False if timeout or no channel.
 
 #### grpc_error_handler
 
@@ -9707,6 +9723,7 @@ Modules:
 - **`grpc_servers`** – Base gRPC server and client models.
 - **`module`** – This module contains the models for the modules.
 - **`services`** – This module contains the models for the services.
+- **`settings`** – This package contain settings of sdk.
 
 Classes:
 
@@ -9880,13 +9897,7 @@ Classes:
 - **`ClientConfig`** – Base configuration for gRPC clients.
 - **`ClientCredentials`** – Model for client credentials in secure mode.
 - **`GrpcCompression`** – gRPC compression algorithm.
-- **`ModuleServerConfig`** – Configuration for Module gRPC server.
-- **`RegistryServerConfig`** – Configuration for Registry gRPC server.
 - **`RetryPolicy`** – gRPC retry policy configuration for resilient connections.
-- **`SecurityMode`** – Enum for server security mode.
-- **`ServerConfig`** – Base configuration for gRPC servers.
-- **`ServerCredentials`** – Model for server credentials in secure mode.
-- **`ServerMode`** – Enum for server operation mode.
 
 ##### ChannelConfig
 
@@ -9905,7 +9916,7 @@ Attributes:
 
 - **`host`** (`str`) – Host address
 - **`port`** (`int`) – Port to listen on
-- **`mode`** (`ServerMode`) – communication operation mode (sync/async)
+- **`mode`** (`ControlFlow`) – communication operation mode (sync/async)
 - **`security`** (`SecurityMode`) – Security mode (secure/insecure)
 - **`credentials`** (`SecurityMode`) – Client credentials for secure mode
 
@@ -9968,7 +9979,7 @@ Attributes:
 
 - **`host`** (`str`) – Host address to bind the client to
 - **`port`** (`int`) – Port to listen on
-- **`mode`** (`ServerMode`) – Client operation mode (sync/async)
+- **`mode`** (`ControlFlow`) – Client operation mode (sync/async)
 - **`security`** (`SecurityMode`) – Security mode (secure/insecure)
 - **`credentials`** (`ClientCredentials | None`) – Client credentials for secure mode
 - **`channel_options`** (`list[tuple[str, Any]]`) – Additional channel options
@@ -10134,190 +10145,6 @@ Returns:
 
 - `Compression` – The corresponding grpc.Compression value.
 
-##### ModuleServerConfig
-
-```
-              flowchart TD
-              digitalkin.models.grpc_servers.models.ModuleServerConfig[ModuleServerConfig]
-              digitalkin.models.grpc_servers.models.ServerConfig[ServerConfig]
-              digitalkin.models.grpc_servers.models.ChannelConfig[ChannelConfig]
-
-                              digitalkin.models.grpc_servers.models.ServerConfig --> digitalkin.models.grpc_servers.models.ModuleServerConfig
-                                digitalkin.models.grpc_servers.models.ChannelConfig --> digitalkin.models.grpc_servers.models.ServerConfig
-                
-
-
-
-              click digitalkin.models.grpc_servers.models.ModuleServerConfig href "" "digitalkin.models.grpc_servers.models.ModuleServerConfig"
-              click digitalkin.models.grpc_servers.models.ServerConfig href "" "digitalkin.models.grpc_servers.models.ServerConfig"
-              click digitalkin.models.grpc_servers.models.ChannelConfig href "" "digitalkin.models.grpc_servers.models.ChannelConfig"
-```
-
-Configuration for Module gRPC server.
-
-Attributes:
-
-- **`advertise_host`** (`str | None`) – Public hostname/IP sent to registry for discovery. Falls back to host if not set.
-
-Methods:
-
-- **`validate_credentials`** – Validate that credentials are provided when in secure mode.
-- **`validate_port`** – Validate that the port is in a valid range.
-
-###### address
-
-```python
-address: str
-```
-
-Get the server address.
-
-Returns:
-
-- `str` – The formatted address string
-
-###### validate_credentials
-
-```python
-validate_credentials(
-    v: ServerCredentials | None, info: ValidationInfo
-) -> ServerCredentials | None
-```
-
-Validate that credentials are provided when in secure mode.
-
-Parameters:
-
-- ###### **`v`**
-
-  (`ServerCredentials | None`) – The credentials value
-
-- ###### **`info`**
-
-  (`ValidationInfo`) – ValidationInfo containing other field values
-
-Returns:
-
-- `ServerCredentials | None` – The validated credentials
-
-Raises:
-
-- `ConfigurationError` – If credentials are missing in secure mode
-
-###### validate_port
-
-```python
-validate_port(v: int) -> int
-```
-
-Validate that the port is in a valid range.
-
-Parameters:
-
-- ###### **`v`**
-
-  (`int`) – Port number to validate
-
-Returns:
-
-- `int` – The validated port number
-
-Raises:
-
-- `ConfigurationError` – If port is outside valid range
-
-##### RegistryServerConfig
-
-```
-              flowchart TD
-              digitalkin.models.grpc_servers.models.RegistryServerConfig[RegistryServerConfig]
-              digitalkin.models.grpc_servers.models.ServerConfig[ServerConfig]
-              digitalkin.models.grpc_servers.models.ChannelConfig[ChannelConfig]
-
-                              digitalkin.models.grpc_servers.models.ServerConfig --> digitalkin.models.grpc_servers.models.RegistryServerConfig
-                                digitalkin.models.grpc_servers.models.ChannelConfig --> digitalkin.models.grpc_servers.models.ServerConfig
-                
-
-
-
-              click digitalkin.models.grpc_servers.models.RegistryServerConfig href "" "digitalkin.models.grpc_servers.models.RegistryServerConfig"
-              click digitalkin.models.grpc_servers.models.ServerConfig href "" "digitalkin.models.grpc_servers.models.ServerConfig"
-              click digitalkin.models.grpc_servers.models.ChannelConfig href "" "digitalkin.models.grpc_servers.models.ChannelConfig"
-```
-
-Configuration for Registry gRPC server.
-
-Attributes:
-
-- **`database_url`** (`str | None`) – Database URL for registry data storage
-
-Methods:
-
-- **`validate_credentials`** – Validate that credentials are provided when in secure mode.
-- **`validate_port`** – Validate that the port is in a valid range.
-
-###### address
-
-```python
-address: str
-```
-
-Get the server address.
-
-Returns:
-
-- `str` – The formatted address string
-
-###### validate_credentials
-
-```python
-validate_credentials(
-    v: ServerCredentials | None, info: ValidationInfo
-) -> ServerCredentials | None
-```
-
-Validate that credentials are provided when in secure mode.
-
-Parameters:
-
-- ###### **`v`**
-
-  (`ServerCredentials | None`) – The credentials value
-
-- ###### **`info`**
-
-  (`ValidationInfo`) – ValidationInfo containing other field values
-
-Returns:
-
-- `ServerCredentials | None` – The validated credentials
-
-Raises:
-
-- `ConfigurationError` – If credentials are missing in secure mode
-
-###### validate_port
-
-```python
-validate_port(v: int) -> int
-```
-
-Validate that the port is in a valid range.
-
-Parameters:
-
-- ###### **`v`**
-
-  (`int`) – Port number to validate
-
-Returns:
-
-- `int` – The validated port number
-
-Raises:
-
-- `ConfigurationError` – If port is outside valid range
-
 ##### RetryPolicy
 
 ```
@@ -10354,173 +10181,6 @@ Serialize to gRPC service config JSON string.
 Returns:
 
 - `str` – JSON string for grpc.service_config channel option.
-
-##### SecurityMode
-
-```
-              flowchart TD
-              digitalkin.models.grpc_servers.models.SecurityMode[SecurityMode]
-
-              
-
-              click digitalkin.models.grpc_servers.models.SecurityMode href "" "digitalkin.models.grpc_servers.models.SecurityMode"
-```
-
-Enum for server security mode.
-
-##### ServerConfig
-
-```
-              flowchart TD
-              digitalkin.models.grpc_servers.models.ServerConfig[ServerConfig]
-              digitalkin.models.grpc_servers.models.ChannelConfig[ChannelConfig]
-
-                              digitalkin.models.grpc_servers.models.ChannelConfig --> digitalkin.models.grpc_servers.models.ServerConfig
-                
-
-
-              click digitalkin.models.grpc_servers.models.ServerConfig href "" "digitalkin.models.grpc_servers.models.ServerConfig"
-              click digitalkin.models.grpc_servers.models.ChannelConfig href "" "digitalkin.models.grpc_servers.models.ChannelConfig"
-```
-
-Base configuration for gRPC servers.
-
-Attributes:
-
-- **`host`** (`str`) – Host address to bind the server to
-- **`port`** (`int`) – Port to listen on
-- **`max_workers`** (`int`) – Maximum number of workers for sync mode
-- **`mode`** (`ServerMode`) – Server operation mode (sync/async)
-- **`security`** (`SecurityMode`) – Security mode (secure/insecure)
-- **`credentials`** (`ServerCredentials | None`) – Server credentials for secure mode
-- **`server_options`** (`list[tuple[str, Any]]`) – Additional server options
-- **`enable_reflection`** (`bool`) – Enable reflection for the server
-- **`compression`** (`GrpcCompression`) – gRPC compression algorithm for server-level compression
-
-Methods:
-
-- **`validate_credentials`** – Validate that credentials are provided when in secure mode.
-- **`validate_port`** – Validate that the port is in a valid range.
-
-###### address
-
-```python
-address: str
-```
-
-Get the server address.
-
-Returns:
-
-- `str` – The formatted address string
-
-###### validate_credentials
-
-```python
-validate_credentials(
-    v: ServerCredentials | None, info: ValidationInfo
-) -> ServerCredentials | None
-```
-
-Validate that credentials are provided when in secure mode.
-
-Parameters:
-
-- ###### **`v`**
-
-  (`ServerCredentials | None`) – The credentials value
-
-- ###### **`info`**
-
-  (`ValidationInfo`) – ValidationInfo containing other field values
-
-Returns:
-
-- `ServerCredentials | None` – The validated credentials
-
-Raises:
-
-- `ConfigurationError` – If credentials are missing in secure mode
-
-###### validate_port
-
-```python
-validate_port(v: int) -> int
-```
-
-Validate that the port is in a valid range.
-
-Parameters:
-
-- ###### **`v`**
-
-  (`int`) – Port number to validate
-
-Returns:
-
-- `int` – The validated port number
-
-Raises:
-
-- `ConfigurationError` – If port is outside valid range
-
-##### ServerCredentials
-
-```
-              flowchart TD
-              digitalkin.models.grpc_servers.models.ServerCredentials[ServerCredentials]
-
-              
-
-              click digitalkin.models.grpc_servers.models.ServerCredentials href "" "digitalkin.models.grpc_servers.models.ServerCredentials"
-```
-
-Model for server credentials in secure mode.
-
-Attributes:
-
-- **`server_key_path`** (`Path`) – Path to the server private key
-- **`server_cert_path`** (`Path`) – Path to the server certificate
-- **`root_cert_path`** (`Path | None`) – Optional path to the root certificate
-
-Methods:
-
-- **`check_path_exists`** – Validate that the file path exists.
-
-###### check_path_exists
-
-```python
-check_path_exists(v: Path | None) -> Path | None
-```
-
-Validate that the file path exists.
-
-Parameters:
-
-- ###### **`v`**
-
-  (`Path | None`) – Path to validate
-
-Returns:
-
-- `Path | None` – The validated path
-
-Raises:
-
-- `SecurityError` – If the path does not exist
-
-##### ServerMode
-
-```
-              flowchart TD
-              digitalkin.models.grpc_servers.models.ServerMode[ServerMode]
-
-              
-
-              click digitalkin.models.grpc_servers.models.ServerMode href "" "digitalkin.models.grpc_servers.models.ServerMode"
-```
-
-Enum for server operation mode.
 
 #### types
 
@@ -13063,6 +12723,367 @@ File history model.
 ```
 
 File model.
+
+### settings
+
+This package contain settings of sdk.
+
+Modules:
+
+- **`server`** – Package for server settings.
+- **`utils`** – This package contain channel base.
+
+#### server
+
+Package for server settings.
+
+Modules:
+
+- **`channel`** – Server channel settings.
+- **`grpc`** – gRPC server settings for the SDK.
+- **`server`** – Server settings for the DigitalKin application.
+
+##### channel
+
+Server channel settings.
+
+Classes:
+
+- **`ServerChannelSettings`** – Settings for a server channel.
+
+###### ServerChannelSettings
+
+```python
+ServerChannelSettings(**values: Any)
+```
+
+```
+              flowchart TD
+              digitalkin.models.settings.server.channel.ServerChannelSettings[ServerChannelSettings]
+              digitalkin.models.settings.utils.channel.BaseChannelSettings[BaseChannelSettings]
+
+                              digitalkin.models.settings.utils.channel.BaseChannelSettings --> digitalkin.models.settings.server.channel.ServerChannelSettings
+                
+
+
+              click digitalkin.models.settings.server.channel.ServerChannelSettings href "" "digitalkin.models.settings.server.channel.ServerChannelSettings"
+              click digitalkin.models.settings.utils.channel.BaseChannelSettings href "" "digitalkin.models.settings.utils.channel.BaseChannelSettings"
+```
+
+Settings for a server channel.
+
+Attributes:
+
+- **`advertise_host`** (`str | None`) – Public hostname/IP sent to registry for discovery. Falls back to host if not set.
+- **`database_url`** (`str | None`) – Database URL for registry data storage
+
+Methods:
+
+- **`validate_credentials`** – Validate that credentials are provided when in secure mode.
+- **`validate_port`** – Validate that the port is in a valid range.
+
+###### address
+
+```python
+address: str
+```
+
+Get the server address.
+
+Returns:
+
+- `str` – The formatted address string
+
+###### validate_credentials
+
+```python
+validate_credentials() -> BaseChannelSettings
+```
+
+Validate that credentials are provided when in secure mode.
+
+Returns:
+
+- `BaseChannelSettings` – The validated credentials
+
+Raises:
+
+- `ConfigurationError` – If credentials are missing in secure mode
+
+###### validate_port
+
+```python
+validate_port(v: int) -> int
+```
+
+Validate that the port is in a valid range.
+
+Parameters:
+
+- ###### **`v`**
+
+  (`int`) – Port number to validate
+
+Returns:
+
+- `int` – The validated port number
+
+Raises:
+
+- `ConfigurationError` – If port is outside valid range
+
+##### grpc
+
+gRPC server settings for the SDK.
+
+Classes:
+
+- **`GrpcServerSettings`** – gRPC tuning settings on the SDK side.
+
+###### GrpcServerSettings
+
+```python
+GrpcServerSettings(**values: Any)
+```
+
+```
+              flowchart TD
+              digitalkin.models.settings.server.grpc.GrpcServerSettings[GrpcServerSettings]
+
+              
+
+              click digitalkin.models.settings.server.grpc.GrpcServerSettings href "" "digitalkin.models.settings.server.grpc.GrpcServerSettings"
+```
+
+gRPC tuning settings on the SDK side.
+
+Attributes:
+
+- **`compression`** (`GrpcCompression`) – gRPC compression algorithm to use for server responses.
+- **`keepalive_time`** (`NonNegativeFloat`) – Interval for server keepalive pings, in milliseconds.
+- **`keepalive_timeout`** (`NonNegativeFloat`) – Timeout for server keepalive pings, in milliseconds.
+- **`min_ping_interval`** (`NonNegativeFloat`) – Minimum interval between HTTP/2 pings on the server side, in milliseconds.
+- **`max_receive_message_lenght`** (`NonNegativeFloat`) – Maximum message size the server can receive, in bytes.
+- **`max_send_message_length`** (`NonNegativeFloat`) – Maximum message size the server can send, in bytes.
+- **`max_pings_without_data`** (`NonNegativeFloat`) – Maximum number of pings the server allows without receiving any data.
+- **`keepalive_permit_without_calls`** (`bool`) – Allow clients to send keepalive pings even when there are no active RPCs.
+
+###### options
+
+```python
+options: list[tuple[str, Any]]
+```
+
+Convert settings to gRPC server options format.
+
+Returns:
+
+- `list[tuple[str, Any]]` – List of tuples containing gRPC server options and their corresponding values.
+
+##### server
+
+Server settings for the DigitalKin application.
+
+Classes:
+
+- **`ServerSettings`** – Settings for the DigitalKin server.
+
+###### ServerSettings
+
+```python
+ServerSettings(**values: Any)
+```
+
+```
+              flowchart TD
+              digitalkin.models.settings.server.server.ServerSettings[ServerSettings]
+
+              
+
+              click digitalkin.models.settings.server.server.ServerSettings href "" "digitalkin.models.settings.server.server.ServerSettings"
+```
+
+Settings for the DigitalKin server.
+
+Attributes:
+
+- **`channel`** (`ServerChannelSettings`) – Settings for the server channel.
+- **`grpc`** (`GrpcServerSettings`) – Settings for the gRPC server.
+- **`health_check`** (`bool`) – Whether to enable the health check service.
+- **`reflection`** (`bool`) – Whether to enable reflection for the server.
+- **`max_concurrent_rpcs`** (`NonNegativeInt`) – Maximum number of RPCs handled in parallel by the server.
+- **`max_workers`** (`NonNegativeInt`) – Maximum number of workers for sync mode.
+- **`thread_pool_workers`** (`NonNegativeInt`) – Number of workers in the server thread pool.
+
+#### utils
+
+This package contain channel base.
+
+Modules:
+
+- **`channel`** – This file define channelBase for grpc config.
+
+##### channel
+
+This file define channelBase for grpc config.
+
+Classes:
+
+- **`BaseChannelSettings`** – Base settings model for gRPC channel configuration.
+- **`ControlFlow`** – Enum for server operation mode.
+- **`Credentials`** – Model for server credentials in secure mode.
+- **`SecurityMode`** – Enum for server security mode.
+
+###### BaseChannelSettings
+
+```python
+BaseChannelSettings(**values: Any)
+```
+
+```
+              flowchart TD
+              digitalkin.models.settings.utils.channel.BaseChannelSettings[BaseChannelSettings]
+
+              
+
+              click digitalkin.models.settings.utils.channel.BaseChannelSettings href "" "digitalkin.models.settings.utils.channel.BaseChannelSettings"
+```
+
+Base settings model for gRPC channel configuration.
+
+Methods:
+
+- **`validate_credentials`** – Validate that credentials are provided when in secure mode.
+- **`validate_port`** – Validate that the port is in a valid range.
+
+Attributes:
+
+- **`address`** (`str`) – Get the server address.
+
+###### address
+
+```python
+address: str
+```
+
+Get the server address.
+
+Returns:
+
+- `str` – The formatted address string
+
+###### validate_credentials
+
+```python
+validate_credentials() -> BaseChannelSettings
+```
+
+Validate that credentials are provided when in secure mode.
+
+Returns:
+
+- `BaseChannelSettings` – The validated credentials
+
+Raises:
+
+- `ConfigurationError` – If credentials are missing in secure mode
+
+###### validate_port
+
+```python
+validate_port(v: int) -> int
+```
+
+Validate that the port is in a valid range.
+
+Parameters:
+
+- ###### **`v`**
+
+  (`int`) – Port number to validate
+
+Returns:
+
+- `int` – The validated port number
+
+Raises:
+
+- `ConfigurationError` – If port is outside valid range
+
+###### ControlFlow
+
+```
+              flowchart TD
+              digitalkin.models.settings.utils.channel.ControlFlow[ControlFlow]
+
+              
+
+              click digitalkin.models.settings.utils.channel.ControlFlow href "" "digitalkin.models.settings.utils.channel.ControlFlow"
+```
+
+Enum for server operation mode.
+
+###### Credentials
+
+```python
+Credentials(**data: Any)
+```
+
+```
+              flowchart TD
+              digitalkin.models.settings.utils.channel.Credentials[Credentials]
+
+              
+
+              click digitalkin.models.settings.utils.channel.Credentials href "" "digitalkin.models.settings.utils.channel.Credentials"
+```
+
+Model for server credentials in secure mode.
+
+Attributes:
+
+- **`key_path`** (`Path | None`) – Path to the server private key
+- **`cert_path`** (`Path | None`) – Path to the server certificate
+- **`root_cert_path`** (`Path | None`) – Optional path to the root certificate
+
+Methods:
+
+- **`check_path_exists`** – Validate that the file path exists.
+
+###### check_path_exists
+
+```python
+check_path_exists(v: Path | None) -> Path | None
+```
+
+Validate that the file path exists.
+
+Parameters:
+
+- ###### **`v`**
+
+  (`Path | None`) – Path to validate
+
+Returns:
+
+- `Path | None` – The validated path
+
+Raises:
+
+- `SecurityError` – If the path does not exist
+
+###### SecurityMode
+
+```
+              flowchart TD
+              digitalkin.models.settings.utils.channel.SecurityMode[SecurityMode]
+
+              
+
+              click digitalkin.models.settings.utils.channel.SecurityMode href "" "digitalkin.models.settings.utils.channel.SecurityMode"
+```
+
+Enum for server security mode.
 
 ## modules
 
@@ -19451,6 +19472,7 @@ Methods:
 - **`heartbeat`** – Send heartbeat to keep module active.
 - **`register`** – Register a module with the registry.
 - **`search`** – Search for modules by criteria.
+- **`wait_for_ready`** – Check if the registry backend is reachable.
 
 #### close
 
@@ -19619,6 +19641,24 @@ Parameters:
 Returns:
 
 - `list[ModuleInfo]` – List of matching modules.
+
+#### wait_for_ready
+
+```python
+wait_for_ready(timeout: float = 1.0) -> bool
+```
+
+Check if the registry backend is reachable.
+
+Parameters:
+
+- ##### **`timeout`**
+
+  (`float`, default: `1.0` ) – Max seconds to wait for connectivity.
+
+Returns:
+
+- `bool` – True if ready. Default implementation always returns True.
 
 ### DefaultSnapshot
 
@@ -20293,6 +20333,7 @@ Methods:
 - **`get_module_schemas`** – Get module schemas via gRPC.
 - **`poll_grpc`** – Execute a single polling RPC. Returns None on DEADLINE_EXCEEDED (expected empty poll).
 - **`release_cached_channel`** – Decrement refcount for a cache key and close channel when last ref is released.
+- **`wait_for_ready`** – Check if the gRPC channel can connect within timeout.
 
 #### call_module
 
@@ -20402,7 +20443,7 @@ Parameters:
 
 - ##### **`timeout`**
 
-  (`float | None`, default: `None` ) – Optional per-call timeout in seconds (passed to gRPC stub call)
+  (`float | None`, default: `None` ) – Per-call timeout in seconds. Falls back to \_QUERY_DEFAULT_TIMEOUT (env DIGITALKIN_GRPC_QUERY_TIMEOUT, default 30s) when None.
 
 Returns:
 
@@ -20485,6 +20526,26 @@ Parameters:
 - ##### **`key`**
 
   (`str`) – Channel cache key to release.
+
+#### wait_for_ready
+
+```python
+wait_for_ready(timeout: float = 1.0) -> bool
+```
+
+Check if the gRPC channel can connect within timeout.
+
+Uses channel_ready() which resolves when the HTTP/2 connection is established and the server is accepting RPCs.
+
+Parameters:
+
+- ##### **`timeout`**
+
+  (`float`, default: `1.0` ) – Max seconds to wait for connectivity.
+
+Returns:
+
+- `bool` – True if channel reached READY state, False if timeout or no channel.
 
 ### IdentityStrategy
 
@@ -20580,6 +20641,7 @@ Methods:
 - **`heartbeat`** – Send heartbeat to keep module active.
 - **`register`** – Register a module with the registry.
 - **`search`** – Search for modules by criteria.
+- **`wait_for_ready`** – Check if the registry backend is reachable.
 
 #### close
 
@@ -20714,6 +20776,24 @@ Parameters:
 Returns:
 
 - `list[ModuleInfo]` – List of matching modules.
+
+#### wait_for_ready
+
+```python
+wait_for_ready(timeout: float = 1.0) -> bool
+```
+
+Check if the registry backend is reachable.
+
+Parameters:
+
+- ##### **`timeout`**
+
+  (`float`, default: `1.0` ) – Max seconds to wait for connectivity.
+
+Returns:
+
+- `bool` – True if ready. Default implementation always returns True.
 
 ### SnapshotStrategy
 
@@ -21760,6 +21840,7 @@ Methods:
 - **`get_module_schemas`** – Get module schemas via gRPC.
 - **`poll_grpc`** – Execute a single polling RPC. Returns None on DEADLINE_EXCEEDED (expected empty poll).
 - **`release_cached_channel`** – Decrement refcount for a cache key and close channel when last ref is released.
+- **`wait_for_ready`** – Check if the gRPC channel can connect within timeout.
 
 ##### call_module
 
@@ -21869,7 +21950,7 @@ Parameters:
 
 - ###### **`timeout`**
 
-  (`float | None`, default: `None` ) – Optional per-call timeout in seconds (passed to gRPC stub call)
+  (`float | None`, default: `None` ) – Per-call timeout in seconds. Falls back to \_QUERY_DEFAULT_TIMEOUT (env DIGITALKIN_GRPC_QUERY_TIMEOUT, default 30s) when None.
 
 Returns:
 
@@ -21952,6 +22033,26 @@ Parameters:
 - ###### **`key`**
 
   (`str`) – Channel cache key to release.
+
+##### wait_for_ready
+
+```python
+wait_for_ready(timeout: float = 1.0) -> bool
+```
+
+Check if the gRPC channel can connect within timeout.
+
+Uses channel_ready() which resolves when the HTTP/2 connection is established and the server is accepting RPCs.
+
+Parameters:
+
+- ###### **`timeout`**
+
+  (`float`, default: `1.0` ) – Max seconds to wait for connectivity.
+
+Returns:
+
+- `bool` – True if channel reached READY state, False if timeout or no channel.
 
 #### communication_strategy
 
@@ -22312,6 +22413,7 @@ Methods:
 - **`get_module_schemas`** – Get module schemas via gRPC.
 - **`poll_grpc`** – Execute a single polling RPC. Returns None on DEADLINE_EXCEEDED (expected empty poll).
 - **`release_cached_channel`** – Decrement refcount for a cache key and close channel when last ref is released.
+- **`wait_for_ready`** – Check if the gRPC channel can connect within timeout.
 
 ###### call_module
 
@@ -22421,7 +22523,7 @@ Parameters:
 
 - ###### **`timeout`**
 
-  (`float | None`, default: `None` ) – Optional per-call timeout in seconds (passed to gRPC stub call)
+  (`float | None`, default: `None` ) – Per-call timeout in seconds. Falls back to \_QUERY_DEFAULT_TIMEOUT (env DIGITALKIN_GRPC_QUERY_TIMEOUT, default 30s) when None.
 
 Returns:
 
@@ -22504,6 +22606,26 @@ Parameters:
 - ###### **`key`**
 
   (`str`) – Channel cache key to release.
+
+###### wait_for_ready
+
+```python
+wait_for_ready(timeout: float = 1.0) -> bool
+```
+
+Check if the gRPC channel can connect within timeout.
+
+Uses channel_ready() which resolves when the HTTP/2 connection is established and the server is accepting RPCs.
+
+Parameters:
+
+- ###### **`timeout`**
+
+  (`float`, default: `1.0` ) – Max seconds to wait for connectivity.
+
+Returns:
+
+- `bool` – True if channel reached READY state, False if timeout or no channel.
 
 ### cost
 
@@ -22980,6 +23102,7 @@ Methods:
 - **`release_cached_channel`** – Decrement refcount for a cache key and close channel when last ref is released.
 - **`set_cost_config`** – Store cost configuration in the database.
 - **`set_limits`** – Set cost limits for this session.
+- **`wait_for_ready`** – Check if the gRPC channel can connect within timeout.
 
 ##### add
 
@@ -23079,7 +23202,7 @@ Parameters:
 
 - ###### **`timeout`**
 
-  (`float | None`, default: `None` ) – Optional per-call timeout in seconds (passed to gRPC stub call)
+  (`float | None`, default: `None` ) – Per-call timeout in seconds. Falls back to \_QUERY_DEFAULT_TIMEOUT (env DIGITALKIN_GRPC_QUERY_TIMEOUT, default 30s) when None.
 
 Returns:
 
@@ -23253,6 +23376,26 @@ Parameters:
 - ###### **`limits`**
 
   (`list[QuantityLimit | AmountLimit]`) – List of CostLimit objects to enforce.
+
+##### wait_for_ready
+
+```python
+wait_for_ready(timeout: float = 1.0) -> bool
+```
+
+Check if the gRPC channel can connect within timeout.
+
+Uses channel_ready() which resolves when the HTTP/2 connection is established and the server is accepting RPCs.
+
+Parameters:
+
+- ###### **`timeout`**
+
+  (`float`, default: `1.0` ) – Max seconds to wait for connectivity.
+
+Returns:
+
+- `bool` – True if channel reached READY state, False if timeout or no channel.
 
 #### cost_strategy
 
@@ -23751,6 +23894,7 @@ Methods:
 - **`release_cached_channel`** – Decrement refcount for a cache key and close channel when last ref is released.
 - **`set_cost_config`** – Store cost configuration in the database.
 - **`set_limits`** – Set cost limits for this session.
+- **`wait_for_ready`** – Check if the gRPC channel can connect within timeout.
 
 ###### add
 
@@ -23850,7 +23994,7 @@ Parameters:
 
 - ###### **`timeout`**
 
-  (`float | None`, default: `None` ) – Optional per-call timeout in seconds (passed to gRPC stub call)
+  (`float | None`, default: `None` ) – Per-call timeout in seconds. Falls back to \_QUERY_DEFAULT_TIMEOUT (env DIGITALKIN_GRPC_QUERY_TIMEOUT, default 30s) when None.
 
 Returns:
 
@@ -24024,6 +24168,26 @@ Parameters:
 - ###### **`limits`**
 
   (`list[QuantityLimit | AmountLimit]`) – List of CostLimit objects to enforce.
+
+###### wait_for_ready
+
+```python
+wait_for_ready(timeout: float = 1.0) -> bool
+```
+
+Check if the gRPC channel can connect within timeout.
+
+Uses channel_ready() which resolves when the HTTP/2 connection is established and the server is accepting RPCs.
+
+Parameters:
+
+- ###### **`timeout`**
+
+  (`float`, default: `1.0` ) – Max seconds to wait for connectivity.
+
+Returns:
+
+- `bool` – True if channel reached READY state, False if timeout or no channel.
 
 ### filesystem
 
@@ -24651,6 +24815,7 @@ Methods:
 - **`release_cached_channel`** – Decrement refcount for a cache key and close channel when last ref is released.
 - **`update_file`** – Update a file in the filesystem.
 - **`upload_files`** – Upload multiple files to the filesystem.
+- **`wait_for_ready`** – Check if the gRPC channel can connect within timeout.
 
 ##### close
 
@@ -24730,7 +24895,7 @@ Parameters:
 
 - ###### **`timeout`**
 
-  (`float | None`, default: `None` ) – Optional per-call timeout in seconds (passed to gRPC stub call)
+  (`float | None`, default: `None` ) – Per-call timeout in seconds. Falls back to \_QUERY_DEFAULT_TIMEOUT (env DIGITALKIN_GRPC_QUERY_TIMEOUT, default 30s) when None.
 
 Returns:
 
@@ -24965,6 +25130,26 @@ Parameters:
 Returns:
 
 - `tuple[list[FilesystemRecord], int, int]` – tuple\[list[FilesystemRecord], int, int\]: List of uploaded files, total uploaded count, total failed count
+
+##### wait_for_ready
+
+```python
+wait_for_ready(timeout: float = 1.0) -> bool
+```
+
+Check if the gRPC channel can connect within timeout.
+
+Uses channel_ready() which resolves when the HTTP/2 connection is established and the server is accepting RPCs.
+
+Parameters:
+
+- ###### **`timeout`**
+
+  (`float`, default: `1.0` ) – Max seconds to wait for connectivity.
+
+Returns:
+
+- `bool` – True if channel reached READY state, False if timeout or no channel.
 
 #### default_filesystem
 
@@ -25656,6 +25841,7 @@ Methods:
 - **`release_cached_channel`** – Decrement refcount for a cache key and close channel when last ref is released.
 - **`update_file`** – Update a file in the filesystem.
 - **`upload_files`** – Upload multiple files to the filesystem.
+- **`wait_for_ready`** – Check if the gRPC channel can connect within timeout.
 
 ###### close
 
@@ -25735,7 +25921,7 @@ Parameters:
 
 - ###### **`timeout`**
 
-  (`float | None`, default: `None` ) – Optional per-call timeout in seconds (passed to gRPC stub call)
+  (`float | None`, default: `None` ) – Per-call timeout in seconds. Falls back to \_QUERY_DEFAULT_TIMEOUT (env DIGITALKIN_GRPC_QUERY_TIMEOUT, default 30s) when None.
 
 Returns:
 
@@ -25970,6 +26156,26 @@ Parameters:
 Returns:
 
 - `tuple[list[FilesystemRecord], int, int]` – tuple\[list[FilesystemRecord], int, int\]: List of uploaded files, total uploaded count, total failed count
+
+###### wait_for_ready
+
+```python
+wait_for_ready(timeout: float = 1.0) -> bool
+```
+
+Check if the gRPC channel can connect within timeout.
+
+Uses channel_ready() which resolves when the HTTP/2 connection is established and the server is accepting RPCs.
+
+Parameters:
+
+- ###### **`timeout`**
+
+  (`float`, default: `1.0` ) – Max seconds to wait for connectivity.
+
+Returns:
+
+- `bool` – True if channel reached READY state, False if timeout or no channel.
 
 ### identity
 
@@ -26300,6 +26506,7 @@ Methods:
 - **`heartbeat`** – Send heartbeat to keep module active.
 - **`register`** – Register a module with the registry.
 - **`search`** – Search for modules by criteria.
+- **`wait_for_ready`** – Check if the registry backend is reachable.
 
 ##### close
 
@@ -26469,6 +26676,24 @@ Returns:
 
 - `list[ModuleInfo]` – List of matching modules.
 
+##### wait_for_ready
+
+```python
+wait_for_ready(timeout: float = 1.0) -> bool
+```
+
+Check if the registry backend is reachable.
+
+Parameters:
+
+- ###### **`timeout`**
+
+  (`float`, default: `1.0` ) – Max seconds to wait for connectivity.
+
+Returns:
+
+- `bool` – True if ready. Default implementation always returns True.
+
 #### GrpcRegistry
 
 ```python
@@ -26526,6 +26751,7 @@ Methods:
 - **`register`** – Register a module with the registry.
 - **`release_cached_channel`** – Decrement refcount for a cache key and close channel when last ref is released.
 - **`search`** – Search for modules by criteria.
+- **`wait_for_ready`** – Check if the registry backend is reachable.
 
 ##### close
 
@@ -26620,7 +26846,7 @@ Parameters:
 
 - ###### **`timeout`**
 
-  (`float | None`, default: `None` ) – Optional per-call timeout in seconds (passed to gRPC stub call)
+  (`float | None`, default: `None` ) – Per-call timeout in seconds. Falls back to \_QUERY_DEFAULT_TIMEOUT (env DIGITALKIN_GRPC_QUERY_TIMEOUT, default 30s) when None.
 
 Returns:
 
@@ -26842,6 +27068,24 @@ Raises:
 
 - `RegistryServiceError` – If gRPC call fails.
 
+##### wait_for_ready
+
+```python
+wait_for_ready(timeout: float = 1.0) -> bool
+```
+
+Check if the registry backend is reachable.
+
+Parameters:
+
+- ###### **`timeout`**
+
+  (`float`, default: `1.0` ) – Max seconds to wait for connectivity.
+
+Returns:
+
+- `bool` – True if ready. Default implementation always returns True.
+
 #### ModuleInfo
 
 ```
@@ -26972,6 +27216,7 @@ Methods:
 - **`heartbeat`** – Send heartbeat to keep module active.
 - **`register`** – Register a module with the registry.
 - **`search`** – Search for modules by criteria.
+- **`wait_for_ready`** – Check if the registry backend is reachable.
 
 ##### close
 
@@ -27107,6 +27352,24 @@ Returns:
 
 - `list[ModuleInfo]` – List of matching modules.
 
+##### wait_for_ready
+
+```python
+wait_for_ready(timeout: float = 1.0) -> bool
+```
+
+Check if the registry backend is reachable.
+
+Parameters:
+
+- ###### **`timeout`**
+
+  (`float`, default: `1.0` ) – Max seconds to wait for connectivity.
+
+Returns:
+
+- `bool` – True if ready. Default implementation always returns True.
+
 #### default_registry
 
 Default registry implementation.
@@ -27150,6 +27413,7 @@ Methods:
 - **`heartbeat`** – Send heartbeat to keep module active.
 - **`register`** – Register a module with the registry.
 - **`search`** – Search for modules by criteria.
+- **`wait_for_ready`** – Check if the registry backend is reachable.
 
 ###### close
 
@@ -27318,6 +27582,24 @@ Parameters:
 Returns:
 
 - `list[ModuleInfo]` – List of matching modules.
+
+###### wait_for_ready
+
+```python
+wait_for_ready(timeout: float = 1.0) -> bool
+```
+
+Check if the registry backend is reachable.
+
+Parameters:
+
+- ###### **`timeout`**
+
+  (`float`, default: `1.0` ) – Max seconds to wait for connectivity.
+
+Returns:
+
+- `bool` – True if ready. Default implementation always returns True.
 
 #### exceptions
 
@@ -27493,6 +27775,7 @@ Methods:
 - **`register`** – Register a module with the registry.
 - **`release_cached_channel`** – Decrement refcount for a cache key and close channel when last ref is released.
 - **`search`** – Search for modules by criteria.
+- **`wait_for_ready`** – Check if the registry backend is reachable.
 
 ###### close
 
@@ -27587,7 +27870,7 @@ Parameters:
 
 - ###### **`timeout`**
 
-  (`float | None`, default: `None` ) – Optional per-call timeout in seconds (passed to gRPC stub call)
+  (`float | None`, default: `None` ) – Per-call timeout in seconds. Falls back to \_QUERY_DEFAULT_TIMEOUT (env DIGITALKIN_GRPC_QUERY_TIMEOUT, default 30s) when None.
 
 Returns:
 
@@ -27809,6 +28092,24 @@ Raises:
 
 - `RegistryServiceError` – If gRPC call fails.
 
+###### wait_for_ready
+
+```python
+wait_for_ready(timeout: float = 1.0) -> bool
+```
+
+Check if the registry backend is reachable.
+
+Parameters:
+
+- ###### **`timeout`**
+
+  (`float`, default: `1.0` ) – Max seconds to wait for connectivity.
+
+Returns:
+
+- `bool` – True if ready. Default implementation always returns True.
+
 #### registry_models
 
 Registry data models.
@@ -27878,6 +28179,7 @@ Methods:
 - **`heartbeat`** – Send heartbeat to keep module active.
 - **`register`** – Register a module with the registry.
 - **`search`** – Search for modules by criteria.
+- **`wait_for_ready`** – Check if the registry backend is reachable.
 
 ###### close
 
@@ -28012,6 +28314,24 @@ Parameters:
 Returns:
 
 - `list[ModuleInfo]` – List of matching modules.
+
+###### wait_for_ready
+
+```python
+wait_for_ready(timeout: float = 1.0) -> bool
+```
+
+Check if the registry backend is reachable.
+
+Parameters:
+
+- ###### **`timeout`**
+
+  (`float`, default: `1.0` ) – Max seconds to wait for connectivity.
+
+Returns:
+
+- `bool` – True if ready. Default implementation always returns True.
 
 ### services_config
 
@@ -28624,6 +28944,7 @@ Methods:
 - **`search_setup_versions`** – Search for setup versions based on filters.
 - **`update_setup`** – Update an existing setup.
 - **`update_setup_version`** – Update an existing setup version.
+- **`wait_for_ready`** – Check if the gRPC channel can connect within timeout.
 
 ###### __post_init__
 
@@ -28781,7 +29102,7 @@ Parameters:
 
 - ###### **`timeout`**
 
-  (`float | None`, default: `None` ) – Optional per-call timeout in seconds (passed to gRPC stub call)
+  (`float | None`, default: `None` ) – Per-call timeout in seconds. Falls back to \_QUERY_DEFAULT_TIMEOUT (env DIGITALKIN_GRPC_QUERY_TIMEOUT, default 30s) when None.
 
 Returns:
 
@@ -29008,6 +29329,26 @@ Raises:
 - `ValidationError` – If setup version data is invalid.
 - `ServerError` – If gRPC operation fails.
 - `SetupServiceError` – For any unexpected internal error.
+
+###### wait_for_ready
+
+```python
+wait_for_ready(timeout: float = 1.0) -> bool
+```
+
+Check if the gRPC channel can connect within timeout.
+
+Uses channel_ready() which resolves when the HTTP/2 connection is established and the server is accepting RPCs.
+
+Parameters:
+
+- ###### **`timeout`**
+
+  (`float`, default: `1.0` ) – Max seconds to wait for connectivity.
+
+Returns:
+
+- `bool` – True if channel reached READY state, False if timeout or no channel.
 
 #### setup_strategy
 
@@ -30026,6 +30367,7 @@ Methods:
 - **`store`** – Store a new record in the storage.
 - **`update`** – Validate & overwrite an existing record.
 - **`upsert`** – Insert or update a record atomically.
+- **`wait_for_ready`** – Check if the gRPC channel can connect within timeout.
 
 ##### close
 
@@ -30077,7 +30419,7 @@ Parameters:
 
 - ###### **`timeout`**
 
-  (`float | None`, default: `None` ) – Optional per-call timeout in seconds (passed to gRPC stub call)
+  (`float | None`, default: `None` ) – Per-call timeout in seconds. Falls back to \_QUERY_DEFAULT_TIMEOUT (env DIGITALKIN_GRPC_QUERY_TIMEOUT, default 30s) when None.
 
 Returns:
 
@@ -30320,6 +30662,26 @@ Raises:
 
 - `ValueError` – If the data type is invalid or if validation fails
 - `StorageServiceError` – If update of an existing record fails unexpectedly
+
+##### wait_for_ready
+
+```python
+wait_for_ready(timeout: float = 1.0) -> bool
+```
+
+Check if the gRPC channel can connect within timeout.
+
+Uses channel_ready() which resolves when the HTTP/2 connection is established and the server is accepting RPCs.
+
+Parameters:
+
+- ###### **`timeout`**
+
+  (`float`, default: `1.0` ) – Max seconds to wait for connectivity.
+
+Returns:
+
+- `bool` – True if channel reached READY state, False if timeout or no channel.
 
 #### StorageStrategy
 
@@ -30880,6 +31242,7 @@ Methods:
 - **`store`** – Store a new record in the storage.
 - **`update`** – Validate & overwrite an existing record.
 - **`upsert`** – Insert or update a record atomically.
+- **`wait_for_ready`** – Check if the gRPC channel can connect within timeout.
 
 ###### close
 
@@ -30931,7 +31294,7 @@ Parameters:
 
 - ###### **`timeout`**
 
-  (`float | None`, default: `None` ) – Optional per-call timeout in seconds (passed to gRPC stub call)
+  (`float | None`, default: `None` ) – Per-call timeout in seconds. Falls back to \_QUERY_DEFAULT_TIMEOUT (env DIGITALKIN_GRPC_QUERY_TIMEOUT, default 30s) when None.
 
 Returns:
 
@@ -31174,6 +31537,26 @@ Raises:
 
 - `ValueError` – If the data type is invalid or if validation fails
 - `StorageServiceError` – If update of an existing record fails unexpectedly
+
+###### wait_for_ready
+
+```python
+wait_for_ready(timeout: float = 1.0) -> bool
+```
+
+Check if the gRPC channel can connect within timeout.
+
+Uses channel_ready() which resolves when the HTTP/2 connection is established and the server is accepting RPCs.
+
+Parameters:
+
+- ###### **`timeout`**
+
+  (`float`, default: `1.0` ) – Max seconds to wait for connectivity.
+
+Returns:
+
+- `bool` – True if channel reached READY state, False if timeout or no channel.
 
 #### storage_strategy
 
@@ -31890,6 +32273,7 @@ Methods:
 - **`send_signal`** – Enqueue a signal for batched delivery via gRPC SendSignals.
 - **`subscribe_signals`** – Subscribe to signal updates via the shared poller.
 - **`unsubscribe_signals`** – Stop the subscription and wake its consumer via the shared poller.
+- **`wait_for_ready`** – Check if the gRPC channel can connect within timeout.
 
 ###### close
 
@@ -31941,7 +32325,7 @@ Parameters:
 
 - ###### **`timeout`**
 
-  (`float | None`, default: `None` ) – Optional per-call timeout in seconds (passed to gRPC stub call)
+  (`float | None`, default: `None` ) – Per-call timeout in seconds. Falls back to \_QUERY_DEFAULT_TIMEOUT (env DIGITALKIN_GRPC_QUERY_TIMEOUT, default 30s) when None.
 
 Returns:
 
@@ -32087,6 +32471,26 @@ Parameters:
 - ###### **`sub_id`**
 
   (`str`) – Subscription identifier.
+
+###### wait_for_ready
+
+```python
+wait_for_ready(timeout: float = 1.0) -> bool
+```
+
+Check if the gRPC channel can connect within timeout.
+
+Uses channel_ready() which resolves when the HTTP/2 connection is established and the server is accepting RPCs.
+
+Parameters:
+
+- ###### **`timeout`**
+
+  (`float`, default: `1.0` ) – Max seconds to wait for connectivity.
+
+Returns:
+
+- `bool` – True if channel reached READY state, False if timeout or no channel.
 
 #### task_manager_strategy
 
@@ -32353,6 +32757,7 @@ Methods:
 - **`handle_grpc_errors`** – Handle gRPC errors for the given operation.
 - **`poll_grpc`** – Execute a single polling RPC. Returns None on DEADLINE_EXCEEDED (expected empty poll).
 - **`release_cached_channel`** – Decrement refcount for a cache key and close channel when last ref is released.
+- **`wait_for_ready`** – Check if the gRPC channel can connect within timeout.
 
 ##### close
 
@@ -32404,7 +32809,7 @@ Parameters:
 
 - ###### **`timeout`**
 
-  (`float | None`, default: `None` ) – Optional per-call timeout in seconds (passed to gRPC stub call)
+  (`float | None`, default: `None` ) – Per-call timeout in seconds. Falls back to \_QUERY_DEFAULT_TIMEOUT (env DIGITALKIN_GRPC_QUERY_TIMEOUT, default 30s) when None.
 
 Returns:
 
@@ -32504,6 +32909,26 @@ Parameters:
 - ###### **`key`**
 
   (`str`) – Channel cache key to release.
+
+##### wait_for_ready
+
+```python
+wait_for_ready(timeout: float = 1.0) -> bool
+```
+
+Check if the gRPC channel can connect within timeout.
+
+Uses channel_ready() which resolves when the HTTP/2 connection is established and the server is accepting RPCs.
+
+Parameters:
+
+- ###### **`timeout`**
+
+  (`float`, default: `1.0` ) – Max seconds to wait for connectivity.
+
+Returns:
+
+- `bool` – True if channel reached READY state, False if timeout or no channel.
 
 #### UserProfileServiceError
 
@@ -32740,6 +33165,7 @@ Methods:
 - **`handle_grpc_errors`** – Handle gRPC errors for the given operation.
 - **`poll_grpc`** – Execute a single polling RPC. Returns None on DEADLINE_EXCEEDED (expected empty poll).
 - **`release_cached_channel`** – Decrement refcount for a cache key and close channel when last ref is released.
+- **`wait_for_ready`** – Check if the gRPC channel can connect within timeout.
 
 ###### close
 
@@ -32791,7 +33217,7 @@ Parameters:
 
 - ###### **`timeout`**
 
-  (`float | None`, default: `None` ) – Optional per-call timeout in seconds (passed to gRPC stub call)
+  (`float | None`, default: `None` ) – Per-call timeout in seconds. Falls back to \_QUERY_DEFAULT_TIMEOUT (env DIGITALKIN_GRPC_QUERY_TIMEOUT, default 30s) when None.
 
 Returns:
 
@@ -32891,6 +33317,26 @@ Parameters:
 - ###### **`key`**
 
   (`str`) – Channel cache key to release.
+
+###### wait_for_ready
+
+```python
+wait_for_ready(timeout: float = 1.0) -> bool
+```
+
+Check if the gRPC channel can connect within timeout.
+
+Uses channel_ready() which resolves when the HTTP/2 connection is established and the server is accepting RPCs.
+
+Parameters:
+
+- ###### **`timeout`**
+
+  (`float`, default: `1.0` ) – Max seconds to wait for connectivity.
+
+Returns:
+
+- `bool` – True if channel reached READY state, False if timeout or no channel.
 
 #### user_profile_strategy
 
