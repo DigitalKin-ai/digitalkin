@@ -484,9 +484,7 @@ class TestStop:
         with patch.object(module, "cleanup", new_callable=AsyncMock):
             await module.stop()
 
-        h1.flush_chat_history.assert_awaited_once_with(module.context)
         h1.flush_file_history.assert_awaited_once_with(module.context)
-        h2.flush_chat_history.assert_awaited_once_with(module.context)
         h2.flush_file_history.assert_awaited_once_with(module.context)
 
     async def test_does_not_call_clear_mission_cache(self) -> None:
@@ -723,6 +721,5 @@ class TestTriggerHandlerIsolation:
         with patch.object(m1, "cleanup", new_callable=AsyncMock):
             await m1.stop()
 
-        h1.flush_chat_history.assert_awaited_once()
-        h2.flush_chat_history.assert_not_called()
+        h1.flush_file_history.assert_awaited_once()
         h2.flush_file_history.assert_not_called()

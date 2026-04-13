@@ -51,4 +51,4 @@ class HealthcheckStatusTrigger(TriggerHandler, BaseMixin):
                 "setup_version_id": context.session.setup_version_id,
             },
         )
-        await self.send_message(context, output)
+        await context.callbacks.send_message(output)

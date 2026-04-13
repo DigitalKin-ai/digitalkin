@@ -26,7 +26,7 @@ class HealthcheckServicesTrigger(TriggerHandler, BaseMixin):
         """Initialize the handler."""
         super().__init__(context)
 
-    async def handle(
+    async def handle(  # noqa: PLR6301
         self,
         input_data: HealthcheckServicesInput,  # Healthcheck needs no input data # noqa: ARG002
         setup_data: Any,  # Module-agnostic setup; healthcheck ignores it # noqa: ARG002
@@ -67,4 +67,4 @@ class HealthcheckServicesTrigger(TriggerHandler, BaseMixin):
             services=services_status,
             overall_status=overall_status,  # type: ignore[arg-type]  # String value matches Literal type at runtime
         )
-        await self.send_message(context, output)
+        await context.callbacks.send_message(output)
