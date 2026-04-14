@@ -69,7 +69,29 @@ class AgnoStreamAdapter:
         self._active_run_id: str | None = None
         self._completed_run_ids: set[str] = set()
 
+        # HITL pause state — populated when a RunPausedEvent is seen
+        # (tools with external_execution=True). Callers can inspect these
+        # after streaming to decide whether to persist and resume later.
+        self._is_paused: bool = False
+        self._paused_tool_executions: list[Any] = []
+        self._paused_requirements: list[Any] = []
+
         self._dispatch: dict[Any, Callable[[Any, Any], list[BaseAgentRunEvent]]] | None = None
+
+    @property
+    def is_paused(self) -> bool:
+        """Whether the last stream ended on a run_paused event (external tool HITL)."""
+        return self._is_paused
+
+    @property
+    def paused_tool_executions(self) -> list[Any]:
+        """Agno ``ToolExecution`` objects awaiting external execution (HITL)."""
+        return list(self._paused_tool_executions)
+
+    @property
+    def paused_requirements(self) -> list[Any]:
+        """Agno ``RunRequirement`` objects carried by the paused run."""
+        return list(self._paused_requirements)
 
     def to_digitalkin_events(self, agno_event: Any) -> list[BaseAgentRunEvent]:
         """Convert one Agno event into one or more DigitalKin events.
@@ -95,6 +117,7 @@ class AgnoStreamAdapter:
                 RunEvent.run_content: self._handle_run_content,
                 RunEvent.run_completed: self._handle_run_completed,
                 RunEvent.run_error: self._handle_run_error,
+                RunEvent.run_paused: self._handle_run_paused,
                 RunEvent.reasoning_started: self._handle_reasoning_started,
                 RunEvent.reasoning_content_delta: self._handle_reasoning_content_delta,
                 RunEvent.reasoning_step: self._handle_reasoning_step,
@@ -330,6 +353,82 @@ class AgnoStreamAdapter:
                 metadata=None,
             )
         ]
+
+    def _handle_run_paused(self, agno_event: Any, timestamp: Any) -> list[BaseAgentRunEvent]:
+        """Handle ``RunEvent.run_paused`` — HITL pause on external tool execution.
+
+        Agno does NOT emit ``tool_call_started`` / ``tool_call_completed`` for
+        tools declared with ``external_execution=True`` (see
+        ``agno/models/base.py`` where the emission is short-circuited). The
+        front therefore never sees the corresponding AG-UI ``ToolCallStart``
+        / ``ToolCallArgs`` / ``ToolCallEnd`` events unless we synthesize them.
+
+        This handler:
+
+        1. Closes any active reasoning / content sequence.
+        2. Iterates ``RunPausedEvent.tools`` and emits one pair of
+           ``ToolCallStartedEvent`` + ``ToolCallCompletedEvent`` per tool.
+           The ``ToolCallCompletedEvent`` carries ``content=None`` and
+           ``tool.result=None`` so the downstream AG-UI bridge emits
+           ``ToolCallEnd`` *without* a ``ToolCallResult`` (guarded by the
+           ``if result_content:`` check in ``AgUiMixin``).
+        3. Records pause state on the adapter (``is_paused``,
+           ``paused_tool_executions``, ``paused_requirements``) so callers
+           can detect the pause after streaming and persist the run for
+           later resumption.
+
+        Returns:
+            Synthesized tool-call events for the paused tools. The caller
+            is responsible for subsequently emitting the AG-UI
+            ``RunFinished`` with ``result.status = "awaiting_tool_result"``
+            — this adapter stays protocol-agnostic.
+        """
+        events: list[BaseAgentRunEvent] = []
+
+        if self._reasoning_active:
+            events.extend(self._close_reasoning(timestamp))
+        if self._content_active:
+            events.extend(self._close_content(timestamp))
+
+        tools = getattr(agno_event, "tools", None) or []
+        requirements = getattr(agno_event, "requirements", None) or []
+
+        self._is_paused = True
+        self._paused_tool_executions = list(tools)
+        self._paused_requirements = list(requirements)
+
+        for tool_exec in tools:
+            tool_call_id = getattr(tool_exec, "tool_call_id", None)
+            tool_info = ToolInfo(
+                tool_call_id=tool_call_id,
+                tool_name=getattr(tool_exec, "tool_name", None),
+                tool_args=getattr(tool_exec, "tool_args", None),
+                result=None,
+            )
+            logger.debug(
+                "Synthesizing tool-call events for external_execution tool %s (id=%s)",
+                tool_info.tool_name,
+                tool_call_id,
+            )
+            events.extend((
+                ToolCallStartedEvent(
+                    event=AgentRunEvent.TOOL_CALL_STARTED,
+                    tool=tool_info,
+                    timestamp=timestamp,
+                    metadata=None,
+                ),
+                ToolCallCompletedEvent(
+                    event=AgentRunEvent.TOOL_CALL_COMPLETED,
+                    tool=tool_info,
+                    content=None,
+                    timestamp=timestamp,
+                    metadata=None,
+                ),
+            ))
+            if tool_call_id:
+                self._closed_tool_call_ids.add(tool_call_id)
+
+        return events
 
     def _handle_tool_call_error(self, agno_event: Any, timestamp: Any) -> list[BaseAgentRunEvent]:
         """Handle RunEvent.tool_call_error.
