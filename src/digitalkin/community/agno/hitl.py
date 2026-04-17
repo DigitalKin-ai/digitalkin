@@ -204,7 +204,7 @@ class PausedRunStore:
             pending_tool_call_ids=pending,
             payload=run_output.to_dict(),
         )
-        await self._storage.store(
+        await self._storage.upsert(
             collection=self.COLLECTION,
             record_id=thread_id,
             data=record.model_dump(),
