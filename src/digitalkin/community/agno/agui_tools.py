@@ -114,7 +114,12 @@ def make_tools_factory(
         factory is re-invoked on every run.
     """
 
-    def factory(run_context: RunContext) -> list[Any]:
+    def factory(run_context: RunContext | None = None) -> list[Any]:
+        # Agno may call the factory without arguments during Agent init or
+        # validation (observed in agno>=2.5.10). When that happens, return
+        # just the base tools — no frontend tools are available yet anyway.
+        if run_context is None:
+            return list(base_tools)
         deps = getattr(run_context, "dependencies", None) or {}
         agui_tools: list[AgUiTool] = deps.get(dependency_key) or []
         return [*base_tools, *[agui_tool_to_external_function(t) for t in agui_tools]]
