@@ -184,11 +184,20 @@ class PausedRunStore:
         Returns:
             A :class:`PauseInfo` describing what was persisted.
         """
-        pending = [
-            req.tool_execution.tool_call_id
-            for req in (run_output.requirements or [])
-            if getattr(req, "needs_external_execution", False) and req.tool_execution is not None
-        ]
+        # Extract pending tool_call_ids from run_output.tools (not requirements).
+        # Agno's requirements list may be incomplete: it only appends a
+        # RunRequirement for the LAST tool in each paused batch
+        # (tool_executions_list[-1] in _response.py), so when N external tools
+        # pause in the same turn, only the last one gets a requirement.
+        # run_output.tools contains ALL tools (server-side + external), so we
+        # filter by external_execution_required and deduplicate.
+        seen: set[str] = set()
+        pending: list[str] = []
+        for tool in run_output.tools or []:
+            tid = getattr(tool, "tool_call_id", None)
+            if tid and tid not in seen and getattr(tool, "external_execution_required", False):
+                seen.add(tid)
+                pending.append(tid)
         record = PausedRunRecord(
             thread_id=thread_id,
             run_id=run_output.run_id or "",

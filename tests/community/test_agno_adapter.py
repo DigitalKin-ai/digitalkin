@@ -287,12 +287,19 @@ class TestTextContent:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-def _make_tool(tool_call_id="tc1", tool_name="search", tool_args=None, result=None):
+def _make_tool(
+    tool_call_id="tc1",
+    tool_name="search",
+    tool_args=None,
+    result=None,
+    external_execution_required=False,
+):
     return SimpleNamespace(
         tool_call_id=tool_call_id,
         tool_name=tool_name,
         tool_args=tool_args or {"q": "test"},
         result=result,
+        external_execution_required=external_execution_required,
     )
 
 
@@ -357,7 +364,7 @@ class TestToolCalls:
 class TestRunPaused:
     def test_run_paused_synthesizes_tool_events(self):
         adapter = _create_adapter()
-        tool1 = _make_tool(tool_call_id="ext1", tool_name="get_weather", tool_args={"city": "Lyon"})
+        tool1 = _make_tool(tool_call_id="ext1", tool_name="get_weather", tool_args={"city": "Lyon"}, external_execution_required=True)
         events = adapter.to_digitalkin_events(
             _make_event("RunPaused", tools=[tool1], requirements=[])
         )
@@ -369,8 +376,8 @@ class TestRunPaused:
 
     def test_run_paused_multiple_tools(self):
         adapter = _create_adapter()
-        tool1 = _make_tool(tool_call_id="ext1", tool_name="get_weather")
-        tool2 = _make_tool(tool_call_id="ext2", tool_name="select_items")
+        tool1 = _make_tool(tool_call_id="ext1", tool_name="get_weather", external_execution_required=True)
+        tool2 = _make_tool(tool_call_id="ext2", tool_name="select_items", external_execution_required=True)
         events = adapter.to_digitalkin_events(
             _make_event("RunPaused", tools=[tool1, tool2], requirements=[])
         )
@@ -392,7 +399,7 @@ class TestRunPaused:
         )
         assert adapter._content_active is True
 
-        tool1 = _make_tool(tool_call_id="ext1", tool_name="get_weather")
+        tool1 = _make_tool(tool_call_id="ext1", tool_name="get_weather", external_execution_required=True)
         all_events.extend(
             adapter.to_digitalkin_events(_make_event("RunPaused", tools=[tool1], requirements=[]))
         )
@@ -409,7 +416,7 @@ class TestRunPaused:
         assert adapter.paused_tool_executions == []
         assert adapter.paused_requirements == []
 
-        tool = _make_tool(tool_call_id="ext1", tool_name="get_weather")
+        tool = _make_tool(tool_call_id="ext1", tool_name="get_weather", external_execution_required=True)
         req = SimpleNamespace(tool_execution=tool)
         adapter.to_digitalkin_events(_make_event("RunPaused", tools=[tool], requirements=[req]))
 
@@ -553,7 +560,7 @@ class TestStateTransitions:
         all_events.extend(adapter.to_digitalkin_events(_make_event("ReasoningStep", reasoning_content="plan")))
         assert adapter._reasoning_active is True
 
-        tool = _make_tool(tool_call_id="ext1", tool_name="get_weather")
+        tool = _make_tool(tool_call_id="ext1", tool_name="get_weather", external_execution_required=True)
         all_events.extend(adapter.to_digitalkin_events(_make_event("RunPaused", tools=[tool], requirements=[])))
 
         types = _event_types(all_events)
@@ -676,10 +683,13 @@ class TestRealisticSequences:
             _make_event("RunContent", content="Here are the results!", reasoning_content=None)
         ))
 
-        # 8. frontend tool pause
-        ext_tool = _make_tool("ext-show", "show_sources")
+        # 8. frontend tool pause — RunPausedEvent.tools contains ALL tools
+        # (backend ones already executed + external ones). The adapter must
+        # only synthesize events for external ones.
+        backend_tool = _make_tool("tc-think", "think")  # already executed, NOT external
+        ext_tool = _make_tool("ext-show", "show_sources", external_execution_required=True)
         all_events.extend(adapter.to_digitalkin_events(
-            _make_event("RunPaused", tools=[ext_tool], requirements=[])
+            _make_event("RunPaused", tools=[backend_tool, ext_tool], requirements=[])
         ))
 
         types = _event_types(all_events)
@@ -702,7 +712,9 @@ class TestRealisticSequences:
 
         # Verify pause at the end
         assert adapter.is_paused is True
-        assert adapter.paused_tool_executions[0].tool_name == "show_sources"
+        ext_tools = [t for t in adapter.paused_tool_executions if getattr(t, "external_execution_required", False)]
+        assert len(ext_tools) == 1
+        assert ext_tools[0].tool_name == "show_sources"
 
     def test_template_archetype_simple_pause_resume_style(self):
         """Simple template-archetype sequence: reasoning → text → external tool → pause."""
@@ -724,7 +736,7 @@ class TestRealisticSequences:
         ))
 
         # External tool pause
-        ext_tool = _make_tool("ext1", "get_weather", {"city": "Lyon"})
+        ext_tool = _make_tool("ext1", "get_weather", {"city": "Lyon"}, external_execution_required=True)
         all_events.extend(adapter.to_digitalkin_events(
             _make_event("RunPaused", tools=[ext_tool], requirements=[])
         ))
@@ -737,4 +749,51 @@ class TestRealisticSequences:
         # All lifecycles properly closed
         assert types.count(AgentRunEvent.REASONING_STARTED) == types.count(AgentRunEvent.REASONING_COMPLETED)
         assert types.count(AgentRunEvent.TEXT_MESSAGE_STARTED) == types.count(AgentRunEvent.TEXT_MESSAGE_COMPLETED)
+        assert adapter.is_paused is True
+
+    def test_run_paused_mixed_backend_and_frontend_tools(self):
+        """RunPausedEvent.tools has backend tools (think) + 2 frontend tools.
+
+        The adapter must only synthesize events for the 2 external tools,
+        skip the backend tool (already streamed), and deduplicate if the
+        same tool_call_id appears multiple times (Agno accumulation bug).
+        """
+        adapter = _create_adapter()
+
+        backend = _make_tool("tc-think", "think")  # NOT external
+        ext1 = _make_tool("ext-ask", "ask_question", external_execution_required=True)
+        ext2 = _make_tool("ext-map", "show_map", external_execution_required=True)
+        # Simulate Agno's accumulation: ext1 appears twice (from two yield batches)
+        ext1_dup = _make_tool("ext-ask", "ask_question", external_execution_required=True)
+
+        events = adapter.to_digitalkin_events(
+            _make_event("RunPaused", tools=[backend, ext1, ext1_dup, ext2], requirements=[])
+        )
+        types = _event_types(events)
+
+        # Only 2 unique external tools → 2 pairs of start/completed
+        assert types == [
+            AgentRunEvent.TOOL_CALL_STARTED,
+            AgentRunEvent.TOOL_CALL_COMPLETED,
+            AgentRunEvent.TOOL_CALL_STARTED,
+            AgentRunEvent.TOOL_CALL_COMPLETED,
+        ]
+        # First pair is ask_question, second is show_map
+        assert events[0].tool.tool_name == "ask_question"
+        assert events[2].tool.tool_name == "show_map"
+        # Backend tool NOT synthesized
+        tool_names = [e.tool.tool_name for e in events if hasattr(e, "tool") and e.tool]
+        assert "think" not in tool_names
+
+    def test_run_paused_no_external_tools_emits_nothing(self):
+        """If RunPausedEvent.tools only has backend tools, no events synthesized."""
+        adapter = _create_adapter()
+        backend = _make_tool("tc-think", "think")  # NOT external
+        events = adapter.to_digitalkin_events(
+            _make_event("RunPaused", tools=[backend], requirements=[])
+        )
+        # No tool events (think is not external)
+        tool_events = [e for e in events if AgentRunEvent.TOOL_CALL_STARTED == e.event or AgentRunEvent.TOOL_CALL_COMPLETED == e.event]
+        assert tool_events == []
+        # But adapter is still paused
         assert adapter.is_paused is True

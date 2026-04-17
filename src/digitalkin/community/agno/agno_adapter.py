@@ -437,8 +437,19 @@ class AgnoStreamAdapter:
         self._paused_tool_executions = list(tools)
         self._paused_requirements = list(requirements)
 
+        # RunPausedEvent.tools contains ALL tools from run_response.tools
+        # (both server-side tools already executed and external ones awaiting
+        # client execution). We must only synthesize events for external tools
+        # — the server-side ones (e.g. ReasoningTools' think/analyze) were
+        # already streamed via the normal tool_call_started/completed path.
+        seen_ids: set[str] = set()
         for tool_exec in tools:
+            if not getattr(tool_exec, "external_execution_required", False):
+                continue
             tool_call_id = getattr(tool_exec, "tool_call_id", None)
+            if not tool_call_id or tool_call_id in seen_ids:
+                continue
+            seen_ids.add(tool_call_id)
             tool_info = ToolInfo(
                 tool_call_id=tool_call_id,
                 tool_name=getattr(tool_exec, "tool_name", None),
@@ -465,8 +476,7 @@ class AgnoStreamAdapter:
                     metadata=None,
                 ),
             ))
-            if tool_call_id:
-                self._closed_tool_call_ids.add(tool_call_id)
+            self._closed_tool_call_ids.add(tool_call_id)
 
         return events
 
