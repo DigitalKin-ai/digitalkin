@@ -263,20 +263,60 @@ class AgnoStreamAdapter:
         ]
 
     def _handle_reasoning_step(self, agno_event: Any, timestamp: Any) -> list[BaseAgentRunEvent]:
-        """Handle RunEvent.reasoning_step.
+        """Handle ``RunEvent.reasoning_step`` — emitted by Agno's ``ReasoningTools``.
+
+        Unlike the native reasoning events (``reasoning_started`` /
+        ``reasoning_content_delta`` / ``reasoning_completed``), a
+        ``reasoning_step`` may arrive without a preceding
+        ``reasoning_started``. This happens when the LLM calls tool-based
+        reasoning (``think`` / ``analyze`` from ``ReasoningTools``) rather
+        than using the model's built-in extended thinking.
+
+        To comply with the AG-UI protocol — which requires every
+        ``REASONING_MESSAGE_CONTENT`` to be wrapped in a
+        ``REASONING_START`` … ``REASONING_END`` lifecycle — we auto-open
+        a reasoning sequence here if none is active. The sequence is
+        auto-closed by the next non-reasoning event (``_handle_run_content``,
+        ``_handle_tool_call_started``, etc.) or by ``flush()``.
 
         Returns:
-            List containing a ReasoningStepEvent.
+            List of events: optionally a ``ReasoningStartedEvent`` (if
+            auto-opened), followed by the ``ReasoningStepEvent``.
         """
-        return [
+        events: list[BaseAgentRunEvent] = []
+
+        content = getattr(agno_event, "reasoning_content", "")
+        if not content:
+            return events
+
+        # Close active text message if transitioning to reasoning
+        if self._content_active:
+            events.extend(self._close_content(timestamp))
+
+        # Auto-open reasoning lifecycle if not already active
+        if not self._reasoning_active:
+            self._current_reasoning_id = str(uuid.uuid4())
+            self._reasoning_active = True
+            logger.debug("Reasoning auto-started (from reasoning_step), id=%s", self._current_reasoning_id)
+            events.append(
+                ReasoningStartedEvent(
+                    event=AgentRunEvent.REASONING_STARTED,
+                    reasoning_id=self._current_reasoning_id,
+                    timestamp=timestamp,
+                    metadata=None,
+                )
+            )
+
+        events.append(
             ReasoningStepEvent(
                 event=AgentRunEvent.REASONING_STEP,
-                delta=getattr(agno_event, "reasoning_content", ""),
+                delta=content,
                 reasoning_id=self._current_reasoning_id,
                 timestamp=timestamp,
                 metadata=None,
             )
-        ]
+        )
+        return events
 
     def _handle_reasoning_completed(self, agno_event: Any, timestamp: Any) -> list[BaseAgentRunEvent]:
         """Handle RunEvent.reasoning_completed.
