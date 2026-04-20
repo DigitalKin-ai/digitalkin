@@ -16,8 +16,10 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 import pytest_asyncio
 
+from digitalkin.core.task_manager.base_task_manager import BaseTaskManager
 from digitalkin.core.task_manager.remote_task_manager import RemoteTaskManager
 from digitalkin.core.task_manager.task_session import TaskSession
+from digitalkin.models.settings.task.task import TaskSettings
 from digitalkin.modules._base_module import BaseModule
 from digitalkin.services.task_manager.task_manager_strategy import TaskManagerStrategy
 
@@ -78,10 +80,11 @@ async def mock_base_module(mock_signal_service: Mock) -> Mock:
 
 
 @pytest_asyncio.fixture
-async def task_manager() -> RemoteTaskManager:
+async def task_manager(monkeypatch: pytest.MonkeyPatch) -> RemoteTaskManager:
     """Standard RemoteTaskManager with test-friendly settings."""
+    monkeypatch.setenv("TASK_MAX_CONCURRENT_TASKS", "10")
+    BaseTaskManager._task_settings = TaskSettings()
     mgr = RemoteTaskManager(default_timeout=2.0)
-    mgr.max_concurrent_tasks = 10
     return mgr
 
 
@@ -133,11 +136,14 @@ class TestTaskRegistration:
     @pytest.mark.asyncio
     async def test_register_task_max_limit(
         self, mock_base_module: Mock,
+            monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Test exceeding max tasks raises RuntimeError after wait timeout."""
+        monkeypatch.setenv("TASK_MAX_CONCURRENT_TASKS", "2")
+        monkeypatch.setenv("TASK_MAX_QUEUED_TASKS", "0")
+        monkeypatch.setenv("TASK_WAIT_TIMEOUT", "0.1")
+        BaseTaskManager._task_settings = TaskSettings()
         small_manager = RemoteTaskManager(default_timeout=1.0)
-        small_manager.max_concurrent_tasks = 2
-        small_manager._task_wait_timeout = 0.1
 
         async def work() -> None:
             await asyncio.sleep(0.5)
@@ -346,11 +352,13 @@ class TestTasksLock:
     """Tests for _tasks_lock preventing TOCTOU race conditions."""
 
     @pytest.mark.asyncio
-    async def test_concurrent_register_respects_max(self, mock_base_module: Mock) -> None:
+    async def test_concurrent_register_respects_max(self, mock_base_module: Mock, monkeypatch: pytest.MonkeyPatch) -> None:
         """Test concurrent registers don't exceed max_concurrent_tasks."""
+        monkeypatch.setenv("TASK_MAX_CONCURRENT_TASKS", "3")
+        monkeypatch.setenv("TASK_MAX_QUEUED_TASKS", "0")
+        monkeypatch.setenv("TASK_WAIT_TIMEOUT", "0.1")
+        BaseTaskManager._task_settings = TaskSettings()
         mgr = RemoteTaskManager()
-        mgr.max_concurrent_tasks = 3
-        mgr._task_wait_timeout = 0.1
 
         async def work():
             await asyncio.sleep(1)

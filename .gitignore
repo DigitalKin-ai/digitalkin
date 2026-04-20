@@ -190,5 +190,7 @@ requirements.txt
 certs/
 .report.json
 docker-compose.override.yml
+docker/init_pycharm_helpers.sh
 
 CLAUDE.md
+/docker/init_pycharm_helpers.sh

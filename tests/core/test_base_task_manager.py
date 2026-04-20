@@ -23,6 +23,7 @@ import pytest_asyncio
 from digitalkin.core.task_manager.base_task_manager import BaseTaskManager
 from digitalkin.core.task_manager.task_session import TaskSession
 from digitalkin.models.core.task_monitor import CancellationReason
+from digitalkin.models.settings.task.task import TaskSettings
 from digitalkin.modules._base_module import BaseModule
 from digitalkin.services.task_manager.task_manager_strategy import TaskManagerStrategy
 
@@ -39,11 +40,11 @@ class ConcreteTaskManager(BaseTaskManager):
     """Minimal concrete implementation for testing BaseTaskManager."""
 
     async def create_task(
-        self,
-        task_id: str,
-        mission_id: str,
-        module: BaseModule,
-        coro: Coroutine[Any, Any, None],
+            self,
+            task_id: str,
+            mission_id: str,
+            module: BaseModule,
+            coro: Coroutine[Any, Any, None],
     ) -> None:
         """Create task using base validation and session creation.
 
@@ -109,8 +110,8 @@ async def mock_base_module(mock_signal_service: Mock) -> Mock:
 @pytest_asyncio.fixture
 async def task_manager() -> ConcreteTaskManager:
     """Standard concrete task manager for testing."""
+    BaseTaskManager._task_settings = TaskSettings()
     mgr = ConcreteTaskManager(default_timeout=2.0)
-    mgr.max_concurrent_tasks = 10
     return mgr
 
 
@@ -155,10 +156,11 @@ class TestAbstractMethods:
         assert mgr.default_timeout == 300.0
         assert mgr.max_concurrent_tasks == 100
 
-    def test_custom_params(self) -> None:
+    def test_custom_params(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Test custom parameter values."""
+        monkeypatch.setenv("TASK_MAX_CONCURRENT_TASKS", "50")
+        BaseTaskManager._task_settings = TaskSettings()
         mgr = ConcreteTaskManager(default_timeout=5.0)
-        mgr.max_concurrent_tasks = 50
         assert mgr.default_timeout == 5.0
         assert mgr.max_concurrent_tasks == 50
 
@@ -173,10 +175,9 @@ class TestValidation:
 
     @pytest.mark.asyncio
     async def test_duplicate_task_id_raises(
-        self, task_manager: ConcreteTaskManager, mock_base_module: Mock,
+            self, task_manager: ConcreteTaskManager, mock_base_module: Mock,
     ) -> None:
         """Test that duplicate task_id raises ValueError."""
-
         async def work():
             await asyncio.sleep(1)
 
@@ -186,11 +187,13 @@ class TestValidation:
             await task_manager.create_task("dup", "missions:test", mock_base_module, work())
 
     @pytest.mark.asyncio
-    async def test_max_concurrent_tasks_raises(self, mock_base_module: Mock) -> None:
+    async def test_max_concurrent_tasks_raises(self, mock_base_module: Mock, monkeypatch: pytest.MonkeyPatch) -> None:
         """Test that exceeding max tasks raises RuntimeError after wait timeout."""
+        monkeypatch.setenv("TASK_MAX_CONCURRENT_TASKS", "2")
+        monkeypatch.setenv("TASK_MAX_QUEUED_TASKS", "0")
+        monkeypatch.setenv("TASK_WAIT_TIMEOUT", "1")
+        BaseTaskManager._task_settings = TaskSettings()
         mgr = ConcreteTaskManager(default_timeout=1.0)
-        mgr.max_concurrent_tasks = 2
-        mgr._task_wait_timeout = 0.1
 
         async def work():
             await asyncio.sleep(1)
@@ -203,10 +206,9 @@ class TestValidation:
 
     @pytest.mark.asyncio
     async def test_duplicate_closes_coroutine(
-        self, task_manager: ConcreteTaskManager, mock_base_module: Mock,
+            self, task_manager: ConcreteTaskManager, mock_base_module: Mock,
     ) -> None:
         """Test that duplicate validation closes the rejected coroutine."""
-
         async def work():
             await asyncio.sleep(1)
 
@@ -221,11 +223,13 @@ class TestValidation:
             await coro
 
     @pytest.mark.asyncio
-    async def test_max_tasks_closes_coroutine(self, mock_base_module: Mock) -> None:
+    async def test_max_tasks_closes_coroutine(self, mock_base_module: Mock, monkeypatch: pytest.MonkeyPatch) -> None:
         """Test that max tasks validation closes the rejected coroutine."""
+        monkeypatch.setenv("TASK_MAX_CONCURRENT_TASKS", "1")
+        monkeypatch.setenv("TASK_MAX_QUEUED_TASKS", "0")
+        monkeypatch.setenv("TASK_WAIT_TIMEOUT", "1")
+        BaseTaskManager._task_settings = TaskSettings()
         mgr = ConcreteTaskManager()
-        mgr.max_concurrent_tasks = 1
-        mgr._task_wait_timeout = 0.1
 
         async def work():
             await asyncio.sleep(1)
@@ -250,7 +254,7 @@ class TestSessionCreation:
 
     @pytest.mark.asyncio
     async def test_create_session_registers(
-        self, task_manager: ConcreteTaskManager, mock_base_module: Mock,
+            self, task_manager: ConcreteTaskManager, mock_base_module: Mock,
     ) -> None:
         """Test _create_session registers session in tasks_sessions."""
         session = task_manager._create_session("t1", "missions:test", mock_base_module)
@@ -262,7 +266,7 @@ class TestSessionCreation:
 
     @pytest.mark.asyncio
     async def test_create_session_pending_status(
-        self, task_manager: ConcreteTaskManager, mock_base_module: Mock,
+            self, task_manager: ConcreteTaskManager, mock_base_module: Mock,
     ) -> None:
         """Test _create_session creates session with pending status."""
         session = task_manager._create_session("t2", "missions:test", mock_base_module)
@@ -279,7 +283,7 @@ class TestCleanup:
 
     @pytest.mark.asyncio
     async def test_cleanup_removes_session(
-        self, task_manager: ConcreteTaskManager, mock_task_session: Mock,
+            self, task_manager: ConcreteTaskManager, mock_task_session: Mock,
     ) -> None:
         """Test cleanup removes session from tracking."""
         task_manager.tasks_sessions["t1"] = mock_task_session
@@ -290,7 +294,7 @@ class TestCleanup:
 
     @pytest.mark.asyncio
     async def test_cleanup_calls_session_cleanup(
-        self, task_manager: ConcreteTaskManager, mock_task_session: Mock,
+            self, task_manager: ConcreteTaskManager, mock_task_session: Mock,
     ) -> None:
         """Test cleanup calls session.cleanup()."""
         task_manager.tasks_sessions["t1"] = mock_task_session
@@ -301,7 +305,7 @@ class TestCleanup:
 
     @pytest.mark.asyncio
     async def test_cleanup_removes_task(
-        self, task_manager: ConcreteTaskManager, mock_task_session: Mock,
+            self, task_manager: ConcreteTaskManager, mock_task_session: Mock,
     ) -> None:
         """Test cleanup removes task from tasks dict."""
         task_manager.tasks["t1"] = asyncio.create_task(asyncio.sleep(10))
@@ -313,7 +317,7 @@ class TestCleanup:
 
     @pytest.mark.asyncio
     async def test_cleanup_handles_missing_session(
-        self, task_manager: ConcreteTaskManager,
+            self, task_manager: ConcreteTaskManager,
     ) -> None:
         """Test cleanup handles non-existent session gracefully."""
         # Should not raise
@@ -321,7 +325,7 @@ class TestCleanup:
 
     @pytest.mark.asyncio
     async def test_cleanup_handles_session_cleanup_failure(
-        self, task_manager: ConcreteTaskManager, mock_task_session: Mock,
+            self, task_manager: ConcreteTaskManager, mock_task_session: Mock,
     ) -> None:
         """Test cleanup continues even if session.cleanup() fails."""
         mock_task_session.cleanup = AsyncMock(side_effect=RuntimeError("cleanup failed"))
@@ -344,10 +348,10 @@ class TestSignalSending:
 
     @pytest.mark.asyncio
     async def test_send_signal_success(
-        self,
-        task_manager: ConcreteTaskManager,
-        mock_task_session: Mock,
-        mock_signal_service: Mock,
+            self,
+            task_manager: ConcreteTaskManager,
+            mock_task_session: Mock,
+            mock_signal_service: Mock,
     ) -> None:
         """Test successful signal sending."""
         task_manager.tasks_sessions["t1"] = mock_task_session
@@ -359,7 +363,7 @@ class TestSignalSending:
 
     @pytest.mark.asyncio
     async def test_send_signal_unknown_task(
-        self, task_manager: ConcreteTaskManager,
+            self, task_manager: ConcreteTaskManager,
     ) -> None:
         """Test signal to non-existent task returns False."""
         result = await task_manager.send_signal("unknown", "missions:test", "cancel", {})
@@ -367,10 +371,10 @@ class TestSignalSending:
 
     @pytest.mark.asyncio
     async def test_send_signal_includes_action(
-        self,
-        task_manager: ConcreteTaskManager,
-        mock_task_session: Mock,
-        mock_signal_service: Mock,
+            self,
+            task_manager: ConcreteTaskManager,
+            mock_task_session: Mock,
+            mock_signal_service: Mock,
     ) -> None:
         """Test signal includes correct action type."""
         task_manager.tasks_sessions["t1"] = mock_task_session
@@ -382,10 +386,10 @@ class TestSignalSending:
 
     @pytest.mark.asyncio
     async def test_send_signal_with_payload(
-        self,
-        task_manager: ConcreteTaskManager,
-        mock_task_session: Mock,
-        mock_signal_service: Mock,
+            self,
+            task_manager: ConcreteTaskManager,
+            mock_task_session: Mock,
+            mock_signal_service: Mock,
     ) -> None:
         """Test signal includes payload."""
         task_manager.tasks_sessions["t1"] = mock_task_session
@@ -406,7 +410,7 @@ class TestCancelTask:
 
     @pytest.mark.asyncio
     async def test_cancel_nonexistent_task(
-        self, task_manager: ConcreteTaskManager,
+            self, task_manager: ConcreteTaskManager,
     ) -> None:
         """Test cancelling a task that doesn't exist returns True."""
         result = await task_manager.cancel_task("nonexistent", "missions:test")
@@ -414,9 +418,9 @@ class TestCancelTask:
 
     @pytest.mark.asyncio
     async def test_cancel_completed_task(
-        self,
-        task_manager: ConcreteTaskManager,
-        mock_task_session: Mock,
+            self,
+            task_manager: ConcreteTaskManager,
+            mock_task_session: Mock,
     ) -> None:
         """Test cancelling an already completed task."""
         done_task = asyncio.create_task(asyncio.sleep(0))
@@ -439,7 +443,7 @@ class TestCancelAllTasks:
 
     @pytest.mark.asyncio
     async def test_cancel_all_no_tasks(
-        self, task_manager: ConcreteTaskManager,
+            self, task_manager: ConcreteTaskManager,
     ) -> None:
         """Test cancel_all_tasks with no tasks."""
         results = await task_manager.cancel_all_tasks("missions:test")
@@ -447,9 +451,9 @@ class TestCancelAllTasks:
 
     @pytest.mark.asyncio
     async def test_cancel_all_cancels_all_running(
-        self,
-        task_manager: ConcreteTaskManager,
-        mock_task_session: Mock,
+            self,
+            task_manager: ConcreteTaskManager,
+            mock_task_session: Mock,
     ) -> None:
         """Test cancel_all_tasks cancels all running tasks."""
         for i in range(3):
@@ -479,7 +483,7 @@ class TestShutdown:
 
     @pytest.mark.asyncio
     async def test_shutdown_sets_event(
-        self, task_manager: ConcreteTaskManager,
+            self, task_manager: ConcreteTaskManager,
     ) -> None:
         """Test shutdown sets the shutdown event."""
         assert not task_manager._shutdown_event.is_set()
@@ -488,7 +492,7 @@ class TestShutdown:
 
     @pytest.mark.asyncio
     async def test_shutdown_idempotent(
-        self, task_manager: ConcreteTaskManager,
+            self, task_manager: ConcreteTaskManager,
     ) -> None:
         """Test shutdown can be called multiple times safely."""
         await task_manager.shutdown("missions:test")
@@ -497,9 +501,9 @@ class TestShutdown:
 
     @pytest.mark.asyncio
     async def test_shutdown_marks_sessions_with_reason(
-        self,
-        task_manager: ConcreteTaskManager,
-        mock_task_session: Mock,
+            self,
+            task_manager: ConcreteTaskManager,
+            mock_task_session: Mock,
     ) -> None:
         """Test shutdown marks sessions with SHUTDOWN reason."""
         mock_task_session.cancellation_reason = CancellationReason.UNKNOWN
@@ -520,16 +524,16 @@ class TestProperties:
 
     @pytest.mark.asyncio
     async def test_task_count_empty(
-        self, task_manager: ConcreteTaskManager,
+            self, task_manager: ConcreteTaskManager,
     ) -> None:
         """Test task_count is 0 when empty."""
         assert task_manager.task_count == 0
 
     @pytest.mark.asyncio
     async def test_task_count_active(
-        self,
-        task_manager: ConcreteTaskManager,
-        mock_base_module: Mock,
+            self,
+            task_manager: ConcreteTaskManager,
+            mock_base_module: Mock,
     ) -> None:
         """Test task_count counts pending and running sessions."""
         async def work():
@@ -543,14 +547,14 @@ class TestProperties:
 
     @pytest.mark.asyncio
     async def test_running_tasks_empty(
-        self, task_manager: ConcreteTaskManager,
+            self, task_manager: ConcreteTaskManager,
     ) -> None:
         """Test running_tasks is empty when no tasks."""
         assert len(task_manager.running_tasks) == 0
 
     @pytest.mark.asyncio
     async def test_running_tasks_tracks_active(
-        self, task_manager: ConcreteTaskManager,
+            self, task_manager: ConcreteTaskManager,
     ) -> None:
         """Test running_tasks returns IDs of active tasks."""
         task = asyncio.create_task(asyncio.sleep(10))
@@ -596,11 +600,13 @@ class TestTasksLock:
     """Tests for _tasks_lock preventing TOCTOU race conditions."""
 
     @pytest.mark.asyncio
-    async def test_concurrent_create_respects_max(self, mock_base_module: Mock) -> None:
+    async def test_concurrent_create_respects_max(self, mock_base_module: Mock, monkeypatch: pytest.MonkeyPatch) -> None:
         """Test that concurrent creates don't exceed max_concurrent_tasks."""
+        monkeypatch.setenv("TASK_MAX_CONCURRENT_TASKS", "3")
+        monkeypatch.setenv("TASK_MAX_QUEUED_TASKS", "0")
+        monkeypatch.setenv("TASK_WAIT_TIMEOUT", "1")
+        BaseTaskManager._task_settings = TaskSettings()
         mgr = ConcreteTaskManager()
-        mgr.max_concurrent_tasks = 3
-        mgr._task_wait_timeout = 0.1
 
         async def work():
             await asyncio.sleep(1)

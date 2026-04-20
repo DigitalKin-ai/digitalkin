@@ -19,9 +19,11 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 import pytest_asyncio
 
+from digitalkin.core.task_manager.base_task_manager import BaseTaskManager
 from digitalkin.core.task_manager.local_task_manager import LocalTaskManager
 from digitalkin.core.task_manager.task_session import TaskSession
 from digitalkin.models.core.task_monitor import CancellationReason
+from digitalkin.models.settings.task.task import TaskSettings
 from digitalkin.modules._base_module import BaseModule
 from digitalkin.services.task_manager.task_manager_strategy import TaskManagerStrategy
 
@@ -121,18 +123,20 @@ async def mock_task_session(mock_signal_service: Mock) -> Mock:
 
 
 @pytest_asyncio.fixture
-async def task_manager() -> LocalTaskManager:
+async def task_manager(monkeypatch: pytest.MonkeyPatch) -> LocalTaskManager:
     """Standard LocalTaskManager with test-friendly settings."""
+    monkeypatch.setenv("TASK_MAX_CONCURRENT_TASKS", "10")
+    BaseTaskManager._task_settings = TaskSettings()
     mgr = LocalTaskManager(default_timeout=2.0)
-    mgr.max_concurrent_tasks = 10
     return mgr
 
 
 @pytest_asyncio.fixture
-async def high_capacity_manager() -> LocalTaskManager:
+async def high_capacity_manager(monkeypatch: pytest.MonkeyPatch) -> LocalTaskManager:
     """High-capacity manager for stress tests."""
+    monkeypatch.setenv("TASK_MAX_CONCURRENT_TASKS", "150")
+    BaseTaskManager._task_settings = TaskSettings()
     mgr = LocalTaskManager(default_timeout=1.0)
-    mgr.max_concurrent_tasks = 150
     return mgr
 
 
@@ -184,11 +188,14 @@ class TestTaskCreation:
     async def test_create_task_max_limit(
         self,
         mock_base_module: Mock,
+        monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Negative: Exceeding max tasks raises RuntimeError after wait timeout."""
+        monkeypatch.setenv("TASK_MAX_CONCURRENT_TASKS", "2")
+        monkeypatch.setenv("TASK_MAX_QUEUED_TASKS", "0")
+        monkeypatch.setenv("TASK_WAIT_TIMEOUT", "0.1")
+        BaseTaskManager._task_settings = TaskSettings()
         small_manager = LocalTaskManager(default_timeout=1.0)
-        small_manager.max_concurrent_tasks = 2
-        small_manager._task_wait_timeout = 0.1
 
         async def work() -> None:
             await asyncio.sleep(0.5)
@@ -463,11 +470,14 @@ class TestConcurrencyStress:
     async def test_toctou_lock_prevents_oversubscription(
         self,
         mock_base_module: Mock,
+        monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Test that semaphore prevents oversubscription of max_concurrent_tasks."""
+        monkeypatch.setenv("TASK_MAX_CONCURRENT_TASKS", "5")
+        monkeypatch.setenv("TASK_MAX_QUEUED_TASKS", "0")
+        monkeypatch.setenv("TASK_WAIT_TIMEOUT", "0.1")
+        BaseTaskManager._task_settings = TaskSettings()
         mgr = LocalTaskManager()
-        mgr.max_concurrent_tasks = 5
-        mgr._task_wait_timeout = 0.1
 
         async def slow_task() -> None:
             await asyncio.sleep(1)
