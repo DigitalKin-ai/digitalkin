@@ -72,7 +72,7 @@ def agui_tool_to_external_function(tool: AgUiTool) -> Function:
         An :class:`agno.tools.function.Function` ready to be plugged into
         an Agno agent's tool list.
     """
-    from agno.tools.function import Function  # pyright: ignore[reportMissingImports]
+    from agno.tools.function import Function
 
     parameters = tool.parameters or {"type": "object", "properties": {}, "required": []}
     return Function(

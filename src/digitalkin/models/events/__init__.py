@@ -7,6 +7,7 @@ These models can be used as a common interface across different AI frameworks.
 from digitalkin.models.events.agent_events import (
     AgentRunEvent,
     BaseAgentRunEvent,
+    CustomEvent,
     ReasoningCompletedEvent,
     ReasoningContentDeltaEvent,
     ReasoningStartedEvent,
@@ -26,6 +27,7 @@ from digitalkin.models.events.agent_events import (
 __all__ = [
     "AgentRunEvent",
     "BaseAgentRunEvent",
+    "CustomEvent",
     "ReasoningCompletedEvent",
     "ReasoningContentDeltaEvent",
     "ReasoningStartedEvent",
