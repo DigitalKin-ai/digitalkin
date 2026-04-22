@@ -1952,15 +1952,271 @@ Modules:
 
 Agno framework integration for DigitalKin.
 
-This module provides utilities and adapters for integrating Agno agents with the DigitalKin SDK.
+Adapters, converters, and HITL helpers for building DigitalKin modules on top of the Agno agent framework. Exports:
+
+- :class:`AgnoStreamAdapter` — Agno streaming events → DigitalKin events.
+- :func:`agui_tool_to_external_function` / :func:`make_tools_factory` — register AG-UI client-side (frontend) tools as Agno external Functions.
+- :class:`AgnoHitlRunner`, :class:`PausedRunStore`, :class:`PauseInfo`, :class:`PausedRunRecord`, :data:`HITL_STORAGE_CONFIG`, :func:`emit_awaiting_tool_result` — human-in-the-loop (HITL) runner that persists a paused Agno run via the module's :class:`~digitalkin.services.storage.StorageStrategy` and resumes it when the front replies with a `ToolMessage`.
 
 Modules:
 
 - **`agno_adapter`** – Adapter to convert Agno events to DigitalKin framework-agnostic events.
+- **`agui_tools`** – AG-UI frontend tools → Agno external Functions.
+- **`hitl`** – Human-in-the-loop (HITL) runner for Agno agents with AG-UI frontend tools.
 
 Classes:
 
+- **`AgnoHitlRunner`** – High-level runner for an Agno agent with AG-UI frontend-tool support.
 - **`AgnoStreamAdapter`** – Stateful converter: Agno streaming events -> DigitalKin events.
+- **`PauseInfo`** – Summary of a paused Agno run.
+- **`PausedRunRecord`** – Persistent snapshot of an Agno run paused on external tool execution.
+- **`PausedRunStore`** – Thin wrapper around :class:StorageStrategy for the paused_runs collection.
+
+Functions:
+
+- **`agui_tool_to_external_function`** – Wrap an AG-UI tool definition as an Agno external Function.
+- **`emit_awaiting_tool_result`** – Emit an AG-UI RunFinished with status="awaiting_tool_result".
+- **`emit_messages_snapshot`** – Emit an AG-UI MessagesSnapshot event.
+- **`make_tools_factory`** – Build an Agno tools factory that merges base tools with per-run AG-UI tools.
+
+Attributes:
+
+- **`HITL_STORAGE_CONFIG`** (`dict[str, type[BaseModel]]`) – Drop-in storage config fragment — merge into your module's services_config_params.
+
+#### HITL_STORAGE_CONFIG
+
+```python
+HITL_STORAGE_CONFIG: dict[str, type[BaseModel]] = {
+    _PAUSED_RUNS_COLLECTION: PausedRunRecord
+}
+```
+
+Drop-in storage config fragment — merge into your module's `services_config_params`.
+
+Example::
+
+```text
+services_config_params = {
+    "storage": {
+        "config": {**HITL_STORAGE_CONFIG, "my_other_collection": MyModel},
+        ...
+    },
+}
+```
+
+#### AgnoHitlRunner
+
+```python
+AgnoHitlRunner(
+    *,
+    agent: Agent,
+    storage: StorageStrategy | None = None,
+    store: PausedRunStore | None = None,
+    dependency_key: str = "agui_tools",
+)
+```
+
+High-level runner for an Agno agent with AG-UI frontend-tool support.
+
+Wraps a configured :class:`~agno.agent.Agent` and a :class:`PausedRunStore`, and exposes three levels of API:
+
+- :meth:`run` / :meth:`continue_paused_run` — low-level: stream one Agno run (fresh or resumed) and return a :class:`PauseInfo` if it paused on an external tool.
+- :meth:`try_resume` — inspects an AG-UI input and resumes iff a matching :class:`~ag_ui.core.types.ToolMessage` is present.
+- :meth:`handle_agui_input` — all-in-one: detects resume vs fresh message, dispatches, and (optionally) emits the awaiting `RunFinished` event on pause. Use this one from a trigger.
+
+Parameters:
+
+- ##### **`agent`**
+
+  (`Agent`) – The Agno agent. It must be built with tools=make_tools_factory(base_tools) and cache_callables=False — otherwise the frontend tools injected per-run won't reach the LLM.
+
+- ##### **`storage`**
+
+  (`StorageStrategy | None`, default: `None` ) – Convenience: if provided and store is not, a :class:PausedRunStore is constructed automatically.
+
+- ##### **`store`**
+
+  (`PausedRunStore | None`, default: `None` ) – Pre-built paused-run store. Wins over storage.
+
+- ##### **`dependency_key`**
+
+  (`str`, default: `'agui_tools'` ) – The Agno dependencies key under which the runner passes the per-run AG-UI tool list. Must match the key used by :func:make_tools_factory. Defaults to "agui_tools".
+
+Raises:
+
+- `ValueError` – If neither storage nor store is provided.
+
+Methods:
+
+- **`continue_paused_run`** – Resume a previously paused run.
+- **`handle_agui_input`** – One-shot dispatch of an AG-UI RunAgentInput.
+- **`run`** – Stream a fresh Agno run.
+- **`try_resume`** – Try to resume a paused run from an AG-UI input.
+
+##### continue_paused_run
+
+```python
+continue_paused_run(
+    thread_id: str,
+    tool_results: dict[str, str],
+    *,
+    send: Callable[[BaseAgentRunEvent], Coroutine[Any, Any, None]],
+    run_id: str | None = None,
+    agui_tools: list[Tool] | None = None,
+) -> PauseInfo | None
+```
+
+Resume a previously paused run.
+
+Loads the persisted :class:`~agno.run.agent.RunOutput`, injects the tool results into the matching :class:`~agno.run.requirement.RunRequirement` entries, and calls :meth:`~agno.agent.Agent.acontinue_run`. On normal completion the storage record is removed; on re-pause it is refreshed.
+
+Parameters:
+
+- ###### **`thread_id`**
+
+  (`str`) – AG-UI thread identifier (the storage key).
+
+- ###### **`tool_results`**
+
+  (`dict[str, str]`) – Mapping of tool_call_id → serialized result (typically a JSON string). Every pending tool must be resolved — unresolved requirements will stall the run.
+
+- ###### **`send`**
+
+  (`Callable[[BaseAgentRunEvent], Coroutine[Any, Any, None]]`) – Digitalkin-event callback (same contract as :meth:run).
+
+- ###### **`run_id`**
+
+  (`str | None`, default: `None` ) – AG-UI run identifier for this resume turn. Used to emit a synthetic RUN_STARTED before streaming — Agno emits RunContinued (not RunStarted) on resume.
+
+- ###### **`agui_tools`**
+
+  (`list[Tool] | None`, default: `None` ) – Frontend tool definitions for the resumed run. The AG-UI client should re-send the same list it provided at the original turn so tool schemas stay registered.
+
+Returns:
+
+- `PauseInfo | None` – None on final completion. A fresh :class:PauseInfo when
+- `PauseInfo | None` – the resumed run paused again (cascading frontend tools). If
+- `PauseInfo | None` – no paused record exists for thread_id, returns None.
+
+##### handle_agui_input
+
+```python
+handle_agui_input(
+    input_data: Any,
+    *,
+    send: Callable[[BaseAgentRunEvent], Coroutine[Any, Any, None]],
+    context: ModuleContext | None = None,
+    message: str | None = None,
+    images: list[Any] | None = None,
+) -> PauseInfo | None
+```
+
+One-shot dispatch of an AG-UI `RunAgentInput`.
+
+Handles the three cases in order:
+
+1. Resume a paused run if the input carries a matching `ToolMessage` (see :meth:`try_resume`).
+1. Drop a stale paused record if the input is a new `UserMessage` while a tool was pending (HITL abandon).
+1. Fresh run on the last `UserMessage` in `input_data.messages` (or on the explicit `message` argument).
+
+When a run pauses (fresh or resumed) and `context` is provided, this method also emits the AG-UI `RunFinished` with `status="awaiting_tool_result"` via :func:`emit_awaiting_tool_result`. Pass `context=None` if you want to emit it yourself.
+
+Parameters:
+
+- ###### **`input_data`**
+
+  (`Any`) – Any object with thread_id, messages, and tools attributes (typically an AgUiStreamInput).
+
+- ###### **`send`**
+
+  (`Callable[[BaseAgentRunEvent], Coroutine[Any, Any, None]]`) – Digitalkin-event callback (e.g. wrapping self.send_message(context, event) in a trigger).
+
+- ###### **`context`**
+
+  (`ModuleContext | None`, default: `None` ) – If provided, the awaiting RunFinished is emitted automatically on pause.
+
+- ###### **`message`**
+
+  (`str | None`, default: `None` ) – Override the user prompt extraction. Normally left as None — the runner picks the last UserMessage content from input_data.messages.
+
+- ###### **`images`**
+
+  (`list[Any] | None`, default: `None` ) – Optional multimodal inputs forwarded to Agno.
+
+Returns:
+
+- `PauseInfo | None` – None on normal completion (or when no actionable input
+- `PauseInfo | None` – was found). A :class:PauseInfo on pause (already emitted to
+- `PauseInfo | None` – the front if context was provided).
+
+##### run
+
+```python
+run(
+    message: str,
+    *,
+    send: Callable[[BaseAgentRunEvent], Coroutine[Any, Any, None]],
+    thread_id: str,
+    agui_tools: list[Tool] | None = None,
+    images: list[Any] | None = None,
+) -> PauseInfo | None
+```
+
+Stream a fresh Agno run.
+
+Parameters:
+
+- ###### **`message`**
+
+  (`str`) – User prompt to send to the agent.
+
+- ###### **`send`**
+
+  (`Callable[[BaseAgentRunEvent], Coroutine[Any, Any, None]]`) – Async callback invoked for each digitalkin event produced by :class:AgnoStreamAdapter. Typically maps through :meth:AgUiMixin.send_message.
+
+- ###### **`thread_id`**
+
+  (`str`) – AG-UI thread identifier (used as the paused-run storage key if the run pauses).
+
+- ###### **`agui_tools`**
+
+  (`list[Tool] | None`, default: `None` ) – Frontend tools declared by the AG-UI client for this run. Merged with the agent's base tools through the factory; None or empty is equivalent to "no frontend tools this turn".
+
+- ###### **`images`**
+
+  (`list[Any] | None`, default: `None` ) – Optional multimodal inputs forwarded to Agno.
+
+Returns:
+
+- `PauseInfo | None` – None on normal completion. A :class:PauseInfo if the run
+- `PauseInfo | None` – paused on one or more external tool calls — the caller is
+- `PauseInfo | None` – responsible for emitting the awaiting RunFinished (use
+- `PauseInfo | None` – func:emit_awaiting_tool_result or let
+- `PauseInfo | None` – meth:handle_agui_input do it).
+
+##### try_resume
+
+```python
+try_resume(
+    input_data: Any, *, send: Callable[[BaseAgentRunEvent], Coroutine[Any, Any, None]]
+) -> tuple[bool, PauseInfo | None]
+```
+
+Try to resume a paused run from an AG-UI input.
+
+The `input_data` only needs to duck-type `thread_id`, `messages`, and `tools` (typically an `AgUiStreamInput`). This method:
+
+1. Loads the paused record for `input_data.thread_id`. Returns `(False, None)` if there is none.
+1. Looks for `ToolMessage` entries in `input_data.messages` whose `tool_call_id` matches a pending one.
+1. If any match → dispatches :meth:`continue_paused_run` and returns `(True, pause_info_or_none)`.
+1. If no match but the last message is a fresh `UserMessage`, drops the stale record (HITL abandon) and returns `(False, None)`.
+
+Returns:
+
+- `bool` – (resumed, pause_info):
+- `PauseInfo | None` – (False, None): no resume, caller should run the fresh-message path.
+- `tuple[bool, PauseInfo | None]` – (True, None): resume ran to normal completion.
+- `tuple[bool, PauseInfo | None]` – (True, PauseInfo): resume paused again (cascading tools).
 
 #### AgnoStreamAdapter
 
@@ -1987,6 +2243,36 @@ Methods:
 
 - **`flush`** – Emit closing events for any active sequences at end of stream.
 - **`to_digitalkin_events`** – Convert one Agno event into one or more DigitalKin events.
+
+Attributes:
+
+- **`is_paused`** (`bool`) – Whether the last stream ended on a run_paused event (external tool HITL).
+- **`paused_requirements`** (`list[Any]`) – Agno RunRequirement objects carried by the paused run.
+- **`paused_tool_executions`** (`list[Any]`) – Agno ToolExecution objects awaiting external execution (HITL).
+
+##### is_paused
+
+```python
+is_paused: bool
+```
+
+Whether the last stream ended on a run_paused event (external tool HITL).
+
+##### paused_requirements
+
+```python
+paused_requirements: list[Any]
+```
+
+Agno `RunRequirement` objects carried by the paused run.
+
+##### paused_tool_executions
+
+```python
+paused_tool_executions: list[Any]
+```
+
+Agno `ToolExecution` objects awaiting external execution (HITL).
 
 ##### flush
 
@@ -2021,6 +2307,211 @@ Returns:
 Raises:
 
 - `ImportError` – If the optional 'agno' dependency is not installed.
+
+#### PauseInfo
+
+```python
+PauseInfo(
+    thread_id: str,
+    run_id: str,
+    pending_tool_call_ids: list[str],
+    new_messages: list[Message] = list(),
+)
+```
+
+Summary of a paused Agno run.
+
+Returned by :meth:`AgnoHitlRunner.run` and related methods whenever the run paused on one or more external tool calls. Callers typically use it to emit the AG-UI awaiting-tool-result event to the front.
+
+`new_messages` carries the AG-UI messages generated by Agno during the paused run (user echoes, the assistant message with `tool_calls`, and any tool results emitted before the pause). It's provided because Agno does not emit stream events from which the front can reconstruct the assistant-with-tool-calls message — in particular, when the LLM goes straight from reasoning to a frontend tool call without emitting any text. Consumers typically push these messages to the front via a :class:`~ag_ui.core.events.MessagesSnapshotEvent` so the client has an authoritative view of the conversation.
+
+#### PausedRunRecord
+
+```
+              flowchart TD
+              digitalkin.community.agno.PausedRunRecord[PausedRunRecord]
+
+              
+
+              click digitalkin.community.agno.PausedRunRecord href "" "digitalkin.community.agno.PausedRunRecord"
+```
+
+Persistent snapshot of an Agno run paused on external tool execution.
+
+Stored in the `paused_runs` collection keyed by `thread_id`. The `payload` field holds `RunOutput.to_dict()` verbatim so :meth:`agno.run.agent.RunOutput.from_dict` can round-trip the run on any replica when the front replies with the tool result(s).
+
+#### PausedRunStore
+
+```python
+PausedRunStore(storage: StorageStrategy)
+```
+
+Thin wrapper around :class:`StorageStrategy` for the `paused_runs` collection.
+
+Owns serialization of :class:`~agno.run.agent.RunOutput` and keying by `thread_id`. Instances are cheap — create one per trigger handler.
+
+Parameters:
+
+- ##### **`storage`**
+
+  (`StorageStrategy`) – The module's storage strategy. The collection paused_runs must be registered with :class:PausedRunRecord — use :data:HITL_STORAGE_CONFIG.
+
+Methods:
+
+- **`delete`** – Remove the paused run record for a thread.
+- **`load`** – Fetch the paused run record for a thread.
+- **`save`** – Serialize and store a paused RunOutput.
+
+##### delete
+
+```python
+delete(thread_id: str) -> None
+```
+
+Remove the paused run record for a thread.
+
+##### load
+
+```python
+load(thread_id: str) -> PausedRunRecord | None
+```
+
+Fetch the paused run record for a thread.
+
+Parameters:
+
+- ###### **`thread_id`**
+
+  (`str`) – AG-UI thread identifier.
+
+Returns:
+
+- **`The`** ( `PausedRunRecord | None` ) – class:PausedRunRecord if one exists, otherwise None.
+
+##### save
+
+```python
+save(run_output: RunOutput, thread_id: str) -> PauseInfo
+```
+
+Serialize and store a paused `RunOutput`.
+
+Parameters:
+
+- ###### **`run_output`**
+
+  (`RunOutput`) – The paused Agno run (is_paused=True with populated requirements).
+
+- ###### **`thread_id`**
+
+  (`str`) – AG-UI thread identifier (the record key).
+
+Returns:
+
+- **`A`** ( `PauseInfo` ) – class:PauseInfo describing what was persisted.
+
+#### agui_tool_to_external_function
+
+```python
+agui_tool_to_external_function(tool: Tool) -> Function
+```
+
+Wrap an AG-UI tool definition as an Agno external `Function`.
+
+The resulting :class:`Function` carries the AG-UI schema as-is (Agno accepts raw JSON Schema via `parameters`) and is marked with `external_execution=True` so Agno emits the tool-call events but skips the entrypoint and pauses the run when the LLM invokes it.
+
+Parameters:
+
+- ##### **`tool`**
+
+  (`Tool`) – An :class:ag_ui.core.types.Tool from RunAgentInput.tools.
+
+Returns:
+
+- **`An`** ( `Function` ) – class:agno.tools.function.Function ready to be plugged into
+- `Function` – an Agno agent's tool list.
+
+#### emit_awaiting_tool_result
+
+```python
+emit_awaiting_tool_result(
+    context: ModuleContext,
+    *,
+    thread_id: str,
+    run_id: str,
+    pending_tool_call_ids: list[str],
+) -> None
+```
+
+Emit an AG-UI `RunFinished` with `status="awaiting_tool_result"`.
+
+This is the protocol signal telling the front "the run paused on a client-side tool; execute it and reply with a `ToolMessage`". It goes out via `context.callbacks.send_message` (bypassing the standard :class:`~digitalkin.mixins.agui_mixin.AgUiMixin` event mapping, which has no notion of an "awaiting" status).
+
+Parameters:
+
+- ##### **`context`**
+
+  (`ModuleContext`) – Current module context.
+
+- ##### **`thread_id`**
+
+  (`str`) – AG-UI thread identifier.
+
+- ##### **`run_id`**
+
+  (`str`) – Run identifier to echo back in the finished event.
+
+- ##### **`pending_tool_call_ids`**
+
+  (`list[str]`) – The tool_call_id values the front must execute and resolve — echoed in result.pending_tool_call_ids so the front can match them.
+
+#### emit_messages_snapshot
+
+```python
+emit_messages_snapshot(context: ModuleContext, messages: list[Message]) -> None
+```
+
+Emit an AG-UI `MessagesSnapshot` event.
+
+Typically called just before :func:`emit_awaiting_tool_result` on a paused run so the front has an authoritative view of the conversation (including the assistant message carrying the frontend `tool_calls`, which cannot be reconstructed from the streamed tool-call events alone).
+
+Parameters:
+
+- ##### **`context`**
+
+  (`ModuleContext`) – Current module context.
+
+- ##### **`messages`**
+
+  (`list[Message]`) – List of AG-UI messages, typically produced by :func:\_agno_messages_to_agui from RunOutput.messages.
+
+#### make_tools_factory
+
+```python
+make_tools_factory(
+    base_tools: list[Any], dependency_key: str = _DEFAULT_DEPENDENCY_KEY
+) -> Callable[[RunContext], list[Any]]
+```
+
+Build an Agno `tools` factory that merges base tools with per-run AG-UI tools.
+
+The returned callable is the value you pass to `Agent(tools=...)`. On every run, Agno resolves the factory with the current :class:`~agno.run.base.RunContext` (see :func:`agno.utils.callables.aresolve_callable_tools`). The factory reads `run_context.dependencies[dependency_key]` — the list of :class:`~ag_ui.core.types.Tool` you passed via `agent.arun(dependencies={dependency_key: [...]})` — converts them to external :class:`Function` objects, and concatenates them with the `base_tools`.
+
+Parameters:
+
+- ##### **`base_tools`**
+
+  (`list[Any]`) – Toolkits / Functions always available to the agent (e.g. AsyncDuckDuckGoTools()). Passed through unchanged.
+
+- ##### **`dependency_key`**
+
+  (`str`, default: `_DEFAULT_DEPENDENCY_KEY` ) – The key in run_context.dependencies under which the caller places the per-run AG-UI tool list. Defaults to "agui_tools".
+
+Returns:
+
+- `Callable[[RunContext], list[Any]]` – A callable suitable for :class:agno.agent.Agent's tools=
+- `Callable[[RunContext], list[Any]]` – parameter. Set cache_callables=False on the Agent so this
+- `Callable[[RunContext], list[Any]]` – factory is re-invoked on every run.
 
 #### agno_adapter
 
@@ -2060,6 +2551,36 @@ Methods:
 - **`flush`** – Emit closing events for any active sequences at end of stream.
 - **`to_digitalkin_events`** – Convert one Agno event into one or more DigitalKin events.
 
+Attributes:
+
+- **`is_paused`** (`bool`) – Whether the last stream ended on a run_paused event (external tool HITL).
+- **`paused_requirements`** (`list[Any]`) – Agno RunRequirement objects carried by the paused run.
+- **`paused_tool_executions`** (`list[Any]`) – Agno ToolExecution objects awaiting external execution (HITL).
+
+###### is_paused
+
+```python
+is_paused: bool
+```
+
+Whether the last stream ended on a run_paused event (external tool HITL).
+
+###### paused_requirements
+
+```python
+paused_requirements: list[Any]
+```
+
+Agno `RunRequirement` objects carried by the paused run.
+
+###### paused_tool_executions
+
+```python
+paused_tool_executions: list[Any]
+```
+
+Agno `ToolExecution` objects awaiting external execution (HITL).
+
 ###### flush
 
 ```python
@@ -2093,6 +2614,553 @@ Returns:
 Raises:
 
 - `ImportError` – If the optional 'agno' dependency is not installed.
+
+#### agui_tools
+
+AG-UI frontend tools → Agno external Functions.
+
+The AG-UI protocol lets the client declare its own tools in `RunAgentInput.tools`. Those tools are meant to be executed on the frontend (a UI widget, a browser-local API call, a user prompt, …) rather than by the agent process. This module provides the glue to expose them to an Agno :class:`~agno.agent.Agent` as regular :class:`~agno.tools.function.Function` objects marked with `external_execution=True`: when the LLM "calls" one, Agno pauses the run (via :class:`~agno.run.agent.RunPausedEvent`) instead of executing an entrypoint — letting the caller stream the tool-call events to the front and resume later via :meth:`~agno.agent.Agent.acontinue_run`.
+
+Usage::
+
+```text
+from digitalkin.community.agno import make_tools_factory
+from agno.agent import Agent
+
+agent = Agent(
+    tools=make_tools_factory([AsyncDuckDuckGoTools()]),
+    cache_callables=False,           # critical — see make_tools_factory
+    ...
+)
+
+async for ev in agent.arun(
+    message,
+    dependencies={"agui_tools": input_data.tools},
+    stream=True,
+    stream_events=True,
+):
+    ...
+```
+
+Notes
+
+`dependencies` is Agno's standard per-run injection bus. We use it as a transport channel to hand the frontend tools to the tools factory on every run — the tools themselves are actually registered through the `tools=factory` mechanism, not through `dependencies`. `cache_callables=False` is required so the factory is re-invoked on each run (otherwise the first resolved tool list is cached forever and subsequent requests would not see new frontend tools).
+
+Functions:
+
+- **`agui_tool_to_external_function`** – Wrap an AG-UI tool definition as an Agno external Function.
+- **`make_tools_factory`** – Build an Agno tools factory that merges base tools with per-run AG-UI tools.
+
+##### agui_tool_to_external_function
+
+```python
+agui_tool_to_external_function(tool: Tool) -> Function
+```
+
+Wrap an AG-UI tool definition as an Agno external `Function`.
+
+The resulting :class:`Function` carries the AG-UI schema as-is (Agno accepts raw JSON Schema via `parameters`) and is marked with `external_execution=True` so Agno emits the tool-call events but skips the entrypoint and pauses the run when the LLM invokes it.
+
+Parameters:
+
+- ###### **`tool`**
+
+  (`Tool`) – An :class:ag_ui.core.types.Tool from RunAgentInput.tools.
+
+Returns:
+
+- **`An`** ( `Function` ) – class:agno.tools.function.Function ready to be plugged into
+- `Function` – an Agno agent's tool list.
+
+##### make_tools_factory
+
+```python
+make_tools_factory(
+    base_tools: list[Any], dependency_key: str = _DEFAULT_DEPENDENCY_KEY
+) -> Callable[[RunContext], list[Any]]
+```
+
+Build an Agno `tools` factory that merges base tools with per-run AG-UI tools.
+
+The returned callable is the value you pass to `Agent(tools=...)`. On every run, Agno resolves the factory with the current :class:`~agno.run.base.RunContext` (see :func:`agno.utils.callables.aresolve_callable_tools`). The factory reads `run_context.dependencies[dependency_key]` — the list of :class:`~ag_ui.core.types.Tool` you passed via `agent.arun(dependencies={dependency_key: [...]})` — converts them to external :class:`Function` objects, and concatenates them with the `base_tools`.
+
+Parameters:
+
+- ###### **`base_tools`**
+
+  (`list[Any]`) – Toolkits / Functions always available to the agent (e.g. AsyncDuckDuckGoTools()). Passed through unchanged.
+
+- ###### **`dependency_key`**
+
+  (`str`, default: `_DEFAULT_DEPENDENCY_KEY` ) – The key in run_context.dependencies under which the caller places the per-run AG-UI tool list. Defaults to "agui_tools".
+
+Returns:
+
+- `Callable[[RunContext], list[Any]]` – A callable suitable for :class:agno.agent.Agent's tools=
+- `Callable[[RunContext], list[Any]]` – parameter. Set cache_callables=False on the Agent so this
+- `Callable[[RunContext], list[Any]]` – factory is re-invoked on every run.
+
+#### hitl
+
+Human-in-the-loop (HITL) runner for Agno agents with AG-UI frontend tools.
+
+This module provides the high-level glue to build an Agno-powered module that supports AG-UI *frontend tools* — tools declared by the AG-UI client and executed on the front rather than on the agent process. The flow is:
+
+1. The front sends `RunAgentInput` with a `tools` list.
+1. The LLM calls one of those tools.
+1. Agno emits `RunPausedEvent` (its HITL signal) and freezes the run.
+1. We persist the paused :class:`~agno.run.agent.RunOutput` via the module's :class:`~digitalkin.services.storage.StorageStrategy`, keyed by `thread_id`.
+1. We emit an AG-UI `RunFinished` with `result={"status": "awaiting_tool_result", "pending_tool_call_ids": [...]}` so the front knows to execute the tool and reply.
+1. On the next `RunAgentInput` carrying a matching `ToolMessage`, we load the paused run, inject the result into the corresponding :class:`~agno.run.requirement.RunRequirement`, and resume via :meth:`~agno.agent.Agent.acontinue_run`.
+
+The design keeps the process stateless (every replica can resume any thread) because all the state lives in the storage service.
+
+Typical usage inside a module trigger::
+
+```text
+from digitalkin.community.agno import (
+    AgnoHitlRunner,
+    HITL_STORAGE_CONFIG,
+    make_tools_factory,
+)
+
+# In your Module class — register the storage schema
+services_config_params = {
+    "storage": {
+        "config": {
+            **HITL_STORAGE_CONFIG,
+            "agno_sessions": AgnoSession,
+            ...
+        },
+        ...
+    },
+    ...
+}
+
+# In your agent factory
+agent = Agent(
+    tools=make_tools_factory([MyBaseToolkit()]),
+    cache_callables=False,
+    ...
+)
+
+# In your trigger handler
+runner = AgnoHitlRunner(agent=agent, storage=context.storage)
+pause_info = await runner.handle_agui_input(
+    input_data=input_data,
+    send=send,
+    context=context,        # enables auto-emission of awaiting RunFinished
+)
+```
+
+`handle_agui_input` will figure out whether this is a fresh user message, a resume of a paused run, or an abandon (new user message while a tool was pending) and dispatch accordingly.
+
+Classes:
+
+- **`AgnoHitlRunner`** – High-level runner for an Agno agent with AG-UI frontend-tool support.
+- **`PauseInfo`** – Summary of a paused Agno run.
+- **`PausedRunRecord`** – Persistent snapshot of an Agno run paused on external tool execution.
+- **`PausedRunStore`** – Thin wrapper around :class:StorageStrategy for the paused_runs collection.
+
+Functions:
+
+- **`emit_awaiting_tool_result`** – Emit an AG-UI RunFinished with status="awaiting_tool_result".
+- **`emit_messages_snapshot`** – Emit an AG-UI MessagesSnapshot event.
+
+Attributes:
+
+- **`HITL_STORAGE_CONFIG`** (`dict[str, type[BaseModel]]`) – Drop-in storage config fragment — merge into your module's services_config_params.
+
+##### HITL_STORAGE_CONFIG
+
+```python
+HITL_STORAGE_CONFIG: dict[str, type[BaseModel]] = {
+    _PAUSED_RUNS_COLLECTION: PausedRunRecord
+}
+```
+
+Drop-in storage config fragment — merge into your module's `services_config_params`.
+
+Example::
+
+```text
+services_config_params = {
+    "storage": {
+        "config": {**HITL_STORAGE_CONFIG, "my_other_collection": MyModel},
+        ...
+    },
+}
+```
+
+##### AgnoHitlRunner
+
+```python
+AgnoHitlRunner(
+    *,
+    agent: Agent,
+    storage: StorageStrategy | None = None,
+    store: PausedRunStore | None = None,
+    dependency_key: str = "agui_tools",
+)
+```
+
+High-level runner for an Agno agent with AG-UI frontend-tool support.
+
+Wraps a configured :class:`~agno.agent.Agent` and a :class:`PausedRunStore`, and exposes three levels of API:
+
+- :meth:`run` / :meth:`continue_paused_run` — low-level: stream one Agno run (fresh or resumed) and return a :class:`PauseInfo` if it paused on an external tool.
+- :meth:`try_resume` — inspects an AG-UI input and resumes iff a matching :class:`~ag_ui.core.types.ToolMessage` is present.
+- :meth:`handle_agui_input` — all-in-one: detects resume vs fresh message, dispatches, and (optionally) emits the awaiting `RunFinished` event on pause. Use this one from a trigger.
+
+Parameters:
+
+- ###### **`agent`**
+
+  (`Agent`) – The Agno agent. It must be built with tools=make_tools_factory(base_tools) and cache_callables=False — otherwise the frontend tools injected per-run won't reach the LLM.
+
+- ###### **`storage`**
+
+  (`StorageStrategy | None`, default: `None` ) – Convenience: if provided and store is not, a :class:PausedRunStore is constructed automatically.
+
+- ###### **`store`**
+
+  (`PausedRunStore | None`, default: `None` ) – Pre-built paused-run store. Wins over storage.
+
+- ###### **`dependency_key`**
+
+  (`str`, default: `'agui_tools'` ) – The Agno dependencies key under which the runner passes the per-run AG-UI tool list. Must match the key used by :func:make_tools_factory. Defaults to "agui_tools".
+
+Raises:
+
+- `ValueError` – If neither storage nor store is provided.
+
+Methods:
+
+- **`continue_paused_run`** – Resume a previously paused run.
+- **`handle_agui_input`** – One-shot dispatch of an AG-UI RunAgentInput.
+- **`run`** – Stream a fresh Agno run.
+- **`try_resume`** – Try to resume a paused run from an AG-UI input.
+
+###### continue_paused_run
+
+```python
+continue_paused_run(
+    thread_id: str,
+    tool_results: dict[str, str],
+    *,
+    send: Callable[[BaseAgentRunEvent], Coroutine[Any, Any, None]],
+    run_id: str | None = None,
+    agui_tools: list[Tool] | None = None,
+) -> PauseInfo | None
+```
+
+Resume a previously paused run.
+
+Loads the persisted :class:`~agno.run.agent.RunOutput`, injects the tool results into the matching :class:`~agno.run.requirement.RunRequirement` entries, and calls :meth:`~agno.agent.Agent.acontinue_run`. On normal completion the storage record is removed; on re-pause it is refreshed.
+
+Parameters:
+
+- ###### **`thread_id`**
+
+  (`str`) – AG-UI thread identifier (the storage key).
+
+- ###### **`tool_results`**
+
+  (`dict[str, str]`) – Mapping of tool_call_id → serialized result (typically a JSON string). Every pending tool must be resolved — unresolved requirements will stall the run.
+
+- ###### **`send`**
+
+  (`Callable[[BaseAgentRunEvent], Coroutine[Any, Any, None]]`) – Digitalkin-event callback (same contract as :meth:run).
+
+- ###### **`run_id`**
+
+  (`str | None`, default: `None` ) – AG-UI run identifier for this resume turn. Used to emit a synthetic RUN_STARTED before streaming — Agno emits RunContinued (not RunStarted) on resume.
+
+- ###### **`agui_tools`**
+
+  (`list[Tool] | None`, default: `None` ) – Frontend tool definitions for the resumed run. The AG-UI client should re-send the same list it provided at the original turn so tool schemas stay registered.
+
+Returns:
+
+- `PauseInfo | None` – None on final completion. A fresh :class:PauseInfo when
+- `PauseInfo | None` – the resumed run paused again (cascading frontend tools). If
+- `PauseInfo | None` – no paused record exists for thread_id, returns None.
+
+###### handle_agui_input
+
+```python
+handle_agui_input(
+    input_data: Any,
+    *,
+    send: Callable[[BaseAgentRunEvent], Coroutine[Any, Any, None]],
+    context: ModuleContext | None = None,
+    message: str | None = None,
+    images: list[Any] | None = None,
+) -> PauseInfo | None
+```
+
+One-shot dispatch of an AG-UI `RunAgentInput`.
+
+Handles the three cases in order:
+
+1. Resume a paused run if the input carries a matching `ToolMessage` (see :meth:`try_resume`).
+1. Drop a stale paused record if the input is a new `UserMessage` while a tool was pending (HITL abandon).
+1. Fresh run on the last `UserMessage` in `input_data.messages` (or on the explicit `message` argument).
+
+When a run pauses (fresh or resumed) and `context` is provided, this method also emits the AG-UI `RunFinished` with `status="awaiting_tool_result"` via :func:`emit_awaiting_tool_result`. Pass `context=None` if you want to emit it yourself.
+
+Parameters:
+
+- ###### **`input_data`**
+
+  (`Any`) – Any object with thread_id, messages, and tools attributes (typically an AgUiStreamInput).
+
+- ###### **`send`**
+
+  (`Callable[[BaseAgentRunEvent], Coroutine[Any, Any, None]]`) – Digitalkin-event callback (e.g. wrapping self.send_message(context, event) in a trigger).
+
+- ###### **`context`**
+
+  (`ModuleContext | None`, default: `None` ) – If provided, the awaiting RunFinished is emitted automatically on pause.
+
+- ###### **`message`**
+
+  (`str | None`, default: `None` ) – Override the user prompt extraction. Normally left as None — the runner picks the last UserMessage content from input_data.messages.
+
+- ###### **`images`**
+
+  (`list[Any] | None`, default: `None` ) – Optional multimodal inputs forwarded to Agno.
+
+Returns:
+
+- `PauseInfo | None` – None on normal completion (or when no actionable input
+- `PauseInfo | None` – was found). A :class:PauseInfo on pause (already emitted to
+- `PauseInfo | None` – the front if context was provided).
+
+###### run
+
+```python
+run(
+    message: str,
+    *,
+    send: Callable[[BaseAgentRunEvent], Coroutine[Any, Any, None]],
+    thread_id: str,
+    agui_tools: list[Tool] | None = None,
+    images: list[Any] | None = None,
+) -> PauseInfo | None
+```
+
+Stream a fresh Agno run.
+
+Parameters:
+
+- ###### **`message`**
+
+  (`str`) – User prompt to send to the agent.
+
+- ###### **`send`**
+
+  (`Callable[[BaseAgentRunEvent], Coroutine[Any, Any, None]]`) – Async callback invoked for each digitalkin event produced by :class:AgnoStreamAdapter. Typically maps through :meth:AgUiMixin.send_message.
+
+- ###### **`thread_id`**
+
+  (`str`) – AG-UI thread identifier (used as the paused-run storage key if the run pauses).
+
+- ###### **`agui_tools`**
+
+  (`list[Tool] | None`, default: `None` ) – Frontend tools declared by the AG-UI client for this run. Merged with the agent's base tools through the factory; None or empty is equivalent to "no frontend tools this turn".
+
+- ###### **`images`**
+
+  (`list[Any] | None`, default: `None` ) – Optional multimodal inputs forwarded to Agno.
+
+Returns:
+
+- `PauseInfo | None` – None on normal completion. A :class:PauseInfo if the run
+- `PauseInfo | None` – paused on one or more external tool calls — the caller is
+- `PauseInfo | None` – responsible for emitting the awaiting RunFinished (use
+- `PauseInfo | None` – func:emit_awaiting_tool_result or let
+- `PauseInfo | None` – meth:handle_agui_input do it).
+
+###### try_resume
+
+```python
+try_resume(
+    input_data: Any, *, send: Callable[[BaseAgentRunEvent], Coroutine[Any, Any, None]]
+) -> tuple[bool, PauseInfo | None]
+```
+
+Try to resume a paused run from an AG-UI input.
+
+The `input_data` only needs to duck-type `thread_id`, `messages`, and `tools` (typically an `AgUiStreamInput`). This method:
+
+1. Loads the paused record for `input_data.thread_id`. Returns `(False, None)` if there is none.
+1. Looks for `ToolMessage` entries in `input_data.messages` whose `tool_call_id` matches a pending one.
+1. If any match → dispatches :meth:`continue_paused_run` and returns `(True, pause_info_or_none)`.
+1. If no match but the last message is a fresh `UserMessage`, drops the stale record (HITL abandon) and returns `(False, None)`.
+
+Returns:
+
+- `bool` – (resumed, pause_info):
+- `PauseInfo | None` – (False, None): no resume, caller should run the fresh-message path.
+- `tuple[bool, PauseInfo | None]` – (True, None): resume ran to normal completion.
+- `tuple[bool, PauseInfo | None]` – (True, PauseInfo): resume paused again (cascading tools).
+
+##### PauseInfo
+
+```python
+PauseInfo(
+    thread_id: str,
+    run_id: str,
+    pending_tool_call_ids: list[str],
+    new_messages: list[Message] = list(),
+)
+```
+
+Summary of a paused Agno run.
+
+Returned by :meth:`AgnoHitlRunner.run` and related methods whenever the run paused on one or more external tool calls. Callers typically use it to emit the AG-UI awaiting-tool-result event to the front.
+
+`new_messages` carries the AG-UI messages generated by Agno during the paused run (user echoes, the assistant message with `tool_calls`, and any tool results emitted before the pause). It's provided because Agno does not emit stream events from which the front can reconstruct the assistant-with-tool-calls message — in particular, when the LLM goes straight from reasoning to a frontend tool call without emitting any text. Consumers typically push these messages to the front via a :class:`~ag_ui.core.events.MessagesSnapshotEvent` so the client has an authoritative view of the conversation.
+
+##### PausedRunRecord
+
+```
+              flowchart TD
+              digitalkin.community.agno.hitl.PausedRunRecord[PausedRunRecord]
+
+              
+
+              click digitalkin.community.agno.hitl.PausedRunRecord href "" "digitalkin.community.agno.hitl.PausedRunRecord"
+```
+
+Persistent snapshot of an Agno run paused on external tool execution.
+
+Stored in the `paused_runs` collection keyed by `thread_id`. The `payload` field holds `RunOutput.to_dict()` verbatim so :meth:`agno.run.agent.RunOutput.from_dict` can round-trip the run on any replica when the front replies with the tool result(s).
+
+##### PausedRunStore
+
+```python
+PausedRunStore(storage: StorageStrategy)
+```
+
+Thin wrapper around :class:`StorageStrategy` for the `paused_runs` collection.
+
+Owns serialization of :class:`~agno.run.agent.RunOutput` and keying by `thread_id`. Instances are cheap — create one per trigger handler.
+
+Parameters:
+
+- ###### **`storage`**
+
+  (`StorageStrategy`) – The module's storage strategy. The collection paused_runs must be registered with :class:PausedRunRecord — use :data:HITL_STORAGE_CONFIG.
+
+Methods:
+
+- **`delete`** – Remove the paused run record for a thread.
+- **`load`** – Fetch the paused run record for a thread.
+- **`save`** – Serialize and store a paused RunOutput.
+
+###### delete
+
+```python
+delete(thread_id: str) -> None
+```
+
+Remove the paused run record for a thread.
+
+###### load
+
+```python
+load(thread_id: str) -> PausedRunRecord | None
+```
+
+Fetch the paused run record for a thread.
+
+Parameters:
+
+- ###### **`thread_id`**
+
+  (`str`) – AG-UI thread identifier.
+
+Returns:
+
+- **`The`** ( `PausedRunRecord | None` ) – class:PausedRunRecord if one exists, otherwise None.
+
+###### save
+
+```python
+save(run_output: RunOutput, thread_id: str) -> PauseInfo
+```
+
+Serialize and store a paused `RunOutput`.
+
+Parameters:
+
+- ###### **`run_output`**
+
+  (`RunOutput`) – The paused Agno run (is_paused=True with populated requirements).
+
+- ###### **`thread_id`**
+
+  (`str`) – AG-UI thread identifier (the record key).
+
+Returns:
+
+- **`A`** ( `PauseInfo` ) – class:PauseInfo describing what was persisted.
+
+##### emit_awaiting_tool_result
+
+```python
+emit_awaiting_tool_result(
+    context: ModuleContext,
+    *,
+    thread_id: str,
+    run_id: str,
+    pending_tool_call_ids: list[str],
+) -> None
+```
+
+Emit an AG-UI `RunFinished` with `status="awaiting_tool_result"`.
+
+This is the protocol signal telling the front "the run paused on a client-side tool; execute it and reply with a `ToolMessage`". It goes out via `context.callbacks.send_message` (bypassing the standard :class:`~digitalkin.mixins.agui_mixin.AgUiMixin` event mapping, which has no notion of an "awaiting" status).
+
+Parameters:
+
+- ###### **`context`**
+
+  (`ModuleContext`) – Current module context.
+
+- ###### **`thread_id`**
+
+  (`str`) – AG-UI thread identifier.
+
+- ###### **`run_id`**
+
+  (`str`) – Run identifier to echo back in the finished event.
+
+- ###### **`pending_tool_call_ids`**
+
+  (`list[str]`) – The tool_call_id values the front must execute and resolve — echoed in result.pending_tool_call_ids so the front can match them.
+
+##### emit_messages_snapshot
+
+```python
+emit_messages_snapshot(context: ModuleContext, messages: list[Message]) -> None
+```
+
+Emit an AG-UI `MessagesSnapshot` event.
+
+Typically called just before :func:`emit_awaiting_tool_result` on a paused run so the front has an authoritative view of the conversation (including the assistant message carrying the frontend `tool_calls`, which cannot be reconstructed from the streamed tool-call events alone).
+
+Parameters:
+
+- ###### **`context`**
+
+  (`ModuleContext`) – Current module context.
+
+- ###### **`messages`**
+
+  (`list[Message]`) – List of AG-UI messages, typically produced by :func:\_agno_messages_to_agui from RunOutput.messages.
 
 ## core
 
