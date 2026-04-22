@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, ClassVar
 from digitalkin.models.events import (
     AgentRunEvent,
     BaseAgentRunEvent,
+    CustomEvent,
     ReasoningCompletedEvent,
     ReasoningContentDeltaEvent,
     ReasoningStartedEvent,
@@ -101,6 +102,7 @@ class AgUiMixin:
         AgentRunEvent.REASONING_CONTENT_DELTA: "_handle_reasoning_delta",
         AgentRunEvent.REASONING_STEP: "_handle_reasoning_step",
         AgentRunEvent.REASONING_COMPLETED: "_handle_reasoning_completed",
+        AgentRunEvent.CUSTOM: "_handle_custom",
     }
 
     # ── Private Event Handlers ───────────────────────────────────────────────
@@ -423,3 +425,21 @@ class AgUiMixin:
             event=AgUiReasoningEndEvent(message_id=reasoning_id),
         )
         await self._send_agui(context, end_output)
+
+    async def _handle_custom(
+        self,
+        context: ModuleContext,
+        event: CustomEvent,
+    ) -> None:
+        """Handle custom event - emit AG-UI CustomEvent."""
+        from ag_ui.core.events import CustomEvent as AgUiCustomEvent  # pylint: disable=C0415
+
+        from digitalkin.models.module.ag_ui import AgUiCustomEventOutput  # pylint: disable=C0415
+
+        output = AgUiCustomEventOutput(
+            event=AgUiCustomEvent(
+                name=event.name,
+                value=event.value,
+            )
+        )
+        await self._send_agui(context, output)
