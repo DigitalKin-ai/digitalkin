@@ -61,6 +61,7 @@ Typical usage inside a module trigger::
 message, a resume of a paused run, or an abandon (new user message while
 a tool was pending) and dispatch accordingly.
 """
+# pyright: reportMissingImports=false
 
 from __future__ import annotations
 
@@ -579,6 +580,8 @@ class AgnoHitlRunner:
                 event=AgentRunEvent.RUN_STARTED,
                 run_id=run_id,
                 thread_id=thread_id,
+                timestamp=None,
+                metadata=None,
             )
         )
 
@@ -702,6 +705,8 @@ class AgnoHitlRunner:
                     event=AgentRunEvent.RUN_STARTED,
                     run_id=input_run_id,
                     thread_id=thread_id,
+                    timestamp=None,
+                    metadata=None,
                 )
             )
             await send(
@@ -716,6 +721,9 @@ class AgnoHitlRunner:
                         "resume. The paused state has been preserved — retry once all "
                         "tool results are available."
                     ),
+                    error_details=None,
+                    timestamp=None,
+                    metadata=None,
                 )
             )
             return True, None

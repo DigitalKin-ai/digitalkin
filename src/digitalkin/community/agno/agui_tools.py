@@ -38,6 +38,7 @@ Notes:
     each run (otherwise the first resolved tool list is cached forever and
     subsequent requests would not see new frontend tools).
 """
+# pyright: reportMissingImports=false
 
 from __future__ import annotations
 
