@@ -14,15 +14,15 @@ import pytest
 from agentic_mesh_protocol.module.v1 import (
     information_pb2,
     lifecycle_pb2,
-    monitoring_pb2,
 )
 from agentic_mesh_protocol.setup.v1 import setup_pb2
 from google.protobuf import json_format, struct_pb2
+from tests.fixtures.grpc_fixtures import FakeContext
 
 from digitalkin.core.job_manager.base_job_manager import BaseJobManager
 from digitalkin.grpc_servers.module_servicer import ModuleServicer
+from digitalkin.models.settings.server.server import ServerSettings
 from digitalkin.modules._base_module import BaseModule
-from tests.fixtures.grpc_fixtures import FakeContext
 
 
 # Mock Module Class for testing
@@ -118,6 +118,7 @@ def module_servicer(mock_job_manager, mock_setup_strategy):
     servicer._setup_cache_max = 100
     servicer._setup_inflight: dict[str, asyncio.Future] = {}
     servicer._completion_timeout = 300.0
+    servicer._server_settings = ServerSettings()
 
     return servicer
 

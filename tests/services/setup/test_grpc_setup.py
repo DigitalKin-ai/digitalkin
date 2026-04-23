@@ -15,13 +15,13 @@ from agentic_mesh_protocol.setup.v1 import (
     setup_service_pb2_grpc,
 )
 from freezegun import freeze_time
+from tests.fixtures.grpc_fixtures import AsyncStubWrapper, FakeContext
 
 from digitalkin.models.grpc_servers.models import ClientConfig
 from digitalkin.models.settings.utils.channel import ControlFlow, SecurityMode
 from digitalkin.services.setup.grpc_setup import GrpcSetup
 from digitalkin.services.setup.setup_strategy import SetupData, SetupVersionData
 from mock_setup_servicer import MockSetupServicer
-from tests.fixtures.grpc_fixtures import AsyncStubWrapper, FakeContext
 
 service_instance = MockSetupServicer()
 service_name = setup_service_pb2.DESCRIPTOR.services_by_name["SetupService"]
@@ -77,7 +77,6 @@ def client(test_channel: grpc_testing.Channel) -> GrpcSetup:
         port=50151,
         mode=ControlFlow.ASYNC,
         security=SecurityMode.INSECURE,
-        credentials=None,
     )
     client = GrpcSetup()
     # emulate real instance

@@ -1,24 +1,17 @@
-"""Server channel settings."""
+"""Client Channel settings."""
 
 from typing import Any
 
-from pydantic import Field
 from pydantic_settings import SettingsConfigDict
 
 from digitalkin.models.settings.utils.channel import BaseChannelSettings
 
 
-class ServerChannelSettings(BaseChannelSettings):
-    """Settings for a server channel.
-
-    Attributes:
-        advertise_host (str | None): Public hostname/IP sent to registry for discovery. Falls back to host if not set.
-        database_url (str | None): Database URL for registry data storage
-
-    """
+class ClientChannelSettings(BaseChannelSettings):
+    """Client channel settings."""
 
     model_config = SettingsConfigDict(
-        env_prefix="SERVER_CHANNEL_",
+        env_prefix="CLIENT_CHANNEL_",
         env_nested_delimiter="__",
         extra="forbid",
         arbitrary_types_allowed=True,
@@ -27,12 +20,8 @@ class ServerChannelSettings(BaseChannelSettings):
 
     # ── Options ───────────────────────────────────────────────────────────────────── #
 
-    advertise_host: str | None = Field(
-        default=None, description="Public hostname/IP sent to registry for discovery. Falls back to host if not set."
-    )
-
     # ── Functions ─────────────────────────────────────────────────────────────────── #
 
     def __init__(self, **values: Any) -> None:
-        """Initialize ServerChannelSettings with default credentials if not provided."""
+        """Default constructor."""
         super().__init__(**values)

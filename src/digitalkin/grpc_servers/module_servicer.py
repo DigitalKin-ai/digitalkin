@@ -1,7 +1,6 @@
 """Module servicer implementation for DigitalKin."""
 
 import asyncio
-import os
 from argparse import ArgumentParser, Namespace
 from collections.abc import AsyncGenerator
 from typing import Any, cast
@@ -11,7 +10,6 @@ from agentic_mesh_protocol.module.v1 import (
     information_pb2,
     lifecycle_pb2,
     module_service_pb2_grpc,
-    monitoring_pb2,
 )
 from google.protobuf import json_format, struct_pb2
 from pydantic import ValidationError
@@ -20,7 +18,8 @@ from digitalkin.core.job_manager.base_job_manager import BaseJobManager
 from digitalkin.grpc_servers.utils.exceptions import ServerError, ServicerError
 from digitalkin.logger import logger
 from digitalkin.models.core.job_manager_models import JobManagerMode
-from digitalkin.models.module.module import ModuleCodeModel, ModuleStatus
+from digitalkin.models.module.module import ModuleCodeModel
+from digitalkin.models.settings.server.server import ServerSettings
 from digitalkin.modules._base_module import BaseModule
 from digitalkin.services.registry import GrpcRegistry, RegistryStrategy
 from digitalkin.services.services_models import ServicesMode
@@ -68,14 +67,16 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             help="Define Module job manager configurations for load balancing",
         )
 
-    def __init__(self, module_class: type[BaseModule]) -> None:
+    def __init__(self, module_class: type[BaseModule], server_settings: ServerSettings) -> None:
         """Initialize the module servicer.
 
         Args:
             module_class: The module type to serve.
+            server_settings: Settings for all server params
         """
         super().__init__()
         module_class.discover()
+        self._server_settings: ServerSettings = server_settings
         self.module_class = module_class
         job_manager_class = self.args.job_manager_mode.get_manager_class()
         self.job_manager = job_manager_class(module_class, self.args.services_mode)
@@ -87,9 +88,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         )
         self.setup = GrpcSetup() if self.args.services_mode == ServicesMode.REMOTE else DefaultSetup()
         self._setup_cache: dict[str, SetupVersionData] = {}
-        self._setup_cache_max = int(os.environ.get("DIGITALKIN_SETUP_CACHE_MAX", "100"))
         self._setup_inflight: dict[str, asyncio.Future[SetupVersionData]] = {}
-        self._completion_timeout = float(os.environ.get("DIGITALKIN_COMPLETION_TIMEOUT", "300.0"))
 
     async def shutdown(self) -> None:
         """Release servicer-level resources (GrpcSetup channel, registry cache)."""
@@ -130,7 +129,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
 
     def _cache_setup(self, setup_id: str, version_data: SetupVersionData) -> None:
         """Cache setup version data, evicting oldest entry if at capacity."""
-        if len(self._setup_cache) >= self._setup_cache_max:
+        if len(self._setup_cache) >= self._server_settings.setup_cache_max:
             oldest_key = next(iter(self._setup_cache))
             del self._setup_cache[oldest_key]
         self._setup_cache[setup_id] = version_data
@@ -596,7 +595,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
                         break
         finally:
             try:
-                completion_timeout = self._completion_timeout
+                completion_timeout = self._server_settings.completion_timeout
                 await asyncio.wait_for(
                     self.job_manager.wait_for_completion(job_id),
                     timeout=completion_timeout,

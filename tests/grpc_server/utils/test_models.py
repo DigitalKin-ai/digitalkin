@@ -251,11 +251,3 @@ class TestServerConfigSubclasses:
         expected_advertise_host = "digitalkin-test-archetype-server"
 
         assert config.channel.advertise_host == expected_advertise_host
-
-    def test_registry_server_config(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Test RegistryServerConfig specific properties."""
-        monkeypatch.setenv("SERVER_CHANNEL_DATABASE_URL", "sqlite:///registry.db")
-        config = ServerSettings()
-        expected_database_url = "sqlite:///registry.db"
-
-        assert config.channel.database_url == expected_database_url

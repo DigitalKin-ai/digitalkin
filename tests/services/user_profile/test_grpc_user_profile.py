@@ -20,11 +20,11 @@ from agentic_mesh_protocol.user_profile.v1 import (
     user_profile_service_pb2,
     user_profile_service_pb2_grpc,
 )
+from tests.fixtures.grpc_fixtures import FakeContext
+from tests.services.user_profile.mock_user_profile_servicer import MockUserProfileServicer
 
 from digitalkin.models.grpc_servers.models import ClientConfig
 from digitalkin.services.user_profile.grpc_user_profile import GrpcUserProfile
-from tests.fixtures.grpc_fixtures import FakeContext
-from tests.services.user_profile.mock_user_profile_servicer import MockUserProfileServicer
 
 # Set timeout for all tests in this file (20 seconds)
 pytestmark = pytest.mark.timeout(20)
@@ -106,7 +106,6 @@ def dummy_client_config() -> ClientConfig:
         port=50051,
         mode=ControlFlow.ASYNC,
         security=SecurityMode.INSECURE,
-        credentials=None,
     )
 
 

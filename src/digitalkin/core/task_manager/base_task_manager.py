@@ -2,17 +2,17 @@
 
 import asyncio
 import contextlib
-import os
 import types
 from abc import ABC, abstractmethod
 from collections.abc import Coroutine
-from typing import Any
+from typing import Any, ClassVar
 
 from typing_extensions import Self
 
 from digitalkin.core.task_manager.task_session import TaskSession
 from digitalkin.logger import logger
 from digitalkin.models.core.task_monitor import CancellationReason, SignalMessage, SignalType
+from digitalkin.models.settings.client.task import TaskSettings
 from digitalkin.modules._base_module import BaseModule
 
 
@@ -26,9 +26,9 @@ class BaseTaskManager(ABC):
     tasks: dict[str, asyncio.Task]
     tasks_sessions: dict[str, TaskSession]
     default_timeout: float
-    _max_concurrent_tasks: int
     _shutdown_event: asyncio.Event
     _tasks_lock: asyncio.Lock
+    _task_settings: ClassVar[TaskSettings] = TaskSettings()
 
     def __init__(self, default_timeout: float = 300.0) -> None:
         """Initialize task manager properties.
@@ -41,40 +41,36 @@ class BaseTaskManager(ABC):
         self.default_timeout = default_timeout
         self._shutdown_event = asyncio.Event()
         self._tasks_lock = asyncio.Lock()
-        self._max_concurrent_tasks = int(os.environ.get("DIGITALKIN_MAX_CONCURRENT_TASKS", "100"))
-        self._task_slot = asyncio.Semaphore(self._max_concurrent_tasks)
+        self._task_slot = asyncio.Semaphore(self._task_settings.max_concurrent_tasks)
         self._active_slots = 0
-        self._task_wait_timeout = float(os.environ.get("DIGITALKIN_TASK_WAIT_TIMEOUT", "30"))
-        self._stream_drain_timeout = float(os.environ.get("DIGITALKIN_STREAM_DRAIN_TIMEOUT", "60.0"))
         self._cleanup_tasks: set[asyncio.Task] = set()
 
         # Admission queue: allows tasks to wait for a slot instead of being rejected.
         # Total in-system capacity = max_concurrent + max_queued.
-        self._max_queued_tasks = int(os.environ.get("DIGITALKIN_MAX_QUEUED_TASKS", "0"))
-        self._admission_timeout = float(os.environ.get("DIGITALKIN_ADMISSION_TIMEOUT", "5.0"))
-        self._queue_slot_timeout = float(os.environ.get("DIGITALKIN_QUEUE_SLOT_TIMEOUT", "600.0"))
-        self._system_gate = asyncio.Semaphore(self._max_concurrent_tasks + self._max_queued_tasks)
+        self._system_gate = asyncio.Semaphore(
+            self._task_settings.max_concurrent_tasks + self._task_settings.max_queued_tasks
+        )
         self._waiting_count = 0
 
         logger.info(
             "%s initialized (max_concurrent_tasks=%d, max_queued=%d, default_timeout=%.1fs)",
             self.__class__.__name__,
-            self._max_concurrent_tasks,
-            self._max_queued_tasks,
+            self._task_settings.max_concurrent_tasks,
+            self._task_settings.max_queued_tasks,
             default_timeout,
         )
 
     @property
     def max_concurrent_tasks(self) -> int:
         """Maximum number of concurrent tasks."""
-        return self._max_concurrent_tasks
+        return self._task_settings.max_concurrent_tasks
 
     @max_concurrent_tasks.setter
     def max_concurrent_tasks(self, value: int) -> None:
-        self._max_concurrent_tasks = value
+        self._task_settings.max_concurrent_tasks = value
         self._task_slot = asyncio.Semaphore(value)
         self._active_slots = 0
-        self._system_gate = asyncio.Semaphore(value + self._max_queued_tasks)
+        self._system_gate = asyncio.Semaphore(value + self._task_settings.max_queued_tasks)
 
     @property
     def task_count(self) -> int:
@@ -127,7 +123,7 @@ class BaseTaskManager(ABC):
         finally:
             self._active_slots -= 1  # Safe: no await between read/write (single-threaded asyncio)
             self._task_slot.release()
-            if self._max_queued_tasks > 0:
+            if self._task_settings.max_queued_tasks > 0:
                 self._system_gate.release()
             logger.debug(
                 "Task cleaned up (%d remaining)",
@@ -177,7 +173,7 @@ class BaseTaskManager(ABC):
         Raises:
             RuntimeError: If the system is at full capacity.
         """
-        if self._max_queued_tasks > 0:
+        if self._task_settings.max_queued_tasks > 0:
             await self._acquire_with_queue(coro)
         else:
             await self._acquire_direct(coro)
@@ -189,19 +185,22 @@ class BaseTaskManager(ABC):
             RuntimeError: If no slot becomes available within the timeout.
         """
         try:
-            await asyncio.wait_for(self._task_slot.acquire(), timeout=self._task_wait_timeout)
+            await asyncio.wait_for(self._task_slot.acquire(), timeout=self._task_settings.wait_timeout)
         except asyncio.TimeoutError:
             coro.close()
-            msg = f"Maximum concurrent tasks ({self.max_concurrent_tasks}) reached, waited {self._task_wait_timeout}s"
+            msg = (
+                f"Maximum concurrent tasks ({self.max_concurrent_tasks}) reached, "
+                f"waited {self._task_settings.wait_timeout}s"
+            )
             raise RuntimeError(msg) from None
 
         self._active_slots += 1  # Safe: no await between read/write (single-threaded asyncio)
-        available = self._max_concurrent_tasks - self._active_slots
-        if available < self._max_concurrent_tasks * 2 // 10:
+        available = self._task_settings.max_concurrent_tasks - self._active_slots
+        if available < self._task_settings.max_concurrent_tasks * 2 // 10:
             logger.warning(
                 "Task slot capacity low: %d/%d available",
                 available,
-                self._max_concurrent_tasks,
+                self._task_settings.max_concurrent_tasks,
             )
 
     async def _acquire_with_queue(self, coro: Coroutine[Any, Any, None]) -> None:
@@ -210,15 +209,16 @@ class BaseTaskManager(ABC):
         Raises:
             RuntimeError: If the system is at full capacity.
         """
-        total_capacity = self._max_concurrent_tasks + self._max_queued_tasks
+        total_capacity = self._task_settings.max_concurrent_tasks + self._task_settings.max_queued_tasks
 
         # Phase 1: Admit into system (fast reject if completely overloaded)
         try:
-            await asyncio.wait_for(self._system_gate.acquire(), timeout=self._admission_timeout)
+            await asyncio.wait_for(self._system_gate.acquire(), timeout=self._task_settings.admission_timeout)
         except asyncio.TimeoutError:
             coro.close()
             msg = (
-                f"System at full capacity ({total_capacity} tasks admitted), rejected after {self._admission_timeout}s"
+                f"System at full capacity ({total_capacity} tasks admitted), "
+                f"rejected after {self._task_settings.admission_timeout}s"
             )
             raise RuntimeError(msg) from None
 
@@ -229,14 +229,14 @@ class BaseTaskManager(ABC):
                 "Task queued for execution (%d waiting, %d/%d slots busy)",
                 self._waiting_count,
                 self._active_slots,
-                self._max_concurrent_tasks,
+                self._task_settings.max_concurrent_tasks,
             )
         try:
-            await asyncio.wait_for(self._task_slot.acquire(), timeout=self._queue_slot_timeout)
+            await asyncio.wait_for(self._task_slot.acquire(), timeout=self._task_settings.queue_slot_timeout)
         except asyncio.TimeoutError:
             self._system_gate.release()
             coro.close()
-            msg = f"Queued task waited {self._queue_slot_timeout}s for execution slot, giving up"
+            msg = f"Queued task waited {self._task_settings.queue_slot_timeout}s for execution slot, giving up"
             raise RuntimeError(msg) from None
         except BaseException:
             self._system_gate.release()
@@ -246,12 +246,12 @@ class BaseTaskManager(ABC):
             self._waiting_count -= 1
 
         self._active_slots += 1  # Safe: no await between read/write (single-threaded asyncio)
-        available = self._max_concurrent_tasks - self._active_slots
-        if available < self._max_concurrent_tasks * 2 // 10:
+        available = self._task_settings.max_concurrent_tasks - self._active_slots
+        if available < self._task_settings.max_concurrent_tasks * 2 // 10:
             logger.warning(
                 "Task slot capacity low: %d/%d available",
                 available,
-                self._max_concurrent_tasks,
+                self._task_settings.max_concurrent_tasks,
             )
 
     def _create_session(
@@ -312,7 +312,7 @@ class BaseTaskManager(ABC):
             return
 
         try:
-            await asyncio.wait_for(session._stream_closed.wait(), timeout=self._stream_drain_timeout)  # noqa: SLF001
+            await asyncio.wait_for(session._stream_closed.wait(), timeout=self._task_settings.stream_drain_timeout)  # noqa: SLF001
         except asyncio.TimeoutError:
             logger.warning(
                 "Stream drain timeout, proceeding with cleanup",
@@ -601,7 +601,7 @@ class BaseTaskManager(ABC):
 
         # Await any deferred cleanup tasks
         if self._cleanup_tasks:
-            await asyncio.gather(*self._cleanup_tasks, return_exceptions=True)
+            await asyncio.gather(*list(self._cleanup_tasks), return_exceptions=True)
             self._cleanup_tasks.clear()
 
         logger.info(

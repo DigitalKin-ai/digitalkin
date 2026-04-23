@@ -68,11 +68,6 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
         config = ClientConfig(
             host=module_address,
             port=module_port,
-            mode=self.client_config.mode,
-            security=self.client_config.security,
-            credentials=self.client_config.credentials,
-            compression=self.client_config.compression,
-            channel_options=self.client_config.channel_options,
         )
         channel = self._init_channel(config)
         if self._channel_cache_key is not None:

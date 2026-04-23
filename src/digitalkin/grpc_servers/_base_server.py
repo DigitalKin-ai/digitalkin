@@ -416,12 +416,11 @@ class BaseServer(abc.ABC):
             raise ServerStateError(msg) from e
 
         # Start asyncio-inspector if enabled
-        if os.environ.get("DIGITALKIN_ASYNCIO_INSPECTOR", "").lower() == "true":
+        if self._server_settings.asyncio_inspector_state:
             try:
                 from digitalkin.core.profiling.asyncio_monitor import AsyncioMonitor
 
-                port = int(os.environ.get("DIGITALKIN_ASYNCIO_INSPECTOR_PORT", "8765"))
-                self._asyncio_monitor = AsyncioMonitor(port=port)
+                self._asyncio_monitor = AsyncioMonitor(port=self._server_settings.asyncio_inspector_port)
                 await self._asyncio_monitor.start()
             except Exception:
                 logger.exception("Failed to start asyncio-inspector")

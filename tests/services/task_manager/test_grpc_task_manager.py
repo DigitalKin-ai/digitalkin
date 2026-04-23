@@ -21,13 +21,13 @@ from agentic_mesh_protocol.task_manager.v1 import (
 )
 from google.protobuf.struct_pb2 import Struct
 from google.protobuf.timestamp_pb2 import Timestamp
+from tests.fixtures.grpc_fixtures import AsyncStubWrapper, FakeContext
 
 from digitalkin.models.core.task_monitor import CancellationReason, SignalMessage, SignalType
 from digitalkin.models.grpc_servers.models import ClientConfig
 from digitalkin.models.settings.utils.channel import ControlFlow, SecurityMode
 from digitalkin.services.task_manager.grpc_task_manager import GrpcTaskManager, _SharedPoller, _SharedSendBuffer
 from mock_task_manager_servicer import MockTaskManagerServicer
-from tests.fixtures.grpc_fixtures import AsyncStubWrapper, FakeContext
 
 # Set timeout for all tests in this file (30 seconds)
 pytestmark = pytest.mark.timeout(30)
@@ -104,7 +104,6 @@ def client(test_channel: grpc_testing.Channel) -> GrpcTaskManager:
         port=50051,
         mode=ControlFlow.ASYNC,
         security=SecurityMode.INSECURE,
-        credentials=None,
     )
 
     client = GrpcTaskManager(

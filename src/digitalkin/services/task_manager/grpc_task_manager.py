@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import os
 import random
 import uuid
 from collections.abc import Awaitable, Callable
@@ -30,6 +29,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
     from digitalkin.models.grpc_servers.models import ClientConfig
+    from digitalkin.models.settings.client.task import TaskSettings
 
 _PollFn = Callable[[list[str]], Awaitable[list[task_manager_message_pb2.Task]]]
 
@@ -149,18 +149,17 @@ class _SharedPoller(_SharedChannelResource):
         self._task_queues: dict[str, asyncio.Queue[task_manager_message_pb2.Task | None]] = {}
         self._last_seen_ts: dict[str, tuple[int, int]] = {}
 
-    def register(self, task_id: str) -> asyncio.Queue[task_manager_message_pb2.Task | None]:
+    def register(self, task_id: str, max_queue_size: int = 512) -> asyncio.Queue[task_manager_message_pb2.Task | None]:
         """Register a task_id for polling. Returns queue for signal delivery.
 
         Args:
             task_id: Unique task identifier.
+            max_queue_size: Maximum size of the signal queue.
 
         Returns:
             asyncio.Queue[task_manager_message_pb2.Task | None]: Queue for signal delivery.
         """
-        queue: asyncio.Queue[task_manager_message_pb2.Task | None] = asyncio.Queue(
-            maxsize=int(os.environ.get("DIGITALKIN_SIGNAL_QUEUE_SIZE", "512"))
-        )
+        queue: asyncio.Queue[task_manager_message_pb2.Task | None] = asyncio.Queue(maxsize=max_queue_size)
         self._task_queues[task_id] = queue
         if self._task is None or self._task.done():
             # Recreate stop_event in the current event loop (the old one may belong to a closed loop)
@@ -292,31 +291,28 @@ class _SharedSendBuffer(_SharedChannelResource):
     _instances: ClassVar[dict[str, _SharedSendBuffer]] = {}
 
     @classmethod
-    def get_or_create(cls, key: str, stub: Any, grpc_timeout: float) -> _SharedSendBuffer:
+    def get_or_create(cls, key: str, stub: Any, settings: TaskSettings) -> _SharedSendBuffer:
         """Get existing buffer for this channel key or create a new one.
 
         Args:
             key: Unique channel identifier.
             stub: gRPC stub for SendSignals calls.
-            grpc_timeout: Seconds before the RPC times out.
+            settings: Settings for tasks and shared channel ressources
 
         Returns:
             _SharedSendBuffer: Shared buffer for this channel.
         """
         if key not in cls._instances:
-            cls._instances[key] = cls(stub, grpc_timeout)
+            cls._instances[key] = cls(stub, settings)
         inst = cls._instances[key]
         inst._refcount += 1  # noqa: SLF001
         return inst
 
-    def __init__(self, stub: Any, grpc_timeout: float) -> None:
+    def __init__(self, stub: Any, settings: TaskSettings) -> None:
         super().__init__()
         self._stub = stub
-        self._grpc_timeout = grpc_timeout
-        self._flush_interval = float(os.environ.get("DIGITALKIN_SIGNAL_FLUSH_INTERVAL", "0.1"))
-        self._max_batch_size = int(os.environ.get("DIGITALKIN_SIGNAL_MAX_BATCH_SIZE", "50"))
-        self._max_retries = int(os.environ.get("DIGITALKIN_SIGNAL_SEND_RETRIES", "3"))
-        self._backoff_base = float(os.environ.get("DIGITALKIN_SIGNAL_SEND_BACKOFF_MS", "100")) / 1000
+        self._grpc_timeout = settings.grpc_timeout
+        self._task_settings = settings
         # List of (proto, future) pairs pending a flush. Swapped atomically in _flush().
         self._pending: list[tuple[task_manager_message_pb2.Task, asyncio.Future[bool]]] = []
 
@@ -335,7 +331,7 @@ class _SharedSendBuffer(_SharedChannelResource):
         future: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
         self._pending.append((task_proto, future))
 
-        if len(self._pending) >= self._max_batch_size:
+        if len(self._pending) >= self._task_settings.signal_max_batch_size:
             # Batch full — flush immediately without waiting for the timer.
             await self._flush()
         elif self._task is None or self._task.done():
@@ -350,7 +346,7 @@ class _SharedSendBuffer(_SharedChannelResource):
         stop_event = self._stop_event
         try:
             stop_wait = asyncio.create_task(stop_event.wait())
-            done, _ = await asyncio.wait([stop_wait], timeout=self._flush_interval)
+            done, _ = await asyncio.wait([stop_wait], timeout=self._task_settings.signal_flush_interval)
             if not done:
                 stop_wait.cancel()
             await self._flush()
@@ -375,7 +371,7 @@ class _SharedSendBuffer(_SharedChannelResource):
         futures = [f for _, f in batch]
         exc: Exception | None = None
 
-        for attempt in range(1 + self._max_retries):
+        for attempt in range(1 + self._task_settings.signal_max_retries):
             exc = None
             try:
                 req = task_manager_dto_pb2.SendSignalsRequest(tasks=task_protos)
@@ -385,13 +381,13 @@ class _SharedSendBuffer(_SharedChannelResource):
                     break  # Server rejected — not retryable
                 break  # Success
             except grpc.aio.AioRpcError as e:
-                if e.code() in _RETRYABLE_CODES and attempt < self._max_retries:
-                    delay = self._backoff_base * (2**attempt)
+                if e.code() in _RETRYABLE_CODES and attempt < self._task_settings.signal_max_retries:
+                    delay = self._task_settings.signal_send_backoff_ms * (2**attempt)
                     jitter = random.uniform(0, delay * 0.5)  # noqa: S311
                     logger.warning(
                         "SendSignals attempt %d/%d failed (%s), retrying in %.0fms",
                         attempt + 1,
-                        1 + self._max_retries,
+                        1 + self._task_settings.signal_max_retries,
                         e.code().name,
                         (delay + jitter) * 1000,
                     )
@@ -440,8 +436,8 @@ class GrpcTaskManager(TaskManagerStrategy, GrpcClientWrapper, GrpcErrorHandlerMi
         setup_version_id: str,  # noqa: ARG002
         client_config: ClientConfig,
         *,
-        poll_interval: float = float(os.environ.get("DIGITALKIN_SIGNAL_POLL_INTERVAL", "1.0")),
-        initial_poll_interval: float = float(os.environ.get("DIGITALKIN_SIGNAL_INITIAL_POLL_INTERVAL", "0.1")),
+        poll_interval: float | None = None,
+        initial_poll_interval: float | None = None,
     ) -> None:
         """Initialize with client config.
 
@@ -463,13 +459,12 @@ class GrpcTaskManager(TaskManagerStrategy, GrpcClientWrapper, GrpcErrorHandlerMi
             )
             raise ImportError(msg)
         channel = self._init_channel(client_config)
+        self._task_settings = self._client_settings.task
         self.stub = task_manager_service_pb2_grpc.TaskManagerServiceStub(channel)
         self._subscriptions = {}
         self._sub_task_ids = {}
-        self._poll_interval = poll_interval
-        self._initial_poll_interval = initial_poll_interval
-        self._grpc_timeout = float(os.environ.get("DIGITALKIN_GRPC_TIMEOUT", "30"))
-        self._poll_timeout = float(os.environ.get("DIGITALKIN_POLL_TIMEOUT", "1"))
+        self._poll_interval = poll_interval or self._task_settings.signal_poll_interval
+        self._initial_poll_interval = initial_poll_interval or self._task_settings.signal_initial_poll_interval
         # Lazy buffer: created on first send_signal to ensure correct event loop and stub
         self._send_buffer_key = self._channel_cache_key or "default"
         self._send_buffer_acquired = False
@@ -570,7 +565,7 @@ class GrpcTaskManager(TaskManagerStrategy, GrpcClientWrapper, GrpcErrorHandlerMi
                 self._send_buffer_acquired = True
                 buffer = None
             if buffer is None:
-                buffer = _SharedSendBuffer.get_or_create(self._send_buffer_key, self.stub, self._grpc_timeout)
+                buffer = _SharedSendBuffer.get_or_create(self._send_buffer_key, self.stub, self._task_settings)
             await buffer.send(self._signal_to_task_proto(signal))
             logger.info("SendSignals: task_id=%s action=%s", task_id, signal.action.value)
             return data
@@ -588,7 +583,7 @@ class GrpcTaskManager(TaskManagerStrategy, GrpcClientWrapper, GrpcErrorHandlerMi
             resp = await self.poll_grpc(
                 "GetSignals",
                 task_manager_dto_pb2.GetSignalsRequest(task_ids=task_ids),
-                timeout=self._poll_timeout,
+                timeout=self._task_settings.poll_timeout,
             )
             return list(resp.tasks) if resp is not None else []
         except Exception:

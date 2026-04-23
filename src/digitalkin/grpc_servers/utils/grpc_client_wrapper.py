@@ -2,7 +2,6 @@
 
 import asyncio
 import logging
-import os
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -12,6 +11,7 @@ import grpc.aio
 from digitalkin.grpc_servers.utils.exceptions import ServerError
 from digitalkin.logger import logger
 from digitalkin.models.grpc_servers.models import ClientConfig
+from digitalkin.models.settings.client.client import ClientSettings
 from digitalkin.models.settings.utils.channel import SecurityMode
 
 
@@ -32,34 +32,36 @@ class GrpcClientWrapper:
     _channel_cache_key: str | None = None
     _channel_cache: ClassVar[dict[str, grpc.aio.Channel]] = {}
     _ref_counts: ClassVar[dict[str, int]] = {}
+    _client_settings: ClassVar[ClientSettings] = ClientSettings()
 
     _RETRYABLE_CODES: ClassVar[set[grpc.StatusCode]] = {
         grpc.StatusCode.UNAVAILABLE,
         grpc.StatusCode.INTERNAL,
         grpc.StatusCode.DEADLINE_EXCEEDED,
     }
-    _QUERY_MAX_RETRIES: ClassVar[int] = int(os.environ.get("DIGITALKIN_GRPC_QUERY_MAX_RETRIES", "2"))
-    _QUERY_BACKOFF_BASE_MS: ClassVar[float] = float(os.environ.get("DIGITALKIN_GRPC_QUERY_BACKOFF_BASE_MS", "50"))
-    _QUERY_DEFAULT_TIMEOUT: ClassVar[float] = float(os.environ.get("DIGITALKIN_GRPC_QUERY_TIMEOUT", "30"))
 
     @staticmethod
-    def _build_channel_credentials(config: ClientConfig) -> grpc.ChannelCredentials | None:
+    def _build_channel_credentials(settings: ClientSettings) -> grpc.ChannelCredentials | None:
         """Build SSL channel credentials from config if secure mode.
 
         Args:
-            config: Client configuration with security and credential settings.
+            settings: Client configuration with security and credential settings.
 
         Returns:
             Channel credentials for secure mode, None for insecure.
         """
-        if config.security != SecurityMode.SECURE or config.credentials is None:
+        if (
+            settings.channel.security != SecurityMode.SECURE
+            or settings.channel.credentials is None
+            or settings.channel.credentials.root_cert_path is None
+        ):
             return None
-        root_certificates = Path(config.credentials.root_cert_path).read_bytes()
+        root_certificates = settings.channel.credentials.root_cert_path.read_bytes()
         private_key = None
         certificate_chain = None
-        if config.credentials.client_cert_path is not None and config.credentials.client_key_path is not None:
-            private_key = Path(config.credentials.client_key_path).read_bytes()
-            certificate_chain = Path(config.credentials.client_cert_path).read_bytes()
+        if settings.channel.credentials.cert_path is not None and settings.channel.credentials.key_path is not None:
+            private_key = Path(settings.channel.credentials.key_path).read_bytes()
+            certificate_chain = Path(settings.channel.credentials.cert_path).read_bytes()
         return grpc.ssl_channel_credentials(
             root_certificates=root_certificates,
             certificate_chain=certificate_chain,
@@ -78,7 +80,10 @@ class GrpcClientWrapper:
         Returns:
             An async gRPC channel (may be shared with other instances).
         """
-        cache_key = f"{config.address}:{config.security.value}:{config.compression.value}"
+        cache_key = (
+            f"{config.address}:{self._client_settings.channel.security}:"
+            f"{self._client_settings.channel.compression.value}"
+        )
         if cache_key in GrpcClientWrapper._channel_cache:
             GrpcClientWrapper._ref_counts[cache_key] += 1
             channel = GrpcClientWrapper._channel_cache[cache_key]
@@ -86,15 +91,15 @@ class GrpcClientWrapper:
             self._channel_cache_key = cache_key
             return channel
 
-        credentials = self._build_channel_credentials(config)
-        grpc_compression = config.compression.to_grpc()
+        credentials = self._build_channel_credentials(self._client_settings)
+        grpc_compression = self._client_settings.channel.compression.to_grpc()
         if credentials is not None:
             channel = grpc.aio.secure_channel(
-                config.address, credentials, options=config.grpc_options, compression=grpc_compression
+                config.address, credentials, options=self._client_settings.grpc.options, compression=grpc_compression
             )
         else:
             channel = grpc.aio.insecure_channel(
-                config.address, options=config.grpc_options, compression=grpc_compression
+                config.address, options=self._client_settings.grpc.options, compression=grpc_compression
             )
         GrpcClientWrapper._channel_cache[cache_key] = channel
         GrpcClientWrapper._ref_counts[cache_key] = 1
@@ -195,12 +200,14 @@ class GrpcClientWrapper:
         Raises:
             ServerError: gRPC error with status code and details for caller to handle.
         """
-        effective_timeout = timeout if timeout is not None else self._QUERY_DEFAULT_TIMEOUT
-        max_retries = self._QUERY_MAX_RETRIES
-        backoff_delays = tuple(self._QUERY_BACKOFF_BASE_MS / 1000 * (2**i) for i in range(max_retries))
+        effective_timeout = timeout if timeout is not None else self._client_settings.query_timeout
+        backoff_delays = tuple(
+            self._client_settings.query_backoff_base_ms / 1000 * (2**i)
+            for i in range(self._client_settings.query_max_retries)
+        )
         last_error: grpc.RpcError | None = None
 
-        for attempt in range(max_retries + 1):
+        for attempt in range(self._client_settings.query_max_retries + 1):
             if attempt > 0:
                 await asyncio.sleep(backoff_delays[attempt - 1])
 
@@ -209,7 +216,7 @@ class GrpcClientWrapper:
                 response = await getattr(self.stub, query_endpoint)(request, timeout=effective_timeout)
             except grpc.RpcError as e:
                 last_error = e
-                if e.code() not in self._RETRYABLE_CODES or attempt == max_retries:
+                if e.code() not in self._RETRYABLE_CODES or attempt == self._client_settings.query_max_retries:
                     break
                 logger.warning(
                     "gRPC transient error on %s.%s [%s] (attempt %d/%d), retrying in %.0fms",
@@ -217,7 +224,7 @@ class GrpcClientWrapper:
                     query_endpoint,
                     e.code().name,
                     attempt + 1,
-                    max_retries + 1,
+                    self._client_settings.query_max_retries + 1,
                     backoff_delays[attempt] * 1000,
                 )
             else:
@@ -229,7 +236,7 @@ class GrpcClientWrapper:
         status_code = last_error.code().name
         details = last_error.details()
         retried = last_error.code() in self._RETRYABLE_CODES
-        suffix = f" (after {max_retries + 1} attempts)" if retried else ""
+        suffix = f" (after {self._client_settings.query_max_retries + 1} attempts)" if retried else ""
 
         log_level = logging.DEBUG if last_error.code() == grpc.StatusCode.NOT_FOUND else logging.ERROR
         logger.log(

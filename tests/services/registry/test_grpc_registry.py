@@ -20,6 +20,8 @@ from agentic_mesh_protocol.registry.v1 import (
     registry_service_pb2,
     registry_service_pb2_grpc,
 )
+from tests.fixtures.grpc_fixtures import AsyncStubWrapper, FakeContext
+from tests.services.registry.mock_registry_servicer import MockRegistryServicer
 
 from digitalkin.models.grpc_servers.models import ClientConfig
 from digitalkin.models.services.registry import RegistryModuleStatus, RegistryModuleType
@@ -28,8 +30,6 @@ from digitalkin.services.registry.exceptions import (
     RegistryServiceError,
 )
 from digitalkin.services.registry.grpc_registry import GrpcRegistry
-from tests.fixtures.grpc_fixtures import AsyncStubWrapper, FakeContext
-from tests.services.registry.mock_registry_servicer import MockRegistryServicer
 
 # Set timeout for all tests in this file (20 seconds)
 pytestmark = pytest.mark.timeout(20)
@@ -88,7 +88,6 @@ def dummy_client_config() -> ClientConfig:
         port=50052,
         mode=ControlFlow.ASYNC,
         security=SecurityMode.INSECURE,
-        credentials=None,
     )
 
 

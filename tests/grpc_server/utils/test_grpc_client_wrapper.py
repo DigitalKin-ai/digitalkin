@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
-from digitalkin.models.grpc_servers.models import ClientConfig, GrpcCompression
+from digitalkin.models.grpc_servers.models import ClientConfig
 from digitalkin.models.settings.utils.channel import ControlFlow, SecurityMode
 
 
@@ -26,7 +26,6 @@ def _make_config(host: str = "localhost", port: int = 50051) -> ClientConfig:
         port=port,
         mode=ControlFlow.ASYNC,
         security=SecurityMode.INSECURE,
-        compression=GrpcCompression.GZIP,
     )
 
 
@@ -52,7 +51,7 @@ class TestChannelCache:
 
         mock_insecure_channel.assert_called_once()
 
-        cache_key = f"{config.address}:{config.security.value}:{config.compression.value}"
+        cache_key = wrapper_a._channel_cache_key
         if GrpcClientWrapper._ref_counts[cache_key] != 2:
             pytest.fail(f"Expected ref_count=2, got {GrpcClientWrapper._ref_counts[cache_key]}")
 
@@ -100,7 +99,7 @@ class TestRefCounting:
 
         fake_channel.close.assert_not_called()
 
-        cache_key = f"{config.address}:{config.security.value}:{config.compression.value}"
+        cache_key = wrapper_a._channel_cache_key
         if cache_key not in GrpcClientWrapper._channel_cache:
             pytest.fail("Channel should still be in cache with one remaining ref")
         if GrpcClientWrapper._ref_counts[cache_key] != 1:
@@ -124,7 +123,7 @@ class TestRefCounting:
 
         fake_channel.close.assert_awaited_once()
 
-        cache_key = f"{config.address}:{config.security.value}:{config.compression.value}"
+        cache_key = wrapper_a._channel_cache_key
         if cache_key in GrpcClientWrapper._channel_cache:
             pytest.fail("Channel should be removed from cache after last ref closed")
         if cache_key in GrpcClientWrapper._ref_counts:

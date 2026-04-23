@@ -66,7 +66,7 @@ class ModuleServer(BaseServer):
             raise RuntimeError(msg)
 
         logger.debug("Registering module servicer for %s", self.module_class.__name__)
-        self.module_servicer = ModuleServicer(self.module_class)
+        self.module_servicer = ModuleServicer(self.module_class, self._server_settings)
         self.register_servicer(
             self.module_servicer,
             module_service_pb2_grpc.add_ModuleServiceServicer_to_server,
