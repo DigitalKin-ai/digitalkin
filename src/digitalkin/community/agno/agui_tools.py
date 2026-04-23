@@ -38,7 +38,6 @@ Notes:
     each run (otherwise the first resolved tool list is cached forever and
     subsequent requests would not see new frontend tools).
 """
-# pyright: reportMissingImports=false
 
 from __future__ import annotations
 
@@ -73,7 +72,7 @@ def agui_tool_to_external_function(tool: AgUiTool) -> Function:
         An :class:`agno.tools.function.Function` ready to be plugged into
         an Agno agent's tool list.
     """
-    from agno.tools.function import Function  # pyright: ignore[reportMissingImports]
+    from agno.tools.function import Function
 
     parameters = tool.parameters or {"type": "object", "properties": {}, "required": []}
     return Function(

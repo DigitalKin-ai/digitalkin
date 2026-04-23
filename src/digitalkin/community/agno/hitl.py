@@ -61,7 +61,6 @@ Typical usage inside a module trigger::
 message, a resume of a paused run, or an abandon (new user message while
 a tool was pending) and dispatch accordingly.
 """
-# pyright: reportMissingImports=false
 
 from __future__ import annotations
 
@@ -505,7 +504,7 @@ class AgnoHitlRunner:
             :func:`emit_awaiting_tool_result` or let
             :meth:`handle_agui_input` do it).
         """
-        from agno.run.agent import RunOutput  # pyright: ignore[reportMissingImports]
+        from agno.run.agent import RunOutput
 
         logger.info("AgnoHitlRunner.run: starting (thread_id=%s, msg_len=%d)", thread_id, len(message))
 
@@ -554,7 +553,7 @@ class AgnoHitlRunner:
             the resumed run paused again (cascading frontend tools). If
             no paused record exists for ``thread_id``, returns ``None``.
         """
-        from agno.run.agent import RunOutput  # pyright: ignore[reportMissingImports]
+        from agno.run.agent import RunOutput
 
         record = await self._store.load(thread_id)
         if record is None:

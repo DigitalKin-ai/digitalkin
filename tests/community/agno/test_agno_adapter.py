@@ -5,7 +5,6 @@ test environment. These tests inject fake ``agno.run.agent`` and
 ``agno.run.team`` modules into ``sys.modules`` so the adapter's lazy import
 resolves to controllable enum members and namespace objects.
 """
-# pyright: reportArgumentType=false, reportPrivateUsage=false, reportAttributeAccessIssue=false
 
 from __future__ import annotations
 
@@ -320,6 +319,196 @@ def test_run_completed_deduplicates() -> None:
         _make_event(_FakeRunEvent.run_completed, run_id="r1", content=None),
     )
     assert duplicate == []
+
+
+def test_nested_run_started_is_dropped() -> None:
+    """A member agent's run (``parent_run_id`` set) must not surface as a new top-level run."""
+    from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
+
+    adapter = AgnoStreamAdapter()
+    adapter.to_digitalkin_events(_make_event(_FakeTeamRunEvent.run_started, run_id="team-r1"))
+
+    nested = adapter.to_digitalkin_events(
+        _make_event(
+            _FakeRunEvent.run_started,
+            run_id="member-r1",
+            parent_run_id="team-r1",
+            agent_id="a1",
+            agent_name="Alice",
+        ),
+    )
+    assert nested == []
+    # Outer run state preserved
+    assert adapter._active_run_id == "team-r1"
+
+
+def test_nested_run_completed_is_dropped() -> None:
+    """A member agent's ``run_completed`` must not close the outer team run."""
+    from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
+
+    adapter = AgnoStreamAdapter()
+    adapter.to_digitalkin_events(_make_event(_FakeTeamRunEvent.run_started, run_id="team-r1"))
+
+    nested = adapter.to_digitalkin_events(
+        _make_event(
+            _FakeRunEvent.run_completed,
+            run_id="member-r1",
+            parent_run_id="team-r1",
+            content="member reply",
+        ),
+    )
+    assert nested == []
+    # Outer run still active
+    assert adapter._active_run_id == "team-r1"
+    assert "member-r1" not in adapter._completed_run_ids
+
+
+def test_nested_member_content_still_propagates_with_metadata() -> None:
+    """Nested member content events keep flowing and carry ``parent_run_id`` in metadata."""
+    from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
+
+    adapter = AgnoStreamAdapter()
+    adapter.to_digitalkin_events(_make_event(_FakeTeamRunEvent.run_started, run_id="team-r1"))
+
+    result = adapter.to_digitalkin_events(
+        _make_event(
+            _FakeRunEvent.run_content,
+            content="member reply",
+            parent_run_id="team-r1",
+            agent_id="a1",
+            agent_name="Alice",
+        ),
+    )
+    assert any(isinstance(e, RunContentEvent) for e in result)
+    content_event = next(e for e in result if isinstance(e, RunContentEvent))
+    metadata = content_event.metadata or {}
+    assert metadata["source"] == "agent"
+    assert metadata["name"] == "Alice"
+    assert metadata["parent_run_id"] == "team-r1"
+
+
+def test_nested_run_completed_closes_open_subagent_text() -> None:
+    """Nested run_completed with active subagent text emits ``---`` footer then TextMessageCompleted."""
+    from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
+
+    adapter = AgnoStreamAdapter()
+    adapter.to_digitalkin_events(_make_event(_FakeTeamRunEvent.run_started, run_id="team-r1"))
+    # Subagent text chunk opens a bubble (auto text_message_started + header).
+    adapter.to_digitalkin_events(
+        _make_event(
+            _FakeRunEvent.run_content,
+            content="hello from member",
+            parent_run_id="team-r1",
+            agent_name="Alice",
+        ),
+    )
+
+    closed = adapter.to_digitalkin_events(
+        _make_event(
+            _FakeRunEvent.run_completed,
+            run_id="member-r1",
+            parent_run_id="team-r1",
+            content="member reply",
+        ),
+    )
+
+    kinds = [type(e) for e in closed]
+    # Order: footer RunContent("\n---\n") → TextMessageCompleted. No RunCompleted (nested is dropped).
+    assert kinds[0] is RunContentEvent
+    assert kinds[1] is TextMessageCompletedEvent
+    assert closed[0].content == " \n\n --- \n\n "
+    # Same message_id on both footer and close.
+    assert closed[0].message_id == closed[1].message_id
+    # Metadata still reflects the subagent.
+    metadata = closed[1].metadata or {}
+    assert metadata["parent_run_id"] == "team-r1"
+    # The nested run must NOT appear in completed ids (outer run keeps going).
+    assert "member-r1" not in adapter._completed_run_ids
+
+
+def test_subagent_first_text_emits_header_delimiter() -> None:
+    """First subagent text chunk opens TextMessage + ``--- SubAgent <name> ---`` header + real content."""
+    from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
+
+    adapter = AgnoStreamAdapter()
+    adapter.to_digitalkin_events(_make_event(_FakeTeamRunEvent.run_started, run_id="team-r1"))
+    result = adapter.to_digitalkin_events(
+        _make_event(
+            _FakeRunEvent.run_content,
+            content="subagent text",
+            parent_run_id="team-r1",
+            agent_name="Alice",
+        ),
+    )
+
+    kinds = [type(e) for e in result]
+    # Order: TextMessageStarted → RunContent("--- SubAgent Alice ---\n") → RunContent(actual text).
+    assert kinds[0] is TextMessageStartedEvent
+    assert kinds[1] is RunContentEvent
+    assert kinds[2] is RunContentEvent
+    assert result[1].content == "\n --- \n ### Alice \n\n"
+    assert result[2].content == "subagent text"
+    # All three share the auto-minted subagent message_id.
+    assert result[0].message_id == result[1].message_id == result[2].message_id
+
+
+def test_main_agent_text_after_subagent_gets_fresh_message_id_without_header() -> None:
+    """Main agent's continuation opens a NEW TextMessage with NO subagent header."""
+    from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
+
+    adapter = AgnoStreamAdapter()
+    adapter.to_digitalkin_events(_make_event(_FakeTeamRunEvent.run_started, run_id="team-r1"))
+    sub = adapter.to_digitalkin_events(
+        _make_event(
+            _FakeRunEvent.run_content,
+            content="subagent text",
+            parent_run_id="team-r1",
+            agent_name="Alice",
+        ),
+    )
+    adapter.to_digitalkin_events(
+        _make_event(
+            _FakeRunEvent.run_completed,
+            run_id="member-r1",
+            parent_run_id="team-r1",
+            content="member reply",
+        ),
+    )
+    main = adapter.to_digitalkin_events(
+        _make_event(
+            _FakeTeamRunEvent.run_content,
+            content="main text",
+            team_name="Leader",
+        ),
+    )
+
+    main_kinds = [type(e) for e in main]
+    # Main agent opens a fresh bubble with NO header — just TextMessageStarted then its content.
+    assert main_kinds[0] is TextMessageStartedEvent
+    assert main_kinds[1] is RunContentEvent
+    assert main[1].content == "main text"
+    # New message_id, different from the subagent's.
+    sub_message_id = sub[0].message_id
+    main_message_id = main[0].message_id
+    assert sub_message_id != main_message_id
+
+
+def test_nested_run_completed_without_open_content_still_returns_empty() -> None:
+    """Nested run_completed with no active text/reasoning returns empty (regression guard)."""
+    from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
+
+    adapter = AgnoStreamAdapter()
+    adapter.to_digitalkin_events(_make_event(_FakeTeamRunEvent.run_started, run_id="team-r1"))
+    # No content opened beforehand.
+    result = adapter.to_digitalkin_events(
+        _make_event(
+            _FakeRunEvent.run_completed,
+            run_id="member-r1",
+            parent_run_id="team-r1",
+            content=None,
+        ),
+    )
+    assert result == []
 
 
 def test_run_completed_without_run_id_still_emits() -> None:
@@ -1095,20 +1284,26 @@ def test_team_events_route_like_agent_events() -> None:
 
 
 def test_metadata_agent_event_has_source_and_identity() -> None:
-    """Agent-scoped events populate ``metadata`` with agent identity."""
+    """Agent-scoped events populate ``metadata`` with agent identity.
+
+    Uses ``run_content`` (not ``run_started``) because nested ``run_started``
+    events are dropped at the adapter boundary to preserve the single-
+    ``RUN_STARTED`` AG-UI contract; ``run_content`` propagates through.
+    """
     from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
 
     adapter = AgnoStreamAdapter()
     result = adapter.to_digitalkin_events(
         _make_event(
-            _FakeRunEvent.run_started,
-            run_id="r1",
+            _FakeRunEvent.run_content,
+            content="hello",
             agent_id="a1",
             agent_name="Alice",
             parent_run_id="team-r1",
         ),
     )
-    assert result[0].metadata == {
+    content_event = next(e for e in result if isinstance(e, RunContentEvent))
+    assert content_event.metadata == {
         "source": "agent",
         "name": "Alice",
         "id": "a1",

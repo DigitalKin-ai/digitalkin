@@ -7,7 +7,6 @@ The adapter owns ALL state management: tracking reasoning/content lifecycle,
 generating message_id and reasoning_id on each phase start, and emitting
 proper start/completed events for text message and reasoning sequences.
 """
-# pyright: reportMissingImports=false
 
 from __future__ import annotations
 
@@ -299,15 +298,39 @@ class AgnoStreamAdapter:
     def _handle_run_started(self, agno_event: AgnoRunStartedEvent, timestamp: Any) -> list[BaseAgentRunEvent]:
         """Handle RunEvent.run_started.
 
+        Nested runs (a team member's own run, or a team invoked from a
+        workflow) carry a non-empty ``parent_run_id``. The AG-UI protocol
+        only accepts a single ``RUN_STARTED`` per stream, so we drop
+        nested ones — content/tool events from members still propagate
+        and carry ``metadata.parent_run_id`` for client-side routing.
+
         Returns:
-            List containing a RunStartedEvent, or empty for duplicates.
+            List containing a RunStartedEvent, or empty for duplicates / nested runs.
         """
+        parent_run_id = getattr(agno_event, "parent_run_id", None)
         run_id = agno_event.run_id
 
-        if run_id and run_id == self._active_run_id:
-            logger.debug("Skipping duplicate RunStarted for run_id=%s", run_id)
+        if parent_run_id:
+            logger.info(
+                "[agno-adapter] DROP nested run_started run_id=%s parent_run_id=%s agent=%s/%s",
+                run_id,
+                parent_run_id,
+                getattr(agno_event, "agent_id", None),
+                getattr(agno_event, "agent_name", None),
+            )
             return []
 
+        if run_id and run_id == self._active_run_id:
+            logger.info("[agno-adapter] DROP duplicate run_started run_id=%s", run_id)
+            return []
+
+        logger.info(
+            "[agno-adapter] EMIT run_started run_id=%s session_id=%s active_was=%s metadata=%s",
+            run_id,
+            getattr(agno_event, "session_id", None),
+            self._active_run_id,
+            self._last_metadata,
+        )
         self._active_run_id = run_id
         return [
             RunStartedEvent(
@@ -322,16 +345,57 @@ class AgnoStreamAdapter:
     def _handle_run_completed(self, agno_event: AgnoRunCompletedEvent, timestamp: Any) -> list[BaseAgentRunEvent]:
         """Handle RunEvent.run_completed.
 
+        Mirrors ``_handle_run_started``: nested runs are silently dropped
+        so the outer run's ``RUN_COMPLETED`` stays the single top-level
+        closure on the stream.
+
         Returns:
-            List of closing events followed by a RunCompletedEvent.
+            List of closing events followed by a RunCompletedEvent,
+            or empty for nested / duplicate events.
         """
+        parent_run_id = getattr(agno_event, "parent_run_id", None)
         run_id = agno_event.run_id
 
+        if parent_run_id:
+            # Close the subagent's text/reasoning bubble so the main agent's
+            # continuation gets a fresh message_id. Inject a "\n---\n" footer
+            # on the same message before the TextMessageCompletedEvent so the
+            # frontend can visually separate subagent content from the rest.
+            events: list[BaseAgentRunEvent] = []
+            if self._content_active:
+                events.append(
+                    RunContentEvent(
+                        event=AgentRunEvent.RUN_CONTENT,
+                        content=" \n\n --- \n\n ",
+                        message_id=self._current_message_id,
+                        reasoning_content=None,
+                        content_type=None,
+                        timestamp=timestamp,
+                        metadata=self._last_metadata,
+                    )
+                )
+                events.extend(self._close_content(timestamp))
+            if self._reasoning_active:
+                events.extend(self._close_reasoning(timestamp))
+            logger.info(
+                "[agno-adapter] DROP nested run_completed run_id=%s parent_run_id=%s closed=%d",
+                run_id,
+                parent_run_id,
+                len(events),
+            )
+            return events
+
         if run_id and run_id in self._completed_run_ids and run_id != self._active_run_id:
-            logger.debug("Skipping duplicate RunCompleted for run_id=%s", run_id)
+            logger.info("[agno-adapter] DROP duplicate run_completed run_id=%s", run_id)
             return []
 
-        events: list[BaseAgentRunEvent] = []
+        logger.info(
+            "[agno-adapter] EMIT run_completed run_id=%s active_run_id=%s",
+            run_id,
+            self._active_run_id,
+        )
+
+        events = []
 
         if self._content_active:
             events.extend(self._close_content(timestamp))
@@ -849,6 +913,23 @@ class AgnoStreamAdapter:
                 )
             )
             self._content_active = True
+
+            # Inject "--- <name> ---" header when the newly-opened
+            # bubble belongs to a team member (nested agent event).
+            meta = self._last_metadata or {}
+            if meta.get("parent_run_id") and meta.get("source") == "agent":
+                name = meta.get("name") or "member"
+                events.append(
+                    RunContentEvent(
+                        event=AgentRunEvent.RUN_CONTENT,
+                        content=f"\n --- \n ### {name} \n\n",
+                        message_id=self._current_message_id,
+                        reasoning_content=None,
+                        content_type=None,
+                        timestamp=timestamp,
+                        metadata=self._last_metadata,
+                    )
+                )
 
         events.append(
             RunContentEvent(
