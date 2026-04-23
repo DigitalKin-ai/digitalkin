@@ -149,18 +149,17 @@ class _SharedPoller(_SharedChannelResource):
         self._task_queues: dict[str, asyncio.Queue[task_manager_message_pb2.Task | None]] = {}
         self._last_seen_ts: dict[str, tuple[int, int]] = {}
 
-    def register(self, task_id: str) -> asyncio.Queue[task_manager_message_pb2.Task | None]:
+    def register(self, task_id: str, max_queue_size: int = 512) -> asyncio.Queue[task_manager_message_pb2.Task | None]:
         """Register a task_id for polling. Returns queue for signal delivery.
 
         Args:
             task_id: Unique task identifier.
+            max_queue_size: Maximum size of the signal queue.
 
         Returns:
             asyncio.Queue[task_manager_message_pb2.Task | None]: Queue for signal delivery.
         """
-        queue: asyncio.Queue[task_manager_message_pb2.Task | None] = asyncio.Queue(
-            maxsize=int(os.environ.get("DIGITALKIN_SIGNAL_QUEUE_SIZE", "512"))
-        )
+        queue: asyncio.Queue[task_manager_message_pb2.Task | None] = asyncio.Queue(maxsize=max_queue_size)
         self._task_queues[task_id] = queue
         if self._task is None or self._task.done():
             # Recreate stop_event in the current event loop (the old one may belong to a closed loop)
