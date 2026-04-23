@@ -7,7 +7,7 @@ from pydantic import Field, NonNegativeInt
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from digitalkin.models.settings.server.channel import ServerChannelSettings
-from digitalkin.models.settings.server.grpc import GrpcServerSettings
+from digitalkin.models.settings.server.grpc_server import GrpcServerSettings
 
 
 class ServerSettings(BaseSettings):
