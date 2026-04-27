@@ -40,7 +40,7 @@ class GracefulShutdownHandler:
 
     _task_manager: BaseTaskManager
     _checkpoint_mgr: RedisCheckpointManager | None
-    _redis_client: RedisClient | None
+    _redis_client: RedisClient
     _shutdown_event: asyncio.Event
     _shutdown_timeout: float
     _loop: asyncio.AbstractEventLoop | None

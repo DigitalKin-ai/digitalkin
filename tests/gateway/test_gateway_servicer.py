@@ -318,12 +318,6 @@ class TestConsumeStream:
         assert len(responses) == 1
         assert responses[0].HasField("error")
 
-    async def test_raises_when_no_redis(self) -> None:
-        """GatewayServicer raises at init when no Redis is provided."""
-        from digitalkin.grpc_servers.gateway_servicer import GatewayServicer
-
-        with pytest.raises(RuntimeError, match="requires Redis"):
-            GatewayServicer(redis_client=None, max_streams=100)
 
 
 # ===========================================================================

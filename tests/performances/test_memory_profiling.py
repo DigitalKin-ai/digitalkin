@@ -12,7 +12,7 @@ import asyncio
 import gc
 import tracemalloc
 from typing import Any, ClassVar
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from tests.fixtures.stress_reporter import StressReporter
@@ -142,7 +142,6 @@ class ImprovedMockModule(BaseModule):
             "identity": None,
             "registry": None,
             "storage": None,
-            "task_manager": None,
             "user_profile": None,
         }
 
@@ -345,7 +344,7 @@ class TestImprovedJobManagerMemoryProfile:
         gc.collect()
         baseline = get_memory_usage_reliable()
 
-        manager = SingleJobManager(ImprovedMockModule, ServicesMode.LOCAL)
+        manager = SingleJobManager(ImprovedMockModule, ServicesMode.LOCAL, MagicMock())
         await manager.start()
 
         gc.collect()

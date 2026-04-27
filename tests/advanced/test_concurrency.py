@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Generator
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -189,7 +189,16 @@ class TestStreamRegistryConcurrency:
         from digitalkin.grpc_servers.stream_registry import StreamRegistry
         from digitalkin.grpc_servers.stream_session import StreamSession
 
-        registry = StreamRegistry(max_streams=10)
+        redis = MagicMock()
+        redis.eval = AsyncMock(side_effect=[1] * 10 + [0])
+        pipe = MagicMock()
+        pipe.decr = MagicMock(return_value=pipe)
+        pipe.zrem = MagicMock(return_value=pipe)
+        pipe.delete = MagicMock(return_value=pipe)
+        pipe.execute = AsyncMock(return_value=[])
+        redis.pipeline = MagicMock(return_value=pipe)
+
+        registry = StreamRegistry(redis, max_streams=10)
 
         for i in range(10):
             accepted = await registry.register(StreamSession(task_id=f"t_{i}"))
@@ -205,7 +214,16 @@ class TestStreamRegistryConcurrency:
         from digitalkin.grpc_servers.stream_registry import StreamRegistry
         from digitalkin.grpc_servers.stream_session import StreamSession
 
-        registry = StreamRegistry(max_streams=100)
+        redis = MagicMock()
+        redis.eval = AsyncMock(return_value=1)
+        pipe = MagicMock()
+        pipe.decr = MagicMock(return_value=pipe)
+        pipe.zrem = MagicMock(return_value=pipe)
+        pipe.delete = MagicMock(return_value=pipe)
+        pipe.execute = AsyncMock(return_value=[])
+        redis.pipeline = MagicMock(return_value=pipe)
+
+        registry = StreamRegistry(redis, max_streams=100)
 
         async def churn(i: int) -> None:
             tid = f"churn_{i}"

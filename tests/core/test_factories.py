@@ -74,7 +74,6 @@ class MockModule(BaseModule[MockInputModel, MockOutputModel, MockSetupModel, Non
             "identity": None,
             "registry": None,
             "storage": None,
-            "task_manager": None,
             "user_profile": None,
         }
 

@@ -8,7 +8,7 @@ import asyncio
 from collections.abc import AsyncGenerator
 from enum import Enum
 from typing import Any, ClassVar
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 from pydantic import BaseModel, Field
@@ -74,7 +74,6 @@ class MockModule(BaseModule):
             "identity": None,
             "registry": None,
             "storage": None,
-            "task_manager": None,
             "user_profile": None,
         }
 
@@ -327,7 +326,7 @@ class TestConcurrencyRegression:
         """REGRESSION: SingleJobManager.stop_module wasn't thread-safe
         Fix: Added async lock protection.
         """
-        manager = SingleJobManager(MockModule, ServicesMode.LOCAL)
+        manager = SingleJobManager(MockModule, ServicesMode.LOCAL, MagicMock())
         await manager.start()
 
         # Create mock module and session with all attributes _cleanup_task needs
@@ -386,7 +385,7 @@ class TestEnumSerializationRegression:
         causing json_format.ParseDict to fail with ParseError.
         Fix: Changed model_dump() to model_dump(mode='json') in add_to_queue.
         """
-        manager = SingleJobManager(MockModule, ServicesMode.LOCAL)
+        manager = SingleJobManager(MockModule, ServicesMode.LOCAL, MagicMock())
         await manager.start()
 
         session = Mock()

@@ -51,7 +51,7 @@ class GatewayServicer:
     """
 
     _registry: StreamRegistry
-    _redis_client: RedisClient | None
+    _redis_client: RedisClient
     _circuit_breaker: CircuitBreaker | None
     _dispatch_key: str
 
@@ -109,7 +109,7 @@ class GatewayServicer:
 
     def __init__(
         self,
-        redis_client: RedisClient | None = None,
+        redis_client: RedisClient,
         max_streams: int = MAX_STREAMS,
         circuit_breaker: CircuitBreaker | None = None,
         dispatch_key: str = "dispatch:module",
@@ -121,18 +121,11 @@ class GatewayServicer:
             max_streams: Maximum concurrent sessions (cluster-wide with Redis).
             circuit_breaker: Optional circuit breaker for recording success/failure.
             dispatch_key: Redis Stream key for task dispatch to the module.
-
-        Raises:
-            RuntimeError: If redis_client is None.
         """
-        self._registry = StreamRegistry(max_streams=max_streams, redis_client=redis_client)
+        self._registry = StreamRegistry(redis_client, max_streams=max_streams)
         self._circuit_breaker = circuit_breaker
         self._redis_client = redis_client
         self._dispatch_key = dispatch_key
-
-        if redis_client is None:
-            msg = "GatewayServicer: no Redis — gateway requires Redis for production use"
-            raise RuntimeError(msg)
 
     async def start(self) -> None:
         """Start the registry reaper."""
@@ -182,6 +175,25 @@ class GatewayServicer:
             logger.warning("Session rejected (capacity): task_id=%s", task_id)
             return gateway_pb2.StartStreamResponse(task_id=task_id, accepted=False)
 
+        # Seed output stream with module_start_info so ConsumeStream's first
+        # XREAD 0-0 finds data immediately, advancing the cursor to a real entry ID.
+        # Subsequent XREADs block properly and wake instantly on module output.
+        # Direct XADD (not ProtoStreamWriter) to guarantee immediate write.
+        start_info = struct_pb2.Struct()
+        start_info.update({
+            "root": {
+                "protocol": "module_start_info",
+                "task_id": task_id,
+                "mission_id": request.mission_id,
+                "setup_id": request.setup_id,
+                "started_at": datetime.now(tz=timezone.utc).isoformat(),
+            },
+        })
+        await self._redis_client.xadd(
+            f"task:{task_id}:stream",
+            {"pb": start_info.SerializeToString(), "seq": "0"},
+        )
+
         # Start module in background
         session._forward_task = asyncio.create_task(  # noqa: SLF001
             self._start_module(session, request),
@@ -217,11 +229,14 @@ class GatewayServicer:
             request: The StartStreamRequest.
         """
         try:
+            import time as _t
+
             await self._redis_client.xadd(
                 self._dispatch_key,
                 {
                     "task_id": session.task_id,
                     "pb": request.input.SerializeToString(),
+                    "ts_ns": str(_t.perf_counter_ns()),
                     "setup_id": request.setup_id,
                     "mission_id": request.mission_id,
                 },
@@ -353,7 +368,7 @@ class GatewayServicer:
             if proto_writer is not None:
                 await proto_writer.write_eos()
 
-    async def ConsumeStream(  # noqa: C901, PLR0911, PLR0912
+    async def ConsumeStream(  # noqa: C901
         self,
         request_iterator: AsyncIterator,
         context: grpc.aio.ServicerContext,  # noqa: ARG002
@@ -392,17 +407,12 @@ class GatewayServicer:
         session = self._registry.get(task_id)
 
         # Late consumer: session already finished but data is in Redis.
-        # Read directly from Redis without requiring an active session.
-        if session is None and self._redis_client is not None:
+        if session is None:
             stream_len = await self._redis_client.xlen(f"task:{task_id}:stream")
             if stream_len > 0:
                 async for resp in self._consume_from_redis(task_id, from_seq):
                     yield resp
                 return
-            yield self._error_response(task_id, "", 5, "Task not found")
-            return
-
-        if session is None:
             yield self._error_response(task_id, "", 5, "Task not found")
             return
 
@@ -412,11 +422,8 @@ class GatewayServicer:
             name=f"upstream_{task_id}",
         )
 
-        # Stream output downstream to Module B (Redis only — no queue fallback)
+        # Stream output downstream to Module B
         try:
-            if self._redis_client is None:
-                yield self._error_response(task_id, "", 13, "Service unavailable")
-                return
             async for resp in self._consume_from_redis(task_id, from_seq):
                 yield resp
         finally:
@@ -505,10 +512,15 @@ class GatewayServicer:
         Yields:
             GatewayResponse messages.
         """
+        import time as _t
+
         from digitalkin.core.task_manager.redis.proto_streams import ProtoStreamReader
 
+        t0 = _t.perf_counter_ns()
         reader = ProtoStreamReader(task_id, self._redis_client)  # type: ignore[arg-type]
-        await reader.restore_cursor()
+        if from_seq > 0:
+            await reader.restore_cursor()
+        t1 = _t.perf_counter_ns()
 
         seq = from_seq
         job_id = task_id
@@ -517,8 +529,16 @@ class GatewayServicer:
         batch_ts = timestamp_pb2.Timestamp()
         batch_ts.FromDatetime(datetime.now(tz=timezone.utc))
         batch_count = 0
+        first = True
 
         async for struct_data in reader.read_structs():
+            if first:
+                t2 = _t.perf_counter_ns()
+                logger.info(
+                    "ConsumeStream: cursor=%.1fms xread_wait=%.1fms total_to_first=%.1fms task_id=%s",
+                    (t1 - t0) / 1e6, (t2 - t1) / 1e6, (t2 - t0) / 1e6, task_id,
+                )
+                first = False
             seq += 1
             batch_count += 1
 

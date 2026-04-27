@@ -137,6 +137,7 @@ class TestTaskRegistration:
         """Test exceeding max tasks raises RuntimeError after wait timeout."""
         small_manager = RemoteTaskManager(default_timeout=1.0)
         small_manager.max_concurrent_tasks = 2
+        small_manager._max_queued_tasks = 0
         small_manager._task_wait_timeout = 0.1
 
         async def work() -> None:
@@ -350,6 +351,7 @@ class TestTasksLock:
         """Test concurrent registers don't exceed max_concurrent_tasks."""
         mgr = RemoteTaskManager()
         mgr.max_concurrent_tasks = 3
+        mgr._max_queued_tasks = 0
         mgr._task_wait_timeout = 0.1
 
         async def work():

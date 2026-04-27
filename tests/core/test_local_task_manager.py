@@ -188,6 +188,7 @@ class TestTaskCreation:
         """Negative: Exceeding max tasks raises RuntimeError after wait timeout."""
         small_manager = LocalTaskManager(default_timeout=1.0)
         small_manager.max_concurrent_tasks = 2
+        small_manager._max_queued_tasks = 0
         small_manager._task_wait_timeout = 0.1
 
         async def work() -> None:
@@ -467,6 +468,7 @@ class TestConcurrencyStress:
         """Test that semaphore prevents oversubscription of max_concurrent_tasks."""
         mgr = LocalTaskManager()
         mgr.max_concurrent_tasks = 5
+        mgr._max_queued_tasks = 0
         mgr._task_wait_timeout = 0.1
 
         async def slow_task() -> None:

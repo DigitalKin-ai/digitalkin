@@ -36,15 +36,12 @@ class ModuleStartInfoOutput(UtilityProtocol):
     """
 
     protocol: Literal["module_start_info"] = "module_start_info"  # type: ignore[misc]
-    job_id: str = Field(..., description="Unique job identifier")
+    task_id: str = Field(..., description="Task identifier")
     mission_id: str = Field(..., description="Mission identifier")
     setup_id: str = Field(..., description="Setup identifier")
-    setup_version_id: str = Field(..., description="Setup version identifier")
-    module_id: str = Field(..., description="Module identifier")
-    module_name: str = Field(..., description="Human-readable module name")
     started_at: str = Field(
         default_factory=lambda: datetime.now(tz=timezone.utc).isoformat(),
-        description="ISO timestamp when module started",
+        description="ISO timestamp when task started",
     )
 
 

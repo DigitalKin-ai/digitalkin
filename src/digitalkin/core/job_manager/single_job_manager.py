@@ -26,7 +26,7 @@ from digitalkin.models.module.base_types import DataModel, InputModelT, OutputMo
 from digitalkin.models.module.module import ModuleCodeModel
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, AsyncIterator
+    from collections.abc import AsyncGenerator, AsyncIterator, Callable
 
     from digitalkin.core.task_manager.redis.redis_client import RedisClient
     from digitalkin.core.task_manager.redis.redis_streams import RedisStreamWriter
@@ -46,16 +46,16 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
     """
 
     # Defaults — safe when __init__ is bypassed (e.g., tests using object.__new__)
-    _redis_client: RedisClient | None = None
+    _redis_client: RedisClient
     _stream_writers: dict[str, RedisStreamWriter] | None = None
 
     def __init__(
         self,
         module_class: type[BaseModule],
         services_mode: ServicesMode,
+        redis_client: RedisClient,
         default_timeout: float = 300.0,
         max_concurrent_tasks: int = int(os.environ.get("DIGITALKIN_MAX_CONCURRENT_TASKS", "100")),
-        redis_client: RedisClient | None = None,
     ) -> None:
         """Initialize the job manager.
 
@@ -64,7 +64,7 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             services_mode: The mode of operation for the services (e.g., ASYNC or SYNC).
             default_timeout: Default timeout for task operations
             max_concurrent_tasks: Maximum number of concurrent tasks
-            redis_client: Optional Redis client for durable stream persistence
+            redis_client: Redis client for signal delivery and stream persistence.
         """
         # Create local task manager for same-process execution
         task_manager = LocalTaskManager(default_timeout)
@@ -80,9 +80,9 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         self._backpressure_strategy = BackpressureStrategy(os.environ.get("DIGITALKIN_BACKPRESSURE_STRATEGY", "block"))
         self._backpressure_timeout = float(os.environ.get("DIGITALKIN_BACKPRESSURE_TIMEOUT", "300.0"))
 
-        # Optional Redis Streams for durable output persistence
+        # Redis for signal delivery and durable output persistence
         self._redis_client = redis_client
-        self._stream_writers = {} if redis_client is not None else None
+        self._stream_writers: dict[str, RedisStreamWriter] = {}
 
     async def start(self) -> None:
         """Start manager (no-op, no external connections needed)."""
@@ -344,6 +344,7 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         request_metadata: dict[str, str] | None = None,
         job_id: str | None = None,
         tool_cache: Any = None,
+        callback: Callable | None = None,
     ) -> str:
         """Create and start a new module job.
 
@@ -355,9 +356,9 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             setup_version_id: The setup Version ID associated with the module.
             request_metadata: gRPC request metadata (headers) to forward to the module.
             job_id: Optional externally-provided job ID (e.g., Gateway's task_id).
-                    If None, a UUID is minted. Allows all Redis keys, signals,
-                    and metrics to align on the same ID from client to module.
             tool_cache: Pre-resolved ToolCache to inject (skips per-request resolution).
+            callback: Direct output callback (writes to Redis). If None, uses
+                internal queue path via add_to_queue.
 
         Returns:
             str: The unique identifier (job ID) of the created job.
@@ -376,19 +377,16 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             tool_cache=tool_cache,
         )
 
-        # Inject Redis-backed signal service for cross-process signal delivery
-        if self._redis_client is not None:
-            from digitalkin.services.task_manager.redis_task_manager import RedisTaskManager
+        # Redis-backed signal service for cross-process signal delivery
+        from digitalkin.services.task_manager.redis_task_manager import RedisTaskManager
 
-            module.context.task_manager = RedisTaskManager(self._redis_client)
+        module.context.task_manager = RedisTaskManager(self._redis_client)
 
-        # Create durable stream writer if Redis is configured
-        if self._redis_client is not None and self._stream_writers is not None:
+        if callback is None:
             from digitalkin.core.task_manager.redis.redis_streams import RedisStreamWriter
 
             self._stream_writers[job_id] = RedisStreamWriter(job_id, self._redis_client)
-
-        callback = await self.job_specific_callback(self.add_to_queue, job_id)
+            callback = await self.job_specific_callback(self.add_to_queue, job_id)
 
         await self.create_task(
             job_id,

@@ -9,7 +9,7 @@ from digitalkin.services.services_models import ServicesMode
 
 
 class TestSingletonStrategies:
-    """Stateless strategies (registry, communication, task_manager) are cached as singletons."""
+    """Stateless strategies (registry, communication) are cached as singletons."""
 
     def test_same_instance_returned_on_second_call(self) -> None:
         """init_strategy returns cached singleton for stateless strategies."""
@@ -30,10 +30,10 @@ class TestSingletonStrategies:
         assert id1 is not id2
 
     def test_all_stateless_strategies_cached(self) -> None:
-        """All three stateless strategies are singletons."""
+        """All stateless strategies are singletons."""
         config = ServicesConfig(mode=ServicesMode.LOCAL)
 
-        for name in ("registry", "communication", "task_manager"):
+        for name in ("registry", "communication"):
             first = config.init_strategy(name, "m1", "s1", "v1")
             second = config.init_strategy(name, "m2", "s2", "v2")
             assert first is second, f"{name} should be a singleton"
@@ -62,16 +62,15 @@ class TestBorrowedCleanup:
 
         comm = AsyncMock()
         reg = AsyncMock()
-        tm = AsyncMock()
         cost = AsyncMock()
 
         ctx = ModuleContext(
             communication=comm, cost=cost,
             filesystem=AsyncMock(), identity=AsyncMock(), registry=reg,
-            storage=AsyncMock(), task_manager=tm,
+            storage=AsyncMock(),
             user_profile=AsyncMock(),
             session={"job_id": "j1", "mission_id": "m1", "setup_id": "s1", "setup_version_id": "v1"},
-            borrowed=frozenset({"registry", "communication", "task_manager"}),
+            borrowed=frozenset({"registry", "communication"}),
         )
 
         await ctx.cleanup()
@@ -79,7 +78,6 @@ class TestBorrowedCleanup:
         # Borrowed: should NOT be closed
         reg.close.assert_not_awaited()
         comm.close.assert_not_awaited()
-        tm.close.assert_not_awaited()
 
         # Owned: SHOULD be closed
         cost.close.assert_awaited_once()

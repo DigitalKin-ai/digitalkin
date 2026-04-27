@@ -41,16 +41,16 @@ class BaseTaskManager(ABC):
         self.default_timeout = default_timeout
         self._shutdown_event = asyncio.Event()
         self._tasks_lock = asyncio.Lock()
-        self._max_concurrent_tasks = int(os.environ.get("DIGITALKIN_MAX_CONCURRENT_TASKS", "100"))
+        self._max_concurrent_tasks = int(os.environ.get("DIGITALKIN_MAX_CONCURRENT_TASKS", "500"))
         self._task_slot = asyncio.Semaphore(self._max_concurrent_tasks)
         self._active_slots = 0
         self._task_wait_timeout = float(os.environ.get("DIGITALKIN_TASK_WAIT_TIMEOUT", "30"))
-        self._stream_drain_timeout = float(os.environ.get("DIGITALKIN_STREAM_DRAIN_TIMEOUT", "60.0"))
+        self._stream_drain_timeout = float(os.environ.get("DIGITALKIN_STREAM_DRAIN_TIMEOUT", "2.0"))
         self._cleanup_tasks: set[asyncio.Task] = set()
 
         # Admission queue: allows tasks to wait for a slot instead of being rejected.
         # Total in-system capacity = max_concurrent + max_queued.
-        self._max_queued_tasks = int(os.environ.get("DIGITALKIN_MAX_QUEUED_TASKS", "0"))
+        self._max_queued_tasks = int(os.environ.get("DIGITALKIN_MAX_QUEUED_TASKS", "5000"))
         self._admission_timeout = float(os.environ.get("DIGITALKIN_ADMISSION_TIMEOUT", "5.0"))
         self._queue_slot_timeout = float(os.environ.get("DIGITALKIN_QUEUE_SLOT_TIMEOUT", "600.0"))
         self._system_gate = asyncio.Semaphore(self._max_concurrent_tasks + self._max_queued_tasks)
@@ -129,7 +129,7 @@ class BaseTaskManager(ABC):
             self._task_slot.release()
             if self._max_queued_tasks > 0:
                 self._system_gate.release()
-            logger.debug(
+            logger.info(
                 "Task cleaned up (%d remaining)",
                 len(self.tasks_sessions),
                 extra={

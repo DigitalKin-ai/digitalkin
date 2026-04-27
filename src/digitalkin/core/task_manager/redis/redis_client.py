@@ -10,7 +10,6 @@ Created once at startup, passed via dependency injection, closed on shutdown.
 from __future__ import annotations
 
 import asyncio
-import os
 from typing import TYPE_CHECKING, Any
 
 import redis.asyncio as aioredis
@@ -35,19 +34,23 @@ class RedisClient:  # noqa: PLR0904
     def __init__(
         self,
         redis_url: str = "",
-        pool_size: int = int(os.environ.get("DIGITALKIN_REDIS_POOL_SIZE", "2000")),
+        pool_size: int = 0,
     ) -> None:
         """Initialize Redis client with split pools.
 
         Args:
-            redis_url: Redis connection URL. Falls back to env
-                ``DIGITALKIN_REDIS_URL`` if empty.
-            pool_size: Total max connections (split evenly across pools).
+            redis_url: Redis connection URL. Falls back to RedisPoolSettings.
+            pool_size: Total max connections. 0 = use RedisPoolSettings default.
         """
-        self.url = redis_url or os.environ.get("DIGITALKIN_REDIS_URL", "redis://localhost:6379/0")
+        from digitalkin.models.settings.redis import RedisPoolSettings
 
-        default_size = int(os.environ.get("DIGITALKIN_REDIS_POOL_SIZE_DEFAULT", str(pool_size // 2)))
-        blocking_size = int(os.environ.get("DIGITALKIN_REDIS_POOL_SIZE_BLOCKING", str(pool_size // 2)))
+        pool = RedisPoolSettings()
+        self.url = redis_url or pool.url
+        if pool_size:
+            pool.pool_size = pool_size
+
+        default_size = pool.get_default_pool_size()
+        blocking_size = pool.get_blocking_pool_size()
 
         self._client = aioredis.Redis.from_url(
             self.url,

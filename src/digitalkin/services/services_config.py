@@ -11,8 +11,6 @@ from digitalkin.services.identity import DefaultIdentity, IdentityStrategy
 from digitalkin.services.registry import DefaultRegistry, GrpcRegistry, RegistryStrategy
 from digitalkin.services.services_models import ServicesMode, ServicesStrategy
 from digitalkin.services.storage import DefaultStorage, GrpcStorage, StorageStrategy
-from digitalkin.services.task_manager import DefaultTaskManager, TaskManagerStrategy
-from digitalkin.services.task_manager.grpc_task_manager import GrpcTaskManager
 from digitalkin.services.user_profile import DefaultUserProfile, GrpcUserProfile, UserProfileStrategy
 
 
@@ -40,7 +38,6 @@ class ServicesConfig(BaseModel):
         "identity",
         "communication",
         "user_profile",
-        "task_manager",
     }
 
     def __init__(
@@ -62,7 +59,7 @@ class ServicesConfig(BaseModel):
         self.mode = mode
 
         # Strategies that never use per-request IDs — safe to share as singletons
-        self._stateless_strategies: frozenset[str] = frozenset({"registry", "communication", "task_manager"})
+        self._stateless_strategies: frozenset[str] = frozenset({"registry", "communication"})
 
         # Default strategy definitions
         defaults: dict[str, ServicesStrategy] = {
@@ -73,7 +70,6 @@ class ServicesConfig(BaseModel):
             "identity": ServicesStrategy(local=DefaultIdentity, remote=DefaultIdentity),
             "communication": ServicesStrategy(local=DefaultCommunication, remote=GrpcCommunication),
             "user_profile": ServicesStrategy(local=DefaultUserProfile, remote=GrpcUserProfile),
-            "task_manager": ServicesStrategy(local=DefaultTaskManager, remote=GrpcTaskManager),
         }
 
         # Apply strategy overrides
@@ -170,11 +166,6 @@ class ServicesConfig(BaseModel):
     def user_profile(self) -> type[UserProfileStrategy]:
         """Get the user_profile service strategy class based on the current mode."""
         return self._strategies["user_profile"][self.mode.value]
-
-    @property
-    def task_manager(self) -> type[TaskManagerStrategy]:
-        """Get the task_manager service strategy class based on the current mode."""
-        return self._strategies["task_manager"][self.mode.value]
 
     def update_mode(self, mode: ServicesMode) -> None:
         """Update the strategy mode.

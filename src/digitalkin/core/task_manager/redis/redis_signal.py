@@ -15,14 +15,13 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
-import os
 from typing import Any, ClassVar
 
 from digitalkin.core.task_manager.redis.redis_client import RedisClient  # noqa: TC001
 from digitalkin.logger import logger
 
 # ============================================================================
-# SharedRedisListener — one PubSub for N tasks (mirrors _SharedPoller)
+# SharedRedisListener — one PubSub for N tasks
 # ============================================================================
 
 
@@ -31,7 +30,7 @@ class SharedRedisListener:
 
     Instead of N PubSub connections (one per task), a single listener
     subscribes to ``signal_ch:{task_id}`` channels and dispatches messages
-    to per-task bounded queues. Identical to ``_SharedPoller`` but push-based.
+    to per-task bounded queues.
 
     Thread-safety: all methods are called from the same event loop.
     The listen loop runs as a single asyncio.Task.
@@ -77,18 +76,22 @@ class SharedRedisListener:
         Args:
             redis_client: Shared Redis connection pool.
         """
+        from digitalkin.models.settings.redis import RedisSignalSettings
+
+        sig = RedisSignalSettings()
         self._redis_client = redis_client
         self._refcount: int = 0
         self._task_queues: dict[str, asyncio.Queue[dict[str, Any] | None]] = {}
+        self._task_refs: dict[str, asyncio.Task[None]] = {}
         self._last_seen: dict[str, str] = {}
         self._pubsub: Any = None
         self._listen_task: asyncio.Task[None] | None = None
         self._stop_event = asyncio.Event()
-        self._queue_size = int(os.environ.get("DIGITALKIN_SIGNAL_QUEUE_SIZE", "512"))
-        self._max_tasks = int(os.environ.get("DIGITALKIN_SIGNAL_MAX_TASKS", "10000"))
+        self._queue_size = sig.queue_size
+        self._max_tasks = sig.max_tasks
 
-    def register(self, task_id: str) -> asyncio.Queue[dict[str, Any] | None]:
-        """Register a task_id for listening. Returns bounded queue for signal delivery.
+    async def register(self, task_id: str) -> asyncio.Queue[dict[str, Any] | None]:
+        """Register a task_id and subscribe to its signal channel.
 
         Args:
             task_id: Unique task identifier.
@@ -104,22 +107,25 @@ class SharedRedisListener:
             raise RuntimeError(msg)
         queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue(maxsize=self._queue_size)
         self._task_queues[task_id] = queue
-        if self._listen_task is None or self._listen_task.done():
-            # New event for new loop — old event may belong to a closed/done task
-            self._stop_event = asyncio.Event()
-            self._listen_task = asyncio.create_task(self._listen_loop(), name="shared_redis_listener")
-            logger.debug("SharedRedisListener: started listen task for %d tasks", len(self._task_queues))
-        return queue
 
-    async def ensure_subscribed(self, task_id: str) -> None:
-        """Subscribe to the pub/sub channel for task_id if not already subscribed.
-
-        Args:
-            task_id: Unique task identifier.
-        """
+        # Subscribe before starting the listen loop — prevents get_message on unsubscribed pubsub
         if self._pubsub is None:
             self._pubsub = self._redis_client.pubsub()
         await self._pubsub.subscribe(f"signal_ch:{task_id}")
+
+        if self._listen_task is None or self._listen_task.done():
+            self._stop_event = asyncio.Event()
+            self._listen_task = asyncio.create_task(self._listen_loop(), name="shared_redis_listener")
+        return queue
+
+    def register_task(self, task_id: str, task: asyncio.Task[None]) -> None:
+        """Associate an asyncio.Task with a task_id for direct cancellation.
+
+        Args:
+            task_id: Unique task identifier.
+            task: The asyncio.Task to cancel on stop/cancel signal.
+        """
+        self._task_refs[task_id] = task
 
     def unregister(self, task_id: str) -> None:
         """Remove a task_id from listening. Stops listener when empty.
@@ -128,6 +134,7 @@ class SharedRedisListener:
             task_id: Unique task identifier.
         """
         self._task_queues.pop(task_id, None)
+        self._task_refs.pop(task_id, None)
         self._last_seen.pop(task_id, None)
         if not self._task_queues:
             self._stop_event.set()
@@ -179,6 +186,10 @@ class SharedRedisListener:
                 return False
 
         if action in {"stop", "cancel"}:
+            # Cancel the asyncio.Task directly — no per-task listener needed
+            task = self._task_refs.get(task_id)
+            if task is not None and not task.done():
+                task.cancel()
             with contextlib.suppress(Exception):
                 queue.put_nowait(None)
             self.unregister(task_id)
@@ -249,7 +260,7 @@ class SharedRedisListener:
 
 
 # ============================================================================
-# RedisSendBuffer — batched pipeline writes (mirrors _SharedSendBuffer)
+# RedisSendBuffer — batched pipeline writes
 # ============================================================================
 
 
@@ -306,12 +317,15 @@ class RedisSendBuffer:
             redis_client: Shared Redis connection pool.
             signal_ttl: TTL in seconds for signal hash keys.
         """
+        from digitalkin.models.settings.redis import RedisSignalSettings
+
+        sig = RedisSignalSettings()
         self._redis_client = redis_client
         self._signal_ttl = signal_ttl
         self._refcount: int = 0
-        self._flush_interval = float(os.environ.get("DIGITALKIN_SIGNAL_FLUSH_INTERVAL", "0.1"))
-        self._max_batch_size = int(os.environ.get("DIGITALKIN_SIGNAL_MAX_BATCH_SIZE", "50"))
-        self._max_pending = int(os.environ.get("DIGITALKIN_SIGNAL_MAX_PENDING", "5000"))
+        self._flush_interval = sig.flush_interval
+        self._max_batch_size = sig.max_batch_size
+        self._max_pending = sig.max_pending
         self._pending: list[tuple[str, str, asyncio.Future[bool]]] = []
         self._flush_task: asyncio.Task[None] | None = None
         self._stop_event = asyncio.Event()

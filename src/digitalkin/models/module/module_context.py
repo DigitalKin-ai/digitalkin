@@ -114,7 +114,6 @@ class ModuleContext:
         identity: IdentityStrategy,
         registry: RegistryStrategy,
         storage: StorageStrategy,
-        task_manager: TaskManagerStrategy,
         user_profile: UserProfileStrategy,
         session: dict[str, Any],
         metadata: dict[str, Any] | None = None,
@@ -124,6 +123,7 @@ class ModuleContext:
         request_metadata: dict[str, str] | None = None,
         borrowed: frozenset[str] | None = None,
         shared: dict[str, Any] | None = None,
+        task_manager: TaskManagerStrategy | None = None,
     ) -> None:
         """Register mandatory services, session, metadata and callbacks.
 
@@ -134,8 +134,8 @@ class ModuleContext:
             identity: IdentityStrategy.
             registry: RegistryStrategy.
             storage: StorageStrategy.
-            task_manager: TaskManagerStrategy.
             user_profile: UserProfileStrategy.
+            task_manager: Optional, injected by SingleJobManager (RedisTaskManager).
             metadata: dict defining differents Module metadata.
             helpers: dict different user defined helpers.
             session: dict referring the session IDs or informations.

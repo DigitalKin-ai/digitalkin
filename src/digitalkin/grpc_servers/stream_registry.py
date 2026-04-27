@@ -75,7 +75,7 @@ class StreamRegistry:
     _heartbeat_ttl: float
     _reaper_interval: float
     _reaper_task: asyncio.Task[None] | None
-    _redis_client: RedisClient | None
+    _redis_client: RedisClient
 
     @staticmethod
     @lru_cache
@@ -89,11 +89,11 @@ class StreamRegistry:
 
     def __init__(
         self,
+        redis_client: RedisClient,
         max_streams: int = MAX_STREAMS,
         max_local: int = MAX_LOCAL_CACHE,
         heartbeat_ttl: float = HEARTBEAT_TTL_S,
         reaper_interval: float = REAPER_INTERVAL_S,
-        redis_client: RedisClient | None = None,
     ) -> None:
         """Initialize the stream registry.
 
@@ -102,8 +102,7 @@ class StreamRegistry:
             max_local: Maximum sessions cached locally on this instance.
             heartbeat_ttl: Seconds before a session is considered zombie.
             reaper_interval: Seconds between reaper scans.
-            redis_client: Redis client for distributed state. Local-only
-                mode (dev/test) when None.
+            redis_client: Redis client for distributed state.
         """
         self._local_cache = OrderedDict()
         self._max_local = max_local
@@ -112,11 +111,6 @@ class StreamRegistry:
         self._reaper_interval = reaper_interval
         self._reaper_task = None
         self._redis_client = redis_client
-
-        if redis_client is None:
-            logger.warning(
-                "StreamRegistry: no Redis — local-only mode (dev/test). Cluster-wide capacity NOT enforced.",
-            )
 
     @property
     def active_count(self) -> int:
@@ -143,29 +137,25 @@ class StreamRegistry:
         Returns:
             True if registered, False if at capacity.
         """
-        if self._redis_client is not None:
-            # Build session key only if metadata provided
-            sess_key = self.session_key(session.task_id) if setup_id else ""
-            try:
-                allowed = await self._redis_client.eval(
-                    _LUA_REGISTER,
-                    [REDIS_KEY_SESSION_COUNT, REDIS_KEY_HEARTBEATS, sess_key],
-                    [
-                        str(self._max_streams),
-                        session.task_id,
-                        str(time.time()),
-                        setup_id,
-                        mission_id,
-                        str(SESSION_STATE_TTL_S),
-                    ],
-                )
-            except Exception:
-                logger.exception("Redis capacity check failed: task_id=%s", session.task_id)
-                return False
+        sess_key = self.session_key(session.task_id) if setup_id else ""
+        try:
+            allowed = await self._redis_client.eval(
+                _LUA_REGISTER,
+                [REDIS_KEY_SESSION_COUNT, REDIS_KEY_HEARTBEATS, sess_key],
+                [
+                    str(self._max_streams),
+                    session.task_id,
+                    str(time.time()),
+                    setup_id,
+                    mission_id,
+                    str(SESSION_STATE_TTL_S),
+                ],
+            )
+        except Exception:
+            logger.exception("Redis capacity check failed: task_id=%s", session.task_id)
+            return False
 
-            if not allowed:
-                return False
-        elif len(self._local_cache) >= self._max_streams:
+        if not allowed:
             return False
 
         # LRU cache — evict oldest if full (don't unregister from Redis,
@@ -203,15 +193,14 @@ class StreamRegistry:
         """
         session = self._local_cache.pop(task_id, None)
 
-        if self._redis_client is not None:
-            try:
-                pipe = self._redis_client.pipeline()
-                pipe.decr(REDIS_KEY_SESSION_COUNT)
-                pipe.zrem(REDIS_KEY_HEARTBEATS, task_id)
-                pipe.delete(self.session_key(task_id))
-                await pipe.execute()
-            except Exception:
-                logger.exception("Redis unregister pipeline failed: task_id=%s", task_id)
+        try:
+            pipe = self._redis_client.pipeline()
+            pipe.decr(REDIS_KEY_SESSION_COUNT)
+            pipe.zrem(REDIS_KEY_HEARTBEATS, task_id)
+            pipe.delete(self.session_key(task_id))
+            await pipe.execute()
+        except Exception:
+            logger.exception("Redis unregister pipeline failed: task_id=%s", task_id)
 
         if session is not None:
             logger.debug("StreamRegistry.unregister: task_id=%s local=%d", task_id, len(self._local_cache))
@@ -223,20 +212,16 @@ class StreamRegistry:
         Args:
             task_id: Session to touch.
         """
-        if self._redis_client is not None:
-            try:
-                await self._redis_client.zadd(
-                    REDIS_KEY_HEARTBEATS,
-                    {task_id: time.time()},
-                )
-            except Exception:
-                logger.debug("Heartbeat update failed: task_id=%s", task_id)
+        try:
+            await self._redis_client.zadd(
+                REDIS_KEY_HEARTBEATS,
+                {task_id: time.time()},
+            )
+        except Exception:
+            logger.debug("Heartbeat update failed: task_id=%s", task_id)
 
     async def start_reaper(self) -> None:
         """Start the background zombie session reaper."""
-        if self._redis_client is None:
-            logger.debug("No Redis — reaper disabled (dev/test mode)")
-            return
         if self._reaper_task is None or self._reaper_task.done():
             self._reaper_task = asyncio.create_task(self._reaper_loop(), name="stream_reaper")
 
@@ -245,9 +230,6 @@ class StreamRegistry:
         try:
             while True:
                 await asyncio.sleep(self._reaper_interval)
-
-                if self._redis_client is None:
-                    continue
 
                 try:
                     cutoff = time.time() - self._heartbeat_ttl

@@ -42,7 +42,6 @@
     [project.optional-dependencies]
         performance = [ "uvloop>=0.21" ]
         profiling = [
-            "asyncio-inspector>=0.1.0",
             "pyinstrument>=5.1.2",
             "viztracer>=1.1.1",
             "yappi>=1.7.6",

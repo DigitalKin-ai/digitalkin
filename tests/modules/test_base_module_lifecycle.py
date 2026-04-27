@@ -63,7 +63,6 @@ _SERVICE_NAMES = {
     "identity",
     "registry",
     "storage",
-    "task_manager",
     "user_profile",
 }
 

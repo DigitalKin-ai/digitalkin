@@ -11,11 +11,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import time
 from typing import TYPE_CHECKING, Any
 
 from google.protobuf import json_format, struct_pb2
 
-from digitalkin.core.task_manager.redis.proto_streams import ProtoStreamWriter
 from digitalkin.logger import logger
 
 if TYPE_CHECKING:
@@ -23,11 +23,36 @@ if TYPE_CHECKING:
     from digitalkin.grpc_servers.module_servicer import ModuleServicer
 
 
+class _StepTimer:
+    """Lightweight step timer for latency monitoring. Zero-alloc marks."""
+
+    __slots__ = ("_last", "_steps", "_t0")
+
+    def __init__(self) -> None:
+        now = time.perf_counter_ns()
+        self._t0 = now
+        self._last = now
+        self._steps: list[tuple[str, int]] = []
+
+    def mark(self, name: str) -> None:
+        """Record a step with its delta from the previous mark."""
+        now = time.perf_counter_ns()
+        self._steps.append((name, now - self._last))
+        self._last = now
+
+    def log(self, prefix: str, task_id: str) -> None:
+        """Log all steps as one info line."""
+        parts = [f"{name}={ns / 1e6:.1f}ms" for name, ns in self._steps]
+        total = (self._last - self._t0) / 1e6
+        parts.append(f"total={total:.1f}ms")
+        logger.info("%s: %s task_id=%s", prefix, " ".join(parts), task_id)
+
+
 class TaskDispatcher:
     """Dispatches module tasks from a Redis Stream.
 
     Gateway XADDs a task spec → TaskDispatcher XREADs it →
-    resolves setup → runs module → output goes to ProtoStreamWriter.
+    resolves setup → runs module → output goes directly to Redis via XADD.
 
     Reuses ModuleServicer's setup resolution, tool cache, and job manager
     to avoid duplicating complex validation/caching logic.
@@ -109,16 +134,23 @@ class TaskDispatcher:
         Args:
             fields: Redis Stream entry fields (task_id, pb, setup_id, mission_id).
         """
+        timer = _StepTimer()
         task_id = fields.get(b"task_id", b"").decode()
         setup_id = fields.get(b"setup_id", b"").decode()
         mission_id = fields.get(b"mission_id", b"").decode()
         input_pb = fields.get(b"pb", b"")
+        ts_ns_raw = fields.get(b"ts_ns", b"0").decode()
+        try:
+            dispatch_delay = (time.perf_counter_ns() - int(ts_ns_raw)) / 1e6
+            logger.info("TaskDispatcher XREAD pickup delay: %.1fms task_id=%s", dispatch_delay, task_id)
+        except (ValueError, OverflowError):
+            pass
 
         if not task_id:
             logger.warning("TaskDispatcher: missing task_id in dispatch")
             return
 
-        proto_writer = ProtoStreamWriter(task_id, self._redis_client)
+        stream_key = f"task:{task_id}:stream"
         try:
             # Parse proto input
             input_struct = struct_pb2.Struct()
@@ -128,16 +160,33 @@ class TaskDispatcher:
             input_data = self._servicer.module_class.create_input_model(
                 json_format.MessageToDict(input_struct),
             )
+            timer.mark("input_parse")
 
             # Resolve setup (reuses ModuleServicer's cache + coalescing)
             setup_version = await self._servicer._resolve_setup(setup_id, mission_id)  # noqa: SLF001
+            timer.mark("setup_resolve")
+
             setup_data = await self._servicer.module_class.create_setup_model(setup_version.content)
+            timer.mark("setup_model")
+
+            timer.mark("setup_done")
 
             # Resolve tool cache
             tool_cache = self._servicer._tool_cache_by_setup.get(setup_version.setup_id)  # noqa: SLF001
 
-            # Run module via job manager
-            job_id = await self._servicer.job_manager.create_module_instance_job(
+            # Direct callback: module output → XADD → Redis (no buffer, no flush)
+            async def _on_output(output_data: Any) -> None:
+                data = output_data.model_dump(mode="json")
+                if data.get("root", {}).get("protocol") == "end_of_stream":
+                    await self._redis_client.xadd(stream_key, {"eos": b"true"})
+                    await self._redis_client.expire(stream_key, 60)
+                    return
+                s = struct_pb2.Struct()
+                s.update(data)
+                await self._redis_client.xadd(stream_key, {"pb": s.SerializeToString()})
+
+            # Run module with direct Redis callback
+            await self._servicer.job_manager.create_module_instance_job(
                 input_data,
                 setup_data,
                 mission_id=mission_id,
@@ -146,36 +195,18 @@ class TaskDispatcher:
                 request_metadata={"x-task-id": task_id},
                 job_id=task_id,
                 tool_cache=tool_cache,
+                callback=_on_output,
             )
+            timer.mark("create_job")
+            timer.log("Dispatch", task_id)
 
-            # Consume output and write to proto stream
-            async with self._servicer.job_manager.generate_stream_consumer(job_id) as stream:
-                async for message in stream:
-                    if message.get("root", {}).get("protocol") == "end_of_stream":
-                        break
-                    s = struct_pb2.Struct()
-                    s.update(message)
-                    await proto_writer.write_struct(s)
-
-            # Wait for task completion
-            try:
-                await asyncio.wait_for(
-                    self._servicer.job_manager.wait_for_completion(job_id),
-                    timeout=30.0,
-                )
-            except asyncio.TimeoutError:
-                logger.warning("Task completion timeout: task_id=%s", task_id)
-
-            # Clean up session
-            try:
-                await self._servicer.job_manager.clean_session(job_id, mission_id=mission_id)
-            except Exception:
-                logger.exception("Task cleanup error: task_id=%s", task_id)
+            # Fire-and-forget: auto-cleanup handles wait + session cleanup via done callback.
+            # Don't block the dispatch handler — EOS is already written by _on_output callback.
 
         except Exception:
             logger.exception("TaskDispatcher error: task_id=%s", task_id)
-        finally:
+            # Write EOS on dispatch error so ConsumeStream doesn't hang
             try:
-                await proto_writer.write_eos()
+                await self._redis_client.xadd(stream_key, {"eos": b"true"})
             except Exception:
                 logger.exception("TaskDispatcher EOS write failed: task_id=%s", task_id)

@@ -5,7 +5,7 @@ as well as env var configuration and closed-stream rejection.
 """
 
 import asyncio
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
 import pytest_asyncio
@@ -173,7 +173,7 @@ def test_env_var_configuration(monkeypatch: pytest.MonkeyPatch) -> None:
 
     from digitalkin.services.services_models import ServicesMode
 
-    mgr = SingleJobManager(_mock_module_class(), ServicesMode.LOCAL)
+    mgr = SingleJobManager(_mock_module_class(), ServicesMode.LOCAL, MagicMock())
 
     assert mgr._backpressure_strategy == BackpressureStrategy.REJECT
     assert mgr._backpressure_timeout == 42.5
@@ -186,7 +186,7 @@ def test_env_var_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
 
     from digitalkin.services.services_models import ServicesMode
 
-    mgr = SingleJobManager(_mock_module_class(), ServicesMode.LOCAL)
+    mgr = SingleJobManager(_mock_module_class(), ServicesMode.LOCAL, MagicMock())
 
     assert mgr._backpressure_strategy == BackpressureStrategy.BLOCK
     assert mgr._backpressure_timeout == 300.0

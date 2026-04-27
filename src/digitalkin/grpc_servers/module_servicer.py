@@ -76,12 +76,23 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
 
         Args:
             module_class: The module type to serve.
+
+        Raises:
+            RuntimeError: If DIGITALKIN_REDIS_URL is not set.
         """
         super().__init__()
         module_class.discover()
         self.module_class = module_class
         job_manager_class = self.args.job_manager_mode.get_manager_class()
-        self.job_manager = job_manager_class(module_class, self.args.services_mode)
+
+        redis_url = os.environ.get("DIGITALKIN_REDIS_URL")
+        if not redis_url:
+            msg = "DIGITALKIN_REDIS_URL is required"
+            raise RuntimeError(msg)
+        from digitalkin.core.task_manager.redis import RedisClient
+
+        self._redis_client = RedisClient(redis_url)
+        self.job_manager = job_manager_class(module_class, self.args.services_mode, redis_client=self._redis_client)
 
         logger.debug(
             "ModuleServicer initialized with job manager: %s",

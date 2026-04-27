@@ -1,17 +1,22 @@
 """Constants for the Gateway subsystem.
 
-Centralizes Redis key patterns, default values, and magic numbers
-used across gateway_servicer, stream_registry, proto_streams, and
-auth_interceptor.
+All values sourced from ``GatewaySettings`` (pydantic-settings).
+Module-level constants kept for backward compatibility with existing imports.
 """
 
 from __future__ import annotations
 
-import os
 import re
 
+from digitalkin.models.settings.gateway import GatewaySettings
+from digitalkin.models.settings.profiling import ProfilingSettings
+
+# Singleton settings — loaded once at import, env vars read here
+_gw = GatewaySettings()
+_prof = ProfilingSettings()
+
 # ══════════════════════════════════════════════════════════════════
-# Redis Key Patterns
+# Redis Key Patterns (not configurable — structural)
 # ══════════════════════════════════════════════════════════════════
 
 REDIS_KEY_SESSION = "gateway:session:{task_id}"
@@ -21,52 +26,51 @@ REDIS_KEY_STREAM = "task:{task_id}:stream"
 REDIS_KEY_CURSOR = "task:{task_id}:cursor"
 REDIS_KEY_SIGNAL_CHANNEL = "signal_ch:{task_id}"
 
+# ══════════════════════════════════════════════════════════════════
+# Gateway
+# ══════════════════════════════════════════════════════════════════
+
+MAX_STREAMS = _gw.max_streams
+MAX_LOCAL_CACHE = _gw.max_local_cache
+HEARTBEAT_TTL_S = _gw.heartbeat_ttl
+REAPER_INTERVAL_S = _gw.reaper_interval
+SESSION_STATE_TTL_S = _gw.session_state_ttl
 
 # ══════════════════════════════════════════════════════════════════
-# Default Values (all overridable via env vars)
+# Streams
 # ══════════════════════════════════════════════════════════════════
 
-# -- Gateway --
-MAX_STREAMS = int(os.environ.get("DIGITALKIN_GATEWAY_MAX_STREAMS", "20000"))
-MAX_LOCAL_CACHE = int(os.environ.get("DIGITALKIN_GATEWAY_MAX_LOCAL_CACHE", "5000"))
-HEARTBEAT_TTL_S = float(os.environ.get("DIGITALKIN_GATEWAY_HEARTBEAT_TTL", "45"))
-REAPER_INTERVAL_S = float(os.environ.get("DIGITALKIN_GATEWAY_REAPER_INTERVAL", "30"))
-SESSION_STATE_TTL_S = int(os.environ.get("DIGITALKIN_SESSION_STATE_TTL_S", "3600"))  # 1h — session metadata
+STREAM_TTL_S = _gw.stream.redis_stream_ttl
+STREAM_MAXLEN = _gw.stream.redis_stream_maxlen
+CURSOR_TTL_S = _gw.stream.redis_cursor_ttl
+STREAM_READ_BLOCK_MS = _gw.stream.stream_read_block_ms
+STREAM_BATCH_SIZE = _gw.stream.stream_batch_size
+STREAM_FLUSH_MS = _gw.stream.stream_flush_ms
 
-# -- Streams --
-STREAM_TTL_S = int(os.environ.get("DIGITALKIN_REDIS_STREAM_TTL", "60"))
-STREAM_MAXLEN = int(os.environ.get("DIGITALKIN_REDIS_STREAM_MAXLEN", "1000"))
-CURSOR_TTL_S = int(os.environ.get("DIGITALKIN_REDIS_CURSOR_TTL", "360"))
-STREAM_READ_BLOCK_MS = int(os.environ.get("DIGITALKIN_STREAM_READ_BLOCK_MS", "100"))
+# ══════════════════════════════════════════════════════════════════
+# Backpressure
+# ══════════════════════════════════════════════════════════════════
 
-# -- Backpressure --
-BACKPRESSURE_THRESHOLD = float(os.environ.get("DIGITALKIN_STREAM_BACKPRESSURE_THRESHOLD", "0.8"))
-BACKPRESSURE_DELAY_MS = int(os.environ.get("DIGITALKIN_STREAM_BACKPRESSURE_DELAY_MS", "50"))
-BACKPRESSURE_CHECK_INTERVAL = int(os.environ.get("DIGITALKIN_STREAM_BACKPRESSURE_CHECK_INTERVAL", "100"))
-BACKPRESSURE_TIMEOUT_S = float(os.environ.get("DIGITALKIN_STREAM_BACKPRESSURE_TIMEOUT_S", "30"))
+BACKPRESSURE_THRESHOLD = _gw.backpressure.backpressure_threshold
+BACKPRESSURE_DELAY_MS = _gw.backpressure.backpressure_delay_ms
+BACKPRESSURE_CHECK_INTERVAL = _gw.backpressure.backpressure_check_interval
+BACKPRESSURE_TIMEOUT_S = _gw.backpressure.backpressure_timeout_s
 
-# -- Redis Pool --
-REDIS_POOL_SIZE = int(os.environ.get("DIGITALKIN_REDIS_POOL_SIZE", "2000"))
-REDIS_POOL_SIZE_DEFAULT = int(os.environ.get("DIGITALKIN_REDIS_POOL_SIZE_DEFAULT", str(REDIS_POOL_SIZE // 2)))
-REDIS_POOL_SIZE_BLOCKING = int(os.environ.get("DIGITALKIN_REDIS_POOL_SIZE_BLOCKING", str(REDIS_POOL_SIZE // 2)))
+# ══════════════════════════════════════════════════════════════════
+# Queue & Timeout
+# ══════════════════════════════════════════════════════════════════
 
-# -- Validation --
-MAX_FROM_SEQ = STREAM_MAXLEN * 10  # upper bound for from_seq — 10x stream capacity
+DEFAULT_OUTPUT_QUEUE_SIZE = _gw.queue.output_queue_size
+DEFAULT_INPUT_QUEUE_SIZE = _gw.queue.input_queue_size
+ENQUEUE_TIMEOUT_S = _gw.queue.enqueue_timeout_s
+REDIS_HEALTH_CHECK_TIMEOUT_S = _gw.redis_health_timeout
 
-# -- Queue Sizes --
-DEFAULT_OUTPUT_QUEUE_SIZE = int(os.environ.get("DIGITALKIN_OUTPUT_QUEUE_SIZE", "512"))
-DEFAULT_INPUT_QUEUE_SIZE = int(os.environ.get("DIGITALKIN_INPUT_QUEUE_SIZE", "512"))
-ENQUEUE_TIMEOUT_S = float(os.environ.get("DIGITALKIN_ENQUEUE_TIMEOUT_S", "5.0"))
+# ══════════════════════════════════════════════════════════════════
+# Derived
+# ══════════════════════════════════════════════════════════════════
 
-# -- gRPC --
-REDIS_HEALTH_CHECK_TIMEOUT_S = float(os.environ.get("DIGITALKIN_REDIS_HEALTH_TIMEOUT", "5.0"))
-
-# -- Stream Batching --
-STREAM_BATCH_SIZE = int(os.environ.get("DIGITALKIN_STREAM_BATCH_SIZE", "20"))
-STREAM_FLUSH_MS = int(os.environ.get("DIGITALKIN_STREAM_FLUSH_MS", "50"))
-
-# -- uvloop --
-UVLOOP_ENABLED = os.environ.get("DIGITALKIN_UVLOOP", "false").lower() == "true"
+MAX_FROM_SEQ = STREAM_MAXLEN * 10
+UVLOOP_ENABLED = _prof.uvloop
 
 
 # ══════════════════════════════════════════════════════════════════

@@ -20,7 +20,7 @@ from digitalkin.models.module.module_types import (
 )
 from digitalkin.models.module.select_schema import SelectSchema
 from digitalkin.models.module.tool_cache import ToolCache
-from digitalkin.models.module.utility import EndOfStreamOutput, ModuleStartInfoOutput, UtilityProtocol
+from digitalkin.models.module.utility import EndOfStreamOutput, UtilityProtocol
 from digitalkin.models.services.storage import BaseRole
 from digitalkin.modules.trigger_handler import TriggerHandler
 from digitalkin.services.services_config import ServicesConfig, ServicesStrategy
@@ -29,7 +29,6 @@ from digitalkin.utils.schema_splitter import SchemaSplitter
 
 # Pre-create generic DataModel subclasses to avoid Pydantic
 # creating new generic classes on every start()/stop() call.
-_ModuleStartInfoDataModel: type[DataModel] = DataModel[ModuleStartInfoOutput]
 _EndOfStreamDataModel: type[DataModel] = DataModel[EndOfStreamOutput]
 
 
@@ -568,6 +567,9 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
         done_callback: Callable | None = None,
     ) -> None:
         """Start the module."""
+        import time as _t
+
+        t0 = _t.perf_counter_ns()
         try:
             self.context.callbacks.send_message = callback
 
@@ -577,24 +579,15 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
             )
             if tool_cache.entries:
                 self.context.tool_cache = tool_cache
-            logger.debug("debug:start tool_cache entries=%s", len(tool_cache.entries))
+            t1 = _t.perf_counter_ns()
 
-            await callback(
-                _ModuleStartInfoDataModel(
-                    root=ModuleStartInfoOutput(
-                        job_id=self.context.session.job_id,
-                        mission_id=self.context.session.mission_id,
-                        setup_id=self.context.session.setup_id,
-                        setup_version_id=self.context.session.setup_version_id,
-                        module_id=self.get_module_id(),
-                        module_name=self.name,
-                    ),
-                    annotations={"role": BaseRole.SYSTEM},
-                )
-            )
-
-            logger.debug("Initialize module %s", self.context.session.job_id)
             await self.initialize(self.context, setup_data)
+            t2 = _t.perf_counter_ns()
+
+            logger.info(
+                "module.start: tool_cache=%.1fms initialize=%.1fms total=%.1fms",
+                (t1 - t0) / 1e6, (t2 - t1) / 1e6, (t2 - t0) / 1e6,
+            )
         except Exception as e:
             self._status = ModuleStatus.FAILED
             short_description = "Error initializing module"
@@ -623,13 +616,15 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
 
     async def stop(self) -> None:
         """Stop the module. Idempotent — second call is a no-op."""
+        import time as _t
+
+        _t0 = _t.perf_counter_ns()
         if self._status in {ModuleStatus.STOPPED, ModuleStatus.FAILED}:
             return
-        logger.info("Stopping module %s | job_id=%s", self.name, self.context.session.job_id)
         try:
             self._status = ModuleStatus.STOPPING
-            # Let module finalize (wait for pending callbacks, close streams, etc.)
             await self.cleanup()
+            _t1 = _t.perf_counter_ns()
             # Flush batched histories — all messages are in cache, in correct order
             try:
                 for handlers in self.trigger_handlers.values():
@@ -637,6 +632,7 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
                         await handler.flush_file_history(self.context)
             except Exception:
                 logger.warning("Failed to flush handler history during stop", exc_info=True)
+            _t2 = _t.perf_counter_ns()
             try:
                 await self.context.callbacks.send_message(
                     _EndOfStreamDataModel(
@@ -649,8 +645,12 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
                     "send_message callback not set, skipping end-of-stream"
                     " (expected for start_config_setup which does not register send_message)"
                 )
+            _t3 = _t.perf_counter_ns()
             self._status = ModuleStatus.STOPPED
-            logger.debug("Module %s cleaned", self.name)
+            logger.info(
+                "module.stop: cleanup=%.1fms flush=%.1fms eos=%.1fms total=%.1fms",
+                (_t1 - _t0) / 1e6, (_t2 - _t1) / 1e6, (_t3 - _t2) / 1e6, (_t3 - _t0) / 1e6,
+            )
         except Exception:
             self._status = ModuleStatus.FAILED
             logger.exception("Error stopping module")

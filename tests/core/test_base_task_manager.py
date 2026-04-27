@@ -155,7 +155,7 @@ class TestAbstractMethods:
         """Test default parameter values."""
         mgr = ConcreteTaskManager()
         assert mgr.default_timeout == 300.0
-        assert mgr.max_concurrent_tasks == 100
+        assert mgr.max_concurrent_tasks == 500
 
     def test_custom_params(self) -> None:
         """Test custom parameter values."""
@@ -192,6 +192,7 @@ class TestValidation:
         """Test that exceeding max tasks raises RuntimeError after wait timeout."""
         mgr = ConcreteTaskManager(default_timeout=1.0)
         mgr.max_concurrent_tasks = 2
+        mgr._max_queued_tasks = 0
         mgr._task_wait_timeout = 0.1
 
         async def work():
@@ -227,6 +228,7 @@ class TestValidation:
         """Test that max tasks validation closes the rejected coroutine."""
         mgr = ConcreteTaskManager()
         mgr.max_concurrent_tasks = 1
+        mgr._max_queued_tasks = 0
         mgr._task_wait_timeout = 0.1
 
         async def work():
@@ -602,6 +604,7 @@ class TestTasksLock:
         """Test that concurrent creates don't exceed max_concurrent_tasks."""
         mgr = ConcreteTaskManager()
         mgr.max_concurrent_tasks = 3
+        mgr._max_queued_tasks = 0
         mgr._task_wait_timeout = 0.1
 
         async def work():

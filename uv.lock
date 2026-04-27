@@ -70,18 +70,6 @@ wheels = [
 ]
 
 [[package]]
-name = "asyncio-inspector"
-version = "0.1.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "sortedcollections" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/fc/37/e8f3a380b55b41fea4b109410b6e05754e1174fadd41809c373e97a919a2/asyncio_inspector-0.1.0.tar.gz", hash = "sha256:e2aa1120ba883326b8920ba50295a374d5da308b68671c58c8d4e9f665488cfa", size = 6494, upload-time = "2022-08-26T14:04:28.583Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/10/98/5db0345fee3ce69ec749c7067efbc562e0306a83d158be420d2ecd3ac01a/asyncio_inspector-0.1.0-py3-none-any.whl", hash = "sha256:93130307422cf1fe97a68f50940c3682f2047b02dfa1de72371eddfb2a14de1b", size = 6498, upload-time = "2022-08-26T14:04:27.214Z" },
-]
-
-[[package]]
 name = "babel"
 version = "2.18.0"
 source = { registry = "https://pypi.org/simple" }
@@ -659,11 +647,7 @@ wheels = [
 
 [[package]]
 name = "digitalkin"
-<<<<<<< HEAD
-version = "0.4.1.dev5"
-=======
 version = "1.0.0.dev0"
->>>>>>> 0272fea (feat(redis_sdk): start of first sdk refacto based on redis platform)
 source = { editable = "." }
 dependencies = [
     { name = "ag-ui-protocol" },
@@ -682,7 +666,6 @@ performance = [
     { name = "uvloop" },
 ]
 profiling = [
-    { name = "asyncio-inspector" },
     { name = "pyinstrument" },
     { name = "viztracer" },
     { name = "yappi" },
@@ -750,7 +733,6 @@ requires-dist = [
     { name = "ag-ui-protocol", specifier = ">=0.1.18" },
     { name = "agentic-mesh-protocol", specifier = "==1.0.0.dev0" },
     { name = "anyio", specifier = ">=4.13.0" },
-    { name = "asyncio-inspector", marker = "extra == 'profiling'", specifier = ">=0.1.0" },
     { name = "grpcio-health-checking", specifier = "==1.80.0" },
     { name = "grpcio-reflection", specifier = "==1.80.0" },
     { name = "grpcio-status", specifier = "==1.80.0" },
@@ -3385,18 +3367,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/1f/ea/49c993d6dfdd7338c9b1000a0f36817ed7ec84577ae2e52f890d1a4ff909/smmap-5.0.3.tar.gz", hash = "sha256:4d9debb8b99007ae47165abc08670bd74cb74b5227dda7f643eccc4e9eb5642c", size = 22506, upload-time = "2026-03-09T03:43:26.1Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c1/d4/59e74daffcb57a07668852eeeb6035af9f32cbfd7a1d2511f17d2fe6a738/smmap-5.0.3-py3-none-any.whl", hash = "sha256:c106e05d5a61449cf6ba9a1e650227ecfb141590d2a98412103ff35d89fc7b2f", size = 24390, upload-time = "2026-03-09T03:43:24.361Z" },
-]
-
-[[package]]
-name = "sortedcollections"
-version = "2.1.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "sortedcontainers" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/01/00/6d749cc1f88e7f95f5442a8abb195fa607094deba9e0475affbfb7fa8c04/sortedcollections-2.1.0.tar.gz", hash = "sha256:d8e9609d6c580a16a1224a3dc8965789e03ebc4c3e5ffd05ada54a2fed5dcacd", size = 9287, upload-time = "2021-01-18T22:15:16.623Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/6e/39/c993a7d0c9dbf3aeca5008bdd00e4436ad9b7170527cef0a14634b47001f/sortedcollections-2.1.0-py3-none-any.whl", hash = "sha256:b07abbc73472cc459da9dd6e2607d73d1f3b9309a32dd9a57fa2c6fa882f4c6c", size = 9531, upload-time = "2021-01-18T22:15:15.36Z" },
 ]
 
 [[package]]

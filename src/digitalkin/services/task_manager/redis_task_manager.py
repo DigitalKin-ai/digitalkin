@@ -70,8 +70,7 @@ class RedisTaskManager(TaskManagerStrategy):
         Returns:
             Tuple of (task_id as sub_id, async generator of signal dicts).
         """
-        queue = self._listener.register(task_id)
-        await self._listener.ensure_subscribed(task_id)
+        queue = await self._listener.register(task_id)
 
         async def _signal_generator() -> AsyncGenerator[dict[str, Any], None]:
             while True:

@@ -64,7 +64,6 @@ class BaseServer(abc.ABC):
         self._service_names: list[str] = []  # Track service names for reflection
         self._health_servicer: Any = None  # For health checking
         self._interceptors: list[Any] = list(interceptors) if interceptors else []
-        self._asyncio_monitor: Any = None
 
     def register_servicer(
         self,
@@ -424,25 +423,12 @@ class BaseServer(abc.ABC):
             msg = f"Failed to start server: {e}"
             raise ServerStateError(msg) from e
 
-        # Start asyncio-inspector if enabled
-        if os.environ.get("DIGITALKIN_ASYNCIO_INSPECTOR", "").lower() == "true":
-            try:
-                from digitalkin.core.profiling.asyncio_monitor import AsyncioMonitor
-
-                port = int(os.environ.get("DIGITALKIN_ASYNCIO_INSPECTOR_PORT", "8765"))
-                self._asyncio_monitor = AsyncioMonitor(port=port)
-                await self._asyncio_monitor.start()
-            except Exception:
-                logger.exception("Failed to start asyncio-inspector")
-
     def stop(self, grace: float | None = None) -> None:
         """Stop the gRPC server and close all cached gRPC client channels.
 
         Args:
             grace: Optional grace period in seconds for existing RPCs to complete.
         """
-        self._asyncio_monitor = None
-
         if self.server is None:
             logger.warning("Attempted to stop server, but no server is running")
             return
@@ -469,10 +455,6 @@ class BaseServer(abc.ABC):
                 # If not in a running event loop, use run_until_complete
                 loop.run_until_complete(self._stop_async(grace))
                 loop.run_until_complete(GrpcClientWrapper.close_all_cached_channels())
-                from digitalkin.services.task_manager.grpc_task_manager import _SharedPoller, _SharedSendBuffer
-
-                loop.run_until_complete(_SharedPoller.close_all())
-                loop.run_until_complete(_SharedSendBuffer.close_all())
             except RuntimeError:
                 # Event loop issues - try with a new loop
                 logger.debug("Creating new event loop for shutdown")
@@ -481,10 +463,6 @@ class BaseServer(abc.ABC):
                     asyncio.set_event_loop(new_loop)
                     new_loop.run_until_complete(self._stop_async(grace))
                     new_loop.run_until_complete(GrpcClientWrapper.close_all_cached_channels())
-                    from digitalkin.services.task_manager.grpc_task_manager import _SharedPoller, _SharedSendBuffer
-
-                    new_loop.run_until_complete(_SharedPoller.close_all())
-                    new_loop.run_until_complete(_SharedSendBuffer.close_all())
                 finally:
                     new_loop.close()
         else:
@@ -515,10 +493,6 @@ class BaseServer(abc.ABC):
         Args:
             grace: Optional grace period in seconds for existing RPCs to complete.
         """
-        if self._asyncio_monitor is not None:
-            await self._asyncio_monitor.stop()
-            self._asyncio_monitor = None
-
         if self.server is None:
             logger.warning("Attempted to stop server, but no server is running")
             return
@@ -532,11 +506,6 @@ class BaseServer(abc.ABC):
             sync_server.stop(grace=grace)
 
         await GrpcClientWrapper.close_all_cached_channels()
-        # Lazy import to avoid circular dependency (grpc_task_manager imports from grpc_servers)
-        from digitalkin.services.task_manager.grpc_task_manager import _SharedPoller, _SharedSendBuffer
-
-        await _SharedPoller.close_all()
-        await _SharedSendBuffer.close_all()
         logger.debug("✅ gRPC server stopped")
         self.server = None
 
