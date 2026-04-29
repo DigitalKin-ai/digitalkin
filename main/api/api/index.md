@@ -7,6 +7,7 @@ This package implements the DigitalKin agentic mesh standards.
 Modules:
 
 - **`__version__`** – Version information.
+- **`community`** – Community integrations for DigitalKin.
 - **`core`** – Core of Digitlakin defining the task management and sub-modules.
 - **`grpc_servers`** – This package contains the gRPC server and client implementations.
 - **`logger`** – This module sets up a logger.
@@ -1427,8 +1428,7 @@ TriggerHandler(context: ModuleContext)
               digitalkin.TriggerHandler[TriggerHandler]
               digitalkin.mixins.base_mixin.BaseMixin[BaseMixin]
               digitalkin.mixins.cost_mixin.CostMixin[CostMixin]
-              digitalkin.mixins.chat_history_mixin.ChatHistoryMixin[ChatHistoryMixin]
-              digitalkin.mixins.callback_mixin.UserMessageMixin[UserMessageMixin]
+              digitalkin.mixins.agui_mixin.AgUiMixin[AgUiMixin]
               digitalkin.mixins.file_history_mixin.FileHistoryMixin[FileHistoryMixin]
               digitalkin.mixins.storage_mixin.StorageMixin[StorageMixin]
               digitalkin.mixins.logger_mixin.LoggerMixin[LoggerMixin]
@@ -1436,14 +1436,8 @@ TriggerHandler(context: ModuleContext)
                               digitalkin.mixins.base_mixin.BaseMixin --> digitalkin.TriggerHandler
                                 digitalkin.mixins.cost_mixin.CostMixin --> digitalkin.mixins.base_mixin.BaseMixin
                 
-                digitalkin.mixins.chat_history_mixin.ChatHistoryMixin --> digitalkin.mixins.base_mixin.BaseMixin
-                                digitalkin.mixins.callback_mixin.UserMessageMixin --> digitalkin.mixins.chat_history_mixin.ChatHistoryMixin
+                digitalkin.mixins.agui_mixin.AgUiMixin --> digitalkin.mixins.base_mixin.BaseMixin
                 
-                digitalkin.mixins.storage_mixin.StorageMixin --> digitalkin.mixins.chat_history_mixin.ChatHistoryMixin
-                
-                digitalkin.mixins.logger_mixin.LoggerMixin --> digitalkin.mixins.chat_history_mixin.ChatHistoryMixin
-                
-
                 digitalkin.mixins.file_history_mixin.FileHistoryMixin --> digitalkin.mixins.base_mixin.BaseMixin
                                 digitalkin.mixins.storage_mixin.StorageMixin --> digitalkin.mixins.file_history_mixin.FileHistoryMixin
                 
@@ -1458,8 +1452,7 @@ TriggerHandler(context: ModuleContext)
               click digitalkin.TriggerHandler href "" "digitalkin.TriggerHandler"
               click digitalkin.mixins.base_mixin.BaseMixin href "" "digitalkin.mixins.base_mixin.BaseMixin"
               click digitalkin.mixins.cost_mixin.CostMixin href "" "digitalkin.mixins.cost_mixin.CostMixin"
-              click digitalkin.mixins.chat_history_mixin.ChatHistoryMixin href "" "digitalkin.mixins.chat_history_mixin.ChatHistoryMixin"
-              click digitalkin.mixins.callback_mixin.UserMessageMixin href "" "digitalkin.mixins.callback_mixin.UserMessageMixin"
+              click digitalkin.mixins.agui_mixin.AgUiMixin href "" "digitalkin.mixins.agui_mixin.AgUiMixin"
               click digitalkin.mixins.file_history_mixin.FileHistoryMixin href "" "digitalkin.mixins.file_history_mixin.FileHistoryMixin"
               click digitalkin.mixins.storage_mixin.StorageMixin href "" "digitalkin.mixins.storage_mixin.StorageMixin"
               click digitalkin.mixins.logger_mixin.LoggerMixin href "" "digitalkin.mixins.logger_mixin.LoggerMixin"
@@ -1475,24 +1468,19 @@ Each handler declares
 Methods:
 
 - **`add_cost`** – Add a cost entry using the cost strategy.
-- **`append_chat_history_message`** – Append a message to chat history.
 - **`append_files_history`** – Append files to file history.
-- **`clear_ch_mission_cache`** – Remove a mission's entries from in-memory caches after flush.
 - **`clear_fh_mission_cache`** – Remove a mission's entries from in-memory caches after flush.
-- **`flush_chat_history`** – Flush the current mission's dirty chat history to storage.
 - **`flush_file_history`** – Flush the current mission's dirty file history to storage.
 - **`get_cost`** – Get cost entries for a specific name.
 - **`get_costs`** – Get filtered cost entries.
 - **`handle`** – Asynchronously processes the input data specific to Handler and streams results via the provided callback.
-- **`load_chat_history`** – Load chat history for the current session.
 - **`load_file_history`** – Load file history for the current session.
 - **`log_debug`** – Log debug message using the callbacks strategy.
 - **`log_error`** – Log error message using the callbacks strategy.
 - **`log_info`** – Log info message using the callbacks strategy.
 - **`log_warning`** – Log warning message using the callbacks strategy.
 - **`read_storage`** – Read data from storage.
-- **`save_send_message`** – Save output to chat history and send response to the module request.
-- **`send_message`** – Send a message using the callbacks strategy.
+- **`send_message`** – Convert agent event to AG-UI protocol and send via context callbacks.
 - **`store_storage`** – Store data using the storage strategy.
 - **`update_storage`** – Update existing data in storage.
 - **`upsert_storage`** – Insert or update data in storage atomically.
@@ -1525,30 +1513,6 @@ Parameters:
 
   (`float`) – Quantity of units consumed.
 
-### append_chat_history_message
-
-```python
-append_chat_history_message(context: ModuleContext, role: Role, content: Any) -> None
-```
-
-Append a message to chat history.
-
-The message is added to the in-memory cache immediately. A storage write is deferred until the batch threshold is reached (default 10, env: DIGITALKIN_CHAT_HISTORY_FLUSH_THRESHOLD) or flush_chat_history().
-
-Parameters:
-
-- #### **`context`**
-
-  (`ModuleContext`) – Module context containing storage strategy.
-
-- #### **`role`**
-
-  (`Role`) – Message role (user, assistant, system).
-
-- #### **`content`**
-
-  (`Any`) – Message content.
-
 ### append_files_history
 
 ```python
@@ -1569,20 +1533,6 @@ Parameters:
 
   (`list[FileModel]`) – List of file models to append.
 
-### clear_ch_mission_cache
-
-```python
-clear_ch_mission_cache(context: ModuleContext) -> None
-```
-
-Remove a mission's entries from in-memory caches after flush.
-
-Parameters:
-
-- #### **`context`**
-
-  (`ModuleContext`) – Module context identifying the mission to clear.
-
 ### clear_fh_mission_cache
 
 ```python
@@ -1596,22 +1546,6 @@ Parameters:
 - #### **`context`**
 
   (`ModuleContext`) – Module context identifying the mission to clear.
-
-### flush_chat_history
-
-```python
-flush_chat_history(context: ModuleContext) -> None
-```
-
-Flush the current mission's dirty chat history to storage.
-
-Only flushes the key belonging to context's mission_id, preventing cross-mission contamination when handlers are shared.
-
-Parameters:
-
-- #### **`context`**
-
-  (`ModuleContext`) – Module context containing storage strategy.
 
 ### flush_file_history
 
@@ -1717,26 +1651,6 @@ Note
 self.send_message: callback used to stream results. (Callable\[[OutputModelT], Coroutine[Any, Any, None]\])
 
 The callback must be awaited to ensure results are streamed correctly during processing.
-
-### load_chat_history
-
-```python
-load_chat_history(context: ModuleContext) -> ChatHistory
-```
-
-Load chat history for the current session.
-
-Returns cached history on subsequent calls to avoid gRPC reads.
-
-Parameters:
-
-- #### **`context`**
-
-  (`ModuleContext`) – Module context containing storage strategy.
-
-Returns:
-
-- `ChatHistory` – Chat history object, empty if none exists or loading fails.
 
 ### load_file_history
 
@@ -1878,35 +1792,13 @@ Raises:
 
 - `StorageServiceError` – If read operation fails
 
-### save_send_message
-
-```python
-save_send_message(context: ModuleContext, output: OutputModelT, role: Role) -> None
-```
-
-Save output to chat history and send response to the module request.
-
-Parameters:
-
-- #### **`context`**
-
-  (`ModuleContext`) – Module context containing storage strategy.
-
-- #### **`role`**
-
-  (`Role`) – Message role (user, assistant, system).
-
-- #### **`output`**
-
-  (`OutputModelT`) – Message content as Pydantic Class.
-
 ### send_message
 
 ```python
-send_message(context: ModuleContext, output: OutputModelT) -> None
+send_message(context: ModuleContext, event: BaseAgentRunEvent) -> None
 ```
 
-Send a message using the callbacks strategy.
+Convert agent event to AG-UI protocol and send via context callbacks.
 
 Parameters:
 
@@ -1914,9 +1806,9 @@ Parameters:
 
   (`ModuleContext`) – Module context containing the callbacks strategy.
 
-- #### **`output`**
+- #### **`event`**
 
-  (`OutputModelT`) – Message to send with the Module defined output Type.
+  (`BaseAgentRunEvent`) – Agent run event to process and convert.
 
 ### store_storage
 
@@ -2045,6 +1937,1230 @@ Raises:
 ## __version__
 
 Version information.
+
+## community
+
+Community integrations for DigitalKin.
+
+This package contains community-contributed integrations with various AI frameworks and tools (Agno, LangChain, etc.).
+
+Modules:
+
+- **`agno`** – Agno framework integration for DigitalKin.
+
+### agno
+
+Agno framework integration for DigitalKin.
+
+Adapters, converters, and HITL helpers for building DigitalKin modules on top of the Agno agent framework. Exports:
+
+- :class:`AgnoStreamAdapter` — Agno streaming events → DigitalKin events.
+- :func:`agui_tool_to_external_function` / :func:`make_tools_factory` — register AG-UI client-side (frontend) tools as Agno external Functions.
+- :class:`AgnoHitlRunner`, :class:`PausedRunStore`, :class:`PauseInfo`, :class:`PausedRunRecord`, :data:`HITL_STORAGE_CONFIG`, :func:`emit_awaiting_tool_result` — human-in-the-loop (HITL) runner that persists a paused Agno run via the module's :class:`~digitalkin.services.storage.StorageStrategy` and resumes it when the front replies with a `ToolMessage`.
+
+Modules:
+
+- **`agno_adapter`** – Adapter to convert Agno events to DigitalKin framework-agnostic events.
+- **`agui_tools`** – AG-UI frontend tools → Agno external Functions.
+- **`hitl`** – Human-in-the-loop (HITL) runner for Agno agents with AG-UI frontend tools.
+
+Classes:
+
+- **`AgnoHitlRunner`** – High-level runner for an Agno agent with AG-UI frontend-tool support.
+- **`AgnoStreamAdapter`** – Stateful converter: Agno streaming events -> DigitalKin events.
+- **`PauseInfo`** – Summary of a paused Agno run.
+- **`PausedRunRecord`** – Persistent snapshot of an Agno run paused on external tool execution.
+- **`PausedRunStore`** – Thin wrapper around :class:StorageStrategy for the paused_runs collection.
+
+Functions:
+
+- **`agui_tool_to_external_function`** – Wrap an AG-UI tool definition as an Agno external Function.
+- **`emit_awaiting_tool_result`** – Emit an AG-UI RunFinished with status="awaiting_tool_result".
+- **`emit_messages_snapshot`** – Emit an AG-UI MessagesSnapshot event.
+- **`make_tools_factory`** – Build an Agno tools factory that merges base tools with per-run AG-UI tools.
+
+Attributes:
+
+- **`HITL_STORAGE_CONFIG`** (`dict[str, type[BaseModel]]`) – Drop-in storage config fragment — merge into your module's services_config_params.
+
+#### HITL_STORAGE_CONFIG
+
+```python
+HITL_STORAGE_CONFIG: dict[str, type[BaseModel]] = {
+    _PAUSED_RUNS_COLLECTION: PausedRunRecord
+}
+```
+
+Drop-in storage config fragment — merge into your module's `services_config_params`.
+
+Example::
+
+```text
+services_config_params = {
+    "storage": {
+        "config": {**HITL_STORAGE_CONFIG, "my_other_collection": MyModel},
+        ...
+    },
+}
+```
+
+#### AgnoHitlRunner
+
+```python
+AgnoHitlRunner(
+    *,
+    agent: Agent,
+    storage: StorageStrategy | None = None,
+    store: PausedRunStore | None = None,
+    dependency_key: str = "agui_tools",
+)
+```
+
+High-level runner for an Agno agent with AG-UI frontend-tool support.
+
+Wraps a configured :class:`~agno.agent.Agent` and a :class:`PausedRunStore`, and exposes three levels of API:
+
+- :meth:`run` / :meth:`continue_paused_run` — low-level: stream one Agno run (fresh or resumed) and return a :class:`PauseInfo` if it paused on an external tool.
+- :meth:`try_resume` — inspects an AG-UI input and resumes iff a matching :class:`~ag_ui.core.types.ToolMessage` is present.
+- :meth:`handle_agui_input` — all-in-one: detects resume vs fresh message, dispatches, and (optionally) emits the awaiting `RunFinished` event on pause. Use this one from a trigger.
+
+Parameters:
+
+- ##### **`agent`**
+
+  (`Agent`) – The Agno agent. It must be built with tools=make_tools_factory(base_tools) and cache_callables=False — otherwise the frontend tools injected per-run won't reach the LLM.
+
+- ##### **`storage`**
+
+  (`StorageStrategy | None`, default: `None` ) – Convenience: if provided and store is not, a :class:PausedRunStore is constructed automatically.
+
+- ##### **`store`**
+
+  (`PausedRunStore | None`, default: `None` ) – Pre-built paused-run store. Wins over storage.
+
+- ##### **`dependency_key`**
+
+  (`str`, default: `'agui_tools'` ) – The Agno dependencies key under which the runner passes the per-run AG-UI tool list. Must match the key used by :func:make_tools_factory. Defaults to "agui_tools".
+
+Raises:
+
+- `ValueError` – If neither storage nor store is provided.
+
+Methods:
+
+- **`continue_paused_run`** – Resume a previously paused run.
+- **`handle_agui_input`** – One-shot dispatch of an AG-UI RunAgentInput.
+- **`run`** – Stream a fresh Agno run.
+- **`try_resume`** – Try to resume a paused run from an AG-UI input.
+
+##### continue_paused_run
+
+```python
+continue_paused_run(
+    thread_id: str,
+    tool_results: dict[str, str],
+    *,
+    send: Callable[[BaseAgentRunEvent], Coroutine[Any, Any, None]],
+    run_id: str | None = None,
+    agui_tools: list[Tool] | None = None,
+) -> PauseInfo | None
+```
+
+Resume a previously paused run.
+
+Loads the persisted :class:`~agno.run.agent.RunOutput`, injects the tool results into the matching :class:`~agno.run.requirement.RunRequirement` entries, and calls :meth:`~agno.agent.Agent.acontinue_run`. On normal completion the storage record is removed; on re-pause it is refreshed.
+
+Parameters:
+
+- ###### **`thread_id`**
+
+  (`str`) – AG-UI thread identifier (the storage key).
+
+- ###### **`tool_results`**
+
+  (`dict[str, str]`) – Mapping of tool_call_id → serialized result (typically a JSON string). Every pending tool must be resolved — unresolved requirements will stall the run.
+
+- ###### **`send`**
+
+  (`Callable[[BaseAgentRunEvent], Coroutine[Any, Any, None]]`) – Digitalkin-event callback (same contract as :meth:run).
+
+- ###### **`run_id`**
+
+  (`str | None`, default: `None` ) – AG-UI run identifier for this resume turn. Used to emit a synthetic RUN_STARTED before streaming — Agno emits RunContinued (not RunStarted) on resume.
+
+- ###### **`agui_tools`**
+
+  (`list[Tool] | None`, default: `None` ) – Frontend tool definitions for the resumed run. The AG-UI client should re-send the same list it provided at the original turn so tool schemas stay registered.
+
+Returns:
+
+- `PauseInfo | None` – None on final completion. A fresh :class:PauseInfo when
+- `PauseInfo | None` – the resumed run paused again (cascading frontend tools). If
+- `PauseInfo | None` – no paused record exists for thread_id, returns None.
+
+##### handle_agui_input
+
+```python
+handle_agui_input(
+    input_data: Any,
+    *,
+    send: Callable[[BaseAgentRunEvent], Coroutine[Any, Any, None]],
+    context: ModuleContext | None = None,
+    message: str | None = None,
+    images: list[Any] | None = None,
+) -> PauseInfo | None
+```
+
+One-shot dispatch of an AG-UI `RunAgentInput`.
+
+Handles the three cases in order:
+
+1. Resume a paused run if the input carries a matching `ToolMessage` (see :meth:`try_resume`).
+1. Drop a stale paused record if the input is a new `UserMessage` while a tool was pending (HITL abandon).
+1. Fresh run on the last `UserMessage` in `input_data.messages` (or on the explicit `message` argument).
+
+When a run pauses (fresh or resumed) and `context` is provided, this method also emits the AG-UI `RunFinished` with `status="awaiting_tool_result"` via :func:`emit_awaiting_tool_result`. Pass `context=None` if you want to emit it yourself.
+
+Parameters:
+
+- ###### **`input_data`**
+
+  (`Any`) – Any object with thread_id, messages, and tools attributes (typically an AgUiStreamInput).
+
+- ###### **`send`**
+
+  (`Callable[[BaseAgentRunEvent], Coroutine[Any, Any, None]]`) – Digitalkin-event callback (e.g. wrapping self.send_message(context, event) in a trigger).
+
+- ###### **`context`**
+
+  (`ModuleContext | None`, default: `None` ) – If provided, the awaiting RunFinished is emitted automatically on pause.
+
+- ###### **`message`**
+
+  (`str | None`, default: `None` ) – Override the user prompt extraction. Normally left as None — the runner picks the last UserMessage content from input_data.messages.
+
+- ###### **`images`**
+
+  (`list[Any] | None`, default: `None` ) – Optional multimodal inputs forwarded to Agno.
+
+Returns:
+
+- `PauseInfo | None` – None on normal completion (or when no actionable input
+- `PauseInfo | None` – was found). A :class:PauseInfo on pause (already emitted to
+- `PauseInfo | None` – the front if context was provided).
+
+##### run
+
+```python
+run(
+    message: str,
+    *,
+    send: Callable[[BaseAgentRunEvent], Coroutine[Any, Any, None]],
+    thread_id: str,
+    agui_tools: list[Tool] | None = None,
+    images: list[Any] | None = None,
+) -> PauseInfo | None
+```
+
+Stream a fresh Agno run.
+
+Parameters:
+
+- ###### **`message`**
+
+  (`str`) – User prompt to send to the agent.
+
+- ###### **`send`**
+
+  (`Callable[[BaseAgentRunEvent], Coroutine[Any, Any, None]]`) – Async callback invoked for each digitalkin event produced by :class:AgnoStreamAdapter. Typically maps through :meth:AgUiMixin.send_message.
+
+- ###### **`thread_id`**
+
+  (`str`) – AG-UI thread identifier (used as the paused-run storage key if the run pauses).
+
+- ###### **`agui_tools`**
+
+  (`list[Tool] | None`, default: `None` ) – Frontend tools declared by the AG-UI client for this run. Merged with the agent's base tools through the factory; None or empty is equivalent to "no frontend tools this turn".
+
+- ###### **`images`**
+
+  (`list[Any] | None`, default: `None` ) – Optional multimodal inputs forwarded to Agno.
+
+Returns:
+
+- `PauseInfo | None` – None on normal completion. A :class:PauseInfo if the run
+- `PauseInfo | None` – paused on one or more external tool calls — the caller is
+- `PauseInfo | None` – responsible for emitting the awaiting RunFinished (use
+- `PauseInfo | None` – func:emit_awaiting_tool_result or let
+- `PauseInfo | None` – meth:handle_agui_input do it).
+
+##### try_resume
+
+```python
+try_resume(
+    input_data: Any, *, send: Callable[[BaseAgentRunEvent], Coroutine[Any, Any, None]]
+) -> tuple[bool, PauseInfo | None]
+```
+
+Try to resume a paused run from an AG-UI input.
+
+The `input_data` only needs to duck-type `thread_id`, `messages`, and `tools` (typically an `AgUiStreamInput`). This method:
+
+1. Loads the paused record for `input_data.thread_id`. Returns `(False, None)` if there is none.
+1. Looks for `ToolMessage` entries in `input_data.messages` whose `tool_call_id` matches a pending one.
+1. If any match → dispatches :meth:`continue_paused_run` and returns `(True, pause_info_or_none)`.
+1. If no match but the last message is a fresh `UserMessage`, drops the stale record (HITL abandon) and returns `(False, None)`.
+
+Returns:
+
+- `bool` – (resumed, pause_info):
+- `PauseInfo | None` – (False, None): no resume, caller should run the fresh-message path.
+- `tuple[bool, PauseInfo | None]` – (True, None): resume ran to normal completion.
+- `tuple[bool, PauseInfo | None]` – (True, PauseInfo): resume paused again (cascading tools).
+
+#### AgnoStreamAdapter
+
+```python
+AgnoStreamAdapter()
+```
+
+Stateful converter: Agno streaming events -> DigitalKin events.
+
+Tracks reasoning and content state so that events arriving on `RunEvent.run_content` are automatically wrapped in proper lifecycle events (TextMessageStarted/Completed, ReasoningStarted/Completed).
+
+Usage::
+
+```text
+adapter = AgnoStreamAdapter()
+async for raw_event in agent.arun(..., stream=True, stream_events=True):
+    for event in adapter.to_digitalkin_events(raw_event):
+        await send(event)
+for event in adapter.flush():
+    await send(event)
+```
+
+Methods:
+
+- **`flush`** – Emit closing events for any active sequences at end of stream.
+- **`to_digitalkin_events`** – Convert one Agno event into one or more DigitalKin events.
+
+Attributes:
+
+- **`is_paused`** (`bool`) – Whether the last stream ended on a run_paused event (external tool HITL).
+- **`paused_requirements`** (`list[Any]`) – Agno RunRequirement objects carried by the paused run.
+- **`paused_tool_executions`** (`list[Any]`) – Agno ToolExecution objects awaiting external execution (HITL).
+
+##### is_paused
+
+```python
+is_paused: bool
+```
+
+Whether the last stream ended on a run_paused event (external tool HITL).
+
+##### paused_requirements
+
+```python
+paused_requirements: list[Any]
+```
+
+Agno `RunRequirement` objects carried by the paused run.
+
+##### paused_tool_executions
+
+```python
+paused_tool_executions: list[Any]
+```
+
+Agno `ToolExecution` objects awaiting external execution (HITL).
+
+##### flush
+
+```python
+flush() -> list[BaseAgentRunEvent]
+```
+
+Emit closing events for any active sequences at end of stream.
+
+Returns:
+
+- `list[BaseAgentRunEvent]` – List of closing events (empty if nothing is active).
+
+##### to_digitalkin_events
+
+```python
+to_digitalkin_events(agno_event: AgnoRunEvent) -> list[BaseAgentRunEvent]
+```
+
+Convert one Agno event into one or more DigitalKin events.
+
+Parameters:
+
+- ###### **`agno_event`**
+
+  (`AgnoRunEvent`) – Event from Agno's streaming API.
+
+Returns:
+
+- `list[BaseAgentRunEvent]` – List of corresponding DigitalKin events (may be empty).
+
+Raises:
+
+- `ImportError` – If the optional 'agno' dependency is not installed.
+
+#### PauseInfo
+
+```python
+PauseInfo(
+    thread_id: str,
+    run_id: str,
+    pending_tool_call_ids: list[str],
+    new_messages: list[Message] = list(),
+)
+```
+
+Summary of a paused Agno run.
+
+Returned by :meth:`AgnoHitlRunner.run` and related methods whenever the run paused on one or more external tool calls. Callers typically use it to emit the AG-UI awaiting-tool-result event to the front.
+
+`new_messages` carries the AG-UI messages generated by Agno during the paused run (user echoes, the assistant message with `tool_calls`, and any tool results emitted before the pause). It's provided because Agno does not emit stream events from which the front can reconstruct the assistant-with-tool-calls message — in particular, when the LLM goes straight from reasoning to a frontend tool call without emitting any text. Consumers typically push these messages to the front via a :class:`~ag_ui.core.events.MessagesSnapshotEvent` so the client has an authoritative view of the conversation.
+
+#### PausedRunRecord
+
+```
+              flowchart TD
+              digitalkin.community.agno.PausedRunRecord[PausedRunRecord]
+
+              
+
+              click digitalkin.community.agno.PausedRunRecord href "" "digitalkin.community.agno.PausedRunRecord"
+```
+
+Persistent snapshot of an Agno run paused on external tool execution.
+
+Stored in the `paused_runs` collection keyed by `thread_id`. The `payload` field holds `RunOutput.to_dict()` verbatim so :meth:`agno.run.agent.RunOutput.from_dict` can round-trip the run on any replica when the front replies with the tool result(s).
+
+#### PausedRunStore
+
+```python
+PausedRunStore(storage: StorageStrategy)
+```
+
+Thin wrapper around :class:`StorageStrategy` for the `paused_runs` collection.
+
+Owns serialization of :class:`~agno.run.agent.RunOutput` and keying by `thread_id`. Instances are cheap — create one per trigger handler.
+
+Parameters:
+
+- ##### **`storage`**
+
+  (`StorageStrategy`) – The module's storage strategy. The collection paused_runs must be registered with :class:PausedRunRecord — use :data:HITL_STORAGE_CONFIG.
+
+Methods:
+
+- **`delete`** – Remove the paused run record for a thread.
+- **`load`** – Fetch the paused run record for a thread.
+- **`save`** – Serialize and store a paused RunOutput.
+
+##### delete
+
+```python
+delete(thread_id: str) -> None
+```
+
+Remove the paused run record for a thread.
+
+##### load
+
+```python
+load(thread_id: str) -> PausedRunRecord | None
+```
+
+Fetch the paused run record for a thread.
+
+Parameters:
+
+- ###### **`thread_id`**
+
+  (`str`) – AG-UI thread identifier.
+
+Returns:
+
+- **`The`** ( `PausedRunRecord | None` ) – class:PausedRunRecord if one exists, otherwise None.
+
+##### save
+
+```python
+save(run_output: RunOutput, thread_id: str) -> PauseInfo
+```
+
+Serialize and store a paused `RunOutput`.
+
+Parameters:
+
+- ###### **`run_output`**
+
+  (`RunOutput`) – The paused Agno run (is_paused=True with populated requirements).
+
+- ###### **`thread_id`**
+
+  (`str`) – AG-UI thread identifier (the record key).
+
+Returns:
+
+- **`A`** ( `PauseInfo` ) – class:PauseInfo describing what was persisted.
+
+#### agui_tool_to_external_function
+
+```python
+agui_tool_to_external_function(tool: Tool) -> Function
+```
+
+Wrap an AG-UI tool definition as an Agno external `Function`.
+
+The resulting :class:`Function` carries the AG-UI schema as-is (Agno accepts raw JSON Schema via `parameters`) and is marked with `external_execution=True` so Agno emits the tool-call events but skips the entrypoint and pauses the run when the LLM invokes it.
+
+Parameters:
+
+- ##### **`tool`**
+
+  (`Tool`) – An :class:ag_ui.core.types.Tool from RunAgentInput.tools.
+
+Returns:
+
+- **`An`** ( `Function` ) – class:agno.tools.function.Function ready to be plugged into
+- `Function` – an Agno agent's tool list.
+
+#### emit_awaiting_tool_result
+
+```python
+emit_awaiting_tool_result(
+    context: ModuleContext,
+    *,
+    thread_id: str,
+    run_id: str,
+    pending_tool_call_ids: list[str],
+) -> None
+```
+
+Emit an AG-UI `RunFinished` with `status="awaiting_tool_result"`.
+
+This is the protocol signal telling the front "the run paused on a client-side tool; execute it and reply with a `ToolMessage`". It goes out via `context.callbacks.send_message` (bypassing the standard :class:`~digitalkin.mixins.agui_mixin.AgUiMixin` event mapping, which has no notion of an "awaiting" status).
+
+Parameters:
+
+- ##### **`context`**
+
+  (`ModuleContext`) – Current module context.
+
+- ##### **`thread_id`**
+
+  (`str`) – AG-UI thread identifier.
+
+- ##### **`run_id`**
+
+  (`str`) – Run identifier to echo back in the finished event.
+
+- ##### **`pending_tool_call_ids`**
+
+  (`list[str]`) – The tool_call_id values the front must execute and resolve — echoed in result.pending_tool_call_ids so the front can match them.
+
+#### emit_messages_snapshot
+
+```python
+emit_messages_snapshot(context: ModuleContext, messages: list[Message]) -> None
+```
+
+Emit an AG-UI `MessagesSnapshot` event.
+
+Typically called just before :func:`emit_awaiting_tool_result` on a paused run so the front has an authoritative view of the conversation (including the assistant message carrying the frontend `tool_calls`, which cannot be reconstructed from the streamed tool-call events alone).
+
+Parameters:
+
+- ##### **`context`**
+
+  (`ModuleContext`) – Current module context.
+
+- ##### **`messages`**
+
+  (`list[Message]`) – List of AG-UI messages, typically produced by :func:\_agno_messages_to_agui from RunOutput.messages.
+
+#### make_tools_factory
+
+```python
+make_tools_factory(
+    base_tools: list[Any], dependency_key: str = _DEFAULT_DEPENDENCY_KEY
+) -> Callable[[RunContext], list[Any]]
+```
+
+Build an Agno `tools` factory that merges base tools with per-run AG-UI tools.
+
+The returned callable is the value you pass to `Agent(tools=...)`. On every run, Agno resolves the factory with the current :class:`~agno.run.base.RunContext` (see :func:`agno.utils.callables.aresolve_callable_tools`). The factory reads `run_context.dependencies[dependency_key]` — the list of :class:`~ag_ui.core.types.Tool` you passed via `agent.arun(dependencies={dependency_key: [...]})` — converts them to external :class:`Function` objects, and concatenates them with the `base_tools`.
+
+Parameters:
+
+- ##### **`base_tools`**
+
+  (`list[Any]`) – Toolkits / Functions always available to the agent (e.g. AsyncDuckDuckGoTools()). Passed through unchanged.
+
+- ##### **`dependency_key`**
+
+  (`str`, default: `_DEFAULT_DEPENDENCY_KEY` ) – The key in run_context.dependencies under which the caller places the per-run AG-UI tool list. Defaults to "agui_tools".
+
+Returns:
+
+- `Callable[[RunContext], list[Any]]` – A callable suitable for :class:agno.agent.Agent's tools=
+- `Callable[[RunContext], list[Any]]` – parameter. Set cache_callables=False on the Agent so this
+- `Callable[[RunContext], list[Any]]` – factory is re-invoked on every run.
+
+#### agno_adapter
+
+Adapter to convert Agno events to DigitalKin framework-agnostic events.
+
+This adapter bridges Agno-specific events to the DigitalKin event model, allowing the core DigitalKin SDK to remain independent of Agno.
+
+The adapter owns ALL state management: tracking reasoning/content lifecycle, generating message_id and reasoning_id on each phase start, and emitting proper start/completed events for text message and reasoning sequences.
+
+Classes:
+
+- **`AgnoStreamAdapter`** – Stateful converter: Agno streaming events -> DigitalKin events.
+
+##### AgnoStreamAdapter
+
+```python
+AgnoStreamAdapter()
+```
+
+Stateful converter: Agno streaming events -> DigitalKin events.
+
+Tracks reasoning and content state so that events arriving on `RunEvent.run_content` are automatically wrapped in proper lifecycle events (TextMessageStarted/Completed, ReasoningStarted/Completed).
+
+Usage::
+
+```text
+adapter = AgnoStreamAdapter()
+async for raw_event in agent.arun(..., stream=True, stream_events=True):
+    for event in adapter.to_digitalkin_events(raw_event):
+        await send(event)
+for event in adapter.flush():
+    await send(event)
+```
+
+Methods:
+
+- **`flush`** – Emit closing events for any active sequences at end of stream.
+- **`to_digitalkin_events`** – Convert one Agno event into one or more DigitalKin events.
+
+Attributes:
+
+- **`is_paused`** (`bool`) – Whether the last stream ended on a run_paused event (external tool HITL).
+- **`paused_requirements`** (`list[Any]`) – Agno RunRequirement objects carried by the paused run.
+- **`paused_tool_executions`** (`list[Any]`) – Agno ToolExecution objects awaiting external execution (HITL).
+
+###### is_paused
+
+```python
+is_paused: bool
+```
+
+Whether the last stream ended on a run_paused event (external tool HITL).
+
+###### paused_requirements
+
+```python
+paused_requirements: list[Any]
+```
+
+Agno `RunRequirement` objects carried by the paused run.
+
+###### paused_tool_executions
+
+```python
+paused_tool_executions: list[Any]
+```
+
+Agno `ToolExecution` objects awaiting external execution (HITL).
+
+###### flush
+
+```python
+flush() -> list[BaseAgentRunEvent]
+```
+
+Emit closing events for any active sequences at end of stream.
+
+Returns:
+
+- `list[BaseAgentRunEvent]` – List of closing events (empty if nothing is active).
+
+###### to_digitalkin_events
+
+```python
+to_digitalkin_events(agno_event: AgnoRunEvent) -> list[BaseAgentRunEvent]
+```
+
+Convert one Agno event into one or more DigitalKin events.
+
+Parameters:
+
+- ###### **`agno_event`**
+
+  (`AgnoRunEvent`) – Event from Agno's streaming API.
+
+Returns:
+
+- `list[BaseAgentRunEvent]` – List of corresponding DigitalKin events (may be empty).
+
+Raises:
+
+- `ImportError` – If the optional 'agno' dependency is not installed.
+
+#### agui_tools
+
+AG-UI frontend tools → Agno external Functions.
+
+The AG-UI protocol lets the client declare its own tools in `RunAgentInput.tools`. Those tools are meant to be executed on the frontend (a UI widget, a browser-local API call, a user prompt, …) rather than by the agent process. This module provides the glue to expose them to an Agno :class:`~agno.agent.Agent` as regular :class:`~agno.tools.function.Function` objects marked with `external_execution=True`: when the LLM "calls" one, Agno pauses the run (via :class:`~agno.run.agent.RunPausedEvent`) instead of executing an entrypoint — letting the caller stream the tool-call events to the front and resume later via :meth:`~agno.agent.Agent.acontinue_run`.
+
+Usage::
+
+```text
+from digitalkin.community.agno import make_tools_factory
+from agno.agent import Agent
+
+agent = Agent(
+    tools=make_tools_factory([AsyncDuckDuckGoTools()]),
+    cache_callables=False,           # critical — see make_tools_factory
+    ...
+)
+
+async for ev in agent.arun(
+    message,
+    dependencies={"agui_tools": input_data.tools},
+    stream=True,
+    stream_events=True,
+):
+    ...
+```
+
+Notes
+
+`dependencies` is Agno's standard per-run injection bus. We use it as a transport channel to hand the frontend tools to the tools factory on every run — the tools themselves are actually registered through the `tools=factory` mechanism, not through `dependencies`. `cache_callables=False` is required so the factory is re-invoked on each run (otherwise the first resolved tool list is cached forever and subsequent requests would not see new frontend tools).
+
+Functions:
+
+- **`agui_tool_to_external_function`** – Wrap an AG-UI tool definition as an Agno external Function.
+- **`make_tools_factory`** – Build an Agno tools factory that merges base tools with per-run AG-UI tools.
+
+##### agui_tool_to_external_function
+
+```python
+agui_tool_to_external_function(tool: Tool) -> Function
+```
+
+Wrap an AG-UI tool definition as an Agno external `Function`.
+
+The resulting :class:`Function` carries the AG-UI schema as-is (Agno accepts raw JSON Schema via `parameters`) and is marked with `external_execution=True` so Agno emits the tool-call events but skips the entrypoint and pauses the run when the LLM invokes it.
+
+Parameters:
+
+- ###### **`tool`**
+
+  (`Tool`) – An :class:ag_ui.core.types.Tool from RunAgentInput.tools.
+
+Returns:
+
+- **`An`** ( `Function` ) – class:agno.tools.function.Function ready to be plugged into
+- `Function` – an Agno agent's tool list.
+
+##### make_tools_factory
+
+```python
+make_tools_factory(
+    base_tools: list[Any], dependency_key: str = _DEFAULT_DEPENDENCY_KEY
+) -> Callable[[RunContext], list[Any]]
+```
+
+Build an Agno `tools` factory that merges base tools with per-run AG-UI tools.
+
+The returned callable is the value you pass to `Agent(tools=...)`. On every run, Agno resolves the factory with the current :class:`~agno.run.base.RunContext` (see :func:`agno.utils.callables.aresolve_callable_tools`). The factory reads `run_context.dependencies[dependency_key]` — the list of :class:`~ag_ui.core.types.Tool` you passed via `agent.arun(dependencies={dependency_key: [...]})` — converts them to external :class:`Function` objects, and concatenates them with the `base_tools`.
+
+Parameters:
+
+- ###### **`base_tools`**
+
+  (`list[Any]`) – Toolkits / Functions always available to the agent (e.g. AsyncDuckDuckGoTools()). Passed through unchanged.
+
+- ###### **`dependency_key`**
+
+  (`str`, default: `_DEFAULT_DEPENDENCY_KEY` ) – The key in run_context.dependencies under which the caller places the per-run AG-UI tool list. Defaults to "agui_tools".
+
+Returns:
+
+- `Callable[[RunContext], list[Any]]` – A callable suitable for :class:agno.agent.Agent's tools=
+- `Callable[[RunContext], list[Any]]` – parameter. Set cache_callables=False on the Agent so this
+- `Callable[[RunContext], list[Any]]` – factory is re-invoked on every run.
+
+#### hitl
+
+Human-in-the-loop (HITL) runner for Agno agents with AG-UI frontend tools.
+
+This module provides the high-level glue to build an Agno-powered module that supports AG-UI *frontend tools* — tools declared by the AG-UI client and executed on the front rather than on the agent process. The flow is:
+
+1. The front sends `RunAgentInput` with a `tools` list.
+1. The LLM calls one of those tools.
+1. Agno emits `RunPausedEvent` (its HITL signal) and freezes the run.
+1. We persist the paused :class:`~agno.run.agent.RunOutput` via the module's :class:`~digitalkin.services.storage.StorageStrategy`, keyed by `thread_id`.
+1. We emit an AG-UI `RunFinished` with `result={"status": "awaiting_tool_result", "pending_tool_call_ids": [...]}` so the front knows to execute the tool and reply.
+1. On the next `RunAgentInput` carrying a matching `ToolMessage`, we load the paused run, inject the result into the corresponding :class:`~agno.run.requirement.RunRequirement`, and resume via :meth:`~agno.agent.Agent.acontinue_run`.
+
+The design keeps the process stateless (every replica can resume any thread) because all the state lives in the storage service.
+
+Typical usage inside a module trigger::
+
+```text
+from digitalkin.community.agno import (
+    AgnoHitlRunner,
+    HITL_STORAGE_CONFIG,
+    make_tools_factory,
+)
+
+# In your Module class — register the storage schema
+services_config_params = {
+    "storage": {
+        "config": {
+            **HITL_STORAGE_CONFIG,
+            "agno_sessions": AgnoSession,
+            ...
+        },
+        ...
+    },
+    ...
+}
+
+# In your agent factory
+agent = Agent(
+    tools=make_tools_factory([MyBaseToolkit()]),
+    cache_callables=False,
+    ...
+)
+
+# In your trigger handler
+runner = AgnoHitlRunner(agent=agent, storage=context.storage)
+pause_info = await runner.handle_agui_input(
+    input_data=input_data,
+    send=send,
+    context=context,        # enables auto-emission of awaiting RunFinished
+)
+```
+
+`handle_agui_input` will figure out whether this is a fresh user message, a resume of a paused run, or an abandon (new user message while a tool was pending) and dispatch accordingly.
+
+Classes:
+
+- **`AgnoHitlRunner`** – High-level runner for an Agno agent with AG-UI frontend-tool support.
+- **`PauseInfo`** – Summary of a paused Agno run.
+- **`PausedRunRecord`** – Persistent snapshot of an Agno run paused on external tool execution.
+- **`PausedRunStore`** – Thin wrapper around :class:StorageStrategy for the paused_runs collection.
+
+Functions:
+
+- **`emit_awaiting_tool_result`** – Emit an AG-UI RunFinished with status="awaiting_tool_result".
+- **`emit_messages_snapshot`** – Emit an AG-UI MessagesSnapshot event.
+
+Attributes:
+
+- **`HITL_STORAGE_CONFIG`** (`dict[str, type[BaseModel]]`) – Drop-in storage config fragment — merge into your module's services_config_params.
+
+##### HITL_STORAGE_CONFIG
+
+```python
+HITL_STORAGE_CONFIG: dict[str, type[BaseModel]] = {
+    _PAUSED_RUNS_COLLECTION: PausedRunRecord
+}
+```
+
+Drop-in storage config fragment — merge into your module's `services_config_params`.
+
+Example::
+
+```text
+services_config_params = {
+    "storage": {
+        "config": {**HITL_STORAGE_CONFIG, "my_other_collection": MyModel},
+        ...
+    },
+}
+```
+
+##### AgnoHitlRunner
+
+```python
+AgnoHitlRunner(
+    *,
+    agent: Agent,
+    storage: StorageStrategy | None = None,
+    store: PausedRunStore | None = None,
+    dependency_key: str = "agui_tools",
+)
+```
+
+High-level runner for an Agno agent with AG-UI frontend-tool support.
+
+Wraps a configured :class:`~agno.agent.Agent` and a :class:`PausedRunStore`, and exposes three levels of API:
+
+- :meth:`run` / :meth:`continue_paused_run` — low-level: stream one Agno run (fresh or resumed) and return a :class:`PauseInfo` if it paused on an external tool.
+- :meth:`try_resume` — inspects an AG-UI input and resumes iff a matching :class:`~ag_ui.core.types.ToolMessage` is present.
+- :meth:`handle_agui_input` — all-in-one: detects resume vs fresh message, dispatches, and (optionally) emits the awaiting `RunFinished` event on pause. Use this one from a trigger.
+
+Parameters:
+
+- ###### **`agent`**
+
+  (`Agent`) – The Agno agent. It must be built with tools=make_tools_factory(base_tools) and cache_callables=False — otherwise the frontend tools injected per-run won't reach the LLM.
+
+- ###### **`storage`**
+
+  (`StorageStrategy | None`, default: `None` ) – Convenience: if provided and store is not, a :class:PausedRunStore is constructed automatically.
+
+- ###### **`store`**
+
+  (`PausedRunStore | None`, default: `None` ) – Pre-built paused-run store. Wins over storage.
+
+- ###### **`dependency_key`**
+
+  (`str`, default: `'agui_tools'` ) – The Agno dependencies key under which the runner passes the per-run AG-UI tool list. Must match the key used by :func:make_tools_factory. Defaults to "agui_tools".
+
+Raises:
+
+- `ValueError` – If neither storage nor store is provided.
+
+Methods:
+
+- **`continue_paused_run`** – Resume a previously paused run.
+- **`handle_agui_input`** – One-shot dispatch of an AG-UI RunAgentInput.
+- **`run`** – Stream a fresh Agno run.
+- **`try_resume`** – Try to resume a paused run from an AG-UI input.
+
+###### continue_paused_run
+
+```python
+continue_paused_run(
+    thread_id: str,
+    tool_results: dict[str, str],
+    *,
+    send: Callable[[BaseAgentRunEvent], Coroutine[Any, Any, None]],
+    run_id: str | None = None,
+    agui_tools: list[Tool] | None = None,
+) -> PauseInfo | None
+```
+
+Resume a previously paused run.
+
+Loads the persisted :class:`~agno.run.agent.RunOutput`, injects the tool results into the matching :class:`~agno.run.requirement.RunRequirement` entries, and calls :meth:`~agno.agent.Agent.acontinue_run`. On normal completion the storage record is removed; on re-pause it is refreshed.
+
+Parameters:
+
+- ###### **`thread_id`**
+
+  (`str`) – AG-UI thread identifier (the storage key).
+
+- ###### **`tool_results`**
+
+  (`dict[str, str]`) – Mapping of tool_call_id → serialized result (typically a JSON string). Every pending tool must be resolved — unresolved requirements will stall the run.
+
+- ###### **`send`**
+
+  (`Callable[[BaseAgentRunEvent], Coroutine[Any, Any, None]]`) – Digitalkin-event callback (same contract as :meth:run).
+
+- ###### **`run_id`**
+
+  (`str | None`, default: `None` ) – AG-UI run identifier for this resume turn. Used to emit a synthetic RUN_STARTED before streaming — Agno emits RunContinued (not RunStarted) on resume.
+
+- ###### **`agui_tools`**
+
+  (`list[Tool] | None`, default: `None` ) – Frontend tool definitions for the resumed run. The AG-UI client should re-send the same list it provided at the original turn so tool schemas stay registered.
+
+Returns:
+
+- `PauseInfo | None` – None on final completion. A fresh :class:PauseInfo when
+- `PauseInfo | None` – the resumed run paused again (cascading frontend tools). If
+- `PauseInfo | None` – no paused record exists for thread_id, returns None.
+
+###### handle_agui_input
+
+```python
+handle_agui_input(
+    input_data: Any,
+    *,
+    send: Callable[[BaseAgentRunEvent], Coroutine[Any, Any, None]],
+    context: ModuleContext | None = None,
+    message: str | None = None,
+    images: list[Any] | None = None,
+) -> PauseInfo | None
+```
+
+One-shot dispatch of an AG-UI `RunAgentInput`.
+
+Handles the three cases in order:
+
+1. Resume a paused run if the input carries a matching `ToolMessage` (see :meth:`try_resume`).
+1. Drop a stale paused record if the input is a new `UserMessage` while a tool was pending (HITL abandon).
+1. Fresh run on the last `UserMessage` in `input_data.messages` (or on the explicit `message` argument).
+
+When a run pauses (fresh or resumed) and `context` is provided, this method also emits the AG-UI `RunFinished` with `status="awaiting_tool_result"` via :func:`emit_awaiting_tool_result`. Pass `context=None` if you want to emit it yourself.
+
+Parameters:
+
+- ###### **`input_data`**
+
+  (`Any`) – Any object with thread_id, messages, and tools attributes (typically an AgUiStreamInput).
+
+- ###### **`send`**
+
+  (`Callable[[BaseAgentRunEvent], Coroutine[Any, Any, None]]`) – Digitalkin-event callback (e.g. wrapping self.send_message(context, event) in a trigger).
+
+- ###### **`context`**
+
+  (`ModuleContext | None`, default: `None` ) – If provided, the awaiting RunFinished is emitted automatically on pause.
+
+- ###### **`message`**
+
+  (`str | None`, default: `None` ) – Override the user prompt extraction. Normally left as None — the runner picks the last UserMessage content from input_data.messages.
+
+- ###### **`images`**
+
+  (`list[Any] | None`, default: `None` ) – Optional multimodal inputs forwarded to Agno.
+
+Returns:
+
+- `PauseInfo | None` – None on normal completion (or when no actionable input
+- `PauseInfo | None` – was found). A :class:PauseInfo on pause (already emitted to
+- `PauseInfo | None` – the front if context was provided).
+
+###### run
+
+```python
+run(
+    message: str,
+    *,
+    send: Callable[[BaseAgentRunEvent], Coroutine[Any, Any, None]],
+    thread_id: str,
+    agui_tools: list[Tool] | None = None,
+    images: list[Any] | None = None,
+) -> PauseInfo | None
+```
+
+Stream a fresh Agno run.
+
+Parameters:
+
+- ###### **`message`**
+
+  (`str`) – User prompt to send to the agent.
+
+- ###### **`send`**
+
+  (`Callable[[BaseAgentRunEvent], Coroutine[Any, Any, None]]`) – Async callback invoked for each digitalkin event produced by :class:AgnoStreamAdapter. Typically maps through :meth:AgUiMixin.send_message.
+
+- ###### **`thread_id`**
+
+  (`str`) – AG-UI thread identifier (used as the paused-run storage key if the run pauses).
+
+- ###### **`agui_tools`**
+
+  (`list[Tool] | None`, default: `None` ) – Frontend tools declared by the AG-UI client for this run. Merged with the agent's base tools through the factory; None or empty is equivalent to "no frontend tools this turn".
+
+- ###### **`images`**
+
+  (`list[Any] | None`, default: `None` ) – Optional multimodal inputs forwarded to Agno.
+
+Returns:
+
+- `PauseInfo | None` – None on normal completion. A :class:PauseInfo if the run
+- `PauseInfo | None` – paused on one or more external tool calls — the caller is
+- `PauseInfo | None` – responsible for emitting the awaiting RunFinished (use
+- `PauseInfo | None` – func:emit_awaiting_tool_result or let
+- `PauseInfo | None` – meth:handle_agui_input do it).
+
+###### try_resume
+
+```python
+try_resume(
+    input_data: Any, *, send: Callable[[BaseAgentRunEvent], Coroutine[Any, Any, None]]
+) -> tuple[bool, PauseInfo | None]
+```
+
+Try to resume a paused run from an AG-UI input.
+
+The `input_data` only needs to duck-type `thread_id`, `messages`, and `tools` (typically an `AgUiStreamInput`). This method:
+
+1. Loads the paused record for `input_data.thread_id`. Returns `(False, None)` if there is none.
+1. Looks for `ToolMessage` entries in `input_data.messages` whose `tool_call_id` matches a pending one.
+1. If any match → dispatches :meth:`continue_paused_run` and returns `(True, pause_info_or_none)`.
+1. If no match but the last message is a fresh `UserMessage`, drops the stale record (HITL abandon) and returns `(False, None)`.
+
+Returns:
+
+- `bool` – (resumed, pause_info):
+- `PauseInfo | None` – (False, None): no resume, caller should run the fresh-message path.
+- `tuple[bool, PauseInfo | None]` – (True, None): resume ran to normal completion.
+- `tuple[bool, PauseInfo | None]` – (True, PauseInfo): resume paused again (cascading tools).
+
+##### PauseInfo
+
+```python
+PauseInfo(
+    thread_id: str,
+    run_id: str,
+    pending_tool_call_ids: list[str],
+    new_messages: list[Message] = list(),
+)
+```
+
+Summary of a paused Agno run.
+
+Returned by :meth:`AgnoHitlRunner.run` and related methods whenever the run paused on one or more external tool calls. Callers typically use it to emit the AG-UI awaiting-tool-result event to the front.
+
+`new_messages` carries the AG-UI messages generated by Agno during the paused run (user echoes, the assistant message with `tool_calls`, and any tool results emitted before the pause). It's provided because Agno does not emit stream events from which the front can reconstruct the assistant-with-tool-calls message — in particular, when the LLM goes straight from reasoning to a frontend tool call without emitting any text. Consumers typically push these messages to the front via a :class:`~ag_ui.core.events.MessagesSnapshotEvent` so the client has an authoritative view of the conversation.
+
+##### PausedRunRecord
+
+```
+              flowchart TD
+              digitalkin.community.agno.hitl.PausedRunRecord[PausedRunRecord]
+
+              
+
+              click digitalkin.community.agno.hitl.PausedRunRecord href "" "digitalkin.community.agno.hitl.PausedRunRecord"
+```
+
+Persistent snapshot of an Agno run paused on external tool execution.
+
+Stored in the `paused_runs` collection keyed by `thread_id`. The `payload` field holds `RunOutput.to_dict()` verbatim so :meth:`agno.run.agent.RunOutput.from_dict` can round-trip the run on any replica when the front replies with the tool result(s).
+
+##### PausedRunStore
+
+```python
+PausedRunStore(storage: StorageStrategy)
+```
+
+Thin wrapper around :class:`StorageStrategy` for the `paused_runs` collection.
+
+Owns serialization of :class:`~agno.run.agent.RunOutput` and keying by `thread_id`. Instances are cheap — create one per trigger handler.
+
+Parameters:
+
+- ###### **`storage`**
+
+  (`StorageStrategy`) – The module's storage strategy. The collection paused_runs must be registered with :class:PausedRunRecord — use :data:HITL_STORAGE_CONFIG.
+
+Methods:
+
+- **`delete`** – Remove the paused run record for a thread.
+- **`load`** – Fetch the paused run record for a thread.
+- **`save`** – Serialize and store a paused RunOutput.
+
+###### delete
+
+```python
+delete(thread_id: str) -> None
+```
+
+Remove the paused run record for a thread.
+
+###### load
+
+```python
+load(thread_id: str) -> PausedRunRecord | None
+```
+
+Fetch the paused run record for a thread.
+
+Parameters:
+
+- ###### **`thread_id`**
+
+  (`str`) – AG-UI thread identifier.
+
+Returns:
+
+- **`The`** ( `PausedRunRecord | None` ) – class:PausedRunRecord if one exists, otherwise None.
+
+###### save
+
+```python
+save(run_output: RunOutput, thread_id: str) -> PauseInfo
+```
+
+Serialize and store a paused `RunOutput`.
+
+Parameters:
+
+- ###### **`run_output`**
+
+  (`RunOutput`) – The paused Agno run (is_paused=True with populated requirements).
+
+- ###### **`thread_id`**
+
+  (`str`) – AG-UI thread identifier (the record key).
+
+Returns:
+
+- **`A`** ( `PauseInfo` ) – class:PauseInfo describing what was persisted.
+
+##### emit_awaiting_tool_result
+
+```python
+emit_awaiting_tool_result(
+    context: ModuleContext,
+    *,
+    thread_id: str,
+    run_id: str,
+    pending_tool_call_ids: list[str],
+) -> None
+```
+
+Emit an AG-UI `RunFinished` with `status="awaiting_tool_result"`.
+
+This is the protocol signal telling the front "the run paused on a client-side tool; execute it and reply with a `ToolMessage`". It goes out via `context.callbacks.send_message` (bypassing the standard :class:`~digitalkin.mixins.agui_mixin.AgUiMixin` event mapping, which has no notion of an "awaiting" status).
+
+Parameters:
+
+- ###### **`context`**
+
+  (`ModuleContext`) – Current module context.
+
+- ###### **`thread_id`**
+
+  (`str`) – AG-UI thread identifier.
+
+- ###### **`run_id`**
+
+  (`str`) – Run identifier to echo back in the finished event.
+
+- ###### **`pending_tool_call_ids`**
+
+  (`list[str]`) – The tool_call_id values the front must execute and resolve — echoed in result.pending_tool_call_ids so the front can match them.
+
+##### emit_messages_snapshot
+
+```python
+emit_messages_snapshot(context: ModuleContext, messages: list[Message]) -> None
+```
+
+Emit an AG-UI `MessagesSnapshot` event.
+
+Typically called just before :func:`emit_awaiting_tool_result` on a paused run so the front has an authoritative view of the conversation (including the assistant message carrying the frontend `tool_calls`, which cannot be reconstructed from the streamed tool-call events alone).
+
+Parameters:
+
+- ###### **`context`**
+
+  (`ModuleContext`) – Current module context.
+
+- ###### **`messages`**
+
+  (`list[Message]`) – List of AG-UI messages, typically produced by :func:\_agno_messages_to_agui from RunOutput.messages.
 
 ## core
 
@@ -5290,7 +6406,6 @@ Classes:
 ```python
 ModuleServer(
     module_class: type[BaseModule],
-    server_config: ModuleServerConfig,
     client_config: ClientConfig | None = None,
     interceptors: Sequence[Any] | None = None,
 )
@@ -5325,10 +6440,6 @@ Parameters:
 - ##### **`module_class`**
 
   (`type[BaseModule]`) – The module instance to be served.
-
-- ##### **`server_config`**
-
-  (`ModuleServerConfig`) – Server configuration.
 
 - ##### **`client_config`**
 
@@ -5971,6 +7082,7 @@ Methods:
 - **`exec_grpc_query`** – Execute a gRPC query with from the query's rpc endpoint name.
 - **`poll_grpc`** – Execute a single polling RPC. Returns None on DEADLINE_EXCEEDED (expected empty poll).
 - **`release_cached_channel`** – Decrement refcount for a cache key and close channel when last ref is released.
+- **`wait_for_ready`** – Check if the gRPC channel can connect within timeout.
 
 ###### close
 
@@ -6022,7 +7134,7 @@ Parameters:
 
 - ###### **`timeout`**
 
-  (`float | None`, default: `None` ) – Optional per-call timeout in seconds (passed to gRPC stub call)
+  (`float | None`, default: `None` ) – Per-call timeout in seconds. Falls back to \_QUERY_DEFAULT_TIMEOUT (env DIGITALKIN_GRPC_QUERY_TIMEOUT, default 30s) when None.
 
 Returns:
 
@@ -6077,6 +7189,26 @@ Parameters:
 - ###### **`key`**
 
   (`str`) – Channel cache key to release.
+
+###### wait_for_ready
+
+```python
+wait_for_ready(timeout: float = 1.0) -> bool
+```
+
+Check if the gRPC channel can connect within timeout.
+
+Uses channel_ready() which resolves when the HTTP/2 connection is established and the server is accepting RPCs.
+
+Parameters:
+
+- ###### **`timeout`**
+
+  (`float`, default: `1.0` ) – Max seconds to wait for connectivity.
+
+Returns:
+
+- `bool` – True if channel reached READY state, False if timeout or no channel.
 
 #### grpc_error_handler
 
@@ -6338,6 +7470,7 @@ Mixin definitions.
 
 Modules:
 
+- **`agui_mixin`** – AG-UI event streaming mixin for DigitalKin modules.
 - **`base_mixin`** – Simple toolkit class with basic and simple API access in the Triggers.
 - **`callback_mixin`** – User callback to send a message from the Trigger.
 - **`chat_history_mixin`** – Context mixins providing ergonomic access to service strategies.
@@ -6349,13 +7482,53 @@ Modules:
 
 Classes:
 
+- **`AgUiMixin`** – Mixin for converting agent events to AG-UI protocol and sending them.
 - **`BaseMixin`** – Base Mixin to access to minimum Module Context functionnalities in the Triggers.
-- **`ChatHistoryMixin`** – Mixin providing chat history operations through storage strategy.
 - **`CostMixin`** – Mixin providing cost tracking operations through the cost strategy.
 - **`FilesystemMixin`** – Mixin providing filesystem operations through the filesystem strategy.
 - **`LoggerMixin`** – Mixin providing callback operations through the callbacks strategy.
 - **`StorageMixin`** – Mixin providing storage operations through the storage strategy.
-- **`UserMessageMixin`** – Mixin providing callback operations through the callbacks .
+
+### AgUiMixin
+
+```python
+AgUiMixin()
+```
+
+Mixin for converting agent events to AG-UI protocol and sending them.
+
+This mixin is a stateless emitter: each handler reads IDs from the event and emits the corresponding AG-UI event(s). The adapter is responsible for generating IDs and managing event lifecycle (start/complete sequences).
+
+Usage::
+
+```text
+class MyTrigger(BaseTrigger, AgUiMixin):
+    async def execute(self, context, input_data):
+        async for event in agent.run(input_data.message, stream=True):
+            await self.agui_send_message(context, event)
+```
+
+Methods:
+
+- **`send_message`** – Convert agent event to AG-UI protocol and send via context callbacks.
+
+#### send_message
+
+```python
+send_message(context: ModuleContext, event: BaseAgentRunEvent) -> None
+```
+
+Convert agent event to AG-UI protocol and send via context callbacks.
+
+Parameters:
+
+- ##### **`context`**
+
+  (`ModuleContext`) – Module context containing the callbacks strategy.
+
+- ##### **`event`**
+
+  (`BaseAgentRunEvent`) – Agent run event to process and convert.
 
 ### BaseMixin
 
@@ -6367,22 +7540,15 @@ BaseMixin()
               flowchart TD
               digitalkin.mixins.BaseMixin[BaseMixin]
               digitalkin.mixins.cost_mixin.CostMixin[CostMixin]
-              digitalkin.mixins.chat_history_mixin.ChatHistoryMixin[ChatHistoryMixin]
-              digitalkin.mixins.callback_mixin.UserMessageMixin[UserMessageMixin]
+              digitalkin.mixins.agui_mixin.AgUiMixin[AgUiMixin]
               digitalkin.mixins.file_history_mixin.FileHistoryMixin[FileHistoryMixin]
               digitalkin.mixins.storage_mixin.StorageMixin[StorageMixin]
               digitalkin.mixins.logger_mixin.LoggerMixin[LoggerMixin]
 
                               digitalkin.mixins.cost_mixin.CostMixin --> digitalkin.mixins.BaseMixin
                 
-                digitalkin.mixins.chat_history_mixin.ChatHistoryMixin --> digitalkin.mixins.BaseMixin
-                                digitalkin.mixins.callback_mixin.UserMessageMixin --> digitalkin.mixins.chat_history_mixin.ChatHistoryMixin
+                digitalkin.mixins.agui_mixin.AgUiMixin --> digitalkin.mixins.BaseMixin
                 
-                digitalkin.mixins.storage_mixin.StorageMixin --> digitalkin.mixins.chat_history_mixin.ChatHistoryMixin
-                
-                digitalkin.mixins.logger_mixin.LoggerMixin --> digitalkin.mixins.chat_history_mixin.ChatHistoryMixin
-                
-
                 digitalkin.mixins.file_history_mixin.FileHistoryMixin --> digitalkin.mixins.BaseMixin
                                 digitalkin.mixins.storage_mixin.StorageMixin --> digitalkin.mixins.file_history_mixin.FileHistoryMixin
                 
@@ -6395,8 +7561,7 @@ BaseMixin()
 
               click digitalkin.mixins.BaseMixin href "" "digitalkin.mixins.BaseMixin"
               click digitalkin.mixins.cost_mixin.CostMixin href "" "digitalkin.mixins.cost_mixin.CostMixin"
-              click digitalkin.mixins.chat_history_mixin.ChatHistoryMixin href "" "digitalkin.mixins.chat_history_mixin.ChatHistoryMixin"
-              click digitalkin.mixins.callback_mixin.UserMessageMixin href "" "digitalkin.mixins.callback_mixin.UserMessageMixin"
+              click digitalkin.mixins.agui_mixin.AgUiMixin href "" "digitalkin.mixins.agui_mixin.AgUiMixin"
               click digitalkin.mixins.file_history_mixin.FileHistoryMixin href "" "digitalkin.mixins.file_history_mixin.FileHistoryMixin"
               click digitalkin.mixins.storage_mixin.StorageMixin href "" "digitalkin.mixins.storage_mixin.StorageMixin"
               click digitalkin.mixins.logger_mixin.LoggerMixin href "" "digitalkin.mixins.logger_mixin.LoggerMixin"
@@ -6407,23 +7572,18 @@ Base Mixin to access to minimum Module Context functionnalities in the Triggers.
 Methods:
 
 - **`add_cost`** – Add a cost entry using the cost strategy.
-- **`append_chat_history_message`** – Append a message to chat history.
 - **`append_files_history`** – Append files to file history.
-- **`clear_ch_mission_cache`** – Remove a mission's entries from in-memory caches after flush.
 - **`clear_fh_mission_cache`** – Remove a mission's entries from in-memory caches after flush.
-- **`flush_chat_history`** – Flush the current mission's dirty chat history to storage.
 - **`flush_file_history`** – Flush the current mission's dirty file history to storage.
 - **`get_cost`** – Get cost entries for a specific name.
 - **`get_costs`** – Get filtered cost entries.
-- **`load_chat_history`** – Load chat history for the current session.
 - **`load_file_history`** – Load file history for the current session.
 - **`log_debug`** – Log debug message using the callbacks strategy.
 - **`log_error`** – Log error message using the callbacks strategy.
 - **`log_info`** – Log info message using the callbacks strategy.
 - **`log_warning`** – Log warning message using the callbacks strategy.
 - **`read_storage`** – Read data from storage.
-- **`save_send_message`** – Save output to chat history and send response to the module request.
-- **`send_message`** – Send a message using the callbacks strategy.
+- **`send_message`** – Convert agent event to AG-UI protocol and send via context callbacks.
 - **`store_storage`** – Store data using the storage strategy.
 - **`update_storage`** – Update existing data in storage.
 - **`upsert_storage`** – Insert or update data in storage atomically.
@@ -6456,30 +7616,6 @@ Parameters:
 
   (`float`) – Quantity of units consumed.
 
-#### append_chat_history_message
-
-```python
-append_chat_history_message(context: ModuleContext, role: Role, content: Any) -> None
-```
-
-Append a message to chat history.
-
-The message is added to the in-memory cache immediately. A storage write is deferred until the batch threshold is reached (default 10, env: DIGITALKIN_CHAT_HISTORY_FLUSH_THRESHOLD) or flush_chat_history().
-
-Parameters:
-
-- ##### **`context`**
-
-  (`ModuleContext`) – Module context containing storage strategy.
-
-- ##### **`role`**
-
-  (`Role`) – Message role (user, assistant, system).
-
-- ##### **`content`**
-
-  (`Any`) – Message content.
-
 #### append_files_history
 
 ```python
@@ -6500,20 +7636,6 @@ Parameters:
 
   (`list[FileModel]`) – List of file models to append.
 
-#### clear_ch_mission_cache
-
-```python
-clear_ch_mission_cache(context: ModuleContext) -> None
-```
-
-Remove a mission's entries from in-memory caches after flush.
-
-Parameters:
-
-- ##### **`context`**
-
-  (`ModuleContext`) – Module context identifying the mission to clear.
-
 #### clear_fh_mission_cache
 
 ```python
@@ -6527,22 +7649,6 @@ Parameters:
 - ##### **`context`**
 
   (`ModuleContext`) – Module context identifying the mission to clear.
-
-#### flush_chat_history
-
-```python
-flush_chat_history(context: ModuleContext) -> None
-```
-
-Flush the current mission's dirty chat history to storage.
-
-Only flushes the key belonging to context's mission_id, preventing cross-mission contamination when handlers are shared.
-
-Parameters:
-
-- ##### **`context`**
-
-  (`ModuleContext`) – Module context containing storage strategy.
 
 #### flush_file_history
 
@@ -6614,26 +7720,6 @@ Parameters:
 Returns:
 
 - `list[CostData]` – List of filtered cost data entries, empty on failure.
-
-#### load_chat_history
-
-```python
-load_chat_history(context: ModuleContext) -> ChatHistory
-```
-
-Load chat history for the current session.
-
-Returns cached history on subsequent calls to avoid gRPC reads.
-
-Parameters:
-
-- ##### **`context`**
-
-  (`ModuleContext`) – Module context containing storage strategy.
-
-Returns:
-
-- `ChatHistory` – Chat history object, empty if none exists or loading fails.
 
 #### load_file_history
 
@@ -6775,35 +7861,13 @@ Raises:
 
 - `StorageServiceError` – If read operation fails
 
-#### save_send_message
-
-```python
-save_send_message(context: ModuleContext, output: OutputModelT, role: Role) -> None
-```
-
-Save output to chat history and send response to the module request.
-
-Parameters:
-
-- ##### **`context`**
-
-  (`ModuleContext`) – Module context containing storage strategy.
-
-- ##### **`role`**
-
-  (`Role`) – Message role (user, assistant, system).
-
-- ##### **`output`**
-
-  (`OutputModelT`) – Message content as Pydantic Class.
-
 #### send_message
 
 ```python
-send_message(context: ModuleContext, output: OutputModelT) -> None
+send_message(context: ModuleContext, event: BaseAgentRunEvent) -> None
 ```
 
-Send a message using the callbacks strategy.
+Convert agent event to AG-UI protocol and send via context callbacks.
 
 Parameters:
 
@@ -6811,417 +7875,9 @@ Parameters:
 
   (`ModuleContext`) – Module context containing the callbacks strategy.
 
-- ##### **`output`**
+- ##### **`event`**
 
-  (`OutputModelT`) – Message to send with the Module defined output Type.
-
-#### store_storage
-
-```python
-store_storage(
-    context: ModuleContext,
-    collection: str,
-    record_id: str | None,
-    data: dict[str, Any],
-    data_type: Literal["OUTPUT", "VIEW", "LOGS", "OTHER"] = "OUTPUT",
-) -> StorageRecord
-```
-
-Store data using the storage strategy.
-
-Parameters:
-
-- ##### **`context`**
-
-  (`ModuleContext`) – Module context containing the storage strategy
-
-- ##### **`collection`**
-
-  (`str`) – Collection name for the data
-
-- ##### **`record_id`**
-
-  (`str | None`) – Optional record identifier
-
-- ##### **`data`**
-
-  (`dict[str, Any]`) – Data to store
-
-- ##### **`data_type`**
-
-  (`Literal['OUTPUT', 'VIEW', 'LOGS', 'OTHER']`, default: `'OUTPUT'` ) – Type of data being stored
-
-Returns:
-
-- `StorageRecord` – Result from the storage strategy
-
-Raises:
-
-- `StorageServiceError` – If storage operation fails
-
-#### update_storage
-
-```python
-update_storage(
-    context: ModuleContext, collection: str, record_id: str, data: dict[str, Any]
-) -> StorageRecord | None
-```
-
-Update existing data in storage.
-
-Parameters:
-
-- ##### **`context`**
-
-  (`ModuleContext`) – Module context containing the storage strategy
-
-- ##### **`collection`**
-
-  (`str`) – Collection name
-
-- ##### **`record_id`**
-
-  (`str`) – Record identifier
-
-- ##### **`data`**
-
-  (`dict[str, Any]`) – Updated data
-
-Returns:
-
-- `StorageRecord | None` – Result from the storage strategy
-
-Raises:
-
-- `StorageServiceError` – If update operation fails
-
-#### upsert_storage
-
-```python
-upsert_storage(
-    context: ModuleContext,
-    collection: str,
-    record_id: str,
-    data: dict[str, Any],
-    data_type: Literal["OUTPUT", "VIEW", "LOGS", "OTHER"] = "OUTPUT",
-) -> StorageRecord
-```
-
-Insert or update data in storage atomically.
-
-Parameters:
-
-- ##### **`context`**
-
-  (`ModuleContext`) – Module context containing the storage strategy
-
-- ##### **`collection`**
-
-  (`str`) – Collection name
-
-- ##### **`record_id`**
-
-  (`str`) – Record identifier
-
-- ##### **`data`**
-
-  (`dict[str, Any]`) – Data to store or update
-
-- ##### **`data_type`**
-
-  (`Literal['OUTPUT', 'VIEW', 'LOGS', 'OTHER']`, default: `'OUTPUT'` ) – Type of data being stored
-
-Returns:
-
-- `StorageRecord` – The created or updated storage record
-
-Raises:
-
-- `StorageServiceError` – If upsert operation fails
-
-### ChatHistoryMixin
-
-```python
-ChatHistoryMixin()
-```
-
-```
-              flowchart TD
-              digitalkin.mixins.ChatHistoryMixin[ChatHistoryMixin]
-              digitalkin.mixins.callback_mixin.UserMessageMixin[UserMessageMixin]
-              digitalkin.mixins.storage_mixin.StorageMixin[StorageMixin]
-              digitalkin.mixins.logger_mixin.LoggerMixin[LoggerMixin]
-
-                              digitalkin.mixins.callback_mixin.UserMessageMixin --> digitalkin.mixins.ChatHistoryMixin
-                
-                digitalkin.mixins.storage_mixin.StorageMixin --> digitalkin.mixins.ChatHistoryMixin
-                
-                digitalkin.mixins.logger_mixin.LoggerMixin --> digitalkin.mixins.ChatHistoryMixin
-                
-
-
-              click digitalkin.mixins.ChatHistoryMixin href "" "digitalkin.mixins.ChatHistoryMixin"
-              click digitalkin.mixins.callback_mixin.UserMessageMixin href "" "digitalkin.mixins.callback_mixin.UserMessageMixin"
-              click digitalkin.mixins.storage_mixin.StorageMixin href "" "digitalkin.mixins.storage_mixin.StorageMixin"
-              click digitalkin.mixins.logger_mixin.LoggerMixin href "" "digitalkin.mixins.logger_mixin.LoggerMixin"
-```
-
-Mixin providing chat history operations through storage strategy.
-
-Chat histories are cached in memory after first load to avoid redundant gRPC reads. Known-persisted keys use update_storage (1 call) instead of upsert_storage (2 calls).
-
-Writes are batched: messages accumulate in the cache and are flushed when the batch threshold is reached or flush_chat_history() is called.
-
-Methods:
-
-- **`append_chat_history_message`** – Append a message to chat history.
-- **`clear_ch_mission_cache`** – Remove a mission's entries from in-memory caches after flush.
-- **`flush_chat_history`** – Flush the current mission's dirty chat history to storage.
-- **`load_chat_history`** – Load chat history for the current session.
-- **`log_debug`** – Log debug message using the callbacks strategy.
-- **`log_error`** – Log error message using the callbacks strategy.
-- **`log_info`** – Log info message using the callbacks strategy.
-- **`log_warning`** – Log warning message using the callbacks strategy.
-- **`read_storage`** – Read data from storage.
-- **`save_send_message`** – Save output to chat history and send response to the module request.
-- **`send_message`** – Send a message using the callbacks strategy.
-- **`store_storage`** – Store data using the storage strategy.
-- **`update_storage`** – Update existing data in storage.
-- **`upsert_storage`** – Insert or update data in storage atomically.
-
-#### append_chat_history_message
-
-```python
-append_chat_history_message(context: ModuleContext, role: Role, content: Any) -> None
-```
-
-Append a message to chat history.
-
-The message is added to the in-memory cache immediately. A storage write is deferred until the batch threshold is reached (default 10, env: DIGITALKIN_CHAT_HISTORY_FLUSH_THRESHOLD) or flush_chat_history().
-
-Parameters:
-
-- ##### **`context`**
-
-  (`ModuleContext`) – Module context containing storage strategy.
-
-- ##### **`role`**
-
-  (`Role`) – Message role (user, assistant, system).
-
-- ##### **`content`**
-
-  (`Any`) – Message content.
-
-#### clear_ch_mission_cache
-
-```python
-clear_ch_mission_cache(context: ModuleContext) -> None
-```
-
-Remove a mission's entries from in-memory caches after flush.
-
-Parameters:
-
-- ##### **`context`**
-
-  (`ModuleContext`) – Module context identifying the mission to clear.
-
-#### flush_chat_history
-
-```python
-flush_chat_history(context: ModuleContext) -> None
-```
-
-Flush the current mission's dirty chat history to storage.
-
-Only flushes the key belonging to context's mission_id, preventing cross-mission contamination when handlers are shared.
-
-Parameters:
-
-- ##### **`context`**
-
-  (`ModuleContext`) – Module context containing storage strategy.
-
-#### load_chat_history
-
-```python
-load_chat_history(context: ModuleContext) -> ChatHistory
-```
-
-Load chat history for the current session.
-
-Returns cached history on subsequent calls to avoid gRPC reads.
-
-Parameters:
-
-- ##### **`context`**
-
-  (`ModuleContext`) – Module context containing storage strategy.
-
-Returns:
-
-- `ChatHistory` – Chat history object, empty if none exists or loading fails.
-
-#### log_debug
-
-```python
-log_debug(context: ModuleContext, message: str, *args: Any) -> None
-```
-
-Log debug message using the callbacks strategy.
-
-Parameters:
-
-- ##### **`context`**
-
-  (`ModuleContext`) – Module context containing the callbacks strategy
-
-- ##### **`message`**
-
-  (`str`) – Debug message to log (supports %s lazy formatting)
-
-- ##### **`*args`**
-
-  (`Any`, default: `()` ) – Format arguments for lazy string interpolation
-
-#### log_error
-
-```python
-log_error(context: ModuleContext, message: str, *args: Any) -> None
-```
-
-Log error message using the callbacks strategy.
-
-Parameters:
-
-- ##### **`context`**
-
-  (`ModuleContext`) – Module context containing the callbacks strategy
-
-- ##### **`message`**
-
-  (`str`) – Error message to log (supports %s lazy formatting)
-
-- ##### **`*args`**
-
-  (`Any`, default: `()` ) – Format arguments for lazy string interpolation
-
-#### log_info
-
-```python
-log_info(context: ModuleContext, message: str, *args: Any) -> None
-```
-
-Log info message using the callbacks strategy.
-
-Parameters:
-
-- ##### **`context`**
-
-  (`ModuleContext`) – Module context containing the callbacks strategy
-
-- ##### **`message`**
-
-  (`str`) – Info message to log (supports %s lazy formatting)
-
-- ##### **`*args`**
-
-  (`Any`, default: `()` ) – Format arguments for lazy string interpolation
-
-#### log_warning
-
-```python
-log_warning(context: ModuleContext, message: str, *args: Any) -> None
-```
-
-Log warning message using the callbacks strategy.
-
-Parameters:
-
-- ##### **`context`**
-
-  (`ModuleContext`) – Module context containing the callbacks strategy
-
-- ##### **`message`**
-
-  (`str`) – Warning message to log (supports %s lazy formatting)
-
-- ##### **`*args`**
-
-  (`Any`, default: `()` ) – Format arguments for lazy string interpolation
-
-#### read_storage
-
-```python
-read_storage(
-    context: ModuleContext, collection: str, record_id: str
-) -> StorageRecord | None
-```
-
-Read data from storage.
-
-Parameters:
-
-- ##### **`context`**
-
-  (`ModuleContext`) – Module context containing the storage strategy
-
-- ##### **`collection`**
-
-  (`str`) – Collection name
-
-- ##### **`record_id`**
-
-  (`str`) – Record identifier
-
-Returns:
-
-- `StorageRecord | None` – Retrieved data
-
-Raises:
-
-- `StorageServiceError` – If read operation fails
-
-#### save_send_message
-
-```python
-save_send_message(context: ModuleContext, output: OutputModelT, role: Role) -> None
-```
-
-Save output to chat history and send response to the module request.
-
-Parameters:
-
-- ##### **`context`**
-
-  (`ModuleContext`) – Module context containing storage strategy.
-
-- ##### **`role`**
-
-  (`Role`) – Message role (user, assistant, system).
-
-- ##### **`output`**
-
-  (`OutputModelT`) – Message content as Pydantic Class.
-
-#### send_message
-
-```python
-send_message(context: ModuleContext, output: OutputModelT) -> None
-```
-
-Send a message using the callbacks strategy.
-
-Parameters:
-
-- ##### **`context`**
-
-  (`ModuleContext`) – Module context containing the callbacks strategy.
-
-- ##### **`output`**
-
-  (`OutputModelT`) – Message to send with the Module defined output Type.
+  (`BaseAgentRunEvent`) – Agent run event to process and convert.
 
 #### store_storage
 
@@ -7777,42 +8433,58 @@ Raises:
 
 - `StorageServiceError` – If upsert operation fails
 
-### UserMessageMixin
+### agui_mixin
 
+AG-UI event streaming mixin for DigitalKin modules.
+
+This mixin provides utilities to convert framework-agnostic agent events into AG-UI protocol events and send them through the module context callbacks.
+
+The mixin is a stateless emitter: it receives events with all necessary info (including IDs) and emits the corresponding AG-UI protocol events. All state management (ID generation, lifecycle tracking) belongs in the adapter layer.
+
+Classes:
+
+- **`AgUiMixin`** – Mixin for converting agent events to AG-UI protocol and sending them.
+
+#### AgUiMixin
+
+```python
+AgUiMixin()
 ```
-              flowchart TD
-              digitalkin.mixins.UserMessageMixin[UserMessageMixin]
 
-              
+Mixin for converting agent events to AG-UI protocol and sending them.
 
-              click digitalkin.mixins.UserMessageMixin href "" "digitalkin.mixins.UserMessageMixin"
+This mixin is a stateless emitter: each handler reads IDs from the event and emits the corresponding AG-UI event(s). The adapter is responsible for generating IDs and managing event lifecycle (start/complete sequences).
+
+Usage::
+
+```text
+class MyTrigger(BaseTrigger, AgUiMixin):
+    async def execute(self, context, input_data):
+        async for event in agent.run(input_data.message, stream=True):
+            await self.agui_send_message(context, event)
 ```
-
-Mixin providing callback operations through the callbacks .
-
-This mixin wraps callback strategy calls to provide a cleaner API for direct messaging in trigger handlers.
 
 Methods:
 
-- **`send_message`** – Send a message using the callbacks strategy.
+- **`send_message`** – Convert agent event to AG-UI protocol and send via context callbacks.
 
-#### send_message
+##### send_message
 
 ```python
-send_message(context: ModuleContext, output: OutputModelT) -> None
+send_message(context: ModuleContext, event: BaseAgentRunEvent) -> None
 ```
 
-Send a message using the callbacks strategy.
+Convert agent event to AG-UI protocol and send via context callbacks.
 
 Parameters:
 
-- ##### **`context`**
+- ###### **`context`**
 
   (`ModuleContext`) – Module context containing the callbacks strategy.
 
-- ##### **`output`**
+- ###### **`event`**
 
-  (`OutputModelT`) – Message to send with the Module defined output Type.
+  (`BaseAgentRunEvent`) – Agent run event to process and convert.
 
 ### base_mixin
 
@@ -7832,22 +8504,15 @@ BaseMixin()
               flowchart TD
               digitalkin.mixins.base_mixin.BaseMixin[BaseMixin]
               digitalkin.mixins.cost_mixin.CostMixin[CostMixin]
-              digitalkin.mixins.chat_history_mixin.ChatHistoryMixin[ChatHistoryMixin]
-              digitalkin.mixins.callback_mixin.UserMessageMixin[UserMessageMixin]
+              digitalkin.mixins.agui_mixin.AgUiMixin[AgUiMixin]
               digitalkin.mixins.file_history_mixin.FileHistoryMixin[FileHistoryMixin]
               digitalkin.mixins.storage_mixin.StorageMixin[StorageMixin]
               digitalkin.mixins.logger_mixin.LoggerMixin[LoggerMixin]
 
                               digitalkin.mixins.cost_mixin.CostMixin --> digitalkin.mixins.base_mixin.BaseMixin
                 
-                digitalkin.mixins.chat_history_mixin.ChatHistoryMixin --> digitalkin.mixins.base_mixin.BaseMixin
-                                digitalkin.mixins.callback_mixin.UserMessageMixin --> digitalkin.mixins.chat_history_mixin.ChatHistoryMixin
+                digitalkin.mixins.agui_mixin.AgUiMixin --> digitalkin.mixins.base_mixin.BaseMixin
                 
-                digitalkin.mixins.storage_mixin.StorageMixin --> digitalkin.mixins.chat_history_mixin.ChatHistoryMixin
-                
-                digitalkin.mixins.logger_mixin.LoggerMixin --> digitalkin.mixins.chat_history_mixin.ChatHistoryMixin
-                
-
                 digitalkin.mixins.file_history_mixin.FileHistoryMixin --> digitalkin.mixins.base_mixin.BaseMixin
                                 digitalkin.mixins.storage_mixin.StorageMixin --> digitalkin.mixins.file_history_mixin.FileHistoryMixin
                 
@@ -7860,8 +8525,7 @@ BaseMixin()
 
               click digitalkin.mixins.base_mixin.BaseMixin href "" "digitalkin.mixins.base_mixin.BaseMixin"
               click digitalkin.mixins.cost_mixin.CostMixin href "" "digitalkin.mixins.cost_mixin.CostMixin"
-              click digitalkin.mixins.chat_history_mixin.ChatHistoryMixin href "" "digitalkin.mixins.chat_history_mixin.ChatHistoryMixin"
-              click digitalkin.mixins.callback_mixin.UserMessageMixin href "" "digitalkin.mixins.callback_mixin.UserMessageMixin"
+              click digitalkin.mixins.agui_mixin.AgUiMixin href "" "digitalkin.mixins.agui_mixin.AgUiMixin"
               click digitalkin.mixins.file_history_mixin.FileHistoryMixin href "" "digitalkin.mixins.file_history_mixin.FileHistoryMixin"
               click digitalkin.mixins.storage_mixin.StorageMixin href "" "digitalkin.mixins.storage_mixin.StorageMixin"
               click digitalkin.mixins.logger_mixin.LoggerMixin href "" "digitalkin.mixins.logger_mixin.LoggerMixin"
@@ -7872,23 +8536,18 @@ Base Mixin to access to minimum Module Context functionnalities in the Triggers.
 Methods:
 
 - **`add_cost`** – Add a cost entry using the cost strategy.
-- **`append_chat_history_message`** – Append a message to chat history.
 - **`append_files_history`** – Append files to file history.
-- **`clear_ch_mission_cache`** – Remove a mission's entries from in-memory caches after flush.
 - **`clear_fh_mission_cache`** – Remove a mission's entries from in-memory caches after flush.
-- **`flush_chat_history`** – Flush the current mission's dirty chat history to storage.
 - **`flush_file_history`** – Flush the current mission's dirty file history to storage.
 - **`get_cost`** – Get cost entries for a specific name.
 - **`get_costs`** – Get filtered cost entries.
-- **`load_chat_history`** – Load chat history for the current session.
 - **`load_file_history`** – Load file history for the current session.
 - **`log_debug`** – Log debug message using the callbacks strategy.
 - **`log_error`** – Log error message using the callbacks strategy.
 - **`log_info`** – Log info message using the callbacks strategy.
 - **`log_warning`** – Log warning message using the callbacks strategy.
 - **`read_storage`** – Read data from storage.
-- **`save_send_message`** – Save output to chat history and send response to the module request.
-- **`send_message`** – Send a message using the callbacks strategy.
+- **`send_message`** – Convert agent event to AG-UI protocol and send via context callbacks.
 - **`store_storage`** – Store data using the storage strategy.
 - **`update_storage`** – Update existing data in storage.
 - **`upsert_storage`** – Insert or update data in storage atomically.
@@ -7921,30 +8580,6 @@ Parameters:
 
   (`float`) – Quantity of units consumed.
 
-##### append_chat_history_message
-
-```python
-append_chat_history_message(context: ModuleContext, role: Role, content: Any) -> None
-```
-
-Append a message to chat history.
-
-The message is added to the in-memory cache immediately. A storage write is deferred until the batch threshold is reached (default 10, env: DIGITALKIN_CHAT_HISTORY_FLUSH_THRESHOLD) or flush_chat_history().
-
-Parameters:
-
-- ###### **`context`**
-
-  (`ModuleContext`) – Module context containing storage strategy.
-
-- ###### **`role`**
-
-  (`Role`) – Message role (user, assistant, system).
-
-- ###### **`content`**
-
-  (`Any`) – Message content.
-
 ##### append_files_history
 
 ```python
@@ -7965,20 +8600,6 @@ Parameters:
 
   (`list[FileModel]`) – List of file models to append.
 
-##### clear_ch_mission_cache
-
-```python
-clear_ch_mission_cache(context: ModuleContext) -> None
-```
-
-Remove a mission's entries from in-memory caches after flush.
-
-Parameters:
-
-- ###### **`context`**
-
-  (`ModuleContext`) – Module context identifying the mission to clear.
-
 ##### clear_fh_mission_cache
 
 ```python
@@ -7992,22 +8613,6 @@ Parameters:
 - ###### **`context`**
 
   (`ModuleContext`) – Module context identifying the mission to clear.
-
-##### flush_chat_history
-
-```python
-flush_chat_history(context: ModuleContext) -> None
-```
-
-Flush the current mission's dirty chat history to storage.
-
-Only flushes the key belonging to context's mission_id, preventing cross-mission contamination when handlers are shared.
-
-Parameters:
-
-- ###### **`context`**
-
-  (`ModuleContext`) – Module context containing storage strategy.
 
 ##### flush_file_history
 
@@ -8079,26 +8684,6 @@ Parameters:
 Returns:
 
 - `list[CostData]` – List of filtered cost data entries, empty on failure.
-
-##### load_chat_history
-
-```python
-load_chat_history(context: ModuleContext) -> ChatHistory
-```
-
-Load chat history for the current session.
-
-Returns cached history on subsequent calls to avoid gRPC reads.
-
-Parameters:
-
-- ###### **`context`**
-
-  (`ModuleContext`) – Module context containing storage strategy.
-
-Returns:
-
-- `ChatHistory` – Chat history object, empty if none exists or loading fails.
 
 ##### load_file_history
 
@@ -8240,35 +8825,13 @@ Raises:
 
 - `StorageServiceError` – If read operation fails
 
-##### save_send_message
-
-```python
-save_send_message(context: ModuleContext, output: OutputModelT, role: Role) -> None
-```
-
-Save output to chat history and send response to the module request.
-
-Parameters:
-
-- ###### **`context`**
-
-  (`ModuleContext`) – Module context containing storage strategy.
-
-- ###### **`role`**
-
-  (`Role`) – Message role (user, assistant, system).
-
-- ###### **`output`**
-
-  (`OutputModelT`) – Message content as Pydantic Class.
-
 ##### send_message
 
 ```python
-send_message(context: ModuleContext, output: OutputModelT) -> None
+send_message(context: ModuleContext, event: BaseAgentRunEvent) -> None
 ```
 
-Send a message using the callbacks strategy.
+Convert agent event to AG-UI protocol and send via context callbacks.
 
 Parameters:
 
@@ -8276,9 +8839,9 @@ Parameters:
 
   (`ModuleContext`) – Module context containing the callbacks strategy.
 
-- ###### **`output`**
+- ###### **`event`**
 
-  (`OutputModelT`) – Message to send with the Module defined output Type.
+  (`BaseAgentRunEvent`) – Agent run event to process and convert.
 
 ##### store_storage
 
@@ -8408,9 +8971,11 @@ Raises:
 
 User callback to send a message from the Trigger.
 
+.. deprecated:: Use :class:`digitalkin.mixins.agui_mixin.AgUiMixin` instead.
+
 Classes:
 
-- **`UserMessageMixin`** – Mixin providing callback operations through the callbacks .
+- **`UserMessageMixin`** – Mixin providing callback operations through the callbacks.
 
 #### UserMessageMixin
 
@@ -8423,13 +8988,22 @@ Classes:
               click digitalkin.mixins.callback_mixin.UserMessageMixin href "" "digitalkin.mixins.callback_mixin.UserMessageMixin"
 ```
 
-Mixin providing callback operations through the callbacks .
+Mixin providing callback operations through the callbacks.
 
-This mixin wraps callback strategy calls to provide a cleaner API for direct messaging in trigger handlers.
+.. deprecated:: Use :class:`digitalkin.mixins.agui_mixin.AgUiMixin` instead.
 
 Methods:
 
+- **`__init_subclass__`** – Deprecated warning.
 - **`send_message`** – Send a message using the callbacks strategy.
+
+##### __init_subclass__
+
+```python
+__init_subclass__(**kwargs: Any) -> None
+```
+
+Deprecated warning.
 
 ##### send_message
 
@@ -8453,7 +9027,7 @@ Parameters:
 
 Context mixins providing ergonomic access to service strategies.
 
-This module provides mixins that wrap service strategy calls with cleaner APIs, following Django/FastAPI patterns where context is passed explicitly to each method.
+.. deprecated:: Use :class:`digitalkin.mixins.agui_mixin.AgUiMixin` instead.
 
 Classes:
 
@@ -8488,12 +9062,11 @@ ChatHistoryMixin()
 
 Mixin providing chat history operations through storage strategy.
 
-Chat histories are cached in memory after first load to avoid redundant gRPC reads. Known-persisted keys use update_storage (1 call) instead of upsert_storage (2 calls).
-
-Writes are batched: messages accumulate in the cache and are flushed when the batch threshold is reached or flush_chat_history() is called.
+.. deprecated:: Use :class:`digitalkin.mixins.agui_mixin.AgUiMixin` instead.
 
 Methods:
 
+- **`__init_subclass__`** – Deprecated warning.
 - **`append_chat_history_message`** – Append a message to chat history.
 - **`clear_ch_mission_cache`** – Remove a mission's entries from in-memory caches after flush.
 - **`flush_chat_history`** – Flush the current mission's dirty chat history to storage.
@@ -8508,6 +9081,14 @@ Methods:
 - **`store_storage`** – Store data using the storage strategy.
 - **`update_storage`** – Update existing data in storage.
 - **`upsert_storage`** – Insert or update data in storage atomically.
+
+##### __init_subclass__
+
+```python
+__init_subclass__(**kwargs: Any) -> None
+```
+
+Deprecated warning.
 
 ##### append_chat_history_message
 
@@ -9704,14 +10285,64 @@ This package contains the models for DigitalKin.
 Modules:
 
 - **`core`** – Core models.
+- **`events`** – Agent run event models for DigitalKin.
 - **`grpc_servers`** – Base gRPC server and client models.
 - **`module`** – This module contains the models for the modules.
 - **`services`** – This module contains the models for the services.
+- **`settings`** – This package contain settings of sdk.
 
 Classes:
 
+- **`AgentRunEvent`** – Agent run event types.
+- **`BaseAgentRunEvent`** – Base class for all agent run events.
 - **`Module`** – Module model.
 - **`ModuleStatus`** – Possible module's state.
+- **`ReasoningCompletedEvent`** – Event emitted when a reasoning phase completes.
+- **`ReasoningContentDeltaEvent`** – Event emitted during extended thinking/reasoning phases.
+- **`ReasoningStartedEvent`** – Event emitted when a reasoning phase starts.
+- **`ReasoningStepEvent`** – Event emitted for intermediate reasoning steps.
+- **`RunCompletedEvent`** – Event emitted when an agent run completes successfully.
+- **`RunContentEvent`** – Event emitted when the agent produces content (text, reasoning, etc.).
+- **`RunErrorEvent`** – Event emitted when an agent run encounters an error.
+- **`RunStartedEvent`** – Event emitted when an agent run starts.
+- **`ToolCallCompletedEvent`** – Event emitted when a tool call completes successfully.
+- **`ToolCallErrorEvent`** – Event emitted when a tool call encounters an error.
+- **`ToolCallStartedEvent`** – Event emitted when a tool call starts.
+- **`ToolInfo`** – Information about a tool call.
+
+### AgentRunEvent
+
+```
+              flowchart TD
+              digitalkin.models.AgentRunEvent[AgentRunEvent]
+
+              
+
+              click digitalkin.models.AgentRunEvent href "" "digitalkin.models.AgentRunEvent"
+```
+
+Agent run event types.
+
+### BaseAgentRunEvent
+
+```
+              flowchart TD
+              digitalkin.models.BaseAgentRunEvent[BaseAgentRunEvent]
+
+              
+
+              click digitalkin.models.BaseAgentRunEvent href "" "digitalkin.models.BaseAgentRunEvent"
+```
+
+Base class for all agent run events.
+
+Classes:
+
+- **`Config`** – Pydantic configuration.
+
+#### Config
+
+Pydantic configuration.
 
 ### Module
 
@@ -9738,6 +10369,294 @@ Module model.
 ```
 
 Possible module's state.
+
+### ReasoningCompletedEvent
+
+```
+              flowchart TD
+              digitalkin.models.ReasoningCompletedEvent[ReasoningCompletedEvent]
+              digitalkin.models.events.agent_events.BaseAgentRunEvent[BaseAgentRunEvent]
+
+                              digitalkin.models.events.agent_events.BaseAgentRunEvent --> digitalkin.models.ReasoningCompletedEvent
+                
+
+
+              click digitalkin.models.ReasoningCompletedEvent href "" "digitalkin.models.ReasoningCompletedEvent"
+              click digitalkin.models.events.agent_events.BaseAgentRunEvent href "" "digitalkin.models.events.agent_events.BaseAgentRunEvent"
+```
+
+Event emitted when a reasoning phase completes.
+
+Classes:
+
+- **`Config`** – Pydantic configuration.
+
+#### Config
+
+Pydantic configuration.
+
+### ReasoningContentDeltaEvent
+
+```
+              flowchart TD
+              digitalkin.models.ReasoningContentDeltaEvent[ReasoningContentDeltaEvent]
+              digitalkin.models.events.agent_events.BaseAgentRunEvent[BaseAgentRunEvent]
+
+                              digitalkin.models.events.agent_events.BaseAgentRunEvent --> digitalkin.models.ReasoningContentDeltaEvent
+                
+
+
+              click digitalkin.models.ReasoningContentDeltaEvent href "" "digitalkin.models.ReasoningContentDeltaEvent"
+              click digitalkin.models.events.agent_events.BaseAgentRunEvent href "" "digitalkin.models.events.agent_events.BaseAgentRunEvent"
+```
+
+Event emitted during extended thinking/reasoning phases.
+
+Classes:
+
+- **`Config`** – Pydantic configuration.
+
+#### Config
+
+Pydantic configuration.
+
+### ReasoningStartedEvent
+
+```
+              flowchart TD
+              digitalkin.models.ReasoningStartedEvent[ReasoningStartedEvent]
+              digitalkin.models.events.agent_events.BaseAgentRunEvent[BaseAgentRunEvent]
+
+                              digitalkin.models.events.agent_events.BaseAgentRunEvent --> digitalkin.models.ReasoningStartedEvent
+                
+
+
+              click digitalkin.models.ReasoningStartedEvent href "" "digitalkin.models.ReasoningStartedEvent"
+              click digitalkin.models.events.agent_events.BaseAgentRunEvent href "" "digitalkin.models.events.agent_events.BaseAgentRunEvent"
+```
+
+Event emitted when a reasoning phase starts.
+
+Classes:
+
+- **`Config`** – Pydantic configuration.
+
+#### Config
+
+Pydantic configuration.
+
+### ReasoningStepEvent
+
+```
+              flowchart TD
+              digitalkin.models.ReasoningStepEvent[ReasoningStepEvent]
+              digitalkin.models.events.agent_events.BaseAgentRunEvent[BaseAgentRunEvent]
+
+                              digitalkin.models.events.agent_events.BaseAgentRunEvent --> digitalkin.models.ReasoningStepEvent
+                
+
+
+              click digitalkin.models.ReasoningStepEvent href "" "digitalkin.models.ReasoningStepEvent"
+              click digitalkin.models.events.agent_events.BaseAgentRunEvent href "" "digitalkin.models.events.agent_events.BaseAgentRunEvent"
+```
+
+Event emitted for intermediate reasoning steps.
+
+Classes:
+
+- **`Config`** – Pydantic configuration.
+
+#### Config
+
+Pydantic configuration.
+
+### RunCompletedEvent
+
+```
+              flowchart TD
+              digitalkin.models.RunCompletedEvent[RunCompletedEvent]
+              digitalkin.models.events.agent_events.BaseAgentRunEvent[BaseAgentRunEvent]
+
+                              digitalkin.models.events.agent_events.BaseAgentRunEvent --> digitalkin.models.RunCompletedEvent
+                
+
+
+              click digitalkin.models.RunCompletedEvent href "" "digitalkin.models.RunCompletedEvent"
+              click digitalkin.models.events.agent_events.BaseAgentRunEvent href "" "digitalkin.models.events.agent_events.BaseAgentRunEvent"
+```
+
+Event emitted when an agent run completes successfully.
+
+Classes:
+
+- **`Config`** – Pydantic configuration.
+
+#### Config
+
+Pydantic configuration.
+
+### RunContentEvent
+
+```
+              flowchart TD
+              digitalkin.models.RunContentEvent[RunContentEvent]
+              digitalkin.models.events.agent_events.BaseAgentRunEvent[BaseAgentRunEvent]
+
+                              digitalkin.models.events.agent_events.BaseAgentRunEvent --> digitalkin.models.RunContentEvent
+                
+
+
+              click digitalkin.models.RunContentEvent href "" "digitalkin.models.RunContentEvent"
+              click digitalkin.models.events.agent_events.BaseAgentRunEvent href "" "digitalkin.models.events.agent_events.BaseAgentRunEvent"
+```
+
+Event emitted when the agent produces content (text, reasoning, etc.).
+
+Classes:
+
+- **`Config`** – Pydantic configuration.
+
+#### Config
+
+Pydantic configuration.
+
+### RunErrorEvent
+
+```
+              flowchart TD
+              digitalkin.models.RunErrorEvent[RunErrorEvent]
+              digitalkin.models.events.agent_events.BaseAgentRunEvent[BaseAgentRunEvent]
+
+                              digitalkin.models.events.agent_events.BaseAgentRunEvent --> digitalkin.models.RunErrorEvent
+                
+
+
+              click digitalkin.models.RunErrorEvent href "" "digitalkin.models.RunErrorEvent"
+              click digitalkin.models.events.agent_events.BaseAgentRunEvent href "" "digitalkin.models.events.agent_events.BaseAgentRunEvent"
+```
+
+Event emitted when an agent run encounters an error.
+
+Classes:
+
+- **`Config`** – Pydantic configuration.
+
+#### Config
+
+Pydantic configuration.
+
+### RunStartedEvent
+
+```
+              flowchart TD
+              digitalkin.models.RunStartedEvent[RunStartedEvent]
+              digitalkin.models.events.agent_events.BaseAgentRunEvent[BaseAgentRunEvent]
+
+                              digitalkin.models.events.agent_events.BaseAgentRunEvent --> digitalkin.models.RunStartedEvent
+                
+
+
+              click digitalkin.models.RunStartedEvent href "" "digitalkin.models.RunStartedEvent"
+              click digitalkin.models.events.agent_events.BaseAgentRunEvent href "" "digitalkin.models.events.agent_events.BaseAgentRunEvent"
+```
+
+Event emitted when an agent run starts.
+
+Classes:
+
+- **`Config`** – Pydantic configuration.
+
+#### Config
+
+Pydantic configuration.
+
+### ToolCallCompletedEvent
+
+```
+              flowchart TD
+              digitalkin.models.ToolCallCompletedEvent[ToolCallCompletedEvent]
+              digitalkin.models.events.agent_events.BaseAgentRunEvent[BaseAgentRunEvent]
+
+                              digitalkin.models.events.agent_events.BaseAgentRunEvent --> digitalkin.models.ToolCallCompletedEvent
+                
+
+
+              click digitalkin.models.ToolCallCompletedEvent href "" "digitalkin.models.ToolCallCompletedEvent"
+              click digitalkin.models.events.agent_events.BaseAgentRunEvent href "" "digitalkin.models.events.agent_events.BaseAgentRunEvent"
+```
+
+Event emitted when a tool call completes successfully.
+
+Classes:
+
+- **`Config`** – Pydantic configuration.
+
+#### Config
+
+Pydantic configuration.
+
+### ToolCallErrorEvent
+
+```
+              flowchart TD
+              digitalkin.models.ToolCallErrorEvent[ToolCallErrorEvent]
+              digitalkin.models.events.agent_events.BaseAgentRunEvent[BaseAgentRunEvent]
+
+                              digitalkin.models.events.agent_events.BaseAgentRunEvent --> digitalkin.models.ToolCallErrorEvent
+                
+
+
+              click digitalkin.models.ToolCallErrorEvent href "" "digitalkin.models.ToolCallErrorEvent"
+              click digitalkin.models.events.agent_events.BaseAgentRunEvent href "" "digitalkin.models.events.agent_events.BaseAgentRunEvent"
+```
+
+Event emitted when a tool call encounters an error.
+
+Classes:
+
+- **`Config`** – Pydantic configuration.
+
+#### Config
+
+Pydantic configuration.
+
+### ToolCallStartedEvent
+
+```
+              flowchart TD
+              digitalkin.models.ToolCallStartedEvent[ToolCallStartedEvent]
+              digitalkin.models.events.agent_events.BaseAgentRunEvent[BaseAgentRunEvent]
+
+                              digitalkin.models.events.agent_events.BaseAgentRunEvent --> digitalkin.models.ToolCallStartedEvent
+                
+
+
+              click digitalkin.models.ToolCallStartedEvent href "" "digitalkin.models.ToolCallStartedEvent"
+              click digitalkin.models.events.agent_events.BaseAgentRunEvent href "" "digitalkin.models.events.agent_events.BaseAgentRunEvent"
+```
+
+Event emitted when a tool call starts.
+
+Classes:
+
+- **`Config`** – Pydantic configuration.
+
+#### Config
+
+Pydantic configuration.
+
+### ToolInfo
+
+```
+              flowchart TD
+              digitalkin.models.ToolInfo[ToolInfo]
+
+              
+
+              click digitalkin.models.ToolInfo href "" "digitalkin.models.ToolInfo"
+```
+
+Information about a tool call.
 
 ### core
 
@@ -9861,6 +10780,860 @@ Signal message model for task monitoring.
 
 Signal type enumeration.
 
+### events
+
+Agent run event models for DigitalKin.
+
+This module provides framework-agnostic event models for agent runs. These models can be used as a common interface across different AI frameworks.
+
+Modules:
+
+- **`agent_events`** – Framework-agnostic agent run event models.
+
+Classes:
+
+- **`AgentRunEvent`** – Agent run event types.
+- **`BaseAgentRunEvent`** – Base class for all agent run events.
+- **`CustomEvent`** – Event emitted for application-defined custom events.
+- **`ReasoningCompletedEvent`** – Event emitted when a reasoning phase completes.
+- **`ReasoningContentDeltaEvent`** – Event emitted during extended thinking/reasoning phases.
+- **`ReasoningStartedEvent`** – Event emitted when a reasoning phase starts.
+- **`ReasoningStepEvent`** – Event emitted for intermediate reasoning steps.
+- **`RunCompletedEvent`** – Event emitted when an agent run completes successfully.
+- **`RunContentEvent`** – Event emitted when the agent produces content (text, reasoning, etc.).
+- **`RunErrorEvent`** – Event emitted when an agent run encounters an error.
+- **`RunStartedEvent`** – Event emitted when an agent run starts.
+- **`TextMessageCompletedEvent`** – Event emitted when a text message sequence ends.
+- **`TextMessageStartedEvent`** – Event emitted when a new text message sequence begins.
+- **`ToolCallCompletedEvent`** – Event emitted when a tool call completes successfully.
+- **`ToolCallErrorEvent`** – Event emitted when a tool call encounters an error.
+- **`ToolCallStartedEvent`** – Event emitted when a tool call starts.
+- **`ToolInfo`** – Information about a tool call.
+
+#### AgentRunEvent
+
+```
+              flowchart TD
+              digitalkin.models.events.AgentRunEvent[AgentRunEvent]
+
+              
+
+              click digitalkin.models.events.AgentRunEvent href "" "digitalkin.models.events.AgentRunEvent"
+```
+
+Agent run event types.
+
+#### BaseAgentRunEvent
+
+```
+              flowchart TD
+              digitalkin.models.events.BaseAgentRunEvent[BaseAgentRunEvent]
+
+              
+
+              click digitalkin.models.events.BaseAgentRunEvent href "" "digitalkin.models.events.BaseAgentRunEvent"
+```
+
+Base class for all agent run events.
+
+Classes:
+
+- **`Config`** – Pydantic configuration.
+
+##### Config
+
+Pydantic configuration.
+
+#### CustomEvent
+
+```
+              flowchart TD
+              digitalkin.models.events.CustomEvent[CustomEvent]
+              digitalkin.models.events.agent_events.BaseAgentRunEvent[BaseAgentRunEvent]
+
+                              digitalkin.models.events.agent_events.BaseAgentRunEvent --> digitalkin.models.events.CustomEvent
+                
+
+
+              click digitalkin.models.events.CustomEvent href "" "digitalkin.models.events.CustomEvent"
+              click digitalkin.models.events.agent_events.BaseAgentRunEvent href "" "digitalkin.models.events.agent_events.BaseAgentRunEvent"
+```
+
+Event emitted for application-defined custom events.
+
+Carries an application-specific `name` that discriminates the custom event subtype and a free-form `value` payload for metadata transfer.
+
+Classes:
+
+- **`Config`** – Pydantic configuration.
+
+##### Config
+
+Pydantic configuration.
+
+#### ReasoningCompletedEvent
+
+```
+              flowchart TD
+              digitalkin.models.events.ReasoningCompletedEvent[ReasoningCompletedEvent]
+              digitalkin.models.events.agent_events.BaseAgentRunEvent[BaseAgentRunEvent]
+
+                              digitalkin.models.events.agent_events.BaseAgentRunEvent --> digitalkin.models.events.ReasoningCompletedEvent
+                
+
+
+              click digitalkin.models.events.ReasoningCompletedEvent href "" "digitalkin.models.events.ReasoningCompletedEvent"
+              click digitalkin.models.events.agent_events.BaseAgentRunEvent href "" "digitalkin.models.events.agent_events.BaseAgentRunEvent"
+```
+
+Event emitted when a reasoning phase completes.
+
+Classes:
+
+- **`Config`** – Pydantic configuration.
+
+##### Config
+
+Pydantic configuration.
+
+#### ReasoningContentDeltaEvent
+
+```
+              flowchart TD
+              digitalkin.models.events.ReasoningContentDeltaEvent[ReasoningContentDeltaEvent]
+              digitalkin.models.events.agent_events.BaseAgentRunEvent[BaseAgentRunEvent]
+
+                              digitalkin.models.events.agent_events.BaseAgentRunEvent --> digitalkin.models.events.ReasoningContentDeltaEvent
+                
+
+
+              click digitalkin.models.events.ReasoningContentDeltaEvent href "" "digitalkin.models.events.ReasoningContentDeltaEvent"
+              click digitalkin.models.events.agent_events.BaseAgentRunEvent href "" "digitalkin.models.events.agent_events.BaseAgentRunEvent"
+```
+
+Event emitted during extended thinking/reasoning phases.
+
+Classes:
+
+- **`Config`** – Pydantic configuration.
+
+##### Config
+
+Pydantic configuration.
+
+#### ReasoningStartedEvent
+
+```
+              flowchart TD
+              digitalkin.models.events.ReasoningStartedEvent[ReasoningStartedEvent]
+              digitalkin.models.events.agent_events.BaseAgentRunEvent[BaseAgentRunEvent]
+
+                              digitalkin.models.events.agent_events.BaseAgentRunEvent --> digitalkin.models.events.ReasoningStartedEvent
+                
+
+
+              click digitalkin.models.events.ReasoningStartedEvent href "" "digitalkin.models.events.ReasoningStartedEvent"
+              click digitalkin.models.events.agent_events.BaseAgentRunEvent href "" "digitalkin.models.events.agent_events.BaseAgentRunEvent"
+```
+
+Event emitted when a reasoning phase starts.
+
+Classes:
+
+- **`Config`** – Pydantic configuration.
+
+##### Config
+
+Pydantic configuration.
+
+#### ReasoningStepEvent
+
+```
+              flowchart TD
+              digitalkin.models.events.ReasoningStepEvent[ReasoningStepEvent]
+              digitalkin.models.events.agent_events.BaseAgentRunEvent[BaseAgentRunEvent]
+
+                              digitalkin.models.events.agent_events.BaseAgentRunEvent --> digitalkin.models.events.ReasoningStepEvent
+                
+
+
+              click digitalkin.models.events.ReasoningStepEvent href "" "digitalkin.models.events.ReasoningStepEvent"
+              click digitalkin.models.events.agent_events.BaseAgentRunEvent href "" "digitalkin.models.events.agent_events.BaseAgentRunEvent"
+```
+
+Event emitted for intermediate reasoning steps.
+
+Classes:
+
+- **`Config`** – Pydantic configuration.
+
+##### Config
+
+Pydantic configuration.
+
+#### RunCompletedEvent
+
+```
+              flowchart TD
+              digitalkin.models.events.RunCompletedEvent[RunCompletedEvent]
+              digitalkin.models.events.agent_events.BaseAgentRunEvent[BaseAgentRunEvent]
+
+                              digitalkin.models.events.agent_events.BaseAgentRunEvent --> digitalkin.models.events.RunCompletedEvent
+                
+
+
+              click digitalkin.models.events.RunCompletedEvent href "" "digitalkin.models.events.RunCompletedEvent"
+              click digitalkin.models.events.agent_events.BaseAgentRunEvent href "" "digitalkin.models.events.agent_events.BaseAgentRunEvent"
+```
+
+Event emitted when an agent run completes successfully.
+
+Classes:
+
+- **`Config`** – Pydantic configuration.
+
+##### Config
+
+Pydantic configuration.
+
+#### RunContentEvent
+
+```
+              flowchart TD
+              digitalkin.models.events.RunContentEvent[RunContentEvent]
+              digitalkin.models.events.agent_events.BaseAgentRunEvent[BaseAgentRunEvent]
+
+                              digitalkin.models.events.agent_events.BaseAgentRunEvent --> digitalkin.models.events.RunContentEvent
+                
+
+
+              click digitalkin.models.events.RunContentEvent href "" "digitalkin.models.events.RunContentEvent"
+              click digitalkin.models.events.agent_events.BaseAgentRunEvent href "" "digitalkin.models.events.agent_events.BaseAgentRunEvent"
+```
+
+Event emitted when the agent produces content (text, reasoning, etc.).
+
+Classes:
+
+- **`Config`** – Pydantic configuration.
+
+##### Config
+
+Pydantic configuration.
+
+#### RunErrorEvent
+
+```
+              flowchart TD
+              digitalkin.models.events.RunErrorEvent[RunErrorEvent]
+              digitalkin.models.events.agent_events.BaseAgentRunEvent[BaseAgentRunEvent]
+
+                              digitalkin.models.events.agent_events.BaseAgentRunEvent --> digitalkin.models.events.RunErrorEvent
+                
+
+
+              click digitalkin.models.events.RunErrorEvent href "" "digitalkin.models.events.RunErrorEvent"
+              click digitalkin.models.events.agent_events.BaseAgentRunEvent href "" "digitalkin.models.events.agent_events.BaseAgentRunEvent"
+```
+
+Event emitted when an agent run encounters an error.
+
+Classes:
+
+- **`Config`** – Pydantic configuration.
+
+##### Config
+
+Pydantic configuration.
+
+#### RunStartedEvent
+
+```
+              flowchart TD
+              digitalkin.models.events.RunStartedEvent[RunStartedEvent]
+              digitalkin.models.events.agent_events.BaseAgentRunEvent[BaseAgentRunEvent]
+
+                              digitalkin.models.events.agent_events.BaseAgentRunEvent --> digitalkin.models.events.RunStartedEvent
+                
+
+
+              click digitalkin.models.events.RunStartedEvent href "" "digitalkin.models.events.RunStartedEvent"
+              click digitalkin.models.events.agent_events.BaseAgentRunEvent href "" "digitalkin.models.events.agent_events.BaseAgentRunEvent"
+```
+
+Event emitted when an agent run starts.
+
+Classes:
+
+- **`Config`** – Pydantic configuration.
+
+##### Config
+
+Pydantic configuration.
+
+#### TextMessageCompletedEvent
+
+```
+              flowchart TD
+              digitalkin.models.events.TextMessageCompletedEvent[TextMessageCompletedEvent]
+              digitalkin.models.events.agent_events.BaseAgentRunEvent[BaseAgentRunEvent]
+
+                              digitalkin.models.events.agent_events.BaseAgentRunEvent --> digitalkin.models.events.TextMessageCompletedEvent
+                
+
+
+              click digitalkin.models.events.TextMessageCompletedEvent href "" "digitalkin.models.events.TextMessageCompletedEvent"
+              click digitalkin.models.events.agent_events.BaseAgentRunEvent href "" "digitalkin.models.events.agent_events.BaseAgentRunEvent"
+```
+
+Event emitted when a text message sequence ends.
+
+Classes:
+
+- **`Config`** – Pydantic configuration.
+
+##### Config
+
+Pydantic configuration.
+
+#### TextMessageStartedEvent
+
+```
+              flowchart TD
+              digitalkin.models.events.TextMessageStartedEvent[TextMessageStartedEvent]
+              digitalkin.models.events.agent_events.BaseAgentRunEvent[BaseAgentRunEvent]
+
+                              digitalkin.models.events.agent_events.BaseAgentRunEvent --> digitalkin.models.events.TextMessageStartedEvent
+                
+
+
+              click digitalkin.models.events.TextMessageStartedEvent href "" "digitalkin.models.events.TextMessageStartedEvent"
+              click digitalkin.models.events.agent_events.BaseAgentRunEvent href "" "digitalkin.models.events.agent_events.BaseAgentRunEvent"
+```
+
+Event emitted when a new text message sequence begins.
+
+Classes:
+
+- **`Config`** – Pydantic configuration.
+
+##### Config
+
+Pydantic configuration.
+
+#### ToolCallCompletedEvent
+
+```
+              flowchart TD
+              digitalkin.models.events.ToolCallCompletedEvent[ToolCallCompletedEvent]
+              digitalkin.models.events.agent_events.BaseAgentRunEvent[BaseAgentRunEvent]
+
+                              digitalkin.models.events.agent_events.BaseAgentRunEvent --> digitalkin.models.events.ToolCallCompletedEvent
+                
+
+
+              click digitalkin.models.events.ToolCallCompletedEvent href "" "digitalkin.models.events.ToolCallCompletedEvent"
+              click digitalkin.models.events.agent_events.BaseAgentRunEvent href "" "digitalkin.models.events.agent_events.BaseAgentRunEvent"
+```
+
+Event emitted when a tool call completes successfully.
+
+Classes:
+
+- **`Config`** – Pydantic configuration.
+
+##### Config
+
+Pydantic configuration.
+
+#### ToolCallErrorEvent
+
+```
+              flowchart TD
+              digitalkin.models.events.ToolCallErrorEvent[ToolCallErrorEvent]
+              digitalkin.models.events.agent_events.BaseAgentRunEvent[BaseAgentRunEvent]
+
+                              digitalkin.models.events.agent_events.BaseAgentRunEvent --> digitalkin.models.events.ToolCallErrorEvent
+                
+
+
+              click digitalkin.models.events.ToolCallErrorEvent href "" "digitalkin.models.events.ToolCallErrorEvent"
+              click digitalkin.models.events.agent_events.BaseAgentRunEvent href "" "digitalkin.models.events.agent_events.BaseAgentRunEvent"
+```
+
+Event emitted when a tool call encounters an error.
+
+Classes:
+
+- **`Config`** – Pydantic configuration.
+
+##### Config
+
+Pydantic configuration.
+
+#### ToolCallStartedEvent
+
+```
+              flowchart TD
+              digitalkin.models.events.ToolCallStartedEvent[ToolCallStartedEvent]
+              digitalkin.models.events.agent_events.BaseAgentRunEvent[BaseAgentRunEvent]
+
+                              digitalkin.models.events.agent_events.BaseAgentRunEvent --> digitalkin.models.events.ToolCallStartedEvent
+                
+
+
+              click digitalkin.models.events.ToolCallStartedEvent href "" "digitalkin.models.events.ToolCallStartedEvent"
+              click digitalkin.models.events.agent_events.BaseAgentRunEvent href "" "digitalkin.models.events.agent_events.BaseAgentRunEvent"
+```
+
+Event emitted when a tool call starts.
+
+Classes:
+
+- **`Config`** – Pydantic configuration.
+
+##### Config
+
+Pydantic configuration.
+
+#### ToolInfo
+
+```
+              flowchart TD
+              digitalkin.models.events.ToolInfo[ToolInfo]
+
+              
+
+              click digitalkin.models.events.ToolInfo href "" "digitalkin.models.events.ToolInfo"
+```
+
+Information about a tool call.
+
+#### agent_events
+
+Framework-agnostic agent run event models.
+
+These models define a common interface for agent execution events that can be used across different AI frameworks (Agno, LangChain, custom agents, etc.).
+
+Classes:
+
+- **`AgentRunEvent`** – Agent run event types.
+- **`BaseAgentRunEvent`** – Base class for all agent run events.
+- **`CustomEvent`** – Event emitted for application-defined custom events.
+- **`ReasoningCompletedEvent`** – Event emitted when a reasoning phase completes.
+- **`ReasoningContentDeltaEvent`** – Event emitted during extended thinking/reasoning phases.
+- **`ReasoningStartedEvent`** – Event emitted when a reasoning phase starts.
+- **`ReasoningStepEvent`** – Event emitted for intermediate reasoning steps.
+- **`RunCompletedEvent`** – Event emitted when an agent run completes successfully.
+- **`RunContentEvent`** – Event emitted when the agent produces content (text, reasoning, etc.).
+- **`RunErrorEvent`** – Event emitted when an agent run encounters an error.
+- **`RunStartedEvent`** – Event emitted when an agent run starts.
+- **`TextMessageCompletedEvent`** – Event emitted when a text message sequence ends.
+- **`TextMessageStartedEvent`** – Event emitted when a new text message sequence begins.
+- **`ToolCallCompletedEvent`** – Event emitted when a tool call completes successfully.
+- **`ToolCallErrorEvent`** – Event emitted when a tool call encounters an error.
+- **`ToolCallStartedEvent`** – Event emitted when a tool call starts.
+- **`ToolInfo`** – Information about a tool call.
+
+##### AgentRunEvent
+
+```
+              flowchart TD
+              digitalkin.models.events.agent_events.AgentRunEvent[AgentRunEvent]
+
+              
+
+              click digitalkin.models.events.agent_events.AgentRunEvent href "" "digitalkin.models.events.agent_events.AgentRunEvent"
+```
+
+Agent run event types.
+
+##### BaseAgentRunEvent
+
+```
+              flowchart TD
+              digitalkin.models.events.agent_events.BaseAgentRunEvent[BaseAgentRunEvent]
+
+              
+
+              click digitalkin.models.events.agent_events.BaseAgentRunEvent href "" "digitalkin.models.events.agent_events.BaseAgentRunEvent"
+```
+
+Base class for all agent run events.
+
+Classes:
+
+- **`Config`** – Pydantic configuration.
+
+###### Config
+
+Pydantic configuration.
+
+##### CustomEvent
+
+```
+              flowchart TD
+              digitalkin.models.events.agent_events.CustomEvent[CustomEvent]
+              digitalkin.models.events.agent_events.BaseAgentRunEvent[BaseAgentRunEvent]
+
+                              digitalkin.models.events.agent_events.BaseAgentRunEvent --> digitalkin.models.events.agent_events.CustomEvent
+                
+
+
+              click digitalkin.models.events.agent_events.CustomEvent href "" "digitalkin.models.events.agent_events.CustomEvent"
+              click digitalkin.models.events.agent_events.BaseAgentRunEvent href "" "digitalkin.models.events.agent_events.BaseAgentRunEvent"
+```
+
+Event emitted for application-defined custom events.
+
+Carries an application-specific `name` that discriminates the custom event subtype and a free-form `value` payload for metadata transfer.
+
+Classes:
+
+- **`Config`** – Pydantic configuration.
+
+###### Config
+
+Pydantic configuration.
+
+##### ReasoningCompletedEvent
+
+```
+              flowchart TD
+              digitalkin.models.events.agent_events.ReasoningCompletedEvent[ReasoningCompletedEvent]
+              digitalkin.models.events.agent_events.BaseAgentRunEvent[BaseAgentRunEvent]
+
+                              digitalkin.models.events.agent_events.BaseAgentRunEvent --> digitalkin.models.events.agent_events.ReasoningCompletedEvent
+                
+
+
+              click digitalkin.models.events.agent_events.ReasoningCompletedEvent href "" "digitalkin.models.events.agent_events.ReasoningCompletedEvent"
+              click digitalkin.models.events.agent_events.BaseAgentRunEvent href "" "digitalkin.models.events.agent_events.BaseAgentRunEvent"
+```
+
+Event emitted when a reasoning phase completes.
+
+Classes:
+
+- **`Config`** – Pydantic configuration.
+
+###### Config
+
+Pydantic configuration.
+
+##### ReasoningContentDeltaEvent
+
+```
+              flowchart TD
+              digitalkin.models.events.agent_events.ReasoningContentDeltaEvent[ReasoningContentDeltaEvent]
+              digitalkin.models.events.agent_events.BaseAgentRunEvent[BaseAgentRunEvent]
+
+                              digitalkin.models.events.agent_events.BaseAgentRunEvent --> digitalkin.models.events.agent_events.ReasoningContentDeltaEvent
+                
+
+
+              click digitalkin.models.events.agent_events.ReasoningContentDeltaEvent href "" "digitalkin.models.events.agent_events.ReasoningContentDeltaEvent"
+              click digitalkin.models.events.agent_events.BaseAgentRunEvent href "" "digitalkin.models.events.agent_events.BaseAgentRunEvent"
+```
+
+Event emitted during extended thinking/reasoning phases.
+
+Classes:
+
+- **`Config`** – Pydantic configuration.
+
+###### Config
+
+Pydantic configuration.
+
+##### ReasoningStartedEvent
+
+```
+              flowchart TD
+              digitalkin.models.events.agent_events.ReasoningStartedEvent[ReasoningStartedEvent]
+              digitalkin.models.events.agent_events.BaseAgentRunEvent[BaseAgentRunEvent]
+
+                              digitalkin.models.events.agent_events.BaseAgentRunEvent --> digitalkin.models.events.agent_events.ReasoningStartedEvent
+                
+
+
+              click digitalkin.models.events.agent_events.ReasoningStartedEvent href "" "digitalkin.models.events.agent_events.ReasoningStartedEvent"
+              click digitalkin.models.events.agent_events.BaseAgentRunEvent href "" "digitalkin.models.events.agent_events.BaseAgentRunEvent"
+```
+
+Event emitted when a reasoning phase starts.
+
+Classes:
+
+- **`Config`** – Pydantic configuration.
+
+###### Config
+
+Pydantic configuration.
+
+##### ReasoningStepEvent
+
+```
+              flowchart TD
+              digitalkin.models.events.agent_events.ReasoningStepEvent[ReasoningStepEvent]
+              digitalkin.models.events.agent_events.BaseAgentRunEvent[BaseAgentRunEvent]
+
+                              digitalkin.models.events.agent_events.BaseAgentRunEvent --> digitalkin.models.events.agent_events.ReasoningStepEvent
+                
+
+
+              click digitalkin.models.events.agent_events.ReasoningStepEvent href "" "digitalkin.models.events.agent_events.ReasoningStepEvent"
+              click digitalkin.models.events.agent_events.BaseAgentRunEvent href "" "digitalkin.models.events.agent_events.BaseAgentRunEvent"
+```
+
+Event emitted for intermediate reasoning steps.
+
+Classes:
+
+- **`Config`** – Pydantic configuration.
+
+###### Config
+
+Pydantic configuration.
+
+##### RunCompletedEvent
+
+```
+              flowchart TD
+              digitalkin.models.events.agent_events.RunCompletedEvent[RunCompletedEvent]
+              digitalkin.models.events.agent_events.BaseAgentRunEvent[BaseAgentRunEvent]
+
+                              digitalkin.models.events.agent_events.BaseAgentRunEvent --> digitalkin.models.events.agent_events.RunCompletedEvent
+                
+
+
+              click digitalkin.models.events.agent_events.RunCompletedEvent href "" "digitalkin.models.events.agent_events.RunCompletedEvent"
+              click digitalkin.models.events.agent_events.BaseAgentRunEvent href "" "digitalkin.models.events.agent_events.BaseAgentRunEvent"
+```
+
+Event emitted when an agent run completes successfully.
+
+Classes:
+
+- **`Config`** – Pydantic configuration.
+
+###### Config
+
+Pydantic configuration.
+
+##### RunContentEvent
+
+```
+              flowchart TD
+              digitalkin.models.events.agent_events.RunContentEvent[RunContentEvent]
+              digitalkin.models.events.agent_events.BaseAgentRunEvent[BaseAgentRunEvent]
+
+                              digitalkin.models.events.agent_events.BaseAgentRunEvent --> digitalkin.models.events.agent_events.RunContentEvent
+                
+
+
+              click digitalkin.models.events.agent_events.RunContentEvent href "" "digitalkin.models.events.agent_events.RunContentEvent"
+              click digitalkin.models.events.agent_events.BaseAgentRunEvent href "" "digitalkin.models.events.agent_events.BaseAgentRunEvent"
+```
+
+Event emitted when the agent produces content (text, reasoning, etc.).
+
+Classes:
+
+- **`Config`** – Pydantic configuration.
+
+###### Config
+
+Pydantic configuration.
+
+##### RunErrorEvent
+
+```
+              flowchart TD
+              digitalkin.models.events.agent_events.RunErrorEvent[RunErrorEvent]
+              digitalkin.models.events.agent_events.BaseAgentRunEvent[BaseAgentRunEvent]
+
+                              digitalkin.models.events.agent_events.BaseAgentRunEvent --> digitalkin.models.events.agent_events.RunErrorEvent
+                
+
+
+              click digitalkin.models.events.agent_events.RunErrorEvent href "" "digitalkin.models.events.agent_events.RunErrorEvent"
+              click digitalkin.models.events.agent_events.BaseAgentRunEvent href "" "digitalkin.models.events.agent_events.BaseAgentRunEvent"
+```
+
+Event emitted when an agent run encounters an error.
+
+Classes:
+
+- **`Config`** – Pydantic configuration.
+
+###### Config
+
+Pydantic configuration.
+
+##### RunStartedEvent
+
+```
+              flowchart TD
+              digitalkin.models.events.agent_events.RunStartedEvent[RunStartedEvent]
+              digitalkin.models.events.agent_events.BaseAgentRunEvent[BaseAgentRunEvent]
+
+                              digitalkin.models.events.agent_events.BaseAgentRunEvent --> digitalkin.models.events.agent_events.RunStartedEvent
+                
+
+
+              click digitalkin.models.events.agent_events.RunStartedEvent href "" "digitalkin.models.events.agent_events.RunStartedEvent"
+              click digitalkin.models.events.agent_events.BaseAgentRunEvent href "" "digitalkin.models.events.agent_events.BaseAgentRunEvent"
+```
+
+Event emitted when an agent run starts.
+
+Classes:
+
+- **`Config`** – Pydantic configuration.
+
+###### Config
+
+Pydantic configuration.
+
+##### TextMessageCompletedEvent
+
+```
+              flowchart TD
+              digitalkin.models.events.agent_events.TextMessageCompletedEvent[TextMessageCompletedEvent]
+              digitalkin.models.events.agent_events.BaseAgentRunEvent[BaseAgentRunEvent]
+
+                              digitalkin.models.events.agent_events.BaseAgentRunEvent --> digitalkin.models.events.agent_events.TextMessageCompletedEvent
+                
+
+
+              click digitalkin.models.events.agent_events.TextMessageCompletedEvent href "" "digitalkin.models.events.agent_events.TextMessageCompletedEvent"
+              click digitalkin.models.events.agent_events.BaseAgentRunEvent href "" "digitalkin.models.events.agent_events.BaseAgentRunEvent"
+```
+
+Event emitted when a text message sequence ends.
+
+Classes:
+
+- **`Config`** – Pydantic configuration.
+
+###### Config
+
+Pydantic configuration.
+
+##### TextMessageStartedEvent
+
+```
+              flowchart TD
+              digitalkin.models.events.agent_events.TextMessageStartedEvent[TextMessageStartedEvent]
+              digitalkin.models.events.agent_events.BaseAgentRunEvent[BaseAgentRunEvent]
+
+                              digitalkin.models.events.agent_events.BaseAgentRunEvent --> digitalkin.models.events.agent_events.TextMessageStartedEvent
+                
+
+
+              click digitalkin.models.events.agent_events.TextMessageStartedEvent href "" "digitalkin.models.events.agent_events.TextMessageStartedEvent"
+              click digitalkin.models.events.agent_events.BaseAgentRunEvent href "" "digitalkin.models.events.agent_events.BaseAgentRunEvent"
+```
+
+Event emitted when a new text message sequence begins.
+
+Classes:
+
+- **`Config`** – Pydantic configuration.
+
+###### Config
+
+Pydantic configuration.
+
+##### ToolCallCompletedEvent
+
+```
+              flowchart TD
+              digitalkin.models.events.agent_events.ToolCallCompletedEvent[ToolCallCompletedEvent]
+              digitalkin.models.events.agent_events.BaseAgentRunEvent[BaseAgentRunEvent]
+
+                              digitalkin.models.events.agent_events.BaseAgentRunEvent --> digitalkin.models.events.agent_events.ToolCallCompletedEvent
+                
+
+
+              click digitalkin.models.events.agent_events.ToolCallCompletedEvent href "" "digitalkin.models.events.agent_events.ToolCallCompletedEvent"
+              click digitalkin.models.events.agent_events.BaseAgentRunEvent href "" "digitalkin.models.events.agent_events.BaseAgentRunEvent"
+```
+
+Event emitted when a tool call completes successfully.
+
+Classes:
+
+- **`Config`** – Pydantic configuration.
+
+###### Config
+
+Pydantic configuration.
+
+##### ToolCallErrorEvent
+
+```
+              flowchart TD
+              digitalkin.models.events.agent_events.ToolCallErrorEvent[ToolCallErrorEvent]
+              digitalkin.models.events.agent_events.BaseAgentRunEvent[BaseAgentRunEvent]
+
+                              digitalkin.models.events.agent_events.BaseAgentRunEvent --> digitalkin.models.events.agent_events.ToolCallErrorEvent
+                
+
+
+              click digitalkin.models.events.agent_events.ToolCallErrorEvent href "" "digitalkin.models.events.agent_events.ToolCallErrorEvent"
+              click digitalkin.models.events.agent_events.BaseAgentRunEvent href "" "digitalkin.models.events.agent_events.BaseAgentRunEvent"
+```
+
+Event emitted when a tool call encounters an error.
+
+Classes:
+
+- **`Config`** – Pydantic configuration.
+
+###### Config
+
+Pydantic configuration.
+
+##### ToolCallStartedEvent
+
+```
+              flowchart TD
+              digitalkin.models.events.agent_events.ToolCallStartedEvent[ToolCallStartedEvent]
+              digitalkin.models.events.agent_events.BaseAgentRunEvent[BaseAgentRunEvent]
+
+                              digitalkin.models.events.agent_events.BaseAgentRunEvent --> digitalkin.models.events.agent_events.ToolCallStartedEvent
+                
+
+
+              click digitalkin.models.events.agent_events.ToolCallStartedEvent href "" "digitalkin.models.events.agent_events.ToolCallStartedEvent"
+              click digitalkin.models.events.agent_events.BaseAgentRunEvent href "" "digitalkin.models.events.agent_events.BaseAgentRunEvent"
+```
+
+Event emitted when a tool call starts.
+
+Classes:
+
+- **`Config`** – Pydantic configuration.
+
+###### Config
+
+Pydantic configuration.
+
+##### ToolInfo
+
+```
+              flowchart TD
+              digitalkin.models.events.agent_events.ToolInfo[ToolInfo]
+
+              
+
+              click digitalkin.models.events.agent_events.ToolInfo href "" "digitalkin.models.events.agent_events.ToolInfo"
+```
+
+Information about a tool call.
+
 ### grpc_servers
 
 Base gRPC server and client models.
@@ -9880,13 +11653,7 @@ Classes:
 - **`ClientConfig`** – Base configuration for gRPC clients.
 - **`ClientCredentials`** – Model for client credentials in secure mode.
 - **`GrpcCompression`** – gRPC compression algorithm.
-- **`ModuleServerConfig`** – Configuration for Module gRPC server.
-- **`RegistryServerConfig`** – Configuration for Registry gRPC server.
 - **`RetryPolicy`** – gRPC retry policy configuration for resilient connections.
-- **`SecurityMode`** – Enum for server security mode.
-- **`ServerConfig`** – Base configuration for gRPC servers.
-- **`ServerCredentials`** – Model for server credentials in secure mode.
-- **`ServerMode`** – Enum for server operation mode.
 
 ##### ChannelConfig
 
@@ -9905,7 +11672,7 @@ Attributes:
 
 - **`host`** (`str`) – Host address
 - **`port`** (`int`) – Port to listen on
-- **`mode`** (`ServerMode`) – communication operation mode (sync/async)
+- **`mode`** (`ControlFlow`) – communication operation mode (sync/async)
 - **`security`** (`SecurityMode`) – Security mode (secure/insecure)
 - **`credentials`** (`SecurityMode`) – Client credentials for secure mode
 
@@ -9968,7 +11735,7 @@ Attributes:
 
 - **`host`** (`str`) – Host address to bind the client to
 - **`port`** (`int`) – Port to listen on
-- **`mode`** (`ServerMode`) – Client operation mode (sync/async)
+- **`mode`** (`ControlFlow`) – Client operation mode (sync/async)
 - **`security`** (`SecurityMode`) – Security mode (secure/insecure)
 - **`credentials`** (`ClientCredentials | None`) – Client credentials for secure mode
 - **`channel_options`** (`list[tuple[str, Any]]`) – Additional channel options
@@ -10134,190 +11901,6 @@ Returns:
 
 - `Compression` – The corresponding grpc.Compression value.
 
-##### ModuleServerConfig
-
-```
-              flowchart TD
-              digitalkin.models.grpc_servers.models.ModuleServerConfig[ModuleServerConfig]
-              digitalkin.models.grpc_servers.models.ServerConfig[ServerConfig]
-              digitalkin.models.grpc_servers.models.ChannelConfig[ChannelConfig]
-
-                              digitalkin.models.grpc_servers.models.ServerConfig --> digitalkin.models.grpc_servers.models.ModuleServerConfig
-                                digitalkin.models.grpc_servers.models.ChannelConfig --> digitalkin.models.grpc_servers.models.ServerConfig
-                
-
-
-
-              click digitalkin.models.grpc_servers.models.ModuleServerConfig href "" "digitalkin.models.grpc_servers.models.ModuleServerConfig"
-              click digitalkin.models.grpc_servers.models.ServerConfig href "" "digitalkin.models.grpc_servers.models.ServerConfig"
-              click digitalkin.models.grpc_servers.models.ChannelConfig href "" "digitalkin.models.grpc_servers.models.ChannelConfig"
-```
-
-Configuration for Module gRPC server.
-
-Attributes:
-
-- **`advertise_host`** (`str | None`) – Public hostname/IP sent to registry for discovery. Falls back to host if not set.
-
-Methods:
-
-- **`validate_credentials`** – Validate that credentials are provided when in secure mode.
-- **`validate_port`** – Validate that the port is in a valid range.
-
-###### address
-
-```python
-address: str
-```
-
-Get the server address.
-
-Returns:
-
-- `str` – The formatted address string
-
-###### validate_credentials
-
-```python
-validate_credentials(
-    v: ServerCredentials | None, info: ValidationInfo
-) -> ServerCredentials | None
-```
-
-Validate that credentials are provided when in secure mode.
-
-Parameters:
-
-- ###### **`v`**
-
-  (`ServerCredentials | None`) – The credentials value
-
-- ###### **`info`**
-
-  (`ValidationInfo`) – ValidationInfo containing other field values
-
-Returns:
-
-- `ServerCredentials | None` – The validated credentials
-
-Raises:
-
-- `ConfigurationError` – If credentials are missing in secure mode
-
-###### validate_port
-
-```python
-validate_port(v: int) -> int
-```
-
-Validate that the port is in a valid range.
-
-Parameters:
-
-- ###### **`v`**
-
-  (`int`) – Port number to validate
-
-Returns:
-
-- `int` – The validated port number
-
-Raises:
-
-- `ConfigurationError` – If port is outside valid range
-
-##### RegistryServerConfig
-
-```
-              flowchart TD
-              digitalkin.models.grpc_servers.models.RegistryServerConfig[RegistryServerConfig]
-              digitalkin.models.grpc_servers.models.ServerConfig[ServerConfig]
-              digitalkin.models.grpc_servers.models.ChannelConfig[ChannelConfig]
-
-                              digitalkin.models.grpc_servers.models.ServerConfig --> digitalkin.models.grpc_servers.models.RegistryServerConfig
-                                digitalkin.models.grpc_servers.models.ChannelConfig --> digitalkin.models.grpc_servers.models.ServerConfig
-                
-
-
-
-              click digitalkin.models.grpc_servers.models.RegistryServerConfig href "" "digitalkin.models.grpc_servers.models.RegistryServerConfig"
-              click digitalkin.models.grpc_servers.models.ServerConfig href "" "digitalkin.models.grpc_servers.models.ServerConfig"
-              click digitalkin.models.grpc_servers.models.ChannelConfig href "" "digitalkin.models.grpc_servers.models.ChannelConfig"
-```
-
-Configuration for Registry gRPC server.
-
-Attributes:
-
-- **`database_url`** (`str | None`) – Database URL for registry data storage
-
-Methods:
-
-- **`validate_credentials`** – Validate that credentials are provided when in secure mode.
-- **`validate_port`** – Validate that the port is in a valid range.
-
-###### address
-
-```python
-address: str
-```
-
-Get the server address.
-
-Returns:
-
-- `str` – The formatted address string
-
-###### validate_credentials
-
-```python
-validate_credentials(
-    v: ServerCredentials | None, info: ValidationInfo
-) -> ServerCredentials | None
-```
-
-Validate that credentials are provided when in secure mode.
-
-Parameters:
-
-- ###### **`v`**
-
-  (`ServerCredentials | None`) – The credentials value
-
-- ###### **`info`**
-
-  (`ValidationInfo`) – ValidationInfo containing other field values
-
-Returns:
-
-- `ServerCredentials | None` – The validated credentials
-
-Raises:
-
-- `ConfigurationError` – If credentials are missing in secure mode
-
-###### validate_port
-
-```python
-validate_port(v: int) -> int
-```
-
-Validate that the port is in a valid range.
-
-Parameters:
-
-- ###### **`v`**
-
-  (`int`) – Port number to validate
-
-Returns:
-
-- `int` – The validated port number
-
-Raises:
-
-- `ConfigurationError` – If port is outside valid range
-
 ##### RetryPolicy
 
 ```
@@ -10354,173 +11937,6 @@ Serialize to gRPC service config JSON string.
 Returns:
 
 - `str` – JSON string for grpc.service_config channel option.
-
-##### SecurityMode
-
-```
-              flowchart TD
-              digitalkin.models.grpc_servers.models.SecurityMode[SecurityMode]
-
-              
-
-              click digitalkin.models.grpc_servers.models.SecurityMode href "" "digitalkin.models.grpc_servers.models.SecurityMode"
-```
-
-Enum for server security mode.
-
-##### ServerConfig
-
-```
-              flowchart TD
-              digitalkin.models.grpc_servers.models.ServerConfig[ServerConfig]
-              digitalkin.models.grpc_servers.models.ChannelConfig[ChannelConfig]
-
-                              digitalkin.models.grpc_servers.models.ChannelConfig --> digitalkin.models.grpc_servers.models.ServerConfig
-                
-
-
-              click digitalkin.models.grpc_servers.models.ServerConfig href "" "digitalkin.models.grpc_servers.models.ServerConfig"
-              click digitalkin.models.grpc_servers.models.ChannelConfig href "" "digitalkin.models.grpc_servers.models.ChannelConfig"
-```
-
-Base configuration for gRPC servers.
-
-Attributes:
-
-- **`host`** (`str`) – Host address to bind the server to
-- **`port`** (`int`) – Port to listen on
-- **`max_workers`** (`int`) – Maximum number of workers for sync mode
-- **`mode`** (`ServerMode`) – Server operation mode (sync/async)
-- **`security`** (`SecurityMode`) – Security mode (secure/insecure)
-- **`credentials`** (`ServerCredentials | None`) – Server credentials for secure mode
-- **`server_options`** (`list[tuple[str, Any]]`) – Additional server options
-- **`enable_reflection`** (`bool`) – Enable reflection for the server
-- **`compression`** (`GrpcCompression`) – gRPC compression algorithm for server-level compression
-
-Methods:
-
-- **`validate_credentials`** – Validate that credentials are provided when in secure mode.
-- **`validate_port`** – Validate that the port is in a valid range.
-
-###### address
-
-```python
-address: str
-```
-
-Get the server address.
-
-Returns:
-
-- `str` – The formatted address string
-
-###### validate_credentials
-
-```python
-validate_credentials(
-    v: ServerCredentials | None, info: ValidationInfo
-) -> ServerCredentials | None
-```
-
-Validate that credentials are provided when in secure mode.
-
-Parameters:
-
-- ###### **`v`**
-
-  (`ServerCredentials | None`) – The credentials value
-
-- ###### **`info`**
-
-  (`ValidationInfo`) – ValidationInfo containing other field values
-
-Returns:
-
-- `ServerCredentials | None` – The validated credentials
-
-Raises:
-
-- `ConfigurationError` – If credentials are missing in secure mode
-
-###### validate_port
-
-```python
-validate_port(v: int) -> int
-```
-
-Validate that the port is in a valid range.
-
-Parameters:
-
-- ###### **`v`**
-
-  (`int`) – Port number to validate
-
-Returns:
-
-- `int` – The validated port number
-
-Raises:
-
-- `ConfigurationError` – If port is outside valid range
-
-##### ServerCredentials
-
-```
-              flowchart TD
-              digitalkin.models.grpc_servers.models.ServerCredentials[ServerCredentials]
-
-              
-
-              click digitalkin.models.grpc_servers.models.ServerCredentials href "" "digitalkin.models.grpc_servers.models.ServerCredentials"
-```
-
-Model for server credentials in secure mode.
-
-Attributes:
-
-- **`server_key_path`** (`Path`) – Path to the server private key
-- **`server_cert_path`** (`Path`) – Path to the server certificate
-- **`root_cert_path`** (`Path | None`) – Optional path to the root certificate
-
-Methods:
-
-- **`check_path_exists`** – Validate that the file path exists.
-
-###### check_path_exists
-
-```python
-check_path_exists(v: Path | None) -> Path | None
-```
-
-Validate that the file path exists.
-
-Parameters:
-
-- ###### **`v`**
-
-  (`Path | None`) – Path to validate
-
-Returns:
-
-- `Path | None` – The validated path
-
-Raises:
-
-- `SecurityError` – If the path does not exist
-
-##### ServerMode
-
-```
-              flowchart TD
-              digitalkin.models.grpc_servers.models.ServerMode[ServerMode]
-
-              
-
-              click digitalkin.models.grpc_servers.models.ServerMode href "" "digitalkin.models.grpc_servers.models.ServerMode"
-```
-
-Enum for server operation mode.
 
 #### types
 
@@ -10563,6 +11979,7 @@ This module contains the models for the modules.
 
 Modules:
 
+- **`ag_ui`** – Output model for the Template module.
 - **`base_types`** – Base types for module models.
 - **`module`** – Module model.
 - **`module_context`** – Define the module context used in the triggers.
@@ -11419,6 +12836,793 @@ Parameters:
 Returns:
 
 - `type[ToolReference]` – Annotated type for use in Pydantic models.
+
+#### ag_ui
+
+Output model for the Template module.
+
+Classes:
+
+- **`AgUiActivityDeltaOutput`** – AG-UI ActivityDelta event - JSON Patch delta for an activity message.
+- **`AgUiActivitySnapshotOutput`** – AG-UI ActivitySnapshot event - full activity message snapshot.
+- **`AgUiCustomEventOutput`** – AG-UI CustomEvent event - carries an application-defined custom event.
+- **`AgUiDataTrigger`** – DataTrigger subclass that serializes wrapper fields as camelCase.
+- **`AgUiMessagesSnapshotOutput`** – AG-UI MessagesSnapshot event - full conversation messages snapshot.
+- **`AgUiOutput`** – Output model for the Template module with discriminated union.
+- **`AgUiRawEventOutput`** – AG-UI RawEvent event - passes through a raw/untyped event payload.
+- **`AgUiReasoningEncryptedValueOutput`** – AG-UI ReasoningEncryptedValue event - carries an encrypted reasoning value.
+- **`AgUiReasoningEndOutput`** – AG-UI ReasoningEnd event - signals end of a reasoning phase.
+- **`AgUiReasoningMessageChunkOutput`** – AG-UI ReasoningMessageChunk event - aggregated reasoning message chunk.
+- **`AgUiReasoningMessageContentOutput`** – AG-UI ReasoningMessageContent event - carries a reasoning content delta.
+- **`AgUiReasoningMessageEndOutput`** – AG-UI ReasoningMessageEnd event - signals end of a reasoning message.
+- **`AgUiReasoningMessageStartOutput`** – AG-UI ReasoningMessageStart event - signals start of a reasoning message.
+- **`AgUiReasoningStartOutput`** – AG-UI ReasoningStart event - signals start of a reasoning phase.
+- **`AgUiRunErrorOutput`** – AG-UI RunError event - signals that a run encountered an error.
+- **`AgUiRunFinishedOutput`** – AG-UI RunFinished event - signals that an agent run has completed.
+- **`AgUiRunStartedOutput`** – AG-UI RunStarted event - signals that an agent run has begun.
+- **`AgUiStateDeltaOutput`** – AG-UI StateDelta event - JSON Patch (RFC 6902) operations on agent state.
+- **`AgUiStateSnapshotOutput`** – AG-UI StateSnapshot event - full agent state snapshot.
+- **`AgUiStepFinishedOutput`** – AG-UI StepFinished event - signals completion of a named agent step.
+- **`AgUiStepStartedOutput`** – AG-UI StepStarted event - signals start of a named agent step.
+- **`AgUiTextMessageChunkOutput`** – AG-UI TextMessageChunk event - aggregated text message chunk.
+- **`AgUiTextMessageContentOutput`** – AG-UI TextMessageContent event - carries a text delta chunk.
+- **`AgUiTextMessageEndOutput`** – AG-UI TextMessageEnd event - signals end of a text message.
+- **`AgUiTextMessageStartOutput`** – AG-UI TextMessageStart event - signals start of a text message.
+- **`AgUiThinkingEndOutput`** – AG-UI ThinkingEnd event - signals end of a high-level thinking step.
+- **`AgUiThinkingStartOutput`** – AG-UI ThinkingStart event - signals start of a high-level thinking step.
+- **`AgUiThinkingTextMessageContentOutput`** – AG-UI ThinkingTextMessageContent event - carries a thinking text delta chunk.
+- **`AgUiThinkingTextMessageEndOutput`** – AG-UI ThinkingTextMessageEnd event - signals end of internal thinking.
+- **`AgUiThinkingTextMessageStartOutput`** – AG-UI ThinkingTextMessageStart event - signals start of internal thinking.
+- **`AgUiToolCallArgsOutput`** – AG-UI ToolCallArgs event - carries streamed tool call arguments delta.
+- **`AgUiToolCallChunkOutput`** – AG-UI ToolCallChunk event - aggregated tool call chunk.
+- **`AgUiToolCallEndOutput`** – AG-UI ToolCallEnd event - signals end of tool call argument streaming.
+- **`AgUiToolCallResultOutput`** – AG-UI ToolCallResult event - carries the result of a completed tool call.
+- **`AgUiToolCallStartOutput`** – AG-UI ToolCallStart event - signals start of a tool invocation.
+
+##### AgUiActivityDeltaOutput
+
+```
+              flowchart TD
+              digitalkin.models.module.ag_ui.AgUiActivityDeltaOutput[AgUiActivityDeltaOutput]
+              digitalkin.models.module.ag_ui.AgUiDataTrigger[AgUiDataTrigger]
+              digitalkin.models.module.base_types.DataTrigger[DataTrigger]
+
+                              digitalkin.models.module.ag_ui.AgUiDataTrigger --> digitalkin.models.module.ag_ui.AgUiActivityDeltaOutput
+                                digitalkin.models.module.base_types.DataTrigger --> digitalkin.models.module.ag_ui.AgUiDataTrigger
+                
+
+
+
+              click digitalkin.models.module.ag_ui.AgUiActivityDeltaOutput href "" "digitalkin.models.module.ag_ui.AgUiActivityDeltaOutput"
+              click digitalkin.models.module.ag_ui.AgUiDataTrigger href "" "digitalkin.models.module.ag_ui.AgUiDataTrigger"
+              click digitalkin.models.module.base_types.DataTrigger href "" "digitalkin.models.module.base_types.DataTrigger"
+```
+
+AG-UI ActivityDelta event - JSON Patch delta for an activity message.
+
+##### AgUiActivitySnapshotOutput
+
+```
+              flowchart TD
+              digitalkin.models.module.ag_ui.AgUiActivitySnapshotOutput[AgUiActivitySnapshotOutput]
+              digitalkin.models.module.ag_ui.AgUiDataTrigger[AgUiDataTrigger]
+              digitalkin.models.module.base_types.DataTrigger[DataTrigger]
+
+                              digitalkin.models.module.ag_ui.AgUiDataTrigger --> digitalkin.models.module.ag_ui.AgUiActivitySnapshotOutput
+                                digitalkin.models.module.base_types.DataTrigger --> digitalkin.models.module.ag_ui.AgUiDataTrigger
+                
+
+
+
+              click digitalkin.models.module.ag_ui.AgUiActivitySnapshotOutput href "" "digitalkin.models.module.ag_ui.AgUiActivitySnapshotOutput"
+              click digitalkin.models.module.ag_ui.AgUiDataTrigger href "" "digitalkin.models.module.ag_ui.AgUiDataTrigger"
+              click digitalkin.models.module.base_types.DataTrigger href "" "digitalkin.models.module.base_types.DataTrigger"
+```
+
+AG-UI ActivitySnapshot event - full activity message snapshot.
+
+##### AgUiCustomEventOutput
+
+```
+              flowchart TD
+              digitalkin.models.module.ag_ui.AgUiCustomEventOutput[AgUiCustomEventOutput]
+              digitalkin.models.module.ag_ui.AgUiDataTrigger[AgUiDataTrigger]
+              digitalkin.models.module.base_types.DataTrigger[DataTrigger]
+
+                              digitalkin.models.module.ag_ui.AgUiDataTrigger --> digitalkin.models.module.ag_ui.AgUiCustomEventOutput
+                                digitalkin.models.module.base_types.DataTrigger --> digitalkin.models.module.ag_ui.AgUiDataTrigger
+                
+
+
+
+              click digitalkin.models.module.ag_ui.AgUiCustomEventOutput href "" "digitalkin.models.module.ag_ui.AgUiCustomEventOutput"
+              click digitalkin.models.module.ag_ui.AgUiDataTrigger href "" "digitalkin.models.module.ag_ui.AgUiDataTrigger"
+              click digitalkin.models.module.base_types.DataTrigger href "" "digitalkin.models.module.base_types.DataTrigger"
+```
+
+AG-UI CustomEvent event - carries an application-defined custom event.
+
+##### AgUiDataTrigger
+
+```
+              flowchart TD
+              digitalkin.models.module.ag_ui.AgUiDataTrigger[AgUiDataTrigger]
+              digitalkin.models.module.base_types.DataTrigger[DataTrigger]
+
+                              digitalkin.models.module.base_types.DataTrigger --> digitalkin.models.module.ag_ui.AgUiDataTrigger
+                
+
+
+              click digitalkin.models.module.ag_ui.AgUiDataTrigger href "" "digitalkin.models.module.ag_ui.AgUiDataTrigger"
+              click digitalkin.models.module.base_types.DataTrigger href "" "digitalkin.models.module.base_types.DataTrigger"
+```
+
+DataTrigger subclass that serializes wrapper fields as camelCase.
+
+AG-UI events must be serialized with camelCase field names. Since the SDK calls `model_dump(mode="json")` without `by_alias=True`, we define camelCase aliases here and activate them via `TemplateOutput.model_dump`.
+
+##### AgUiMessagesSnapshotOutput
+
+```
+              flowchart TD
+              digitalkin.models.module.ag_ui.AgUiMessagesSnapshotOutput[AgUiMessagesSnapshotOutput]
+              digitalkin.models.module.ag_ui.AgUiDataTrigger[AgUiDataTrigger]
+              digitalkin.models.module.base_types.DataTrigger[DataTrigger]
+
+                              digitalkin.models.module.ag_ui.AgUiDataTrigger --> digitalkin.models.module.ag_ui.AgUiMessagesSnapshotOutput
+                                digitalkin.models.module.base_types.DataTrigger --> digitalkin.models.module.ag_ui.AgUiDataTrigger
+                
+
+
+
+              click digitalkin.models.module.ag_ui.AgUiMessagesSnapshotOutput href "" "digitalkin.models.module.ag_ui.AgUiMessagesSnapshotOutput"
+              click digitalkin.models.module.ag_ui.AgUiDataTrigger href "" "digitalkin.models.module.ag_ui.AgUiDataTrigger"
+              click digitalkin.models.module.base_types.DataTrigger href "" "digitalkin.models.module.base_types.DataTrigger"
+```
+
+AG-UI MessagesSnapshot event - full conversation messages snapshot.
+
+##### AgUiOutput
+
+```
+              flowchart TD
+              digitalkin.models.module.ag_ui.AgUiOutput[AgUiOutput]
+              digitalkin.models.module.base_types.DataModel[DataModel]
+
+                              digitalkin.models.module.base_types.DataModel --> digitalkin.models.module.ag_ui.AgUiOutput
+                
+
+
+              click digitalkin.models.module.ag_ui.AgUiOutput href "" "digitalkin.models.module.ag_ui.AgUiOutput"
+              click digitalkin.models.module.base_types.DataModel href "" "digitalkin.models.module.base_types.DataModel"
+```
+
+Output model for the Template module with discriminated union.
+
+Methods:
+
+- **`model_dump`** – Serialize with camelCase aliases and exclude None fields by default.
+
+###### model_dump
+
+```python
+model_dump(**kwargs: object) -> dict[str, object]
+```
+
+Serialize with camelCase aliases and exclude None fields by default.
+
+Returns:
+
+- `dict[str, object]` – Serialized model dictionary with camelCase keys and no null values.
+
+##### AgUiRawEventOutput
+
+```
+              flowchart TD
+              digitalkin.models.module.ag_ui.AgUiRawEventOutput[AgUiRawEventOutput]
+              digitalkin.models.module.ag_ui.AgUiDataTrigger[AgUiDataTrigger]
+              digitalkin.models.module.base_types.DataTrigger[DataTrigger]
+
+                              digitalkin.models.module.ag_ui.AgUiDataTrigger --> digitalkin.models.module.ag_ui.AgUiRawEventOutput
+                                digitalkin.models.module.base_types.DataTrigger --> digitalkin.models.module.ag_ui.AgUiDataTrigger
+                
+
+
+
+              click digitalkin.models.module.ag_ui.AgUiRawEventOutput href "" "digitalkin.models.module.ag_ui.AgUiRawEventOutput"
+              click digitalkin.models.module.ag_ui.AgUiDataTrigger href "" "digitalkin.models.module.ag_ui.AgUiDataTrigger"
+              click digitalkin.models.module.base_types.DataTrigger href "" "digitalkin.models.module.base_types.DataTrigger"
+```
+
+AG-UI RawEvent event - passes through a raw/untyped event payload.
+
+##### AgUiReasoningEncryptedValueOutput
+
+```
+              flowchart TD
+              digitalkin.models.module.ag_ui.AgUiReasoningEncryptedValueOutput[AgUiReasoningEncryptedValueOutput]
+              digitalkin.models.module.ag_ui.AgUiDataTrigger[AgUiDataTrigger]
+              digitalkin.models.module.base_types.DataTrigger[DataTrigger]
+
+                              digitalkin.models.module.ag_ui.AgUiDataTrigger --> digitalkin.models.module.ag_ui.AgUiReasoningEncryptedValueOutput
+                                digitalkin.models.module.base_types.DataTrigger --> digitalkin.models.module.ag_ui.AgUiDataTrigger
+                
+
+
+
+              click digitalkin.models.module.ag_ui.AgUiReasoningEncryptedValueOutput href "" "digitalkin.models.module.ag_ui.AgUiReasoningEncryptedValueOutput"
+              click digitalkin.models.module.ag_ui.AgUiDataTrigger href "" "digitalkin.models.module.ag_ui.AgUiDataTrigger"
+              click digitalkin.models.module.base_types.DataTrigger href "" "digitalkin.models.module.base_types.DataTrigger"
+```
+
+AG-UI ReasoningEncryptedValue event - carries an encrypted reasoning value.
+
+##### AgUiReasoningEndOutput
+
+```
+              flowchart TD
+              digitalkin.models.module.ag_ui.AgUiReasoningEndOutput[AgUiReasoningEndOutput]
+              digitalkin.models.module.ag_ui.AgUiDataTrigger[AgUiDataTrigger]
+              digitalkin.models.module.base_types.DataTrigger[DataTrigger]
+
+                              digitalkin.models.module.ag_ui.AgUiDataTrigger --> digitalkin.models.module.ag_ui.AgUiReasoningEndOutput
+                                digitalkin.models.module.base_types.DataTrigger --> digitalkin.models.module.ag_ui.AgUiDataTrigger
+                
+
+
+
+              click digitalkin.models.module.ag_ui.AgUiReasoningEndOutput href "" "digitalkin.models.module.ag_ui.AgUiReasoningEndOutput"
+              click digitalkin.models.module.ag_ui.AgUiDataTrigger href "" "digitalkin.models.module.ag_ui.AgUiDataTrigger"
+              click digitalkin.models.module.base_types.DataTrigger href "" "digitalkin.models.module.base_types.DataTrigger"
+```
+
+AG-UI ReasoningEnd event - signals end of a reasoning phase.
+
+##### AgUiReasoningMessageChunkOutput
+
+```
+              flowchart TD
+              digitalkin.models.module.ag_ui.AgUiReasoningMessageChunkOutput[AgUiReasoningMessageChunkOutput]
+              digitalkin.models.module.ag_ui.AgUiDataTrigger[AgUiDataTrigger]
+              digitalkin.models.module.base_types.DataTrigger[DataTrigger]
+
+                              digitalkin.models.module.ag_ui.AgUiDataTrigger --> digitalkin.models.module.ag_ui.AgUiReasoningMessageChunkOutput
+                                digitalkin.models.module.base_types.DataTrigger --> digitalkin.models.module.ag_ui.AgUiDataTrigger
+                
+
+
+
+              click digitalkin.models.module.ag_ui.AgUiReasoningMessageChunkOutput href "" "digitalkin.models.module.ag_ui.AgUiReasoningMessageChunkOutput"
+              click digitalkin.models.module.ag_ui.AgUiDataTrigger href "" "digitalkin.models.module.ag_ui.AgUiDataTrigger"
+              click digitalkin.models.module.base_types.DataTrigger href "" "digitalkin.models.module.base_types.DataTrigger"
+```
+
+AG-UI ReasoningMessageChunk event - aggregated reasoning message chunk.
+
+##### AgUiReasoningMessageContentOutput
+
+```
+              flowchart TD
+              digitalkin.models.module.ag_ui.AgUiReasoningMessageContentOutput[AgUiReasoningMessageContentOutput]
+              digitalkin.models.module.ag_ui.AgUiDataTrigger[AgUiDataTrigger]
+              digitalkin.models.module.base_types.DataTrigger[DataTrigger]
+
+                              digitalkin.models.module.ag_ui.AgUiDataTrigger --> digitalkin.models.module.ag_ui.AgUiReasoningMessageContentOutput
+                                digitalkin.models.module.base_types.DataTrigger --> digitalkin.models.module.ag_ui.AgUiDataTrigger
+                
+
+
+
+              click digitalkin.models.module.ag_ui.AgUiReasoningMessageContentOutput href "" "digitalkin.models.module.ag_ui.AgUiReasoningMessageContentOutput"
+              click digitalkin.models.module.ag_ui.AgUiDataTrigger href "" "digitalkin.models.module.ag_ui.AgUiDataTrigger"
+              click digitalkin.models.module.base_types.DataTrigger href "" "digitalkin.models.module.base_types.DataTrigger"
+```
+
+AG-UI ReasoningMessageContent event - carries a reasoning content delta.
+
+##### AgUiReasoningMessageEndOutput
+
+```
+              flowchart TD
+              digitalkin.models.module.ag_ui.AgUiReasoningMessageEndOutput[AgUiReasoningMessageEndOutput]
+              digitalkin.models.module.ag_ui.AgUiDataTrigger[AgUiDataTrigger]
+              digitalkin.models.module.base_types.DataTrigger[DataTrigger]
+
+                              digitalkin.models.module.ag_ui.AgUiDataTrigger --> digitalkin.models.module.ag_ui.AgUiReasoningMessageEndOutput
+                                digitalkin.models.module.base_types.DataTrigger --> digitalkin.models.module.ag_ui.AgUiDataTrigger
+                
+
+
+
+              click digitalkin.models.module.ag_ui.AgUiReasoningMessageEndOutput href "" "digitalkin.models.module.ag_ui.AgUiReasoningMessageEndOutput"
+              click digitalkin.models.module.ag_ui.AgUiDataTrigger href "" "digitalkin.models.module.ag_ui.AgUiDataTrigger"
+              click digitalkin.models.module.base_types.DataTrigger href "" "digitalkin.models.module.base_types.DataTrigger"
+```
+
+AG-UI ReasoningMessageEnd event - signals end of a reasoning message.
+
+##### AgUiReasoningMessageStartOutput
+
+```
+              flowchart TD
+              digitalkin.models.module.ag_ui.AgUiReasoningMessageStartOutput[AgUiReasoningMessageStartOutput]
+              digitalkin.models.module.ag_ui.AgUiDataTrigger[AgUiDataTrigger]
+              digitalkin.models.module.base_types.DataTrigger[DataTrigger]
+
+                              digitalkin.models.module.ag_ui.AgUiDataTrigger --> digitalkin.models.module.ag_ui.AgUiReasoningMessageStartOutput
+                                digitalkin.models.module.base_types.DataTrigger --> digitalkin.models.module.ag_ui.AgUiDataTrigger
+                
+
+
+
+              click digitalkin.models.module.ag_ui.AgUiReasoningMessageStartOutput href "" "digitalkin.models.module.ag_ui.AgUiReasoningMessageStartOutput"
+              click digitalkin.models.module.ag_ui.AgUiDataTrigger href "" "digitalkin.models.module.ag_ui.AgUiDataTrigger"
+              click digitalkin.models.module.base_types.DataTrigger href "" "digitalkin.models.module.base_types.DataTrigger"
+```
+
+AG-UI ReasoningMessageStart event - signals start of a reasoning message.
+
+##### AgUiReasoningStartOutput
+
+```
+              flowchart TD
+              digitalkin.models.module.ag_ui.AgUiReasoningStartOutput[AgUiReasoningStartOutput]
+              digitalkin.models.module.ag_ui.AgUiDataTrigger[AgUiDataTrigger]
+              digitalkin.models.module.base_types.DataTrigger[DataTrigger]
+
+                              digitalkin.models.module.ag_ui.AgUiDataTrigger --> digitalkin.models.module.ag_ui.AgUiReasoningStartOutput
+                                digitalkin.models.module.base_types.DataTrigger --> digitalkin.models.module.ag_ui.AgUiDataTrigger
+                
+
+
+
+              click digitalkin.models.module.ag_ui.AgUiReasoningStartOutput href "" "digitalkin.models.module.ag_ui.AgUiReasoningStartOutput"
+              click digitalkin.models.module.ag_ui.AgUiDataTrigger href "" "digitalkin.models.module.ag_ui.AgUiDataTrigger"
+              click digitalkin.models.module.base_types.DataTrigger href "" "digitalkin.models.module.base_types.DataTrigger"
+```
+
+AG-UI ReasoningStart event - signals start of a reasoning phase.
+
+##### AgUiRunErrorOutput
+
+```
+              flowchart TD
+              digitalkin.models.module.ag_ui.AgUiRunErrorOutput[AgUiRunErrorOutput]
+              digitalkin.models.module.ag_ui.AgUiDataTrigger[AgUiDataTrigger]
+              digitalkin.models.module.base_types.DataTrigger[DataTrigger]
+
+                              digitalkin.models.module.ag_ui.AgUiDataTrigger --> digitalkin.models.module.ag_ui.AgUiRunErrorOutput
+                                digitalkin.models.module.base_types.DataTrigger --> digitalkin.models.module.ag_ui.AgUiDataTrigger
+                
+
+
+
+              click digitalkin.models.module.ag_ui.AgUiRunErrorOutput href "" "digitalkin.models.module.ag_ui.AgUiRunErrorOutput"
+              click digitalkin.models.module.ag_ui.AgUiDataTrigger href "" "digitalkin.models.module.ag_ui.AgUiDataTrigger"
+              click digitalkin.models.module.base_types.DataTrigger href "" "digitalkin.models.module.base_types.DataTrigger"
+```
+
+AG-UI RunError event - signals that a run encountered an error.
+
+##### AgUiRunFinishedOutput
+
+```
+              flowchart TD
+              digitalkin.models.module.ag_ui.AgUiRunFinishedOutput[AgUiRunFinishedOutput]
+              digitalkin.models.module.ag_ui.AgUiDataTrigger[AgUiDataTrigger]
+              digitalkin.models.module.base_types.DataTrigger[DataTrigger]
+
+                              digitalkin.models.module.ag_ui.AgUiDataTrigger --> digitalkin.models.module.ag_ui.AgUiRunFinishedOutput
+                                digitalkin.models.module.base_types.DataTrigger --> digitalkin.models.module.ag_ui.AgUiDataTrigger
+                
+
+
+
+              click digitalkin.models.module.ag_ui.AgUiRunFinishedOutput href "" "digitalkin.models.module.ag_ui.AgUiRunFinishedOutput"
+              click digitalkin.models.module.ag_ui.AgUiDataTrigger href "" "digitalkin.models.module.ag_ui.AgUiDataTrigger"
+              click digitalkin.models.module.base_types.DataTrigger href "" "digitalkin.models.module.base_types.DataTrigger"
+```
+
+AG-UI RunFinished event - signals that an agent run has completed.
+
+##### AgUiRunStartedOutput
+
+```
+              flowchart TD
+              digitalkin.models.module.ag_ui.AgUiRunStartedOutput[AgUiRunStartedOutput]
+              digitalkin.models.module.ag_ui.AgUiDataTrigger[AgUiDataTrigger]
+              digitalkin.models.module.base_types.DataTrigger[DataTrigger]
+
+                              digitalkin.models.module.ag_ui.AgUiDataTrigger --> digitalkin.models.module.ag_ui.AgUiRunStartedOutput
+                                digitalkin.models.module.base_types.DataTrigger --> digitalkin.models.module.ag_ui.AgUiDataTrigger
+                
+
+
+
+              click digitalkin.models.module.ag_ui.AgUiRunStartedOutput href "" "digitalkin.models.module.ag_ui.AgUiRunStartedOutput"
+              click digitalkin.models.module.ag_ui.AgUiDataTrigger href "" "digitalkin.models.module.ag_ui.AgUiDataTrigger"
+              click digitalkin.models.module.base_types.DataTrigger href "" "digitalkin.models.module.base_types.DataTrigger"
+```
+
+AG-UI RunStarted event - signals that an agent run has begun.
+
+##### AgUiStateDeltaOutput
+
+```
+              flowchart TD
+              digitalkin.models.module.ag_ui.AgUiStateDeltaOutput[AgUiStateDeltaOutput]
+              digitalkin.models.module.ag_ui.AgUiDataTrigger[AgUiDataTrigger]
+              digitalkin.models.module.base_types.DataTrigger[DataTrigger]
+
+                              digitalkin.models.module.ag_ui.AgUiDataTrigger --> digitalkin.models.module.ag_ui.AgUiStateDeltaOutput
+                                digitalkin.models.module.base_types.DataTrigger --> digitalkin.models.module.ag_ui.AgUiDataTrigger
+                
+
+
+
+              click digitalkin.models.module.ag_ui.AgUiStateDeltaOutput href "" "digitalkin.models.module.ag_ui.AgUiStateDeltaOutput"
+              click digitalkin.models.module.ag_ui.AgUiDataTrigger href "" "digitalkin.models.module.ag_ui.AgUiDataTrigger"
+              click digitalkin.models.module.base_types.DataTrigger href "" "digitalkin.models.module.base_types.DataTrigger"
+```
+
+AG-UI StateDelta event - JSON Patch (RFC 6902) operations on agent state.
+
+##### AgUiStateSnapshotOutput
+
+```
+              flowchart TD
+              digitalkin.models.module.ag_ui.AgUiStateSnapshotOutput[AgUiStateSnapshotOutput]
+              digitalkin.models.module.ag_ui.AgUiDataTrigger[AgUiDataTrigger]
+              digitalkin.models.module.base_types.DataTrigger[DataTrigger]
+
+                              digitalkin.models.module.ag_ui.AgUiDataTrigger --> digitalkin.models.module.ag_ui.AgUiStateSnapshotOutput
+                                digitalkin.models.module.base_types.DataTrigger --> digitalkin.models.module.ag_ui.AgUiDataTrigger
+                
+
+
+
+              click digitalkin.models.module.ag_ui.AgUiStateSnapshotOutput href "" "digitalkin.models.module.ag_ui.AgUiStateSnapshotOutput"
+              click digitalkin.models.module.ag_ui.AgUiDataTrigger href "" "digitalkin.models.module.ag_ui.AgUiDataTrigger"
+              click digitalkin.models.module.base_types.DataTrigger href "" "digitalkin.models.module.base_types.DataTrigger"
+```
+
+AG-UI StateSnapshot event - full agent state snapshot.
+
+##### AgUiStepFinishedOutput
+
+```
+              flowchart TD
+              digitalkin.models.module.ag_ui.AgUiStepFinishedOutput[AgUiStepFinishedOutput]
+              digitalkin.models.module.ag_ui.AgUiDataTrigger[AgUiDataTrigger]
+              digitalkin.models.module.base_types.DataTrigger[DataTrigger]
+
+                              digitalkin.models.module.ag_ui.AgUiDataTrigger --> digitalkin.models.module.ag_ui.AgUiStepFinishedOutput
+                                digitalkin.models.module.base_types.DataTrigger --> digitalkin.models.module.ag_ui.AgUiDataTrigger
+                
+
+
+
+              click digitalkin.models.module.ag_ui.AgUiStepFinishedOutput href "" "digitalkin.models.module.ag_ui.AgUiStepFinishedOutput"
+              click digitalkin.models.module.ag_ui.AgUiDataTrigger href "" "digitalkin.models.module.ag_ui.AgUiDataTrigger"
+              click digitalkin.models.module.base_types.DataTrigger href "" "digitalkin.models.module.base_types.DataTrigger"
+```
+
+AG-UI StepFinished event - signals completion of a named agent step.
+
+##### AgUiStepStartedOutput
+
+```
+              flowchart TD
+              digitalkin.models.module.ag_ui.AgUiStepStartedOutput[AgUiStepStartedOutput]
+              digitalkin.models.module.ag_ui.AgUiDataTrigger[AgUiDataTrigger]
+              digitalkin.models.module.base_types.DataTrigger[DataTrigger]
+
+                              digitalkin.models.module.ag_ui.AgUiDataTrigger --> digitalkin.models.module.ag_ui.AgUiStepStartedOutput
+                                digitalkin.models.module.base_types.DataTrigger --> digitalkin.models.module.ag_ui.AgUiDataTrigger
+                
+
+
+
+              click digitalkin.models.module.ag_ui.AgUiStepStartedOutput href "" "digitalkin.models.module.ag_ui.AgUiStepStartedOutput"
+              click digitalkin.models.module.ag_ui.AgUiDataTrigger href "" "digitalkin.models.module.ag_ui.AgUiDataTrigger"
+              click digitalkin.models.module.base_types.DataTrigger href "" "digitalkin.models.module.base_types.DataTrigger"
+```
+
+AG-UI StepStarted event - signals start of a named agent step.
+
+##### AgUiTextMessageChunkOutput
+
+```
+              flowchart TD
+              digitalkin.models.module.ag_ui.AgUiTextMessageChunkOutput[AgUiTextMessageChunkOutput]
+              digitalkin.models.module.ag_ui.AgUiDataTrigger[AgUiDataTrigger]
+              digitalkin.models.module.base_types.DataTrigger[DataTrigger]
+
+                              digitalkin.models.module.ag_ui.AgUiDataTrigger --> digitalkin.models.module.ag_ui.AgUiTextMessageChunkOutput
+                                digitalkin.models.module.base_types.DataTrigger --> digitalkin.models.module.ag_ui.AgUiDataTrigger
+                
+
+
+
+              click digitalkin.models.module.ag_ui.AgUiTextMessageChunkOutput href "" "digitalkin.models.module.ag_ui.AgUiTextMessageChunkOutput"
+              click digitalkin.models.module.ag_ui.AgUiDataTrigger href "" "digitalkin.models.module.ag_ui.AgUiDataTrigger"
+              click digitalkin.models.module.base_types.DataTrigger href "" "digitalkin.models.module.base_types.DataTrigger"
+```
+
+AG-UI TextMessageChunk event - aggregated text message chunk.
+
+##### AgUiTextMessageContentOutput
+
+```
+              flowchart TD
+              digitalkin.models.module.ag_ui.AgUiTextMessageContentOutput[AgUiTextMessageContentOutput]
+              digitalkin.models.module.ag_ui.AgUiDataTrigger[AgUiDataTrigger]
+              digitalkin.models.module.base_types.DataTrigger[DataTrigger]
+
+                              digitalkin.models.module.ag_ui.AgUiDataTrigger --> digitalkin.models.module.ag_ui.AgUiTextMessageContentOutput
+                                digitalkin.models.module.base_types.DataTrigger --> digitalkin.models.module.ag_ui.AgUiDataTrigger
+                
+
+
+
+              click digitalkin.models.module.ag_ui.AgUiTextMessageContentOutput href "" "digitalkin.models.module.ag_ui.AgUiTextMessageContentOutput"
+              click digitalkin.models.module.ag_ui.AgUiDataTrigger href "" "digitalkin.models.module.ag_ui.AgUiDataTrigger"
+              click digitalkin.models.module.base_types.DataTrigger href "" "digitalkin.models.module.base_types.DataTrigger"
+```
+
+AG-UI TextMessageContent event - carries a text delta chunk.
+
+##### AgUiTextMessageEndOutput
+
+```
+              flowchart TD
+              digitalkin.models.module.ag_ui.AgUiTextMessageEndOutput[AgUiTextMessageEndOutput]
+              digitalkin.models.module.ag_ui.AgUiDataTrigger[AgUiDataTrigger]
+              digitalkin.models.module.base_types.DataTrigger[DataTrigger]
+
+                              digitalkin.models.module.ag_ui.AgUiDataTrigger --> digitalkin.models.module.ag_ui.AgUiTextMessageEndOutput
+                                digitalkin.models.module.base_types.DataTrigger --> digitalkin.models.module.ag_ui.AgUiDataTrigger
+                
+
+
+
+              click digitalkin.models.module.ag_ui.AgUiTextMessageEndOutput href "" "digitalkin.models.module.ag_ui.AgUiTextMessageEndOutput"
+              click digitalkin.models.module.ag_ui.AgUiDataTrigger href "" "digitalkin.models.module.ag_ui.AgUiDataTrigger"
+              click digitalkin.models.module.base_types.DataTrigger href "" "digitalkin.models.module.base_types.DataTrigger"
+```
+
+AG-UI TextMessageEnd event - signals end of a text message.
+
+##### AgUiTextMessageStartOutput
+
+```
+              flowchart TD
+              digitalkin.models.module.ag_ui.AgUiTextMessageStartOutput[AgUiTextMessageStartOutput]
+              digitalkin.models.module.ag_ui.AgUiDataTrigger[AgUiDataTrigger]
+              digitalkin.models.module.base_types.DataTrigger[DataTrigger]
+
+                              digitalkin.models.module.ag_ui.AgUiDataTrigger --> digitalkin.models.module.ag_ui.AgUiTextMessageStartOutput
+                                digitalkin.models.module.base_types.DataTrigger --> digitalkin.models.module.ag_ui.AgUiDataTrigger
+                
+
+
+
+              click digitalkin.models.module.ag_ui.AgUiTextMessageStartOutput href "" "digitalkin.models.module.ag_ui.AgUiTextMessageStartOutput"
+              click digitalkin.models.module.ag_ui.AgUiDataTrigger href "" "digitalkin.models.module.ag_ui.AgUiDataTrigger"
+              click digitalkin.models.module.base_types.DataTrigger href "" "digitalkin.models.module.base_types.DataTrigger"
+```
+
+AG-UI TextMessageStart event - signals start of a text message.
+
+##### AgUiThinkingEndOutput
+
+```
+              flowchart TD
+              digitalkin.models.module.ag_ui.AgUiThinkingEndOutput[AgUiThinkingEndOutput]
+              digitalkin.models.module.ag_ui.AgUiDataTrigger[AgUiDataTrigger]
+              digitalkin.models.module.base_types.DataTrigger[DataTrigger]
+
+                              digitalkin.models.module.ag_ui.AgUiDataTrigger --> digitalkin.models.module.ag_ui.AgUiThinkingEndOutput
+                                digitalkin.models.module.base_types.DataTrigger --> digitalkin.models.module.ag_ui.AgUiDataTrigger
+                
+
+
+
+              click digitalkin.models.module.ag_ui.AgUiThinkingEndOutput href "" "digitalkin.models.module.ag_ui.AgUiThinkingEndOutput"
+              click digitalkin.models.module.ag_ui.AgUiDataTrigger href "" "digitalkin.models.module.ag_ui.AgUiDataTrigger"
+              click digitalkin.models.module.base_types.DataTrigger href "" "digitalkin.models.module.base_types.DataTrigger"
+```
+
+AG-UI ThinkingEnd event - signals end of a high-level thinking step.
+
+##### AgUiThinkingStartOutput
+
+```
+              flowchart TD
+              digitalkin.models.module.ag_ui.AgUiThinkingStartOutput[AgUiThinkingStartOutput]
+              digitalkin.models.module.ag_ui.AgUiDataTrigger[AgUiDataTrigger]
+              digitalkin.models.module.base_types.DataTrigger[DataTrigger]
+
+                              digitalkin.models.module.ag_ui.AgUiDataTrigger --> digitalkin.models.module.ag_ui.AgUiThinkingStartOutput
+                                digitalkin.models.module.base_types.DataTrigger --> digitalkin.models.module.ag_ui.AgUiDataTrigger
+                
+
+
+
+              click digitalkin.models.module.ag_ui.AgUiThinkingStartOutput href "" "digitalkin.models.module.ag_ui.AgUiThinkingStartOutput"
+              click digitalkin.models.module.ag_ui.AgUiDataTrigger href "" "digitalkin.models.module.ag_ui.AgUiDataTrigger"
+              click digitalkin.models.module.base_types.DataTrigger href "" "digitalkin.models.module.base_types.DataTrigger"
+```
+
+AG-UI ThinkingStart event - signals start of a high-level thinking step.
+
+##### AgUiThinkingTextMessageContentOutput
+
+```
+              flowchart TD
+              digitalkin.models.module.ag_ui.AgUiThinkingTextMessageContentOutput[AgUiThinkingTextMessageContentOutput]
+              digitalkin.models.module.ag_ui.AgUiDataTrigger[AgUiDataTrigger]
+              digitalkin.models.module.base_types.DataTrigger[DataTrigger]
+
+                              digitalkin.models.module.ag_ui.AgUiDataTrigger --> digitalkin.models.module.ag_ui.AgUiThinkingTextMessageContentOutput
+                                digitalkin.models.module.base_types.DataTrigger --> digitalkin.models.module.ag_ui.AgUiDataTrigger
+                
+
+
+
+              click digitalkin.models.module.ag_ui.AgUiThinkingTextMessageContentOutput href "" "digitalkin.models.module.ag_ui.AgUiThinkingTextMessageContentOutput"
+              click digitalkin.models.module.ag_ui.AgUiDataTrigger href "" "digitalkin.models.module.ag_ui.AgUiDataTrigger"
+              click digitalkin.models.module.base_types.DataTrigger href "" "digitalkin.models.module.base_types.DataTrigger"
+```
+
+AG-UI ThinkingTextMessageContent event - carries a thinking text delta chunk.
+
+##### AgUiThinkingTextMessageEndOutput
+
+```
+              flowchart TD
+              digitalkin.models.module.ag_ui.AgUiThinkingTextMessageEndOutput[AgUiThinkingTextMessageEndOutput]
+              digitalkin.models.module.ag_ui.AgUiDataTrigger[AgUiDataTrigger]
+              digitalkin.models.module.base_types.DataTrigger[DataTrigger]
+
+                              digitalkin.models.module.ag_ui.AgUiDataTrigger --> digitalkin.models.module.ag_ui.AgUiThinkingTextMessageEndOutput
+                                digitalkin.models.module.base_types.DataTrigger --> digitalkin.models.module.ag_ui.AgUiDataTrigger
+                
+
+
+
+              click digitalkin.models.module.ag_ui.AgUiThinkingTextMessageEndOutput href "" "digitalkin.models.module.ag_ui.AgUiThinkingTextMessageEndOutput"
+              click digitalkin.models.module.ag_ui.AgUiDataTrigger href "" "digitalkin.models.module.ag_ui.AgUiDataTrigger"
+              click digitalkin.models.module.base_types.DataTrigger href "" "digitalkin.models.module.base_types.DataTrigger"
+```
+
+AG-UI ThinkingTextMessageEnd event - signals end of internal thinking.
+
+##### AgUiThinkingTextMessageStartOutput
+
+```
+              flowchart TD
+              digitalkin.models.module.ag_ui.AgUiThinkingTextMessageStartOutput[AgUiThinkingTextMessageStartOutput]
+              digitalkin.models.module.ag_ui.AgUiDataTrigger[AgUiDataTrigger]
+              digitalkin.models.module.base_types.DataTrigger[DataTrigger]
+
+                              digitalkin.models.module.ag_ui.AgUiDataTrigger --> digitalkin.models.module.ag_ui.AgUiThinkingTextMessageStartOutput
+                                digitalkin.models.module.base_types.DataTrigger --> digitalkin.models.module.ag_ui.AgUiDataTrigger
+                
+
+
+
+              click digitalkin.models.module.ag_ui.AgUiThinkingTextMessageStartOutput href "" "digitalkin.models.module.ag_ui.AgUiThinkingTextMessageStartOutput"
+              click digitalkin.models.module.ag_ui.AgUiDataTrigger href "" "digitalkin.models.module.ag_ui.AgUiDataTrigger"
+              click digitalkin.models.module.base_types.DataTrigger href "" "digitalkin.models.module.base_types.DataTrigger"
+```
+
+AG-UI ThinkingTextMessageStart event - signals start of internal thinking.
+
+##### AgUiToolCallArgsOutput
+
+```
+              flowchart TD
+              digitalkin.models.module.ag_ui.AgUiToolCallArgsOutput[AgUiToolCallArgsOutput]
+              digitalkin.models.module.ag_ui.AgUiDataTrigger[AgUiDataTrigger]
+              digitalkin.models.module.base_types.DataTrigger[DataTrigger]
+
+                              digitalkin.models.module.ag_ui.AgUiDataTrigger --> digitalkin.models.module.ag_ui.AgUiToolCallArgsOutput
+                                digitalkin.models.module.base_types.DataTrigger --> digitalkin.models.module.ag_ui.AgUiDataTrigger
+                
+
+
+
+              click digitalkin.models.module.ag_ui.AgUiToolCallArgsOutput href "" "digitalkin.models.module.ag_ui.AgUiToolCallArgsOutput"
+              click digitalkin.models.module.ag_ui.AgUiDataTrigger href "" "digitalkin.models.module.ag_ui.AgUiDataTrigger"
+              click digitalkin.models.module.base_types.DataTrigger href "" "digitalkin.models.module.base_types.DataTrigger"
+```
+
+AG-UI ToolCallArgs event - carries streamed tool call arguments delta.
+
+##### AgUiToolCallChunkOutput
+
+```
+              flowchart TD
+              digitalkin.models.module.ag_ui.AgUiToolCallChunkOutput[AgUiToolCallChunkOutput]
+              digitalkin.models.module.ag_ui.AgUiDataTrigger[AgUiDataTrigger]
+              digitalkin.models.module.base_types.DataTrigger[DataTrigger]
+
+                              digitalkin.models.module.ag_ui.AgUiDataTrigger --> digitalkin.models.module.ag_ui.AgUiToolCallChunkOutput
+                                digitalkin.models.module.base_types.DataTrigger --> digitalkin.models.module.ag_ui.AgUiDataTrigger
+                
+
+
+
+              click digitalkin.models.module.ag_ui.AgUiToolCallChunkOutput href "" "digitalkin.models.module.ag_ui.AgUiToolCallChunkOutput"
+              click digitalkin.models.module.ag_ui.AgUiDataTrigger href "" "digitalkin.models.module.ag_ui.AgUiDataTrigger"
+              click digitalkin.models.module.base_types.DataTrigger href "" "digitalkin.models.module.base_types.DataTrigger"
+```
+
+AG-UI ToolCallChunk event - aggregated tool call chunk.
+
+##### AgUiToolCallEndOutput
+
+```
+              flowchart TD
+              digitalkin.models.module.ag_ui.AgUiToolCallEndOutput[AgUiToolCallEndOutput]
+              digitalkin.models.module.ag_ui.AgUiDataTrigger[AgUiDataTrigger]
+              digitalkin.models.module.base_types.DataTrigger[DataTrigger]
+
+                              digitalkin.models.module.ag_ui.AgUiDataTrigger --> digitalkin.models.module.ag_ui.AgUiToolCallEndOutput
+                                digitalkin.models.module.base_types.DataTrigger --> digitalkin.models.module.ag_ui.AgUiDataTrigger
+                
+
+
+
+              click digitalkin.models.module.ag_ui.AgUiToolCallEndOutput href "" "digitalkin.models.module.ag_ui.AgUiToolCallEndOutput"
+              click digitalkin.models.module.ag_ui.AgUiDataTrigger href "" "digitalkin.models.module.ag_ui.AgUiDataTrigger"
+              click digitalkin.models.module.base_types.DataTrigger href "" "digitalkin.models.module.base_types.DataTrigger"
+```
+
+AG-UI ToolCallEnd event - signals end of tool call argument streaming.
+
+##### AgUiToolCallResultOutput
+
+```
+              flowchart TD
+              digitalkin.models.module.ag_ui.AgUiToolCallResultOutput[AgUiToolCallResultOutput]
+              digitalkin.models.module.ag_ui.AgUiDataTrigger[AgUiDataTrigger]
+              digitalkin.models.module.base_types.DataTrigger[DataTrigger]
+
+                              digitalkin.models.module.ag_ui.AgUiDataTrigger --> digitalkin.models.module.ag_ui.AgUiToolCallResultOutput
+                                digitalkin.models.module.base_types.DataTrigger --> digitalkin.models.module.ag_ui.AgUiDataTrigger
+                
+
+
+
+              click digitalkin.models.module.ag_ui.AgUiToolCallResultOutput href "" "digitalkin.models.module.ag_ui.AgUiToolCallResultOutput"
+              click digitalkin.models.module.ag_ui.AgUiDataTrigger href "" "digitalkin.models.module.ag_ui.AgUiDataTrigger"
+              click digitalkin.models.module.base_types.DataTrigger href "" "digitalkin.models.module.base_types.DataTrigger"
+```
+
+AG-UI ToolCallResult event - carries the result of a completed tool call.
+
+##### AgUiToolCallStartOutput
+
+```
+              flowchart TD
+              digitalkin.models.module.ag_ui.AgUiToolCallStartOutput[AgUiToolCallStartOutput]
+              digitalkin.models.module.ag_ui.AgUiDataTrigger[AgUiDataTrigger]
+              digitalkin.models.module.base_types.DataTrigger[DataTrigger]
+
+                              digitalkin.models.module.ag_ui.AgUiDataTrigger --> digitalkin.models.module.ag_ui.AgUiToolCallStartOutput
+                                digitalkin.models.module.base_types.DataTrigger --> digitalkin.models.module.ag_ui.AgUiDataTrigger
+                
+
+
+
+              click digitalkin.models.module.ag_ui.AgUiToolCallStartOutput href "" "digitalkin.models.module.ag_ui.AgUiToolCallStartOutput"
+              click digitalkin.models.module.ag_ui.AgUiDataTrigger href "" "digitalkin.models.module.ag_ui.AgUiDataTrigger"
+              click digitalkin.models.module.base_types.DataTrigger href "" "digitalkin.models.module.base_types.DataTrigger"
+```
+
+AG-UI ToolCallStart event - signals start of a tool invocation.
 
 #### base_types
 
@@ -13064,6 +15268,367 @@ File history model.
 
 File model.
 
+### settings
+
+This package contain settings of sdk.
+
+Modules:
+
+- **`server`** – Package for server settings.
+- **`utils`** – This package contain channel base.
+
+#### server
+
+Package for server settings.
+
+Modules:
+
+- **`channel`** – Server channel settings.
+- **`grpc`** – gRPC server settings for the SDK.
+- **`server`** – Server settings for the DigitalKin application.
+
+##### channel
+
+Server channel settings.
+
+Classes:
+
+- **`ServerChannelSettings`** – Settings for a server channel.
+
+###### ServerChannelSettings
+
+```python
+ServerChannelSettings(**values: Any)
+```
+
+```
+              flowchart TD
+              digitalkin.models.settings.server.channel.ServerChannelSettings[ServerChannelSettings]
+              digitalkin.models.settings.utils.channel.BaseChannelSettings[BaseChannelSettings]
+
+                              digitalkin.models.settings.utils.channel.BaseChannelSettings --> digitalkin.models.settings.server.channel.ServerChannelSettings
+                
+
+
+              click digitalkin.models.settings.server.channel.ServerChannelSettings href "" "digitalkin.models.settings.server.channel.ServerChannelSettings"
+              click digitalkin.models.settings.utils.channel.BaseChannelSettings href "" "digitalkin.models.settings.utils.channel.BaseChannelSettings"
+```
+
+Settings for a server channel.
+
+Attributes:
+
+- **`advertise_host`** (`str | None`) – Public hostname/IP sent to registry for discovery. Falls back to host if not set.
+- **`database_url`** (`str | None`) – Database URL for registry data storage
+
+Methods:
+
+- **`validate_credentials`** – Validate that credentials are provided when in secure mode.
+- **`validate_port`** – Validate that the port is in a valid range.
+
+###### address
+
+```python
+address: str
+```
+
+Get the server address.
+
+Returns:
+
+- `str` – The formatted address string
+
+###### validate_credentials
+
+```python
+validate_credentials() -> BaseChannelSettings
+```
+
+Validate that credentials are provided when in secure mode.
+
+Returns:
+
+- `BaseChannelSettings` – The validated credentials
+
+Raises:
+
+- `ConfigurationError` – If credentials are missing in secure mode
+
+###### validate_port
+
+```python
+validate_port(v: int) -> int
+```
+
+Validate that the port is in a valid range.
+
+Parameters:
+
+- ###### **`v`**
+
+  (`int`) – Port number to validate
+
+Returns:
+
+- `int` – The validated port number
+
+Raises:
+
+- `ConfigurationError` – If port is outside valid range
+
+##### grpc
+
+gRPC server settings for the SDK.
+
+Classes:
+
+- **`GrpcServerSettings`** – gRPC tuning settings on the SDK side.
+
+###### GrpcServerSettings
+
+```python
+GrpcServerSettings(**values: Any)
+```
+
+```
+              flowchart TD
+              digitalkin.models.settings.server.grpc.GrpcServerSettings[GrpcServerSettings]
+
+              
+
+              click digitalkin.models.settings.server.grpc.GrpcServerSettings href "" "digitalkin.models.settings.server.grpc.GrpcServerSettings"
+```
+
+gRPC tuning settings on the SDK side.
+
+Attributes:
+
+- **`compression`** (`GrpcCompression`) – gRPC compression algorithm to use for server responses.
+- **`keepalive_time`** (`NonNegativeFloat`) – Interval for server keepalive pings, in milliseconds.
+- **`keepalive_timeout`** (`NonNegativeFloat`) – Timeout for server keepalive pings, in milliseconds.
+- **`min_ping_interval`** (`NonNegativeFloat`) – Minimum interval between HTTP/2 pings on the server side, in milliseconds.
+- **`max_receive_message_lenght`** (`NonNegativeFloat`) – Maximum message size the server can receive, in bytes.
+- **`max_send_message_length`** (`NonNegativeFloat`) – Maximum message size the server can send, in bytes.
+- **`max_pings_without_data`** (`NonNegativeFloat`) – Maximum number of pings the server allows without receiving any data.
+- **`keepalive_permit_without_calls`** (`bool`) – Allow clients to send keepalive pings even when there are no active RPCs.
+
+###### options
+
+```python
+options: list[tuple[str, Any]]
+```
+
+Convert settings to gRPC server options format.
+
+Returns:
+
+- `list[tuple[str, Any]]` – List of tuples containing gRPC server options and their corresponding values.
+
+##### server
+
+Server settings for the DigitalKin application.
+
+Classes:
+
+- **`ServerSettings`** – Settings for the DigitalKin server.
+
+###### ServerSettings
+
+```python
+ServerSettings(**values: Any)
+```
+
+```
+              flowchart TD
+              digitalkin.models.settings.server.server.ServerSettings[ServerSettings]
+
+              
+
+              click digitalkin.models.settings.server.server.ServerSettings href "" "digitalkin.models.settings.server.server.ServerSettings"
+```
+
+Settings for the DigitalKin server.
+
+Attributes:
+
+- **`channel`** (`ServerChannelSettings`) – Settings for the server channel.
+- **`grpc`** (`GrpcServerSettings`) – Settings for the gRPC server.
+- **`health_check`** (`bool`) – Whether to enable the health check service.
+- **`reflection`** (`bool`) – Whether to enable reflection for the server.
+- **`max_concurrent_rpcs`** (`NonNegativeInt`) – Maximum number of RPCs handled in parallel by the server.
+- **`max_workers`** (`NonNegativeInt`) – Maximum number of workers for sync mode.
+- **`thread_pool_workers`** (`NonNegativeInt`) – Number of workers in the server thread pool.
+
+#### utils
+
+This package contain channel base.
+
+Modules:
+
+- **`channel`** – This file define channelBase for grpc config.
+
+##### channel
+
+This file define channelBase for grpc config.
+
+Classes:
+
+- **`BaseChannelSettings`** – Base settings model for gRPC channel configuration.
+- **`ControlFlow`** – Enum for server operation mode.
+- **`Credentials`** – Model for server credentials in secure mode.
+- **`SecurityMode`** – Enum for server security mode.
+
+###### BaseChannelSettings
+
+```python
+BaseChannelSettings(**values: Any)
+```
+
+```
+              flowchart TD
+              digitalkin.models.settings.utils.channel.BaseChannelSettings[BaseChannelSettings]
+
+              
+
+              click digitalkin.models.settings.utils.channel.BaseChannelSettings href "" "digitalkin.models.settings.utils.channel.BaseChannelSettings"
+```
+
+Base settings model for gRPC channel configuration.
+
+Methods:
+
+- **`validate_credentials`** – Validate that credentials are provided when in secure mode.
+- **`validate_port`** – Validate that the port is in a valid range.
+
+Attributes:
+
+- **`address`** (`str`) – Get the server address.
+
+###### address
+
+```python
+address: str
+```
+
+Get the server address.
+
+Returns:
+
+- `str` – The formatted address string
+
+###### validate_credentials
+
+```python
+validate_credentials() -> BaseChannelSettings
+```
+
+Validate that credentials are provided when in secure mode.
+
+Returns:
+
+- `BaseChannelSettings` – The validated credentials
+
+Raises:
+
+- `ConfigurationError` – If credentials are missing in secure mode
+
+###### validate_port
+
+```python
+validate_port(v: int) -> int
+```
+
+Validate that the port is in a valid range.
+
+Parameters:
+
+- ###### **`v`**
+
+  (`int`) – Port number to validate
+
+Returns:
+
+- `int` – The validated port number
+
+Raises:
+
+- `ConfigurationError` – If port is outside valid range
+
+###### ControlFlow
+
+```
+              flowchart TD
+              digitalkin.models.settings.utils.channel.ControlFlow[ControlFlow]
+
+              
+
+              click digitalkin.models.settings.utils.channel.ControlFlow href "" "digitalkin.models.settings.utils.channel.ControlFlow"
+```
+
+Enum for server operation mode.
+
+###### Credentials
+
+```python
+Credentials(**data: Any)
+```
+
+```
+              flowchart TD
+              digitalkin.models.settings.utils.channel.Credentials[Credentials]
+
+              
+
+              click digitalkin.models.settings.utils.channel.Credentials href "" "digitalkin.models.settings.utils.channel.Credentials"
+```
+
+Model for server credentials in secure mode.
+
+Attributes:
+
+- **`key_path`** (`Path | None`) – Path to the server private key
+- **`cert_path`** (`Path | None`) – Path to the server certificate
+- **`root_cert_path`** (`Path | None`) – Optional path to the root certificate
+
+Methods:
+
+- **`check_path_exists`** – Validate that the file path exists.
+
+###### check_path_exists
+
+```python
+check_path_exists(v: Path | None) -> Path | None
+```
+
+Validate that the file path exists.
+
+Parameters:
+
+- ###### **`v`**
+
+  (`Path | None`) – Path to validate
+
+Returns:
+
+- `Path | None` – The validated path
+
+Raises:
+
+- `SecurityError` – If the path does not exist
+
+###### SecurityMode
+
+```
+              flowchart TD
+              digitalkin.models.settings.utils.channel.SecurityMode[SecurityMode]
+
+              
+
+              click digitalkin.models.settings.utils.channel.SecurityMode href "" "digitalkin.models.settings.utils.channel.SecurityMode"
+```
+
+Enum for server security mode.
+
 ## modules
 
 Module package for DigitalKin.
@@ -14074,8 +16639,7 @@ TriggerHandler(context: ModuleContext)
               digitalkin.modules.TriggerHandler[TriggerHandler]
               digitalkin.mixins.base_mixin.BaseMixin[BaseMixin]
               digitalkin.mixins.cost_mixin.CostMixin[CostMixin]
-              digitalkin.mixins.chat_history_mixin.ChatHistoryMixin[ChatHistoryMixin]
-              digitalkin.mixins.callback_mixin.UserMessageMixin[UserMessageMixin]
+              digitalkin.mixins.agui_mixin.AgUiMixin[AgUiMixin]
               digitalkin.mixins.file_history_mixin.FileHistoryMixin[FileHistoryMixin]
               digitalkin.mixins.storage_mixin.StorageMixin[StorageMixin]
               digitalkin.mixins.logger_mixin.LoggerMixin[LoggerMixin]
@@ -14083,14 +16647,8 @@ TriggerHandler(context: ModuleContext)
                               digitalkin.mixins.base_mixin.BaseMixin --> digitalkin.modules.TriggerHandler
                                 digitalkin.mixins.cost_mixin.CostMixin --> digitalkin.mixins.base_mixin.BaseMixin
                 
-                digitalkin.mixins.chat_history_mixin.ChatHistoryMixin --> digitalkin.mixins.base_mixin.BaseMixin
-                                digitalkin.mixins.callback_mixin.UserMessageMixin --> digitalkin.mixins.chat_history_mixin.ChatHistoryMixin
+                digitalkin.mixins.agui_mixin.AgUiMixin --> digitalkin.mixins.base_mixin.BaseMixin
                 
-                digitalkin.mixins.storage_mixin.StorageMixin --> digitalkin.mixins.chat_history_mixin.ChatHistoryMixin
-                
-                digitalkin.mixins.logger_mixin.LoggerMixin --> digitalkin.mixins.chat_history_mixin.ChatHistoryMixin
-                
-
                 digitalkin.mixins.file_history_mixin.FileHistoryMixin --> digitalkin.mixins.base_mixin.BaseMixin
                                 digitalkin.mixins.storage_mixin.StorageMixin --> digitalkin.mixins.file_history_mixin.FileHistoryMixin
                 
@@ -14105,8 +16663,7 @@ TriggerHandler(context: ModuleContext)
               click digitalkin.modules.TriggerHandler href "" "digitalkin.modules.TriggerHandler"
               click digitalkin.mixins.base_mixin.BaseMixin href "" "digitalkin.mixins.base_mixin.BaseMixin"
               click digitalkin.mixins.cost_mixin.CostMixin href "" "digitalkin.mixins.cost_mixin.CostMixin"
-              click digitalkin.mixins.chat_history_mixin.ChatHistoryMixin href "" "digitalkin.mixins.chat_history_mixin.ChatHistoryMixin"
-              click digitalkin.mixins.callback_mixin.UserMessageMixin href "" "digitalkin.mixins.callback_mixin.UserMessageMixin"
+              click digitalkin.mixins.agui_mixin.AgUiMixin href "" "digitalkin.mixins.agui_mixin.AgUiMixin"
               click digitalkin.mixins.file_history_mixin.FileHistoryMixin href "" "digitalkin.mixins.file_history_mixin.FileHistoryMixin"
               click digitalkin.mixins.storage_mixin.StorageMixin href "" "digitalkin.mixins.storage_mixin.StorageMixin"
               click digitalkin.mixins.logger_mixin.LoggerMixin href "" "digitalkin.mixins.logger_mixin.LoggerMixin"
@@ -14122,24 +16679,19 @@ Each handler declares
 Methods:
 
 - **`add_cost`** – Add a cost entry using the cost strategy.
-- **`append_chat_history_message`** – Append a message to chat history.
 - **`append_files_history`** – Append files to file history.
-- **`clear_ch_mission_cache`** – Remove a mission's entries from in-memory caches after flush.
 - **`clear_fh_mission_cache`** – Remove a mission's entries from in-memory caches after flush.
-- **`flush_chat_history`** – Flush the current mission's dirty chat history to storage.
 - **`flush_file_history`** – Flush the current mission's dirty file history to storage.
 - **`get_cost`** – Get cost entries for a specific name.
 - **`get_costs`** – Get filtered cost entries.
 - **`handle`** – Asynchronously processes the input data specific to Handler and streams results via the provided callback.
-- **`load_chat_history`** – Load chat history for the current session.
 - **`load_file_history`** – Load file history for the current session.
 - **`log_debug`** – Log debug message using the callbacks strategy.
 - **`log_error`** – Log error message using the callbacks strategy.
 - **`log_info`** – Log info message using the callbacks strategy.
 - **`log_warning`** – Log warning message using the callbacks strategy.
 - **`read_storage`** – Read data from storage.
-- **`save_send_message`** – Save output to chat history and send response to the module request.
-- **`send_message`** – Send a message using the callbacks strategy.
+- **`send_message`** – Convert agent event to AG-UI protocol and send via context callbacks.
 - **`store_storage`** – Store data using the storage strategy.
 - **`update_storage`** – Update existing data in storage.
 - **`upsert_storage`** – Insert or update data in storage atomically.
@@ -14172,30 +16724,6 @@ Parameters:
 
   (`float`) – Quantity of units consumed.
 
-#### append_chat_history_message
-
-```python
-append_chat_history_message(context: ModuleContext, role: Role, content: Any) -> None
-```
-
-Append a message to chat history.
-
-The message is added to the in-memory cache immediately. A storage write is deferred until the batch threshold is reached (default 10, env: DIGITALKIN_CHAT_HISTORY_FLUSH_THRESHOLD) or flush_chat_history().
-
-Parameters:
-
-- ##### **`context`**
-
-  (`ModuleContext`) – Module context containing storage strategy.
-
-- ##### **`role`**
-
-  (`Role`) – Message role (user, assistant, system).
-
-- ##### **`content`**
-
-  (`Any`) – Message content.
-
 #### append_files_history
 
 ```python
@@ -14216,20 +16744,6 @@ Parameters:
 
   (`list[FileModel]`) – List of file models to append.
 
-#### clear_ch_mission_cache
-
-```python
-clear_ch_mission_cache(context: ModuleContext) -> None
-```
-
-Remove a mission's entries from in-memory caches after flush.
-
-Parameters:
-
-- ##### **`context`**
-
-  (`ModuleContext`) – Module context identifying the mission to clear.
-
 #### clear_fh_mission_cache
 
 ```python
@@ -14243,22 +16757,6 @@ Parameters:
 - ##### **`context`**
 
   (`ModuleContext`) – Module context identifying the mission to clear.
-
-#### flush_chat_history
-
-```python
-flush_chat_history(context: ModuleContext) -> None
-```
-
-Flush the current mission's dirty chat history to storage.
-
-Only flushes the key belonging to context's mission_id, preventing cross-mission contamination when handlers are shared.
-
-Parameters:
-
-- ##### **`context`**
-
-  (`ModuleContext`) – Module context containing storage strategy.
 
 #### flush_file_history
 
@@ -14364,26 +16862,6 @@ Note
 self.send_message: callback used to stream results. (Callable\[[OutputModelT], Coroutine[Any, Any, None]\])
 
 The callback must be awaited to ensure results are streamed correctly during processing.
-
-#### load_chat_history
-
-```python
-load_chat_history(context: ModuleContext) -> ChatHistory
-```
-
-Load chat history for the current session.
-
-Returns cached history on subsequent calls to avoid gRPC reads.
-
-Parameters:
-
-- ##### **`context`**
-
-  (`ModuleContext`) – Module context containing storage strategy.
-
-Returns:
-
-- `ChatHistory` – Chat history object, empty if none exists or loading fails.
 
 #### load_file_history
 
@@ -14525,35 +17003,13 @@ Raises:
 
 - `StorageServiceError` – If read operation fails
 
-#### save_send_message
-
-```python
-save_send_message(context: ModuleContext, output: OutputModelT, role: Role) -> None
-```
-
-Save output to chat history and send response to the module request.
-
-Parameters:
-
-- ##### **`context`**
-
-  (`ModuleContext`) – Module context containing storage strategy.
-
-- ##### **`role`**
-
-  (`Role`) – Message role (user, assistant, system).
-
-- ##### **`output`**
-
-  (`OutputModelT`) – Message content as Pydantic Class.
-
 #### send_message
 
 ```python
-send_message(context: ModuleContext, output: OutputModelT) -> None
+send_message(context: ModuleContext, event: BaseAgentRunEvent) -> None
 ```
 
-Send a message using the callbacks strategy.
+Convert agent event to AG-UI protocol and send via context callbacks.
 
 Parameters:
 
@@ -14561,9 +17017,9 @@ Parameters:
 
   (`ModuleContext`) – Module context containing the callbacks strategy.
 
-- ##### **`output`**
+- ##### **`event`**
 
-  (`OutputModelT`) – Message to send with the Module defined output Type.
+  (`BaseAgentRunEvent`) – Agent run event to process and convert.
 
 #### store_storage
 
@@ -15706,8 +18162,7 @@ TriggerHandler(context: ModuleContext)
               digitalkin.modules.trigger_handler.TriggerHandler[TriggerHandler]
               digitalkin.mixins.base_mixin.BaseMixin[BaseMixin]
               digitalkin.mixins.cost_mixin.CostMixin[CostMixin]
-              digitalkin.mixins.chat_history_mixin.ChatHistoryMixin[ChatHistoryMixin]
-              digitalkin.mixins.callback_mixin.UserMessageMixin[UserMessageMixin]
+              digitalkin.mixins.agui_mixin.AgUiMixin[AgUiMixin]
               digitalkin.mixins.file_history_mixin.FileHistoryMixin[FileHistoryMixin]
               digitalkin.mixins.storage_mixin.StorageMixin[StorageMixin]
               digitalkin.mixins.logger_mixin.LoggerMixin[LoggerMixin]
@@ -15715,14 +18170,8 @@ TriggerHandler(context: ModuleContext)
                               digitalkin.mixins.base_mixin.BaseMixin --> digitalkin.modules.trigger_handler.TriggerHandler
                                 digitalkin.mixins.cost_mixin.CostMixin --> digitalkin.mixins.base_mixin.BaseMixin
                 
-                digitalkin.mixins.chat_history_mixin.ChatHistoryMixin --> digitalkin.mixins.base_mixin.BaseMixin
-                                digitalkin.mixins.callback_mixin.UserMessageMixin --> digitalkin.mixins.chat_history_mixin.ChatHistoryMixin
+                digitalkin.mixins.agui_mixin.AgUiMixin --> digitalkin.mixins.base_mixin.BaseMixin
                 
-                digitalkin.mixins.storage_mixin.StorageMixin --> digitalkin.mixins.chat_history_mixin.ChatHistoryMixin
-                
-                digitalkin.mixins.logger_mixin.LoggerMixin --> digitalkin.mixins.chat_history_mixin.ChatHistoryMixin
-                
-
                 digitalkin.mixins.file_history_mixin.FileHistoryMixin --> digitalkin.mixins.base_mixin.BaseMixin
                                 digitalkin.mixins.storage_mixin.StorageMixin --> digitalkin.mixins.file_history_mixin.FileHistoryMixin
                 
@@ -15737,8 +18186,7 @@ TriggerHandler(context: ModuleContext)
               click digitalkin.modules.trigger_handler.TriggerHandler href "" "digitalkin.modules.trigger_handler.TriggerHandler"
               click digitalkin.mixins.base_mixin.BaseMixin href "" "digitalkin.mixins.base_mixin.BaseMixin"
               click digitalkin.mixins.cost_mixin.CostMixin href "" "digitalkin.mixins.cost_mixin.CostMixin"
-              click digitalkin.mixins.chat_history_mixin.ChatHistoryMixin href "" "digitalkin.mixins.chat_history_mixin.ChatHistoryMixin"
-              click digitalkin.mixins.callback_mixin.UserMessageMixin href "" "digitalkin.mixins.callback_mixin.UserMessageMixin"
+              click digitalkin.mixins.agui_mixin.AgUiMixin href "" "digitalkin.mixins.agui_mixin.AgUiMixin"
               click digitalkin.mixins.file_history_mixin.FileHistoryMixin href "" "digitalkin.mixins.file_history_mixin.FileHistoryMixin"
               click digitalkin.mixins.storage_mixin.StorageMixin href "" "digitalkin.mixins.storage_mixin.StorageMixin"
               click digitalkin.mixins.logger_mixin.LoggerMixin href "" "digitalkin.mixins.logger_mixin.LoggerMixin"
@@ -15754,24 +18202,19 @@ Each handler declares
 Methods:
 
 - **`add_cost`** – Add a cost entry using the cost strategy.
-- **`append_chat_history_message`** – Append a message to chat history.
 - **`append_files_history`** – Append files to file history.
-- **`clear_ch_mission_cache`** – Remove a mission's entries from in-memory caches after flush.
 - **`clear_fh_mission_cache`** – Remove a mission's entries from in-memory caches after flush.
-- **`flush_chat_history`** – Flush the current mission's dirty chat history to storage.
 - **`flush_file_history`** – Flush the current mission's dirty file history to storage.
 - **`get_cost`** – Get cost entries for a specific name.
 - **`get_costs`** – Get filtered cost entries.
 - **`handle`** – Asynchronously processes the input data specific to Handler and streams results via the provided callback.
-- **`load_chat_history`** – Load chat history for the current session.
 - **`load_file_history`** – Load file history for the current session.
 - **`log_debug`** – Log debug message using the callbacks strategy.
 - **`log_error`** – Log error message using the callbacks strategy.
 - **`log_info`** – Log info message using the callbacks strategy.
 - **`log_warning`** – Log warning message using the callbacks strategy.
 - **`read_storage`** – Read data from storage.
-- **`save_send_message`** – Save output to chat history and send response to the module request.
-- **`send_message`** – Send a message using the callbacks strategy.
+- **`send_message`** – Convert agent event to AG-UI protocol and send via context callbacks.
 - **`store_storage`** – Store data using the storage strategy.
 - **`update_storage`** – Update existing data in storage.
 - **`upsert_storage`** – Insert or update data in storage atomically.
@@ -15804,30 +18247,6 @@ Parameters:
 
   (`float`) – Quantity of units consumed.
 
-##### append_chat_history_message
-
-```python
-append_chat_history_message(context: ModuleContext, role: Role, content: Any) -> None
-```
-
-Append a message to chat history.
-
-The message is added to the in-memory cache immediately. A storage write is deferred until the batch threshold is reached (default 10, env: DIGITALKIN_CHAT_HISTORY_FLUSH_THRESHOLD) or flush_chat_history().
-
-Parameters:
-
-- ###### **`context`**
-
-  (`ModuleContext`) – Module context containing storage strategy.
-
-- ###### **`role`**
-
-  (`Role`) – Message role (user, assistant, system).
-
-- ###### **`content`**
-
-  (`Any`) – Message content.
-
 ##### append_files_history
 
 ```python
@@ -15848,20 +18267,6 @@ Parameters:
 
   (`list[FileModel]`) – List of file models to append.
 
-##### clear_ch_mission_cache
-
-```python
-clear_ch_mission_cache(context: ModuleContext) -> None
-```
-
-Remove a mission's entries from in-memory caches after flush.
-
-Parameters:
-
-- ###### **`context`**
-
-  (`ModuleContext`) – Module context identifying the mission to clear.
-
 ##### clear_fh_mission_cache
 
 ```python
@@ -15875,22 +18280,6 @@ Parameters:
 - ###### **`context`**
 
   (`ModuleContext`) – Module context identifying the mission to clear.
-
-##### flush_chat_history
-
-```python
-flush_chat_history(context: ModuleContext) -> None
-```
-
-Flush the current mission's dirty chat history to storage.
-
-Only flushes the key belonging to context's mission_id, preventing cross-mission contamination when handlers are shared.
-
-Parameters:
-
-- ###### **`context`**
-
-  (`ModuleContext`) – Module context containing storage strategy.
 
 ##### flush_file_history
 
@@ -15996,26 +18385,6 @@ Note
 self.send_message: callback used to stream results. (Callable\[[OutputModelT], Coroutine[Any, Any, None]\])
 
 The callback must be awaited to ensure results are streamed correctly during processing.
-
-##### load_chat_history
-
-```python
-load_chat_history(context: ModuleContext) -> ChatHistory
-```
-
-Load chat history for the current session.
-
-Returns cached history on subsequent calls to avoid gRPC reads.
-
-Parameters:
-
-- ###### **`context`**
-
-  (`ModuleContext`) – Module context containing storage strategy.
-
-Returns:
-
-- `ChatHistory` – Chat history object, empty if none exists or loading fails.
 
 ##### load_file_history
 
@@ -16157,35 +18526,13 @@ Raises:
 
 - `StorageServiceError` – If read operation fails
 
-##### save_send_message
-
-```python
-save_send_message(context: ModuleContext, output: OutputModelT, role: Role) -> None
-```
-
-Save output to chat history and send response to the module request.
-
-Parameters:
-
-- ###### **`context`**
-
-  (`ModuleContext`) – Module context containing storage strategy.
-
-- ###### **`role`**
-
-  (`Role`) – Message role (user, assistant, system).
-
-- ###### **`output`**
-
-  (`OutputModelT`) – Message content as Pydantic Class.
-
 ##### send_message
 
 ```python
-send_message(context: ModuleContext, output: OutputModelT) -> None
+send_message(context: ModuleContext, event: BaseAgentRunEvent) -> None
 ```
 
-Send a message using the callbacks strategy.
+Convert agent event to AG-UI protocol and send via context callbacks.
 
 Parameters:
 
@@ -16193,9 +18540,9 @@ Parameters:
 
   (`ModuleContext`) – Module context containing the callbacks strategy.
 
-- ###### **`output`**
+- ###### **`event`**
 
-  (`OutputModelT`) – Message to send with the Module defined output Type.
+  (`BaseAgentRunEvent`) – Agent run event to process and convert.
 
 ##### store_storage
 
@@ -16355,8 +18702,7 @@ HealthcheckPingTrigger(context: ModuleContext)
               digitalkin.modules.trigger_handler.TriggerHandler[TriggerHandler]
               digitalkin.mixins.base_mixin.BaseMixin[BaseMixin]
               digitalkin.mixins.cost_mixin.CostMixin[CostMixin]
-              digitalkin.mixins.chat_history_mixin.ChatHistoryMixin[ChatHistoryMixin]
-              digitalkin.mixins.callback_mixin.UserMessageMixin[UserMessageMixin]
+              digitalkin.mixins.agui_mixin.AgUiMixin[AgUiMixin]
               digitalkin.mixins.file_history_mixin.FileHistoryMixin[FileHistoryMixin]
               digitalkin.mixins.storage_mixin.StorageMixin[StorageMixin]
               digitalkin.mixins.logger_mixin.LoggerMixin[LoggerMixin]
@@ -16365,14 +18711,8 @@ HealthcheckPingTrigger(context: ModuleContext)
                                 digitalkin.mixins.base_mixin.BaseMixin --> digitalkin.modules.trigger_handler.TriggerHandler
                                 digitalkin.mixins.cost_mixin.CostMixin --> digitalkin.mixins.base_mixin.BaseMixin
                 
-                digitalkin.mixins.chat_history_mixin.ChatHistoryMixin --> digitalkin.mixins.base_mixin.BaseMixin
-                                digitalkin.mixins.callback_mixin.UserMessageMixin --> digitalkin.mixins.chat_history_mixin.ChatHistoryMixin
+                digitalkin.mixins.agui_mixin.AgUiMixin --> digitalkin.mixins.base_mixin.BaseMixin
                 
-                digitalkin.mixins.storage_mixin.StorageMixin --> digitalkin.mixins.chat_history_mixin.ChatHistoryMixin
-                
-                digitalkin.mixins.logger_mixin.LoggerMixin --> digitalkin.mixins.chat_history_mixin.ChatHistoryMixin
-                
-
                 digitalkin.mixins.file_history_mixin.FileHistoryMixin --> digitalkin.mixins.base_mixin.BaseMixin
                                 digitalkin.mixins.storage_mixin.StorageMixin --> digitalkin.mixins.file_history_mixin.FileHistoryMixin
                 
@@ -16386,14 +18726,8 @@ HealthcheckPingTrigger(context: ModuleContext)
                 digitalkin.mixins.base_mixin.BaseMixin --> digitalkin.modules.triggers.healthcheck_ping_trigger.HealthcheckPingTrigger
                                 digitalkin.mixins.cost_mixin.CostMixin --> digitalkin.mixins.base_mixin.BaseMixin
                 
-                digitalkin.mixins.chat_history_mixin.ChatHistoryMixin --> digitalkin.mixins.base_mixin.BaseMixin
-                                digitalkin.mixins.callback_mixin.UserMessageMixin --> digitalkin.mixins.chat_history_mixin.ChatHistoryMixin
+                digitalkin.mixins.agui_mixin.AgUiMixin --> digitalkin.mixins.base_mixin.BaseMixin
                 
-                digitalkin.mixins.storage_mixin.StorageMixin --> digitalkin.mixins.chat_history_mixin.ChatHistoryMixin
-                
-                digitalkin.mixins.logger_mixin.LoggerMixin --> digitalkin.mixins.chat_history_mixin.ChatHistoryMixin
-                
-
                 digitalkin.mixins.file_history_mixin.FileHistoryMixin --> digitalkin.mixins.base_mixin.BaseMixin
                                 digitalkin.mixins.storage_mixin.StorageMixin --> digitalkin.mixins.file_history_mixin.FileHistoryMixin
                 
@@ -16409,8 +18743,7 @@ HealthcheckPingTrigger(context: ModuleContext)
               click digitalkin.modules.trigger_handler.TriggerHandler href "" "digitalkin.modules.trigger_handler.TriggerHandler"
               click digitalkin.mixins.base_mixin.BaseMixin href "" "digitalkin.mixins.base_mixin.BaseMixin"
               click digitalkin.mixins.cost_mixin.CostMixin href "" "digitalkin.mixins.cost_mixin.CostMixin"
-              click digitalkin.mixins.chat_history_mixin.ChatHistoryMixin href "" "digitalkin.mixins.chat_history_mixin.ChatHistoryMixin"
-              click digitalkin.mixins.callback_mixin.UserMessageMixin href "" "digitalkin.mixins.callback_mixin.UserMessageMixin"
+              click digitalkin.mixins.agui_mixin.AgUiMixin href "" "digitalkin.mixins.agui_mixin.AgUiMixin"
               click digitalkin.mixins.file_history_mixin.FileHistoryMixin href "" "digitalkin.mixins.file_history_mixin.FileHistoryMixin"
               click digitalkin.mixins.storage_mixin.StorageMixin href "" "digitalkin.mixins.storage_mixin.StorageMixin"
               click digitalkin.mixins.logger_mixin.LoggerMixin href "" "digitalkin.mixins.logger_mixin.LoggerMixin"
@@ -16423,24 +18756,19 @@ Responds immediately with "pong" status to verify the module is responsive.
 Methods:
 
 - **`add_cost`** – Add a cost entry using the cost strategy.
-- **`append_chat_history_message`** – Append a message to chat history.
 - **`append_files_history`** – Append files to file history.
-- **`clear_ch_mission_cache`** – Remove a mission's entries from in-memory caches after flush.
 - **`clear_fh_mission_cache`** – Remove a mission's entries from in-memory caches after flush.
-- **`flush_chat_history`** – Flush the current mission's dirty chat history to storage.
 - **`flush_file_history`** – Flush the current mission's dirty file history to storage.
 - **`get_cost`** – Get cost entries for a specific name.
 - **`get_costs`** – Get filtered cost entries.
 - **`handle`** – Handle ping healthcheck request.
-- **`load_chat_history`** – Load chat history for the current session.
 - **`load_file_history`** – Load file history for the current session.
 - **`log_debug`** – Log debug message using the callbacks strategy.
 - **`log_error`** – Log error message using the callbacks strategy.
 - **`log_info`** – Log info message using the callbacks strategy.
 - **`log_warning`** – Log warning message using the callbacks strategy.
 - **`read_storage`** – Read data from storage.
-- **`save_send_message`** – Save output to chat history and send response to the module request.
-- **`send_message`** – Send a message using the callbacks strategy.
+- **`send_message`** – Convert agent event to AG-UI protocol and send via context callbacks.
 - **`store_storage`** – Store data using the storage strategy.
 - **`update_storage`** – Update existing data in storage.
 - **`upsert_storage`** – Insert or update data in storage atomically.
@@ -16473,30 +18801,6 @@ Parameters:
 
   (`float`) – Quantity of units consumed.
 
-###### append_chat_history_message
-
-```python
-append_chat_history_message(context: ModuleContext, role: Role, content: Any) -> None
-```
-
-Append a message to chat history.
-
-The message is added to the in-memory cache immediately. A storage write is deferred until the batch threshold is reached (default 10, env: DIGITALKIN_CHAT_HISTORY_FLUSH_THRESHOLD) or flush_chat_history().
-
-Parameters:
-
-- ###### **`context`**
-
-  (`ModuleContext`) – Module context containing storage strategy.
-
-- ###### **`role`**
-
-  (`Role`) – Message role (user, assistant, system).
-
-- ###### **`content`**
-
-  (`Any`) – Message content.
-
 ###### append_files_history
 
 ```python
@@ -16517,20 +18821,6 @@ Parameters:
 
   (`list[FileModel]`) – List of file models to append.
 
-###### clear_ch_mission_cache
-
-```python
-clear_ch_mission_cache(context: ModuleContext) -> None
-```
-
-Remove a mission's entries from in-memory caches after flush.
-
-Parameters:
-
-- ###### **`context`**
-
-  (`ModuleContext`) – Module context identifying the mission to clear.
-
 ###### clear_fh_mission_cache
 
 ```python
@@ -16544,22 +18834,6 @@ Parameters:
 - ###### **`context`**
 
   (`ModuleContext`) – Module context identifying the mission to clear.
-
-###### flush_chat_history
-
-```python
-flush_chat_history(context: ModuleContext) -> None
-```
-
-Flush the current mission's dirty chat history to storage.
-
-Only flushes the key belonging to context's mission_id, preventing cross-mission contamination when handlers are shared.
-
-Parameters:
-
-- ###### **`context`**
-
-  (`ModuleContext`) – Module context containing storage strategy.
 
 ###### flush_file_history
 
@@ -16655,26 +18929,6 @@ Parameters:
 - ###### **`context`**
 
   (`ModuleContext`) – The module context.
-
-###### load_chat_history
-
-```python
-load_chat_history(context: ModuleContext) -> ChatHistory
-```
-
-Load chat history for the current session.
-
-Returns cached history on subsequent calls to avoid gRPC reads.
-
-Parameters:
-
-- ###### **`context`**
-
-  (`ModuleContext`) – Module context containing storage strategy.
-
-Returns:
-
-- `ChatHistory` – Chat history object, empty if none exists or loading fails.
 
 ###### load_file_history
 
@@ -16816,35 +19070,13 @@ Raises:
 
 - `StorageServiceError` – If read operation fails
 
-###### save_send_message
-
-```python
-save_send_message(context: ModuleContext, output: OutputModelT, role: Role) -> None
-```
-
-Save output to chat history and send response to the module request.
-
-Parameters:
-
-- ###### **`context`**
-
-  (`ModuleContext`) – Module context containing storage strategy.
-
-- ###### **`role`**
-
-  (`Role`) – Message role (user, assistant, system).
-
-- ###### **`output`**
-
-  (`OutputModelT`) – Message content as Pydantic Class.
-
 ###### send_message
 
 ```python
-send_message(context: ModuleContext, output: OutputModelT) -> None
+send_message(context: ModuleContext, event: BaseAgentRunEvent) -> None
 ```
 
-Send a message using the callbacks strategy.
+Convert agent event to AG-UI protocol and send via context callbacks.
 
 Parameters:
 
@@ -16852,9 +19084,9 @@ Parameters:
 
   (`ModuleContext`) – Module context containing the callbacks strategy.
 
-- ###### **`output`**
+- ###### **`event`**
 
-  (`OutputModelT`) – Message to send with the Module defined output Type.
+  (`BaseAgentRunEvent`) – Agent run event to process and convert.
 
 ###### store_storage
 
@@ -17000,8 +19232,7 @@ HealthcheckServicesTrigger(context: ModuleContext)
               digitalkin.modules.trigger_handler.TriggerHandler[TriggerHandler]
               digitalkin.mixins.base_mixin.BaseMixin[BaseMixin]
               digitalkin.mixins.cost_mixin.CostMixin[CostMixin]
-              digitalkin.mixins.chat_history_mixin.ChatHistoryMixin[ChatHistoryMixin]
-              digitalkin.mixins.callback_mixin.UserMessageMixin[UserMessageMixin]
+              digitalkin.mixins.agui_mixin.AgUiMixin[AgUiMixin]
               digitalkin.mixins.file_history_mixin.FileHistoryMixin[FileHistoryMixin]
               digitalkin.mixins.storage_mixin.StorageMixin[StorageMixin]
               digitalkin.mixins.logger_mixin.LoggerMixin[LoggerMixin]
@@ -17010,14 +19241,8 @@ HealthcheckServicesTrigger(context: ModuleContext)
                                 digitalkin.mixins.base_mixin.BaseMixin --> digitalkin.modules.trigger_handler.TriggerHandler
                                 digitalkin.mixins.cost_mixin.CostMixin --> digitalkin.mixins.base_mixin.BaseMixin
                 
-                digitalkin.mixins.chat_history_mixin.ChatHistoryMixin --> digitalkin.mixins.base_mixin.BaseMixin
-                                digitalkin.mixins.callback_mixin.UserMessageMixin --> digitalkin.mixins.chat_history_mixin.ChatHistoryMixin
+                digitalkin.mixins.agui_mixin.AgUiMixin --> digitalkin.mixins.base_mixin.BaseMixin
                 
-                digitalkin.mixins.storage_mixin.StorageMixin --> digitalkin.mixins.chat_history_mixin.ChatHistoryMixin
-                
-                digitalkin.mixins.logger_mixin.LoggerMixin --> digitalkin.mixins.chat_history_mixin.ChatHistoryMixin
-                
-
                 digitalkin.mixins.file_history_mixin.FileHistoryMixin --> digitalkin.mixins.base_mixin.BaseMixin
                                 digitalkin.mixins.storage_mixin.StorageMixin --> digitalkin.mixins.file_history_mixin.FileHistoryMixin
                 
@@ -17031,14 +19256,8 @@ HealthcheckServicesTrigger(context: ModuleContext)
                 digitalkin.mixins.base_mixin.BaseMixin --> digitalkin.modules.triggers.healthcheck_services_trigger.HealthcheckServicesTrigger
                                 digitalkin.mixins.cost_mixin.CostMixin --> digitalkin.mixins.base_mixin.BaseMixin
                 
-                digitalkin.mixins.chat_history_mixin.ChatHistoryMixin --> digitalkin.mixins.base_mixin.BaseMixin
-                                digitalkin.mixins.callback_mixin.UserMessageMixin --> digitalkin.mixins.chat_history_mixin.ChatHistoryMixin
+                digitalkin.mixins.agui_mixin.AgUiMixin --> digitalkin.mixins.base_mixin.BaseMixin
                 
-                digitalkin.mixins.storage_mixin.StorageMixin --> digitalkin.mixins.chat_history_mixin.ChatHistoryMixin
-                
-                digitalkin.mixins.logger_mixin.LoggerMixin --> digitalkin.mixins.chat_history_mixin.ChatHistoryMixin
-                
-
                 digitalkin.mixins.file_history_mixin.FileHistoryMixin --> digitalkin.mixins.base_mixin.BaseMixin
                                 digitalkin.mixins.storage_mixin.StorageMixin --> digitalkin.mixins.file_history_mixin.FileHistoryMixin
                 
@@ -17054,8 +19273,7 @@ HealthcheckServicesTrigger(context: ModuleContext)
               click digitalkin.modules.trigger_handler.TriggerHandler href "" "digitalkin.modules.trigger_handler.TriggerHandler"
               click digitalkin.mixins.base_mixin.BaseMixin href "" "digitalkin.mixins.base_mixin.BaseMixin"
               click digitalkin.mixins.cost_mixin.CostMixin href "" "digitalkin.mixins.cost_mixin.CostMixin"
-              click digitalkin.mixins.chat_history_mixin.ChatHistoryMixin href "" "digitalkin.mixins.chat_history_mixin.ChatHistoryMixin"
-              click digitalkin.mixins.callback_mixin.UserMessageMixin href "" "digitalkin.mixins.callback_mixin.UserMessageMixin"
+              click digitalkin.mixins.agui_mixin.AgUiMixin href "" "digitalkin.mixins.agui_mixin.AgUiMixin"
               click digitalkin.mixins.file_history_mixin.FileHistoryMixin href "" "digitalkin.mixins.file_history_mixin.FileHistoryMixin"
               click digitalkin.mixins.storage_mixin.StorageMixin href "" "digitalkin.mixins.storage_mixin.StorageMixin"
               click digitalkin.mixins.logger_mixin.LoggerMixin href "" "digitalkin.mixins.logger_mixin.LoggerMixin"
@@ -17068,24 +19286,19 @@ Reports the health status of all configured services (storage, cost, filesystem,
 Methods:
 
 - **`add_cost`** – Add a cost entry using the cost strategy.
-- **`append_chat_history_message`** – Append a message to chat history.
 - **`append_files_history`** – Append files to file history.
-- **`clear_ch_mission_cache`** – Remove a mission's entries from in-memory caches after flush.
 - **`clear_fh_mission_cache`** – Remove a mission's entries from in-memory caches after flush.
-- **`flush_chat_history`** – Flush the current mission's dirty chat history to storage.
 - **`flush_file_history`** – Flush the current mission's dirty file history to storage.
 - **`get_cost`** – Get cost entries for a specific name.
 - **`get_costs`** – Get filtered cost entries.
 - **`handle`** – Handle services healthcheck request.
-- **`load_chat_history`** – Load chat history for the current session.
 - **`load_file_history`** – Load file history for the current session.
 - **`log_debug`** – Log debug message using the callbacks strategy.
 - **`log_error`** – Log error message using the callbacks strategy.
 - **`log_info`** – Log info message using the callbacks strategy.
 - **`log_warning`** – Log warning message using the callbacks strategy.
 - **`read_storage`** – Read data from storage.
-- **`save_send_message`** – Save output to chat history and send response to the module request.
-- **`send_message`** – Send a message using the callbacks strategy.
+- **`send_message`** – Convert agent event to AG-UI protocol and send via context callbacks.
 - **`store_storage`** – Store data using the storage strategy.
 - **`update_storage`** – Update existing data in storage.
 - **`upsert_storage`** – Insert or update data in storage atomically.
@@ -17118,30 +19331,6 @@ Parameters:
 
   (`float`) – Quantity of units consumed.
 
-###### append_chat_history_message
-
-```python
-append_chat_history_message(context: ModuleContext, role: Role, content: Any) -> None
-```
-
-Append a message to chat history.
-
-The message is added to the in-memory cache immediately. A storage write is deferred until the batch threshold is reached (default 10, env: DIGITALKIN_CHAT_HISTORY_FLUSH_THRESHOLD) or flush_chat_history().
-
-Parameters:
-
-- ###### **`context`**
-
-  (`ModuleContext`) – Module context containing storage strategy.
-
-- ###### **`role`**
-
-  (`Role`) – Message role (user, assistant, system).
-
-- ###### **`content`**
-
-  (`Any`) – Message content.
-
 ###### append_files_history
 
 ```python
@@ -17162,20 +19351,6 @@ Parameters:
 
   (`list[FileModel]`) – List of file models to append.
 
-###### clear_ch_mission_cache
-
-```python
-clear_ch_mission_cache(context: ModuleContext) -> None
-```
-
-Remove a mission's entries from in-memory caches after flush.
-
-Parameters:
-
-- ###### **`context`**
-
-  (`ModuleContext`) – Module context identifying the mission to clear.
-
 ###### clear_fh_mission_cache
 
 ```python
@@ -17189,22 +19364,6 @@ Parameters:
 - ###### **`context`**
 
   (`ModuleContext`) – Module context identifying the mission to clear.
-
-###### flush_chat_history
-
-```python
-flush_chat_history(context: ModuleContext) -> None
-```
-
-Flush the current mission's dirty chat history to storage.
-
-Only flushes the key belonging to context's mission_id, preventing cross-mission contamination when handlers are shared.
-
-Parameters:
-
-- ###### **`context`**
-
-  (`ModuleContext`) – Module context containing storage strategy.
 
 ###### flush_file_history
 
@@ -17300,26 +19459,6 @@ Parameters:
 - ###### **`context`**
 
   (`ModuleContext`) – The module context.
-
-###### load_chat_history
-
-```python
-load_chat_history(context: ModuleContext) -> ChatHistory
-```
-
-Load chat history for the current session.
-
-Returns cached history on subsequent calls to avoid gRPC reads.
-
-Parameters:
-
-- ###### **`context`**
-
-  (`ModuleContext`) – Module context containing storage strategy.
-
-Returns:
-
-- `ChatHistory` – Chat history object, empty if none exists or loading fails.
 
 ###### load_file_history
 
@@ -17461,35 +19600,13 @@ Raises:
 
 - `StorageServiceError` – If read operation fails
 
-###### save_send_message
-
-```python
-save_send_message(context: ModuleContext, output: OutputModelT, role: Role) -> None
-```
-
-Save output to chat history and send response to the module request.
-
-Parameters:
-
-- ###### **`context`**
-
-  (`ModuleContext`) – Module context containing storage strategy.
-
-- ###### **`role`**
-
-  (`Role`) – Message role (user, assistant, system).
-
-- ###### **`output`**
-
-  (`OutputModelT`) – Message content as Pydantic Class.
-
 ###### send_message
 
 ```python
-send_message(context: ModuleContext, output: OutputModelT) -> None
+send_message(context: ModuleContext, event: BaseAgentRunEvent) -> None
 ```
 
-Send a message using the callbacks strategy.
+Convert agent event to AG-UI protocol and send via context callbacks.
 
 Parameters:
 
@@ -17497,9 +19614,9 @@ Parameters:
 
   (`ModuleContext`) – Module context containing the callbacks strategy.
 
-- ###### **`output`**
+- ###### **`event`**
 
-  (`OutputModelT`) – Message to send with the Module defined output Type.
+  (`BaseAgentRunEvent`) – Agent run event to process and convert.
 
 ###### store_storage
 
@@ -17645,8 +19762,7 @@ HealthcheckStatusTrigger(context: ModuleContext)
               digitalkin.modules.trigger_handler.TriggerHandler[TriggerHandler]
               digitalkin.mixins.base_mixin.BaseMixin[BaseMixin]
               digitalkin.mixins.cost_mixin.CostMixin[CostMixin]
-              digitalkin.mixins.chat_history_mixin.ChatHistoryMixin[ChatHistoryMixin]
-              digitalkin.mixins.callback_mixin.UserMessageMixin[UserMessageMixin]
+              digitalkin.mixins.agui_mixin.AgUiMixin[AgUiMixin]
               digitalkin.mixins.file_history_mixin.FileHistoryMixin[FileHistoryMixin]
               digitalkin.mixins.storage_mixin.StorageMixin[StorageMixin]
               digitalkin.mixins.logger_mixin.LoggerMixin[LoggerMixin]
@@ -17655,14 +19771,8 @@ HealthcheckStatusTrigger(context: ModuleContext)
                                 digitalkin.mixins.base_mixin.BaseMixin --> digitalkin.modules.trigger_handler.TriggerHandler
                                 digitalkin.mixins.cost_mixin.CostMixin --> digitalkin.mixins.base_mixin.BaseMixin
                 
-                digitalkin.mixins.chat_history_mixin.ChatHistoryMixin --> digitalkin.mixins.base_mixin.BaseMixin
-                                digitalkin.mixins.callback_mixin.UserMessageMixin --> digitalkin.mixins.chat_history_mixin.ChatHistoryMixin
+                digitalkin.mixins.agui_mixin.AgUiMixin --> digitalkin.mixins.base_mixin.BaseMixin
                 
-                digitalkin.mixins.storage_mixin.StorageMixin --> digitalkin.mixins.chat_history_mixin.ChatHistoryMixin
-                
-                digitalkin.mixins.logger_mixin.LoggerMixin --> digitalkin.mixins.chat_history_mixin.ChatHistoryMixin
-                
-
                 digitalkin.mixins.file_history_mixin.FileHistoryMixin --> digitalkin.mixins.base_mixin.BaseMixin
                                 digitalkin.mixins.storage_mixin.StorageMixin --> digitalkin.mixins.file_history_mixin.FileHistoryMixin
                 
@@ -17676,14 +19786,8 @@ HealthcheckStatusTrigger(context: ModuleContext)
                 digitalkin.mixins.base_mixin.BaseMixin --> digitalkin.modules.triggers.healthcheck_status_trigger.HealthcheckStatusTrigger
                                 digitalkin.mixins.cost_mixin.CostMixin --> digitalkin.mixins.base_mixin.BaseMixin
                 
-                digitalkin.mixins.chat_history_mixin.ChatHistoryMixin --> digitalkin.mixins.base_mixin.BaseMixin
-                                digitalkin.mixins.callback_mixin.UserMessageMixin --> digitalkin.mixins.chat_history_mixin.ChatHistoryMixin
+                digitalkin.mixins.agui_mixin.AgUiMixin --> digitalkin.mixins.base_mixin.BaseMixin
                 
-                digitalkin.mixins.storage_mixin.StorageMixin --> digitalkin.mixins.chat_history_mixin.ChatHistoryMixin
-                
-                digitalkin.mixins.logger_mixin.LoggerMixin --> digitalkin.mixins.chat_history_mixin.ChatHistoryMixin
-                
-
                 digitalkin.mixins.file_history_mixin.FileHistoryMixin --> digitalkin.mixins.base_mixin.BaseMixin
                                 digitalkin.mixins.storage_mixin.StorageMixin --> digitalkin.mixins.file_history_mixin.FileHistoryMixin
                 
@@ -17699,8 +19803,7 @@ HealthcheckStatusTrigger(context: ModuleContext)
               click digitalkin.modules.trigger_handler.TriggerHandler href "" "digitalkin.modules.trigger_handler.TriggerHandler"
               click digitalkin.mixins.base_mixin.BaseMixin href "" "digitalkin.mixins.base_mixin.BaseMixin"
               click digitalkin.mixins.cost_mixin.CostMixin href "" "digitalkin.mixins.cost_mixin.CostMixin"
-              click digitalkin.mixins.chat_history_mixin.ChatHistoryMixin href "" "digitalkin.mixins.chat_history_mixin.ChatHistoryMixin"
-              click digitalkin.mixins.callback_mixin.UserMessageMixin href "" "digitalkin.mixins.callback_mixin.UserMessageMixin"
+              click digitalkin.mixins.agui_mixin.AgUiMixin href "" "digitalkin.mixins.agui_mixin.AgUiMixin"
               click digitalkin.mixins.file_history_mixin.FileHistoryMixin href "" "digitalkin.mixins.file_history_mixin.FileHistoryMixin"
               click digitalkin.mixins.storage_mixin.StorageMixin href "" "digitalkin.mixins.storage_mixin.StorageMixin"
               click digitalkin.mixins.logger_mixin.LoggerMixin href "" "digitalkin.mixins.logger_mixin.LoggerMixin"
@@ -17713,24 +19816,19 @@ Reports detailed module status including uptime, active jobs, and metadata.
 Methods:
 
 - **`add_cost`** – Add a cost entry using the cost strategy.
-- **`append_chat_history_message`** – Append a message to chat history.
 - **`append_files_history`** – Append files to file history.
-- **`clear_ch_mission_cache`** – Remove a mission's entries from in-memory caches after flush.
 - **`clear_fh_mission_cache`** – Remove a mission's entries from in-memory caches after flush.
-- **`flush_chat_history`** – Flush the current mission's dirty chat history to storage.
 - **`flush_file_history`** – Flush the current mission's dirty file history to storage.
 - **`get_cost`** – Get cost entries for a specific name.
 - **`get_costs`** – Get filtered cost entries.
 - **`handle`** – Handle status healthcheck request.
-- **`load_chat_history`** – Load chat history for the current session.
 - **`load_file_history`** – Load file history for the current session.
 - **`log_debug`** – Log debug message using the callbacks strategy.
 - **`log_error`** – Log error message using the callbacks strategy.
 - **`log_info`** – Log info message using the callbacks strategy.
 - **`log_warning`** – Log warning message using the callbacks strategy.
 - **`read_storage`** – Read data from storage.
-- **`save_send_message`** – Save output to chat history and send response to the module request.
-- **`send_message`** – Send a message using the callbacks strategy.
+- **`send_message`** – Convert agent event to AG-UI protocol and send via context callbacks.
 - **`store_storage`** – Store data using the storage strategy.
 - **`update_storage`** – Update existing data in storage.
 - **`upsert_storage`** – Insert or update data in storage atomically.
@@ -17763,30 +19861,6 @@ Parameters:
 
   (`float`) – Quantity of units consumed.
 
-###### append_chat_history_message
-
-```python
-append_chat_history_message(context: ModuleContext, role: Role, content: Any) -> None
-```
-
-Append a message to chat history.
-
-The message is added to the in-memory cache immediately. A storage write is deferred until the batch threshold is reached (default 10, env: DIGITALKIN_CHAT_HISTORY_FLUSH_THRESHOLD) or flush_chat_history().
-
-Parameters:
-
-- ###### **`context`**
-
-  (`ModuleContext`) – Module context containing storage strategy.
-
-- ###### **`role`**
-
-  (`Role`) – Message role (user, assistant, system).
-
-- ###### **`content`**
-
-  (`Any`) – Message content.
-
 ###### append_files_history
 
 ```python
@@ -17807,20 +19881,6 @@ Parameters:
 
   (`list[FileModel]`) – List of file models to append.
 
-###### clear_ch_mission_cache
-
-```python
-clear_ch_mission_cache(context: ModuleContext) -> None
-```
-
-Remove a mission's entries from in-memory caches after flush.
-
-Parameters:
-
-- ###### **`context`**
-
-  (`ModuleContext`) – Module context identifying the mission to clear.
-
 ###### clear_fh_mission_cache
 
 ```python
@@ -17834,22 +19894,6 @@ Parameters:
 - ###### **`context`**
 
   (`ModuleContext`) – Module context identifying the mission to clear.
-
-###### flush_chat_history
-
-```python
-flush_chat_history(context: ModuleContext) -> None
-```
-
-Flush the current mission's dirty chat history to storage.
-
-Only flushes the key belonging to context's mission_id, preventing cross-mission contamination when handlers are shared.
-
-Parameters:
-
-- ###### **`context`**
-
-  (`ModuleContext`) – Module context containing storage strategy.
 
 ###### flush_file_history
 
@@ -17945,26 +19989,6 @@ Parameters:
 - ###### **`context`**
 
   (`ModuleContext`) – The module context.
-
-###### load_chat_history
-
-```python
-load_chat_history(context: ModuleContext) -> ChatHistory
-```
-
-Load chat history for the current session.
-
-Returns cached history on subsequent calls to avoid gRPC reads.
-
-Parameters:
-
-- ###### **`context`**
-
-  (`ModuleContext`) – Module context containing storage strategy.
-
-Returns:
-
-- `ChatHistory` – Chat history object, empty if none exists or loading fails.
 
 ###### load_file_history
 
@@ -18106,35 +20130,13 @@ Raises:
 
 - `StorageServiceError` – If read operation fails
 
-###### save_send_message
-
-```python
-save_send_message(context: ModuleContext, output: OutputModelT, role: Role) -> None
-```
-
-Save output to chat history and send response to the module request.
-
-Parameters:
-
-- ###### **`context`**
-
-  (`ModuleContext`) – Module context containing storage strategy.
-
-- ###### **`role`**
-
-  (`Role`) – Message role (user, assistant, system).
-
-- ###### **`output`**
-
-  (`OutputModelT`) – Message content as Pydantic Class.
-
 ###### send_message
 
 ```python
-send_message(context: ModuleContext, output: OutputModelT) -> None
+send_message(context: ModuleContext, event: BaseAgentRunEvent) -> None
 ```
 
-Send a message using the callbacks strategy.
+Convert agent event to AG-UI protocol and send via context callbacks.
 
 Parameters:
 
@@ -18142,9 +20144,9 @@ Parameters:
 
   (`ModuleContext`) – Module context containing the callbacks strategy.
 
-- ###### **`output`**
+- ###### **`event`**
 
-  (`OutputModelT`) – Message to send with the Module defined output Type.
+  (`BaseAgentRunEvent`) – Agent run event to process and convert.
 
 ###### store_storage
 
@@ -19451,6 +21453,7 @@ Methods:
 - **`heartbeat`** – Send heartbeat to keep module active.
 - **`register`** – Register a module with the registry.
 - **`search`** – Search for modules by criteria.
+- **`wait_for_ready`** – Check if the registry backend is reachable.
 
 #### close
 
@@ -19619,6 +21622,24 @@ Parameters:
 Returns:
 
 - `list[ModuleInfo]` – List of matching modules.
+
+#### wait_for_ready
+
+```python
+wait_for_ready(timeout: float = 1.0) -> bool
+```
+
+Check if the registry backend is reachable.
+
+Parameters:
+
+- ##### **`timeout`**
+
+  (`float`, default: `1.0` ) – Max seconds to wait for connectivity.
+
+Returns:
+
+- `bool` – True if ready. Default implementation always returns True.
 
 ### DefaultSnapshot
 
@@ -20293,6 +22314,7 @@ Methods:
 - **`get_module_schemas`** – Get module schemas via gRPC.
 - **`poll_grpc`** – Execute a single polling RPC. Returns None on DEADLINE_EXCEEDED (expected empty poll).
 - **`release_cached_channel`** – Decrement refcount for a cache key and close channel when last ref is released.
+- **`wait_for_ready`** – Check if the gRPC channel can connect within timeout.
 
 #### call_module
 
@@ -20402,7 +22424,7 @@ Parameters:
 
 - ##### **`timeout`**
 
-  (`float | None`, default: `None` ) – Optional per-call timeout in seconds (passed to gRPC stub call)
+  (`float | None`, default: `None` ) – Per-call timeout in seconds. Falls back to \_QUERY_DEFAULT_TIMEOUT (env DIGITALKIN_GRPC_QUERY_TIMEOUT, default 30s) when None.
 
 Returns:
 
@@ -20485,6 +22507,26 @@ Parameters:
 - ##### **`key`**
 
   (`str`) – Channel cache key to release.
+
+#### wait_for_ready
+
+```python
+wait_for_ready(timeout: float = 1.0) -> bool
+```
+
+Check if the gRPC channel can connect within timeout.
+
+Uses channel_ready() which resolves when the HTTP/2 connection is established and the server is accepting RPCs.
+
+Parameters:
+
+- ##### **`timeout`**
+
+  (`float`, default: `1.0` ) – Max seconds to wait for connectivity.
+
+Returns:
+
+- `bool` – True if channel reached READY state, False if timeout or no channel.
 
 ### IdentityStrategy
 
@@ -20580,6 +22622,7 @@ Methods:
 - **`heartbeat`** – Send heartbeat to keep module active.
 - **`register`** – Register a module with the registry.
 - **`search`** – Search for modules by criteria.
+- **`wait_for_ready`** – Check if the registry backend is reachable.
 
 #### close
 
@@ -20714,6 +22757,24 @@ Parameters:
 Returns:
 
 - `list[ModuleInfo]` – List of matching modules.
+
+#### wait_for_ready
+
+```python
+wait_for_ready(timeout: float = 1.0) -> bool
+```
+
+Check if the registry backend is reachable.
+
+Parameters:
+
+- ##### **`timeout`**
+
+  (`float`, default: `1.0` ) – Max seconds to wait for connectivity.
+
+Returns:
+
+- `bool` – True if ready. Default implementation always returns True.
 
 ### SnapshotStrategy
 
@@ -21760,6 +23821,7 @@ Methods:
 - **`get_module_schemas`** – Get module schemas via gRPC.
 - **`poll_grpc`** – Execute a single polling RPC. Returns None on DEADLINE_EXCEEDED (expected empty poll).
 - **`release_cached_channel`** – Decrement refcount for a cache key and close channel when last ref is released.
+- **`wait_for_ready`** – Check if the gRPC channel can connect within timeout.
 
 ##### call_module
 
@@ -21869,7 +23931,7 @@ Parameters:
 
 - ###### **`timeout`**
 
-  (`float | None`, default: `None` ) – Optional per-call timeout in seconds (passed to gRPC stub call)
+  (`float | None`, default: `None` ) – Per-call timeout in seconds. Falls back to \_QUERY_DEFAULT_TIMEOUT (env DIGITALKIN_GRPC_QUERY_TIMEOUT, default 30s) when None.
 
 Returns:
 
@@ -21952,6 +24014,26 @@ Parameters:
 - ###### **`key`**
 
   (`str`) – Channel cache key to release.
+
+##### wait_for_ready
+
+```python
+wait_for_ready(timeout: float = 1.0) -> bool
+```
+
+Check if the gRPC channel can connect within timeout.
+
+Uses channel_ready() which resolves when the HTTP/2 connection is established and the server is accepting RPCs.
+
+Parameters:
+
+- ###### **`timeout`**
+
+  (`float`, default: `1.0` ) – Max seconds to wait for connectivity.
+
+Returns:
+
+- `bool` – True if channel reached READY state, False if timeout or no channel.
 
 #### communication_strategy
 
@@ -22312,6 +24394,7 @@ Methods:
 - **`get_module_schemas`** – Get module schemas via gRPC.
 - **`poll_grpc`** – Execute a single polling RPC. Returns None on DEADLINE_EXCEEDED (expected empty poll).
 - **`release_cached_channel`** – Decrement refcount for a cache key and close channel when last ref is released.
+- **`wait_for_ready`** – Check if the gRPC channel can connect within timeout.
 
 ###### call_module
 
@@ -22421,7 +24504,7 @@ Parameters:
 
 - ###### **`timeout`**
 
-  (`float | None`, default: `None` ) – Optional per-call timeout in seconds (passed to gRPC stub call)
+  (`float | None`, default: `None` ) – Per-call timeout in seconds. Falls back to \_QUERY_DEFAULT_TIMEOUT (env DIGITALKIN_GRPC_QUERY_TIMEOUT, default 30s) when None.
 
 Returns:
 
@@ -22504,6 +24587,26 @@ Parameters:
 - ###### **`key`**
 
   (`str`) – Channel cache key to release.
+
+###### wait_for_ready
+
+```python
+wait_for_ready(timeout: float = 1.0) -> bool
+```
+
+Check if the gRPC channel can connect within timeout.
+
+Uses channel_ready() which resolves when the HTTP/2 connection is established and the server is accepting RPCs.
+
+Parameters:
+
+- ###### **`timeout`**
+
+  (`float`, default: `1.0` ) – Max seconds to wait for connectivity.
+
+Returns:
+
+- `bool` – True if channel reached READY state, False if timeout or no channel.
 
 ### cost
 
@@ -22980,6 +25083,7 @@ Methods:
 - **`release_cached_channel`** – Decrement refcount for a cache key and close channel when last ref is released.
 - **`set_cost_config`** – Store cost configuration in the database.
 - **`set_limits`** – Set cost limits for this session.
+- **`wait_for_ready`** – Check if the gRPC channel can connect within timeout.
 
 ##### add
 
@@ -23079,7 +25183,7 @@ Parameters:
 
 - ###### **`timeout`**
 
-  (`float | None`, default: `None` ) – Optional per-call timeout in seconds (passed to gRPC stub call)
+  (`float | None`, default: `None` ) – Per-call timeout in seconds. Falls back to \_QUERY_DEFAULT_TIMEOUT (env DIGITALKIN_GRPC_QUERY_TIMEOUT, default 30s) when None.
 
 Returns:
 
@@ -23253,6 +25357,26 @@ Parameters:
 - ###### **`limits`**
 
   (`list[QuantityLimit | AmountLimit]`) – List of CostLimit objects to enforce.
+
+##### wait_for_ready
+
+```python
+wait_for_ready(timeout: float = 1.0) -> bool
+```
+
+Check if the gRPC channel can connect within timeout.
+
+Uses channel_ready() which resolves when the HTTP/2 connection is established and the server is accepting RPCs.
+
+Parameters:
+
+- ###### **`timeout`**
+
+  (`float`, default: `1.0` ) – Max seconds to wait for connectivity.
+
+Returns:
+
+- `bool` – True if channel reached READY state, False if timeout or no channel.
 
 #### cost_strategy
 
@@ -23751,6 +25875,7 @@ Methods:
 - **`release_cached_channel`** – Decrement refcount for a cache key and close channel when last ref is released.
 - **`set_cost_config`** – Store cost configuration in the database.
 - **`set_limits`** – Set cost limits for this session.
+- **`wait_for_ready`** – Check if the gRPC channel can connect within timeout.
 
 ###### add
 
@@ -23850,7 +25975,7 @@ Parameters:
 
 - ###### **`timeout`**
 
-  (`float | None`, default: `None` ) – Optional per-call timeout in seconds (passed to gRPC stub call)
+  (`float | None`, default: `None` ) – Per-call timeout in seconds. Falls back to \_QUERY_DEFAULT_TIMEOUT (env DIGITALKIN_GRPC_QUERY_TIMEOUT, default 30s) when None.
 
 Returns:
 
@@ -24024,6 +26149,26 @@ Parameters:
 - ###### **`limits`**
 
   (`list[QuantityLimit | AmountLimit]`) – List of CostLimit objects to enforce.
+
+###### wait_for_ready
+
+```python
+wait_for_ready(timeout: float = 1.0) -> bool
+```
+
+Check if the gRPC channel can connect within timeout.
+
+Uses channel_ready() which resolves when the HTTP/2 connection is established and the server is accepting RPCs.
+
+Parameters:
+
+- ###### **`timeout`**
+
+  (`float`, default: `1.0` ) – Max seconds to wait for connectivity.
+
+Returns:
+
+- `bool` – True if channel reached READY state, False if timeout or no channel.
 
 ### filesystem
 
@@ -24651,6 +26796,7 @@ Methods:
 - **`release_cached_channel`** – Decrement refcount for a cache key and close channel when last ref is released.
 - **`update_file`** – Update a file in the filesystem.
 - **`upload_files`** – Upload multiple files to the filesystem.
+- **`wait_for_ready`** – Check if the gRPC channel can connect within timeout.
 
 ##### close
 
@@ -24730,7 +26876,7 @@ Parameters:
 
 - ###### **`timeout`**
 
-  (`float | None`, default: `None` ) – Optional per-call timeout in seconds (passed to gRPC stub call)
+  (`float | None`, default: `None` ) – Per-call timeout in seconds. Falls back to \_QUERY_DEFAULT_TIMEOUT (env DIGITALKIN_GRPC_QUERY_TIMEOUT, default 30s) when None.
 
 Returns:
 
@@ -24965,6 +27111,26 @@ Parameters:
 Returns:
 
 - `tuple[list[FilesystemRecord], int, int]` – tuple\[list[FilesystemRecord], int, int\]: List of uploaded files, total uploaded count, total failed count
+
+##### wait_for_ready
+
+```python
+wait_for_ready(timeout: float = 1.0) -> bool
+```
+
+Check if the gRPC channel can connect within timeout.
+
+Uses channel_ready() which resolves when the HTTP/2 connection is established and the server is accepting RPCs.
+
+Parameters:
+
+- ###### **`timeout`**
+
+  (`float`, default: `1.0` ) – Max seconds to wait for connectivity.
+
+Returns:
+
+- `bool` – True if channel reached READY state, False if timeout or no channel.
 
 #### default_filesystem
 
@@ -25656,6 +27822,7 @@ Methods:
 - **`release_cached_channel`** – Decrement refcount for a cache key and close channel when last ref is released.
 - **`update_file`** – Update a file in the filesystem.
 - **`upload_files`** – Upload multiple files to the filesystem.
+- **`wait_for_ready`** – Check if the gRPC channel can connect within timeout.
 
 ###### close
 
@@ -25735,7 +27902,7 @@ Parameters:
 
 - ###### **`timeout`**
 
-  (`float | None`, default: `None` ) – Optional per-call timeout in seconds (passed to gRPC stub call)
+  (`float | None`, default: `None` ) – Per-call timeout in seconds. Falls back to \_QUERY_DEFAULT_TIMEOUT (env DIGITALKIN_GRPC_QUERY_TIMEOUT, default 30s) when None.
 
 Returns:
 
@@ -25970,6 +28137,26 @@ Parameters:
 Returns:
 
 - `tuple[list[FilesystemRecord], int, int]` – tuple\[list[FilesystemRecord], int, int\]: List of uploaded files, total uploaded count, total failed count
+
+###### wait_for_ready
+
+```python
+wait_for_ready(timeout: float = 1.0) -> bool
+```
+
+Check if the gRPC channel can connect within timeout.
+
+Uses channel_ready() which resolves when the HTTP/2 connection is established and the server is accepting RPCs.
+
+Parameters:
+
+- ###### **`timeout`**
+
+  (`float`, default: `1.0` ) – Max seconds to wait for connectivity.
+
+Returns:
+
+- `bool` – True if channel reached READY state, False if timeout or no channel.
 
 ### identity
 
@@ -26300,6 +28487,7 @@ Methods:
 - **`heartbeat`** – Send heartbeat to keep module active.
 - **`register`** – Register a module with the registry.
 - **`search`** – Search for modules by criteria.
+- **`wait_for_ready`** – Check if the registry backend is reachable.
 
 ##### close
 
@@ -26469,6 +28657,24 @@ Returns:
 
 - `list[ModuleInfo]` – List of matching modules.
 
+##### wait_for_ready
+
+```python
+wait_for_ready(timeout: float = 1.0) -> bool
+```
+
+Check if the registry backend is reachable.
+
+Parameters:
+
+- ###### **`timeout`**
+
+  (`float`, default: `1.0` ) – Max seconds to wait for connectivity.
+
+Returns:
+
+- `bool` – True if ready. Default implementation always returns True.
+
 #### GrpcRegistry
 
 ```python
@@ -26526,6 +28732,7 @@ Methods:
 - **`register`** – Register a module with the registry.
 - **`release_cached_channel`** – Decrement refcount for a cache key and close channel when last ref is released.
 - **`search`** – Search for modules by criteria.
+- **`wait_for_ready`** – Check if the registry backend is reachable.
 
 ##### close
 
@@ -26620,7 +28827,7 @@ Parameters:
 
 - ###### **`timeout`**
 
-  (`float | None`, default: `None` ) – Optional per-call timeout in seconds (passed to gRPC stub call)
+  (`float | None`, default: `None` ) – Per-call timeout in seconds. Falls back to \_QUERY_DEFAULT_TIMEOUT (env DIGITALKIN_GRPC_QUERY_TIMEOUT, default 30s) when None.
 
 Returns:
 
@@ -26842,6 +29049,24 @@ Raises:
 
 - `RegistryServiceError` – If gRPC call fails.
 
+##### wait_for_ready
+
+```python
+wait_for_ready(timeout: float = 1.0) -> bool
+```
+
+Check if the registry backend is reachable.
+
+Parameters:
+
+- ###### **`timeout`**
+
+  (`float`, default: `1.0` ) – Max seconds to wait for connectivity.
+
+Returns:
+
+- `bool` – True if ready. Default implementation always returns True.
+
 #### ModuleInfo
 
 ```
@@ -26972,6 +29197,7 @@ Methods:
 - **`heartbeat`** – Send heartbeat to keep module active.
 - **`register`** – Register a module with the registry.
 - **`search`** – Search for modules by criteria.
+- **`wait_for_ready`** – Check if the registry backend is reachable.
 
 ##### close
 
@@ -27107,6 +29333,24 @@ Returns:
 
 - `list[ModuleInfo]` – List of matching modules.
 
+##### wait_for_ready
+
+```python
+wait_for_ready(timeout: float = 1.0) -> bool
+```
+
+Check if the registry backend is reachable.
+
+Parameters:
+
+- ###### **`timeout`**
+
+  (`float`, default: `1.0` ) – Max seconds to wait for connectivity.
+
+Returns:
+
+- `bool` – True if ready. Default implementation always returns True.
+
 #### default_registry
 
 Default registry implementation.
@@ -27150,6 +29394,7 @@ Methods:
 - **`heartbeat`** – Send heartbeat to keep module active.
 - **`register`** – Register a module with the registry.
 - **`search`** – Search for modules by criteria.
+- **`wait_for_ready`** – Check if the registry backend is reachable.
 
 ###### close
 
@@ -27318,6 +29563,24 @@ Parameters:
 Returns:
 
 - `list[ModuleInfo]` – List of matching modules.
+
+###### wait_for_ready
+
+```python
+wait_for_ready(timeout: float = 1.0) -> bool
+```
+
+Check if the registry backend is reachable.
+
+Parameters:
+
+- ###### **`timeout`**
+
+  (`float`, default: `1.0` ) – Max seconds to wait for connectivity.
+
+Returns:
+
+- `bool` – True if ready. Default implementation always returns True.
 
 #### exceptions
 
@@ -27493,6 +29756,7 @@ Methods:
 - **`register`** – Register a module with the registry.
 - **`release_cached_channel`** – Decrement refcount for a cache key and close channel when last ref is released.
 - **`search`** – Search for modules by criteria.
+- **`wait_for_ready`** – Check if the registry backend is reachable.
 
 ###### close
 
@@ -27587,7 +29851,7 @@ Parameters:
 
 - ###### **`timeout`**
 
-  (`float | None`, default: `None` ) – Optional per-call timeout in seconds (passed to gRPC stub call)
+  (`float | None`, default: `None` ) – Per-call timeout in seconds. Falls back to \_QUERY_DEFAULT_TIMEOUT (env DIGITALKIN_GRPC_QUERY_TIMEOUT, default 30s) when None.
 
 Returns:
 
@@ -27809,6 +30073,24 @@ Raises:
 
 - `RegistryServiceError` – If gRPC call fails.
 
+###### wait_for_ready
+
+```python
+wait_for_ready(timeout: float = 1.0) -> bool
+```
+
+Check if the registry backend is reachable.
+
+Parameters:
+
+- ###### **`timeout`**
+
+  (`float`, default: `1.0` ) – Max seconds to wait for connectivity.
+
+Returns:
+
+- `bool` – True if ready. Default implementation always returns True.
+
 #### registry_models
 
 Registry data models.
@@ -27878,6 +30160,7 @@ Methods:
 - **`heartbeat`** – Send heartbeat to keep module active.
 - **`register`** – Register a module with the registry.
 - **`search`** – Search for modules by criteria.
+- **`wait_for_ready`** – Check if the registry backend is reachable.
 
 ###### close
 
@@ -28012,6 +30295,24 @@ Parameters:
 Returns:
 
 - `list[ModuleInfo]` – List of matching modules.
+
+###### wait_for_ready
+
+```python
+wait_for_ready(timeout: float = 1.0) -> bool
+```
+
+Check if the registry backend is reachable.
+
+Parameters:
+
+- ###### **`timeout`**
+
+  (`float`, default: `1.0` ) – Max seconds to wait for connectivity.
+
+Returns:
+
+- `bool` – True if ready. Default implementation always returns True.
 
 ### services_config
 
@@ -28624,6 +30925,7 @@ Methods:
 - **`search_setup_versions`** – Search for setup versions based on filters.
 - **`update_setup`** – Update an existing setup.
 - **`update_setup_version`** – Update an existing setup version.
+- **`wait_for_ready`** – Check if the gRPC channel can connect within timeout.
 
 ###### __post_init__
 
@@ -28781,7 +31083,7 @@ Parameters:
 
 - ###### **`timeout`**
 
-  (`float | None`, default: `None` ) – Optional per-call timeout in seconds (passed to gRPC stub call)
+  (`float | None`, default: `None` ) – Per-call timeout in seconds. Falls back to \_QUERY_DEFAULT_TIMEOUT (env DIGITALKIN_GRPC_QUERY_TIMEOUT, default 30s) when None.
 
 Returns:
 
@@ -29008,6 +31310,26 @@ Raises:
 - `ValidationError` – If setup version data is invalid.
 - `ServerError` – If gRPC operation fails.
 - `SetupServiceError` – For any unexpected internal error.
+
+###### wait_for_ready
+
+```python
+wait_for_ready(timeout: float = 1.0) -> bool
+```
+
+Check if the gRPC channel can connect within timeout.
+
+Uses channel_ready() which resolves when the HTTP/2 connection is established and the server is accepting RPCs.
+
+Parameters:
+
+- ###### **`timeout`**
+
+  (`float`, default: `1.0` ) – Max seconds to wait for connectivity.
+
+Returns:
+
+- `bool` – True if channel reached READY state, False if timeout or no channel.
 
 #### setup_strategy
 
@@ -30026,6 +32348,7 @@ Methods:
 - **`store`** – Store a new record in the storage.
 - **`update`** – Validate & overwrite an existing record.
 - **`upsert`** – Insert or update a record atomically.
+- **`wait_for_ready`** – Check if the gRPC channel can connect within timeout.
 
 ##### close
 
@@ -30077,7 +32400,7 @@ Parameters:
 
 - ###### **`timeout`**
 
-  (`float | None`, default: `None` ) – Optional per-call timeout in seconds (passed to gRPC stub call)
+  (`float | None`, default: `None` ) – Per-call timeout in seconds. Falls back to \_QUERY_DEFAULT_TIMEOUT (env DIGITALKIN_GRPC_QUERY_TIMEOUT, default 30s) when None.
 
 Returns:
 
@@ -30320,6 +32643,26 @@ Raises:
 
 - `ValueError` – If the data type is invalid or if validation fails
 - `StorageServiceError` – If update of an existing record fails unexpectedly
+
+##### wait_for_ready
+
+```python
+wait_for_ready(timeout: float = 1.0) -> bool
+```
+
+Check if the gRPC channel can connect within timeout.
+
+Uses channel_ready() which resolves when the HTTP/2 connection is established and the server is accepting RPCs.
+
+Parameters:
+
+- ###### **`timeout`**
+
+  (`float`, default: `1.0` ) – Max seconds to wait for connectivity.
+
+Returns:
+
+- `bool` – True if channel reached READY state, False if timeout or no channel.
 
 #### StorageStrategy
 
@@ -30880,6 +33223,7 @@ Methods:
 - **`store`** – Store a new record in the storage.
 - **`update`** – Validate & overwrite an existing record.
 - **`upsert`** – Insert or update a record atomically.
+- **`wait_for_ready`** – Check if the gRPC channel can connect within timeout.
 
 ###### close
 
@@ -30931,7 +33275,7 @@ Parameters:
 
 - ###### **`timeout`**
 
-  (`float | None`, default: `None` ) – Optional per-call timeout in seconds (passed to gRPC stub call)
+  (`float | None`, default: `None` ) – Per-call timeout in seconds. Falls back to \_QUERY_DEFAULT_TIMEOUT (env DIGITALKIN_GRPC_QUERY_TIMEOUT, default 30s) when None.
 
 Returns:
 
@@ -31174,6 +33518,26 @@ Raises:
 
 - `ValueError` – If the data type is invalid or if validation fails
 - `StorageServiceError` – If update of an existing record fails unexpectedly
+
+###### wait_for_ready
+
+```python
+wait_for_ready(timeout: float = 1.0) -> bool
+```
+
+Check if the gRPC channel can connect within timeout.
+
+Uses channel_ready() which resolves when the HTTP/2 connection is established and the server is accepting RPCs.
+
+Parameters:
+
+- ###### **`timeout`**
+
+  (`float`, default: `1.0` ) – Max seconds to wait for connectivity.
+
+Returns:
+
+- `bool` – True if channel reached READY state, False if timeout or no channel.
 
 #### storage_strategy
 
@@ -31890,6 +34254,7 @@ Methods:
 - **`send_signal`** – Enqueue a signal for batched delivery via gRPC SendSignals.
 - **`subscribe_signals`** – Subscribe to signal updates via the shared poller.
 - **`unsubscribe_signals`** – Stop the subscription and wake its consumer via the shared poller.
+- **`wait_for_ready`** – Check if the gRPC channel can connect within timeout.
 
 ###### close
 
@@ -31941,7 +34306,7 @@ Parameters:
 
 - ###### **`timeout`**
 
-  (`float | None`, default: `None` ) – Optional per-call timeout in seconds (passed to gRPC stub call)
+  (`float | None`, default: `None` ) – Per-call timeout in seconds. Falls back to \_QUERY_DEFAULT_TIMEOUT (env DIGITALKIN_GRPC_QUERY_TIMEOUT, default 30s) when None.
 
 Returns:
 
@@ -32087,6 +34452,26 @@ Parameters:
 - ###### **`sub_id`**
 
   (`str`) – Subscription identifier.
+
+###### wait_for_ready
+
+```python
+wait_for_ready(timeout: float = 1.0) -> bool
+```
+
+Check if the gRPC channel can connect within timeout.
+
+Uses channel_ready() which resolves when the HTTP/2 connection is established and the server is accepting RPCs.
+
+Parameters:
+
+- ###### **`timeout`**
+
+  (`float`, default: `1.0` ) – Max seconds to wait for connectivity.
+
+Returns:
+
+- `bool` – True if channel reached READY state, False if timeout or no channel.
 
 #### task_manager_strategy
 
@@ -32353,6 +34738,7 @@ Methods:
 - **`handle_grpc_errors`** – Handle gRPC errors for the given operation.
 - **`poll_grpc`** – Execute a single polling RPC. Returns None on DEADLINE_EXCEEDED (expected empty poll).
 - **`release_cached_channel`** – Decrement refcount for a cache key and close channel when last ref is released.
+- **`wait_for_ready`** – Check if the gRPC channel can connect within timeout.
 
 ##### close
 
@@ -32404,7 +34790,7 @@ Parameters:
 
 - ###### **`timeout`**
 
-  (`float | None`, default: `None` ) – Optional per-call timeout in seconds (passed to gRPC stub call)
+  (`float | None`, default: `None` ) – Per-call timeout in seconds. Falls back to \_QUERY_DEFAULT_TIMEOUT (env DIGITALKIN_GRPC_QUERY_TIMEOUT, default 30s) when None.
 
 Returns:
 
@@ -32504,6 +34890,26 @@ Parameters:
 - ###### **`key`**
 
   (`str`) – Channel cache key to release.
+
+##### wait_for_ready
+
+```python
+wait_for_ready(timeout: float = 1.0) -> bool
+```
+
+Check if the gRPC channel can connect within timeout.
+
+Uses channel_ready() which resolves when the HTTP/2 connection is established and the server is accepting RPCs.
+
+Parameters:
+
+- ###### **`timeout`**
+
+  (`float`, default: `1.0` ) – Max seconds to wait for connectivity.
+
+Returns:
+
+- `bool` – True if channel reached READY state, False if timeout or no channel.
 
 #### UserProfileServiceError
 
@@ -32740,6 +35146,7 @@ Methods:
 - **`handle_grpc_errors`** – Handle gRPC errors for the given operation.
 - **`poll_grpc`** – Execute a single polling RPC. Returns None on DEADLINE_EXCEEDED (expected empty poll).
 - **`release_cached_channel`** – Decrement refcount for a cache key and close channel when last ref is released.
+- **`wait_for_ready`** – Check if the gRPC channel can connect within timeout.
 
 ###### close
 
@@ -32791,7 +35198,7 @@ Parameters:
 
 - ###### **`timeout`**
 
-  (`float | None`, default: `None` ) – Optional per-call timeout in seconds (passed to gRPC stub call)
+  (`float | None`, default: `None` ) – Per-call timeout in seconds. Falls back to \_QUERY_DEFAULT_TIMEOUT (env DIGITALKIN_GRPC_QUERY_TIMEOUT, default 30s) when None.
 
 Returns:
 
@@ -32891,6 +35298,26 @@ Parameters:
 - ###### **`key`**
 
   (`str`) – Channel cache key to release.
+
+###### wait_for_ready
+
+```python
+wait_for_ready(timeout: float = 1.0) -> bool
+```
+
+Check if the gRPC channel can connect within timeout.
+
+Uses channel_ready() which resolves when the HTTP/2 connection is established and the server is accepting RPCs.
+
+Parameters:
+
+- ###### **`timeout`**
+
+  (`float`, default: `1.0` ) – Max seconds to wait for connectivity.
+
+Returns:
+
+- `bool` – True if channel reached READY state, False if timeout or no channel.
 
 #### user_profile_strategy
 

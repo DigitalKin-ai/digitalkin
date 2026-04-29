@@ -10,13 +10,13 @@
       
       
       
-        <link rel="canonical" href="https://digitalkin.com/main/architecture/concurrency-model/">
+        <link rel="canonical" href="https://digitalkin.com/main/changelog/0.3.5_to_0.4.0/">
       
       
-        <link rel="prev" href="../admission-queue/">
+        <link rel="prev" href="../0.3.4_to_0.3.5.dev0/">
       
       
-        <link rel="next" href="../resilience/">
+        <link rel="next" href="../0.4.1/">
       
       
         
@@ -27,7 +27,7 @@
     
     
       
-        <title>Concurrency Model - DigitalKin</title>
+        <title>0.3.5 to 0.4.0 - DigitalKin</title>
       
     
     
@@ -82,7 +82,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#concurrency-model" class="md-skip">
+        <a href="#migration-ag-ui-nouveau-protocole-de-streaming" class="md-skip">
           Skip to content
         </a>
       
@@ -121,7 +121,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Concurrency Model
+              0.3.5 to 0.4.0
             
           </span>
         </div>
@@ -331,11 +331,9 @@
   
   
   
-    
   
-  
-    <li class="md-tabs__item md-tabs__item--active">
-      <a href="../admission-queue/" class="md-tabs__link">
+    <li class="md-tabs__item">
+      <a href="../../architecture/admission-queue/" class="md-tabs__link">
         
   
   
@@ -352,9 +350,11 @@
   
   
   
+    
   
-    <li class="md-tabs__item">
-      <a href="../../changelog/0.3.4_to_0.3.5.dev0/" class="md-tabs__link">
+  
+    <li class="md-tabs__item md-tabs__item--active">
+      <a href="../0.3.4_to_0.3.5.dev0/" class="md-tabs__link">
         
   
   
@@ -623,32 +623,27 @@
       
   
   
-    
   
   
-  
     
     
     
     
-      
-        
-        
       
       
         
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" checked>
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
         
           
           <div class="md-nav__link md-nav__container">
-            <a href="../admission-queue/" class="md-nav__link ">
+            <a href="../../architecture/admission-queue/" class="md-nav__link ">
               
   
   
@@ -666,13 +661,13 @@
             </a>
             
               
-              <label class="md-nav__link " for="__nav_6" id="__nav_6_label" tabindex="">
+              <label class="md-nav__link " for="__nav_6" id="__nav_6_label" tabindex="0">
                 <span class="md-nav__icon md-icon"></span>
               </label>
             
           </div>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_6">
             <span class="md-nav__icon md-icon"></span>
             
@@ -687,37 +682,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Concurrency Model
-  
-
-    
-  </span>
-  
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../../architecture/concurrency-model/" class="md-nav__link">
         
   
   
@@ -733,220 +701,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#three-layer-architecture" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Three-Layer Architecture
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Three-Layer Architecture">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#layer-1-grpc-server-accepts-rpcs" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Layer 1: gRPC Server (accepts RPCs)
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#layer-2-task-manager-executes-work" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Layer 2: Task Manager (executes work)
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#layer-3-signal-io-client-side-grpc" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Layer 3: Signal I/O (client-side gRPC)
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#request-lifecycle" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Request Lifecycle
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#shared-resources" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Shared Resources
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Shared Resources">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#_sharedpoller-one-per-channel" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        _SharedPoller (one per channel)
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#_sharedsendbuffer-one-per-channel" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        _SharedSendBuffer (one per channel)
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#channel-cache-ref-counted" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Channel Cache (ref-counted)
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#event-loop-budget" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Event Loop Budget
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#environment-variables-by-layer" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Environment Variables by Layer
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Environment Variables by Layer">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#layer-1-grpc-server" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Layer 1: gRPC Server
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#layer-2-task-manager" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Layer 2: Task Manager
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#layer-3-signal-io" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Layer 3: Signal I/O
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#key-files" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Key Files
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#related-docs" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Related Docs
-      
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -959,7 +713,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../resilience/" class="md-nav__link">
+      <a href="../../architecture/resilience/" class="md-nav__link">
         
   
   
@@ -987,7 +741,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../sdk-flow/" class="md-nav__link">
+      <a href="../../architecture/sdk-flow/" class="md-nav__link">
         
   
   
@@ -1019,27 +773,32 @@
       
   
   
+    
   
   
+  
     
     
     
     
+      
+        
+        
       
       
         
       
     
     
-    <li class="md-nav__item md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" checked>
         
           
           <div class="md-nav__link md-nav__container">
-            <a href="../../changelog/0.3.4_to_0.3.5.dev0/" class="md-nav__link ">
+            <a href="../0.3.4_to_0.3.5.dev0/" class="md-nav__link ">
               
   
   
@@ -1057,13 +816,13 @@
             </a>
             
               
-              <label class="md-nav__link " for="__nav_7" id="__nav_7_label" tabindex="0">
+              <label class="md-nav__link " for="__nav_7" id="__nav_7_label" tabindex="">
                 <span class="md-nav__icon md-icon"></span>
               </label>
             
           </div>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_7">
             <span class="md-nav__icon md-icon"></span>
             
@@ -1078,10 +837,35 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../../changelog/0.3.5_to_0.4.0/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    0.3.5 to 0.4.0
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -1097,6 +881,140 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#migration-ag-ui-nouveau-protocole-de-streaming" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Migration AG-UI : nouveau protocole de streaming
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nouveaux-composants" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Nouveaux composants
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Nouveaux composants">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#aguimixin" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        AgUiMixin
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#agnostreamadapter-community" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        AgnoStreamAdapter (community)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#modeles-devenements-digitalkinmodelsevents" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Modeles d'evenements (digitalkin.models.events)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#modeles-de-sortie-ag-ui-digitalkinmodelsmoduleag_ui" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Modeles de sortie AG-UI (digitalkin.models.module.ag_ui)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#architecture" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Architecture
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#exemple-complet-agno" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Exemple complet (Agno)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#deprecations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Deprecations
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#basemixin-mis-a-jour" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        BaseMixin mis a jour
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -1109,7 +1027,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../changelog/0.4.1/" class="md-nav__link">
+      <a href="../0.4.1/" class="md-nav__link">
         
   
   
@@ -1154,8 +1072,6 @@
   
   
   
-    
-  
   
     <label class="md-nav__title" for="__toc">
       <span class="md-nav__icon md-icon"></span>
@@ -1164,22 +1080,33 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#three-layer-architecture" class="md-nav__link">
+  <a href="#migration-ag-ui-nouveau-protocole-de-streaming" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Three-Layer Architecture
+        Migration AG-UI : nouveau protocole de streaming
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Three-Layer Architecture">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#nouveaux-composants" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Nouveaux composants
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Nouveaux composants">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#layer-1-grpc-server-accepts-rpcs" class="md-nav__link">
+  <a href="#aguimixin" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Layer 1: gRPC Server (accepts RPCs)
+        AgUiMixin
       
     </span>
   </a>
@@ -1187,10 +1114,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#layer-2-task-manager-executes-work" class="md-nav__link">
+  <a href="#agnostreamadapter-community" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Layer 2: Task Manager (executes work)
+        AgnoStreamAdapter (community)
       
     </span>
   </a>
@@ -1198,10 +1125,21 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#layer-3-signal-io-client-side-grpc" class="md-nav__link">
+  <a href="#modeles-devenements-digitalkinmodelsevents" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Layer 3: Signal I/O (client-side gRPC)
+        Modeles d'evenements (digitalkin.models.events)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#modeles-de-sortie-ag-ui-digitalkinmodelsmoduleag_ui" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Modeles de sortie AG-UI (digitalkin.models.module.ag_ui)
       
     </span>
   </a>
@@ -1214,10 +1152,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#request-lifecycle" class="md-nav__link">
+  <a href="#architecture" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Request Lifecycle
+        Architecture
       
     </span>
   </a>
@@ -1225,60 +1163,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#shared-resources" class="md-nav__link">
+  <a href="#exemple-complet-agno" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Shared Resources
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Shared Resources">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#_sharedpoller-one-per-channel" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        _SharedPoller (one per channel)
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#_sharedsendbuffer-one-per-channel" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        _SharedSendBuffer (one per channel)
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#channel-cache-ref-counted" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Channel Cache (ref-counted)
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#event-loop-budget" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Event Loop Budget
+        Exemple complet (Agno)
       
     </span>
   </a>
@@ -1286,60 +1174,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#environment-variables-by-layer" class="md-nav__link">
+  <a href="#deprecations" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Environment Variables by Layer
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Environment Variables by Layer">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#layer-1-grpc-server" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Layer 1: gRPC Server
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#layer-2-task-manager" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Layer 2: Task Manager
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#layer-3-signal-io" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Layer 3: Signal I/O
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#key-files" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Key Files
+        Deprecations
       
     </span>
   </a>
@@ -1347,10 +1185,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#related-docs" class="md-nav__link">
+  <a href="#basemixin-mis-a-jour" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Related Docs
+        BaseMixin mis a jour
       
     </span>
   </a>
@@ -1403,7 +1241,7 @@
         <a href="./" class="md-path__link">
           
   <span class="md-ellipsis">
-    Architecture
+    Changelog
   </span>
 
         </a>
@@ -1422,7 +1260,7 @@
 
 
   
-    <a href="https://github.com/DigitalKin-ai/digitalkin/edit/main/docs/architecture/concurrency-model.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+    <a href="https://github.com/DigitalKin-ai/digitalkin/edit/main/docs/changelog/0.3.5_to_0.4.0.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
     </a>
@@ -1431,349 +1269,194 @@
     
       
     
-    <a href="https://github.com/DigitalKin-ai/digitalkin/raw/main/docs/architecture/concurrency-model.md" title="View source of this page" class="md-content__button md-icon">
+    <a href="https://github.com/DigitalKin-ai/digitalkin/raw/main/docs/changelog/0.3.5_to_0.4.0.md" title="View source of this page" class="md-content__button md-icon">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M17 18c.56 0 1 .44 1 1s-.44 1-1 1-1-.44-1-1 .44-1 1-1m0-3c-2.73 0-5.06 1.66-6 4 .94 2.34 3.27 4 6 4s5.06-1.66 6-4c-.94-2.34-3.27-4-6-4m0 6.5a2.5 2.5 0 0 1-2.5-2.5 2.5 2.5 0 0 1 2.5-2.5 2.5 2.5 0 0 1 2.5 2.5 2.5 2.5 0 0 1-2.5 2.5M9.27 20H6V4h7v5h5v4.07c.7.08 1.36.25 2 .49V8l-6-6H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h4.5a8.2 8.2 0 0 1-1.23-2"/></svg>
     </a>
   
 
 
-<h1 id="concurrency-model">Concurrency Model<a class="headerlink" href="#concurrency-model" title="Permanent link">¤</a></h1>
-<h2 id="three-layer-architecture">Three-Layer Architecture<a class="headerlink" href="#three-layer-architecture" title="Permanent link">¤</a></h2>
-<p>The SDK manages concurrency across three distinct layers, each with its own resource controls:</p>
-<pre class="mermaid"><code>flowchart TB
-    subgraph L1["Layer 1: gRPC Server"]
-        direction LR
-        S1["Async gRPC Server"]
-        S2["MAX_CONCURRENT_RPCS gate"]
-        S3["THREAD_POOL_WORKERS"]
-    end
+  <h1>0.3.5 to 0.4.0</h1>
 
-    subgraph L2["Layer 2: Task Manager"]
-        direction LR
-        T1["system_gate semaphore&lt;br/&gt;(running + queued capacity)"]
-        T2["task_slot semaphore&lt;br/&gt;(execution capacity)"]
-        T3["Waiting queue"]
-    end
+<h2 id="migration-ag-ui-nouveau-protocole-de-streaming">Migration AG-UI : nouveau protocole de streaming<a class="headerlink" href="#migration-ag-ui-nouveau-protocole-de-streaming" title="Permanent link">¤</a></h2>
+<p>A partir de <code>0.4.0</code>, le SDK adopte le protocole <strong>AG-UI</strong> pour le streaming des evenements agent.
+Les anciens mixins <code>UserMessageMixin</code> (callback_mixin) et <code>ChatHistoryMixin</code> sont <strong>deprecated</strong> et seront supprimes dans une version future.</p>
+<h2 id="nouveaux-composants">Nouveaux composants<a class="headerlink" href="#nouveaux-composants" title="Permanent link">¤</a></h2>
+<h3 id="aguimixin"><code>AgUiMixin</code><a class="headerlink" href="#aguimixin" title="Permanent link">¤</a></h3>
+<p>Mixin integre dans <code>BaseMixin</code> (donc disponible dans tous les <code>TriggerHandler</code>).
+Convertit les evenements agent DigitalKin en evenements AG-UI et les envoie via <code>context.callbacks</code>.</p>
+<div class="language-python highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">digitalkin.mixins</span><span class="w"> </span><span class="kn">import</span> <span class="n">AgUiMixin</span>
 
-    subgraph L3["Layer 3: Signal I/O"]
-        direction LR
-        IO1["_SharedSendBuffer&lt;br/&gt;(outbound batching + retry)"]
-        IO2["_SharedPoller&lt;br/&gt;(inbound polling)"]
-        IO3["Channel cache&lt;br/&gt;(ref-counted)"]
-    end
-
-    CLIENT["Client RPCs"] --&gt; L1
-    L1 --&gt; L2
-    L2 --&gt; EXEC["Module Execution"]
-    EXEC --&gt; L3
-    L3 --&gt; SP["services-provider"]
-
-    style L1 fill:#e3f2fd,stroke:#1976d2
-    style L2 fill:#fff3e0,stroke:#ff9800
-    style L3 fill:#e8f5e9,stroke:#4caf50</code></pre>
-<h3 id="layer-1-grpc-server-accepts-rpcs">Layer 1: gRPC Server (accepts RPCs)<a class="headerlink" href="#layer-1-grpc-server-accepts-rpcs" title="Permanent link">¤</a></h3>
-<p>Controls how many RPCs the async server handles concurrently. Each <code>StartModule</code> call is a <strong>server-streaming RPC</strong> that stays open for the entire task duration (potentially minutes).</p>
-<ul>
-<li><strong><code>MAX_CONCURRENT_RPCS</code></strong> — Front door. Set <code>&gt;= MAX_CONCURRENT_TASKS + MAX_QUEUED_TASKS</code>.</li>
-<li><strong><code>THREAD_POOL_WORKERS</code></strong> — For synchronous callbacks. Pure-async modules need only 1–2.</li>
-</ul>
-<h3 id="layer-2-task-manager-executes-work">Layer 2: Task Manager (executes work)<a class="headerlink" href="#layer-2-task-manager-executes-work" title="Permanent link">¤</a></h3>
-<p>Controls how many tasks actually run and how many can wait in line.</p>
-<ul>
-<li><strong><code>system_gate</code></strong> — Total admitted tasks (<code>MAX_CONCURRENT_TASKS + MAX_QUEUED_TASKS</code>). Fast reject when full.</li>
-<li><strong><code>task_slot</code></strong> — Execution slots (<code>MAX_CONCURRENT_TASKS</code>). Queued tasks wait here.</li>
-<li>See <a href="../admission-queue/">Admission Queue</a> for the full two-phase flow.</li>
-</ul>
-<h3 id="layer-3-signal-io-client-side-grpc">Layer 3: Signal I/O (client-side gRPC)<a class="headerlink" href="#layer-3-signal-io-client-side-grpc" title="Permanent link">¤</a></h3>
-<p>Controls outbound signal batching/retry and inbound signal polling.</p>
-<ul>
-<li><strong><code>_SharedSendBuffer</code></strong> — Batches signals, flushes on size or timer, retries on transient errors.</li>
-<li><strong><code>_SharedPoller</code></strong> — Polls <code>GetSignals</code> with adaptive backoff.</li>
-<li><strong>Channel cache</strong> — One gRPC channel per (host, port) pair, ref-counted.</li>
-<li>See <a href="../resilience/">Retry &amp; Fault Tolerance</a> for the retry architecture.</li>
-</ul>
-<hr />
-<h2 id="request-lifecycle">Request Lifecycle<a class="headerlink" href="#request-lifecycle" title="Permanent link">¤</a></h2>
-<pre class="mermaid"><code>sequenceDiagram
-    participant C as Client
-    participant GS as gRPC Server
-    participant TM as Task Manager
-    participant M as Module
-    participant SB as _SharedSendBuffer
-    participant SP as services-provider
-
-    C-&gt;&gt;GS: StartModule RPC
-    Note over GS: MAX_CONCURRENT_RPCS gate
-
-    GS-&gt;&gt;TM: create_task(module_coro)
-
-    alt Queue enabled (MAX_QUEUED_TASKS &gt; 0)
-        TM-&gt;&gt;TM: Phase 1: system_gate.acquire(timeout=ADMISSION_TIMEOUT)
-        Note over TM: Fast reject if system full
-        TM-&gt;&gt;TM: Phase 2: task_slot.acquire(no timeout)
-        Note over TM: Patient wait for execution slot
-    else Legacy mode
-        TM-&gt;&gt;TM: task_slot.acquire(timeout=TASK_WAIT_TIMEOUT)
-    end
-
-    TM-&gt;&gt;M: execute module coroutine
-    Note over M: initialize() → run() → trigger handler
-
-    M-&gt;&gt;SB: send_signal(proto, future)
-    Note over SB: Accumulate in batch
-
-    alt Batch full or timer fires
-        SB-&gt;&gt;SP: SendSignals(batch)
-        alt Transient error
-            SP--&gt;&gt;SB: DEADLINE_EXCEEDED
-            Note over SB: Retry with backoff + jitter
-            SB-&gt;&gt;SP: SendSignals(batch) [retry]
-            SP--&gt;&gt;SB: Success
-        else Success
-            SP--&gt;&gt;SB: resp.success=True
-        end
-        SB-&gt;&gt;M: future.set_result(True)
-    end
-
-    M-&gt;&gt;TM: Task complete
-    TM-&gt;&gt;TM: Release task_slot + system_gate
-    Note over TM: Next queued task starts
-
-    TM-&gt;&gt;GS: EndOfStream
-    GS-&gt;&gt;C: Stream complete</code></pre>
-<hr />
-<h2 id="shared-resources">Shared Resources<a class="headerlink" href="#shared-resources" title="Permanent link">¤</a></h2>
-<h3 id="_sharedpoller-one-per-channel">_SharedPoller (one per channel)<a class="headerlink" href="#_sharedpoller-one-per-channel" title="Permanent link">¤</a></h3>
-<p>Polls <code>GetSignals</code> for inbound signals with adaptive exponential backoff:</p>
-<div class="language-text highlight"><pre><span></span><code>Initial interval: SIGNAL_INITIAL_POLL_INTERVAL (0.1s)
-  → doubles each empty poll
-    → caps at SIGNAL_POLL_INTERVAL (1.0s)
-      → resets to initial when signals arrive
+<span class="k">class</span><span class="w"> </span><span class="nc">MyTrigger</span><span class="p">(</span><span class="n">TriggerHandler</span><span class="p">,</span> <span class="n">AgUiMixin</span><span class="p">):</span>
+    <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">handle</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">input_data</span><span class="p">,</span> <span class="n">setup_data</span><span class="p">,</span> <span class="n">context</span><span class="p">):</span>
+        <span class="k">for</span> <span class="n">event</span> <span class="ow">in</span> <span class="n">events</span><span class="p">:</span>
+            <span class="k">await</span> <span class="bp">self</span><span class="o">.</span><span class="n">send_message</span><span class="p">(</span><span class="n">context</span><span class="p">,</span> <span class="n">event</span><span class="p">)</span>
 </code></pre></div>
-<p>All tasks sharing a channel share one poller. Signals are dispatched to per-task queues by <code>job_id</code>.</p>
-<h3 id="_sharedsendbuffer-one-per-channel">_SharedSendBuffer (one per channel)<a class="headerlink" href="#_sharedsendbuffer-one-per-channel" title="Permanent link">¤</a></h3>
-<p>Batches outbound signals and flushes them as a single RPC:</p>
-<div class="language-text highlight"><pre><span></span><code>Signal arrives → append to batch
-  → if len(batch) &gt;= MAX_BATCH_SIZE → flush immediately
-  → if FLUSH_INTERVAL timer fires → flush whatever is accumulated
-    → flush: SendSignals RPC with retry (up to SIGNAL_SEND_RETRIES)
+<p>Evenements supportes :
+- <strong>Run lifecycle</strong> : <code>RunStarted</code>, <code>RunCompleted</code>, <code>RunError</code>
+- <strong>Text messages</strong> : <code>TextMessageStart</code>, <code>TextMessageContent</code>, <code>TextMessageEnd</code>
+- <strong>Reasoning</strong> : <code>ReasoningStart</code>, <code>ReasoningMessageContent</code>, <code>ReasoningEnd</code>
+- <strong>Tool calls</strong> : <code>ToolCallStart</code>, <code>ToolCallArgs</code>, <code>ToolCallEnd</code>, <code>ToolCallResult</code></p>
+<h3 id="agnostreamadapter-community"><code>AgnoStreamAdapter</code> (community)<a class="headerlink" href="#agnostreamadapter-community" title="Permanent link">¤</a></h3>
+<p>Adaptateur pour convertir les evenements Agno en evenements DigitalKin.
+Gere automatiquement le cycle de vie (ouverture/fermeture des sequences text/reasoning).</p>
+<div class="language-python highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">digitalkin.community.agno</span><span class="w"> </span><span class="kn">import</span> <span class="n">AgnoStreamAdapter</span>
+
+<span class="n">adapter</span> <span class="o">=</span> <span class="n">AgnoStreamAdapter</span><span class="p">()</span>
+
+<span class="k">async</span> <span class="k">for</span> <span class="n">raw_event</span> <span class="ow">in</span> <span class="n">agent</span><span class="o">.</span><span class="n">arun</span><span class="p">(</span><span class="n">message</span><span class="p">,</span> <span class="n">stream</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">stream_events</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+    <span class="k">for</span> <span class="n">event</span> <span class="ow">in</span> <span class="n">adapter</span><span class="o">.</span><span class="n">to_digitalkin_events</span><span class="p">(</span><span class="n">raw_event</span><span class="p">):</span>
+        <span class="k">await</span> <span class="bp">self</span><span class="o">.</span><span class="n">send_message</span><span class="p">(</span><span class="n">context</span><span class="p">,</span> <span class="n">event</span><span class="p">)</span>
+
+<span class="c1"># Fermer les sequences encore ouvertes en fin de stream</span>
+<span class="k">for</span> <span class="n">event</span> <span class="ow">in</span> <span class="n">adapter</span><span class="o">.</span><span class="n">flush</span><span class="p">():</span>
+    <span class="k">await</span> <span class="bp">self</span><span class="o">.</span><span class="n">send_message</span><span class="p">(</span><span class="n">context</span><span class="p">,</span> <span class="n">event</span><span class="p">)</span>
 </code></pre></div>
-<h3 id="channel-cache-ref-counted">Channel Cache (ref-counted)<a class="headerlink" href="#channel-cache-ref-counted" title="Permanent link">¤</a></h3>
-<p>gRPC channels are expensive to create (TLS handshake, HTTP/2 negotiation). The SDK caches channels by <code>(host, port)</code>:</p>
-<div class="language-text highlight"><pre><span></span><code>task starts → get_or_create_channel(host, port) → ref_count++
-task ends   → release_channel(host, port)       → ref_count--
-ref_count == 0 → close channel after grace period
-</code></pre></div>
-<p>Each channel carries its own <code>_SharedPoller</code> and <code>_SharedSendBuffer</code>.</p>
-<hr />
-<h2 id="event-loop-budget">Event Loop Budget<a class="headerlink" href="#event-loop-budget" title="Permanent link">¤</a></h2>
-<p>The asyncio event loop is the single most constrained resource. Every concurrent task competes for it:</p>
+<h3 id="modeles-devenements-digitalkinmodelsevents">Modeles d'evenements (<code>digitalkin.models.events</code>)<a class="headerlink" href="#modeles-devenements-digitalkinmodelsevents" title="Permanent link">¤</a></h3>
+<p>Evenements framework-agnostic pour les runs agent :</p>
 <table>
 <thead>
 <tr>
-<th>Concurrent Tasks</th>
-<th>Event Loop Health</th>
-<th>Task Duration</th>
-<th>Throughput</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>200</td>
-<td>Healthy — coroutines scheduled promptly</td>
-<td>~120s (88s work + 32s overhead)</td>
-<td>~100 tasks/min</td>
-</tr>
-<tr>
-<td>400</td>
-<td>Moderate contention — scheduling delays</td>
-<td>~160s</td>
-<td>~150 tasks/min</td>
-</tr>
-<tr>
-<td>800</td>
-<td>Saturated — 110s+ overhead per task</td>
-<td>~245s</td>
-<td>~196 tasks/min (but failures)</td>
-</tr>
-</tbody>
-</table>
-<p><strong>Why 200 outperforms 800:</strong> At 800 concurrent tasks, the event loop spends more time context-switching between coroutines than doing useful work. The infrastructure overhead (DNS resolution, gRPC I/O, CostService calls) balloons from ~32s to ~110s because every async operation waits longer to be scheduled.</p>
-<p><strong>Golden rule:</strong> <code>MAX_CONCURRENT_TASKS</code> × average task duration should not exceed what your event loop can schedule without starvation. In practice, 200 concurrent tasks with a queue of 3,000 delivers higher sustained throughput than 800 concurrent tasks with no queue.</p>
-<hr />
-<h2 id="environment-variables-by-layer">Environment Variables by Layer<a class="headerlink" href="#environment-variables-by-layer" title="Permanent link">¤</a></h2>
-<h3 id="layer-1-grpc-server">Layer 1: gRPC Server<a class="headerlink" href="#layer-1-grpc-server" title="Permanent link">¤</a></h3>
-<table>
-<thead>
-<tr>
-<th>Variable</th>
-<th>Default</th>
+<th>Classe</th>
 <th>Description</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>DIGITALKIN_MAX_CONCURRENT_RPCS</code></td>
-<td><code>cpu × 200</code></td>
-<td>Concurrent RPCs accepted</td>
+<td><code>RunStartedEvent</code></td>
+<td>Debut d'un run agent</td>
 </tr>
 <tr>
-<td><code>DIGITALKIN_THREAD_POOL_WORKERS</code></td>
-<td><code>min(4, cpu)</code></td>
-<td>Sync callback thread pool</td>
+<td><code>RunContentEvent</code></td>
+<td>Contenu texte streame</td>
+</tr>
+<tr>
+<td><code>RunCompletedEvent</code></td>
+<td>Fin d'un run</td>
+</tr>
+<tr>
+<td><code>RunErrorEvent</code></td>
+<td>Erreur pendant le run</td>
+</tr>
+<tr>
+<td><code>TextMessageStartedEvent</code></td>
+<td>Debut d'un message texte</td>
+</tr>
+<tr>
+<td><code>TextMessageCompletedEvent</code></td>
+<td>Fin d'un message texte</td>
+</tr>
+<tr>
+<td><code>ReasoningStartedEvent</code></td>
+<td>Debut d'une phase de raisonnement</td>
+</tr>
+<tr>
+<td><code>ReasoningContentDeltaEvent</code></td>
+<td>Delta de contenu raisonnement</td>
+</tr>
+<tr>
+<td><code>ReasoningStepEvent</code></td>
+<td>Etape de raisonnement</td>
+</tr>
+<tr>
+<td><code>ReasoningCompletedEvent</code></td>
+<td>Fin de la phase de raisonnement</td>
+</tr>
+<tr>
+<td><code>ToolCallStartedEvent</code></td>
+<td>Debut d'un appel outil</td>
+</tr>
+<tr>
+<td><code>ToolCallCompletedEvent</code></td>
+<td>Fin d'un appel outil</td>
+</tr>
+<tr>
+<td><code>ToolCallErrorEvent</code></td>
+<td>Erreur d'un appel outil</td>
 </tr>
 </tbody>
 </table>
-<h3 id="layer-2-task-manager">Layer 2: Task Manager<a class="headerlink" href="#layer-2-task-manager" title="Permanent link">¤</a></h3>
+<h3 id="modeles-de-sortie-ag-ui-digitalkinmodelsmoduleag_ui">Modeles de sortie AG-UI (<code>digitalkin.models.module.ag_ui</code>)<a class="headerlink" href="#modeles-de-sortie-ag-ui-digitalkinmodelsmoduleag_ui" title="Permanent link">¤</a></h3>
+<p>40+ types de sortie AG-UI avec serialisation camelCase automatique et union discriminee via le champ <code>protocol</code>.</p>
+<h2 id="architecture">Architecture<a class="headerlink" href="#architecture" title="Permanent link">¤</a></h2>
+<div class="language-text highlight"><pre><span></span><code>Framework (Agno, ...)
+    |
+    v
+AgnoStreamAdapter          -- convertit les events framework -&gt; DigitalKin
+    |
+    v
+DigitalKin Events          -- modeles framework-agnostic (agent_events.py)
+    |
+    v
+AgUiMixin.send_message()   -- convertit DigitalKin events -&gt; AG-UI protocol
+    |
+    v
+context.callbacks           -- envoie vers le client via gRPC stream
+</code></pre></div>
+<h2 id="exemple-complet-agno">Exemple complet (Agno)<a class="headerlink" href="#exemple-complet-agno" title="Permanent link">¤</a></h2>
+<div class="language-python highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">digitalkin.community.agno</span><span class="w"> </span><span class="kn">import</span> <span class="n">AgnoStreamAdapter</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">digitalkin.models.events</span><span class="w"> </span><span class="kn">import</span> <span class="n">BaseAgentRunEvent</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">digitalkin.modules.trigger_handler</span><span class="w"> </span><span class="kn">import</span> <span class="n">TriggerHandler</span>
+
+
+<span class="nd">@MyModule</span><span class="o">.</span><span class="n">register</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">MessageTrigger</span><span class="p">(</span><span class="n">TriggerHandler</span><span class="p">):</span>
+
+    <span class="n">protocol</span> <span class="o">=</span> <span class="s2">&quot;agui_stream&quot;</span>
+    <span class="n">input_format</span> <span class="o">=</span> <span class="n">AgUiStreamInput</span>
+    <span class="n">output_format</span> <span class="o">=</span> <span class="n">AgUiEventOutput</span>
+
+    <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">handle</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">input_data</span><span class="p">,</span> <span class="n">setup_data</span><span class="p">,</span> <span class="n">context</span><span class="p">):</span>
+        <span class="n">message</span> <span class="o">=</span> <span class="n">extract_user_message</span><span class="p">(</span><span class="n">input_data</span><span class="p">)</span>
+
+        <span class="n">adapter</span> <span class="o">=</span> <span class="n">AgnoStreamAdapter</span><span class="p">()</span>
+
+        <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">send_event</span><span class="p">(</span><span class="n">event</span><span class="p">:</span> <span class="n">BaseAgentRunEvent</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">await</span> <span class="bp">self</span><span class="o">.</span><span class="n">send_message</span><span class="p">(</span><span class="n">context</span><span class="p">,</span> <span class="n">event</span><span class="p">)</span>
+
+        <span class="k">async</span> <span class="k">for</span> <span class="n">raw_event</span> <span class="ow">in</span> <span class="n">agent</span><span class="o">.</span><span class="n">arun</span><span class="p">(</span><span class="n">message</span><span class="p">,</span> <span class="n">stream</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">stream_events</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+            <span class="k">for</span> <span class="n">event</span> <span class="ow">in</span> <span class="n">adapter</span><span class="o">.</span><span class="n">to_digitalkin_events</span><span class="p">(</span><span class="n">raw_event</span><span class="p">):</span>
+                <span class="k">await</span> <span class="n">send_event</span><span class="p">(</span><span class="n">event</span><span class="p">)</span>
+
+        <span class="k">for</span> <span class="n">event</span> <span class="ow">in</span> <span class="n">adapter</span><span class="o">.</span><span class="n">flush</span><span class="p">():</span>
+            <span class="k">await</span> <span class="n">send_event</span><span class="p">(</span><span class="n">event</span><span class="p">)</span>
+</code></pre></div>
+<h2 id="deprecations">Deprecations<a class="headerlink" href="#deprecations" title="Permanent link">¤</a></h2>
 <table>
 <thead>
 <tr>
-<th>Variable</th>
-<th>Default</th>
-<th>Description</th>
+<th>Ancien</th>
+<th>Nouveau</th>
+<th>Notes</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>DIGITALKIN_MAX_CONCURRENT_TASKS</code></td>
-<td><code>100</code></td>
-<td>Execution slots</td>
+<td><code>UserMessageMixin</code></td>
+<td><code>AgUiMixin</code></td>
+<td>Emettra un <code>DeprecationWarning</code> a l'heritage</td>
 </tr>
 <tr>
-<td><code>DIGITALKIN_MAX_QUEUED_TASKS</code></td>
-<td><code>0</code></td>
-<td>Queue depth (0 = legacy mode)</td>
+<td><code>ChatHistoryMixin</code></td>
+<td><code>AgUiMixin</code></td>
+<td>Emettra un <code>DeprecationWarning</code> a l'heritage</td>
 </tr>
 <tr>
-<td><code>DIGITALKIN_ADMISSION_TIMEOUT</code></td>
-<td><code>5.0</code></td>
-<td>System gate timeout (seconds)</td>
-</tr>
-<tr>
-<td><code>DIGITALKIN_TASK_WAIT_TIMEOUT</code></td>
-<td><code>30</code></td>
-<td>Legacy slot timeout (seconds)</td>
+<td><code>context.callbacks.send_message(output)</code> directement</td>
+<td><code>self.send_message(context, event)</code> via <code>AgUiMixin</code></td>
+<td>Les events passent maintenant par le pipeline AG-UI</td>
 </tr>
 </tbody>
 </table>
-<h3 id="layer-3-signal-io">Layer 3: Signal I/O<a class="headerlink" href="#layer-3-signal-io" title="Permanent link">¤</a></h3>
-<table>
-<thead>
-<tr>
-<th>Variable</th>
-<th>Default</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>DIGITALKIN_GRPC_TIMEOUT</code></td>
-<td><code>30</code></td>
-<td>SendSignals RPC timeout</td>
-</tr>
-<tr>
-<td><code>DIGITALKIN_SIGNAL_MAX_BATCH_SIZE</code></td>
-<td><code>50</code></td>
-<td>Batch flush trigger</td>
-</tr>
-<tr>
-<td><code>DIGITALKIN_SIGNAL_FLUSH_INTERVAL</code></td>
-<td><code>0.1</code></td>
-<td>Timer flush trigger (seconds)</td>
-</tr>
-<tr>
-<td><code>DIGITALKIN_SIGNAL_SEND_RETRIES</code></td>
-<td><code>3</code></td>
-<td>Batch retry attempts</td>
-</tr>
-<tr>
-<td><code>DIGITALKIN_SIGNAL_SEND_BACKOFF_MS</code></td>
-<td><code>100</code></td>
-<td>Retry backoff base (ms)</td>
-</tr>
-<tr>
-<td><code>DIGITALKIN_POLL_TIMEOUT</code></td>
-<td><code>1</code></td>
-<td>GetSignals RPC timeout</td>
-</tr>
-<tr>
-<td><code>DIGITALKIN_SIGNAL_POLL_INTERVAL</code></td>
-<td><code>1.0</code></td>
-<td>Max poll interval (seconds)</td>
-</tr>
-<tr>
-<td><code>DIGITALKIN_SIGNAL_INITIAL_POLL_INTERVAL</code></td>
-<td><code>0.1</code></td>
-<td>Initial poll interval</td>
-</tr>
-<tr>
-<td><code>DIGITALKIN_SIGNAL_QUEUE_SIZE</code></td>
-<td><code>512</code></td>
-<td>Per-task signal buffer</td>
-</tr>
-</tbody>
-</table>
-<hr />
-<h2 id="key-files">Key Files<a class="headerlink" href="#key-files" title="Permanent link">¤</a></h2>
-<table>
-<thead>
-<tr>
-<th>Component</th>
-<th>File</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>Async gRPC server</td>
-<td><code>src/digitalkin/grpc_servers/_base_server.py</code></td>
-</tr>
-<tr>
-<td>Server config (MAX_CONCURRENT_RPCS)</td>
-<td><code>src/digitalkin/grpc_servers/_base_server.py</code></td>
-</tr>
-<tr>
-<td>Module servicer</td>
-<td><code>src/digitalkin/grpc_servers/module_servicer.py</code></td>
-</tr>
-<tr>
-<td>Task manager (admission queue)</td>
-<td><code>src/digitalkin/core/task_manager/base_task_manager.py</code></td>
-</tr>
-<tr>
-<td>Local task manager</td>
-<td><code>src/digitalkin/core/task_manager/local_task_manager.py</code></td>
-</tr>
-<tr>
-<td>Task executor</td>
-<td><code>src/digitalkin/core/task_manager/task_executor.py</code></td>
-</tr>
-<tr>
-<td>Signal I/O (poller + send buffer)</td>
-<td><code>src/digitalkin/services/task_manager/grpc_task_manager.py</code></td>
-</tr>
-<tr>
-<td>gRPC client wrapper (exec_grpc_query)</td>
-<td><code>src/digitalkin/grpc_servers/utils/grpc_client_wrapper.py</code></td>
-</tr>
-<tr>
-<td>Channel/client config models</td>
-<td><code>src/digitalkin/models/grpc_servers/models.py</code></td>
-</tr>
-<tr>
-<td>Job manager</td>
-<td><code>src/digitalkin/core/job_manager/single_job_manager.py</code></td>
-</tr>
-</tbody>
-</table>
-<hr />
-<h2 id="related-docs">Related Docs<a class="headerlink" href="#related-docs" title="Permanent link">¤</a></h2>
-<ul>
-<li><a href="../sdk-flow/">SDK Flow</a> — request flow from server to module execution</li>
-<li><a href="../resilience/">Retry &amp; Fault Tolerance</a> — detailed retry layer documentation</li>
-<li><a href="../admission-queue/">Admission Queue</a> — two-phase admission control</li>
-<li><a href="../../grpc-tuning/">gRPC Tuning Guide</a> — environment variable reference and recommended configs</li>
-</ul>
+<h2 id="basemixin-mis-a-jour"><code>BaseMixin</code> mis a jour<a class="headerlink" href="#basemixin-mis-a-jour" title="Permanent link">¤</a></h2>
+<div class="language-python highlight"><pre><span></span><code><span class="c1"># Avant (0.3.5)</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">BaseMixin</span><span class="p">(</span><span class="n">CostMixin</span><span class="p">,</span> <span class="n">ChatHistoryMixin</span><span class="p">,</span> <span class="n">FileHistoryMixin</span><span class="p">,</span> <span class="n">LoggerMixin</span><span class="p">):</span> <span class="o">...</span>
+
+<span class="c1"># Apres (0.4.0)</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">BaseMixin</span><span class="p">(</span><span class="n">CostMixin</span><span class="p">,</span> <span class="n">AgUiMixin</span><span class="p">,</span> <span class="n">FileHistoryMixin</span><span class="p">,</span> <span class="n">LoggerMixin</span><span class="p">):</span> <span class="o">...</span>
+</code></pre></div>
+<p><code>AgUiMixin</code> remplace <code>ChatHistoryMixin</code> dans la chaine d'heritage de <code>BaseMixin</code>.
+Tous les <code>TriggerHandler</code> ont donc acces a <code>self.send_message(context, event)</code> sans import supplementaire.</p>
 
 
 
@@ -1809,7 +1492,7 @@ ref_count == 0 → close channel after grace period
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../admission-queue/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Architecture">
+          <a href="../0.3.4_to_0.3.5.dev0/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Changelog">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
@@ -1819,20 +1502,20 @@ ref_count == 0 → close channel after grace period
                 Previous
               </span>
               <div class="md-ellipsis">
-                Architecture
+                Changelog
               </div>
             </div>
           </a>
         
         
           
-          <a href="../resilience/" class="md-footer__link md-footer__link--next" aria-label="Next: Retry &amp;amp; Fault Tolerance">
+          <a href="../0.4.1/" class="md-footer__link md-footer__link--next" aria-label="Next: 0.4.0 → 0.4.1 — AG-UI Frontend Tools (HITL)">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                Retry &amp; Fault Tolerance
+                0.4.0 → 0.4.1 — AG-UI Frontend Tools (HITL)
               </div>
             </div>
             <div class="md-footer__button md-icon">
