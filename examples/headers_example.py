@@ -38,9 +38,8 @@ from google.protobuf import struct_pb2
 from digitalkin.grpc_servers.module_server import ModuleServer
 from digitalkin.models.grpc_servers.models import (
     ModuleServerConfig,
-    SecurityMode,
-    ServerMode,
 )
+from digitalkin.models.settings.utils.channel import ControlFlow, SecurityMode
 
 logging.basicConfig(
     level=logging.INFO,
@@ -74,7 +73,7 @@ async def start_server() -> ModuleServer:
     config = ModuleServerConfig(
         host="[::]",
         port=50055,
-        mode=ServerMode.ASYNC,
+        mode=ControlFlow.ASYNC,
         security=SecurityMode.INSECURE,
         max_workers=10,
         credentials=None,

@@ -16,14 +16,14 @@ repos:
       - id: check-toml
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.14.14
+    rev: v0.15.11
     hooks:
       - id: ruff-check
         args: [--fix]
       - id: ruff-format
 
   - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.19.1
+    rev: v1.20.2
     hooks:
       - id: mypy
         additional_dependencies: [types-protobuf]
@@ -34,7 +34,7 @@ repos:
     hooks:
       - id: pytest
         name: pytest
-        entry: docker compose run --rm -T tests -m 'not integration'
+        entry: docker compose run --rm -T tests pytest tests/ -m 'not integration'
         language: system
         pass_filenames: false
         types: [python]

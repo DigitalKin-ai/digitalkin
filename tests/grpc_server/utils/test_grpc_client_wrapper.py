@@ -5,7 +5,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
-from digitalkin.models.grpc_servers.models import ClientConfig, GrpcCompression, SecurityMode, ServerMode
+from digitalkin.models.grpc_servers.models import ClientConfig, GrpcCompression
+from digitalkin.models.settings.utils.channel import ControlFlow, SecurityMode
 
 
 @pytest.fixture(autouse=True)
@@ -23,7 +24,7 @@ def _make_config(host: str = "localhost", port: int = 50051) -> ClientConfig:
     return ClientConfig(
         host=host,
         port=port,
-        mode=ServerMode.ASYNC,
+        mode=ControlFlow.ASYNC,
         security=SecurityMode.INSECURE,
         compression=GrpcCompression.GZIP,
     )

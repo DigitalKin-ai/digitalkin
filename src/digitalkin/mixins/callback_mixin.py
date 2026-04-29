@@ -1,17 +1,31 @@
-"""User callback to send a message from the Trigger."""
+"""User callback to send a message from the Trigger.
 
-from typing import Generic
+.. deprecated::
+    Use :class:`digitalkin.mixins.agui_mixin.AgUiMixin` instead.
+"""
+
+import warnings
+from typing import Any, Generic
 
 from digitalkin.models.module.module_context import ModuleContext
 from digitalkin.models.module.module_types import OutputModelT
 
 
 class UserMessageMixin(Generic[OutputModelT]):
-    """Mixin providing callback operations through the callbacks .
+    """Mixin providing callback operations through the callbacks.
 
-    This mixin wraps callback strategy calls to provide a cleaner API
-    for direct messaging in trigger handlers.
+    .. deprecated::
+        Use :class:`digitalkin.mixins.agui_mixin.AgUiMixin` instead.
     """
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        """Deprecated warning."""
+        super().__init_subclass__(**kwargs)
+        warnings.warn(
+            f"{cls.__name__} inherits from UserMessageMixin which is deprecated. Use AgUiMixin.send_message instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
 
     @staticmethod
     async def send_message(context: ModuleContext, output: OutputModelT) -> None:
