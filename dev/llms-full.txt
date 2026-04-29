@@ -2475,7 +2475,7 @@ Returns:
 ##### to_digitalkin_events
 
 ```python
-to_digitalkin_events(agno_event: Any) -> list[BaseAgentRunEvent]
+to_digitalkin_events(agno_event: AgnoRunEvent) -> list[BaseAgentRunEvent]
 ```
 
 Convert one Agno event into one or more DigitalKin events.
@@ -2484,7 +2484,7 @@ Parameters:
 
 - ###### **`agno_event`**
 
-  (`Any`) – Event from Agno's streaming API.
+  (`AgnoRunEvent`) – Event from Agno's streaming API.
 
 Returns:
 
@@ -2782,7 +2782,7 @@ Returns:
 ###### to_digitalkin_events
 
 ```python
-to_digitalkin_events(agno_event: Any) -> list[BaseAgentRunEvent]
+to_digitalkin_events(agno_event: AgnoRunEvent) -> list[BaseAgentRunEvent]
 ```
 
 Convert one Agno event into one or more DigitalKin events.
@@ -2791,7 +2791,7 @@ Parameters:
 
 - ###### **`agno_event`**
 
-  (`Any`) – Event from Agno's streaming API.
+  (`AgnoRunEvent`) – Event from Agno's streaming API.
 
 Returns:
 
@@ -10980,6 +10980,7 @@ Classes:
 
 - **`AgentRunEvent`** – Agent run event types.
 - **`BaseAgentRunEvent`** – Base class for all agent run events.
+- **`CustomEvent`** – Event emitted for application-defined custom events.
 - **`ReasoningCompletedEvent`** – Event emitted when a reasoning phase completes.
 - **`ReasoningContentDeltaEvent`** – Event emitted during extended thinking/reasoning phases.
 - **`ReasoningStartedEvent`** – Event emitted when a reasoning phase starts.
@@ -11020,6 +11021,33 @@ Agent run event types.
 ```
 
 Base class for all agent run events.
+
+Classes:
+
+- **`Config`** – Pydantic configuration.
+
+##### Config
+
+Pydantic configuration.
+
+#### CustomEvent
+
+```
+              flowchart TD
+              digitalkin.models.events.CustomEvent[CustomEvent]
+              digitalkin.models.events.agent_events.BaseAgentRunEvent[BaseAgentRunEvent]
+
+                              digitalkin.models.events.agent_events.BaseAgentRunEvent --> digitalkin.models.events.CustomEvent
+                
+
+
+              click digitalkin.models.events.CustomEvent href "" "digitalkin.models.events.CustomEvent"
+              click digitalkin.models.events.agent_events.BaseAgentRunEvent href "" "digitalkin.models.events.agent_events.BaseAgentRunEvent"
+```
+
+Event emitted for application-defined custom events.
+
+Carries an application-specific `name` that discriminates the custom event subtype and a free-form `value` payload for metadata transfer.
 
 Classes:
 
@@ -11377,6 +11405,7 @@ Classes:
 
 - **`AgentRunEvent`** – Agent run event types.
 - **`BaseAgentRunEvent`** – Base class for all agent run events.
+- **`CustomEvent`** – Event emitted for application-defined custom events.
 - **`ReasoningCompletedEvent`** – Event emitted when a reasoning phase completes.
 - **`ReasoningContentDeltaEvent`** – Event emitted during extended thinking/reasoning phases.
 - **`ReasoningStartedEvent`** – Event emitted when a reasoning phase starts.
@@ -11417,6 +11446,33 @@ Agent run event types.
 ```
 
 Base class for all agent run events.
+
+Classes:
+
+- **`Config`** – Pydantic configuration.
+
+###### Config
+
+Pydantic configuration.
+
+##### CustomEvent
+
+```
+              flowchart TD
+              digitalkin.models.events.agent_events.CustomEvent[CustomEvent]
+              digitalkin.models.events.agent_events.BaseAgentRunEvent[BaseAgentRunEvent]
+
+                              digitalkin.models.events.agent_events.BaseAgentRunEvent --> digitalkin.models.events.agent_events.CustomEvent
+                
+
+
+              click digitalkin.models.events.agent_events.CustomEvent href "" "digitalkin.models.events.agent_events.CustomEvent"
+              click digitalkin.models.events.agent_events.BaseAgentRunEvent href "" "digitalkin.models.events.agent_events.BaseAgentRunEvent"
+```
+
+Event emitted for application-defined custom events.
+
+Carries an application-specific `name` that discriminates the custom event subtype and a free-form `value` payload for metadata transfer.
 
 Classes:
 
