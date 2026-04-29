@@ -504,7 +504,7 @@ class AgnoHitlRunner:
             :func:`emit_awaiting_tool_result` or let
             :meth:`handle_agui_input` do it).
         """
-        from agno.run.agent import RunOutput  # pyright: ignore[reportMissingImports]
+        from agno.run.agent import RunOutput
 
         logger.info("AgnoHitlRunner.run: starting (thread_id=%s, msg_len=%d)", thread_id, len(message))
 
@@ -553,7 +553,7 @@ class AgnoHitlRunner:
             the resumed run paused again (cascading frontend tools). If
             no paused record exists for ``thread_id``, returns ``None``.
         """
-        from agno.run.agent import RunOutput  # pyright: ignore[reportMissingImports]
+        from agno.run.agent import RunOutput
 
         record = await self._store.load(thread_id)
         if record is None:
@@ -579,6 +579,8 @@ class AgnoHitlRunner:
                 event=AgentRunEvent.RUN_STARTED,
                 run_id=run_id,
                 thread_id=thread_id,
+                timestamp=None,
+                metadata=None,
             )
         )
 
@@ -702,6 +704,8 @@ class AgnoHitlRunner:
                     event=AgentRunEvent.RUN_STARTED,
                     run_id=input_run_id,
                     thread_id=thread_id,
+                    timestamp=None,
+                    metadata=None,
                 )
             )
             await send(
@@ -716,6 +720,9 @@ class AgnoHitlRunner:
                         "resume. The paused state has been preserved — retry once all "
                         "tool results are available."
                     ),
+                    error_details=None,
+                    timestamp=None,
+                    metadata=None,
                 )
             )
             return True, None

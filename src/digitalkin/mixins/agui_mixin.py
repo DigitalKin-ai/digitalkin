@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, ClassVar
 from digitalkin.models.events import (
     AgentRunEvent,
     BaseAgentRunEvent,
+    CustomEvent,
     ReasoningCompletedEvent,
     ReasoningContentDeltaEvent,
     ReasoningStartedEvent,
@@ -54,7 +55,7 @@ class AgUiMixin:
     def __init__(self) -> None:
         """Initialize AG-UI mixin."""
         super().__init__()
-        self._thread_id: str = str(uuid.uuid4())
+        self._thread_id: str = ""
         self._run_id: str = ""
 
     async def _send_agui(  # noqa: PLR6301
@@ -78,8 +79,10 @@ class AgUiMixin:
             event: Agent run event to process and convert.
         """
         context.callbacks.logger.debug(
-            "AG-UI event: %s",
+            "AG-UI event: %s thread_id=%s run_id=%s",
             event.event,
+            self._thread_id,
+            self._run_id,
             extra=context.session.current_ids(),
         )
 
@@ -101,6 +104,7 @@ class AgUiMixin:
         AgentRunEvent.REASONING_CONTENT_DELTA: "_handle_reasoning_delta",
         AgentRunEvent.REASONING_STEP: "_handle_reasoning_step",
         AgentRunEvent.REASONING_COMPLETED: "_handle_reasoning_completed",
+        AgentRunEvent.CUSTOM: "_handle_custom",
     }
 
     # ── Private Event Handlers ───────────────────────────────────────────────
@@ -115,9 +119,20 @@ class AgUiMixin:
 
         from digitalkin.models.module.ag_ui import AgUiRunStartedOutput  # pylint: disable=C0415
 
-        self._run_id = event.run_id or str(uuid.uuid4())
-        if event.thread_id:
-            self._thread_id = event.thread_id
+        if not self._run_id:
+            self._run_id = event.run_id or str(uuid.uuid4())
+        if not self._thread_id:
+            self._thread_id = event.thread_id or str(uuid.uuid4())
+
+        context.callbacks.logger.info(
+            "[agui-mixin] RUN_STARTED thread_id=%s run_id=%s event_run_id=%s event_thread_id=%s metadata=%s",
+            self._thread_id,
+            self._run_id,
+            event.run_id,
+            event.thread_id,
+            event.metadata,
+            extra=context.session.current_ids(),
+        )
 
         output = AgUiRunStartedOutput(
             event=AgUiRunStartedEvent(
@@ -198,7 +213,16 @@ class AgUiMixin:
 
         from digitalkin.models.module.ag_ui import AgUiRunFinishedOutput  # pylint: disable=C0415
 
-        run_id = event.run_id or self._run_id
+        run_id = self._run_id or event.run_id or str(uuid.uuid4())
+        context.callbacks.logger.info(
+            "[agui-mixin] RUN_FINISHED thread_id=%s event_run_id=%s self._run_id=%s resolved=%s metadata=%s",
+            self._thread_id,
+            event.run_id,
+            self._run_id,
+            run_id,
+            event.metadata,
+            extra=context.session.current_ids(),
+        )
         output = AgUiRunFinishedOutput(
             event=AgUiRunFinishedEvent(
                 thread_id=self._thread_id,
@@ -423,3 +447,21 @@ class AgUiMixin:
             event=AgUiReasoningEndEvent(message_id=reasoning_id),
         )
         await self._send_agui(context, end_output)
+
+    async def _handle_custom(
+        self,
+        context: ModuleContext,
+        event: CustomEvent,
+    ) -> None:
+        """Handle custom event - emit AG-UI CustomEvent."""
+        from ag_ui.core.events import CustomEvent as AgUiCustomEvent  # pylint: disable=C0415
+
+        from digitalkin.models.module.ag_ui import AgUiCustomEventOutput  # pylint: disable=C0415
+
+        output = AgUiCustomEventOutput(
+            event=AgUiCustomEvent(
+                name=event.name,
+                value=event.value,
+            )
+        )
+        await self._send_agui(context, output)

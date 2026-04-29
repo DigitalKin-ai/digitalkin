@@ -32,6 +32,8 @@ class AgentRunEvent(str, Enum):
     TOOL_CALL_COMPLETED = "tool_call_completed"
     TOOL_CALL_ERROR = "tool_call_error"
 
+    CUSTOM = "custom"
+
 
 class BaseAgentRunEvent(BaseModel):
     """Base class for all agent run events."""
@@ -157,3 +159,15 @@ class ToolCallErrorEvent(BaseAgentRunEvent):
     event: AgentRunEvent = Field(AgentRunEvent.TOOL_CALL_ERROR, description="Event type")
     tool: ToolInfo | None = Field(None, description="Tool information")
     error_message: str | None = Field(None, description="Error message")
+
+
+class CustomEvent(BaseAgentRunEvent):
+    """Event emitted for application-defined custom events.
+
+    Carries an application-specific ``name`` that discriminates the custom
+    event subtype and a free-form ``value`` payload for metadata transfer.
+    """
+
+    event: AgentRunEvent = Field(AgentRunEvent.CUSTOM, description="Event type")
+    name: str = Field(..., description="Application-defined event name (discriminator)")
+    value: Any = Field(..., description="Application-defined payload")
