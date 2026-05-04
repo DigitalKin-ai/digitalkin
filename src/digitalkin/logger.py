@@ -8,6 +8,14 @@ from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 from typing import Any, ClassVar
 
+_LEVEL_NAMES: dict[str, int] = {
+    "DEBUG": logging.DEBUG,
+    "INFO": logging.INFO,
+    "WARNING": logging.WARNING,
+    "ERROR": logging.ERROR,
+    "CRITICAL": logging.CRITICAL,
+}
+
 
 class ColorJSONFormatter(logging.Formatter):
     """Color JSON formatter for development (pretty-printed with colors)."""
@@ -166,7 +174,10 @@ def add_file_handler(logger: logging.Logger) -> None:
 
     log_file = os.environ.get("DIGITALKIN_LOG_FILE", os.path.join(log_dir, f"{logger.name}.log"))
     fh = RotatingFileHandler(log_file, maxBytes=10 * 1024 * 1024, backupCount=5)
-    file_level = getattr(logging, os.environ.get("DIGITALKIN_FILE_LOG_LEVEL", "DEBUG").upper(), logging.DEBUG)
+    file_level = _LEVEL_NAMES.get(
+        os.environ.get("DIGITALKIN_FILE_LOG_LEVEL", "DEBUG").upper(),
+        logging.DEBUG,
+    )
     fh.setLevel(file_level)
     fh.setFormatter(PlainJSONFormatter())
     logger.addHandler(fh)
@@ -228,5 +239,8 @@ def setup_logger(
 
 logger = setup_logger(
     "digitalkin",
-    level=getattr(logging, os.environ.get("DIGITALKIN_LOG_LEVEL", "INFO").upper(), logging.INFO),
+    level=_LEVEL_NAMES.get(
+        os.environ.get("DIGITALKIN_LOG_LEVEL", "INFO").upper(),
+        logging.INFO,
+    ),
 )

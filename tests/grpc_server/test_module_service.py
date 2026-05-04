@@ -152,7 +152,7 @@ class TestStartModule:
         async def mock_stream() -> AsyncGenerator[dict[str, Any], None]:  # noqa: RUF029
             yield {"root": {"output": "message 1"}, "annotations": {}}
             yield {"root": {"output": "message 2"}, "annotations": {}}
-            yield {"root": {"protocol": "end_of_stream"}, "annotations": {}}
+            yield {"root": {"protocol": "stream.end"}, "annotations": {}}
 
         mock_context_manager = AsyncMock()
         mock_context_manager.__aenter__ = AsyncMock(return_value=mock_stream())
@@ -165,7 +165,7 @@ class TestStartModule:
         # Execute
         responses = [response async for response in module_servicer.StartModule(request, fake_context)]
 
-        # Verify: 2 data messages + 1 end_of_stream message
+        # Verify: 2 data messages + 1 stream.end message
         assert len(responses) == 3
         assert responses[0].success is True
         assert responses[0].job_id == "test-job-id"

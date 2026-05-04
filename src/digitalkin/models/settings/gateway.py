@@ -36,6 +36,15 @@ class GatewayQueueSettings(BaseSettings):
     output_queue_size: int = Field(default=512, description="Output queue max size")
     input_queue_size: int = Field(default=512, description="Input queue max size")
     enqueue_timeout_s: float = Field(default=5.0, description="Queue enqueue timeout in seconds")
+    dispatcher_input_wait_s: float = Field(
+        default=60.0,
+        description=(
+            "Max seconds the dispatcher waits for the consumer's first input "
+            "(via session.input_queue) before emitting INPUT_WAIT_TIMEOUT. "
+            "Must stay below the dial-back BiDi ceiling (300s) so the dispatcher "
+            "times out first with a meaningful error code."
+        ),
+    )
 
 
 class GatewaySettings(BaseSettings):
@@ -49,6 +58,13 @@ class GatewaySettings(BaseSettings):
     reaper_interval: int = Field(default=30, description="Reaper check interval in seconds")
     session_state_ttl: int = Field(default=3600, description="Session metadata TTL in seconds")
     redis_health_timeout: float = Field(default=5.0, description="Redis health check timeout in seconds")
+    dial_back_bidi_timeout_s: float = Field(
+        default=300.0,
+        description=(
+            "Hard deadline on the gateway → consumer Stream BiDi. The dial-back "
+            "task is cancelled if it has not completed within this window."
+        ),
+    )
 
     stream: GatewayStreamSettings = Field(default_factory=GatewayStreamSettings)
     backpressure: GatewayBackpressureSettings = Field(default_factory=GatewayBackpressureSettings)

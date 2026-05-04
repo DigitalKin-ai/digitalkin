@@ -366,6 +366,9 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         Raises:
             Exception: If the module fails to start.
         """
+        from digitalkin.core.profiling.step_timer import StepTimer
+
+        timer = StepTimer()
         job_id = job_id or str(uuid.uuid4())
         module = ModuleFactory.create_module_instance(
             self.module_class,
@@ -376,17 +379,20 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             request_metadata=request_metadata,
             tool_cache=tool_cache,
         )
+        timer.mark("factory_create")
 
         # Redis-backed signal service for cross-process signal delivery
         from digitalkin.services.task_manager.redis_task_manager import RedisTaskManager
 
         module.context.task_manager = RedisTaskManager(self._redis_client)
+        timer.mark("redis_task_manager")
 
         if callback is None:
             from digitalkin.core.task_manager.redis.redis_streams import RedisStreamWriter
 
             self._stream_writers[job_id] = RedisStreamWriter(job_id, self._redis_client)
             callback = await self.job_specific_callback(self.add_to_queue, job_id)
+            timer.mark("default_callback")
 
         await self.create_task(
             job_id,
@@ -394,6 +400,8 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             module,
             module.start(input_data, setup_data, callback, done_callback=None),  # type: ignore[arg-type]
         )
+        timer.mark("create_task")
+        timer.log("create_module_instance_job", task_id=job_id)
         logger.info("Managed task started: '%s'", job_id, extra={"task_id": job_id})
         return job_id
 

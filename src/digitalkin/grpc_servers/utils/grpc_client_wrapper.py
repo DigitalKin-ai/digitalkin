@@ -15,6 +15,7 @@ from typing import Any, ClassVar
 import grpc
 import grpc.aio
 
+from digitalkin.core.resilience.bulkhead import Bulkhead
 from digitalkin.grpc_servers.utils.circuit_breaker import CircuitBreaker, CircuitOpenError
 from digitalkin.grpc_servers.utils.exceptions import ServerError
 from digitalkin.logger import logger
@@ -153,8 +154,9 @@ class GrpcClientWrapper:
                 GrpcClientWrapper._channel_cache.pop(key, None)
                 GrpcClientWrapper._stub_cache = {k: v for k, v in GrpcClientWrapper._stub_cache.items() if k[0] != key}
                 await self._channel.close()
-                # Clean up circuit breaker for this service to prevent accumulation
+                # Clean up circuit breaker and bulkhead for this service
                 CircuitBreaker.remove(self.service_name)
+                Bulkhead.remove(self.service_name)
         else:
             await self._channel.close()
         self._channel = None

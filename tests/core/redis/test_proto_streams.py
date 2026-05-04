@@ -135,17 +135,21 @@ class TestProtoStreamWriterBatch:
         await c.close()
 
     async def test_batch_flushes_on_eos(self, client: Any) -> None:
-        """Small writes: entries held in _pending, flushed on write_eos."""
+        """Adaptive flush: first write direct, rest buffered, EOS flushes pending.
+
+        First write goes direct (huge gap from init=0.0); subsequent fast
+        writes are buffered.
+        """
         from digitalkin.core.task_manager.redis.proto_streams import ProtoStreamWriter
 
         writer = ProtoStreamWriter("task_batch1", client, batch_size=20, flush_ms=60_000)  # type: ignore[arg-type]
         s = struct_pb2.Struct()
         s.update({"data": "test"})
 
-        await writer.write_struct(s)
-        await writer.write_struct(s)
-        # Entries buffered, not yet in Redis
-        assert len(writer._pending) == 2
+        await writer.write_struct(s)  # direct (first write)
+        await writer.write_struct(s)  # buffered
+        # Only the second write is buffered
+        assert len(writer._pending) == 1
 
         await writer.write_eos()
         # After EOS, pending is flushed and EOS written
@@ -153,19 +157,24 @@ class TestProtoStreamWriterBatch:
         assert writer.last_seq == 3  # 2 entries + 1 EOS
 
     async def test_batch_flushes_on_size(self, client: Any) -> None:
-        """Flush when batch_size is reached, not waiting for EOS."""
+        """Flush when batch_size is reached, not waiting for EOS.
+
+        First write goes direct; subsequent fast writes are buffered until
+        the batch threshold is reached.
+        """
         from digitalkin.core.task_manager.redis.proto_streams import ProtoStreamWriter
 
         writer = ProtoStreamWriter("task_batch2", client, batch_size=3, flush_ms=60_000)  # type: ignore[arg-type]
         s = struct_pb2.Struct()
         s.update({"data": "v"})
 
-        await writer.write_struct(s)
+        await writer.write_struct(s)  # direct (first write)
+        assert len(writer._pending) == 0
+        await writer.write_struct(s)  # buffered (1)
         assert len(writer._pending) == 1
-        await writer.write_struct(s)
+        await writer.write_struct(s)  # buffered (2)
         assert len(writer._pending) == 2
-        await writer.write_struct(s)
-        # Batch size reached (3) — should have flushed
+        await writer.write_struct(s)  # buffered (3) — hits batch_size, flushes
         assert len(writer._pending) == 0
 
     async def test_batch_roundtrip(self, client: Any) -> None:

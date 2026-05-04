@@ -35,6 +35,7 @@ class Bulkhead:
     """
 
     _instances: ClassVar[dict[str, Bulkhead]] = {}
+    _MAX_INSTANCES: ClassVar[int] = 256
 
     _service_id: str
     _semaphore: asyncio.Semaphore
@@ -64,6 +65,10 @@ class Bulkhead:
         if service_id in cls._instances:
             return cls._instances[service_id]
 
+        if len(cls._instances) >= cls._MAX_INSTANCES:
+            oldest = next(iter(cls._instances))
+            del cls._instances[oldest]
+
         env_key = f"DIGITALKIN_BULKHEAD_{service_id.upper()}_MAX"
         default_max = int(os.environ.get(env_key, os.environ.get("DIGITALKIN_BULKHEAD_DEFAULT_MAX", "50")))
         default_timeout = float(os.environ.get("DIGITALKIN_BULKHEAD_TIMEOUT", "2.0"))
@@ -75,6 +80,11 @@ class Bulkhead:
         )
         cls._instances[service_id] = inst
         return inst
+
+    @classmethod
+    def remove(cls, service_id: str) -> None:
+        """Remove a specific bulkhead instance."""
+        cls._instances.pop(service_id, None)
 
     @classmethod
     def clear_all(cls) -> None:

@@ -30,6 +30,7 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
     """Base setup model with dynamic schema and tool cache support."""
 
     _clean_model_cache: ClassVar[dict[tuple[type, bool, bool], type]] = {}
+    _CLEAN_MODEL_CACHE_MAX: ClassVar[int] = 64
     resolved_tools: dict[str, ToolModuleInfo] = Field(
         default_factory=dict,
         json_schema_extra={"ui:widget": "hidden"},
@@ -105,9 +106,16 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
         cls._remove_excluded_inherited_fields(m, excluded_fields, clean_fields)
 
         if not force:
+            if len(cls._clean_model_cache) >= cls._CLEAN_MODEL_CACHE_MAX:
+                del cls._clean_model_cache[next(iter(cls._clean_model_cache))]
             cls._clean_model_cache[cache_key] = m
 
         return cast("type[SetupModelT]", m)
+
+    @classmethod
+    def clear_clean_model_cache(cls) -> None:
+        """Clear the filtered model cache. Called by cache invalidation."""
+        cls._clean_model_cache.clear()
 
     @staticmethod
     def _remove_excluded_inherited_fields(

@@ -4,6 +4,7 @@ import asyncio
 from collections.abc import AsyncGenerator, Awaitable, Callable
 
 import grpc.aio
+from agentic_mesh_protocol.gateway.v1 import gateway_service_pb2_grpc
 from agentic_mesh_protocol.module.v1 import (
     information_pb2,
     lifecycle_pb2,
@@ -16,6 +17,10 @@ from digitalkin.logger import logger
 from digitalkin.models.grpc_servers.models import ClientConfig
 from digitalkin.services.base_strategy import BaseStrategy
 from digitalkin.services.communication.communication_strategy import CommunicationStrategy
+
+
+class InvalidConsumerAddressError(ValueError):
+    """``address`` is not a valid ``host:port`` for dial-back."""
 
 
 class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
@@ -88,6 +93,50 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
     async def close(self) -> None:
         """Release all pooled gRPC channels."""
         await self.close_all_channels()
+
+    def dial_consumer_stream(
+        self,
+        address: str,
+    ) -> tuple[gateway_service_pb2_grpc.GatewayServiceStub, Callable[[], Awaitable[None]]]:
+        """Open (or reuse) a pooled channel to a consumer's GatewayService.
+
+        External clients (chainlit, web UI) run their own GatewayService
+        gRPC server. This returns a stub for the consumer's Stream RPC
+        plus a release closure to drop the cached channel ref when done.
+
+        Args:
+            address: ``"host:port"`` of the consumer's GatewayService.
+
+        Returns:
+            ``(stub, release_channel)`` — call ``await release_channel()``
+            after the BiDi is fully drained.
+
+        Raises:
+            InvalidConsumerAddressError: If ``address`` is not ``host:port``
+                with a port in 1-65535.
+        """
+        host, sep, port_str = address.partition(":")
+        if not host or not sep or not port_str:
+            msg = f"address must be host:port, got {address!r}"
+            raise InvalidConsumerAddressError(msg)
+        try:
+            port = int(port_str)
+        except ValueError as exc:
+            msg = f"port must be integer, got {address!r}"
+            raise InvalidConsumerAddressError(msg) from exc
+        if not (1 <= port <= 65535):  # noqa: PLR2004 — TCP port range
+            msg = f"port out of range, got {address!r}"
+            raise InvalidConsumerAddressError(msg)
+        self._get_or_create_channel(host, port)
+        stub = self._get_or_create_stub(gateway_service_pb2_grpc.GatewayServiceStub)
+        cache_key = self._channel_cache_key
+
+        async def _release() -> None:
+            if cache_key:
+                await GrpcClientWrapper.release_cached_channel(cache_key)
+                self._pool_keys.discard(cache_key)
+
+        return stub, _release
 
     def _create_stub(self, module_address: str, module_port: int) -> module_service_pb2_grpc.ModuleServiceStub:
         """Create a new stub for the target module.
@@ -215,11 +264,11 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
             async for response in response_stream:
                 output_proto = response.output
 
-                # Check for end_of_stream signal on proto
+                # Check for stream.end signal on proto
                 root = output_proto.fields.get("root")
                 if root is not None:
                     protocol_field = root.struct_value.fields.get("protocol")
-                    if protocol_field is not None and protocol_field.string_value == "end_of_stream":
+                    if protocol_field is not None and protocol_field.string_value == "stream.end":
                         logger.debug(
                             "End of stream received",
                             extra={

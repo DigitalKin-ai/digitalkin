@@ -1,11 +1,12 @@
-"""Extended tests for GatewayServicer — late consumer, _start_module error paths, SendSignal.
+"""Extended tests for GatewayServicer — late consumer, _start_module dispatch, SendSignal.
 
 Covers gaps from the audit:
-- ConsumeStream late consumer (session gone, Redis stream exists)
-- _start_module early exit always writes EOS
-- _start_module session NOT unregistered (left for consumer/reaper)
-- SendSignal Redis fallback when no signal_service
-- SendSignal failure reporting
+- Stream late consumer (session gone, Redis stream exists)
+- _start_module dispatches via Redis XADD
+- SendSignal Redis publish + failure reporting
+
+Errors are emitted as ``stream.error`` + ``stream.end`` sentinels — never via
+``context.abort``. Tests assert the sentinel sequence on failure paths.
 """
 
 from __future__ import annotations
@@ -94,12 +95,19 @@ class _FakeRequestIterator:
         return msg
 
 
-def _make_init_msg(task_id: str, from_seq: int = 0) -> MagicMock:
-    msg = MagicMock()
-    msg.WhichOneof.return_value = "init"
-    msg.init.task_id = task_id
-    msg.init.from_seq = from_seq
-    return msg
+def _make_init_msg(task_id: str, from_seq: int = 0) -> Any:
+    """Build a real StreamRequest init proto."""
+    from agentic_mesh_protocol.gateway.v1 import gateway_pb2
+    from google.protobuf import struct_pb2
+
+    return gateway_pb2.StreamClient(
+        task_id=task_id, from_seq=from_seq, data=struct_pb2.Struct(),
+    )
+
+
+def _protocol_of(stream_output: Any) -> str:
+    """Extract data.root.protocol string from a StreamOutput sentinel."""
+    return stream_output.data.fields["root"].struct_value.fields["protocol"].string_value
 
 
 def _mock_servicer(redis_client: Any = "default_mock", **kwargs: Any) -> Any:
@@ -119,8 +127,8 @@ def _mock_servicer(redis_client: Any = "default_mock", **kwargs: Any) -> Any:
 
 
 @SKIP_NO_FAKEREDIS
-class TestConsumeStreamLateConsumer:
-    """ConsumeStream when the session has already been cleaned up."""
+class TestStreamLateConsumer:
+    """Stream when the session has already been cleaned up."""
 
     @pytest.fixture
     async def redis(self) -> Any:
@@ -146,22 +154,22 @@ class TestConsumeStreamLateConsumer:
         # Create servicer — session is NOT registered (module already finished)
         servicer = _mock_servicer(redis_client=redis)
 
-        # ConsumeStream should still work via Redis fallback
+        # Stream should still work via Redis fallback
         init_msg = _make_init_msg(task_id)
         request_iter = _FakeRequestIterator([init_msg])
         ctx = MagicMock()
 
         responses = []
-        async for resp in servicer.ConsumeStream(request_iter, ctx):
+        async for resp in servicer.Stream(request_iter, ctx):
             responses.append(resp)
 
-        # Should get output + COMPLETED status, not "Task not found" error
-        assert len(responses) >= 2
-        last = responses[-1]
-        assert last.WhichOneof("payload") == "status"
+        # Should get the persisted output entry, not a fatal error sequence
+        assert len(responses) >= 1
+        # The first response is the domain output; verify protocol is not stream.error
+        assert all(_protocol_of(r) != "stream.error" for r in responses)
 
-    async def test_returns_error_when_no_session_no_redis_stream(self, redis: Any) -> None:
-        """If session is gone AND no Redis stream, return error."""
+    async def test_returns_fatal_error_when_no_session_no_redis_stream(self, redis: Any) -> None:
+        """If session is gone AND no Redis stream, yield stream.error+stream.end."""
         servicer = _mock_servicer(redis_client=redis)
 
         init_msg = _make_init_msg("task_nonexistent")
@@ -169,11 +177,14 @@ class TestConsumeStreamLateConsumer:
         ctx = MagicMock()
 
         responses = []
-        async for resp in servicer.ConsumeStream(request_iter, ctx):
+        async for resp in servicer.Stream(request_iter, ctx):
             responses.append(resp)
 
-        assert len(responses) == 1
-        assert responses[0].WhichOneof("payload") == "error"
+        assert len(responses) == 2
+        assert _protocol_of(responses[0]) == "stream.error"
+        assert responses[0].data.fields["root"].struct_value.fields["fatal"].bool_value is True
+        assert responses[0].data.fields["root"].struct_value.fields["code"].string_value == "NOT_FOUND"
+        assert _protocol_of(responses[1]) == "stream.end"
 
 
 # ===========================================================================
@@ -192,7 +203,7 @@ class TestStartModuleDispatch:
         await c.close()
 
     async def test_dispatches_task_to_redis(self, redis: Any) -> None:
-        """_start_module XADDs task spec to dispatch stream."""
+        """_start_module XADDs task spec to dispatch stream (no pb/input field)."""
         servicer = _mock_servicer(redis_client=redis)
 
         from digitalkin.grpc_servers.stream_session import StreamSession
@@ -203,15 +214,11 @@ class TestStartModuleDispatch:
         request = MagicMock()
         request.setup_id = "setups:s1"
         request.mission_id = "missions:m1"
-        from google.protobuf import struct_pb2
-
-        input_struct = struct_pb2.Struct()
-        input_struct.update({"root": {"protocol": "message", "content": "hello"}})
-        request.input = input_struct
 
         await servicer._start_module(session, request)
 
-        # Verify dispatch was written to Redis
+        # Verify dispatch was written to Redis (no pb/input — module input
+        # arrives via upstream Stream messages, not via dispatch entry).
         stream_len = await redis.xlen(servicer._dispatch_key)
         assert stream_len == 1
 
@@ -248,7 +255,7 @@ class TestSendSignalExtended:
 
         request = MagicMock()
         request.task_id = "task_sig_redis"
-        request.action = gateway_pb2.SIGNAL_ACTION_CANCEL
+        request.action = gateway_pb2.CANCEL
 
         resp = await servicer.SendSignal(request, MagicMock())
         assert resp.success is True
@@ -271,7 +278,7 @@ class TestSendSignalExtended:
 
         request = MagicMock()
         request.task_id = "task_sig_none"
-        request.action = gateway_pb2.SIGNAL_ACTION_CANCEL
+        request.action = gateway_pb2.CANCEL
 
         resp = await servicer.SendSignal(request, MagicMock())
         assert resp.success is False

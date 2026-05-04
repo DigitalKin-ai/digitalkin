@@ -117,6 +117,8 @@ class TestProtoSequenceIntegrity:
             s = struct_pb2.Struct()
             s.update({"i": i})
             await writer1.write_struct(s)
+        # Flush buffered entries so they are visible via XREVRANGE
+        await writer1._flush()
 
         # New writer restores seq
         writer2 = ProtoStreamWriter("seq:restore", redis_client)

@@ -209,7 +209,7 @@ Keep docstrings lean and professional. No flowery language, no numbered steps, n
 - **No ClassVar for single-use**: Don't create class attributes for values used only once
 
 ### IDs
-IDs flow through the entire system: `job_id`, `mission_id`, `setup_id`, `setup_version_id`. Always propagate these correctly.
+Propagate `task_id`, `setup_id`, and `mission_id` through the system whenever they are available.
 
 ### Pydantic Models
 All data models use Pydantic for validation and serialization. JSON schemas are generated for module introspection.
@@ -221,7 +221,7 @@ Most operations are async/await. Use `async def` for handlers and module methods
 Comprehensive type hints are used throughout. Always add type annotations to new code.
 
 ### Structured Logging
-The `extra` parameter is **only for global context IDs** that help correlate logs across the system (e.g., `job_id`, `mission_id`, `setup_id`, `setup_version_id`, `task_id`). These IDs are typically available via `self.session_ids` or `context.session.current_ids()`.
+The `extra` parameter is **only for global context IDs** that help correlate logs across the system (e.g., `task_id`, `setup_id`, `mission_id`). These IDs are typically available via `self.session_ids` or `context.session.current_ids()`.
 
 **Local-scope variables go in the log message, not in `extra`:**
 ```python

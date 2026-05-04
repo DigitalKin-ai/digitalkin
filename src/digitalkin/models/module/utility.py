@@ -25,7 +25,7 @@ class UtilityProtocol(DataTrigger):
 class EndOfStreamOutput(UtilityProtocol):
     """Signal that the stream has ended."""
 
-    protocol: Literal["end_of_stream"] = "end_of_stream"  # type: ignore[misc]
+    protocol: Literal["stream.end"] = "stream.end"  # type: ignore[misc]
 
 
 class ModuleStartInfoOutput(UtilityProtocol):
@@ -35,7 +35,7 @@ class ModuleStartInfoOutput(UtilityProtocol):
     providing the client with essential execution context information.
     """
 
-    protocol: Literal["module_start_info"] = "module_start_info"  # type: ignore[misc]
+    protocol: Literal["stream.start"] = "stream.start"  # type: ignore[misc]
     task_id: str = Field(..., description="Task identifier")
     mission_id: str = Field(..., description="Mission identifier")
     setup_id: str = Field(..., description="Setup identifier")

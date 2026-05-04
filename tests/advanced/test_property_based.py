@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Generator
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from hypothesis import given, settings
@@ -104,11 +105,13 @@ class TestListenerDispatchProperties:
 
         SharedRedisListener._instances.clear()
         client = MagicMock()
-        client.pubsub.return_value = MagicMock()
+        _ps = MagicMock()
+        _ps.subscribe = AsyncMock()
+        client.pubsub.return_value = _ps
         listener = SharedRedisListener(client)
         listener._queue_size = n_signals + 10  # Enough room
 
-        q = listener.register("t1")
+        q = await listener.register("t1")
         for i in range(n_signals):
             data = {"seq": i}
             listener.dispatch_signal("t1", data, json.dumps(data))
@@ -126,10 +129,12 @@ class TestListenerDispatchProperties:
 
         SharedRedisListener._instances.clear()
         client = MagicMock()
-        client.pubsub.return_value = MagicMock()
+        _ps = MagicMock()
+        _ps.subscribe = AsyncMock()
+        client.pubsub.return_value = _ps
         listener = SharedRedisListener(client)
 
-        q = listener.register("t1")
+        q = await listener.register("t1")
         data = {"action": "start", "value": "fixed"}
         raw = json.dumps(data)
 

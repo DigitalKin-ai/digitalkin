@@ -109,7 +109,7 @@ class TestSharedRedisListenerDispatch:
         from digitalkin.core.task_manager.redis.redis_signal import SharedRedisListener
 
         listener = SharedRedisListener(_make_mock_client())
-        q = listener.register("task_1")
+        q = await listener.register("task_1")
 
         data = {"action": "start", "task_id": "task_1"}
         assert listener.dispatch_signal("task_1", data, json.dumps(data)) is True
@@ -126,7 +126,7 @@ class TestSharedRedisListenerDispatch:
         from digitalkin.core.task_manager.redis.redis_signal import SharedRedisListener
 
         listener = SharedRedisListener(_make_mock_client())
-        q = listener.register("task_1")
+        q = await listener.register("task_1")
 
         data = {"action": "start"}
         raw = json.dumps(data)
@@ -138,7 +138,7 @@ class TestSharedRedisListenerDispatch:
         from digitalkin.core.task_manager.redis.redis_signal import SharedRedisListener
 
         listener = SharedRedisListener(_make_mock_client())
-        q = listener.register("task_1")
+        q = await listener.register("task_1")
 
         d1 = {"action": "start"}
         d2 = {"action": "ack_start"}
@@ -151,7 +151,7 @@ class TestSharedRedisListenerDispatch:
 
         listener = SharedRedisListener(_make_mock_client())
         listener._queue_size = 1
-        q = listener.register("task_1")
+        q = await listener.register("task_1")
 
         filler = {"action": "start"}
         listener.dispatch_signal("task_1", filler, json.dumps(filler))
@@ -164,7 +164,7 @@ class TestSharedRedisListenerDispatch:
         from digitalkin.core.task_manager.redis.redis_signal import SharedRedisListener
 
         listener = SharedRedisListener(_make_mock_client())
-        q = listener.register("task_1")
+        q = await listener.register("task_1")
 
         stop = {"action": "stop"}
         listener.dispatch_signal("task_1", stop, json.dumps(stop))
@@ -179,8 +179,8 @@ class TestSharedRedisListenerDispatch:
         from digitalkin.core.task_manager.redis.redis_signal import SharedRedisListener
 
         listener = SharedRedisListener(_make_mock_client())
-        q1 = listener.register("task_1")
-        q2 = listener.register("task_2")
+        q1 = await listener.register("task_1")
+        q2 = await listener.register("task_2")
 
         data = {"action": "start"}
         listener.dispatch_signal("task_1", data, json.dumps(data))
@@ -213,7 +213,7 @@ class TestSharedRedisListenerLifecycle:
         from digitalkin.core.task_manager.redis.redis_signal import SharedRedisListener
 
         listener = SharedRedisListener(_make_mock_client())
-        q = listener.register("task_w")
+        q = await listener.register("task_w")
         listener.wake("task_w")
         assert q.get_nowait() is None
 
@@ -221,7 +221,7 @@ class TestSharedRedisListenerLifecycle:
         from digitalkin.core.task_manager.redis.redis_signal import SharedRedisListener
 
         listener = SharedRedisListener(_make_mock_client())
-        listener.register("task_u")
+        await listener.register("task_u")
         listener.unregister("task_u")
         assert "task_u" not in listener._task_queues
 

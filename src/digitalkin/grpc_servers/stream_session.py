@@ -1,13 +1,13 @@
-"""Bidirectional stream session for Gateway M2M brokering.
+"""Bidirectional stream session for Gateway inter-module brokering.
 
 Each ``StreamSession`` represents one active task in the Gateway.
 It holds two bounded queues:
 
-- ``output_queue``: Module A output → Gateway → Module B (downstream)
-- ``input_queue``: Module B data → Gateway → Module A (upstream)
+- ``output_queue``: producer output → Gateway → consumer (downstream)
+- ``input_queue``: consumer data → Gateway → producer (upstream)
 
 The Gateway reads from one queue and writes to the other, brokering
-all M2M communication. Neither module talks to the other directly.
+all inter-module communication. Modules never talk to each other directly.
 """
 
 from __future__ import annotations
@@ -25,12 +25,12 @@ from digitalkin.logger import logger
 
 
 class StreamSession:
-    """Tracks one bidirectional M2M session in the Gateway.
+    """Tracks one bidirectional session in the Gateway.
 
     Attributes:
         task_id: Client-provided reference ID (universal key).
-        output_queue: Module A → Gateway → Module B.
-        input_queue: Module B → Gateway → Module A.
+        output_queue: Producer → Gateway → Consumer (downstream).
+        input_queue: Consumer → Gateway → Producer (upstream).
     """
 
     task_id: str
@@ -59,7 +59,7 @@ class StreamSession:
         self._forward_task = None
 
     async def enqueue_output(self, data: dict[str, Any], timeout: float = ENQUEUE_TIMEOUT_S) -> bool:
-        """Put Module A output on the downstream queue (Module A → Module B).
+        """Put producer output on the downstream queue.
 
         Args:
             data: Output data to enqueue.
@@ -80,10 +80,10 @@ class StreamSession:
         return True
 
     async def enqueue_input(self, data: dict[str, Any], timeout: float = ENQUEUE_TIMEOUT_S) -> bool:
-        """Put Module B data on the upstream queue (Module B → Module A).
+        """Put consumer data on the upstream queue.
 
         Args:
-            data: Input data from Module B.
+            data: Input data from the consumer.
             timeout: Max seconds to wait for queue space.
 
         Returns:

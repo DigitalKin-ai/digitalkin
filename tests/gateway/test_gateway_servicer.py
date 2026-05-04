@@ -1,18 +1,23 @@
-"""Functional tests for GatewayServicer — all 4 RPCs.
+"""Functional tests for GatewayServicer — 3 RPCs.
 
-Tests with mocked CommunicationStrategy, RegistryStrategy, and RedisClient.
-Covers: StartStream ACK, ProduceStream BiDi, ConsumeStream BiDi, SendSignal,
-ModuleStartInfo injection, utility protocol fast path, session lifecycle.
+Tests with mocked RedisClient. Covers: StartStream ACK, Stream BiDi
+(success + sentinel-based error paths), SendSignal, stream.start
+seeding, session lifecycle.
+
+Errors are emitted as ``stream.error(fatal=true)`` followed by
+``stream.end`` — never via ``context.abort``. Tests assert the
+sentinel sequence on the failure paths.
 """
 
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncGenerator, Generator
+from collections.abc import Generator
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from google.protobuf import struct_pb2
 
 pytestmark = [pytest.mark.timeout(15)]
 
@@ -40,49 +45,30 @@ class _FakeRequestIterator:
         return msg
 
 
-def _make_proto_msg(oneof_field: str, **kwargs: Any) -> MagicMock:
-    """Build a mock proto message with WhichOneof support."""
-    msg = MagicMock()
-    msg.WhichOneof.return_value = oneof_field
-    for k, v in kwargs.items():
-        setattr(msg, k, v)
-    return msg
+def _make_stream_request(task_id: str = "", from_seq: int = 0, data_dict: dict | None = None) -> Any:
+    """Build a real StreamRequest proto."""
+    from agentic_mesh_protocol.gateway.v1 import gateway_pb2
+
+    data = struct_pb2.Struct()
+    if data_dict:
+        data.update(data_dict)
+    return gateway_pb2.StreamClient(task_id=task_id, from_seq=from_seq, data=data)
 
 
-def _make_init_msg(task_id: str, from_seq: int = 0) -> MagicMock:
-    """Build a ConsumeStream init message."""
-    msg = _make_proto_msg("init")
-    msg.init.task_id = task_id
-    msg.init.from_seq = from_seq
-    return msg
+def _protocol_of(stream_output: Any) -> str:
+    """Extract data.root.protocol string from a StreamOutput sentinel."""
+    return stream_output.data.fields["root"].struct_value.fields["protocol"].string_value
 
 
-def _make_produce_init(task_id: str) -> MagicMock:
-    """Build a ProduceStream init message."""
-    msg = _make_proto_msg("init")
-    msg.init.task_id = task_id
-    return msg
+def _mock_context(client_address: str | None = "127.0.0.1:50057") -> MagicMock:
+    """Build a mock gRPC ServicerContext with invocation_metadata.
 
-
-def _make_produce_output(data_struct: Any) -> MagicMock:
-    """Build a ProduceStream output message."""
-    msg = _make_proto_msg("output")
-    msg.output.data = data_struct
-    return msg
-
-
-def _make_consume_data(task_id: str, data_struct: Any) -> MagicMock:
-    """Build a ConsumeStream data message."""
-    msg = _make_proto_msg("data")
-    msg.data.task_id = task_id
-    msg.data.data = data_struct
-    return msg
-
-
-def _mock_context() -> MagicMock:
-    """Build a mock gRPC ServicerContext with invocation_metadata."""
+    Default carries a valid x-client-address so StartStream proceeds;
+    pass ``None`` to omit it (e.g. to assert the rejection path).
+    """
     ctx = MagicMock()
-    ctx.invocation_metadata.return_value = []
+    md = [("x-client-address", client_address)] if client_address is not None else []
+    ctx.invocation_metadata.return_value = md
     return ctx
 
 
@@ -138,7 +124,7 @@ class TestStartStream:
     async def test_returns_ack_with_task_id(self) -> None:
         """StartStream returns accepted=True and echoes task_id."""
         try:
-            from agentic_mesh_protocol.gateway.v1 import gateway_pb2
+            from agentic_mesh_protocol.gateway.v1 import gateway_pb2  # noqa: F401
         except ImportError:
             pytest.skip("Gateway proto not installed")
 
@@ -149,50 +135,36 @@ class TestStartStream:
         request.setup_id = "setups:s1"
         request.mission_id = "missions:m1"
 
-        # Non-utility input
-        from google.protobuf import struct_pb2
-
-        input_struct = struct_pb2.Struct()
-        input_struct.update({"root": {"protocol": "message", "content": "hello"}})
-        request.input = input_struct
-
         context = _mock_context()
         response = await servicer.StartStream(request, context)
 
         assert response.task_id == "task_start_1"
         assert response.accepted is True
 
-    async def test_utility_protocol_goes_through_full_path(self) -> None:
-        """Utility protocols go through the same path as regular protocols."""
+    async def test_session_registered(self) -> None:
+        """StartStream registers the session for downstream Stream calls."""
         try:
-            from agentic_mesh_protocol.gateway.v1 import gateway_pb2
+            from agentic_mesh_protocol.gateway.v1 import gateway_pb2  # noqa: F401
         except ImportError:
             pytest.skip("Gateway proto not installed")
 
         servicer = _mock_servicer()
 
         request = MagicMock()
-        request.task_id = "task_utility"
+        request.task_id = "task_registered"
         request.setup_id = "setups:test"
         request.mission_id = "missions:test"
-
-        from google.protobuf import struct_pb2
-
-        input_struct = struct_pb2.Struct()
-        input_struct.update({"root": {"protocol": "healthcheck_ping"}})
-        request.input = input_struct
 
         context = _mock_context()
         response = await servicer.StartStream(request, context)
 
         assert response.accepted is True
-        # Session should be registered (not shortcutted)
-        assert servicer._registry.get("task_utility") is not None
+        assert servicer._registry.get("task_registered") is not None
 
     async def test_capacity_exceeded_returns_not_accepted(self) -> None:
         """When max_streams is exceeded, StartStream returns accepted=False."""
         try:
-            from agentic_mesh_protocol.gateway.v1 import gateway_pb2
+            from agentic_mesh_protocol.gateway.v1 import gateway_pb2  # noqa: F401
         except ImportError:
             pytest.skip("Gateway proto not installed")
 
@@ -206,16 +178,36 @@ class TestStartStream:
         request.setup_id = "setups:test"
         request.mission_id = "missions:test"
 
-        from google.protobuf import struct_pb2
-
-        input_struct = struct_pb2.Struct()
-        input_struct.update({"root": {"protocol": "message"}})
-        request.input = input_struct
-
         context = _mock_context()
         response = await servicer.StartStream(request, context)
 
         assert response.accepted is False
+
+    async def test_seeds_stream_start_sentinel(self) -> None:
+        """StartStream writes a stream.start sentinel as first Redis entry."""
+        try:
+            from agentic_mesh_protocol.gateway.v1 import gateway_pb2  # noqa: F401
+        except ImportError:
+            pytest.skip("Gateway proto not installed")
+
+        servicer = _mock_servicer()
+
+        request = MagicMock()
+        request.task_id = "task_seed"
+        request.setup_id = "setups:s"
+        request.mission_id = "missions:m"
+
+        context = _mock_context()
+        await servicer.StartStream(request, context)
+
+        # First xadd is the stream.start seed (key = task:<tid>:stream)
+        first_call = servicer._redis_client.xadd.await_args_list[0]
+        assert first_call.args[0] == "task:task_seed:stream"
+        # Decode the seeded Struct: protocol field == "stream.start"
+        pb_bytes = first_call.args[1]["pb"]
+        seeded = struct_pb2.Struct()
+        seeded.ParseFromString(pb_bytes)
+        assert seeded.fields["root"].struct_value.fields["protocol"].string_value == "stream.start"
 
 
 # ===========================================================================
@@ -235,7 +227,6 @@ class TestSendSignal:
 
         servicer = _mock_servicer()
 
-        # Register a session first
         from digitalkin.grpc_servers.stream_session import StreamSession
 
         session = StreamSession(task_id="task_sig")
@@ -243,7 +234,7 @@ class TestSendSignal:
 
         request = MagicMock()
         request.task_id = "task_sig"
-        request.action = gateway_pb2.SIGNAL_ACTION_CANCEL
+        request.action = gateway_pb2.CANCEL
 
         context = _mock_context()
         response = await servicer.SendSignal(request, context)
@@ -262,7 +253,7 @@ class TestSendSignal:
 
         request = MagicMock()
         request.task_id = "nonexistent"
-        request.action = gateway_pb2.SIGNAL_ACTION_CANCEL
+        request.action = gateway_pb2.CANCEL
 
         context = _mock_context()
         response = await servicer.SendSignal(request, context)
@@ -271,116 +262,119 @@ class TestSendSignal:
 
 
 # ===========================================================================
-# ConsumeStream
+# Stream
 # ===========================================================================
 
 
-class TestConsumeStream:
-    """ConsumeStream: BiDi RPC, Module B reads output."""
+class TestStream:
+    """Stream: BiDi RPC, sentinel-based lifecycle and errors."""
 
-    async def test_unknown_task_yields_error(self) -> None:
-        """ConsumeStream for unknown task yields error response."""
+    async def test_unknown_task_yields_fatal_error_then_end(self) -> None:
+        """Stream for unknown task yields stream.error(fatal=true) + stream.end."""
         try:
-            from agentic_mesh_protocol.gateway.v1 import gateway_pb2
+            from agentic_mesh_protocol.gateway.v1 import gateway_pb2  # noqa: F401
         except ImportError:
             pytest.skip("Gateway proto not installed")
 
         servicer = _mock_servicer()
 
-        init_msg = _make_init_msg("nonexistent_task")
+        init_msg = _make_stream_request(task_id="nonexistent_task")
         request_iter = _FakeRequestIterator([init_msg])
 
         context = _mock_context()
         responses = []
-        async for resp in servicer.ConsumeStream(request_iter, context):
+        async for resp in servicer.Stream(request_iter, context):
             responses.append(resp)
 
-        assert len(responses) == 1
-        assert responses[0].HasField("error")
+        assert len(responses) == 2
+        assert _protocol_of(responses[0]) == "stream.error"
+        assert responses[0].data.fields["root"].struct_value.fields["fatal"].bool_value is True
+        assert responses[0].data.fields["root"].struct_value.fields["code"].string_value == "NOT_FOUND"
+        assert _protocol_of(responses[1]) == "stream.end"
 
-    async def test_first_message_must_be_init(self) -> None:
-        """ConsumeStream rejects if first message is not init."""
+    async def test_invalid_task_id_yields_fatal_error_then_end(self) -> None:
+        """Stream with an invalid task_id yields the sentinel error sequence."""
         try:
-            from agentic_mesh_protocol.gateway.v1 import gateway_pb2
+            from agentic_mesh_protocol.gateway.v1 import gateway_pb2  # noqa: F401
         except ImportError:
             pytest.skip("Gateway proto not installed")
 
         servicer = _mock_servicer()
 
-        bad_msg = _make_proto_msg("data")
-        request_iter = _FakeRequestIterator([bad_msg])
-
-        context = _mock_context()
-        responses = []
-        async for resp in servicer.ConsumeStream(request_iter, context):
-            responses.append(resp)
-
-        assert len(responses) == 1
-        assert responses[0].HasField("error")
-
-
-
-# ===========================================================================
-# ProduceStream
-# ===========================================================================
-
-
-class TestProduceStream:
-    """ProduceStream: BiDi RPC, Module A sends output."""
-
-    async def test_unknown_task_returns_nothing(self) -> None:
-        """ProduceStream for unknown task exits silently."""
-        servicer = _mock_servicer()
-
-        init_msg = _make_produce_init("nonexistent")
+        # Empty task_id fails validation
+        init_msg = _make_stream_request(task_id="")
         request_iter = _FakeRequestIterator([init_msg])
 
         context = _mock_context()
         responses = []
-        async for resp in servicer.ProduceStream(request_iter, context):
+        async for resp in servicer.Stream(request_iter, context):
             responses.append(resp)
 
-        assert len(responses) == 0
+        assert len(responses) == 2
+        assert _protocol_of(responses[0]) == "stream.error"
+        assert responses[0].data.fields["root"].struct_value.fields["fatal"].bool_value is True
+        assert responses[0].data.fields["root"].struct_value.fields["code"].string_value == "INVALID_ARGUMENT"
+        assert _protocol_of(responses[1]) == "stream.end"
 
-    async def test_persists_output_to_session_queue(self) -> None:
-        """ProduceStream puts Module A output on session.output_queue."""
+    async def test_from_seq_out_of_range_yields_fatal_error(self) -> None:
+        """Stream with from_seq above MAX_FROM_SEQ yields the sentinel error sequence."""
+        try:
+            from agentic_mesh_protocol.gateway.v1 import gateway_pb2  # noqa: F401
+        except ImportError:
+            pytest.skip("Gateway proto not installed")
+
+        from digitalkin.grpc_servers.gateway_constants import MAX_FROM_SEQ
+
         servicer = _mock_servicer()
 
+        init_msg = _make_stream_request(task_id="task_oor", from_seq=MAX_FROM_SEQ + 1)
+        request_iter = _FakeRequestIterator([init_msg])
+
+        context = _mock_context()
+        responses = []
+        async for resp in servicer.Stream(request_iter, context):
+            responses.append(resp)
+
+        assert len(responses) == 2
+        assert _protocol_of(responses[0]) == "stream.error"
+        assert _protocol_of(responses[1]) == "stream.end"
+
+    async def test_upstream_data_enqueued(self) -> None:
+        """Stream: subsequent messages with non-empty data flow into session.input_queue."""
+        try:
+            from agentic_mesh_protocol.gateway.v1 import gateway_pb2  # noqa: F401
+        except ImportError:
+            pytest.skip("Gateway proto not installed")
+
+        from digitalkin.grpc_servers.gateway_servicer import GatewayServicer
         from digitalkin.grpc_servers.stream_session import StreamSession
 
-        session = StreamSession(task_id="task_produce")
-        await servicer._registry.register(session)
+        session = StreamSession(task_id="task_up")
+        upstream_msg = _make_stream_request(data_dict={"msg": "from_consumer"})
 
-        from google.protobuf import struct_pb2
+        # Iterator yields only upstream messages (init is consumed by Stream itself)
+        request_iter = _FakeRequestIterator([upstream_msg])
 
-        data = struct_pb2.Struct()
-        data.update({"msg": "from_module_a"})
+        # Drive the upstream reader directly — bypasses _consume_from_redis
+        # which would block waiting for Redis entries.
+        await GatewayServicer._read_client_upstream(request_iter, session)
 
-        init_msg = _make_produce_init("task_produce")
-        output_msg = _make_produce_output(data)
+        assert session.input_queue.qsize() == 1
 
-        request_iter = _FakeRequestIterator([init_msg, output_msg])
-
-        context = _mock_context()
-
-        # Consume in background (ProduceStream blocks reading input_queue)
-        async def consume() -> list:
-            results = []
-            async for resp in servicer.ProduceStream(request_iter, context):
-                results.append(resp)
-            return results
-
-        task = asyncio.create_task(consume())
-        await asyncio.sleep(0.1)
-
-        # With Redis, output goes to proto stream (batch mode uses pipeline)
-        pipe = servicer._redis_client.pipeline.return_value
-        assert pipe.execute.await_count > 0 or servicer._redis_client.xadd.await_count > 0
-
-        session.stop()
-        await asyncio.sleep(0.1)
-        task.cancel()
+    async def test_upstream_empty_data_skipped(self) -> None:
+        """Empty Struct upstream messages are skipped (would be init re-sends)."""
         try:
-            await task
-        except asyncio.CancelledError:
-            pass
+            from agentic_mesh_protocol.gateway.v1 import gateway_pb2  # noqa: F401
+        except ImportError:
+            pytest.skip("Gateway proto not installed")
+
+        from digitalkin.grpc_servers.gateway_servicer import GatewayServicer
+        from digitalkin.grpc_servers.stream_session import StreamSession
+
+        session = StreamSession(task_id="task_empty")
+        empty_msg = _make_stream_request(task_id="task_empty")  # data is empty Struct
+
+        request_iter = _FakeRequestIterator([empty_msg])
+        await GatewayServicer._read_client_upstream(request_iter, session)
+
+        assert session.input_queue.qsize() == 0

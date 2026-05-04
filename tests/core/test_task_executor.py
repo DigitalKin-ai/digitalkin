@@ -165,25 +165,22 @@ class TestExceptionHandling:
         task_executor: TaskExecutor,
         mock_base_module: Mock,
     ) -> None:
-        """Test executor when main task raises an exception."""
+        """Test executor when main task raises an exception. Exception is caught inside _run()."""
         task_id = "main_exception"
         mission_id = "missions:error"
 
         session = TaskSession(task_id, mission_id, mock_base_module)
-        session.listen_signals = AsyncMock(side_effect=_stay_alive)
 
         async def failing_coro() -> None:
             await asyncio.sleep(0.05)
             msg = "Intentional failure"
             raise ValueError(msg)
 
-        supervisor = await task_executor.execute_task(
+        task = await task_executor.execute_task(
             task_id, mission_id, failing_coro(), session
         )
 
-        with pytest.raises(ValueError, match="Intentional failure"):
-            await supervisor
-
+        await task  # _run() catches the exception, task completes normally
         assert session.status == "failed"
 
     @pytest.mark.asyncio
@@ -197,45 +194,40 @@ class TestExceptionHandling:
         mission_id = "missions:fail"
 
         session = TaskSession(task_id, mission_id, mock_base_module)
-        session.listen_signals = AsyncMock(side_effect=_stay_alive)
 
         async def failing() -> NoReturn:
             msg = "boom"
             raise ValueError(msg)
 
-        supervisor = await task_executor.execute_task(task_id, mission_id, failing(), session)
+        task = await task_executor.execute_task(task_id, mission_id, failing(), session)
 
-        with pytest.raises(ValueError):
-            await supervisor
+        await task  # _run() catches the exception
         assert session.status == "failed"
 
     @pytest.mark.asyncio
-    async def test_exception_propagated_to_caller(
+    async def test_exception_propagated_to_session(
         self,
         task_executor: TaskExecutor,
         mock_base_module: Mock,
     ) -> None:
-        """Test that exceptions are properly propagated to the caller."""
+        """Test that exceptions are recorded in session (not propagated to caller)."""
         task_id = "propagate"
         mission_id = "missions:propagate"
 
         session = TaskSession(task_id, mission_id, mock_base_module)
-        session.listen_signals = AsyncMock(side_effect=_stay_alive)
-
-        class CustomError(Exception):
-            pass
 
         async def custom_failure() -> NoReturn:
             await asyncio.sleep(0.01)
             msg = "custom error message"
-            raise CustomError(msg)
+            raise ValueError(msg)
 
-        supervisor = await task_executor.execute_task(
+        task = await task_executor.execute_task(
             task_id, mission_id, custom_failure(), session
         )
 
-        with pytest.raises(CustomError, match="custom error message"):
-            await supervisor
+        await task  # _run() catches the exception
+        assert session.status == "failed"
+        assert session._last_exception == "custom error message"
 
     @pytest.mark.asyncio
     async def test_exception_records_traceback(
@@ -268,70 +260,35 @@ class TestExceptionHandling:
 # ============================================================================
 
 
-class TestSignalListener:
-    """Tests for signal listener behavior."""
+class TestSignalHandling:
+    """Tests for signal handling via direct task cancellation."""
 
     @pytest.mark.asyncio
-    async def test_signal_listener_stops_task(
+    async def test_task_cancel_sets_cancelled_status(
         self,
         task_executor: TaskExecutor,
         mock_base_module: Mock,
     ) -> None:
-        """Test executor when signal listener returns (stop signal)."""
-        task_id = "signal_stop"
+        """Test that cancelling the task sets status to 'cancelled'."""
+        task_id = "signal_cancel"
         mission_id = "missions:signal"
 
-        async def signal_that_stops() -> None:
-            await asyncio.sleep(0.05)
-
         session = TaskSession(task_id, mission_id, mock_base_module)
-        session.listen_signals = signal_that_stops
 
         async def long_main() -> None:
             await asyncio.sleep(10)
 
-        supervisor = await task_executor.execute_task(
+        task = await task_executor.execute_task(
             task_id, mission_id, long_main(), session
         )
 
-        await supervisor
+        await asyncio.sleep(0.05)
+        task.cancel()
+
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
 
         assert session.status == "cancelled"
-
-    @pytest.mark.asyncio
-    async def test_signal_wrapper_sends_start_and_stop(
-        self,
-        task_executor: TaskExecutor,
-        mock_base_module: Mock,
-        mock_signal_service: Mock,
-    ) -> None:
-        """Test that signal wrapper sends START and STOP signals."""
-        task_id = "signal_lifecycle"
-        mission_id = "missions:lifecycle"
-
-        session = TaskSession(task_id, mission_id, mock_base_module)
-        session.listen_signals = AsyncMock(side_effect=_stay_alive)
-
-        async def quick_task() -> None:
-            await asyncio.sleep(0.05)
-
-        supervisor = await task_executor.execute_task(
-            task_id, mission_id, quick_task(), session
-        )
-
-        await supervisor
-
-        # Verify START and STOP signals were sent
-        calls = mock_signal_service.send_signal.call_args_list
-        assert len(calls) >= 2
-
-        # First call should be START
-        start_data = calls[0][0][1]  # Second positional arg
-        assert start_data["action"] == "start"
-
-        # Last call should be STOP
-        stop_data = calls[-1][0][1]
-        assert stop_data["action"] == "stop"
 
 
 # ============================================================================
@@ -343,7 +300,7 @@ class TestCancellation:
     """Tests for task cancellation scenarios."""
 
     @pytest.mark.asyncio
-    async def test_supervisor_cancellation(
+    async def test_task_cancellation(
         self,
         task_executor: TaskExecutor,
         mock_base_module: Mock,
@@ -353,20 +310,19 @@ class TestCancellation:
         mission_id = "missions:cancel"
 
         session = TaskSession(task_id, mission_id, mock_base_module)
-        session.listen_signals = AsyncMock(side_effect=_stay_alive)
 
         async def long_main() -> None:
             await asyncio.sleep(10)
 
-        supervisor = await task_executor.execute_task(
+        task = await task_executor.execute_task(
             task_id, mission_id, long_main(), session
         )
 
         await asyncio.sleep(0.05)
-        supervisor.cancel()
+        task.cancel()
 
-        with pytest.raises(asyncio.CancelledError):
-            await supervisor
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
 
         assert session.status == "cancelled"
 
@@ -494,33 +450,27 @@ class TestConcurrentExecution:
             assert not (max(main_indices) < min(listener_indices))
 
     @pytest.mark.asyncio
-    async def test_first_completed_wins(
+    async def test_completion_determines_outcome(
         self,
         task_executor: TaskExecutor,
         mock_base_module: Mock,
     ) -> None:
-        """Test that first task to complete determines the outcome."""
-        task_id = "first_wins"
-        mission_id = "missions:first_wins"
+        """Test that module completion sets the final status."""
+        task_id = "outcome"
+        mission_id = "missions:outcome"
 
         session = TaskSession(task_id, mission_id, mock_base_module)
 
-        async def quick_listener() -> None:
-            await asyncio.sleep(0.02)  # Finishes first
+        async def quick_main() -> None:
+            await asyncio.sleep(0.02)
 
-        session.listen_signals = quick_listener
-
-        async def slow_main() -> None:
-            await asyncio.sleep(10)
-
-        supervisor = await task_executor.execute_task(
-            task_id, mission_id, slow_main(), session
+        task = await task_executor.execute_task(
+            task_id, mission_id, quick_main(), session
         )
 
-        await supervisor
+        await task
 
-        # Listener finished first, so status should be cancelled
-        assert session.status == "cancelled"
+        assert session.status == "completed"
 
 
 # ============================================================================
@@ -556,27 +506,26 @@ class TestEdgeCases:
         assert session.status == "completed"
 
     @pytest.mark.asyncio
-    async def test_supervisor_task_name(
+    async def test_task_name(
         self,
         task_executor: TaskExecutor,
         mock_base_module: Mock,
     ) -> None:
-        """Test that supervisor task has correct name."""
+        """Test that task has correct name."""
         task_id = "named_task"
         mission_id = "missions:named"
 
         session = TaskSession(task_id, mission_id, mock_base_module)
-        session.listen_signals = AsyncMock(side_effect=_stay_alive)
 
         async def quick_task() -> None:
             await asyncio.sleep(0.01)
 
-        supervisor = await task_executor.execute_task(
+        task = await task_executor.execute_task(
             task_id, mission_id, quick_task(), session
         )
 
-        assert supervisor.get_name() == f"{task_id}_supervisor"
-        await supervisor
+        assert task.get_name() == f"{task_id}_main"
+        await task
 
 
 # ============================================================================

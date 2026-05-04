@@ -1,15 +1,23 @@
-"""GatewayService gRPC servicer — 4 RPCs, full module isolation.
+"""GatewayService gRPC servicer — 3 RPCs, full module isolation.
 
-All M2M communication flows through the Gateway + Redis. Modules never
-see each other directly.
+All inter-module communication flows through the Gateway + Redis.
+Modules write their output directly to Redis (no producer-side gRPC);
+the Gateway only exposes the consumer-facing surface:
 
-- ``StartStream``: unary. Client requests, Gateway starts the module,
-  returns ACK + task_id.
-- ``ProduceStream``: BiDi. Module A sends output to Gateway → Redis.
-  Gateway forwards Module B's data from Redis → Module A.
-- ``ConsumeStream``: BiDi. Module B reads output from Redis via Gateway.
-  Module B sends data → Gateway → Redis → Module A reads.
-- ``SendSignal``: unary. Cancel/pause via Redis pub/sub.
+- ``StartStream``: unary. Consumer asks Gateway to dispatch a task.
+  Returns ACK + task_id; ``stream.start`` is seeded as the first Redis entry.
+- ``Stream``: BiDi. Consumer reads output from Redis via Gateway and may
+  send upstream input. Lifecycle is sentinel-based, in-band:
+  every event (start, end, error, warning, status) flows as a Struct
+  in ``StreamServer.data`` keyed under ``data.root.protocol``.
+- ``SendSignal``: unary. CANCEL or INVALIDATE_* via Redis pub/sub.
+
+**Sentinel protocol invariant:** every ``Stream`` call ends with exactly
+one ``stream.end`` entry, regardless of how the stream concluded. Fatal
+errors are emitted as ``stream.error(fatal=true)`` immediately followed
+by ``stream.end``. Recoverable issues use ``stream.error(fatal=false)``
+or ``stream.warn`` and the stream continues. ``context.abort`` is never
+called on ``Stream`` — uniform observation is the whole point.
 """
 
 from __future__ import annotations
@@ -17,34 +25,40 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import time
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
+import grpc
 from agentic_mesh_protocol.gateway.v1 import gateway_pb2
-from google.protobuf import json_format, struct_pb2, timestamp_pb2
+from google.protobuf import struct_pb2
+from redis.exceptions import RedisError
 
-from digitalkin.core.task_manager.redis.proto_streams import ProtoStreamWriter
+from digitalkin.core.profiling.step_timer import StepTimer
 from digitalkin.grpc_servers.gateway_constants import (
+    DIAL_BACK_BIDI_TIMEOUT_S,
     MAX_FROM_SEQ,
     MAX_STREAMS,
-    STREAM_BATCH_SIZE,
+    validate_address,
     validate_id,
 )
+from digitalkin.grpc_servers.stream_error_codes import StreamErrorCode
 from digitalkin.grpc_servers.stream_registry import StreamRegistry
 from digitalkin.grpc_servers.stream_session import StreamSession
 from digitalkin.logger import logger
+from digitalkin.services.communication.grpc_communication import (
+    InvalidConsumerAddressError,
+)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterator
-
-    import grpc
 
     from digitalkin.core.task_manager.redis.redis_client import RedisClient
     from digitalkin.grpc_servers.utils.circuit_breaker import CircuitBreaker
 
 
 class GatewayServicer:
-    """M2M broker with full module isolation via Redis.
+    """Inter-module broker with full isolation via Redis.
 
     Modules only talk to the Gateway. Data flows through Redis Streams.
     Gateway manages session lifecycle and persists output to Redis.
@@ -56,56 +70,47 @@ class GatewayServicer:
     _dispatch_key: str
 
     @staticmethod
-    def _output_response(task_id: str, job_id: str, data: dict[str, Any], seq: int) -> Any:
-        """Build StreamOutput GatewayResponse.
+    def _sentinel(seq: int, task_id: str, protocol: str, **fields: Any) -> Any:
+        """Build a StreamServer carrying a control sentinel.
+
+        ``seq=0`` distinguishes gateway-emitted control entries (validation
+        errors, late-consumer rejections) from Redis-replayed entries
+        (which start at seq=1). Clients dispatch on
+        ``data.root.protocol`` regardless of seq.
+
+        Args:
+            seq: Sequence number; 0 for gateway control entries.
+            task_id: Task ID echoed on the wire for client routing.
+            protocol: Sentinel protocol name (``stream.*``).
+            fields: Additional Struct fields under ``data.root``.
 
         Returns:
-            GatewayResponse proto.
+            StreamServer proto.
         """
         s = struct_pb2.Struct()
-        s.update(data)
-        ts = timestamp_pb2.Timestamp()
-        ts.FromDatetime(datetime.now(tz=timezone.utc))
-        return gateway_pb2.GatewayResponse(
-            output=gateway_pb2.StreamOutput(
-                task_id=task_id,
-                job_id=job_id,
-                data=s,
-                seq=seq,
-                timestamp=ts,
-            ),
-        )
+        s.update({"root": {"protocol": protocol, **fields}})
+        return gateway_pb2.StreamServer(seq=seq, task_id=task_id, data=s)
 
-    @staticmethod
-    def _status_response(task_id: str, job_id: str, state: int) -> Any:
-        """Build StreamStatus GatewayResponse.
+    async def _fatal_close(self, task_id: str, code: str, message: str) -> AsyncGenerator:
+        """Yield ``stream.error(fatal=true)`` then ``stream.end`` and return.
 
-        Returns:
-            GatewayResponse proto.
+        Args:
+            task_id: Task ID this fatal error applies to.
+            code: Status code name (``INVALID_ARGUMENT``, ``NOT_FOUND``, ...).
+            message: Human-readable detail.
+
+        Yields:
+            StreamServer sentinels (error then end).
         """
-        return gateway_pb2.GatewayResponse(
-            status=gateway_pb2.StreamStatus(
-                task_id=task_id,
-                job_id=job_id,
-                state=state,  # type: ignore[arg-type]
-            ),
+        yield self._sentinel(
+            0,
+            task_id,
+            "stream.error",
+            code=code,
+            message=message,
+            fatal=True,
         )
-
-    @staticmethod
-    def _error_response(task_id: str, job_id: str, code: int, message: str) -> Any:
-        """Build StreamError GatewayResponse.
-
-        Returns:
-            GatewayResponse proto.
-        """
-        return gateway_pb2.GatewayResponse(
-            error=gateway_pb2.StreamError(
-                task_id=task_id,
-                job_id=job_id or "",
-                code=code,
-                message=message,
-            ),
-        )
+        yield self._sentinel(0, task_id, "stream.end")
 
     def __init__(
         self,
@@ -113,6 +118,8 @@ class GatewayServicer:
         max_streams: int = MAX_STREAMS,
         circuit_breaker: CircuitBreaker | None = None,
         dispatch_key: str = "dispatch:module",
+        cache_handler: Any = None,
+        client_config: Any = None,
     ) -> None:
         """Initialize the gateway servicer.
 
@@ -121,11 +128,16 @@ class GatewayServicer:
             max_streams: Maximum concurrent sessions (cluster-wide with Redis).
             circuit_breaker: Optional circuit breaker for recording success/failure.
             dispatch_key: Redis Stream key for task dispatch to the module.
+            cache_handler: Async callback for cache invalidation signals (from ModuleServer).
+            client_config: ClientConfig for outbound dial-back to consumers
+                (used by the ``_dial_consumer`` callback flow).
         """
         self._registry = StreamRegistry(redis_client, max_streams=max_streams)
         self._circuit_breaker = circuit_breaker
         self._redis_client = redis_client
         self._dispatch_key = dispatch_key
+        self._cache_handler = cache_handler
+        self._client_config = client_config
 
     async def start(self) -> None:
         """Start the registry reaper."""
@@ -138,32 +150,57 @@ class GatewayServicer:
     async def StartStream(
         self,
         request: Any,
-        context: grpc.aio.ServicerContext,  # noqa: ARG002
+        context: grpc.aio.ServicerContext,
     ) -> Any:
-        """Register a task session and start the module in background.
+        """Register a task session and dispatch the module in background.
 
         Args:
             request: StartStreamRequest proto.
             context: gRPC service context.
 
         Returns:
-            StartStreamResponse(task_id, accepted).
+            StartStreamResponse(accepted, task_id).
         """
+        timer = StepTimer()
         task_id = request.task_id
+        log_extra = {
+            "task_id": task_id,
+            "setup_id": request.setup_id,
+            "mission_id": request.mission_id,
+        }
 
         err = (
             validate_id(task_id, "task_id")
             or validate_id(request.setup_id, "setup_id")
             or validate_id(request.mission_id, "mission_id")
         )
+        timer.mark("validate_ids")
         if err is not None:
-            logger.warning("Invalid ID in StartStream: %s", err)
-            return gateway_pb2.StartStreamResponse(task_id=task_id, accepted=False)
+            logger.warning("Invalid ID in StartStream: %s", err, extra=log_extra)
+            return gateway_pb2.StartStreamResponse(accepted=False, task_id=task_id)
+
+        # Validate dial-back address up front, before any side effects.
+        md = dict(context.invocation_metadata() or [])
+        raw_address = md.get("x-client-address", "")
+        if isinstance(raw_address, bytes):
+            raw_address = raw_address.decode("utf-8", errors="replace")
+        client_address = raw_address.strip()
+        addr_err = validate_address(client_address, "x-client-address")
+        timer.mark("validate_address")
+        if addr_err is not None:
+            logger.warning(
+                "StartStream rejected: %s (value=%r)",
+                addr_err,
+                client_address,
+                extra=log_extra,
+            )
+            return gateway_pb2.StartStreamResponse(accepted=False, task_id=task_id)
 
         # Dedup: if session already exists locally, return existing
         if self._registry.get(task_id) is not None:
-            logger.debug("Dedup: session exists for task_id=%s, reusing", task_id)
-            return gateway_pb2.StartStreamResponse(task_id=task_id, accepted=True)
+            logger.debug("Dedup: session exists, reusing", extra=log_extra)
+            return gateway_pb2.StartStreamResponse(accepted=True, task_id=task_id)
+        timer.mark("dedup_check")
 
         session = StreamSession(task_id=task_id)
         accepted = await self._registry.register(
@@ -171,41 +208,62 @@ class GatewayServicer:
             setup_id=request.setup_id,
             mission_id=request.mission_id,
         )
+        timer.mark("registry_register")
         if not accepted:
-            logger.warning("Session rejected (capacity): task_id=%s", task_id)
-            return gateway_pb2.StartStreamResponse(task_id=task_id, accepted=False)
+            logger.warning("Session rejected (capacity)", extra=log_extra)
+            return gateway_pb2.StartStreamResponse(accepted=False, task_id=task_id)
 
-        # Seed output stream with module_start_info so ConsumeStream's first
-        # XREAD 0-0 finds data immediately, advancing the cursor to a real entry ID.
-        # Subsequent XREADs block properly and wake instantly on module output.
-        # Direct XADD (not ProtoStreamWriter) to guarantee immediate write.
+        # Seed output stream with stream.start so Stream's first XREAD finds
+        # data immediately, advancing the cursor to a real entry ID. Direct
+        # XADD (not ProtoStreamWriter) for guaranteed immediate write.
         start_info = struct_pb2.Struct()
         start_info.update({
             "root": {
-                "protocol": "module_start_info",
+                "protocol": "stream.start",
                 "task_id": task_id,
                 "mission_id": request.mission_id,
                 "setup_id": request.setup_id,
                 "started_at": datetime.now(tz=timezone.utc).isoformat(),
             },
         })
+        timer.mark("build_start_info")
         await self._redis_client.xadd(
             f"task:{task_id}:stream",
             {"pb": start_info.SerializeToString(), "seq": "0"},
         )
+        timer.mark("xadd_stream_start")
 
         # Start module in background
         session._forward_task = asyncio.create_task(  # noqa: SLF001
             self._start_module(session, request),
             name=f"start_module_{task_id}",
         )
+        timer.mark("schedule_start_module")
+
+        # Server-initiated dial-back to consumer (mandatory; address
+        # validated at the top of this method).
+        logger.info("→ Dial-back scheduled to consumer %s", client_address, extra=log_extra)
+        # F1.7 (deferred): track this task in a servicer-level set with
+        # add_done_callback so it survives strong-reference GC and
+        # gateway shutdown can cancel it cleanly.
+        asyncio.create_task(  # noqa: RUF006
+            self._dial_consumer(
+                task_id=task_id,
+                mission_id=request.mission_id,
+                setup_id=request.setup_id,
+                address=client_address,
+            ),
+            name=f"dial_consumer_{task_id}",
+        )
+        timer.mark("schedule_dial_consumer")
+        timer.log("StartStream", task_id)
 
         logger.info(
-            "Task accepted: task_id=%s active_sessions=%d",
-            task_id,
+            "Task accepted: active_sessions=%d",
             self._registry.active_count,
+            extra=log_extra,
         )
-        return gateway_pb2.StartStreamResponse(task_id=task_id, accepted=True)
+        return gateway_pb2.StartStreamResponse(accepted=True, task_id=task_id)
 
     def _cb_success(self) -> None:
         """Record circuit breaker success if configured."""
@@ -217,212 +275,168 @@ class GatewayServicer:
         if self._circuit_breaker is not None:
             self._circuit_breaker.record_failure()
 
+    async def _emit_fatal_to_redis(
+        self,
+        task_id: str,
+        code: str,
+        message: str,
+        *,
+        log_extra: dict[str, str],
+    ) -> None:
+        """Write ``stream.error(fatal=true)`` + EOS to the task's Redis stream.
+
+        The consumer's ``_consume_from_redis`` loop yields the error
+        Struct and emits the terminating ``stream.end`` itself when the
+        reader exits on EOS. This is the single point that converts a
+        server-side failure into the in-band protocol error consumers
+        can observe — never raise out of the dial-back background task.
+
+        Args:
+            task_id: Task whose stream gets the error.
+            code: Stable code from :class:`StreamErrorCode`.
+            message: Human-readable detail.
+            log_extra: ``{"task_id", "setup_id", "mission_id"}`` for log
+                correlation. Code is in the message string per the
+                project rule on ``extra=`` containing only global IDs.
+        """
+        error_struct = struct_pb2.Struct()
+        error_struct.update({
+            "root": {
+                "protocol": "stream.error",
+                "code": code,
+                "message": message,
+                "fatal": True,
+            },
+        })
+        stream_key = f"task:{task_id}:stream"
+        try:
+            await self._redis_client.xadd(
+                stream_key,
+                {"pb": error_struct.SerializeToString()},
+            )
+            await self._redis_client.xadd(stream_key, {"eos": b"true"})
+            await self._redis_client.expire(stream_key, 60)
+            logger.error(
+                "stream.error emitted: code=%s message=%s",
+                code,
+                message,
+                extra=log_extra,
+            )
+        except RedisError:
+            logger.exception(
+                "Could not emit stream.error to Redis (Redis is also down): code=%s message=%s",
+                code,
+                message,
+                extra=log_extra,
+            )
+
     async def _start_module(self, session: StreamSession, request: Any) -> None:
         """Dispatch module execution via Redis.
 
         XADDs task spec to the dispatch stream. The TaskDispatcher picks
         it up, runs the module, and writes output to the proto stream.
-        Gateway reads output via ProtoStreamReader in ConsumeStream.
+        Gateway reads output via ProtoStreamReader in Stream.
+
+        Module input arrives via upstream ``StreamClient.data`` messages
+        (handled by ``_read_consumer_upstream``), not from the dispatch entry.
 
         Args:
             session: The stream session.
             request: The StartStreamRequest.
         """
+        log_extra = {
+            "task_id": session.task_id,
+            "setup_id": request.setup_id,
+            "mission_id": request.mission_id,
+        }
         try:
-            import time as _t
-
             await self._redis_client.xadd(
                 self._dispatch_key,
                 {
                     "task_id": session.task_id,
-                    "pb": request.input.SerializeToString(),
-                    "ts_ns": str(_t.perf_counter_ns()),
+                    "ts_ns": str(time.perf_counter_ns()),
                     "setup_id": request.setup_id,
                     "mission_id": request.mission_id,
                 },
             )
             self._cb_success()
-            logger.debug("Task dispatched to Redis: task_id=%s", session.task_id)
-        except Exception:
-            logger.exception("Task dispatch failed: task_id=%s", session.task_id)
+            logger.debug("Task dispatched to Redis", extra=log_extra)
+        except RedisError as exc:
             self._cb_failure()
-            # Write EOS so ConsumeStream doesn't hang
-            try:
-                proto_writer = ProtoStreamWriter(session.task_id, self._redis_client)
-                await proto_writer.write_eos()
-            except Exception:
-                logger.exception("Fallback EOS failed: task_id=%s", session.task_id)
+            logger.exception("Task dispatch XADD failed", extra=log_extra)
+            await self._emit_fatal_to_redis(
+                session.task_id,
+                code=StreamErrorCode.DISPATCH_UNAVAILABLE.value,
+                message=f"failed to dispatch task: {type(exc).__name__}",
+                log_extra=log_extra,
+            )
 
-    async def ProduceStream(
+    async def Stream(  # noqa: C901, PLR0912
         self,
         request_iterator: AsyncIterator,
         context: grpc.aio.ServicerContext,  # noqa: ARG002
     ) -> AsyncGenerator:
-        """Module A sends output, Gateway persists to Redis.
+        """BiDi: client sends StreamClient messages, server yields StreamServer.
 
-        Gateway sends Module B's data back to A.
+        First StreamClient identifies the task and carries the query as
+        ``data``; the data Struct is delivered to the SDK module as its
+        first input. Subsequent StreamClient messages provide additional
+        upstream input (optional).
+
+        Server emits StreamServer per Redis stream entry. First entry is
+        ``stream.start`` (seeded by StartStream); last is ``stream.end``.
+        Errors are emitted as ``stream.error(fatal=true)`` followed by
+        ``stream.end`` — never via ``context.abort``.
 
         Args:
-            request_iterator: BiDi stream from Module A.
+            request_iterator: BiDi stream of StreamClient from the client.
             context: gRPC service context.
 
         Yields:
-            ProduceStreamResponse — forwarded data from Module B.
+            StreamServer — sentinels and SDK module output.
         """
-        # Read init
         try:
             first_msg = await anext(request_iterator)
         except StopAsyncIteration:
             return
 
-        if first_msg.WhichOneof("payload") != "init":
-            return
+        task_id = first_msg.task_id
+        from_seq = first_msg.from_seq
 
-        task_id = first_msg.init.task_id
         if validate_id(task_id, "task_id") is not None:
+            async for out in self._fatal_close(task_id, "INVALID_ARGUMENT", "invalid task_id"):
+                yield out
             return
 
-        session = self._registry.get(task_id)
-        if session is None:
-            return
-
-        # Background: persist Module A's output to Redis Stream (zero-copy proto path)
-        persist_task = asyncio.create_task(
-            self._persist_producer_output(task_id, request_iterator, session, self._redis_client),
-            name=f"persist_{task_id}",
-        )
-
-        # Forward Module B's data from input_queue → Module A
-        reusable_struct = struct_pb2.Struct()
-        try:
-            while not session._stop_event.is_set() and not persist_task.done():  # noqa: SLF001
-                try:
-                    item = await asyncio.wait_for(session.input_queue.get(), timeout=0.5)
-                except asyncio.TimeoutError:
-                    if persist_task.done():
-                        logger.info("Producer stream closed: task_id=%s", task_id)
-                        break
-                    continue
-                if item is None:
-                    break
-
-                reusable_struct.Clear()
-                reusable_struct.update(item)
-                yield gateway_pb2.ProduceStreamResponse(
-                    data=gateway_pb2.ProduceStreamData(task_id=task_id, data=reusable_struct),
-                )
-        finally:
-            if not persist_task.done():
-                persist_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await persist_task
-
-    @staticmethod
-    async def _persist_producer_output(
-        task_id: str,
-        request_iterator: AsyncIterator,
-        session: StreamSession,
-        redis_client: RedisClient | None,
-    ) -> None:
-        """Read Module A's output from BiDi and persist to Redis Stream.
-
-        Zero-copy hot path: proto Struct bytes go directly to Redis
-        via ``ProtoStreamWriter.write_struct()`` — no dict conversion,
-        no JSON encoding. ~0.1-0.5ms per message instead of ~6-23ms.
-
-        Args:
-            task_id: Task reference ID.
-            request_iterator: BiDi stream from Module A.
-            session: Stream session for output_queue fallback.
-            redis_client: Redis client for proto stream persistence.
-        """
-        proto_writer = None
-        if redis_client is not None:
-            from digitalkin.core.task_manager.redis.proto_streams import ProtoStreamWriter
-
-            proto_writer = ProtoStreamWriter(task_id, redis_client)
-            # Continue after any entries already in the stream
-            await proto_writer.restore_seq()
-
-        seq = 1
-        try:
-            async for msg in request_iterator:
-                if session._stop_event.is_set():  # noqa: SLF001
-                    break
-                payload_type = msg.WhichOneof("payload")
-                if payload_type == "output":
-                    seq += 1
-                    if proto_writer is not None:
-                        # Zero-copy: proto Struct → binary bytes → Redis
-                        await proto_writer.write_struct(msg.output.data)
-                    else:
-                        # Fallback: dict → output_queue (in-memory)
-                        data_dict = json_format.MessageToDict(msg.output.data)
-                        data_dict["_seq"] = seq
-                        await session.enqueue_output(data_dict)
-        except asyncio.CancelledError:
-            pass
-        except Exception:
-            logger.exception("Producer output persist error: task_id=%s", task_id)
-        finally:
-            if proto_writer is not None:
-                await proto_writer.write_eos()
-
-    async def ConsumeStream(  # noqa: C901
-        self,
-        request_iterator: AsyncIterator,
-        context: grpc.aio.ServicerContext,  # noqa: ARG002
-    ) -> AsyncGenerator:
-        """Module B reads output from Redis (or queue), sends data to Module A.
-
-        Args:
-            request_iterator: BiDi stream from Module B.
-            context: gRPC service context.
-
-        Yields:
-            GatewayResponse — output from Module A.
-        """
-        # Read init
-        try:
-            first_msg = await anext(request_iterator)
-        except StopAsyncIteration:
-            return
-
-        if first_msg.WhichOneof("payload") != "init":
-            yield self._error_response("", "", 3, "First message must be ConsumeStreamInit")
-            return
-
-        task_id = first_msg.init.task_id
-        from_seq = first_msg.init.from_seq
-
-        err = validate_id(task_id, "task_id")
-        if err is not None:
-            yield self._error_response(task_id, "", 3, "Invalid request")
-            return
-
-        if from_seq < 0 or from_seq > MAX_FROM_SEQ:
-            yield self._error_response(task_id, "", 3, "Invalid request parameters")
+        if from_seq > MAX_FROM_SEQ:
+            async for out in self._fatal_close(task_id, "INVALID_ARGUMENT", "from_seq out of range"):
+                yield out
             return
 
         session = self._registry.get(task_id)
 
-        # Late consumer: session already finished but data is in Redis.
+        # Late client: session already finished but data is in Redis.
         if session is None:
             stream_len = await self._redis_client.xlen(f"task:{task_id}:stream")
             if stream_len > 0:
                 async for resp in self._consume_from_redis(task_id, from_seq):
                     yield resp
                 return
-            yield self._error_response(task_id, "", 5, "Task not found")
+            async for out in self._fatal_close(task_id, "NOT_FOUND", "task not found"):
+                yield out
             return
 
-        # Background: read Module B's upstream data → input_queue → Module A
+        # Deliver first message's data (the query) to the SDK module.
+        if first_msg.data and len(first_msg.data.fields) > 0:
+            await session.enqueue_input({"_proto": first_msg.data})
+
+        # Background: read additional upstream messages → input_queue → module
         upstream_task = asyncio.create_task(
-            self._read_consumer_upstream(request_iterator, session),
+            self._read_client_upstream(request_iterator, session),
             name=f"upstream_{task_id}",
         )
 
-        # Stream output downstream to Module B
+        # Stream output downstream to client
         try:
             async for resp in self._consume_from_redis(task_id, from_seq):
                 yield resp
@@ -431,41 +445,47 @@ class GatewayServicer:
                 upstream_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await upstream_task
-            # Clean up session after consumer finishes reading
+            # Clean up session after client finishes reading
             removed = await self._registry.unregister(task_id)
             if removed is not None:
                 await removed.teardown()
 
     @staticmethod
-    async def _read_consumer_upstream(
+    async def _read_client_upstream(
         request_iterator: AsyncIterator,
         session: StreamSession,
     ) -> None:
-        """Read Module B's data and put on input_queue for Module A.
+        """Read additional StreamClient messages and put on input_queue.
+
+        The first message's data is consumed by ``Stream`` itself (it's
+        the query); this drains the rest. Empty Structs are skipped.
 
         Args:
-            request_iterator: BiDi stream from Module B.
+            request_iterator: BiDi stream of StreamClient from the client.
             session: Stream session with input_queue.
         """
         try:
             async for msg in request_iterator:
                 if session._stop_event.is_set():  # noqa: SLF001
                     break
-                payload_type = msg.WhichOneof("payload")
-                if payload_type == "data":
+                if msg.data and len(msg.data.fields) > 0:
                     # Keep proto Struct as-is — avoid MessageToDict conversion
-                    await session.enqueue_input({"_proto": msg.data.data})
+                    await session.enqueue_input({"_proto": msg.data})
         except asyncio.CancelledError:
             pass
         except Exception:
-            logger.exception("Consumer upstream reader error: task_id=%s", session.task_id)
+            logger.exception("Client upstream reader error: task_id=%s", session.task_id)
 
-    async def SendSignal(
+    async def SendSignal(  # noqa: PLR0911
         self,
         request: Any,
         context: grpc.aio.ServicerContext,  # noqa: ARG002
     ) -> Any:
-        """Forward control signal via Redis pub/sub.
+        """Forward control signal via Redis pub/sub, or dispatch cache invalidation.
+
+        Cache invalidation signals (INVALIDATE_*) are handled directly by
+        ModuleServer — no task_id, no session, no Redis pub/sub.
+        Task signals (CANCEL) require task_id + active session.
 
         Args:
             request: ClientSignalRequest proto.
@@ -474,23 +494,35 @@ class GatewayServicer:
         Returns:
             ClientSignalResponse proto.
         """
+        action_name = gateway_pb2.SignalAction.Name(request.action)
+
+        # Cache invalidation — server-wide, handled by ModuleServer
+        if action_name.startswith("INVALIDATE_"):
+            if self._cache_handler is not None:
+                try:
+                    await self._cache_handler(action_name)
+                    return gateway_pb2.ClientSignalResponse(success=True, task_id="")
+                except Exception:
+                    logger.exception("Cache invalidation failed: %s", action_name)
+                    return gateway_pb2.ClientSignalResponse(success=False, task_id="")
+            return gateway_pb2.ClientSignalResponse(success=False, task_id="")
+
+        # Task signals — require task_id + session
         task_id = request.task_id
         if validate_id(task_id, "task_id") is not None:
             return gateway_pb2.ClientSignalResponse(success=False, task_id=task_id)
 
-        action_value = request.action
-        action_name = gateway_pb2.SignalAction.Name(action_value).removeprefix("SIGNAL_ACTION_").lower()
-
+        action_lower = action_name.lower()
         session = self._registry.get(task_id)
         if session is None:
             logger.warning("SendSignal: task not found: %s", task_id)
             return gateway_pb2.ClientSignalResponse(success=False, task_id=task_id)
 
         try:
-            payload = json.dumps({"action": action_name, "task_id": task_id})
+            payload = json.dumps({"action": action_lower, "task_id": task_id})
             await self._redis_client.publish(f"signal_ch:{task_id}", payload)
         except Exception:
-            logger.exception("SendSignal Redis publish failed: task_id=%s action=%s", task_id, action_name)
+            logger.exception("SendSignal Redis publish failed: task_id=%s action=%s", task_id, action_lower)
             return gateway_pb2.ClientSignalResponse(success=False, task_id=task_id)
         return gateway_pb2.ClientSignalResponse(success=True, task_id=task_id)
 
@@ -499,18 +531,23 @@ class GatewayServicer:
         task_id: str,
         from_seq: int,
     ) -> AsyncGenerator:
-        """Zero-copy read from Redis Stream for Module B.
+        """Zero-copy read from Redis Stream for the consumer.
 
         Proto Struct bytes go directly from Redis to gRPC response —
         no dict conversion, no JSON parsing. ~0.1-0.5ms per message
         instead of ~3-8ms on the JSON path.
+
+        Yields bare ``StreamServer`` (seq + data). Lifecycle is encoded
+        in ``data.root.protocol`` sentinels written by the producer
+        (``stream.start`` already seeded by StartStream; ``stream.end``
+        written by the producer's end-of-stream emit).
 
         Args:
             task_id: Task reference ID.
             from_seq: Resume point.
 
         Yields:
-            GatewayResponse messages.
+            StreamServer messages.
         """
         import time as _t
 
@@ -523,39 +560,213 @@ class GatewayServicer:
         t1 = _t.perf_counter_ns()
 
         seq = from_seq
-        job_id = task_id
-
-        # Reuse timestamp across batch — one syscall per XREAD, not per message
-        batch_ts = timestamp_pb2.Timestamp()
-        batch_ts.FromDatetime(datetime.now(tz=timezone.utc))
-        batch_count = 0
         first = True
 
         async for struct_data in reader.read_structs():
             if first:
                 t2 = _t.perf_counter_ns()
                 logger.info(
-                    "ConsumeStream: cursor=%.1fms xread_wait=%.1fms total_to_first=%.1fms task_id=%s",
-                    (t1 - t0) / 1e6, (t2 - t1) / 1e6, (t2 - t0) / 1e6, task_id,
+                    "Stream: cursor=%.1fms xread_wait=%.1fms total_to_first=%.1fms task_id=%s",
+                    (t1 - t0) / 1e6,
+                    (t2 - t1) / 1e6,
+                    (t2 - t0) / 1e6,
+                    task_id,
                 )
                 first = False
             seq += 1
-            batch_count += 1
+            yield gateway_pb2.StreamServer(seq=seq, task_id=task_id, data=struct_data)
 
-            # Refresh timestamp once per XREAD batch (every 50 messages)
-            if batch_count >= STREAM_BATCH_SIZE:
-                batch_ts = timestamp_pb2.Timestamp()
-                batch_ts.FromDatetime(datetime.now(tz=timezone.utc))
-                batch_count = 0
+        # Reader exited because EOS was hit (Redis `{"eos": "true"}` marker is
+        # consumed silently by ProtoStreamReader). Emit an explicit stream.end
+        # sentinel so the wire contract is uniform: every stream ends with
+        # exactly one stream.end entry, regardless of how it concluded.
+        seq += 1
+        yield self._sentinel(seq, task_id, "stream.end")
 
-            yield gateway_pb2.GatewayResponse(
-                output=gateway_pb2.StreamOutput(
-                    task_id=task_id,
-                    job_id=job_id,
-                    data=struct_data,
-                    seq=seq,
-                    timestamp=batch_ts,
-                ),
+    async def _dial_consumer(  # noqa: C901, PLR0912, PLR0915
+        self,
+        task_id: str,
+        mission_id: str,
+        setup_id: str,
+        address: str,
+    ) -> None:
+        """Dial the consumer's GatewayService.Stream and run the BiDi.
+
+        Flow:
+
+        1. Send ``stream.init`` as the first ``StreamClient``.
+        2. Read the consumer's first ``StreamServer`` — that's the query.
+        3. Push the query onto ``session.input_queue`` so the dispatcher
+           unblocks (matches the M2M client-initiated path).
+        4. Concurrently:
+
+           - forward subsequent ``StreamServer`` messages from the
+             consumer → ``session.input_queue`` (multi-turn input).
+           - pull module outputs from ``_consume_from_redis`` and push
+             each as a ``StreamClient(task_id, from_seq=<seq>, data=…)``
+             to the consumer.
+
+        5. End cleanly when ``stream.end`` flows through.
+
+        A fresh ``GrpcCommunication`` is built per call so logging context
+        (mission_id, setup_id) reflects the actual task. The underlying
+        gRPC channel is still pooled at the ``GrpcClientWrapper`` class
+        level — multiple concurrent tasks dialing the same consumer share
+        one HTTP/2 connection.
+
+        Args:
+            task_id: Task to push.
+            mission_id: Mission ID (carried for logging context).
+            setup_id: Setup ID (carried for logging context).
+            address: ``"host:port"`` of the consumer's GatewayService.
+        """
+        from digitalkin.services.communication.grpc_communication import GrpcCommunication
+
+        log_extra = {"task_id": task_id, "setup_id": setup_id, "mission_id": mission_id}
+        cfg = self._client_config
+        if cfg is None:
+            logger.error("Dial-back unavailable: no client_config configured", extra=log_extra)
+            await self._emit_fatal_to_redis(
+                task_id,
+                code=StreamErrorCode.DIAL_BACK_INTERNAL.value,
+                message="gateway has no client_config to dial back with",
+                log_extra=log_extra,
             )
+            return
+        # setup_version_id is unknown at StartStream time (resolved by the
+        # dispatcher later). Use setup_id as the closest stable identifier
+        # for outbound logging.
+        comm = GrpcCommunication(
+            mission_id=mission_id,
+            setup_id=setup_id,
+            setup_version_id=setup_id,
+            client_config=cfg,
+        )
+        try:
+            stub, release = comm.dial_consumer_stream(address)
+        except InvalidConsumerAddressError as exc:
+            # Defence-in-depth: StartStream's validate_address should have
+            # caught this. Reaching here means the contract drifted.
+            logger.exception("dial_consumer: invalid address %r", address, extra=log_extra)
+            await self._emit_fatal_to_redis(
+                task_id,
+                code=StreamErrorCode.DIAL_BACK_UNREACHABLE.value,
+                message=f"dial-back channel build failed: {exc}",
+                log_extra=log_extra,
+            )
+            return
+        except OSError as exc:
+            logger.exception("dial_consumer: channel build failed addr=%s", address, extra=log_extra)
+            await self._emit_fatal_to_redis(
+                task_id,
+                code=StreamErrorCode.DIAL_BACK_UNREACHABLE.value,
+                message=f"dial-back channel build failed: {type(exc).__name__}: {exc}",
+                log_extra=log_extra,
+            )
+            return
+        logger.info("→ Dial-back channel ready to %s", address, extra=log_extra)
 
-        yield self._status_response(task_id, job_id, gateway_pb2.STREAM_STATE_COMPLETED)
+        session = self._registry.get(task_id)
+        if session is None:
+            logger.warning(
+                "Dial-back aborted — session disappeared before channel was ready",
+                extra=log_extra,
+            )
+            await release()
+            return
+
+        # Build the init StreamClient using the existing _sentinel helper —
+        # we extract the data Struct from a StreamServer-shaped sentinel.
+        init_server = self._sentinel(0, task_id, "stream.init")
+        init_client = gateway_pb2.StreamClient(task_id=task_id, from_seq=0, data=init_server.data)
+
+        # Gate the output drain on the first upstream message arriving:
+        # the dispatcher can't produce anything until the query lands on
+        # session.input_queue, which happens when we receive the consumer's
+        # first StreamServer reply.
+        output_started = asyncio.Event()
+
+        async def _outgoing() -> AsyncGenerator:
+            yield init_client
+            logger.info(
+                "→ stream.init sent, waiting for consumer query before draining outputs",
+                extra={"task_id": task_id, "mission_id": mission_id, "setup_id": setup_id},
+            )
+            await output_started.wait()
+            logger.info(
+                "✓ Output drain started — streaming module outputs to consumer",
+                extra={"task_id": task_id, "mission_id": mission_id, "setup_id": setup_id},
+            )
+            async for srv_msg in self._consume_from_redis(task_id, from_seq=0):
+                yield gateway_pb2.StreamClient(
+                    task_id=task_id,
+                    from_seq=srv_msg.seq,
+                    data=srv_msg.data,
+                )
+
+        try:
+            logger.info(
+                "→ Opening BiDi to consumer %s (sending stream.init)",
+                address,
+                extra=log_extra,
+            )
+            responses = stub.Stream(_outgoing(), timeout=DIAL_BACK_BIDI_TIMEOUT_S)
+            first = True
+            async for upstream in responses:
+                if not (upstream.data and len(upstream.data.fields) > 0):
+                    continue
+                await session.enqueue_input({"_proto": upstream.data})
+                if first:
+                    logger.info(
+                        "← First consumer reply received — query enqueued, output drain unblocked",
+                        extra=log_extra,
+                    )
+                    output_started.set()
+                    first = False
+        except grpc.aio.AioRpcError as exc:
+            code_name = exc.code().name
+            details = exc.details() or ""
+            logger.warning(
+                "dial_consumer BiDi failed: [%s] %s addr=%s",
+                code_name,
+                details,
+                address,
+                extra=log_extra,
+            )
+            if not output_started.is_set():
+                await self._emit_fatal_to_redis(
+                    task_id,
+                    code=StreamErrorCode.DIAL_BACK_RPC_ERROR.value,
+                    message=f"dial-back BiDi failed: [{code_name}] {details}",
+                    log_extra=log_extra,
+                )
+                # Suppress the DIAL_BACK_NO_QUERY in the finally block —
+                # we already emitted the more specific RPC error.
+                output_started.set()
+        except (RuntimeError, AssertionError, ValueError):
+            logger.exception("dial_consumer unexpected error", extra=log_extra)
+            if not output_started.is_set():
+                await self._emit_fatal_to_redis(
+                    task_id,
+                    code=StreamErrorCode.DIAL_BACK_INTERNAL.value,
+                    message="dial-back internal error (see gateway logs)",
+                    log_extra=log_extra,
+                )
+                output_started.set()
+        finally:
+            if not output_started.is_set():
+                logger.warning(
+                    "Dial-back finished without consumer ever sending a query "
+                    "(address=%s) — emitting DIAL_BACK_NO_QUERY",
+                    address,
+                    extra=log_extra,
+                )
+                await self._emit_fatal_to_redis(
+                    task_id,
+                    code=StreamErrorCode.DIAL_BACK_NO_QUERY.value,
+                    message="consumer never sent the query (dial-back BiDi closed without reply)",
+                    log_extra=log_extra,
+                )
+            # Defensive: unblock _outgoing if consumer never replied.
+            output_started.set()
+            await release()

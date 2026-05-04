@@ -121,11 +121,16 @@ class SharedRedisListener:
     def register_task(self, task_id: str, task: asyncio.Task[None]) -> None:
         """Associate an asyncio.Task with a task_id for direct cancellation.
 
+        Auto-cleanup: a done callback unregisters the task when it finishes
+        (success, cancel, or crash), preventing orphaned entries in
+        _task_queues/_task_refs/_last_seen.
+
         Args:
             task_id: Unique task identifier.
             task: The asyncio.Task to cancel on stop/cancel signal.
         """
         self._task_refs[task_id] = task
+        task.add_done_callback(lambda _: self.unregister(task_id))
 
     def unregister(self, task_id: str) -> None:
         """Remove a task_id from listening. Stops listener when empty.
@@ -220,24 +225,31 @@ class SharedRedisListener:
         return task_id, data, raw_json
 
     async def _listen_loop(self) -> None:
-        """Single loop reading PubSub messages for all registered tasks."""
-        try:
-            while not self._stop_event.is_set():
+        """Single loop reading PubSub messages for all registered tasks.
+
+        Crash recovery: try/except inside the loop with exponential backoff
+        (0.1s → 10s cap). Transient Redis errors retry instead of killing
+        signal delivery for all tasks.
+        """
+        backoff = 0.1
+        while not self._stop_event.is_set():
+            try:
                 if self._pubsub is None:
                     await asyncio.sleep(0.05)
                     continue
                 msg = await self._pubsub.get_message(ignore_subscribe_messages=True, timeout=0.5)
-                if msg is None:
-                    continue
-                parsed = self._parse_message(msg)
-                if parsed is not None:
-                    self.dispatch_signal(*parsed)
-        except asyncio.CancelledError:
-            pass
-        except Exception:
-            logger.exception("SharedRedisListener loop crashed")
-        finally:
-            self._listen_task = None
+                if msg is not None:
+                    parsed = self._parse_message(msg)
+                    if parsed is not None:
+                        self.dispatch_signal(*parsed)
+                backoff = 0.1
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                logger.exception("SharedRedisListener iteration error, retrying in %.1fs", backoff)
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, 10.0)
+        self._listen_task = None
 
     async def close(self) -> None:
         """Stop the listener, drain all queues, close PubSub connection."""

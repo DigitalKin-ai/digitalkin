@@ -11,7 +11,7 @@ vs JSON path:
 Write: dict → ``json.dumps()`` → string → Redis XADD (~1-3ms)
 Read:  Redis XREAD → ``json.loads()`` → dict → ``Struct.update()`` (~3-8ms)
 
-Use for Gateway-mediated M2M where both ends speak proto. For internal
+Use for Gateway-mediated inter-module streams where both ends speak proto. For internal
 module output (Pydantic models), use ``RedisStreamWriter`` (JSON) or
 convert to proto Struct once at the module boundary.
 """
@@ -107,7 +107,7 @@ class ProtoStreamWriter:
         self._batch_size = batch_size
         self._flush_interval = flush_ms / 1000
         self._pending: list[dict[str, str | bytes]] = []
-        self._last_write_time = time.monotonic()
+        self._last_write_time = 0.0  # Ensures first write always goes direct (gap is huge)
         self._last_mode = "single"  # tracks current flush mode for logging
 
     async def restore_seq(self) -> int:
@@ -331,6 +331,7 @@ class ProtoStreamReader:
         self,
         count: int = 50,
         block_ms: int = STREAM_READ_BLOCK_MS,
+        cursor_save_interval: int = 100,
     ) -> AsyncGenerator[struct_pb2.Struct, None]:
         """Read proto Structs from the stream until EOS.
 
@@ -338,13 +339,19 @@ class ProtoStreamReader:
         are deserialized via ``ParseFromString()`` (zero-copy from Redis
         bytes). Terminates when an entry with ``eos=true`` is read.
 
+        Cursor is saved every ``cursor_save_interval`` entries (not every
+        XREAD batch) to reduce Redis SET ops under high concurrency.
+        Worst-case crash re-reads up to ``cursor_save_interval`` entries.
+
         Args:
             count: Max entries per XREAD call.
             block_ms: Milliseconds to block waiting for new entries.
+            cursor_save_interval: Save cursor every N entries (default 100).
 
         Yields:
             Proto Struct objects from the stream.
         """
+        entries_since_save = 0
         while True:
             result = await self._redis_client.xread(
                 {self._stream_key: self._last_id},
@@ -386,5 +393,8 @@ class ProtoStreamReader:
                     s.ParseFromString(pb_bytes)
                     yield s
 
-            # Persist cursor after each XREAD batch for crash recovery
-            await self._save_cursor()
+                    entries_since_save += 1
+
+            if entries_since_save >= cursor_save_interval:
+                await self._save_cursor()
+                entries_since_save = 0

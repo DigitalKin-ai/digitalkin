@@ -17,9 +17,9 @@ from google.protobuf import json_format, struct_pb2
 from pydantic import ValidationError
 
 from digitalkin.core.job_manager.base_job_manager import BaseJobManager
+from digitalkin.core.job_manager.single_job_manager import SingleJobManager
 from digitalkin.grpc_servers.utils.exceptions import ServerError, ServicerError
 from digitalkin.logger import logger
-from digitalkin.models.core.job_manager_models import JobManagerMode
 from digitalkin.models.module.module import ModuleCodeModel, ModuleStatus
 from digitalkin.models.module.setup_types import SetupModel
 from digitalkin.modules._base_module import BaseModule
@@ -61,15 +61,6 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             dest="services_mode",
             help="Define Module Service configurations for endpoints",
         )
-        parser.add_argument(
-            "-jm",
-            "--job-manager",
-            type=JobManagerMode,
-            choices=list(JobManagerMode),
-            default=JobManagerMode.SINGLE,
-            dest="job_manager_mode",
-            help="Define Module job manager configurations for load balancing",
-        )
 
     def __init__(self, module_class: type[BaseModule]) -> None:
         """Initialize the module servicer.
@@ -83,7 +74,6 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         super().__init__()
         module_class.discover()
         self.module_class = module_class
-        job_manager_class = self.args.job_manager_mode.get_manager_class()
 
         redis_url = os.environ.get("DIGITALKIN_REDIS_URL")
         if not redis_url:
@@ -92,13 +82,9 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         from digitalkin.core.task_manager.redis import RedisClient
 
         self._redis_client = RedisClient(redis_url)
-        self.job_manager = job_manager_class(module_class, self.args.services_mode, redis_client=self._redis_client)
+        self.job_manager = SingleJobManager(module_class, self.args.services_mode, redis_client=self._redis_client)
 
-        logger.debug(
-            "ModuleServicer initialized with job manager: %s",
-            self.args.job_manager_mode,
-            extra={"job_manager": self.job_manager},
-        )
+        logger.debug("ModuleServicer initialized with SingleJobManager")
         self.setup = GrpcSetup() if self.args.services_mode == ServicesMode.REMOTE else DefaultSetup()
         self._setup_cache: dict[str, SetupVersionData] = {}
         self._setup_cache_max = int(os.environ.get("DIGITALKIN_SETUP_CACHE_MAX", "100"))
@@ -125,6 +111,16 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             self._registry_cache = None
 
         self._setup_cache.clear()
+        self._tool_cache_by_setup.clear()
+        SetupModel.clear_clean_model_cache()
+
+    def invalidate_setup_cache(self) -> None:
+        """Clear setup cache. Next request re-fetches from services-provider."""
+        self._setup_cache.clear()
+        self._setup_inflight.clear()
+
+    def invalidate_tool_cache(self) -> None:
+        """Clear tool cache. Next request re-resolves tool definitions."""
         self._tool_cache_by_setup.clear()
 
     def _get_registry(self) -> RegistryStrategy | None:
@@ -643,7 +639,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
                     proto = json_format.ParseDict(message, struct_pb2.Struct(), ignore_unknown_fields=True)
                     yield lifecycle_pb2.StartModuleResponse(success=True, output=proto, job_id=job_id)
 
-                    if message.get("root", {}).get("protocol") == "end_of_stream":
+                    if message.get("root", {}).get("protocol") == "stream.end":
                         logger.debug(
                             "End of stream signal received",
                             extra={"job_id": job_id, "mission_id": request.mission_id},
@@ -755,8 +751,8 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
 
     async def GetModuleSelectInput(
         self,
-        request: information_pb2.GetModuleSelectInputRequest,  # gRPC servicer signature # noqa: ARG002
-        context: grpc.ServicerContext,  # gRPC servicer signature
+        request: information_pb2.GetModuleSelectInputRequest,  # noqa: ARG002
+        context: grpc.ServicerContext,
     ) -> information_pb2.GetModuleSelectInputResponse:
         """Get the trigger selection schema for the module.
 
@@ -767,8 +763,6 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         Returns:
             A response with the module's select input schema.
         """
-        logger.debug("GetModuleSelectInput called for module: '%s'", self.module_class.__name__)
-
         try:
             select_input_schema_proto = await self.module_class.get_select_input_format()
             select_input_format_struct = json_format.Parse(

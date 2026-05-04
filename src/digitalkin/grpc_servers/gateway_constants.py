@@ -35,6 +35,7 @@ MAX_LOCAL_CACHE = _gw.max_local_cache
 HEARTBEAT_TTL_S = _gw.heartbeat_ttl
 REAPER_INTERVAL_S = _gw.reaper_interval
 SESSION_STATE_TTL_S = _gw.session_state_ttl
+DIAL_BACK_BIDI_TIMEOUT_S = _gw.dial_back_bidi_timeout_s
 
 # ══════════════════════════════════════════════════════════════════
 # Streams
@@ -63,6 +64,7 @@ BACKPRESSURE_TIMEOUT_S = _gw.backpressure.backpressure_timeout_s
 DEFAULT_OUTPUT_QUEUE_SIZE = _gw.queue.output_queue_size
 DEFAULT_INPUT_QUEUE_SIZE = _gw.queue.input_queue_size
 ENQUEUE_TIMEOUT_S = _gw.queue.enqueue_timeout_s
+INPUT_WAIT_TIMEOUT_S = _gw.queue.dispatcher_input_wait_s
 REDIS_HEALTH_CHECK_TIMEOUT_S = _gw.redis_health_timeout
 
 # ══════════════════════════════════════════════════════════════════
@@ -78,6 +80,10 @@ UVLOOP_ENABLED = _prof.uvloop
 # ══════════════════════════════════════════════════════════════════
 
 _ID_PATTERN = re.compile(r"^[a-zA-Z0-9_:.-]{1,256}$")
+_ADDRESS_PATTERN = re.compile(r"^[a-zA-Z0-9_.-]{1,253}:\d{1,5}$")
+# Wildcard bind addresses — invalid as dial-back targets even though
+# servers commonly bind to them. (S104 flags the literal as a bind hint.)
+_WILDCARD_HOSTS = frozenset({"[::]", "0.0.0.0", "::"})  # noqa: S104
 
 
 def validate_id(value: str, field_name: str) -> str | None:
@@ -98,6 +104,34 @@ def validate_id(value: str, field_name: str) -> str | None:
         return f"{field_name} is required"
     if not _ID_PATTERN.match(value):
         return f"{field_name} contains invalid characters"
+    return None
+
+
+def validate_address(value: str, field_name: str) -> str | None:
+    """Validate a ``host:port`` address used for dial-back.
+
+    Rejects empty, malformed, out-of-range, and wildcard bind addresses.
+    Wildcards (``[::]``, ``0.0.0.0``, ``::``) are bind addresses, not
+    routable destinations — accepting them as ``x-client-address`` is a
+    debugging trap because the gateway cannot dial back to them.
+
+    Args:
+        value: The address to validate.
+        field_name: Name of the field (for error messages).
+
+    Returns:
+        None if valid, error message string if invalid.
+    """
+    if not isinstance(value, str) or not value:
+        return f"{field_name} is required"
+    if not _ADDRESS_PATTERN.match(value):
+        return f"{field_name} must be host:port"
+    host, _, port_str = value.partition(":")
+    port = int(port_str)
+    if not (1 <= port <= 65535):  # noqa: PLR2004 — TCP port range
+        return f"{field_name} port out of range"
+    if host in _WILDCARD_HOSTS:
+        return f"{field_name} cannot be a wildcard bind address"
     return None
 
 

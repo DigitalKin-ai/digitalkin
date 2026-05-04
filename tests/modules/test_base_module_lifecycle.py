@@ -373,8 +373,7 @@ class TestStart:
 
             await module.start(input_data, setup_data, callback)
 
-        # Module start info sent first
-        assert callback.await_count >= 1
+        # Module start info is now sent by the gateway, not by start()
         mock_init.assert_awaited_once()
         mock_stop.assert_awaited_once()
 
@@ -394,8 +393,8 @@ class TestStart:
             await module.start(input_data, setup_data, callback)
 
         assert module.status == ModuleStatus.FAILED
-        # Second callback call should be ModuleCodeModel
-        error_call = callback.call_args_list[1]
+        # Error callback sends ModuleCodeModel
+        error_call = callback.call_args_list[0]
         assert isinstance(error_call[0][0], ModuleCodeModel)
         assert error_call[0][0].code == "Error"
 
@@ -455,7 +454,7 @@ class TestStop:
         module.context.callbacks.send_message.assert_awaited_once()
         # Verify EndOfStream was sent
         sent = module.context.callbacks.send_message.call_args[0][0]
-        assert sent.root.protocol == "end_of_stream"
+        assert sent.root.protocol == "stream.end"
 
     async def test_cleanup_error_sets_failed(self) -> None:
         """stop() sets FAILED when cleanup raises."""

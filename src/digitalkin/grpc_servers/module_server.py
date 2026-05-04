@@ -4,8 +4,8 @@ import os
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
-from agentic_mesh_protocol.gateway.v1 import gateway_service_pb2_grpc
-from agentic_mesh_protocol.module.v1 import module_service_pb2_grpc
+from agentic_mesh_protocol.gateway.v1 import gateway_service_pb2, gateway_service_pb2_grpc
+from agentic_mesh_protocol.module.v1 import module_service_pb2, module_service_pb2_grpc
 
 from digitalkin.core.task_manager.redis import RedisClient
 from digitalkin.grpc_servers._base_server import BaseServer
@@ -81,7 +81,11 @@ class ModuleServer(BaseServer):
         self.register_servicer(
             self.module_servicer,
             module_service_pb2_grpc.add_ModuleServiceServicer_to_server,
-            service_names=["agentic_mesh_protocol.module.v1.ModuleService"],
+            # Pass DESCRIPTOR (not just names) so the service-descriptor
+            # _pb2 module is imported and registered into Default() pool —
+            # required for grpcurl/Postman reflection describe to resolve
+            # this service's symbols.
+            service_descriptor=module_service_pb2.DESCRIPTOR,
         )
 
         if self.client_config is not None:
@@ -112,12 +116,20 @@ class ModuleServer(BaseServer):
             redis_client=redis_client,
             circuit_breaker=self._gateway_circuit_breaker,
             dispatch_key=dispatch_key,
+            cache_handler=self._handle_cache_invalidation,
+            # Used by `_dial_consumer` to dial back to consumer-side
+            # GatewayService.Stream when the client opts in via
+            # `x-client-address` metadata.
+            client_config=self.client_config,
         )
 
         self.register_servicer(
             self._gateway_servicer,
             gateway_service_pb2_grpc.add_GatewayServiceServicer_to_server,
-            service_names=["agentic_mesh_protocol.gateway.v1.GatewayService"],
+            # Pass DESCRIPTOR (not just names) so gateway_service_pb2 is
+            # registered into Default() pool — required for reflection
+            # describe of this service's symbols.
+            service_descriptor=gateway_service_pb2.DESCRIPTOR,
         )
 
         # TaskDispatcher reads from the same dispatch stream
@@ -127,9 +139,63 @@ class ModuleServer(BaseServer):
             redis_client=redis_client,
             servicer=self.module_servicer,
             dispatch_key=dispatch_key,
+            # Registry lookup lets the dispatcher pull the first module
+            # input from session.input_queue (fed by the client's first
+            # StreamClient.data) instead of from the dispatch entry.
+            registry=self._gateway_servicer._registry,  # noqa: SLF001
         )
 
         logger.info("GatewayServicer + TaskDispatcher registered (Redis: %s, dispatch: %s)", redis_url, dispatch_key)
+
+    async def _handle_cache_invalidation(self, action: str) -> None:
+        """Dispatch cache invalidation by action name. Isolated from module lifecycle.
+
+        Args:
+            action: SignalAction enum name (e.g. "INVALIDATE_SETUP").
+        """
+        handlers: dict[str, Any] = {
+            "INVALIDATE_ALL": self._invalidate_all,
+            "INVALIDATE_CHANNELS": self._invalidate_channels,
+            "INVALIDATE_MODELS": self._invalidate_models,
+            "INVALIDATE_SETUP": self._invalidate_setup,
+            "INVALIDATE_TOOLS": self._invalidate_tools,
+            "INVALIDATE_SHARED": self._invalidate_shared,
+        }
+        handler = handlers.get(action)
+        if handler is not None:
+            await handler()
+            logger.info("Cache invalidated: %s", action)
+
+    async def _invalidate_all(self) -> None:
+        await self._invalidate_setup()
+        await self._invalidate_tools()
+        await self._invalidate_shared()
+        await self._invalidate_models()
+        await self._invalidate_channels()
+
+    async def _invalidate_setup(self) -> None:
+        if self.module_servicer is not None:
+            self.module_servicer.invalidate_setup_cache()
+
+    async def _invalidate_tools(self) -> None:
+        if self.module_servicer is not None:
+            self.module_servicer.invalidate_tool_cache()
+
+    async def _invalidate_shared(self) -> None:
+        self.module_class.clear_shared()
+
+    async def _invalidate_models(self) -> None:  # noqa: PLR6301
+        from digitalkin.models.module.setup_types import SetupModel
+
+        SetupModel.clear_clean_model_cache()
+
+    async def _invalidate_channels(self) -> None:  # noqa: PLR6301
+        from digitalkin.core.resilience.bulkhead import Bulkhead
+        from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
+
+        GrpcClientWrapper._channel_cache.clear()  # noqa: SLF001
+        GrpcClientWrapper._stub_cache.clear()  # noqa: SLF001
+        Bulkhead.clear_all()
 
     def _prepare_registry_config(self) -> None:
         """Inject registry client config into module_class for spawned instances."""
@@ -253,6 +319,7 @@ class ModuleServer(BaseServer):
                 logger.exception("Failed to deregister from registry")
 
         await self._shutdown_servicer()
+        self.module_class.clear_shared()
 
         if self.registry is not None:
             try:

@@ -237,11 +237,18 @@ class TestReflection:
             # Call add_reflection
             server._add_reflection()
 
-            # Verify the function was called
+            # v1alpha registered via the helper; service list also advertises
+            # the v1 name so v1-first clients (Postman 10.x+) can discover it.
             mock_reflection.enable_server_reflection.assert_called_once_with(
-                ["my.test.Service", "grpc.reflection.v1alpha.ServerReflection"],
+                [
+                    "my.test.Service",
+                    "grpc.reflection.v1alpha.ServerReflection",
+                    "grpc.reflection.v1.ServerReflection",
+                ],
                 mock_grpc_server,
             )
+            # v1 registered manually via add_generic_rpc_handlers
+            mock_grpc_server.add_generic_rpc_handlers.assert_called_once()
 
     def test_add_reflection_import_error(self, server_config_sync_insecure) -> None:
         """Test handling of import error for reflection."""

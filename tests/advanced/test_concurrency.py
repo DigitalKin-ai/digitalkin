@@ -27,7 +27,9 @@ pytestmark = [pytest.mark.concurrency, pytest.mark.timeout(30)]
 def _make_mock_client() -> MagicMock:
     """Mock RedisClient with in-memory pipeline."""
     mock = MagicMock()
-    mock.pubsub.return_value = MagicMock()
+    pubsub = MagicMock()
+    pubsub.subscribe = AsyncMock()
+    mock.pubsub.return_value = pubsub
 
     class FakePipe:
         def __init__(self) -> None:
@@ -126,7 +128,7 @@ class TestListenerConcurrency:
 
         for i in range(20):
             tid = f"task_{i}"
-            queues[tid] = listener.register(tid)
+            queues[tid] = await listener.register(tid)
 
         async def dispatch_to(tid: str) -> None:
             data = {"action": "start", "tid": tid}
@@ -145,7 +147,7 @@ class TestListenerConcurrency:
 
         async def cycle(i: int) -> None:
             tid = f"cycle_{i}"
-            listener.register(tid)
+            await listener.register(tid)
             await asyncio.sleep(0)  # Yield to other tasks
             listener.unregister(tid)
 

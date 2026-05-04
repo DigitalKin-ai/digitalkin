@@ -123,6 +123,18 @@ class BaseServer(abc.ABC):
     def _add_reflection(self) -> None:
         """Add reflection service to the gRPC server if enabled.
 
+        Registers both ``grpc.reflection.v1alpha.ServerReflection`` (the
+        version grpcio-reflection ships natively) and a manual handler for
+        ``grpc.reflection.v1.ServerReflection`` (the newer wire name).
+
+        The v1 and v1alpha wire protocols are byte-identical — same
+        request/response messages, same single bidi RPC. Only the
+        fully-qualified service name differs. Newer clients (Postman 10.x+,
+        recent grpc tooling) call v1 first and may fail with an opaque
+        "unknown error" if the server only advertises v1alpha. Registering
+        both at the same servicer instance fixes this without paying any
+        per-request overhead.
+
         Raises:
             ReflectionError: If reflection initialization fails.
         """
@@ -130,23 +142,42 @@ class BaseServer(abc.ABC):
             return
 
         try:
-            from grpc_reflection.v1alpha import (
-                reflection,
-            )  # Optional dependency, import only if reflection enabled
+            import grpc
+            from grpc_reflection.v1alpha import reflection as reflection_v1alpha
+            from grpc_reflection.v1alpha import reflection_pb2 as reflection_pb2_v1alpha
+            from grpc_reflection.v1alpha._base import BaseReflectionServicer
 
-            # Get all registered service names
             service_names = self._service_names.copy()
+            service_names.append(reflection_v1alpha.SERVICE_NAME)
+            # Advertise the v1 name too so v1-first clients see it via list.
+            v1_service_name = "grpc.reflection.v1.ServerReflection"
+            service_names.append(v1_service_name)
 
-            # Add the reflection service name
-            reflection_service = reflection.SERVICE_NAME
-            service_names.append(reflection_service)
+            # v1alpha — register through the standard helper.
+            reflection_v1alpha.enable_server_reflection(service_names, self.server)
 
-            # Register services with the reflection service
-            # This creates a dynamic file descriptor database that can respond to
-            # reflection queries with detailed service information
-            reflection.enable_server_reflection(service_names, self.server)
+            # v1 — same servicer logic, registered manually under the v1
+            # service path. The v1alpha ReflectionServicer subclass exposes
+            # ServerReflectionInfo(request_iterator, context) which returns
+            # an iterable of ServerReflectionResponse — wire-compatible
+            # with the v1 spec. We instantiate it ourselves and bind the
+            # method to the v1 path.
+            servicer = reflection_v1alpha.ReflectionServicer(service_names)
+            method_handlers = {
+                "ServerReflectionInfo": grpc.stream_stream_rpc_method_handler(
+                    servicer.ServerReflectionInfo,
+                    request_deserializer=reflection_pb2_v1alpha.ServerReflectionRequest.FromString,
+                    response_serializer=reflection_pb2_v1alpha.ServerReflectionResponse.SerializeToString,
+                ),
+            }
+            handler = grpc.method_handlers_generic_handler(v1_service_name, method_handlers)
+            self.server.add_generic_rpc_handlers((handler,))
 
-            logger.debug("Added gRPC reflection service with services: %s", service_names)
+            # Silence unused-import lint for BaseReflectionServicer (kept
+            # available for callers that subclass).
+            _ = BaseReflectionServicer
+
+            logger.debug("Added gRPC reflection v1 + v1alpha: %s", service_names)
         except ImportError:
             logger.warning("Could not enable reflection: grpcio-reflection package not installed")
         except Exception as e:

@@ -17,7 +17,6 @@ import asyncio
 import contextlib
 import time
 from collections import OrderedDict
-from functools import lru_cache
 from typing import TYPE_CHECKING
 
 from digitalkin.grpc_servers.gateway_constants import (
@@ -78,7 +77,6 @@ class StreamRegistry:
     _redis_client: RedisClient
 
     @staticmethod
-    @lru_cache
     def session_key(task_id: str) -> str:
         """Redis hash key for session metadata.
 

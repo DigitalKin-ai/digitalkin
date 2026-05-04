@@ -58,6 +58,15 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
     _extended_input_format: ClassVar[type[DataModel] | None] = None
     _shared: ClassVar[dict[str, Any]] = {}
 
+    @classmethod
+    def clear_shared(cls) -> None:
+        """Swap shared cache with a fresh dict.
+
+        Running tasks keep their existing ``context.shared`` reference
+        (old dict). New module instances get the fresh empty dict.
+        """
+        cls._shared = {}
+
     # service config params — subclasses MUST define their own to avoid sharing
     services_config_strategies: ClassVar[dict[str, ServicesStrategy | None]]
     services_config_params: ClassVar[dict[str, dict[str, Any | None] | None]]
@@ -567,11 +576,12 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
         done_callback: Callable | None = None,
     ) -> None:
         """Start the module."""
-        import time as _t
+        from digitalkin.core.profiling.step_timer import StepTimer
 
-        t0 = _t.perf_counter_ns()
+        timer = StepTimer()
         try:
             self.context.callbacks.send_message = callback
+            timer.mark("set_callback")
 
             tool_cache = self._prebuilt_tool_cache or await setup_data.build_tool_cache(
                 self.context.registry,
@@ -579,15 +589,10 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
             )
             if tool_cache.entries:
                 self.context.tool_cache = tool_cache
-            t1 = _t.perf_counter_ns()
+            timer.mark("build_tool_cache")
 
             await self.initialize(self.context, setup_data)
-            t2 = _t.perf_counter_ns()
-
-            logger.info(
-                "module.start: tool_cache=%.1fms initialize=%.1fms total=%.1fms",
-                (t1 - t0) / 1e6, (t2 - t1) / 1e6, (t2 - t0) / 1e6,
-            )
+            timer.mark("initialize")
         except Exception as e:
             self._status = ModuleStatus.FAILED
             short_description = "Error initializing module"
@@ -607,24 +612,27 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
 
         try:
             self.trigger_handlers = self.triggers_discoverer.init_handlers(self.context)
+            timer.mark("init_handlers")
             await self._run_lifecycle(input_data, setup_data)
+            timer.mark("run_lifecycle")
         except Exception:
             self._status = ModuleStatus.FAILED
             logger.exception("Error during module lifecyle")
         finally:
+            timer.log("module.start", task_id=self.context.session.current_ids().get("task_id", ""))
             await self.stop()
 
     async def stop(self) -> None:
         """Stop the module. Idempotent — second call is a no-op."""
         import time as _t
 
-        _t0 = _t.perf_counter_ns()
+        t0 = _t.perf_counter_ns()
         if self._status in {ModuleStatus.STOPPED, ModuleStatus.FAILED}:
             return
         try:
             self._status = ModuleStatus.STOPPING
             await self.cleanup()
-            _t1 = _t.perf_counter_ns()
+            t1 = _t.perf_counter_ns()
             # Flush batched histories — all messages are in cache, in correct order
             try:
                 for handlers in self.trigger_handlers.values():
@@ -632,7 +640,7 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
                         await handler.flush_file_history(self.context)
             except Exception:
                 logger.warning("Failed to flush handler history during stop", exc_info=True)
-            _t2 = _t.perf_counter_ns()
+            t2 = _t.perf_counter_ns()
             try:
                 await self.context.callbacks.send_message(
                     _EndOfStreamDataModel(
@@ -645,11 +653,14 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
                     "send_message callback not set, skipping end-of-stream"
                     " (expected for start_config_setup which does not register send_message)"
                 )
-            _t3 = _t.perf_counter_ns()
+            t3 = _t.perf_counter_ns()
             self._status = ModuleStatus.STOPPED
             logger.info(
                 "module.stop: cleanup=%.1fms flush=%.1fms eos=%.1fms total=%.1fms",
-                (_t1 - _t0) / 1e6, (_t2 - _t1) / 1e6, (_t3 - _t2) / 1e6, (_t3 - _t0) / 1e6,
+                (t1 - t0) / 1e6,
+                (t2 - t1) / 1e6,
+                (t3 - t2) / 1e6,
+                (t3 - t0) / 1e6,
             )
         except Exception:
             self._status = ModuleStatus.FAILED

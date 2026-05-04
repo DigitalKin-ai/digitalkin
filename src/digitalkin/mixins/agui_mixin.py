@@ -11,7 +11,7 @@ All state management (ID generation, lifecycle tracking) belongs in the adapter 
 from __future__ import annotations
 
 import uuid
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from digitalkin.models.events import (
     AgentRunEvent,
@@ -83,25 +83,30 @@ class AgUiMixin:
             extra=context.session.current_ids(),
         )
 
-        handler_name = self._AGUI_HANDLER_MAP.get(event.event)
-        if handler_name:
-            await getattr(self, handler_name)(context, event)
+        handler = self._agui_dispatch.get(event.event)
+        if handler is not None:
+            await handler(self, context, event)
 
-    _AGUI_HANDLER_MAP: ClassVar[dict[str, str]] = {
-        AgentRunEvent.RUN_STARTED: "_handle_run_started",
-        AgentRunEvent.TEXT_MESSAGE_STARTED: "_handle_text_message_started",
-        AgentRunEvent.RUN_CONTENT: "_handle_run_content",
-        AgentRunEvent.TEXT_MESSAGE_COMPLETED: "_handle_text_message_completed",
-        AgentRunEvent.RUN_COMPLETED: "_handle_run_completed",
-        AgentRunEvent.RUN_ERROR: "_handle_run_error",
-        AgentRunEvent.TOOL_CALL_STARTED: "_handle_tool_call_started",
-        AgentRunEvent.TOOL_CALL_COMPLETED: "_handle_tool_call_completed",
-        AgentRunEvent.TOOL_CALL_ERROR: "_handle_tool_call_error",
-        AgentRunEvent.REASONING_STARTED: "_handle_reasoning_started",
-        AgentRunEvent.REASONING_CONTENT_DELTA: "_handle_reasoning_delta",
-        AgentRunEvent.REASONING_STEP: "_handle_reasoning_step",
-        AgentRunEvent.REASONING_COMPLETED: "_handle_reasoning_completed",
-    }
+    _agui_dispatch: ClassVar[dict[str, Any]] = {}
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        """Build dispatch table from unbound method references."""
+        super().__init_subclass__(**kwargs)
+        cls._agui_dispatch = {
+            AgentRunEvent.RUN_STARTED: cls._handle_run_started,
+            AgentRunEvent.TEXT_MESSAGE_STARTED: cls._handle_text_message_started,
+            AgentRunEvent.RUN_CONTENT: cls._handle_run_content,
+            AgentRunEvent.TEXT_MESSAGE_COMPLETED: cls._handle_text_message_completed,
+            AgentRunEvent.RUN_COMPLETED: cls._handle_run_completed,
+            AgentRunEvent.RUN_ERROR: cls._handle_run_error,
+            AgentRunEvent.TOOL_CALL_STARTED: cls._handle_tool_call_started,
+            AgentRunEvent.TOOL_CALL_COMPLETED: cls._handle_tool_call_completed,
+            AgentRunEvent.TOOL_CALL_ERROR: cls._handle_tool_call_error,
+            AgentRunEvent.REASONING_STARTED: cls._handle_reasoning_started,
+            AgentRunEvent.REASONING_CONTENT_DELTA: cls._handle_reasoning_delta,
+            AgentRunEvent.REASONING_STEP: cls._handle_reasoning_step,
+            AgentRunEvent.REASONING_COMPLETED: cls._handle_reasoning_completed,
+        }
 
     # ── Private Event Handlers ───────────────────────────────────────────────
 
