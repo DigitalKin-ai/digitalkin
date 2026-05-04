@@ -649,6 +649,10 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
             config_setup_data: Setup data containing tool references.
         """
         logger.debug("Starting tool resolution", extra=self.context.session.current_ids())
+        # New setup version: discard any inherited resolved_tools so the live
+        # tool-module schemas are re-fetched. Mission runs reuse the persisted
+        # resolved_tools (via build_tool_cache in start()) and never reach here.
+        config_setup_data.resolved_tools = {}
         tool_cache = await config_setup_data.build_tool_cache(self.context.registry, self.context.communication)
         self.context.tool_cache = tool_cache
         logger.debug(
