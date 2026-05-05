@@ -6,12 +6,14 @@ the Service Provider's Registry service.
 
 from typing import Any
 
+import grpc
 from agentic_mesh_protocol.registry.v1 import (
     registry_enums_pb2,
     registry_models_pb2,
     registry_requests_pb2,
     registry_service_pb2_grpc,
 )
+from grpc_health.v1 import health_pb2, health_pb2_grpc
 
 from digitalkin.grpc_servers.utils.exceptions import ServerError
 from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
@@ -59,27 +61,23 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
         logger.debug("Channel client 'Registry' initialized successfully")
 
     async def wait_for_ready(self, timeout: float = 1.0) -> bool:
-        """Ping the registry by issuing a real GetModule RPC.
-
-        Any gRPC response (including NOT_FOUND) means the server is alive.
-        Only connection failure (UNAVAILABLE/DEADLINE_EXCEEDED after retries)
-        returns False.
+        """Probe the registry via the standard gRPC Health Check service.
 
         Args:
             timeout: Max seconds for the round-trip.
 
         Returns:
-            True if the server responded, False if unreachable.
+            True if the server responded SERVING, False otherwise.
         """
+        health_stub = health_pb2_grpc.HealthStub(self._channel)
         try:
-            await self.exec_grpc_query(
-                "GetModule",
-                registry_requests_pb2.GetModuleRequest(module_id="__ping__"),
+            response = await health_stub.Check(
+                health_pb2.HealthCheckRequest(service=""),
                 timeout=timeout,
             )
-        except ServerError as e:
-            return "UNAVAILABLE" not in str(e) and "DEADLINE_EXCEEDED" not in str(e)
-        return True
+        except grpc.aio.AioRpcError:
+            return False
+        return response.status == health_pb2.HealthCheckResponse.SERVING
 
     @staticmethod
     def _proto_to_module_info(
