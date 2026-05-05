@@ -62,7 +62,6 @@ class ModuleServer(BaseServer):
         self.registry: RegistryStrategy | None = None
         self.module_servicer: ModuleServicer | None = None
         self._gateway_servicer: GatewayServicer | None = None
-        self._task_dispatcher: Any = None
 
         self._prepare_registry_config()
 
@@ -95,10 +94,12 @@ class ModuleServer(BaseServer):
         self._register_gateway_servicer()
 
     def _register_gateway_servicer(self) -> None:
-        """Register the embedded GatewayServicer and TaskDispatcher.
+        """Register the embedded GatewayServicer.
 
-        Gateway dispatches tasks via Redis XADD. TaskDispatcher picks them
-        up via XREAD and runs modules through ModuleServicer's job manager.
+        The dial-back is the sole orchestrator: when a consumer dials in
+        and sends its first reply, the gateway's ``_dial_consumer`` calls
+        the injected ``ModuleRunner`` directly. There is no separate
+        dispatcher process, queue, or Redis stream for dispatch.
 
         Raises:
             RuntimeError: If DIGITALKIN_REDIS_URL is not set.
@@ -109,43 +110,26 @@ class ModuleServer(BaseServer):
             raise RuntimeError(msg)
 
         redis_client = RedisClient(redis_url)
-        module_id = self.module_class.get_module_id()
-        dispatch_key = f"dispatch:{module_id}"
+
+        from digitalkin.core.task_manager.module_runner import ModuleRunner
+
+        module_runner = ModuleRunner(redis_client=redis_client, servicer=self.module_servicer)
 
         self._gateway_servicer = GatewayServicer(
             redis_client=redis_client,
             circuit_breaker=self._gateway_circuit_breaker,
-            dispatch_key=dispatch_key,
             cache_handler=self._handle_cache_invalidation,
-            # Used by `_dial_consumer` to dial back to consumer-side
-            # GatewayService.Stream when the client opts in via
-            # `x-client-address` metadata.
             client_config=self.client_config,
+            module_runner=module_runner,
         )
 
         self.register_servicer(
             self._gateway_servicer,
             gateway_service_pb2_grpc.add_GatewayServiceServicer_to_server,
-            # Pass DESCRIPTOR (not just names) so gateway_service_pb2 is
-            # registered into Default() pool — required for reflection
-            # describe of this service's symbols.
             service_descriptor=gateway_service_pb2.DESCRIPTOR,
         )
 
-        # TaskDispatcher reads from the same dispatch stream
-        from digitalkin.core.task_manager.task_dispatcher import TaskDispatcher
-
-        self._task_dispatcher = TaskDispatcher(
-            redis_client=redis_client,
-            servicer=self.module_servicer,
-            dispatch_key=dispatch_key,
-            # Registry lookup lets the dispatcher pull the first module
-            # input from session.input_queue (fed by the client's first
-            # StreamClient.data) instead of from the dispatch entry.
-            registry=self._gateway_servicer._registry,  # noqa: SLF001
-        )
-
-        logger.info("GatewayServicer + TaskDispatcher registered (Redis: %s, dispatch: %s)", redis_url, dispatch_key)
+        logger.info("GatewayServicer + ModuleRunner registered (Redis: %s)", redis_url)
 
     async def _handle_cache_invalidation(self, action: str) -> None:
         """Dispatch cache invalidation by action name. Isolated from module lifecycle.
@@ -284,9 +268,6 @@ class ModuleServer(BaseServer):
         if self._gateway_servicer is not None:
             await self._gateway_servicer.start()
 
-        if self._task_dispatcher is not None:
-            await self._task_dispatcher.start()
-
         if self.client_config is not None:
             await self._init_and_register()
 
@@ -326,12 +307,6 @@ class ModuleServer(BaseServer):
                 await self.registry.close()
             except Exception:
                 logger.exception("Failed to close registry")
-
-        if self._task_dispatcher is not None:
-            try:
-                await self._task_dispatcher.stop()
-            except Exception:
-                logger.exception("Failed to stop task dispatcher")
 
         if self._gateway_servicer is not None:
             try:

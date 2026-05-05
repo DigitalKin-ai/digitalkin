@@ -39,10 +39,17 @@ class GatewayQueueSettings(BaseSettings):
     dispatcher_input_wait_s: float = Field(
         default=60.0,
         description=(
-            "Max seconds the dispatcher waits for the consumer's first input "
-            "(via session.input_queue) before emitting INPUT_WAIT_TIMEOUT. "
-            "Must stay below the dial-back BiDi ceiling (300s) so the dispatcher "
-            "times out first with a meaningful error code."
+            "Retired in Phase 2.B (the dial-back is the orchestrator). "
+            "Kept for forward-compat / external readers. No effect."
+        ),
+    )
+    toolkit_cache_ttl_s: float = Field(
+        default=600.0,
+        description=(
+            "TTL for the per-setup tool cache "
+            "(``ModuleServicer._tool_cache_by_setup``). Entries older than "
+            "this are recomputed on next lookup. The INVALIDATE_TOOLS "
+            "SendSignal flushes the whole cache regardless of TTL."
         ),
     )
 

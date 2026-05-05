@@ -118,52 +118,10 @@ async def gateway_with_redis() -> AsyncIterator[tuple[Any, _FakeRedisClient]]:
 
 
 # ===========================================================================
-# Site 1: dispatch XADD failure → DISPATCH_UNAVAILABLE
+# Site 1: DISPATCH_UNAVAILABLE — retired in Phase 2.B (no dispatch:module
+# Redis stream; the dial-back is the sole orchestrator). Code preserved
+# in StreamErrorCode for forward-compat.
 # ===========================================================================
-
-
-@SKIP_NO_FAKEREDIS
-class TestDispatchUnavailable:
-    async def test_dispatch_xadd_failure_emits_dispatch_unavailable(self) -> None:
-        """Dispatch XADD failure → ``stream.error(code=DISPATCH_UNAVAILABLE)``."""
-        from digitalkin.grpc_servers.gateway_servicer import GatewayServicer
-        from digitalkin.models.grpc_servers.models import ClientConfig
-        from digitalkin.models.settings.utils.channel import SecurityMode
-
-        real_redis = _FakeRedisClient()
-        try:
-            cfg = ClientConfig(host="127.0.0.1", port=1, security=SecurityMode.INSECURE)
-            servicer = GatewayServicer(
-                redis_client=real_redis,  # type: ignore[arg-type]
-                max_streams=100,
-                client_config=cfg,
-            )
-            session = MagicMock()
-            session.task_id = "task_dispatch_fail"
-            request = _start_request("task_dispatch_fail")
-
-            # Patch xadd to fail only on the dispatch key, succeed on the
-            # task stream so the error sentinel + EOS land normally.
-            real_xadd = real_redis.xadd
-            calls: list[str] = []
-
-            async def patched_xadd(name: str, fields: dict, **kw: Any) -> Any:
-                calls.append(name)
-                if name == "dispatch:module":
-                    msg = "simulated dispatch outage"
-                    raise RedisError(msg)
-                return await real_xadd(name, fields, **kw)
-
-            real_redis.xadd = patched_xadd  # type: ignore[assignment, method-assign]
-
-            await servicer._start_module(session, request)
-            real_redis.xadd = real_xadd  # type: ignore[method-assign]
-
-            error = await _wait_for_error(real_redis, "task_dispatch_fail", timeout=2.0)
-            assert error["code"] == StreamErrorCode.DISPATCH_UNAVAILABLE.value
-            assert "RedisError" in error["message"]
-        finally:
-            await real_redis.close()
 
 
 # ===========================================================================
@@ -241,92 +199,51 @@ class TestDialBackNoQuery:
 
 
 # ===========================================================================
-# Site 6: dispatcher input wait timeout → INPUT_WAIT_TIMEOUT
+# Site 6: INPUT_WAIT_TIMEOUT — retired in Phase 2.B (no dispatcher to time
+# out on; the dial-back's DIAL_BACK_NO_QUERY covers consumer-never-replies).
+# Code preserved in StreamErrorCode for forward-compat.
 # ===========================================================================
 
 
-@SKIP_NO_FAKEREDIS
-class TestInputWaitTimeout:
-    async def test_dispatcher_timeout_emits_input_wait_timeout(self) -> None:
-        from digitalkin.core.task_manager.task_dispatcher import TaskDispatcher
-        from digitalkin.grpc_servers.stream_session import StreamSession
-
-        redis = _FakeRedisClient()
-        try:
-            registry = MagicMock()
-            session = StreamSession(task_id="task_input_to")
-            registry.get = MagicMock(return_value=session)
-
-            dispatcher = TaskDispatcher(
-                redis_client=redis,  # type: ignore[arg-type]
-                servicer=MagicMock(),
-                dispatch_key="dispatch:module",
-                registry=registry,
-                input_wait_timeout_s=0.05,
-            )
-
-            await dispatcher._handle_dispatch({
-                b"task_id": b"task_input_to",
-                b"setup_id": b"setups:s1",
-                b"mission_id": b"missions:m1",
-                b"ts_ns": b"0",
-            })
-
-            entries = await _read_all_stream_entries(redis, "task_input_to")
-            error_entries = [e for e in entries if e.get("protocol") == "stream.error"]
-            assert len(error_entries) == 1
-            assert error_entries[0]["code"] == StreamErrorCode.INPUT_WAIT_TIMEOUT.value
-            assert "no upstream input" in error_entries[0]["message"]
-
-            # EOS marker present after the error.
-            eos = [e for e in entries if e.get("protocol") == "_eos"]
-            assert len(eos) == 1
-        finally:
-            await redis.close()
-
-
 # ===========================================================================
-# Site 7: module job exception → MODULE_RUNTIME_ERROR
+# Site 7: module job exception → MODULE_RUNTIME_ERROR (now via ModuleRunner)
 # ===========================================================================
 
 
 @SKIP_NO_FAKEREDIS
 class TestModuleRuntimeError:
     async def test_module_exception_emits_runtime_error(self) -> None:
-        from digitalkin.core.task_manager.task_dispatcher import TaskDispatcher
-        from digitalkin.grpc_servers.stream_session import StreamSession
+        from digitalkin.core.task_manager.module_runner import ModuleRunner
 
         redis = _FakeRedisClient()
         try:
-            registry = MagicMock()
-            session = StreamSession(task_id="task_runtime")
-            await session.enqueue_input({"_proto": struct_pb2.Struct()})
-            registry.get = MagicMock(return_value=session)
-
             servicer = MagicMock()
+            # _resolve_setup is awaited via asyncio.create_task; use AsyncMock so
+            # the task scheduler gets a real coroutine. The synchronous
+            # create_input_model raises first and cancels the resolve.
+            servicer._resolve_setup = AsyncMock(return_value=MagicMock())
             servicer.module_class.create_input_model = MagicMock(side_effect=ValueError("bad input"))
 
-            dispatcher = TaskDispatcher(
-                redis_client=redis,  # type: ignore[arg-type]
-                servicer=servicer,
-                dispatch_key="dispatch:module",
-                registry=registry,
-                input_wait_timeout_s=1.0,
+            runner = ModuleRunner(redis_client=redis, servicer=servicer)  # type: ignore[arg-type]
+
+            received: list[tuple[str, str]] = []
+
+            async def _on_fatal(code: str, message: str) -> None:
+                received.append((code, message))
+
+            await runner.run(
+                struct_pb2.Struct(),
+                task_id="task_runtime",
+                setup_id="setups:s1",
+                mission_id="missions:m1",
+                on_fatal=_on_fatal,
             )
 
-            await dispatcher._handle_dispatch({
-                b"task_id": b"task_runtime",
-                b"setup_id": b"setups:s1",
-                b"mission_id": b"missions:m1",
-                b"ts_ns": b"0",
-            })
-
-            entries = await _read_all_stream_entries(redis, "task_runtime")
-            error_entries = [e for e in entries if e.get("protocol") == "stream.error"]
-            assert len(error_entries) == 1
-            assert error_entries[0]["code"] == StreamErrorCode.MODULE_RUNTIME_ERROR.value
-            assert "ValueError" in error_entries[0]["message"]
-            assert "bad input" in error_entries[0]["message"]
+            assert len(received) == 1
+            code, message = received[0]
+            assert code == StreamErrorCode.MODULE_RUNTIME_ERROR.value
+            assert "ValueError" in message
+            assert "bad input" in message
         finally:
             await redis.close()
 

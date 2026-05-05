@@ -35,9 +35,13 @@ from digitalkin.logger import logger
 from digitalkin.models.settings.consumer import ConsumerSettings
 from digitalkin.models.settings.server.grpc import GrpcServerSettings
 
-# Singleton — read env vars once at import. Field defaults below pull
-# from this so any caller building ConsumerConfig() picks up env overrides.
+# Singletons — read env vars once at import. Field defaults below pull
+# from `_CONSUMER_DEFAULTS` so any caller building `ConsumerConfig()`
+# picks up env overrides; `_GRPC_SERVER_OPTIONS` is reused by every
+# `GatewayConsumer` instance so we don't re-instantiate the settings
+# on every consumer build (L5).
 _CONSUMER_DEFAULTS = ConsumerSettings()
+_GRPC_SERVER_OPTIONS = GrpcServerSettings().options
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterator
@@ -179,7 +183,7 @@ class GatewayConsumer:
         self._stub: gateway_service_pb2_grpc.GatewayServiceStub | None = None
         self._server: grpc.aio.Server | None = host_server
         self._registry: dict[str, _TaskHandle] = {}
-        self._grpc_options = GrpcServerSettings().options
+        self._grpc_options = _GRPC_SERVER_OPTIONS
 
     @classmethod
     def standalone(cls, config: ConsumerConfig) -> GatewayConsumer:

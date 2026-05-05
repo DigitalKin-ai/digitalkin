@@ -25,7 +25,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
-import time
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
@@ -53,6 +52,7 @@ from digitalkin.services.communication.grpc_communication import (
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterator
 
+    from digitalkin.core.task_manager.module_runner import ModuleRunner
     from digitalkin.core.task_manager.redis.redis_client import RedisClient
     from digitalkin.grpc_servers.utils.circuit_breaker import CircuitBreaker
 
@@ -67,7 +67,6 @@ class GatewayServicer:
     _registry: StreamRegistry
     _redis_client: RedisClient
     _circuit_breaker: CircuitBreaker | None
-    _dispatch_key: str
 
     @staticmethod
     def _sentinel(seq: int, task_id: str, protocol: str, **fields: Any) -> Any:
@@ -117,27 +116,30 @@ class GatewayServicer:
         redis_client: RedisClient,
         max_streams: int = MAX_STREAMS,
         circuit_breaker: CircuitBreaker | None = None,
-        dispatch_key: str = "dispatch:module",
         cache_handler: Any = None,
         client_config: Any = None,
+        module_runner: ModuleRunner | None = None,
     ) -> None:
         """Initialize the gateway servicer.
 
         Args:
-            redis_client: Redis for stream persistence, dispatch, and signals.
+            redis_client: Redis for stream persistence and signals.
             max_streams: Maximum concurrent sessions (cluster-wide with Redis).
             circuit_breaker: Optional circuit breaker for recording success/failure.
-            dispatch_key: Redis Stream key for task dispatch to the module.
             cache_handler: Async callback for cache invalidation signals (from ModuleServer).
             client_config: ClientConfig for outbound dial-back to consumers
-                (used by the ``_dial_consumer`` callback flow).
+                (used by ``_dial_consumer``).
+            module_runner: Orchestrator invoked by ``_dial_consumer`` after the
+                consumer's first reply lands. Required in embedded mode; the
+                dial-back is the sole entry point for module execution and
+                cannot proceed without it.
         """
         self._registry = StreamRegistry(redis_client, max_streams=max_streams)
         self._circuit_breaker = circuit_breaker
         self._redis_client = redis_client
-        self._dispatch_key = dispatch_key
         self._cache_handler = cache_handler
         self._client_config = client_config
+        self._module_runner = module_runner
 
     async def start(self) -> None:
         """Start the registry reaper."""
@@ -233,15 +235,11 @@ class GatewayServicer:
         )
         timer.mark("xadd_stream_start")
 
-        # Start module in background
-        session._forward_task = asyncio.create_task(  # noqa: SLF001
-            self._start_module(session, request),
-            name=f"start_module_{task_id}",
-        )
-        timer.mark("schedule_start_module")
-
         # Server-initiated dial-back to consumer (mandatory; address
-        # validated at the top of this method).
+        # validated at the top of this method). The dial-back IS the
+        # dispatcher: it opens the BiDi, receives the consumer's first
+        # reply (the query), and runs the module via ``ModuleRunner.run``.
+        # No second background task — there is no separate dispatch flow.
         logger.info("→ Dial-back scheduled to consumer %s", client_address, extra=log_extra)
         # F1.7 (deferred): track this task in a servicer-level set with
         # add_done_callback so it survives strong-reference GC and
@@ -328,47 +326,6 @@ class GatewayServicer:
                 code,
                 message,
                 extra=log_extra,
-            )
-
-    async def _start_module(self, session: StreamSession, request: Any) -> None:
-        """Dispatch module execution via Redis.
-
-        XADDs task spec to the dispatch stream. The TaskDispatcher picks
-        it up, runs the module, and writes output to the proto stream.
-        Gateway reads output via ProtoStreamReader in Stream.
-
-        Module input arrives via upstream ``StreamClient.data`` messages
-        (handled by ``_read_consumer_upstream``), not from the dispatch entry.
-
-        Args:
-            session: The stream session.
-            request: The StartStreamRequest.
-        """
-        log_extra = {
-            "task_id": session.task_id,
-            "setup_id": request.setup_id,
-            "mission_id": request.mission_id,
-        }
-        try:
-            await self._redis_client.xadd(
-                self._dispatch_key,
-                {
-                    "task_id": session.task_id,
-                    "ts_ns": str(time.perf_counter_ns()),
-                    "setup_id": request.setup_id,
-                    "mission_id": request.mission_id,
-                },
-            )
-            self._cb_success()
-            logger.debug("Task dispatched to Redis", extra=log_extra)
-        except RedisError as exc:
-            self._cb_failure()
-            logger.exception("Task dispatch XADD failed", extra=log_extra)
-            await self._emit_fatal_to_redis(
-                session.task_id,
-                code=StreamErrorCode.DISPATCH_UNAVAILABLE.value,
-                message=f"failed to dispatch task: {type(exc).__name__}",
-                log_extra=log_extra,
             )
 
     async def Stream(  # noqa: C901, PLR0912
@@ -704,6 +661,9 @@ class GatewayServicer:
                     data=srv_msg.data,
                 )
 
+        async def _runner_fatal(code: str, message: str) -> None:
+            await self._emit_fatal_to_redis(task_id, code=code, message=message, log_extra=log_extra)
+
         try:
             logger.info(
                 "→ Opening BiDi to consumer %s (sending stream.init)",
@@ -715,14 +675,36 @@ class GatewayServicer:
             async for upstream in responses:
                 if not (upstream.data and len(upstream.data.fields) > 0):
                     continue
-                await session.enqueue_input({"_proto": upstream.data})
                 if first:
                     logger.info(
-                        "← First consumer reply received — query enqueued, output drain unblocked",
+                        "← First consumer reply received — starting module runner",
                         extra=log_extra,
+                    )
+                    if self._module_runner is None:
+                        await self._emit_fatal_to_redis(
+                            task_id,
+                            code=StreamErrorCode.DIAL_BACK_INTERNAL.value,
+                            message="gateway has no ModuleRunner configured",
+                            log_extra=log_extra,
+                        )
+                        output_started.set()
+                        return
+                    asyncio.create_task(  # noqa: RUF006 — runner runs to completion in background; tracked via stream.end EOS
+                        self._module_runner.run(
+                            upstream.data,
+                            task_id=task_id,
+                            setup_id=setup_id,
+                            mission_id=mission_id,
+                            on_fatal=_runner_fatal,
+                        ),
+                        name=f"module_runner_{task_id}",
                     )
                     output_started.set()
                     first = False
+                    continue
+                # Follow-up multi-turn input: enqueue for any module that
+                # consumes session.input_queue mid-run.
+                await session.enqueue_input({"_proto": upstream.data})
         except grpc.aio.AioRpcError as exc:
             code_name = exc.code().name
             details = exc.details() or ""

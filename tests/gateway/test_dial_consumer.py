@@ -175,6 +175,27 @@ async def fake_consumer_server() -> AsyncIterator[tuple[_FakeConsumerServicer, s
 # ---------------------------------------------------------------------------
 
 
+class _FakeModuleRunner:
+    """Records ModuleRunner.run invocations; never blocks."""
+
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    async def run(
+        self,
+        query: Any,
+        *,
+        task_id: str,
+        setup_id: str,
+        mission_id: str,
+        on_fatal: Any,  # noqa: ARG002
+    ) -> None:
+        self.calls.append({
+            "query": query, "task_id": task_id,
+            "setup_id": setup_id, "mission_id": mission_id,
+        })
+
+
 @pytest.fixture
 async def gateway() -> AsyncIterator[Any]:
     from digitalkin.grpc_servers.gateway_servicer import GatewayServicer
@@ -183,11 +204,14 @@ async def gateway() -> AsyncIterator[Any]:
 
     redis = _FakeRedisClient()
     cfg = ClientConfig(host="127.0.0.1", port=1, security=SecurityMode.INSECURE)
+    runner = _FakeModuleRunner()
     servicer = GatewayServicer(
         redis_client=redis,  # type: ignore[arg-type]
         max_streams=100,
         client_config=cfg,
+        module_runner=runner,  # type: ignore[arg-type]
     )
+    servicer._fake_runner = runner  # type: ignore[attr-defined]  # for tests to introspect
     try:
         yield servicer
     finally:
@@ -271,8 +295,8 @@ class TestDialConsumer:
         finally:
             await server.stop(grace=0.1)
 
-    async def test_query_lands_on_input_queue(self, gateway) -> None:
-        """The consumer's first StreamServer reply (the query) is enqueued."""
+    async def test_first_reply_invokes_module_runner(self, gateway) -> None:
+        """The consumer's first StreamServer reply (the query) is handed to ModuleRunner.run."""
         servicer = _FakeConsumerServicer(
             query_data={"protocol": "agui_stream", "user_prompt": "hello"},
         )
@@ -281,29 +305,25 @@ class TestDialConsumer:
         port = server.add_insecure_port("127.0.0.1:0")
         await server.start()
         try:
-            task_id = "task_query"
+            task_id = "task_runner"
             ctx = _mock_context({"x-client-address": f"127.0.0.1:{port}"})
             await gateway.StartStream(_start_request(task_id), ctx)
 
-            # Wait briefly for StartStream's session register + dial-back.
-            session = None
+            runner = gateway._fake_runner
             for _ in range(50):
-                session = gateway._registry.get(task_id)
-                if session is not None and not session.input_queue.empty():
+                if runner.calls:
                     break
                 await asyncio.sleep(0.05)
 
-            assert session is not None
-            assert session.input_queue.qsize() >= 1
-            item = session.input_queue.get_nowait()
-            assert "_proto" in item
-            payload = item["_proto"]
-            assert payload.fields["user_prompt"].string_value == "hello"
+            assert len(runner.calls) >= 1
+            call = runner.calls[0]
+            assert call["task_id"] == task_id
+            assert call["query"].fields["user_prompt"].string_value == "hello"
         finally:
             await server.stop(grace=0.1)
 
     async def test_multi_turn_upstream(self, gateway) -> None:
-        """Multiple consumer-side StreamServer replies all land on input_queue."""
+        """First reply → ModuleRunner; subsequent replies → session.input_queue."""
         servicer = _FakeConsumerServicer(
             query_data={"q": "first"},
             extra_upstream=[{"q": "second"}, {"q": "third"}],
@@ -320,17 +340,21 @@ class TestDialConsumer:
             session = None
             for _ in range(80):
                 session = gateway._registry.get(task_id)
-                if session is not None and session.input_queue.qsize() >= 3:
+                if session is not None and session.input_queue.qsize() >= 2:
                     break
                 await asyncio.sleep(0.05)
 
             assert session is not None
-            assert session.input_queue.qsize() >= 3
+            # First reply went to ModuleRunner, not the queue.
+            runner = gateway._fake_runner
+            assert len(runner.calls) == 1
+            assert runner.calls[0]["query"].fields["q"].string_value == "first"
+            # Follow-up replies went to the queue.
             payloads = []
             while not session.input_queue.empty():
                 item = session.input_queue.get_nowait()
                 payloads.append(item["_proto"].fields["q"].string_value)
-            assert payloads == ["first", "second", "third"]
+            assert payloads == ["second", "third"]
         finally:
             await server.stop(grace=0.1)
 

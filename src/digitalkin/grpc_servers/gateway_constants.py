@@ -64,7 +64,8 @@ BACKPRESSURE_TIMEOUT_S = _gw.backpressure.backpressure_timeout_s
 DEFAULT_OUTPUT_QUEUE_SIZE = _gw.queue.output_queue_size
 DEFAULT_INPUT_QUEUE_SIZE = _gw.queue.input_queue_size
 ENQUEUE_TIMEOUT_S = _gw.queue.enqueue_timeout_s
-INPUT_WAIT_TIMEOUT_S = _gw.queue.dispatcher_input_wait_s
+INPUT_WAIT_TIMEOUT_S = _gw.queue.dispatcher_input_wait_s  # retired in 2.B; see GatewayQueueSettings
+TOOLKIT_CACHE_TTL_S = _gw.queue.toolkit_cache_ttl_s
 REDIS_HEALTH_CHECK_TIMEOUT_S = _gw.redis_health_timeout
 
 # ══════════════════════════════════════════════════════════════════

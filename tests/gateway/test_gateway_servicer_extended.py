@@ -188,40 +188,9 @@ class TestStreamLateConsumer:
 
 
 # ===========================================================================
-# _start_module — EOS always written
+# _start_module — REMOVED in Phase 2.B (the dial-back orchestrates;
+# there is no separate dispatch stream).
 # ===========================================================================
-
-
-@SKIP_NO_FAKEREDIS
-class TestStartModuleDispatch:
-    """_start_module dispatches via Redis XADD."""
-
-    @pytest.fixture
-    async def redis(self) -> Any:
-        c = _FakeRedisClient()
-        yield c
-        await c.close()
-
-    async def test_dispatches_task_to_redis(self, redis: Any) -> None:
-        """_start_module XADDs task spec to dispatch stream (no pb/input field)."""
-        servicer = _mock_servicer(redis_client=redis)
-
-        from digitalkin.grpc_servers.stream_session import StreamSession
-
-        session = StreamSession(task_id="task_dispatch_1")
-        await servicer._registry.register(session)
-
-        request = MagicMock()
-        request.setup_id = "setups:s1"
-        request.mission_id = "missions:m1"
-
-        await servicer._start_module(session, request)
-
-        # Verify dispatch was written to Redis (no pb/input — module input
-        # arrives via upstream Stream messages, not via dispatch entry).
-        stream_len = await redis.xlen(servicer._dispatch_key)
-        assert stream_len == 1
-
 
 
 # ===========================================================================

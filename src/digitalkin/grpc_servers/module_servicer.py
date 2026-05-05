@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+import time
 from argparse import ArgumentParser, Namespace
 from collections.abc import AsyncGenerator
 from typing import Any, cast
@@ -18,6 +19,7 @@ from pydantic import ValidationError
 
 from digitalkin.core.job_manager.base_job_manager import BaseJobManager
 from digitalkin.core.job_manager.single_job_manager import SingleJobManager
+from digitalkin.grpc_servers.gateway_constants import TOOLKIT_CACHE_TTL_S
 from digitalkin.grpc_servers.utils.exceptions import ServerError, ServicerError
 from digitalkin.logger import logger
 from digitalkin.models.module.module import ModuleCodeModel, ModuleStatus
@@ -46,7 +48,11 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
     setup: SetupStrategy
     job_manager: BaseJobManager
     _registry_cache: RegistryStrategy | None
-    _tool_cache_by_setup: dict[str, Any]
+    # Maps setup_id -> (tool_cache, expires_at_perf_counter_ns).
+    # TTL'd so a slow-changing tool definition still gets refreshed
+    # without a SendSignal/INVALIDATE_TOOLS in the loop. The signal
+    # path (`invalidate_tool_cache`) bypasses TTL with a full clear.
+    _tool_cache_by_setup: dict[str, tuple[Any, float]]
     _communication_cache: Any
 
     def _add_parser_args(self, parser: ArgumentParser) -> None:
@@ -122,6 +128,37 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
     def invalidate_tool_cache(self) -> None:
         """Clear tool cache. Next request re-resolves tool definitions."""
         self._tool_cache_by_setup.clear()
+
+    def get_tool_cache(self, setup_id: str) -> Any | None:
+        """TTL'd lookup. Returns None if missing or expired (the caller
+        is expected to recompute and call ``set_tool_cache``).
+
+        Args:
+            setup_id: Setup identifier.
+
+        Returns:
+            Cached tool definition object, or None on miss/expiry.
+        """
+        entry = self._tool_cache_by_setup.get(setup_id)
+        if entry is None:
+            return None
+        value, expires_at = entry
+        if time.monotonic() >= expires_at:
+            self._tool_cache_by_setup.pop(setup_id, None)
+            return None
+        return value
+
+    def set_tool_cache(self, setup_id: str, value: Any) -> None:
+        """Insert ``value`` with TTL ``TOOLKIT_CACHE_TTL_S``.
+
+        Args:
+            setup_id: Setup identifier.
+            value: Tool definition object to cache.
+        """
+        if len(self._tool_cache_by_setup) >= self._setup_cache_max:
+            oldest_key = next(iter(self._tool_cache_by_setup))
+            del self._tool_cache_by_setup[oldest_key]
+        self._tool_cache_by_setup[setup_id] = (value, time.monotonic() + TOOLKIT_CACHE_TTL_S)
 
     def _get_registry(self) -> RegistryStrategy | None:
         """Get a cached registry instance if configured.
@@ -516,14 +553,11 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             str(k): str(v) for k, v in cast("list[tuple[str, str]]", context.invocation_metadata() or ())
         }
 
-        # Resolve tool cache (shared across requests with same setup_id)
-        tool_cache = self._tool_cache_by_setup.get(setup_version.setup_id)
+        # Resolve tool cache (shared across requests with same setup_id, TTL'd)
+        tool_cache = self.get_tool_cache(setup_version.setup_id)
         if tool_cache is None and isinstance(setup_data, SetupModel):
             tool_cache = await setup_data.build_tool_cache(self._get_registry(), self._get_communication())
-            if len(self._tool_cache_by_setup) >= self._setup_cache_max:
-                oldest_key = next(iter(self._tool_cache_by_setup))
-                del self._tool_cache_by_setup[oldest_key]
-            self._tool_cache_by_setup[setup_version.setup_id] = tool_cache
+            self.set_tool_cache(setup_version.setup_id, tool_cache)
 
         # create a task to run the module in background
         logger.debug(
