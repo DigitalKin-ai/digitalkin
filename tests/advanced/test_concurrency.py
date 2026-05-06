@@ -192,13 +192,8 @@ class TestStreamRegistryConcurrency:
         from digitalkin.grpc_servers.stream_session import StreamSession
 
         redis = MagicMock()
-        redis.eval = AsyncMock(side_effect=[1] * 10 + [0])
-        pipe = MagicMock()
-        pipe.decr = MagicMock(return_value=pipe)
-        pipe.zrem = MagicMock(return_value=pipe)
-        pipe.delete = MagicMock(return_value=pipe)
-        pipe.execute = AsyncMock(return_value=[])
-        redis.pipeline = MagicMock(return_value=pipe)
+        redis.eval = AsyncMock(return_value=1)
+        redis.delete = AsyncMock()
 
         registry = StreamRegistry(redis, max_streams=10)
 
@@ -218,12 +213,7 @@ class TestStreamRegistryConcurrency:
 
         redis = MagicMock()
         redis.eval = AsyncMock(return_value=1)
-        pipe = MagicMock()
-        pipe.decr = MagicMock(return_value=pipe)
-        pipe.zrem = MagicMock(return_value=pipe)
-        pipe.delete = MagicMock(return_value=pipe)
-        pipe.execute = AsyncMock(return_value=[])
-        redis.pipeline = MagicMock(return_value=pipe)
+        redis.delete = AsyncMock()
 
         registry = StreamRegistry(redis, max_streams=100)
 

@@ -78,10 +78,10 @@ class _FakeClient:
 
 
 class TestTaskSessionStatusWiring:
-    """TaskSession.status property fires RedisStateManager write."""
+    """TaskSession.set_status awaits the RedisStateManager write."""
 
-    async def test_status_setter_calls_state_manager(self) -> None:
-        """Setting session.status triggers a Redis write task."""
+    async def test_set_status_awaits_state_manager(self) -> None:
+        """Calling set_status() triggers a Redis write inline (no task spawn)."""
         from digitalkin.services.task_manager.task_manager_strategy import TaskManagerStrategy
 
         state_mgr = MagicMock()
@@ -101,15 +101,13 @@ class TestTaskSessionStatusWiring:
 
         session = TaskSession("t1", "missions:m1", module, state_manager=state_mgr)
 
-        session.status = "running"
-
-        # Give fire-and-forget task time to execute
-        await asyncio.sleep(0.05)
+        await session.set_status("running")
 
         state_mgr.set_status.assert_awaited_with("t1", "running")
+        assert session.status == "running"
 
-    async def test_status_setter_without_state_manager(self) -> None:
-        """Setting status without state_manager works (in-memory only)."""
+    async def test_set_status_without_state_manager(self) -> None:
+        """Calling set_status() without state_manager works (in-memory only)."""
         from digitalkin.services.task_manager.task_manager_strategy import TaskManagerStrategy
 
         module = Mock()
@@ -124,7 +122,7 @@ class TestTaskSessionStatusWiring:
 
         session = TaskSession("t2", "missions:m1", module)
 
-        session.status = "running"
+        await session.set_status("running")
         assert session.status == "running"
 
 

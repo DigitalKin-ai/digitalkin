@@ -15,6 +15,7 @@ import json
 import os
 from typing import TYPE_CHECKING, Any
 
+from digitalkin.core.resilience.task_supervisor import log_unhandled
 from digitalkin.core.task_manager.redis.redis_client import RedisClient  # noqa: TC001
 from digitalkin.logger import logger
 
@@ -169,6 +170,7 @@ class RedisStreamBatchWriter:
                 self._flush_after_interval(),
                 name=f"stream_batch_flush_{self._task_id}",
             )
+            self._flush_task.add_done_callback(log_unhandled)
         return self._seq
 
     async def _flush_after_interval(self) -> None:

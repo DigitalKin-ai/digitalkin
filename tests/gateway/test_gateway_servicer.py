@@ -162,16 +162,22 @@ class TestStartStream:
         assert servicer._registry.get("task_registered") is not None
 
     async def test_capacity_exceeded_returns_not_accepted(self) -> None:
-        """When max_streams is exceeded, StartStream returns accepted=False."""
+        """When max_streams is exceeded, StartStream returns accepted=False.
+
+        Capacity is now enforced process-locally via _local_cache; pre-fill it
+        to the max_streams limit so the next register() returns False.
+        """
         try:
             from agentic_mesh_protocol.gateway.v1 import gateway_pb2  # noqa: F401
         except ImportError:
             pytest.skip("Gateway proto not installed")
 
-        mock_redis = MagicMock()
-        mock_redis.eval = AsyncMock(return_value=0)  # Lua returns 0 = at capacity
-        mock_redis.xlen = AsyncMock(return_value=0)
-        servicer = _mock_servicer(redis_client=mock_redis)
+        from digitalkin.grpc_servers.stream_session import StreamSession
+
+        servicer = _mock_servicer()
+        # Fill the registry to its max_streams capacity.
+        for i in range(servicer._registry._max_streams):
+            await servicer._registry.register(StreamSession(task_id=f"prefill_{i}"))
 
         request = MagicMock()
         request.task_id = "task_overflow"

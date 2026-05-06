@@ -62,15 +62,20 @@ class LocalTaskManager(BaseTaskManager):
                 },
             )
 
-            # Execute task using TaskExecutor
+            # Execute task using TaskExecutor; cleanup runs inside the
+            # supervisor's `finally` (folded from former _deferred_cleanup).
+            async def _finalize() -> None:
+                await self._cleanup_task(task_id, mission_id=mission_id)
+
             supervisor_task = await self._executor.execute_task(
                 task_id,
                 mission_id,
                 coro,
                 session,
+                on_finalize=_finalize,
+                stream_drain_timeout=self._stream_drain_timeout,
             )
             self.tasks[task_id] = supervisor_task
-            self._register_auto_cleanup(task_id, mission_id)
 
             logger.info(
                 "Local task created and started: '%s'",

@@ -21,14 +21,7 @@ def _mock_redis() -> MagicMock:
     """Build a MagicMock RedisClient with the methods StreamRegistry uses."""
     mock = MagicMock()
     mock.eval = AsyncMock(return_value=1)
-    mock.zadd = AsyncMock()
-    mock.zrangebyscore = AsyncMock(return_value=[])
-    pipe = MagicMock()
-    pipe.decr = MagicMock(return_value=pipe)
-    pipe.zrem = MagicMock(return_value=pipe)
-    pipe.delete = MagicMock(return_value=pipe)
-    pipe.execute = AsyncMock(return_value=[])
-    mock.pipeline = MagicMock(return_value=pipe)
+    mock.delete = AsyncMock()
     return mock
 
 
@@ -42,9 +35,9 @@ class TestRegistryCapacity:
         assert reg.active_count == 5
 
     async def test_register_over_capacity_returns_false(self) -> None:
-        redis = _mock_redis()
-        redis.eval = AsyncMock(side_effect=[1, 1, 0])
-        reg = StreamRegistry(redis, max_streams=2)
+        # Capacity is now enforced process-locally from len(_local_cache)
+        # against max_streams — no Redis Lua call.
+        reg = StreamRegistry(_mock_redis(), max_streams=2)
         assert await reg.register(StreamSession(task_id="t_0")) is True
         assert await reg.register(StreamSession(task_id="t_1")) is True
         assert await reg.register(StreamSession(task_id="t_overflow")) is False
@@ -107,15 +100,6 @@ class TestRegistryShutdown:
 
         await reg.shutdown()
         assert reg.active_count == 0
-
-    async def test_shutdown_cancels_reaper(self) -> None:
-        """Reaper starts with mock Redis — shutdown cancels it cleanly."""
-        reg = StreamRegistry(_mock_redis(), max_streams=10, reaper_interval=0.05)
-        await reg.start_reaper()
-        assert reg._reaper_task is not None
-
-        await reg.shutdown()
-        assert reg._reaper_task.done()
 
 
 class TestRegistryTaskMonitoring:
@@ -212,3 +196,48 @@ class TestRegistryTaskMonitoring:
         assert task.done()
         assert task.cancelled()
         assert task not in reg._monitored_tasks
+
+    async def test_dial_done_callback_reaps_local_zombie(self) -> None:
+        """A dial_consumer task that finishes without unregistering is reaped."""
+        reg = StreamRegistry(_mock_redis(), max_streams=10)
+        task_id = "zombie_task"
+        session = StreamSession(task_id=task_id)
+        await reg.register(session)
+        assert reg.get(task_id) is session
+
+        async def _dial_finishes_without_unregister() -> None:
+            return None
+
+        dial_task = asyncio.create_task(
+            _dial_finishes_without_unregister(),
+            name=f"dial_consumer_{task_id}",
+        )
+        reg.monitor_task(dial_task)
+        await dial_task
+
+        # Done-callback schedules _reap_local. Yield to let it run.
+        for _ in range(20):
+            if reg.get(task_id) is None:
+                break
+            await asyncio.sleep(0.01)
+        assert reg.get(task_id) is None, "local zombie was not reaped"
+
+    async def test_dial_done_callback_skips_when_finally_unregistered(self) -> None:
+        """If the dial-back's finally already unregistered, the callback is a no-op."""
+        reg = StreamRegistry(_mock_redis(), max_streams=10)
+        task_id = "clean_task"
+        session = StreamSession(task_id=task_id)
+        await reg.register(session)
+
+        async def _dial_with_unregister() -> None:
+            await reg.unregister(task_id)
+
+        dial_task = asyncio.create_task(
+            _dial_with_unregister(),
+            name=f"dial_consumer_{task_id}",
+        )
+        reg.monitor_task(dial_task)
+        await dial_task
+        await asyncio.sleep(0.01)
+        # _reap_local should have been a no-op (session already gone).
+        assert reg.get(task_id) is None

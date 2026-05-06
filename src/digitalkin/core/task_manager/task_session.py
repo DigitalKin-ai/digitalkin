@@ -1,9 +1,10 @@
 """Task session easing task lifecycle management.
 
-Status transitions are intercepted by an optional ``RedisStateManager``:
-when set, every ``session.status = "..."`` assignment writes to Redis
-before updating in-memory state (P1 invariant). The TaskExecutor code
-is untouched — persistence is transparent via the property setter.
+Status transitions are persisted via ``await session.set_status(value)``.
+When a ``RedisStateManager`` is configured the awaited call writes to
+Redis before returning; with no manager the call updates only in-memory
+state. The async API replaces the previous sync property setter that
+spawned a fire-and-forget task per status change.
 """
 
 from __future__ import annotations
@@ -118,9 +119,6 @@ class TaskSession:
         # Signal listener failure tracking
         self._signal_listener_failed = False
 
-        # Tracked fire-and-forget Redis tasks (prevents GC before completion)
-        self._pending_redis_tasks: set[asyncio.Task[None]] = set()
-
         logger.debug(
             "TaskSession initialized",
             extra={"task_id": task_id, "mission_id": mission_id},
@@ -128,31 +126,32 @@ class TaskSession:
 
     @property
     def status(self) -> str:
-        """Current task status. Setting triggers optional Redis persistence."""
+        """Current task status. Use ``set_status()`` to update."""
         return self._status
 
-    @status.setter
-    def status(self, value: str) -> None:
+    async def set_status(self, value: str) -> None:
         """Set status, persisting to Redis if state_manager is configured.
 
-        P1 invariant: Redis write is scheduled before memory update returns.
-        The task is tracked in ``_pending_redis_tasks`` to prevent GC.
-        If Redis is unreachable, the write fails silently (degraded mode)
-        but the in-memory status is still updated to keep the task running.
+        Async to avoid the sync-setter-spawning-task pattern: callers
+        ``await`` directly so a Redis hiccup is observable, no fire-and-
+        forget tasks accumulate, and the in-memory state matches what's
+        in Redis once the call returns.
+
+        Args:
+            value: New status (e.g., "running", "completed", "cancelled").
         """
         self._status = value
-        if self._state_manager is not None:
-            try:
-                loop = asyncio.get_running_loop()
-                task = loop.create_task(
-                    self._state_manager.set_status(self.task_id, value),
-                    name=f"redis_status_{self.task_id}_{value}",
-                )
-                # Track to prevent GC — removed on completion via callback
-                self._pending_redis_tasks.add(task)
-                task.add_done_callback(self._pending_redis_tasks.discard)
-            except RuntimeError:
-                logger.debug("No running event loop for Redis status write: task_id=%s status=%s", self.task_id, value)
+        if self._state_manager is None:
+            return
+        try:
+            await self._state_manager.set_status(self.task_id, value)
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "Redis status write failed: task_id=%s status=%s",
+                self.task_id,
+                value,
+                exc_info=True,
+            )
 
     @property
     def cancelled(self) -> bool:
@@ -246,7 +245,7 @@ class TaskSession:
             return
 
         self.cancellation_reason = reason
-        self.status = "cancelled"
+        await self.set_status("cancelled")
         self.is_cancelled.set()
 
         # Log with appropriate level based on reason
@@ -285,7 +284,7 @@ class TaskSession:
             return
 
         self.cancellation_reason = CancellationReason.SIGNAL_SERVICE_STOP
-        self.status = "cancelled"
+        await self.set_status("cancelled")
         self.is_cancelled.set()
         logger.info("Task stop requested via signal", extra=self.session_ids)
 
@@ -324,15 +323,8 @@ class TaskSession:
             return
         self._cleanup_done = True
 
-        # Give pending Redis writes a grace period before cancelling
-        pending = [t for t in self._pending_redis_tasks if not t.done()]
-        if pending:
-            await asyncio.wait(pending, timeout=2.0)
-        # Cancel any stragglers
-        for task in list(self._pending_redis_tasks):
-            if not task.done():
-                task.cancel()
-        self._pending_redis_tasks.clear()
+        # (Status writes are now awaited inline via set_status — no
+        # fire-and-forget tasks to drain.)
 
         # Clear queue to free memory
         logger.debug("Cleanup: draining queue", extra={"task_id": self.task_id, "queue_size": self.queue.qsize()})

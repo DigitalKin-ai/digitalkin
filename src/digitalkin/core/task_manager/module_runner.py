@@ -14,8 +14,6 @@ directly when the consumer's first reply lands.
 
 from __future__ import annotations
 
-import asyncio
-import contextlib
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -97,19 +95,10 @@ class ModuleRunner:
         profiler = TaskProfiler(task_id=task_id, mode=profiler_mode, output_dir=_PROFILING.profile_output_dir)
         profiler.start()
 
-        # Fire the (async) setup resolve immediately so it overlaps with
-        # the (sync) input parsing below. Cold-cache _resolve_setup is a
-        # gRPC call (50-200ms); the input work below is sub-ms.
-        setup_version_task = asyncio.create_task(
-            self._servicer._resolve_setup(setup_id, mission_id),  # noqa: SLF001
-            name=f"resolve_setup_{task_id}",
-        )
-
-        preload_task: asyncio.Task[Any] | None = None
         try:
             timer.mark("entry")
 
-            setup_version = await setup_version_task
+            setup_version = await self._servicer._resolve_setup(setup_id, mission_id)  # noqa: SLF001
             timer.mark("setup_resolve")
 
             setup_data = await self._servicer.module_class.create_setup_model(setup_version.content)
@@ -125,6 +114,16 @@ class ModuleRunner:
             async def _on_output(output_data: Any) -> None:
                 nonlocal first_logged
                 data = output_data.model_dump(mode="json")
+                if data.get("root", {}).get("protocol") == "stream.end":
+                    await self._redis_client.xadd(stream_key, {"eos": b"true"})
+                    await self._redis_client.expire(stream_key, 60)
+                    return
+                s = struct_pb2.Struct()
+                s.update(data)
+                await self._redis_client.xadd(stream_key, {"pb": s.SerializeToString()})
+                # Stream-key TTL safety net: arm an EXPIRE on first XADD so a
+                # producer crash before stream.end doesn't leak the key. The
+                # final EXPIRE on stream.end shortens it to the post-EOS TTL.
                 if not first_logged:
                     elapsed_ms = (time.perf_counter_ns() - runner_start_ns) / 1e6
                     logger.info(
@@ -133,40 +132,28 @@ class ModuleRunner:
                         task_id,
                         extra=log_extra,
                     )
+                    await self._redis_client.expire(stream_key, 600)
                     first_logged = True
-                if data.get("root", {}).get("protocol") == "stream.end":
-                    await self._redis_client.xadd(stream_key, {"eos": b"true"})
-                    await self._redis_client.expire(stream_key, 60)
-                    return
-                s = struct_pb2.Struct()
-                s.update(data)
-                await self._redis_client.xadd(stream_key, {"pb": s.SerializeToString()})
 
-            # Phase 3.A: fire preload (LiteLLM client + agno + toolkits) in
-            # parallel with the sync input parsing below. preload_instance
-            # runs the module's idempotent prepare() so the eventual
-            # start() short-circuits past initialize().
-            preload_task = asyncio.create_task(
-                self._servicer.job_manager.preload_instance(
-                    setup_data,
-                    mission_id=mission_id,
-                    setup_id=setup_version.setup_id,
-                    setup_version_id=setup_version.id,
-                    request_metadata={"x-task-id": task_id},
-                    job_id=task_id,
-                    tool_cache=tool_cache,
-                    callback=_on_output,
-                ),
-                name=f"preload_{task_id}",
-            )
-
+            # Convert input first (sync, sub-ms), then preload directly.
+            # preload_instance runs the module's idempotent prepare() so the
+            # eventual start() short-circuits past initialize().
             input_dict = json_format.MessageToDict(query)
             timer.mark("struct_to_dict")
 
             input_data = self._servicer.module_class.create_input_model(input_dict)
             timer.mark("pydantic_input")
 
-            module, job_id, callback = await preload_task
+            module, job_id, callback = await self._servicer.job_manager.preload_instance(
+                setup_data,
+                mission_id=mission_id,
+                setup_id=setup_version.setup_id,
+                setup_version_id=setup_version.id,
+                request_metadata={"x-task-id": task_id},
+                job_id=task_id,
+                tool_cache=tool_cache,
+                callback=_on_output,
+            )
             timer.mark("preload_join")
 
             await self._servicer.job_manager.run_preloaded(
@@ -190,12 +177,4 @@ class ModuleRunner:
                 f"module execution failed: {type(exc).__name__}: {exc}",
             )
         finally:
-            # Cancel the resolve + preload tasks if either is still in
-            # flight (sync work or input parsing raised before we could
-            # await them).
-            for orphan in (setup_version_task, preload_task):
-                if orphan is not None and not orphan.done():
-                    orphan.cancel()
-                    with contextlib.suppress(asyncio.CancelledError, Exception):
-                        await orphan
             profiler.stop()

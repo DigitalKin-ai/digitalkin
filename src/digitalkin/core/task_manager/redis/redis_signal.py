@@ -17,6 +17,7 @@ import contextlib
 import json
 from typing import Any, ClassVar
 
+from digitalkin.core.resilience.task_supervisor import log_unhandled
 from digitalkin.core.task_manager.redis.redis_client import RedisClient  # noqa: TC001
 from digitalkin.logger import logger
 
@@ -116,6 +117,7 @@ class SharedRedisListener:
         if self._listen_task is None or self._listen_task.done():
             self._stop_event = asyncio.Event()
             self._listen_task = asyncio.create_task(self._listen_loop(), name="shared_redis_listener")
+            self._listen_task.add_done_callback(log_unhandled)
         return queue
 
     def register_task(self, task_id: str, task: asyncio.Task[None]) -> None:
@@ -366,6 +368,7 @@ class RedisSendBuffer:
         elif self._flush_task is None or self._flush_task.done():
             self._stop_event = asyncio.Event()
             self._flush_task = asyncio.create_task(self._flush_after_interval(), name="redis_send_buffer_flush")
+            self._flush_task.add_done_callback(log_unhandled)
 
         return await future
 

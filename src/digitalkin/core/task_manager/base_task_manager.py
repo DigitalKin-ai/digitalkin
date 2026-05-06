@@ -46,7 +46,6 @@ class BaseTaskManager(ABC):
         self._active_slots = 0
         self._task_wait_timeout = float(os.environ.get("DIGITALKIN_TASK_WAIT_TIMEOUT", "30"))
         self._stream_drain_timeout = float(os.environ.get("DIGITALKIN_STREAM_DRAIN_TIMEOUT", "2.0"))
-        self._cleanup_tasks: set[asyncio.Task] = set()
 
         # Admission queue: allows tasks to wait for a slot instead of being rejected.
         # Total in-system capacity = max_concurrent + max_queued.
@@ -277,49 +276,6 @@ class BaseTaskManager(ABC):
         )
         self.tasks_sessions[task_id] = session
         return session
-
-    def _register_auto_cleanup(self, task_id: str, mission_id: str) -> None:
-        """Register a done callback on the supervisor task for deferred cleanup.
-
-        When the supervisor finishes, waits for the stream consumer to drain
-        (up to 60s), then runs idempotent cleanup. Safe if the servicer
-        already cleaned up.
-
-        Args:
-            task_id: The ID of the task.
-            mission_id: The ID of the mission.
-        """
-        supervisor = self.tasks.get(task_id)
-        if supervisor is None:
-            return
-
-        def _on_done(_: asyncio.Task) -> None:
-            t = asyncio.ensure_future(self._deferred_cleanup(task_id, mission_id))
-            self._cleanup_tasks.add(t)
-            t.add_done_callback(self._cleanup_tasks.discard)
-
-        supervisor.add_done_callback(_on_done)
-
-    async def _deferred_cleanup(self, task_id: str, mission_id: str) -> None:
-        """Wait for stream drain then cleanup.
-
-        Args:
-            task_id: The ID of the task.
-            mission_id: The ID of the mission.
-        """
-        session = self.tasks_sessions.get(task_id)
-        if session is None:
-            return
-
-        try:
-            await asyncio.wait_for(session._stream_closed.wait(), timeout=self._stream_drain_timeout)  # noqa: SLF001
-        except asyncio.TimeoutError:
-            logger.warning(
-                "Stream drain timeout, proceeding with cleanup",
-                extra={"task_id": task_id, "mission_id": mission_id},
-            )
-
-        await self._cleanup_task(task_id, mission_id)
 
     @abstractmethod
     async def create_task(
@@ -598,11 +554,6 @@ class BaseTaskManager(ABC):
             )
             cleanup_coros = [self._cleanup_task(task_id, mission_id) for task_id in remaining_sessions]
             await asyncio.gather(*cleanup_coros, return_exceptions=True)
-
-        # Await any deferred cleanup tasks
-        if self._cleanup_tasks:
-            await asyncio.gather(*self._cleanup_tasks, return_exceptions=True)
-            self._cleanup_tasks.clear()
 
         logger.info(
             "TaskManager shutdown completed, cancelled: %d, failed: %d",

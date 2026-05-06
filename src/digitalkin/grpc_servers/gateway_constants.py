@@ -20,8 +20,6 @@ _prof = ProfilingSettings()
 # ══════════════════════════════════════════════════════════════════
 
 REDIS_KEY_SESSION = "gateway:session:{task_id}"
-REDIS_KEY_SESSION_COUNT = "gateway:session_count"
-REDIS_KEY_HEARTBEATS = "gateway:heartbeats"
 REDIS_KEY_STREAM = "task:{task_id}:stream"
 REDIS_KEY_INPUT_STREAM = "task:{task_id}:input"
 REDIS_KEY_CURSOR = "task:{task_id}:cursor"
@@ -33,8 +31,6 @@ REDIS_KEY_SIGNAL_CHANNEL = "signal_ch:{task_id}"
 
 MAX_STREAMS = _gw.max_streams
 MAX_LOCAL_CACHE = _gw.max_local_cache
-HEARTBEAT_TTL_S = _gw.heartbeat_ttl
-REAPER_INTERVAL_S = _gw.reaper_interval
 SESSION_STATE_TTL_S = _gw.session_state_ttl
 DIAL_BACK_BIDI_TIMEOUT_S = _gw.dial_back_bidi_timeout_s
 

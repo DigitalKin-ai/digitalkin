@@ -54,10 +54,8 @@ class GatewaySettings(BaseSettings):
 
     model_config = SettingsConfigDict(env_prefix="DIGITALKIN_GATEWAY_", case_sensitive=False)
 
-    max_streams: int = Field(default=20000, description="Max concurrent gateway sessions (cluster-wide)")
+    max_streams: int = Field(default=20000, description="Max concurrent gateway sessions (per instance)")
     max_local_cache: int = Field(default=5000, description="Max local session cache entries")
-    heartbeat_ttl: int = Field(default=45, description="Heartbeat timeout in seconds")
-    reaper_interval: int = Field(default=30, description="Reaper check interval in seconds")
     session_state_ttl: int = Field(default=3600, description="Session metadata TTL in seconds")
     redis_health_timeout: float = Field(default=5.0, description="Redis health check timeout in seconds")
     dial_back_bidi_timeout_s: float = Field(

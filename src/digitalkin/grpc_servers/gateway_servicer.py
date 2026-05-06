@@ -39,7 +39,6 @@ from digitalkin.core.profiling.step_timer import StepTimer
 from digitalkin.core.task_manager.redis.proto_streams import ProtoStreamReader
 from digitalkin.grpc_servers.gateway_constants import (
     DIAL_BACK_BIDI_TIMEOUT_S,
-    HEARTBEAT_TTL_S,
     MAX_FROM_SEQ,
     MAX_STREAMS,
     validate_address,
@@ -169,8 +168,7 @@ class GatewayServicer:
         return task
 
     async def start(self) -> None:
-        """Start the registry reaper."""
-        await self._registry.start_reaper()
+        """No-op start hook (no periodic reaper anymore — done-callbacks reap)."""
 
     async def stop(self) -> None:
         """Shut down the registry — which cancels monitored tasks and reaps sessions."""
@@ -703,20 +701,11 @@ class GatewayServicer:
         async def _runner_fatal(code: str, message: str) -> None:
             await self._emit_fatal_to_redis(task_id, code=code, message=message, log_extra=log_extra)
 
-        # Phase 6.I: keep the session's heartbeat fresh while the dial-back
-        # is open so the registry's reaper doesn't classify it as a zombie.
-        heartbeat_interval_s = max(1.0, HEARTBEAT_TTL_S / 3)
-
-        async def _heartbeat_loop() -> None:
-            try:
-                while True:
-                    await asyncio.sleep(heartbeat_interval_s)
-                    await self._registry.touch_heartbeat(task_id)
-            except asyncio.CancelledError:
-                return
-
-        heartbeat_task = self._spawn(_heartbeat_loop(), name=f"heartbeat_{task_id}")
-
+        # No per-stream heartbeat task: the dial-back's existence is itself
+        # the proof of liveness. The session's heartbeat zset entry is seeded
+        # at register() and ZREM'd at unregister() (end-of-stream cleanup in
+        # this method's finally). The registry reaper backstops only the
+        # abnormal case where this finally never runs.
         t_pre_stream = time.perf_counter_ns()
         logger.info(
             "[dial-debug] pre_stream dt_since_ready=%.3fms ch_state=%s",
@@ -834,17 +823,11 @@ class GatewayServicer:
                 )
             # Defensive: unblock _outgoing if consumer never replied.
             output_started.set()
-            # Stop the heartbeat now that the dial-back is closing.
-            if not heartbeat_task.done():
-                heartbeat_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await heartbeat_task
             await release()
             # End-of-stream cleanup: mirror the consumer-side Stream RPC's
-            # finally (gateway_servicer.py:426-434). Heartbeat is already
-            # cancelled, so no in-flight `touch_heartbeat` can re-add the
-            # entry. The Redis output stream `task:{id}:stream` is left
-            # intact for replay/resume by a future consumer Stream RPC.
+            # finally (gateway_servicer.py:426-434). The Redis output stream
+            # `task:{id}:stream` is left intact for replay/resume by a
+            # future consumer Stream RPC.
             try:
                 removed = await self._registry.unregister(task_id)
                 if removed is not None:

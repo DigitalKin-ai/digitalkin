@@ -252,15 +252,19 @@ class TestExecutorIntegration:
 
         await task_manager.create_task(task_id, mission_id, mock_base_module, logging_coro())
 
-        # Wait for supervisor task to complete
+        # Capture the session reference BEFORE awaiting supervisor completion —
+        # the supervisor's `finally` now folds cleanup (former _deferred_cleanup),
+        # so by the time supervisor_task returns the session has been removed
+        # from `tasks_sessions`.
+        session = task_manager.tasks_sessions[task_id]
         supervisor_task = task_manager.tasks[task_id]
         await supervisor_task
 
         assert "started" in execution_log
         assert "completed" in execution_log
-
-        session = task_manager.tasks_sessions[task_id]
         assert session.status == "completed"
+        # Cleanup ran inside supervisor's `finally` — session should be gone.
+        assert task_id not in task_manager.tasks_sessions
 
 
 # ============================================================================
