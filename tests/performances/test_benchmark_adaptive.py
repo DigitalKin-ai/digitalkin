@@ -222,21 +222,8 @@ class TestTraceContextPerf:
 # ===========================================================================
 
 
-class TestStreamSessionPerf:
-    """Queue enqueue must be fast when space is available."""
-
-    async def test_enqueue_latency(self) -> None:
-        from digitalkin.grpc_servers.stream_session import StreamSession
-
-        s = StreamSession(task_id="perf_enq", output_queue_size=MEASURE_ITERATIONS + WARMUP_ITERATIONS + 10)
-
-        for i in range(WARMUP_ITERATIONS):
-            await s.enqueue_output({"warmup": i})
-
-        latencies = await _measure_async(
-            lambda: s.enqueue_output({"data": "bench"}),
-        )
-        _assert_budget(latencies, BUDGETS["stream_session_enqueue"], "enqueue_output()")
+# StreamSessionPerf removed in Phase 4.A — StreamSession no longer holds
+# asyncio.Queues; both directions go through Redis Streams.
 
 
 # ===========================================================================

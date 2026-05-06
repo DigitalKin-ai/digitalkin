@@ -140,6 +140,11 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
         self._status = ModuleStatus.CREATED
         self._prebuilt_tool_cache = tool_cache
         self.trigger_handlers: dict[str, tuple] = {}
+        # Phase 3.A: prepare() is idempotent. The flag lets the dial-back
+        # orchestrator (`ModuleRunner`) preload `initialize()` while the
+        # consumer's first reply is still in flight, then call `start()`
+        # which short-circuits the prepare phase.
+        self._prepared: bool = False
 
         # Initialize minimum context
         self.context = ModuleContext(
@@ -568,6 +573,53 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
         else:
             self._status = ModuleStatus.STOPPING
 
+    async def prepare(
+        self,
+        setup_data: SetupModelT,
+        callback: Callable[[OutputModelT | ModuleCodeModel | DataModel[UtilityProtocol]], Coroutine[Any, Any, None]],
+    ) -> None:
+        """Run all input-independent setup: callback wiring, tool cache,
+        ``initialize()``, trigger-handler discovery.
+
+        Idempotent — second call is a no-op. Designed so the dial-back
+        orchestrator can run this in parallel with the wait for the
+        consumer's first reply, paying the (large) ``initialize()`` cost
+        off the critical path.
+
+        Args:
+            setup_data: The setup configuration for the module.
+            callback: Output callback installed on the module context.
+
+        Raises:
+            Exception: anything raised by ``build_tool_cache``,
+                ``initialize``, or ``init_handlers`` propagates so the
+                caller can convert to ``stream.error``.
+        """
+        if self._prepared:
+            return
+        from digitalkin.core.profiling.step_timer import StepTimer
+
+        timer = StepTimer()
+        self.context.callbacks.send_message = callback
+        timer.mark("set_callback")
+
+        tool_cache = self._prebuilt_tool_cache or await setup_data.build_tool_cache(
+            self.context.registry,
+            self.context.communication,
+        )
+        if tool_cache.entries:
+            self.context.tool_cache = tool_cache
+        timer.mark("build_tool_cache")
+
+        await self.initialize(self.context, setup_data)
+        timer.mark("initialize")
+
+        self.trigger_handlers = self.triggers_discoverer.init_handlers(self.context)
+        timer.mark("init_handlers")
+
+        self._prepared = True
+        timer.log("module.prepare", task_id=self.context.session.current_ids().get("task_id", ""))
+
     async def start(
         self,
         input_data: InputModelT,
@@ -580,19 +632,8 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
 
         timer = StepTimer()
         try:
-            self.context.callbacks.send_message = callback
-            timer.mark("set_callback")
-
-            tool_cache = self._prebuilt_tool_cache or await setup_data.build_tool_cache(
-                self.context.registry,
-                self.context.communication,
-            )
-            if tool_cache.entries:
-                self.context.tool_cache = tool_cache
-            timer.mark("build_tool_cache")
-
-            await self.initialize(self.context, setup_data)
-            timer.mark("initialize")
+            await self.prepare(setup_data, callback)
+            timer.mark("prepare")
         except Exception as e:
             self._status = ModuleStatus.FAILED
             short_description = "Error initializing module"
@@ -611,8 +652,6 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
             return
 
         try:
-            self.trigger_handlers = self.triggers_discoverer.init_handlers(self.context)
-            timer.mark("init_handlers")
             await self._run_lifecycle(input_data, setup_data)
             timer.mark("run_lifecycle")
         except Exception:

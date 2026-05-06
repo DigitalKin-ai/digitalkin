@@ -174,6 +174,11 @@ class GrpcClientWrapper:
         if cls._ref_counts[key] <= 0:
             cls._ref_counts.pop(key, None)
             channel = cls._channel_cache.pop(key, None)
+            # Stubs are bound to the now-closing channel — purge them so a
+            # subsequent dial that allocates a fresh channel for the same
+            # cache key gets a fresh stub instead of one bound to the
+            # closed channel (which would raise UsageError: Channel is closed).
+            cls._stub_cache = {k: v for k, v in cls._stub_cache.items() if k[0] != key}
             if channel is not None:
                 await channel.close()
 

@@ -1,8 +1,7 @@
 """Background module manager."""
 
 import abc
-from collections.abc import AsyncGenerator, Callable, Coroutine
-from contextlib import AbstractAsyncContextManager
+from collections.abc import Callable, Coroutine
 from typing import Any, Generic
 
 from digitalkin.core.task_manager.base_task_manager import BaseTaskManager
@@ -79,18 +78,6 @@ class BaseJobManager(abc.ABC, Generic[InputModelT, OutputModelT, SetupModelT]):
         """
         await self._task_manager.create_task(task_id, mission_id, module, coro, **kwargs)
 
-    async def clean_session(self, task_id: str, mission_id: str) -> bool:
-        """Clean a task's session.
-
-        Args:
-            task_id: Unique identifier for the task.
-            mission_id: Mission identifier.
-
-        Returns:
-            bool: True if the task was successfully cancelled, False otherwise.
-        """
-        return await self._task_manager.clean_session(task_id, mission_id)
-
     async def cancel_task(self, task_id: str, mission_id: str, timeout: float | None = None) -> bool:
         """Cancel a task.
 
@@ -165,48 +152,6 @@ class BaseJobManager(abc.ABC, Generic[InputModelT, OutputModelT, SetupModelT]):
         return callback_wrapper
 
     @abc.abstractmethod
-    def generate_stream_consumer(
-        self, job_id: str
-    ) -> AbstractAsyncContextManager[AsyncGenerator[dict[str, Any], None]]:
-        """Generate a stream consumer for the job's message stream.
-
-        Args:
-            job_id: The unique identifier of the job to filter messages for.
-
-        Yields:
-            dict[str, Any]: The messages from the associated module's stream.
-        """
-
-    @abc.abstractmethod
-    async def create_module_instance_job(
-        self,
-        input_data: InputModelT,
-        setup_data: SetupModelT,
-        mission_id: str,
-        setup_id: str,
-        setup_version_id: str,
-        request_metadata: dict[str, str] | None = None,
-        job_id: str | None = None,
-        tool_cache: Any = None,
-    ) -> str:
-        """Create and start a new job for the module's instance.
-
-        Args:
-            input_data: The input data required to start the job.
-            setup_data: The setup configuration for the module.
-            mission_id: The mission ID associated with the job.
-            setup_id: The setup ID.
-            setup_version_id: The setup version ID associated with the module.
-            request_metadata: gRPC request metadata (headers) to forward to the module.
-            job_id: Optional externally-provided job ID (e.g., Gateway's task_id).
-                    If None, a UUID is minted internally.
-            tool_cache: Pre-resolved ToolCache to inject (skips per-request resolution).
-
-        Returns:
-            str: The unique identifier (job ID) of the created job.
-        """
-
-    @abc.abstractmethod
     async def generate_config_setup_module_response(self, job_id: str) -> SetupModelT | ModuleCodeModel:
         """Generate a stream consumer for a module's output data.
 
@@ -247,38 +192,6 @@ class BaseJobManager(abc.ABC, Generic[InputModelT, OutputModelT, SetupModelT]):
 
         Raises:
             Exception: If the module fails to start.
-        """
-
-    @abc.abstractmethod
-    async def stop_module(self, job_id: str) -> bool:
-        """Stop a running module job.
-
-        Args:
-            job_id: The unique identifier of the job to stop.
-
-        Returns:
-            bool: True if the job was successfully stopped, False if it does not exist.
-        """
-
-    @abc.abstractmethod
-    async def wait_for_completion(self, job_id: str) -> None:
-        """Wait for a task to complete.
-
-        This method blocks until the specified job has reached a terminal state.
-        SingleJobManager awaits the asyncio.Task directly.
-
-        Args:
-            job_id: The unique identifier of the job to wait for.
-
-        Raises:
-            KeyError: If the job_id is not found.
-        """
-
-    @abc.abstractmethod
-    async def stop_all_modules(self) -> None:
-        """Stop all currently running module jobs.
-
-        This method ensures that all active jobs are gracefully terminated.
         """
 
     @abc.abstractmethod

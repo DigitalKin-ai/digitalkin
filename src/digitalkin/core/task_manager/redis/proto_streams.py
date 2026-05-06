@@ -38,6 +38,18 @@ from digitalkin.grpc_servers.gateway_constants import (
 )
 from digitalkin.logger import logger
 
+
+class BackpressureTimeoutError(Exception):
+    """Producer's XADD has been throttled past
+    :data:`GatewayBackpressureSettings.backpressure_timeout_s`.
+
+    Caller (typically the module's ``_on_output`` callback) must surface
+    this as ``stream.error(code=BACKPRESSURE_TIMEOUT)`` via the Phase 1
+    ``_emit_fatal_to_redis`` path so the consumer sees a typed sentinel
+    instead of a silent stall.
+    """
+
+
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
@@ -171,8 +183,12 @@ class ProtoStreamWriter:
             delay = self._bp_delay
             while stream_len >= self._maxlen:
                 if waited >= self._bp_timeout:
-                    logger.error("Backpressure timeout after %.0fs, continuing: task_id=%s", waited, self._task_id)
-                    break
+                    msg = (
+                        f"Backpressure timeout after {waited:.0f}s on stream "
+                        f"task_id={self._task_id} (len={stream_len} >= maxlen={self._maxlen})"
+                    )
+                    logger.error(msg)
+                    raise BackpressureTimeoutError(msg)
 
                 await asyncio.sleep(delay)
                 waited += delay

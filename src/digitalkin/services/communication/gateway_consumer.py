@@ -218,6 +218,21 @@ class GatewayConsumer:
         self._stub = gateway_service_pb2_grpc.GatewayServiceStub(self._channel)
 
         servicer = _DialBackServicer(self._registry)
+        # Phase 6.E: warn early if the advertised dial-back target is a
+        # wildcard bind address. The gateway will reject it via
+        # `validate_address` (Phase 1), but surfacing the misconfig at
+        # consumer-startup time saves a network round trip on every
+        # subsequent StartStream call.
+        advertised = cfg.effective_advertise
+        host_part = advertised.rsplit(":", 1)[0] if ":" in advertised else advertised
+        if host_part in {"[::]", "0.0.0.0", "::"}:
+            logger.warning(
+                "GatewayConsumer.effective_advertise=%r uses a wildcard bind host; "
+                "the gateway cannot dial back to it and will reject every StartStream. "
+                "Set ConsumerConfig.advertise_address (or DIGITALKIN_CONSUMER_ADVERTISE_ADDRESS) "
+                "to a routable host:port reachable from the gateway.",
+                advertised,
+            )
         if self._owns_server:
             self._server = grpc.aio.server(options=self._grpc_options)
             gateway_service_pb2_grpc.add_GatewayServiceServicer_to_server(servicer, self._server)
@@ -228,7 +243,7 @@ class GatewayConsumer:
                 cfg.gateway_address,
                 cfg.listen,
                 cfg.port,
-                cfg.effective_advertise,
+                advertised,
             )
         else:
             assert self._server is not None  # noqa: S101
@@ -236,7 +251,7 @@ class GatewayConsumer:
             logger.info(
                 "GatewayConsumer ready (attached) — gateway=%s advertised=%s",
                 cfg.gateway_address,
-                cfg.effective_advertise,
+                advertised,
             )
 
     async def stop(self) -> None:

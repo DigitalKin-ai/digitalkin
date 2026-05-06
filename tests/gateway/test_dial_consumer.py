@@ -292,6 +292,16 @@ class TestDialConsumer:
             protos = [_protocol_of(m) for m in servicer.received]
             assert protos[0] == "stream.init", f"got: {protos}"
             assert "stream.end" in protos, f"got: {protos}"
+
+            # Reaper-at-stream-end: session must be unregistered when the
+            # dial-back finishes — not 120 s later via heartbeat staleness.
+            for _ in range(20):
+                if gateway._registry.get(task_id) is None:
+                    break
+                await asyncio.sleep(0.05)
+            assert gateway._registry.get(task_id) is None, (
+                "session still registered after stream.end — reaper would log a false zombie"
+            )
         finally:
             await server.stop(grace=0.1)
 
@@ -323,7 +333,7 @@ class TestDialConsumer:
             await server.stop(grace=0.1)
 
     async def test_multi_turn_upstream(self, gateway) -> None:
-        """First reply → ModuleRunner; subsequent replies → session.input_queue."""
+        """First reply → ModuleRunner; subsequent replies → Redis input stream."""
         servicer = _FakeConsumerServicer(
             query_data={"q": "first"},
             extra_upstream=[{"q": "second"}, {"q": "third"}],
@@ -337,23 +347,28 @@ class TestDialConsumer:
             ctx = _mock_context({"x-client-address": f"127.0.0.1:{port}"})
             await gateway.StartStream(_start_request(task_id), ctx)
 
-            session = None
+            redis = gateway._redis_client
+            input_key = f"task:{task_id}:input"
             for _ in range(80):
-                session = gateway._registry.get(task_id)
-                if session is not None and session.input_queue.qsize() >= 2:
+                xlen = await redis.xlen(input_key)
+                if xlen >= 2:
                     break
                 await asyncio.sleep(0.05)
 
-            assert session is not None
-            # First reply went to ModuleRunner, not the queue.
+            # First reply went to ModuleRunner (in-memory by-value).
             runner = gateway._fake_runner
             assert len(runner.calls) == 1
             assert runner.calls[0]["query"].fields["q"].string_value == "first"
-            # Follow-up replies went to the queue.
+
+            # Follow-up replies XADD'd to the Redis input stream as raw bytes.
+            entries = await redis._client.xrange(input_key)  # noqa: SLF001
             payloads = []
-            while not session.input_queue.empty():
-                item = session.input_queue.get_nowait()
-                payloads.append(item["_proto"].fields["q"].string_value)
+            for _entry_id, fields in entries:
+                pb = fields.get(b"pb")
+                assert pb is not None
+                s = struct_pb2.Struct()
+                s.ParseFromString(pb)
+                payloads.append(s.fields["q"].string_value)
             assert payloads == ["second", "third"]
         finally:
             await server.stop(grace=0.1)
@@ -370,3 +385,55 @@ class TestDialConsumer:
         )
         # Should return immediately without dialing (servicer never called).
         assert servicer.received == []
+
+    async def test_stub_stream_usage_error_does_not_escape(
+        self, gateway, fake_consumer_server, monkeypatch
+    ) -> None:
+        """If `stub.Stream(...)` raises cygrpc.UsageError (channel closed before BiDi),
+        the spawned task must NOT crash with 'Task exception was never retrieved'.
+        Regression test for the production crash where the consumer is unreachable.
+        """
+        from grpc._cython.cygrpc import UsageError
+
+        from digitalkin.services.communication.grpc_communication import GrpcCommunication
+
+        _servicer, address = fake_consumer_server  # noqa: F841
+        emitted: list[dict] = []
+
+        async def _capture(task_id, *, code, message, log_extra=None):  # noqa: ARG001
+            emitted.append({"task_id": task_id, "code": code, "message": message})
+
+        monkeypatch.setattr(gateway, "_emit_fatal_to_redis", _capture)
+
+        # Register a session so _dial_consumer proceeds past the registry lookup.
+        from digitalkin.grpc_servers.stream_session import StreamSession
+
+        gateway._registry._local_cache["task_usage"] = StreamSession(task_id="task_usage")
+
+        # Patch dial_consumer_stream to return a stub whose Stream raises UsageError.
+        class _BoomStub:
+            def Stream(self, _outgoing, *, timeout):  # noqa: N802, ARG002
+                raise UsageError("Channel is closed.")
+
+        async def _release() -> None:
+            return None
+
+        def _fake_dial(self, _address):  # noqa: ANN001, ARG001
+            self._channel = MagicMock(_closed=True)
+            self._channel_cache_key = "fake:insecure:gzip"
+            return _BoomStub(), _release
+
+        monkeypatch.setattr(GrpcCommunication, "dial_consumer_stream", _fake_dial)
+
+        # Must complete normally — no exception escaping the spawned task.
+        await gateway._dial_consumer(
+            task_id="task_usage",
+            mission_id="missions:test",
+            setup_id="setups:test",
+            address=address,
+        )
+
+        # Should have emitted exactly one DIAL_BACK_RPC_ERROR (not DIAL_BACK_NO_QUERY).
+        codes = [e["code"] for e in emitted]
+        assert "DIAL_BACK_RPC_ERROR" in codes, f"got: {codes}"
+        assert "DIAL_BACK_NO_QUERY" not in codes, f"got: {codes}"

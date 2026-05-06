@@ -25,17 +25,21 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import time
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 import grpc
 from agentic_mesh_protocol.gateway.v1 import gateway_pb2
 from google.protobuf import struct_pb2
+from grpc._cython.cygrpc import UsageError as _GrpcUsageError
 from redis.exceptions import RedisError
 
 from digitalkin.core.profiling.step_timer import StepTimer
+from digitalkin.core.task_manager.redis.proto_streams import ProtoStreamReader
 from digitalkin.grpc_servers.gateway_constants import (
     DIAL_BACK_BIDI_TIMEOUT_S,
+    HEARTBEAT_TTL_S,
     MAX_FROM_SEQ,
     MAX_STREAMS,
     validate_address,
@@ -44,8 +48,10 @@ from digitalkin.grpc_servers.gateway_constants import (
 from digitalkin.grpc_servers.stream_error_codes import StreamErrorCode
 from digitalkin.grpc_servers.stream_registry import StreamRegistry
 from digitalkin.grpc_servers.stream_session import StreamSession
+from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
 from digitalkin.logger import logger
 from digitalkin.services.communication.grpc_communication import (
+    GrpcCommunication,
     InvalidConsumerAddressError,
 )
 
@@ -55,6 +61,9 @@ if TYPE_CHECKING:
     from digitalkin.core.task_manager.module_runner import ModuleRunner
     from digitalkin.core.task_manager.redis.redis_client import RedisClient
     from digitalkin.grpc_servers.utils.circuit_breaker import CircuitBreaker
+
+# Real (non-TYPE_CHECKING) import — `ModuleRunner` is the orchestrator
+# the gateway invokes; we need the runtime symbol.
 
 
 class GatewayServicer:
@@ -141,12 +150,30 @@ class GatewayServicer:
         self._client_config = client_config
         self._module_runner = module_runner
 
+    def _spawn(self, coro: Any, *, name: str) -> asyncio.Task[Any]:
+        """Schedule ``coro`` as a fire-and-forget task supervised by the reaper.
+
+        Hands the task to ``StreamRegistry.monitor_task`` which keeps a strong
+        reference, logs unhandled exceptions, and cancels still-running tasks
+        on shutdown. No bookkeeping is duplicated at the servicer level.
+
+        Args:
+            coro: Coroutine to schedule.
+            name: asyncio task name (for logs and ``[lat-audit]``).
+
+        Returns:
+            The created task.
+        """
+        task = asyncio.create_task(coro, name=name)
+        self._registry.monitor_task(task)
+        return task
+
     async def start(self) -> None:
         """Start the registry reaper."""
         await self._registry.start_reaper()
 
     async def stop(self) -> None:
-        """Shut down all sessions and the reaper."""
+        """Shut down the registry — which cancels monitored tasks and reaps sessions."""
         await self._registry.shutdown()
 
     async def StartStream(
@@ -241,10 +268,7 @@ class GatewayServicer:
         # reply (the query), and runs the module via ``ModuleRunner.run``.
         # No second background task — there is no separate dispatch flow.
         logger.info("→ Dial-back scheduled to consumer %s", client_address, extra=log_extra)
-        # F1.7 (deferred): track this task in a servicer-level set with
-        # add_done_callback so it survives strong-reference GC and
-        # gateway shutdown can cancel it cleanly.
-        asyncio.create_task(  # noqa: RUF006
+        self._spawn(
             self._dial_consumer(
                 task_id=task_id,
                 mission_id=request.mission_id,
@@ -262,16 +286,6 @@ class GatewayServicer:
             extra=log_extra,
         )
         return gateway_pb2.StartStreamResponse(accepted=True, task_id=task_id)
-
-    def _cb_success(self) -> None:
-        """Record circuit breaker success if configured."""
-        if self._circuit_breaker is not None:
-            self._circuit_breaker.record_success()
-
-    def _cb_failure(self) -> None:
-        """Record circuit breaker failure if configured."""
-        if self._circuit_breaker is not None:
-            self._circuit_breaker.record_failure()
 
     async def _emit_fatal_to_redis(
         self,
@@ -383,14 +397,18 @@ class GatewayServicer:
                 yield out
             return
 
-        # Deliver first message's data (the query) to the SDK module.
+        # Deliver first message's data (the query) to the input stream.
+        input_key = f"task:{task_id}:input"
         if first_msg.data and len(first_msg.data.fields) > 0:
-            await session.enqueue_input({"_proto": first_msg.data})
+            await self._redis_client.xadd(
+                input_key,
+                {"pb": first_msg.data.SerializeToString()},
+            )
 
-        # Background: read additional upstream messages → input_queue → module
-        upstream_task = asyncio.create_task(
-            self._read_client_upstream(request_iterator, session),
-            name=f"upstream_{task_id}",
+        # Background: read additional upstream messages → Redis input stream
+        upstream_task = self._spawn(
+            self._read_peer_upstream(request_iterator, task_id, session),
+            name=f"peer_upstream_{task_id}",
         )
 
         # Stream output downstream to client
@@ -407,31 +425,37 @@ class GatewayServicer:
             if removed is not None:
                 await removed.teardown()
 
-    @staticmethod
-    async def _read_client_upstream(
+    async def _read_peer_upstream(
+        self,
         request_iterator: AsyncIterator,
+        task_id: str,
         session: StreamSession,
     ) -> None:
-        """Read additional StreamClient messages and put on input_queue.
+        """Read peer-initiated upstream StreamClient messages and XADD raw
+        proto bytes onto the task's input stream. Empty Structs skipped.
 
-        The first message's data is consumed by ``Stream`` itself (it's
-        the query); this drains the rest. Empty Structs are skipped.
+        The first message's data is consumed by :meth:`Stream` itself
+        (it's the query); this drains the rest.
 
         Args:
             request_iterator: BiDi stream of StreamClient from the client.
-            session: Stream session with input_queue.
+            task_id: Task identifier (used for the Redis input stream key).
+            session: Stream session for the stop-event check.
         """
+        input_key = f"task:{task_id}:input"
         try:
             async for msg in request_iterator:
                 if session._stop_event.is_set():  # noqa: SLF001
                     break
                 if msg.data and len(msg.data.fields) > 0:
-                    # Keep proto Struct as-is — avoid MessageToDict conversion
-                    await session.enqueue_input({"_proto": msg.data})
+                    await self._redis_client.xadd(
+                        input_key,
+                        {"pb": msg.data.SerializeToString()},
+                    )
         except asyncio.CancelledError:
             pass
         except Exception:
-            logger.exception("Client upstream reader error: task_id=%s", session.task_id)
+            logger.exception("Peer upstream reader error: task_id=%s", task_id)
 
     async def SendSignal(  # noqa: PLR0911
         self,
@@ -478,7 +502,7 @@ class GatewayServicer:
         try:
             payload = json.dumps({"action": action_lower, "task_id": task_id})
             await self._redis_client.publish(f"signal_ch:{task_id}", payload)
-        except Exception:
+        except RedisError:
             logger.exception("SendSignal Redis publish failed: task_id=%s action=%s", task_id, action_lower)
             return gateway_pb2.ClientSignalResponse(success=False, task_id=task_id)
         return gateway_pb2.ClientSignalResponse(success=True, task_id=task_id)
@@ -506,22 +530,18 @@ class GatewayServicer:
         Yields:
             StreamServer messages.
         """
-        import time as _t
-
-        from digitalkin.core.task_manager.redis.proto_streams import ProtoStreamReader
-
-        t0 = _t.perf_counter_ns()
+        t0 = time.perf_counter_ns()
         reader = ProtoStreamReader(task_id, self._redis_client)  # type: ignore[arg-type]
         if from_seq > 0:
             await reader.restore_cursor()
-        t1 = _t.perf_counter_ns()
+        t1 = time.perf_counter_ns()
 
         seq = from_seq
         first = True
 
         async for struct_data in reader.read_structs():
             if first:
-                t2 = _t.perf_counter_ns()
+                t2 = time.perf_counter_ns()
                 logger.info(
                     "Stream: cursor=%.1fms xread_wait=%.1fms total_to_first=%.1fms task_id=%s",
                     (t1 - t0) / 1e6,
@@ -577,8 +597,6 @@ class GatewayServicer:
             setup_id: Setup ID (carried for logging context).
             address: ``"host:port"`` of the consumer's GatewayService.
         """
-        from digitalkin.services.communication.grpc_communication import GrpcCommunication
-
         log_extra = {"task_id": task_id, "setup_id": setup_id, "mission_id": mission_id}
         cfg = self._client_config
         if cfg is None:
@@ -590,15 +608,16 @@ class GatewayServicer:
                 log_extra=log_extra,
             )
             return
-        # setup_version_id is unknown at StartStream time (resolved by the
-        # dispatcher later). Use setup_id as the closest stable identifier
-        # for outbound logging.
+        # setup_version_id is unknown at StartStream time and is not used
+        # by the dial-back path (no setup-version-scoped resources are
+        # touched here). Pass the empty string to make that explicit.
         comm = GrpcCommunication(
             mission_id=mission_id,
             setup_id=setup_id,
-            setup_version_id=setup_id,
+            setup_version_id="",
             client_config=cfg,
         )
+        t_dial0 = time.perf_counter_ns()
         try:
             stub, release = comm.dial_consumer_stream(address)
         except InvalidConsumerAddressError as exc:
@@ -621,7 +640,27 @@ class GatewayServicer:
                 log_extra=log_extra,
             )
             return
+        t_stub = time.perf_counter_ns()
         logger.info("→ Dial-back channel ready to %s", address, extra=log_extra)
+
+        def _ch_state(chan: Any) -> str:
+            """Best-effort connectivity probe — returns enum name or '?' on failure."""
+            try:
+                state = chan.get_state(try_to_connect=False)
+                return getattr(state, "name", str(state))
+            except Exception as exc:  # noqa: BLE001
+                return f"err:{type(exc).__name__}"
+
+        logger.info(
+            "[dial-debug] channel_ready dt_init=%.3fms ch_state=%s "
+            "channel_id=%s ref_count=%d cache_keys=%d",
+            (t_stub - t_dial0) / 1e6,
+            _ch_state(comm._channel),
+            id(comm._channel),
+            GrpcClientWrapper._ref_counts.get(comm._channel_cache_key, 0),
+            len(GrpcClientWrapper._channel_cache),
+            extra=log_extra,
+        )
 
         session = self._registry.get(task_id)
         if session is None:
@@ -664,6 +703,27 @@ class GatewayServicer:
         async def _runner_fatal(code: str, message: str) -> None:
             await self._emit_fatal_to_redis(task_id, code=code, message=message, log_extra=log_extra)
 
+        # Phase 6.I: keep the session's heartbeat fresh while the dial-back
+        # is open so the registry's reaper doesn't classify it as a zombie.
+        heartbeat_interval_s = max(1.0, HEARTBEAT_TTL_S / 3)
+
+        async def _heartbeat_loop() -> None:
+            try:
+                while True:
+                    await asyncio.sleep(heartbeat_interval_s)
+                    await self._registry.touch_heartbeat(task_id)
+            except asyncio.CancelledError:
+                return
+
+        heartbeat_task = self._spawn(_heartbeat_loop(), name=f"heartbeat_{task_id}")
+
+        t_pre_stream = time.perf_counter_ns()
+        logger.info(
+            "[dial-debug] pre_stream dt_since_ready=%.3fms ch_state=%s",
+            (t_pre_stream - t_stub) / 1e6,
+            _ch_state(comm._channel),
+            extra=log_extra,
+        )
         try:
             logger.info(
                 "→ Opening BiDi to consumer %s (sending stream.init)",
@@ -689,7 +749,7 @@ class GatewayServicer:
                         )
                         output_started.set()
                         return
-                    asyncio.create_task(  # noqa: RUF006 — runner runs to completion in background; tracked via stream.end EOS
+                    self._spawn(
                         self._module_runner.run(
                             upstream.data,
                             task_id=task_id,
@@ -702,9 +762,13 @@ class GatewayServicer:
                     output_started.set()
                     first = False
                     continue
-                # Follow-up multi-turn input: enqueue for any module that
-                # consumes session.input_queue mid-run.
-                await session.enqueue_input({"_proto": upstream.data})
+                # Follow-up multi-turn input: XADD raw proto bytes to the
+                # task's input stream. Modules that opt in to multi-turn
+                # input consume it via ProtoStreamReader on this key.
+                await self._redis_client.xadd(
+                    f"task:{task_id}:input",
+                    {"pb": upstream.data.SerializeToString()},
+                )
         except grpc.aio.AioRpcError as exc:
             code_name = exc.code().name
             details = exc.details() or ""
@@ -724,6 +788,25 @@ class GatewayServicer:
                 )
                 # Suppress the DIAL_BACK_NO_QUERY in the finally block —
                 # we already emitted the more specific RPC error.
+                output_started.set()
+        except _GrpcUsageError:
+            t_fail = time.perf_counter_ns()
+            logger.warning(
+                "[dial-debug] UsageError raised dt_total=%.3fms dt_pre_to_call=%.3fms "
+                "ch_state=%s addr=%s",
+                (t_fail - t_dial0) / 1e6,
+                (t_fail - t_pre_stream) / 1e6,
+                _ch_state(comm._channel),
+                address,
+                extra=log_extra,
+            )
+            if not output_started.is_set():
+                await self._emit_fatal_to_redis(
+                    task_id,
+                    code=StreamErrorCode.DIAL_BACK_RPC_ERROR.value,
+                    message="dial-back channel closed before BiDi could start",
+                    log_extra=log_extra,
+                )
                 output_started.set()
         except (RuntimeError, AssertionError, ValueError):
             logger.exception("dial_consumer unexpected error", extra=log_extra)
@@ -751,4 +834,20 @@ class GatewayServicer:
                 )
             # Defensive: unblock _outgoing if consumer never replied.
             output_started.set()
+            # Stop the heartbeat now that the dial-back is closing.
+            if not heartbeat_task.done():
+                heartbeat_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await heartbeat_task
             await release()
+            # End-of-stream cleanup: mirror the consumer-side Stream RPC's
+            # finally (gateway_servicer.py:426-434). Heartbeat is already
+            # cancelled, so no in-flight `touch_heartbeat` can re-add the
+            # entry. The Redis output stream `task:{id}:stream` is left
+            # intact for replay/resume by a future consumer Stream RPC.
+            try:
+                removed = await self._registry.unregister(task_id)
+                if removed is not None:
+                    await removed.teardown()
+            except Exception:  # noqa: BLE001 — finally must not raise out
+                logger.exception("end-of-stream unregister failed", extra=log_extra)

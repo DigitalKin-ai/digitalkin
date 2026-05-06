@@ -23,6 +23,7 @@ REDIS_KEY_SESSION = "gateway:session:{task_id}"
 REDIS_KEY_SESSION_COUNT = "gateway:session_count"
 REDIS_KEY_HEARTBEATS = "gateway:heartbeats"
 REDIS_KEY_STREAM = "task:{task_id}:stream"
+REDIS_KEY_INPUT_STREAM = "task:{task_id}:input"
 REDIS_KEY_CURSOR = "task:{task_id}:cursor"
 REDIS_KEY_SIGNAL_CHANNEL = "signal_ch:{task_id}"
 
@@ -61,10 +62,11 @@ BACKPRESSURE_TIMEOUT_S = _gw.backpressure.backpressure_timeout_s
 # Queue & Timeout
 # ══════════════════════════════════════════════════════════════════
 
+# Phase 4.A retired the asyncio.Queue path; *_QUEUE_SIZE / ENQUEUE_TIMEOUT_S
+# kept here as no-op re-exports for forward-compat with external readers.
 DEFAULT_OUTPUT_QUEUE_SIZE = _gw.queue.output_queue_size
 DEFAULT_INPUT_QUEUE_SIZE = _gw.queue.input_queue_size
 ENQUEUE_TIMEOUT_S = _gw.queue.enqueue_timeout_s
-INPUT_WAIT_TIMEOUT_S = _gw.queue.dispatcher_input_wait_s  # retired in 2.B; see GatewayQueueSettings
 TOOLKIT_CACHE_TTL_S = _gw.queue.toolkit_cache_ttl_s
 REDIS_HEALTH_CHECK_TIMEOUT_S = _gw.redis_health_timeout
 

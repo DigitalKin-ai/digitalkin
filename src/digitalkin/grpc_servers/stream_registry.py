@@ -17,7 +17,9 @@ import asyncio
 import contextlib
 import time
 from collections import OrderedDict
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
+
+from redis.exceptions import RedisError
 
 from digitalkin.grpc_servers.gateway_constants import (
     HEARTBEAT_TTL_S,
@@ -74,6 +76,7 @@ class StreamRegistry:
     _heartbeat_ttl: float
     _reaper_interval: float
     _reaper_task: asyncio.Task[None] | None
+    _monitored_tasks: set[asyncio.Task[Any]]
     _redis_client: RedisClient
 
     @staticmethod
@@ -108,6 +111,7 @@ class StreamRegistry:
         self._heartbeat_ttl = heartbeat_ttl
         self._reaper_interval = reaper_interval
         self._reaper_task = None
+        self._monitored_tasks = set()
         self._redis_client = redis_client
 
     @property
@@ -149,7 +153,7 @@ class StreamRegistry:
                     str(SESSION_STATE_TTL_S),
                 ],
             )
-        except Exception:
+        except RedisError:
             logger.exception("Redis capacity check failed: task_id=%s", session.task_id)
             return False
 
@@ -197,7 +201,7 @@ class StreamRegistry:
             pipe.zrem(REDIS_KEY_HEARTBEATS, task_id)
             pipe.delete(self.session_key(task_id))
             await pipe.execute()
-        except Exception:
+        except RedisError:
             logger.exception("Redis unregister pipeline failed: task_id=%s", task_id)
 
         if session is not None:
@@ -215,8 +219,46 @@ class StreamRegistry:
                 REDIS_KEY_HEARTBEATS,
                 {task_id: time.time()},
             )
-        except Exception:
+        except RedisError:
             logger.debug("Heartbeat update failed: task_id=%s", task_id)
+
+    def monitor_task(self, task: asyncio.Task[Any]) -> None:
+        """Track a fire-and-forget asyncio task for the reaper to supervise.
+
+        The reaper has one job: monitor tasks and clean them. Calling
+        ``monitor_task`` enrolls ``task`` in that watch:
+
+        - The registry holds a strong reference, so the task can't be
+          garbage-collected mid-flight.
+        - When the task finishes, the done-callback runs:
+          cancellation and clean exits are silent; an unhandled exception
+          is logged at error level. This replaces asyncio's opaque
+          ``Task exception was never retrieved`` warning with a real,
+          actionable log line tagged with the task name.
+        - On ``shutdown()``, every still-running monitored task is
+          cancelled and awaited.
+
+        Args:
+            task: An ``asyncio.Task`` to supervise.
+        """
+        self._monitored_tasks.add(task)
+        task.add_done_callback(self._on_monitored_task_done)
+
+    def _on_monitored_task_done(self, task: asyncio.Task[Any]) -> None:
+        """Done-callback for monitored tasks — discard + report exceptions."""
+        self._monitored_tasks.discard(task)
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is None:
+            return
+        logger.error(
+            "Background task '%s' failed with %s: %s",
+            task.get_name(),
+            type(exc).__name__,
+            exc,
+            exc_info=exc,
+        )
 
     async def start_reaper(self) -> None:
         """Start the background zombie session reaper."""
@@ -242,18 +284,36 @@ class StreamRegistry:
                         if session is not None:
                             logger.warning("Reaping zombie session: task_id=%s", sid)
                             await session.teardown()
-                except Exception:
-                    logger.exception("Reaper scan failed")
+                except asyncio.CancelledError:
+                    raise
+                except RedisError:
+                    logger.exception("Reaper scan: redis error")
 
         except asyncio.CancelledError:
             pass
 
     async def shutdown(self) -> None:
-        """Stop the reaper and tear down all sessions."""
+        """Stop the reaper, cancel monitored tasks, and tear down all sessions.
+
+        Order matters:
+
+        1. Stop the heartbeat reaper so it can't race with our cleanup.
+        2. Cancel every monitored asyncio task. Their ``finally`` blocks run
+           — including ``_dial_consumer.finally``, which calls
+           ``unregister(task_id)`` — so most sessions clean themselves up.
+        3. Sweep any sessions left in ``_local_cache`` defensively.
+        """
         if self._reaper_task is not None and not self._reaper_task.done():
             self._reaper_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._reaper_task
+
+        for task in list(self._monitored_tasks):
+            if not task.done():
+                task.cancel()
+        if self._monitored_tasks:
+            await asyncio.gather(*self._monitored_tasks, return_exceptions=True)
+            self._monitored_tasks.clear()
 
         for sid in list(self._local_cache):
             session = await self.unregister(sid)

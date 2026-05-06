@@ -339,42 +339,43 @@ class TestStream:
         assert _protocol_of(responses[0]) == "stream.error"
         assert _protocol_of(responses[1]) == "stream.end"
 
-    async def test_upstream_data_enqueued(self) -> None:
-        """Stream: subsequent messages with non-empty data flow into session.input_queue."""
+    async def test_upstream_data_xadds_to_redis_input_stream(self) -> None:
+        """Stream: subsequent messages XADD raw proto bytes onto task:{id}:input."""
         try:
             from agentic_mesh_protocol.gateway.v1 import gateway_pb2  # noqa: F401
         except ImportError:
             pytest.skip("Gateway proto not installed")
 
-        from digitalkin.grpc_servers.gateway_servicer import GatewayServicer
         from digitalkin.grpc_servers.stream_session import StreamSession
 
+        servicer = _mock_servicer()
         session = StreamSession(task_id="task_up")
-        upstream_msg = _make_stream_request(data_dict={"msg": "from_consumer"})
+        upstream_msg = _make_stream_request(task_id="task_up", data_dict={"msg": "from_consumer"})
 
-        # Iterator yields only upstream messages (init is consumed by Stream itself)
         request_iter = _FakeRequestIterator([upstream_msg])
 
-        # Drive the upstream reader directly — bypasses _consume_from_redis
-        # which would block waiting for Redis entries.
-        await GatewayServicer._read_client_upstream(request_iter, session)
+        await servicer._read_peer_upstream(request_iter, "task_up", session)  # noqa: SLF001
 
-        assert session.input_queue.qsize() == 1
+        # One XADD on the input stream key with raw proto bytes.
+        servicer._redis_client.xadd.assert_awaited_once()  # noqa: SLF001
+        args, kwargs = servicer._redis_client.xadd.call_args  # noqa: SLF001
+        assert args[0] == "task:task_up:input"
+        assert b"pb" in args[1] or "pb" in args[1]
 
     async def test_upstream_empty_data_skipped(self) -> None:
-        """Empty Struct upstream messages are skipped (would be init re-sends)."""
+        """Empty Struct upstream messages are skipped — no XADD."""
         try:
             from agentic_mesh_protocol.gateway.v1 import gateway_pb2  # noqa: F401
         except ImportError:
             pytest.skip("Gateway proto not installed")
 
-        from digitalkin.grpc_servers.gateway_servicer import GatewayServicer
         from digitalkin.grpc_servers.stream_session import StreamSession
 
+        servicer = _mock_servicer()
         session = StreamSession(task_id="task_empty")
         empty_msg = _make_stream_request(task_id="task_empty")  # data is empty Struct
 
         request_iter = _FakeRequestIterator([empty_msg])
-        await GatewayServicer._read_client_upstream(request_iter, session)
+        await servicer._read_peer_upstream(request_iter, "task_empty", session)  # noqa: SLF001
 
-        assert session.input_queue.qsize() == 0
+        servicer._redis_client.xadd.assert_not_called()  # noqa: SLF001

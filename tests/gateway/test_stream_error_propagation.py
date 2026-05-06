@@ -218,11 +218,18 @@ class TestModuleRuntimeError:
         redis = _FakeRedisClient()
         try:
             servicer = MagicMock()
-            # _resolve_setup is awaited via asyncio.create_task; use AsyncMock so
-            # the task scheduler gets a real coroutine. The synchronous
-            # create_input_model raises first and cancels the resolve.
+            # `_resolve_setup` is awaited via asyncio.create_task; use AsyncMock so
+            # the task scheduler gets a real coroutine. After Phase 3.A,
+            # `preload_instance` is also awaited concurrently — same treatment.
+            # `create_input_model` is the synchronous raise that drives this test.
             servicer._resolve_setup = AsyncMock(return_value=MagicMock())
+            servicer.module_class.create_setup_model = AsyncMock(return_value=MagicMock())
             servicer.module_class.create_input_model = MagicMock(side_effect=ValueError("bad input"))
+            servicer.get_tool_cache = MagicMock(return_value=None)
+            servicer.job_manager.preload_instance = AsyncMock(
+                return_value=(MagicMock(), "task_runtime", AsyncMock()),
+            )
+            servicer.job_manager.run_preloaded = AsyncMock()
 
             runner = ModuleRunner(redis_client=redis, servicer=servicer)  # type: ignore[arg-type]
 

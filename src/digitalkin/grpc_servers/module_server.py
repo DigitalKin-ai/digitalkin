@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 from agentic_mesh_protocol.gateway.v1 import gateway_service_pb2, gateway_service_pb2_grpc
 from agentic_mesh_protocol.module.v1 import module_service_pb2, module_service_pb2_grpc
 
+from digitalkin.core.task_manager.module_runner import ModuleRunner
 from digitalkin.core.task_manager.redis import RedisClient
 from digitalkin.grpc_servers._base_server import BaseServer
 from digitalkin.grpc_servers.gateway_servicer import GatewayServicer
@@ -110,9 +111,6 @@ class ModuleServer(BaseServer):
             raise RuntimeError(msg)
 
         redis_client = RedisClient(redis_url)
-
-        from digitalkin.core.task_manager.module_runner import ModuleRunner
-
         module_runner = ModuleRunner(redis_client=redis_client, servicer=self.module_servicer)
 
         self._gateway_servicer = GatewayServicer(
@@ -279,10 +277,6 @@ class ModuleServer(BaseServer):
             await self.module_servicer.shutdown()
         except Exception:
             logger.exception("Failed to shutdown module servicer resources")
-        try:
-            await self.module_servicer.job_manager.stop_all_modules()
-        except Exception:
-            logger.exception("Failed to stop all modules during shutdown")
         try:
             await self.module_servicer.job_manager.stop()
         except Exception:

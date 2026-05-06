@@ -116,3 +116,99 @@ class TestRegistryShutdown:
 
         await reg.shutdown()
         assert reg._reaper_task.done()
+
+
+class TestRegistryTaskMonitoring:
+    """Reaper supervises fire-and-forget asyncio tasks: refs + exception logging."""
+
+    async def test_monitor_holds_strong_reference(self) -> None:
+        """The reaper keeps a strong ref so a fire-and-forget task can't be GC'd."""
+        reg = StreamRegistry(_mock_redis(), max_streams=10)
+        started = asyncio.Event()
+        finish = asyncio.Event()
+
+        async def _worker() -> None:
+            started.set()
+            await finish.wait()
+
+        task = asyncio.create_task(_worker(), name="worker_holdref")
+        reg.monitor_task(task)
+        await started.wait()
+        assert task in reg._monitored_tasks
+
+        finish.set()
+        await task
+        # done-callback discards the task on completion
+        assert task not in reg._monitored_tasks
+
+    async def test_monitor_logs_unhandled_exception(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A monitored task that raises must produce a logged error, not a silent drop."""
+        from digitalkin.grpc_servers import stream_registry as sr_mod
+
+        calls: list[tuple[str, tuple, dict]] = []
+
+        def _capture(msg: str, *args: object, **kwargs: object) -> None:
+            calls.append((msg % args if args else msg, args, kwargs))
+
+        monkeypatch.setattr(sr_mod.logger, "error", _capture)
+
+        reg = StreamRegistry(_mock_redis(), max_streams=10)
+
+        async def _boom() -> None:
+            raise RuntimeError("kaboom")
+
+        task = asyncio.create_task(_boom(), name="worker_boom")
+        reg.monitor_task(task)
+        await asyncio.gather(task, return_exceptions=True)
+        await asyncio.sleep(0)
+
+        assert any(
+            "worker_boom" in msg and "kaboom" in msg for msg, _args, _kw in calls
+        ), f"expected error log mentioning task name + exception, got: {[m for m, _, _ in calls]}"
+        # done-callback already retrieved the exception → no asyncio warning
+        assert task.exception() is not None
+
+    async def test_monitor_silent_on_cancellation(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Cancelled tasks are routine — no error log."""
+        from digitalkin.grpc_servers import stream_registry as sr_mod
+
+        calls: list[str] = []
+        monkeypatch.setattr(
+            sr_mod.logger,
+            "error",
+            lambda msg, *args, **_kw: calls.append(msg % args if args else msg),
+        )
+
+        reg = StreamRegistry(_mock_redis(), max_streams=10)
+
+        async def _wait_forever() -> None:
+            await asyncio.Event().wait()
+
+        task = asyncio.create_task(_wait_forever(), name="worker_cancel")
+        reg.monitor_task(task)
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await asyncio.sleep(0)
+
+        assert not any("worker_cancel" in m for m in calls), (
+            f"cancellation should be silent, got: {calls}"
+        )
+
+    async def test_shutdown_cancels_monitored_tasks(self) -> None:
+        """shutdown() cancels every still-running monitored task."""
+        reg = StreamRegistry(_mock_redis(), max_streams=10)
+        started = asyncio.Event()
+
+        async def _wait_forever() -> None:
+            started.set()
+            await asyncio.Event().wait()
+
+        task = asyncio.create_task(_wait_forever(), name="worker_shutdown")
+        reg.monitor_task(task)
+        await started.wait()
+
+        await reg.shutdown()
+
+        assert task.done()
+        assert task.cancelled()
+        assert task not in reg._monitored_tasks

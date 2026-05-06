@@ -12,7 +12,7 @@ class GatewayStreamSettings(BaseSettings):
     redis_stream_ttl: int = Field(default=60, description="Stream TTL in seconds after EOS")
     redis_stream_maxlen: int = Field(default=1000, description="Approximate max entries before trimming")
     redis_cursor_ttl: int = Field(default=360, description="Cursor key TTL in seconds")
-    stream_read_block_ms: int = Field(default=5, description="XREAD block timeout in milliseconds")
+    stream_read_block_ms: int = Field(default=50, description="XREAD block timeout in milliseconds")
     stream_batch_size: int = Field(default=20, description="Entries per pipeline flush")
     stream_flush_ms: int = Field(default=50, description="Max ms between adaptive flushes")
 
@@ -33,15 +33,10 @@ class GatewayQueueSettings(BaseSettings):
 
     model_config = SettingsConfigDict(env_prefix="DIGITALKIN_", case_sensitive=False)
 
-    output_queue_size: int = Field(default=512, description="Output queue max size")
-    input_queue_size: int = Field(default=512, description="Input queue max size")
-    enqueue_timeout_s: float = Field(default=5.0, description="Queue enqueue timeout in seconds")
-    dispatcher_input_wait_s: float = Field(
-        default=60.0,
-        description=(
-            "Retired in Phase 2.B (the dial-back is the orchestrator). "
-            "Kept for forward-compat / external readers. No effect."
-        ),
+    output_queue_size: int = Field(default=512, description="Retired in Phase 4.A; kept for forward-compat (no effect)")
+    input_queue_size: int = Field(default=512, description="Retired in Phase 4.A; kept for forward-compat (no effect)")
+    enqueue_timeout_s: float = Field(
+        default=5.0, description="Retired in Phase 4.A; kept for forward-compat (no effect)"
     )
     toolkit_cache_ttl_s: float = Field(
         default=600.0,

@@ -69,8 +69,8 @@ async def gateway_with_runner():
 @SKIP_NO_FAKEREDIS
 class TestFullDuplex:
     async def test_unbounded_upstream_inputs(self, gateway_with_runner) -> None:
-        """5 follow-up StreamServer messages all land on session.input_queue."""
-        gateway, _redis = gateway_with_runner
+        """5 follow-up StreamServer messages all XADD on Redis input stream."""
+        gateway, redis = gateway_with_runner
         n_followups = 5
         servicer = _FakeConsumerServicer(
             query_data={"q": "first"},
@@ -85,25 +85,26 @@ class TestFullDuplex:
             ctx = _mock_context({"x-client-address": f"127.0.0.1:{port}"})
             await gateway.StartStream(_start_request(task_id), ctx)
 
-            session = None
+            input_key = f"task:{task_id}:input"
             for _ in range(80):
-                session = gateway._registry.get(task_id)
-                if session is not None and session.input_queue.qsize() >= n_followups:
+                xlen = await redis.xlen(input_key)
+                if xlen >= n_followups:
                     break
                 await asyncio.sleep(0.05)
 
-            assert session is not None
-            assert session.input_queue.qsize() >= n_followups
-
-            # First reply went to ModuleRunner (not the queue).
+            # First reply went to ModuleRunner (in-memory by-value).
             assert len(gateway._fake_runner.calls) == 1
             assert gateway._fake_runner.calls[0]["query"].fields["q"].string_value == "first"
 
-            # Follow-ups landed on the queue in order.
+            # Follow-ups XADD'd to Redis input stream as raw proto bytes.
+            entries = await redis._client.xrange(input_key)  # noqa: SLF001
             payloads = []
-            while not session.input_queue.empty():
-                item = session.input_queue.get_nowait()
-                payloads.append(item["_proto"].fields["q"].string_value)
+            for _entry_id, fields in entries:
+                pb = fields.get(b"pb")
+                assert pb is not None
+                s = struct_pb2.Struct()
+                s.ParseFromString(pb)
+                payloads.append(s.fields["q"].string_value)
             assert payloads == [f"turn-{i}" for i in range(1, n_followups + 1)]
         finally:
             await server.stop(grace=0.1)

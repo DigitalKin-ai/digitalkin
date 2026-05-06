@@ -15,7 +15,6 @@ from pydantic import BaseModel, Field
 
 from digitalkin.core.job_manager.single_job_manager import SingleJobManager
 from digitalkin.core.task_manager.local_task_manager import LocalTaskManager
-from digitalkin.models.core.task_monitor import CancellationReason
 from digitalkin.modules._base_module import BaseModule
 from digitalkin.services.services_config import ServicesConfig
 from digitalkin.services.services_models import ServicesMode, ServicesStrategy
@@ -316,50 +315,6 @@ class TestAsyncCleanupRegression:
 
         # All sessions should be cleaned
         assert len(manager.tasks_sessions) == 0
-
-
-class TestConcurrencyRegression:
-    """Test regressions related to concurrency issues."""
-
-    @pytest.mark.asyncio
-    async def test_single_job_manager_lock_protection(self):
-        """REGRESSION: SingleJobManager.stop_module wasn't thread-safe
-        Fix: Added async lock protection.
-        """
-        manager = SingleJobManager(MockModule, ServicesMode.LOCAL, MagicMock())
-        await manager.start()
-
-        # Create mock module and session with all attributes _cleanup_task needs
-        module = MockModule("job-1", "mission", "setup", "version")
-        module.stop = AsyncMock()
-
-        session = Mock()
-        session.module = module
-        session.mission_id = "mission"
-        session.cleanup = AsyncMock()
-        session._write_lock = asyncio.Lock()
-        session.close_stream = Mock()
-        session.cancellation_reason = CancellationReason.UNKNOWN
-        session.status = "running"
-
-        manager.tasks_sessions["job-1"] = session
-
-        # Mock task
-        manager._task_manager.tasks["job-1"] = asyncio.create_task(asyncio.sleep(0.1))
-
-        stop_calls = []
-
-        async def track_stop() -> None:
-            result = await manager.stop_module("job-1")
-            stop_calls.append(result)
-
-        # Multiple concurrent stop calls
-        await asyncio.gather(track_stop(), track_stop(), track_stop(), return_exceptions=True)
-
-        # Module.stop should only be called once (lock prevents multiple);
-        # only one stop_module call returns True (subsequent ones find session already cleaned)
-        assert module.stop.await_count == 1
-        assert sum(1 for r in stop_calls if r is True) == 1
 
 
 class _MockBackend(Enum):

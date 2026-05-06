@@ -238,7 +238,8 @@ class TestSignalActionAll:
         from digitalkin.grpc_servers.stream_session import StreamSession
 
         servicer = _mock_servicer()
-        servicer._redis_client.publish = AsyncMock(side_effect=RuntimeError("redis down"))
+        from redis.exceptions import RedisError
+        servicer._redis_client.publish = AsyncMock(side_effect=RedisError("redis down"))
         session = StreamSession(task_id="task_pub_fail")
         await servicer._registry.register(session)
 
@@ -423,7 +424,7 @@ class TestStreamSentinels:
                 return _fake_read_structs(self)
 
         with patch(
-            "digitalkin.core.task_manager.redis.proto_streams.ProtoStreamReader",
+            "digitalkin.grpc_servers.gateway_servicer.ProtoStreamReader",
             _FakeReader,
         ):
             outs = []

@@ -236,8 +236,12 @@ class TestSendSignalExtended:
         except ImportError:
             pytest.skip("Gateway proto not installed")
 
+        from redis.exceptions import RedisError
+
         mock_redis = MagicMock()
-        mock_redis.publish = AsyncMock(side_effect=Exception("publish failed"))
+        mock_redis.eval = AsyncMock(return_value=1)
+        mock_redis.xadd = AsyncMock(return_value=b"1-0")
+        mock_redis.publish = AsyncMock(side_effect=RedisError("publish failed"))
         servicer = _mock_servicer(redis_client=mock_redis)
 
         from digitalkin.grpc_servers.stream_session import StreamSession

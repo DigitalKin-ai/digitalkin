@@ -104,13 +104,6 @@ class TestStreamSessionLogging:
 
         assert any("teardown" in r.message and "t_log_td" in r.message for r in caplog.records)
 
-    async def test_enqueue_full_logs_warning(self, caplog: pytest.LogCaptureFixture) -> None:
-        from digitalkin.grpc_servers.stream_session import StreamSession
-
-        s = StreamSession(task_id="t_log_full", output_queue_size=1)
-        await s.enqueue_output({"first": True})
-
-        with caplog.at_level(logging.WARNING):
-            await s.enqueue_output({"second": True}, timeout=0.05)
-
-        assert any("queue full" in r.message.lower() for r in caplog.records)
+    # test_enqueue_full_logs_warning removed in Phase 4.A — the
+    # asyncio.Queue path was deleted; backpressure now lives in
+    # ProtoStreamWriter._check_backpressure (covered separately).

@@ -23,6 +23,7 @@ from google.protobuf import json_format, struct_pb2
 
 from digitalkin.core.profiling.step_timer import StepTimer
 from digitalkin.core.profiling.task_profiler import ProfilerMode, TaskProfiler
+from digitalkin.core.task_manager.redis.proto_streams import BackpressureTimeoutError
 from digitalkin.grpc_servers.stream_error_codes import StreamErrorCode
 from digitalkin.logger import logger
 from digitalkin.models.settings.profiling import ProfilingSettings
@@ -88,7 +89,11 @@ class ModuleRunner:
         # Per-task profiler — zero-cost when DIGITALKIN_PROFILER=none.
         # Runs over the whole module lifecycle so the saved profile shows
         # setup/init/run/output broken down with line-level resolution.
-        profiler_mode = ProfilerMode(_PROFILING.profiler) if _PROFILING.profiler in {p.value for p in ProfilerMode} else ProfilerMode.NONE
+        profiler_mode = (
+            ProfilerMode(_PROFILING.profiler)
+            if _PROFILING.profiler in {p.value for p in ProfilerMode}
+            else ProfilerMode.NONE
+        )
         profiler = TaskProfiler(task_id=task_id, mode=profiler_mode, output_dir=_PROFILING.profile_output_dir)
         profiler.start()
 
@@ -100,14 +105,9 @@ class ModuleRunner:
             name=f"resolve_setup_{task_id}",
         )
 
+        preload_task: asyncio.Task[Any] | None = None
         try:
             timer.mark("entry")
-
-            input_dict = json_format.MessageToDict(query)
-            timer.mark("struct_to_dict")
-
-            input_data = self._servicer.module_class.create_input_model(input_dict)
-            timer.mark("pydantic_input")
 
             setup_version = await setup_version_task
             timer.mark("setup_resolve")
@@ -129,7 +129,9 @@ class ModuleRunner:
                     elapsed_ms = (time.perf_counter_ns() - runner_start_ns) / 1e6
                     logger.info(
                         "[lat-audit] producer_first_byte_to_redis: %.1fms task_id=%s",
-                        elapsed_ms, task_id, extra=log_extra,
+                        elapsed_ms,
+                        task_id,
+                        extra=log_extra,
                     )
                     first_logged = True
                 if data.get("root", {}).get("protocol") == "stream.end":
@@ -140,31 +142,60 @@ class ModuleRunner:
                 s.update(data)
                 await self._redis_client.xadd(stream_key, {"pb": s.SerializeToString()})
 
-            await self._servicer.job_manager.create_module_instance_job(
-                input_data,
-                setup_data,
+            # Phase 3.A: fire preload (LiteLLM client + agno + toolkits) in
+            # parallel with the sync input parsing below. preload_instance
+            # runs the module's idempotent prepare() so the eventual
+            # start() short-circuits past initialize().
+            preload_task = asyncio.create_task(
+                self._servicer.job_manager.preload_instance(
+                    setup_data,
+                    mission_id=mission_id,
+                    setup_id=setup_version.setup_id,
+                    setup_version_id=setup_version.id,
+                    request_metadata={"x-task-id": task_id},
+                    job_id=task_id,
+                    tool_cache=tool_cache,
+                    callback=_on_output,
+                ),
+                name=f"preload_{task_id}",
+            )
+
+            input_dict = json_format.MessageToDict(query)
+            timer.mark("struct_to_dict")
+
+            input_data = self._servicer.module_class.create_input_model(input_dict)
+            timer.mark("pydantic_input")
+
+            module, job_id, callback = await preload_task
+            timer.mark("preload_join")
+
+            await self._servicer.job_manager.run_preloaded(
+                module=module,
+                job_id=job_id,
                 mission_id=mission_id,
-                setup_id=setup_version.setup_id,
-                setup_version_id=setup_version.id,
-                request_metadata={"x-task-id": task_id},
-                job_id=task_id,
-                tool_cache=tool_cache,
-                callback=_on_output,
+                input_data=input_data,
+                setup_data=setup_data,
+                callback=callback,
             )
             timer.mark("create_job")
             timer.log("ModuleRunner", task_id)
 
+        except BackpressureTimeoutError as exc:
+            logger.exception("ModuleRunner: backpressure timeout", extra=log_extra)
+            await on_fatal(StreamErrorCode.BACKPRESSURE_TIMEOUT.value, str(exc))
         except Exception as exc:
             logger.exception("ModuleRunner: module job failed", extra=log_extra)
             await on_fatal(
                 StreamErrorCode.MODULE_RUNTIME_ERROR.value,
                 f"module execution failed: {type(exc).__name__}: {exc}",
             )
-            # Cancel the resolve task if it's still in flight (sync work
-            # raised before we could await it).
-            if not setup_version_task.done():
-                setup_version_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError, Exception):
-                    await setup_version_task
         finally:
+            # Cancel the resolve + preload tasks if either is still in
+            # flight (sync work or input parsing raised before we could
+            # await them).
+            for orphan in (setup_version_task, preload_task):
+                if orphan is not None and not orphan.done():
+                    orphan.cancel()
+                    with contextlib.suppress(asyncio.CancelledError, Exception):
+                        await orphan
             profiler.stop()

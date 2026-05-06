@@ -45,7 +45,7 @@ class TestToolCacheServicerLevel:
 
     @pytest.mark.asyncio
     async def test_tool_cache_reused_on_second_request(self) -> None:
-        """Second StartModule with same setup_id uses cached ToolCache."""
+        """Second module run with same setup_id uses cached ToolCache."""
         from digitalkin.grpc_servers.module_servicer import ModuleServicer
 
         servicer = ModuleServicer.__new__(ModuleServicer)
