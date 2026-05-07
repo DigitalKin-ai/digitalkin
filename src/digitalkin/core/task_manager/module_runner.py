@@ -115,8 +115,16 @@ class ModuleRunner:
                 nonlocal first_logged
                 data = output_data.model_dump(mode="json")
                 if data.get("root", {}).get("protocol") == "stream.end":
+                    t_eos_write_start = time.perf_counter_ns()
                     await self._redis_client.xadd(stream_key, {"eos": b"true"})
                     await self._redis_client.expire(stream_key, 60)
+                    t_eos_write_end = time.perf_counter_ns()
+                    logger.info(
+                        "[close-debug] producer_eos_write: xadd_expire=%.2fms t_done_ns=%d task_id=%s",
+                        (t_eos_write_end - t_eos_write_start) / 1e6,
+                        t_eos_write_end,
+                        task_id,
+                    )
                     return
                 s = struct_pb2.Struct()
                 s.update(data)

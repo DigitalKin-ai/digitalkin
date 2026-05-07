@@ -695,11 +695,14 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
             t3 = _t.perf_counter_ns()
             self._status = ModuleStatus.STOPPED
             logger.info(
-                "module.stop: cleanup=%.1fms flush=%.1fms eos=%.1fms total=%.1fms",
+                "[close-debug] module.stop: cleanup=%.2fms flush=%.2fms eos=%.2fms "
+                "total=%.2fms t_done_ns=%d task_id=%s",
                 (t1 - t0) / 1e6,
                 (t2 - t1) / 1e6,
                 (t3 - t2) / 1e6,
                 (t3 - t0) / 1e6,
+                t3,
+                self.context.session.current_ids().get("task_id", ""),
             )
         except Exception:
             self._status = ModuleStatus.FAILED

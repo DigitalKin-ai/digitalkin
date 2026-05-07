@@ -33,11 +33,11 @@
         "grpcio-health-checking==1.80.0",
         "grpcio-reflection==1.80.0",
         "grpcio-status==1.80.0",
-        "pydantic>=2.13.4",
+        "pydantic>=2.12.4",
         "pydantic-settings>=2.14.0",
         "redis[hiredis]>=7.4.0,<8",
     ]
-    version = "1.0.0.dev4"
+    version = "1.0.0.dev5"
 
     [project.optional-dependencies]
         performance = [ "uvloop>=0.21" ]

@@ -369,11 +369,13 @@ class ProtoStreamReader:
         """
         entries_since_save = 0
         while True:
+            t_xread_start = time.perf_counter_ns()
             result = await self._redis_client.xread(
                 {self._stream_key: self._last_id},
                 count=count,
                 block=block_ms,
             )
+            t_xread_end = time.perf_counter_ns()
             if not result:
                 continue
 
@@ -383,6 +385,13 @@ class ProtoStreamReader:
 
                     eos = fields.get(b"eos", b"")
                     if eos == b"true":
+                        logger.info(
+                            "[close-debug] reader_saw_eos: last_xread_block=%.2fms "
+                            "t_seen_ns=%d task_id=%s",
+                            (t_xread_end - t_xread_start) / 1e6,
+                            t_xread_end,
+                            self._task_id,
+                        )
                         await self._save_cursor()
                         return
 

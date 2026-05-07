@@ -555,8 +555,17 @@ class GatewayServicer:
         # consumed silently by ProtoStreamReader). Emit an explicit stream.end
         # sentinel so the wire contract is uniform: every stream ends with
         # exactly one stream.end entry, regardless of how it concluded.
+        t_after_reader = time.perf_counter_ns()
         seq += 1
         yield self._sentinel(seq, task_id, "stream.end")
+        t_after_yield = time.perf_counter_ns()
+        logger.info(
+            "[close-debug] gateway_stream_end: reader_to_yield=%.2fms "
+            "t_yielded_ns=%d task_id=%s",
+            (t_after_yield - t_after_reader) / 1e6,
+            t_after_yield,
+            task_id,
+        )
 
     async def _dial_consumer(  # noqa: C901, PLR0912, PLR0915
         self,
