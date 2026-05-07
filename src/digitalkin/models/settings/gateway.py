@@ -56,7 +56,6 @@ class GatewaySettings(BaseSettings):
 
     max_streams: int = Field(default=20000, description="Max concurrent gateway sessions (per instance)")
     max_local_cache: int = Field(default=5000, description="Max local session cache entries")
-    session_state_ttl: int = Field(default=3600, description="Session metadata TTL in seconds")
     redis_health_timeout: float = Field(default=5.0, description="Redis health check timeout in seconds")
     dial_back_bidi_timeout_s: float = Field(
         default=300.0,

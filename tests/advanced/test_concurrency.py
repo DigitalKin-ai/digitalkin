@@ -191,11 +191,7 @@ class TestStreamRegistryConcurrency:
         from digitalkin.grpc_servers.stream_registry import StreamRegistry
         from digitalkin.grpc_servers.stream_session import StreamSession
 
-        redis = MagicMock()
-        redis.eval = AsyncMock(return_value=1)
-        redis.delete = AsyncMock()
-
-        registry = StreamRegistry(redis, max_streams=10)
+        registry = StreamRegistry(MagicMock(), max_streams=10)
 
         for i in range(10):
             accepted = await registry.register(StreamSession(task_id=f"t_{i}"))
@@ -211,11 +207,7 @@ class TestStreamRegistryConcurrency:
         from digitalkin.grpc_servers.stream_registry import StreamRegistry
         from digitalkin.grpc_servers.stream_session import StreamSession
 
-        redis = MagicMock()
-        redis.eval = AsyncMock(return_value=1)
-        redis.delete = AsyncMock()
-
-        registry = StreamRegistry(redis, max_streams=100)
+        registry = StreamRegistry(MagicMock(), max_streams=100)
 
         async def churn(i: int) -> None:
             tid = f"churn_{i}"

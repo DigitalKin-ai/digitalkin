@@ -6,10 +6,9 @@ bound to the dial-back asyncio task: the task's ``finally`` calls
 ``BaseException`` propagated past finally), the task done-callback
 force-unregisters as a backstop.
 
-Optional Redis session-state mirror (``gateway:session:{task_id}`` HSET)
-is written on register and deleted on unregister for cross-instance
-observability. Heartbeat-based zombie reaping is gone — long streams
-were getting cut off when their heartbeat zset entry went stale.
+No Redis I/O on register/unregister — the gateway is fully local for
+session lifecycle. The previous Redis session-state mirror had no readers
+once the heartbeat reaper was retired.
 """
 
 from __future__ import annotations
@@ -18,13 +17,10 @@ import asyncio
 from collections import OrderedDict
 from typing import TYPE_CHECKING, Any
 
-from redis.exceptions import RedisError
-
 from digitalkin.core.resilience.task_supervisor import log_unhandled
 from digitalkin.grpc_servers.gateway_constants import (
     MAX_LOCAL_CACHE,
     MAX_STREAMS,
-    SESSION_STATE_TTL_S,
 )
 from digitalkin.logger import logger
 
@@ -32,62 +28,38 @@ if TYPE_CHECKING:
     from digitalkin.core.task_manager.redis.redis_client import RedisClient
     from digitalkin.grpc_servers.stream_session import StreamSession
 
-# Lua: atomic session-state write on register.
-# KEYS: [1]=session_key (empty string to skip)
-# ARGV: [1]=setup_id, [2]=mission_id, [3]=session_ttl
-# Returns 1 unconditionally — capacity is enforced process-locally now.
-_LUA_REGISTER = """
-local session_key = KEYS[1]
-if session_key ~= '' then
-    redis.call('HSET', session_key, 'status', 'starting', 'setup_id', ARGV[1], 'mission_id', ARGV[2])
-    redis.call('EXPIRE', session_key, tonumber(ARGV[3]))
-end
-return 1
-"""
-
 
 class StreamRegistry:
     """Tracks active stream sessions per-instance + supervises spawned tasks.
 
     Local dict is a bounded LRU cache of sessions with active BiDi
     connections on this gateway instance. Capacity is enforced
-    process-locally against ``max_streams``. Optional Redis HSET
-    mirrors session metadata for observability.
+    process-locally against ``max_streams``.
     """
 
     _local_cache: OrderedDict[str, StreamSession]
     _max_local: int
     _max_streams: int
     _monitored_tasks: set[asyncio.Task[Any]]
-    _redis_client: RedisClient
-
-    @staticmethod
-    def session_key(task_id: str) -> str:
-        """Redis hash key for session metadata.
-
-        Returns:
-            Key in the format ``gateway:session:{task_id}``.
-        """
-        return f"gateway:session:{task_id}"
 
     def __init__(
         self,
-        redis_client: RedisClient,
+        redis_client: RedisClient | None = None,  # noqa: ARG002 — kept for back-compat with callers
         max_streams: int = MAX_STREAMS,
         max_local: int = MAX_LOCAL_CACHE,
     ) -> None:
         """Initialize the stream registry.
 
         Args:
+            redis_client: Unused (kept for back-compat); the registry no
+                longer touches Redis on register/unregister.
             max_streams: Maximum concurrent streams on this instance.
             max_local: Maximum sessions cached locally on this instance.
-            redis_client: Redis client for the optional session-state mirror.
         """
         self._local_cache = OrderedDict()
         self._max_local = max_local
         self._max_streams = max_streams
         self._monitored_tasks = set()
-        self._redis_client = redis_client
 
     @property
     def active_count(self) -> int:
@@ -97,15 +69,15 @@ class StreamRegistry:
     async def register(
         self,
         session: StreamSession,
-        setup_id: str = "",
-        mission_id: str = "",
+        setup_id: str = "",  # noqa: ARG002 — accepted for back-compat with callers
+        mission_id: str = "",  # noqa: ARG002 — accepted for back-compat with callers
     ) -> bool:
         """Register a new session. Capacity is enforced process-locally.
 
         Args:
             session: The stream session to register.
-            setup_id: Setup ID to store in session state (optional).
-            mission_id: Mission ID to store in session state (optional).
+            setup_id: Accepted for back-compat; no longer persisted to Redis.
+            mission_id: Accepted for back-compat; no longer persisted to Redis.
 
         Returns:
             True if registered, False if at capacity (this instance).
@@ -113,18 +85,6 @@ class StreamRegistry:
         # Process-local capacity check.
         if len(self._local_cache) >= self._max_streams:
             return False
-
-        # Optional: mirror session metadata to Redis for observability.
-        if setup_id:
-            try:
-                await self._redis_client.eval(
-                    _LUA_REGISTER,
-                    [self.session_key(session.task_id)],
-                    [setup_id, mission_id, str(SESSION_STATE_TTL_S)],
-                )
-            except RedisError:
-                logger.exception("Redis session-state write failed: task_id=%s", session.task_id)
-                # Continue — local registration is enough.
 
         # LRU cache — evict oldest if past max_local (separate from
         # max_streams which gates new admissions above).
@@ -151,7 +111,7 @@ class StreamRegistry:
         return session
 
     async def unregister(self, task_id: str) -> StreamSession | None:
-        """Unregister a session and delete its Redis session-state key.
+        """Unregister a session from the local cache.
 
         Args:
             task_id: Session to remove.
@@ -160,12 +120,6 @@ class StreamRegistry:
             The removed session, or None if not found locally.
         """
         session = self._local_cache.pop(task_id, None)
-
-        try:
-            await self._redis_client.delete(self.session_key(task_id))
-        except RedisError:
-            logger.exception("Redis session-state delete failed: task_id=%s", task_id)
-
         if session is not None:
             logger.debug("StreamRegistry.unregister: task_id=%s local=%d", task_id, len(self._local_cache))
         return session

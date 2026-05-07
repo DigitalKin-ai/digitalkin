@@ -7,7 +7,7 @@ zombie reaper, shutdown cleanup. Uses a mock RedisClient for fast unit tests.
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -18,11 +18,8 @@ pytestmark = [pytest.mark.timeout(15)]
 
 
 def _mock_redis() -> MagicMock:
-    """Build a MagicMock RedisClient with the methods StreamRegistry uses."""
-    mock = MagicMock()
-    mock.eval = AsyncMock(return_value=1)
-    mock.delete = AsyncMock()
-    return mock
+    """Placeholder RedisClient — StreamRegistry no longer touches Redis."""
+    return MagicMock()
 
 
 class TestRegistryCapacity:

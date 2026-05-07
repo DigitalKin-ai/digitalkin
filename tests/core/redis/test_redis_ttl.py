@@ -5,7 +5,7 @@ Tests EXPIRE/PERSIST/TTL patterns used by:
 - RedisCheckpointManager (checkpoint_ttl=5min)
 - RedisIdempotencyGuard (claim_ttl=1h)
 - ProtoStreamWriter (stream_ttl=60s)
-- StreamRegistry (session_state_ttl=1h)
+- (gateway session-state HSET removed — registry is local-only now)
 
 All tests use fakeredis, no real Redis needed.
 """
@@ -156,13 +156,6 @@ class TestTtlProductionValues:
         await client.expire("task:s1:stream", 60)
         ttl = await client.ttl("task:s1:stream")
         assert 55 < ttl <= 60
-
-    async def test_session_state_ttl_1h(self, client: _FakeRedisClient) -> None:
-        await client.hset("gateway:session:t1", {"status": "starting"})
-        await client.expire("gateway:session:t1", 3600)
-        ttl = await client.ttl("gateway:session:t1")
-        assert ttl > 3500
-
 
 class TestExpireOnDelete:
     """Keys with TTL are properly cleaned on DELETE."""

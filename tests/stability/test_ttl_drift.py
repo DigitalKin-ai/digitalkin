@@ -115,27 +115,6 @@ class TestTtlProductionWorkflows:
 
         await client.aclose()
 
-    async def test_session_state_ttl(self) -> None:
-        """Gateway session state created with 1h TTL, updated, survives."""
-        client = fakeredis_aio.FakeRedis()
-
-        # Create session state
-        await client.hset("gateway:session:t1", mapping={"status": "starting"})
-        await client.expire("gateway:session:t1", 3600)
-
-        # Update status (should preserve TTL)
-        await client.hset("gateway:session:t1", mapping={"status": "running"})
-
-        ttl = await client.ttl("gateway:session:t1")
-        assert ttl > 3500, f"Session TTL dropped to {ttl} after status update"
-
-        # Re-apply TTL (production pattern)
-        await client.expire("gateway:session:t1", 3600)
-        ttl = await client.ttl("gateway:session:t1")
-        assert ttl > 3595
-
-        await client.aclose()
-
     async def test_stream_ttl_after_eos(self) -> None:
         """Stream gets TTL after EOS marker (ProtoStreamWriter.write_eos)."""
         client = fakeredis_aio.FakeRedis()

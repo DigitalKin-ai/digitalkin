@@ -83,6 +83,13 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         self._redis_client = redis_client
         self._stream_writers: dict[str, RedisStreamWriter] = {}
 
+        # Pool one RedisTaskManager across all preload_instance calls.
+        # The class is task-id-stateless; its `_listener` is already a
+        # process-wide singleton via SharedRedisListener.get_or_create.
+        from digitalkin.services.task_manager.redis_task_manager import RedisTaskManager
+
+        self._task_manager_strategy = RedisTaskManager(self._redis_client)
+
     async def start(self) -> None:
         """Start manager (no-op, no external connections needed)."""
 
@@ -273,7 +280,6 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             ``(module, job_id, callback)`` — pass to ``run_preloaded``.
         """
         from digitalkin.core.profiling.step_timer import StepTimer
-        from digitalkin.services.task_manager.redis_task_manager import RedisTaskManager
 
         timer = StepTimer()
         job_id = job_id or str(uuid.uuid4())
@@ -288,7 +294,8 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         )
         timer.mark("factory_create")
 
-        module.context.task_manager = RedisTaskManager(self._redis_client)
+        # Reuse the pooled RedisTaskManager — task-id-stateless, safe to share.
+        module.context.task_manager = self._task_manager_strategy
         timer.mark("redis_task_manager")
 
         if callback is None:
