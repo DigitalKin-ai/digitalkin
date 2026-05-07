@@ -28,14 +28,14 @@
 
     dependencies = [
         "ag-ui-protocol>=0.1.14",
-        "agentic-mesh-protocol==0.2.3",
+        "agentic-mesh-protocol==0.2.4",
         "anyio==4.13.0",
         "grpcio-health-checking==1.78.0",
         "grpcio-reflection==1.78.0",
         "grpcio-status==1.78.0",
         "pydantic==2.12.5",
     ]
-    version = "0.4.3.dev1"
+    version = "0.4.3.dev2"
 
     [project.optional-dependencies]
         profiling = [
