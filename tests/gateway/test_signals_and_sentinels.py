@@ -49,19 +49,19 @@ class _FakeRequestIterator:
         return msg
 
 
-def _make_first_msg(task_id: str = "t1", from_seq: int = 0, data_dict: dict | None = None) -> Any:
-    """Build a real StreamClient first message (init + query)."""
+def _make_first_msg(task_id: str = "t1", seq: int = 0, data_dict: dict | None = None) -> Any:
+    """Build a real Stream first request (dev2: client sends StreamServer)."""
     from agentic_mesh_protocol.gateway.v1 import gateway_pb2
 
     data = struct_pb2.Struct()
     if data_dict:
         data.update(data_dict)
-    return gateway_pb2.StreamClient(task_id=task_id, from_seq=from_seq, data=data)
+    return gateway_pb2.StreamServer(task_id=task_id, seq=seq, data=data)
 
 
-def _protocol_of(stream_server_msg: Any) -> str:
-    """Extract data.root.protocol string from a StreamServer sentinel."""
-    return stream_server_msg.data.fields["root"].struct_value.fields["protocol"].string_value
+def _protocol_of(stream_msg: Any) -> str:
+    """Extract data.root.protocol string from a Stream sentinel message."""
+    return stream_msg.data.fields["root"].struct_value.fields["protocol"].string_value
 
 
 def _root(stream_server_msg: Any) -> Any:
@@ -329,12 +329,12 @@ class TestStreamSentinels:
         assert "task_id" in err["message"].string_value
         assert _protocol_of(responses[1]) == "stream.end"
 
-    async def test_stream_error_from_seq_out_of_range(self) -> None:
-        """Stream with from_seq > MAX_FROM_SEQ yields stream.error + stream.end."""
+    async def test_stream_error_seq_out_of_range(self) -> None:
+        """Stream with seq > MAX_FROM_SEQ yields stream.error + stream.end."""
         from digitalkin.grpc_servers.gateway_constants import MAX_FROM_SEQ
 
         servicer = _mock_servicer()
-        first = _make_first_msg(task_id="task_oor", from_seq=MAX_FROM_SEQ + 1)
+        first = _make_first_msg(task_id="task_oor", seq=MAX_FROM_SEQ + 1)
         request_iter = _FakeRequestIterator([first])
 
         responses = [r async for r in servicer.Stream(request_iter, _mock_context())]
@@ -343,7 +343,7 @@ class TestStreamSentinels:
         err = _root(responses[0]).fields
         assert err["fatal"].bool_value is True
         assert err["code"].string_value == "INVALID_ARGUMENT"
-        assert "from_seq" in err["message"].string_value
+        assert "seq" in err["message"].string_value
         assert _protocol_of(responses[1]) == "stream.end"
 
     async def test_stream_error_task_not_found_when_no_session_no_redis(self) -> None:
@@ -385,15 +385,15 @@ class TestStreamSentinels:
         assert _protocol_of(outs[1]) == "stream.end"
 
     async def test_sentinel_helper_seq_zero_for_gateway_control(self) -> None:
-        """Gateway control sentinels (validation errors etc.) carry seq=0."""
+        """Gateway control sentinels (validation errors etc.) carry from_seq=0."""
         servicer = _mock_servicer()
         outs = [out async for out in servicer._fatal_close("t", "BAD", "x")]
-        # Both control entries are seq=0 — they're not Redis-replayed
-        assert outs[0].seq == 0
-        assert outs[1].seq == 0
+        # Both control entries are from_seq=0 — they're not Redis-replayed
+        assert outs[0].from_seq == 0
+        assert outs[1].from_seq == 0
 
-    async def test_stream_server_carries_task_id_on_wire(self) -> None:
-        """Every emitted StreamServer carries task_id on the wire field."""
+    async def test_stream_client_carries_task_id_on_wire(self) -> None:
+        """Every emitted StreamClient carries task_id on the wire field."""
         servicer = _mock_servicer()
         outs = [out async for out in servicer._fatal_close("task_xyz", "INTERNAL", "x")]
         assert all(out.task_id == "task_xyz" for out in outs)
@@ -431,15 +431,15 @@ class TestStreamSentinels:
             async for out in servicer._consume_from_redis("task_done", from_seq=0):
                 outs.append(out)
 
-        # Expect exactly: domain output (seq=1) + stream.end sentinel (seq=2)
+        # Expect exactly: domain output (from_seq=1) + stream.end sentinel (from_seq=2)
         assert len(outs) == 2
         # First: the domain output
-        assert outs[0].seq == 1
+        assert outs[0].from_seq == 1
         assert outs[0].task_id == "task_done"
         # Domain output has no root.protocol — it's the module's payload directly
         assert "root" not in outs[0].data.fields
         # Second: the gateway-emitted stream.end terminator
-        assert outs[1].seq == 2
+        assert outs[1].from_seq == 2
         assert outs[1].task_id == "task_done"
         assert _protocol_of(outs[1]) == "stream.end"
 

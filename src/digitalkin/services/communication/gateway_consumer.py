@@ -3,9 +3,15 @@
 A *consumer* (UI, dev tool, eval harness, M2M caller) calls
 ``StartStream`` on the gateway with ``x-client-address`` metadata, then
 serves a local ``GatewayService.Stream`` server that the gateway dials
-back into. The gateway delivers ``stream.init`` first, the consumer
-replies with the query as the first ``StreamServer``, and the gateway
-then forwards module outputs as subsequent ``StreamClient`` messages.
+back into. Dial-back contract (inverts the standard Stream RPC roles):
+
+- gateway → consumer: ``StreamServer`` (``stream.init`` first, then
+  module outputs + lifecycle sentinels).
+- consumer → gateway: ``StreamClient`` (the query as the first reply,
+  then any follow-up upstream input).
+
+Wire-compatible with ``Stream(StreamClient) → StreamServer`` because both
+messages share identical proto field tags.
 
 Two construction modes:
 
@@ -132,10 +138,17 @@ class _TaskHandle:
 class _DialBackServicer(gateway_service_pb2_grpc.GatewayServiceServicer):
     """Serves the gateway-initiated ``Stream`` BiDi.
 
-    Reads the first ``StreamClient`` (always ``stream.init``), looks up
+    Dial-back contract (inverts the standard Stream RPC roles): the
+    gateway emits ``StreamServer`` (module output + sentinels) and the
+    consumer (this servicer) replies with ``StreamClient`` (query +
+    follow-up upstream input). Wire-compatible with the proto's
+    ``Stream(StreamClient) → StreamServer`` signature because both
+    messages share identical field tags.
+
+    Reads the first ``StreamServer`` (always ``stream.init``), looks up
     the matching task, replies with the query as the first
-    ``StreamServer``, then forwards every subsequent ``StreamClient``
-    payload onto the per-task output queue.
+    ``StreamClient``, then forwards every subsequent ``StreamServer``
+    payload (module output) onto the per-task output queue.
     """
 
     def __init__(self, registry: dict[str, _TaskHandle]) -> None:
@@ -143,9 +156,9 @@ class _DialBackServicer(gateway_service_pb2_grpc.GatewayServiceServicer):
 
     async def Stream(
         self,
-        request_iterator: AsyncIterator[gateway_pb2.StreamClient],
+        request_iterator: AsyncIterator[gateway_pb2.StreamServer],
         context: grpc.aio.ServicerContext,  # noqa: ARG002
-    ) -> AsyncGenerator[gateway_pb2.StreamServer, None]:
+    ) -> AsyncGenerator[gateway_pb2.StreamClient, None]:
         handle: _TaskHandle | None = None
         try:
             async for upstream in request_iterator:
@@ -157,7 +170,7 @@ class _DialBackServicer(gateway_service_pb2_grpc.GatewayServiceServicer):
                             extra={"task_id": upstream.task_id},
                         )
                         return
-                    yield gateway_pb2.StreamServer(task_id=handle.task_id, seq=0, data=handle.query)
+                    yield gateway_pb2.StreamClient(task_id=handle.task_id, from_seq=0, data=handle.query)
                     continue
                 if upstream.data and len(upstream.data.fields) > 0:
                     await handle.output_queue.put(upstream.data)

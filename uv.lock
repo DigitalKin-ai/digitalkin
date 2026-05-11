@@ -23,7 +23,7 @@ wheels = [
 
 [[package]]
 name = "agentic-mesh-protocol"
-version = "1.0.0.dev1"
+version = "1.0.0.dev2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "bump-my-version" },
@@ -33,9 +33,9 @@ dependencies = [
     { name = "protobuf" },
     { name = "protovalidate" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/bb/9f/77e5cd473731e5659f40e3716c3dc8bb4b65916db4c33838c8597a3c65e1/agentic_mesh_protocol-1.0.0.dev1.tar.gz", hash = "sha256:287063dfef56beb0076543ef4c843be5a82da1b642a01fa7b0b1f460b6a1e4c6", size = 72213, upload-time = "2026-04-30T07:46:33.152Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/46/85/56d14e393f51d9d3ed7ce179db6dc8d7e5b9f1abe48130954d12595f7e6e/agentic_mesh_protocol-1.0.0.dev2.tar.gz", hash = "sha256:9b208787f04a892ff521012d64062736b34dd753d3e6ac50515a2cb046166a29", size = 72248, upload-time = "2026-05-11T19:48:46.419Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/27/34/7ef0302c0bccdc6ae4f4e72a0a3fd8a557a49fff17d83ba0cca471a87b35/agentic_mesh_protocol-1.0.0.dev1-py3-none-any.whl", hash = "sha256:a299847088308b7112096b9ed0dee2bba3ed5b6faf75f75671414c05a7605236", size = 101473, upload-time = "2026-04-30T07:46:31.422Z" },
+    { url = "https://files.pythonhosted.org/packages/0a/02/9953acc62c1f0675f894961d2b89b3a46039b25a97f680830b48dd884bad/agentic_mesh_protocol-1.0.0.dev2-py3-none-any.whl", hash = "sha256:52b831e31982d87ad4c395c97983e2d4d8f84a4ace5d8faec120c16c35b4e71e", size = 101473, upload-time = "2026-05-11T19:48:44.848Z" },
 ]
 
 [[package]]
@@ -686,7 +686,7 @@ wheels = [
 
 [[package]]
 name = "digitalkin"
-version = "1.0.0.dev4"
+version = "1.0.0.dev5"
 source = { editable = "." }
 dependencies = [
     { name = "ag-ui-protocol" },
@@ -770,12 +770,12 @@ tests = [
 [package.metadata]
 requires-dist = [
     { name = "ag-ui-protocol", specifier = ">=0.1.18" },
-    { name = "agentic-mesh-protocol", specifier = "==1.0.0.dev1" },
+    { name = "agentic-mesh-protocol", specifier = "==1.0.0.dev2" },
     { name = "anyio", specifier = ">=4.13.0" },
     { name = "grpcio-health-checking", specifier = "==1.80.0" },
     { name = "grpcio-reflection", specifier = "==1.80.0" },
     { name = "grpcio-status", specifier = "==1.80.0" },
-    { name = "pydantic", specifier = ">=2.13.4" },
+    { name = "pydantic", specifier = ">=2.12.4" },
     { name = "pydantic-settings", specifier = ">=2.14.0" },
     { name = "pyinstrument", marker = "extra == 'profiling'", specifier = ">=5.1.2" },
     { name = "redis", extras = ["hiredis"], specifier = ">=7.4.0,<8" },
@@ -1012,14 +1012,14 @@ wheels = [
 
 [[package]]
 name = "googleapis-common-protos"
-version = "1.74.0"
+version = "1.75.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "protobuf" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/20/18/a746c8344152d368a5aac738d4c857012f2c5d1fd2eac7e17b647a7861bd/googleapis_common_protos-1.74.0.tar.gz", hash = "sha256:57971e4eeeba6aad1163c1f0fc88543f965bb49129b8bb55b2b7b26ecab084f1", size = 151254, upload-time = "2026-04-02T21:23:26.679Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/b5/c8/f439cffde755cffa462bfbb156278fa6f9d09119719af9814b858fd4f81f/googleapis_common_protos-1.75.0.tar.gz", hash = "sha256:53a062ff3c32552fbd62c11fe23768b78e4ddf0494d5e5fd97d3f4689c75fbbd", size = 151035, upload-time = "2026-05-07T08:04:49.423Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/b6/b0/be5d3329badb9230b765de6eea66b73abd5944bdeb5afb3562ddcd80ae84/googleapis_common_protos-1.74.0-py3-none-any.whl", hash = "sha256:702216f78610bb510e3f12ac3cafd281b7ac45cc5d86e90ad87e4d301a3426b5", size = 300743, upload-time = "2026-04-02T21:22:49.108Z" },
+    { url = "https://files.pythonhosted.org/packages/e7/c8/e2645aa8ed02fd4c7a2f59d68783b65b1f3cbdfe39a6308e156509d1fee8/googleapis_common_protos-1.75.0-py3-none-any.whl", hash = "sha256:961ed60399c457ceb0ee8f285a84c870aabc9c6a832b9d37bb281b5bebde43ed", size = 300631, upload-time = "2026-05-07T08:03:30.345Z" },
 ]
 
 [[package]]

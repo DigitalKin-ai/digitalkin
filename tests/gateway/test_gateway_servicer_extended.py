@@ -95,13 +95,13 @@ class _FakeRequestIterator:
         return msg
 
 
-def _make_init_msg(task_id: str, from_seq: int = 0) -> Any:
-    """Build a real StreamRequest init proto."""
+def _make_init_msg(task_id: str, seq: int = 0) -> Any:
+    """Build a Stream init request (dev2: client sends StreamServer)."""
     from agentic_mesh_protocol.gateway.v1 import gateway_pb2
     from google.protobuf import struct_pb2
 
-    return gateway_pb2.StreamClient(
-        task_id=task_id, from_seq=from_seq, data=struct_pb2.Struct(),
+    return gateway_pb2.StreamServer(
+        task_id=task_id, seq=seq, data=struct_pb2.Struct(),
     )
 
 

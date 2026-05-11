@@ -17,7 +17,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator, Generator
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import grpc
 import grpc.aio
@@ -437,3 +437,88 @@ class TestDialConsumer:
         codes = [e["code"] for e in emitted]
         assert "DIAL_BACK_RPC_ERROR" in codes, f"got: {codes}"
         assert "DIAL_BACK_NO_QUERY" not in codes, f"got: {codes}"
+
+    async def test_dial_consumer_outgoing_yields_streamserver(
+        self, gateway, fake_consumer_server, monkeypatch
+    ) -> None:
+        """Dial-back contract: gateway emits StreamServer messages.
+
+        Pins the wire-direction so a regression to ``StreamClient`` (which
+        is wire-compatible due to identical proto field tags) is caught.
+        """
+        from digitalkin.services.communication.grpc_communication import GrpcCommunication
+
+        _servicer, address = fake_consumer_server  # noqa: F841
+        seen_outgoing: list[Any] = []
+
+        # Capture every message the gateway yields on the dial-back BiDi.
+        class _RecordingStub:
+            def Stream(self, outgoing, *, timeout):  # noqa: N802, ARG002
+                async def _drive() -> AsyncIterator[gateway_pb2.StreamServer]:
+                    async for msg in outgoing:
+                        seen_outgoing.append(msg)
+                        # Return immediately after the first capture so the
+                        # dial-back coroutine exits cleanly.
+                        return
+                        yield  # pragma: no cover  # makes this an async gen
+                return _drive()
+
+        async def _release() -> None:
+            return None
+
+        def _fake_dial(self, _address):  # noqa: ANN001, ARG001
+            self._channel = MagicMock(_closed=False)
+            self._channel_cache_key = "fake:insecure:gzip"
+            return _RecordingStub(), _release
+
+        monkeypatch.setattr(GrpcCommunication, "dial_consumer_stream", _fake_dial)
+        monkeypatch.setattr(gateway, "_emit_fatal_to_redis", AsyncMock())
+
+        from digitalkin.grpc_servers.stream_session import StreamSession
+        gateway._registry._local_cache["task_type"] = StreamSession(task_id="task_type")
+
+        await gateway._dial_consumer(
+            task_id="task_type",
+            mission_id="missions:test",
+            setup_id="setups:test",
+            address=address,
+        )
+
+        assert seen_outgoing, "gateway emitted nothing on the dial-back outgoing"
+        assert all(
+            isinstance(m, gateway_pb2.StreamServer) for m in seen_outgoing
+        ), f"expected only StreamServer, got: {[type(m).__name__ for m in seen_outgoing]}"
+
+    async def test_dialback_servicer_yields_streamclient(self) -> None:
+        """SDK ``_DialBackServicer.Stream`` emits StreamClient on the dial-back.
+
+        Pins the wire-direction (consumer → gateway = StreamClient).
+        """
+        import asyncio as _asyncio
+
+        from digitalkin.services.communication.gateway_consumer import (
+            _DialBackServicer,
+            _TaskHandle,
+        )
+
+        query = struct_pb2.Struct()
+        query.update({"root": {"protocol": "test", "x": 1}})
+        handle = _TaskHandle(task_id="t", query=query, output_queue=_asyncio.Queue())
+        servicer = _DialBackServicer({"t": handle})
+
+        async def _req() -> AsyncIterator[gateway_pb2.StreamServer]:
+            # Dial-back input: the gateway sends StreamServer (sentinels +
+            # module output). First message is stream.init.
+            init = struct_pb2.Struct()
+            init.update({"root": {"protocol": "stream.init"}})
+            yield gateway_pb2.StreamServer(task_id="t", seq=0, data=init)
+
+        yielded: list[Any] = []
+        async for resp in servicer.Stream(_req(), context=None):  # type: ignore[arg-type]
+            yielded.append(resp)
+            break
+
+        assert yielded, "_DialBackServicer.Stream yielded nothing"
+        assert all(
+            isinstance(m, gateway_pb2.StreamClient) for m in yielded
+        ), f"expected only StreamClient, got: {[type(m).__name__ for m in yielded]}"

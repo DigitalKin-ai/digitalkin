@@ -78,7 +78,13 @@ class GatewayServicer:
 
     @staticmethod
     def _sentinel(seq: int, task_id: str, protocol: str, **fields: Any) -> Any:
-        """Build a StreamServer carrying a control sentinel.
+        """Build a StreamClient carrying a control sentinel (server→client wire).
+
+        Under dev2 of agentic-mesh-protocol the Stream RPC is
+        ``rpc Stream(stream StreamServer) returns (stream StreamClient)``,
+        so the server-side response type is ``StreamClient``. ``from_seq``
+        on StreamClient is the wire-equivalent of the old ``seq`` field
+        (same tag 1, same uint64).
 
         ``seq=0`` distinguishes gateway-emitted control entries (validation
         errors, late-consumer rejections) from Redis-replayed entries
@@ -92,11 +98,11 @@ class GatewayServicer:
             fields: Additional Struct fields under ``data.root``.
 
         Returns:
-            StreamServer proto.
+            StreamClient proto.
         """
         s = struct_pb2.Struct()
         s.update({"root": {"protocol": protocol, **fields}})
-        return gateway_pb2.StreamServer(seq=seq, task_id=task_id, data=s)
+        return gateway_pb2.StreamClient(from_seq=seq, task_id=task_id, data=s)
 
     async def _fatal_close(self, task_id: str, code: str, message: str) -> AsyncGenerator:
         """Yield ``stream.error(fatal=true)`` then ``stream.end`` and return.
@@ -342,27 +348,35 @@ class GatewayServicer:
 
     async def Stream(  # noqa: C901, PLR0912
         self,
-        request_iterator: AsyncIterator,
+        request_iterator: AsyncIterator[Any],
         context: grpc.aio.ServicerContext,  # noqa: ARG002
-    ) -> AsyncGenerator:
-        """BiDi: client sends StreamClient messages, server yields StreamServer.
+    ) -> AsyncGenerator[Any, None]:
+        """BiDi: client sends StreamServer messages, server yields StreamClient.
 
-        First StreamClient identifies the task and carries the query as
-        ``data``; the data Struct is delivered to the SDK module as its
-        first input. Subsequent StreamClient messages provide additional
-        upstream input (optional).
+        Dev2 of agentic-mesh-protocol defines the RPC as
+        ``rpc Stream(stream StreamServer) returns (stream StreamClient)``.
+        The naming is inverted from intuition: ``StreamServer`` is the
+        message **sent to** the server (upstream input + resume cursor)
+        and ``StreamClient`` is the message **sent to** the client
+        (module output + lifecycle sentinels).
 
-        Server emits StreamServer per Redis stream entry. First entry is
+        First StreamServer identifies the task (``task_id``), carries the
+        resume cursor in ``seq``, and carries the query in ``data``; the
+        Struct is delivered to the SDK module as its first input.
+        Subsequent StreamServer messages provide additional upstream input
+        (optional).
+
+        Server emits StreamClient per Redis stream entry. First entry is
         ``stream.start`` (seeded by StartStream); last is ``stream.end``.
         Errors are emitted as ``stream.error(fatal=true)`` followed by
         ``stream.end`` — never via ``context.abort``.
 
         Args:
-            request_iterator: BiDi stream of StreamClient from the client.
+            request_iterator: BiDi stream of StreamServer from the client.
             context: gRPC service context.
 
         Yields:
-            StreamServer — sentinels and SDK module output.
+            StreamClient — sentinels and SDK module output.
         """
         try:
             first_msg = await anext(request_iterator)
@@ -370,7 +384,7 @@ class GatewayServicer:
             return
 
         task_id = first_msg.task_id
-        from_seq = first_msg.from_seq
+        from_seq = first_msg.seq
 
         if validate_id(task_id, "task_id") is not None:
             async for out in self._fatal_close(task_id, "INVALID_ARGUMENT", "invalid task_id"):
@@ -378,7 +392,7 @@ class GatewayServicer:
             return
 
         if from_seq > MAX_FROM_SEQ:
-            async for out in self._fatal_close(task_id, "INVALID_ARGUMENT", "from_seq out of range"):
+            async for out in self._fatal_close(task_id, "INVALID_ARGUMENT", "seq out of range"):
                 yield out
             return
 
@@ -516,17 +530,23 @@ class GatewayServicer:
         no dict conversion, no JSON parsing. ~0.1-0.5ms per message
         instead of ~3-8ms on the JSON path.
 
-        Yields bare ``StreamServer`` (seq + data). Lifecycle is encoded
-        in ``data.root.protocol`` sentinels written by the producer
-        (``stream.start`` already seeded by StartStream; ``stream.end``
-        written by the producer's end-of-stream emit).
+        Yields ``StreamClient`` messages (the dev2 server→client wire
+        type). The ``from_seq`` field carries the monotonic sequence
+        number — same tag as the legacy ``StreamServer.seq``. Lifecycle
+        is encoded in ``data.root.protocol`` sentinels written by the
+        producer (``stream.start`` already seeded by StartStream;
+        ``stream.end`` emitted explicitly below on reader EOS).
+
+        Callers that need a ``StreamServer`` (the dial-back outbound
+        direction) re-wrap each yielded message; both messages share
+        identical field tags so the conversion is a field rename.
 
         Args:
             task_id: Task reference ID.
             from_seq: Resume point.
 
         Yields:
-            StreamServer messages.
+            StreamClient messages.
         """
         t0 = time.perf_counter_ns()
         reader = ProtoStreamReader(task_id, self._redis_client)  # type: ignore[arg-type]
@@ -549,7 +569,7 @@ class GatewayServicer:
                 )
                 first = False
             seq += 1
-            yield gateway_pb2.StreamServer(seq=seq, task_id=task_id, data=struct_data)
+            yield gateway_pb2.StreamClient(from_seq=seq, task_id=task_id, data=struct_data)
 
         # Reader exited because EOS was hit (Redis `{"eos": "true"}` marker is
         # consumed silently by ProtoStreamReader). Emit an explicit stream.end
@@ -560,8 +580,7 @@ class GatewayServicer:
         yield self._sentinel(seq, task_id, "stream.end")
         t_after_yield = time.perf_counter_ns()
         logger.info(
-            "[close-debug] gateway_stream_end: reader_to_yield=%.2fms "
-            "t_yielded_ns=%d task_id=%s",
+            "[close-debug] gateway_stream_end: reader_to_yield=%.2fms t_yielded_ns=%d task_id=%s",
             (t_after_yield - t_after_reader) / 1e6,
             t_after_yield,
             task_id,
@@ -578,16 +597,16 @@ class GatewayServicer:
 
         Flow:
 
-        1. Send ``stream.init`` as the first ``StreamClient``.
+        1. Send ``stream.init`` as the first ``StreamServer``.
         2. Read the consumer's first ``StreamServer`` — that's the query.
         3. Push the query onto ``session.input_queue`` so the dispatcher
            unblocks (matches the M2M client-initiated path).
         4. Concurrently:
 
-           - forward subsequent ``StreamServer`` messages from the
+           - forward subsequent ``StreamClient`` messages from the
              consumer → ``session.input_queue`` (multi-turn input).
            - pull module outputs from ``_consume_from_redis`` and push
-             each as a ``StreamClient(task_id, from_seq=<seq>, data=…)``
+             each as a ``StreamServer(task_id, from_seq=<seq>, data=…)``
              to the consumer.
 
         5. End cleanly when ``stream.end`` flows through.
@@ -659,8 +678,7 @@ class GatewayServicer:
                 return f"err:{type(exc).__name__}"
 
         logger.info(
-            "[dial-debug] channel_ready dt_init=%.3fms ch_state=%s "
-            "channel_id=%s ref_count=%d cache_keys=%d",
+            "[dial-debug] channel_ready dt_init=%.3fms ch_state=%s channel_id=%s ref_count=%d cache_keys=%d",
             (t_stub - t_dial0) / 1e6,
             _ch_state(comm._channel),
             id(comm._channel),
@@ -678,19 +696,28 @@ class GatewayServicer:
             await release()
             return
 
-        # Build the init StreamClient using the existing _sentinel helper —
-        # we extract the data Struct from a StreamServer-shaped sentinel.
-        init_server = self._sentinel(0, task_id, "stream.init")
-        init_client = gateway_pb2.StreamClient(task_id=task_id, from_seq=0, data=init_server.data)
+        # Dial-back contract under dev2's RPC signature
+        # ``Stream(stream StreamServer) returns (stream StreamClient)``:
+        # - gateway is the gRPC client and sends ``StreamServer``
+        #   (module output + sentinels) on the request stream.
+        # - gateway receives ``StreamClient`` (query + follow-up upstream)
+        #   on the response stream.
+        # ``_consume_from_redis`` yields ``StreamClient`` for the regular
+        # consumer-facing path; here we re-wrap each one into the
+        # ``StreamServer`` the dial-back wire expects (field tags are
+        # identical so it's a rename: ``from_seq`` → ``seq``).
+        init_struct = struct_pb2.Struct()
+        init_struct.update({"root": {"protocol": "stream.init"}})
+        init_server = gateway_pb2.StreamServer(seq=0, task_id=task_id, data=init_struct)
 
         # Gate the output drain on the first upstream message arriving:
         # the dispatcher can't produce anything until the query lands on
         # session.input_queue, which happens when we receive the consumer's
-        # first StreamServer reply.
+        # first StreamClient reply (carrying the query).
         output_started = asyncio.Event()
 
         async def _outgoing() -> AsyncGenerator:
-            yield init_client
+            yield init_server
             logger.info(
                 "→ stream.init sent, waiting for consumer query before draining outputs",
                 extra={"task_id": task_id, "mission_id": mission_id, "setup_id": setup_id},
@@ -700,11 +727,11 @@ class GatewayServicer:
                 "✓ Output drain started — streaming module outputs to consumer",
                 extra={"task_id": task_id, "mission_id": mission_id, "setup_id": setup_id},
             )
-            async for srv_msg in self._consume_from_redis(task_id, from_seq=0):
-                yield gateway_pb2.StreamClient(
+            async for cli_msg in self._consume_from_redis(task_id, from_seq=0):
+                yield gateway_pb2.StreamServer(
                     task_id=task_id,
-                    from_seq=srv_msg.seq,
-                    data=srv_msg.data,
+                    seq=cli_msg.from_seq,
+                    data=cli_msg.data,
                 )
 
         async def _runner_fatal(code: str, message: str) -> None:
@@ -730,6 +757,12 @@ class GatewayServicer:
             )
             responses = stub.Stream(_outgoing(), timeout=DIAL_BACK_BIDI_TIMEOUT_S)
             first = True
+            # `responses` items are deserialised by gRPC as the proto's
+            # response type (StreamServer), but per the dial-back contract
+            # the consumer is sending StreamClient bytes — the field tags
+            # match so reading `.data` / `.task_id` works either way. The
+            # consumer-emitted message is the query (first) or follow-up
+            # upstream input (subsequent).
             async for upstream in responses:
                 if not (upstream.data and len(upstream.data.fields) > 0):
                     continue
@@ -790,8 +823,7 @@ class GatewayServicer:
         except _GrpcUsageError:
             t_fail = time.perf_counter_ns()
             logger.warning(
-                "[dial-debug] UsageError raised dt_total=%.3fms dt_pre_to_call=%.3fms "
-                "ch_state=%s addr=%s",
+                "[dial-debug] UsageError raised dt_total=%.3fms dt_pre_to_call=%.3fms ch_state=%s addr=%s",
                 (t_fail - t_dial0) / 1e6,
                 (t_fail - t_pre_stream) / 1e6,
                 _ch_state(comm._channel),

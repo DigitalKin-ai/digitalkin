@@ -45,14 +45,14 @@ class _FakeRequestIterator:
         return msg
 
 
-def _make_stream_request(task_id: str = "", from_seq: int = 0, data_dict: dict | None = None) -> Any:
-    """Build a real StreamRequest proto."""
+def _make_stream_request(task_id: str = "", seq: int = 0, data_dict: dict | None = None) -> Any:
+    """Build a real Stream request proto (dev2: client sends StreamServer)."""
     from agentic_mesh_protocol.gateway.v1 import gateway_pb2
 
     data = struct_pb2.Struct()
     if data_dict:
         data.update(data_dict)
-    return gateway_pb2.StreamClient(task_id=task_id, from_seq=from_seq, data=data)
+    return gateway_pb2.StreamServer(task_id=task_id, seq=seq, data=data)
 
 
 def _protocol_of(stream_output: Any) -> str:
@@ -333,7 +333,7 @@ class TestStream:
 
         servicer = _mock_servicer()
 
-        init_msg = _make_stream_request(task_id="task_oor", from_seq=MAX_FROM_SEQ + 1)
+        init_msg = _make_stream_request(task_id="task_oor", seq=MAX_FROM_SEQ + 1)
         request_iter = _FakeRequestIterator([init_msg])
 
         context = _mock_context()
