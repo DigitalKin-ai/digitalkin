@@ -674,7 +674,7 @@ class GatewayServicer:
             try:
                 state = chan.get_state(try_to_connect=False)
                 return getattr(state, "name", str(state))
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 return f"err:{type(exc).__name__}"
 
         logger.info(
@@ -873,5 +873,5 @@ class GatewayServicer:
                 removed = await self._registry.unregister(task_id)
                 if removed is not None:
                     await removed.teardown()
-            except Exception:  # noqa: BLE001 — finally must not raise out
+            except Exception:
                 logger.exception("end-of-stream unregister failed", extra=log_extra)
