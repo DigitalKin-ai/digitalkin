@@ -34,7 +34,7 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
             A fully validated StorageRecord.
         """
         # Direct field access for scalars (avoids full MessageToDict overhead)
-        mission = proto.mission_id
+        ctx = proto.context
         coll = proto.collection
         rid = proto.record_id
         dtype = DataType[data_pb2.DataType.Name(proto.data_type)]
@@ -48,7 +48,7 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
 
         validated = self._validate_data(coll, payload)
         return StorageRecord(
-            mission_id=mission,
+            context=ctx,
             collection=coll,
             record_id=rid,
             data=validated,
@@ -75,7 +75,7 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
             data_struct.update(record.data.model_dump())
             req = data_pb2.StoreRecordRequest(
                 data=data_struct,
-                mission_id=record.mission_id,
+                context=record.context,
                 collection=record.collection,
                 record_id=record.record_id,
                 data_type=record.data_type.name,
@@ -90,16 +90,16 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
             )
             raise StorageServiceError(str(e)) from e
 
-    async def _read(self, collection: str, record_id: str) -> StorageRecord | None:
-        """Fetch a single document by collection + record_id.
+    async def _read(self, collection: str, record_id: str, context: str) -> StorageRecord | None:
+        """Fetch a single document scoped to a specific context.
 
         Returns:
             StorageData: The record
         """
-        logger.debug("debug:_read collection=%s id=%s", collection, record_id)
+        logger.debug("debug:_read context=%s collection=%s id=%s", context, collection, record_id)
         try:
             req = data_pb2.ReadRecordRequest(
-                mission_id=self.mission_id,
+                context=context,
                 collection=collection,
                 record_id=record_id,
             )
@@ -114,24 +114,20 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
         collection: str,
         record_id: str,
         data: BaseModel,
+        context: str,
     ) -> StorageRecord | None:
-        """Overwrite a document via gRPC.
-
-        Args:
-            collection: The unique name for the record type
-            record_id: The unique ID for the record
-            data: The validated data model
+        """Overwrite a document via gRPC scoped to a specific context.
 
         Returns:
-            StorageRecord: The updated record
+            StorageRecord: The updated record, or None on failure.
         """
-        logger.debug("debug:_update collection=%s id=%s", collection, record_id)
+        logger.debug("debug:_update context=%s collection=%s id=%s", context, collection, record_id)
         try:
             struct = Struct()
             struct.update(data.model_dump())
             req = data_pb2.UpdateRecordRequest(
                 data=struct,
-                mission_id=self.mission_id,
+                context=context,
                 collection=collection,
                 record_id=record_id,
             )
@@ -141,20 +137,16 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
             logger.warning("gRPC UpdateRecord failed for %s:%s", collection, record_id)
             return None
 
-    async def _remove(self, collection: str, record_id: str) -> bool:
-        """Delete a document via gRPC.
-
-        Args:
-            collection: The unique name for the record type
-            record_id: The unique ID for the record
+    async def _remove(self, collection: str, record_id: str, context: str) -> bool:
+        """Delete a document via gRPC scoped to a specific context.
 
         Returns:
-            bool: True if the record was deleted, False otherwise
+            bool: True if the record was deleted, False otherwise.
         """
-        logger.debug("debug:_remove collection=%s id=%s", collection, record_id)
+        logger.debug("debug:_remove context=%s collection=%s id=%s", context, collection, record_id)
         try:
             req = data_pb2.RemoveRecordRequest(
-                mission_id=self.mission_id,
+                context=context,
                 collection=collection,
                 record_id=record_id,
             )
@@ -168,19 +160,16 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
             return False
         return True
 
-    async def _list(self, collection: str) -> list[StorageRecord]:
-        """List all documents in a collection via gRPC.
-
-        Args:
-            collection: The unique name for the record type
+    async def _list(self, collection: str, context: str) -> list[StorageRecord]:
+        """List all documents in a collection via gRPC scoped to a specific context.
 
         Returns:
-            list[StorageRecord]: A list of storage records
+            list[StorageRecord]: The records found, or an empty list on failure.
         """
-        logger.debug("debug:_list collection=%s", collection)
+        logger.debug("debug:_list context=%s collection=%s", context, collection)
         try:
             req = data_pb2.ListRecordsRequest(
-                mission_id=self.mission_id,
+                context=context,
                 collection=collection,
             )
             resp = await self.exec_grpc_query("ListRecords", req)
@@ -189,18 +178,15 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
             logger.warning("gRPC ListRecords failed for %s", collection)
             return []
 
-    async def _remove_collection(self, collection: str) -> bool:
-        """Delete an entire collection via gRPC.
-
-        Args:
-            collection: The unique name for the record type
+    async def _remove_collection(self, collection: str, context: str) -> bool:
+        """Delete an entire collection via gRPC scoped to a specific context.
 
         Returns:
-            bool: True if the collection was deleted, False otherwise
+            bool: True if the collection was removed, False otherwise.
         """
         try:
             req = data_pb2.RemoveCollectionRequest(
-                mission_id=self.mission_id,
+                context=context,
                 collection=collection,
             )
             await self.exec_grpc_query("RemoveCollection", req)

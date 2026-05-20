@@ -62,7 +62,7 @@ class DefaultStorage(StorageStrategy):
                     continue
                 data_model = model_cls.model_validate(rd["data"])
                 rec = StorageRecord(
-                    mission_id=rd["mission_id"],
+                    context=rd["context"],
                     collection=rd["collection"],
                     record_id=rd["record_id"],
                     data=data_model,
@@ -93,7 +93,7 @@ class DefaultStorage(StorageStrategy):
                 serial: dict[str, dict] = {}
                 for key, record in self.storage.items():
                     serial[key] = {
-                        "mission_id": record.mission_id,
+                        "context": record.context,
                         "collection": record.collection,
                         "record_id": record.record_id,
                         "data_type": record.data_type.name,
@@ -119,7 +119,7 @@ class DefaultStorage(StorageStrategy):
         Raises:
             ValueError: If the record already exists
         """
-        key = f"{record.collection}:{record.record_id}"
+        key = self._key(record.context, record.collection, record.record_id)
         if key in self.storage:
             msg = f"Document {key!r} already exists"
             raise ValueError(msg)
@@ -131,31 +131,36 @@ class DefaultStorage(StorageStrategy):
         logger.debug("Created %s", key)
         return record
 
-    async def _read(self, collection: str, record_id: str) -> StorageRecord | None:
-        """Get records from the database.
+    @staticmethod
+    def _key(context: str, collection: str, record_id: str) -> str:
+        return f"{context}|{collection}:{record_id}"
+
+    async def _read(self, collection: str, record_id: str, context: str) -> StorageRecord | None:
+        """Get a record from the database scoped to a specific context.
 
         Args:
             collection: The unique name to retrieve data for
             record_id: The unique ID of the record
+            context: Owner context scoping the lookup.
 
         Returns:
             StorageRecord: The corresponding record
         """
-        key = f"{collection}:{record_id}"
-        return self.storage.get(key)
+        return self.storage.get(self._key(context, collection, record_id))
 
-    async def _update(self, collection: str, record_id: str, data: BaseModel) -> StorageRecord | None:
-        """Update records in the database and persist to file.
+    async def _update(self, collection: str, record_id: str, data: BaseModel, context: str) -> StorageRecord | None:
+        """Update a record in the database scoped to a specific context.
 
         Args:
             collection: The unique name to retrieve data for
             record_id: The unique ID of the record
             data: The data to modify
+            context: Owner context scoping the update.
 
         Returns:
             StorageRecord: The modified record
         """
-        key = f"{collection}:{record_id}"
+        key = self._key(context, collection, record_id)
         rec = self.storage.get(key)
         if not rec:
             return None
@@ -165,17 +170,18 @@ class DefaultStorage(StorageStrategy):
         logger.debug("Modified %s", key)
         return rec
 
-    async def _remove(self, collection: str, record_id: str) -> bool:
-        """Delete records from the database and update file.
+    async def _remove(self, collection: str, record_id: str, context: str) -> bool:
+        """Delete a record from the database scoped to a specific context.
 
         Args:
             collection: The unique name to retrieve data for
             record_id: The unique ID of the record
+            context: Owner context scoping the deletion.
 
         Returns:
             bool: True if the record was removed, False otherwise
         """
-        key = f"{collection}:{record_id}"
+        key = self._key(context, collection, record_id)
         if key not in self.storage:
             return False
         del self.storage[key]
@@ -183,28 +189,30 @@ class DefaultStorage(StorageStrategy):
         logger.debug("Removed %s", key)
         return True
 
-    async def _list(self, collection: str) -> list[StorageRecord]:
-        """Implements StorageStrategy._list.
+    async def _list(self, collection: str, context: str) -> list[StorageRecord]:
+        """List records in a collection scoped to a specific context.
 
         Args:
             collection: The unique name to retrieve data for
+            context: Owner context scoping the listing.
 
         Returns:
             A list of storage records
         """
-        prefix = f"{collection}:"
+        prefix = f"{context}|{collection}:"
         return [r for k, r in self.storage.items() if k.startswith(prefix)]
 
-    async def _remove_collection(self, collection: str) -> bool:
-        """Implements StorageStrategy._remove_collection.
+    async def _remove_collection(self, collection: str, context: str) -> bool:
+        """Wipe a collection scoped to a specific context.
 
         Args:
             collection: The unique name to retrieve data for
+            context: Owner context scoping the wipe.
 
         Returns:
             bool: True if the collection was removed, False otherwise
         """
-        prefix = f"{collection}:"
+        prefix = f"{context}|{collection}:"
         to_delete = [k for k in self.storage if k.startswith(prefix)]
         for k in to_delete:
             del self.storage[k]
