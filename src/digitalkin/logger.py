@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 from typing import Any, ClassVar
 
+from digitalkin.models.settings.log import LoggingSettings
+
 _LEVEL_NAMES: dict[str, int] = {
     "DEBUG": logging.DEBUG,
     "INFO": logging.INFO,
@@ -168,16 +170,14 @@ def add_file_handler(logger: logging.Logger) -> None:
     Args:
         logger: The logger to attach the file handler to.
     """
-    log_dir = os.environ.get("DIGITALKIN_LOG_DIR")
+    settings = LoggingSettings()
+    log_dir = settings.dir
     if not log_dir or not os.path.isdir(log_dir):
         return
 
-    log_file = os.environ.get("DIGITALKIN_LOG_FILE", os.path.join(log_dir, f"{logger.name}.log"))
+    log_file = settings.file or os.path.join(log_dir, f"{logger.name}.log")
     fh = RotatingFileHandler(log_file, maxBytes=10 * 1024 * 1024, backupCount=5)
-    file_level = _LEVEL_NAMES.get(
-        os.environ.get("DIGITALKIN_FILE_LOG_LEVEL", "DEBUG").upper(),
-        logging.DEBUG,
-    )
+    file_level = _LEVEL_NAMES.get(settings.file_level.upper(), logging.DEBUG)
     fh.setLevel(file_level)
     fh.setFormatter(PlainJSONFormatter())
     logger.addHandler(fh)
@@ -205,7 +205,7 @@ def setup_logger(
     """
     # Determine if we're in production
     if is_production is None:
-        is_production = os.getenv("RAILWAY_SERVICE_NAME") is not None
+        is_production = LoggingSettings().railway_service_name is not None
 
     # Configure root logger if requested
     if configure_root:
@@ -239,8 +239,5 @@ def setup_logger(
 
 logger = setup_logger(
     "digitalkin",
-    level=_LEVEL_NAMES.get(
-        os.environ.get("DIGITALKIN_LOG_LEVEL", "INFO").upper(),
-        logging.INFO,
-    ),
+    level=_LEVEL_NAMES.get(LoggingSettings().level.upper(), logging.INFO),
 )

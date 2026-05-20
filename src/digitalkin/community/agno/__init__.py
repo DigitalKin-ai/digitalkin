@@ -24,10 +24,10 @@ from digitalkin.community.agno.hitl import (
     AgnoHitlRunner,
     PausedRunRecord,
     PausedRunStore,
-    PauseInfo,
     emit_awaiting_tool_result,
     emit_messages_snapshot,
 )
+from digitalkin.community.agno.models import PauseInfo
 
 __all__ = [
     "HITL_STORAGE_CONFIG",

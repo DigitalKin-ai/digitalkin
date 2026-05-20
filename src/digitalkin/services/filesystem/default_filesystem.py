@@ -9,10 +9,10 @@ from typing import Any, Literal
 from anyio import Path as AsyncPath
 
 from digitalkin.logger import logger
+from digitalkin.services.filesystem.exceptions import FilesystemServiceError
 from digitalkin.services.filesystem.filesystem_strategy import (
     FileFilter,
     FilesystemRecord,
-    FilesystemServiceError,
     FilesystemStrategy,
     UploadFileData,
 )

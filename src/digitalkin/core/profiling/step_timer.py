@@ -33,6 +33,7 @@ class StepTimer:
     __slots__ = ("_last", "_steps", "_t0")
 
     def __init__(self) -> None:
+        """Init start time."""
         now = time.perf_counter_ns()
         self._t0 = now
         self._last = now
@@ -55,5 +56,9 @@ class StepTimer:
             logger.info("[lat-audit] %s: %s", prefix, " ".join(parts))
 
     def total_ms(self) -> float:
-        """Total elapsed time across all marks in milliseconds."""
+        """Total elapsed time across all marks in milliseconds.
+
+        Returns:
+            float: time elapsed in ms
+        """
         return (self._last - self._t0) / 1e6

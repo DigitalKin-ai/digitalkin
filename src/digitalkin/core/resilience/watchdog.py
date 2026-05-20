@@ -21,6 +21,7 @@ import threading
 import time
 
 from digitalkin.logger import logger
+from digitalkin.models.settings.resilience import ResilienceSettings
 
 
 class WatchdogThread:
@@ -45,19 +46,22 @@ class WatchdogThread:
     def __init__(
         self,
         loop: asyncio.AbstractEventLoop,
-        stall_threshold: float = float(os.environ.get("DIGITALKIN_WATCHDOG_STALL_THRESHOLD", "5")),
-        check_interval: float = float(os.environ.get("DIGITALKIN_WATCHDOG_CHECK_INTERVAL", "1")),
+        stall_threshold: float | None = None,
+        check_interval: float | None = None,
     ) -> None:
         """Initialize the watchdog.
 
         Args:
             loop: The asyncio event loop to monitor.
             stall_threshold: Seconds without progress before declaring stall.
+                Defaults to ResilienceSettings.watchdog_stall_threshold.
             check_interval: Seconds between health checks.
+                Defaults to ResilienceSettings.watchdog_check_interval.
         """
+        settings = ResilienceSettings()
         self._loop = loop
-        self._stall_threshold = stall_threshold
-        self._check_interval = check_interval
+        self._stall_threshold = stall_threshold if stall_threshold is not None else settings.watchdog_stall_threshold
+        self._check_interval = check_interval if check_interval is not None else settings.watchdog_check_interval
         self._thread = None
         self._running = False
         self._counter = 0
@@ -119,12 +123,12 @@ class WatchdogThread:
         except RuntimeError:
             logger.critical("Could not enumerate tasks (loop may be closing)")
 
-        # Phase 1: SIGTERM — give the process a chance to shutdown gracefully
+        # SIGTERM — give the process a chance to shutdown gracefully
         pid = os.getpid()
         logger.critical("Sending SIGTERM to pid %d", pid)
         os.kill(pid, signal.SIGTERM)
 
-        # Phase 2: Wait for graceful shutdown. Do NOT SIGKILL —
+        # Wait for graceful shutdown. Do NOT SIGKILL —
         # let the orchestrator (Docker, K8s) handle escalation to avoid
         # corrupting shared resources (Redis, files, locks).
         time.sleep(10)

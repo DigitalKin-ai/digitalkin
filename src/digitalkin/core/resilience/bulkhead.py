@@ -20,11 +20,8 @@ from typing import ClassVar
 
 from typing_extensions import Self
 
-from digitalkin.logger import logger
-
-
-class BulkheadFullError(Exception):
-    """Raised when a bulkhead semaphore cannot be acquired within timeout."""
+from digitalkin.core.exceptions import BulkheadFullError
+from digitalkin.models.settings.resilience import BulkheadSettings
 
 
 class Bulkhead:
@@ -69,9 +66,12 @@ class Bulkhead:
             oldest = next(iter(cls._instances))
             del cls._instances[oldest]
 
-        env_key = f"DIGITALKIN_BULKHEAD_{service_id.upper()}_MAX"
-        default_max = int(os.environ.get(env_key, os.environ.get("DIGITALKIN_BULKHEAD_DEFAULT_MAX", "50")))
-        default_timeout = float(os.environ.get("DIGITALKIN_BULKHEAD_TIMEOUT", "2.0"))
+        settings = BulkheadSettings()
+        # Per-service override has a dynamic env-var suffix, so it cannot be a
+        # static settings field — read it directly, falling back to the setting.
+        env_max = os.environ.get(f"DIGITALKIN_BULKHEAD_{service_id.upper()}_MAX")
+        default_max = int(env_max) if env_max is not None else settings.default_max
+        default_timeout = settings.timeout
 
         inst = cls(
             service_id=service_id,

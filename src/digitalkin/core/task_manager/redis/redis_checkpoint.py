@@ -8,12 +8,12 @@ re-submission.
 from __future__ import annotations
 
 import json
-import os
 from datetime import datetime, timezone
 from typing import Any
 
 from digitalkin.core.task_manager.redis.redis_client import RedisClient  # noqa: TC001
 from digitalkin.logger import logger
+from digitalkin.models.settings.redis import RedisSettings
 
 
 class RedisCheckpointManager:
@@ -34,16 +34,17 @@ class RedisCheckpointManager:
     def __init__(
         self,
         redis_client: RedisClient,
-        checkpoint_ttl: int = int(os.environ.get("DIGITALKIN_REDIS_CHECKPOINT_TTL", "300")),
+        checkpoint_ttl: int | None = None,
     ) -> None:
         """Initialize checkpoint manager.
 
         Args:
             redis_client: Shared Redis connection.
-            checkpoint_ttl: TTL in seconds for checkpoint keys (default 5min).
+            checkpoint_ttl: TTL in seconds for checkpoint keys.
+                Defaults to RedisSettings.checkpoint_ttl.
         """
         self._redis_client = redis_client
-        self._checkpoint_ttl = checkpoint_ttl
+        self._checkpoint_ttl = checkpoint_ttl if checkpoint_ttl is not None else RedisSettings().checkpoint_ttl
 
     async def checkpoint(
         self,

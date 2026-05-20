@@ -6,10 +6,6 @@ from typing import Any
 from digitalkin.services.base_strategy import BaseStrategy
 
 
-class UserProfileServiceError(Exception):
-    """Base exception for UserProfile service errors."""
-
-
 class UserProfileStrategy(BaseStrategy, ABC):
     """Abstract base class for UserProfile strategies."""
 

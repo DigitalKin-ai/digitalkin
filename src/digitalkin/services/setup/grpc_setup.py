@@ -9,15 +9,15 @@ from agentic_mesh_protocol.setup.v1 import (
     setup_pb2,
     setup_service_pb2_grpc,
 )
-from google.protobuf import json_format
 from google.protobuf.struct_pb2 import Struct
 from pydantic import ValidationError
 
-from digitalkin.grpc_servers.utils.exceptions import ServerError
+from digitalkin.grpc_servers.exceptions import ServerError
 from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
 from digitalkin.logger import logger
 from digitalkin.models.grpc_servers.models import ClientConfig
-from digitalkin.services.setup.setup_strategy import SetupData, SetupServiceError, SetupStrategy, SetupVersionData
+from digitalkin.services.setup.exceptions import SetupServiceError
+from digitalkin.services.setup.setup_strategy import SetupData, SetupStrategy, SetupVersionData
 from digitalkin.utils.proto_utils import proto_to_dict
 
 

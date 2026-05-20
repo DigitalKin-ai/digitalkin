@@ -262,20 +262,20 @@ class TestRedisIdempotencyDeterministic:
         await client.close()
 
     async def test_claim_fresh_task(self, guard: Any) -> None:
-        from digitalkin.core.task_manager.redis.redis_idempotency import ClaimResult
+        from digitalkin.models.core.redis import ClaimResult
 
         result = await guard.claim("task_lua_1")
         assert result == ClaimResult.CLAIMED
 
     async def test_reclaim_same_task(self, guard: Any) -> None:
-        from digitalkin.core.task_manager.redis.redis_idempotency import ClaimResult
+        from digitalkin.models.core.redis import ClaimResult
 
         await guard.claim("task_lua_2")
         result = await guard.claim("task_lua_2")
         assert result == ClaimResult.RECLAIMED
 
     async def test_release_and_reclaim(self, guard: Any) -> None:
-        from digitalkin.core.task_manager.redis.redis_idempotency import ClaimResult
+        from digitalkin.models.core.redis import ClaimResult
 
         await guard.claim("task_lua_3")
         await guard.release("task_lua_3")

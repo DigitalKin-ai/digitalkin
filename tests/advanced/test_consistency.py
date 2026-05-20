@@ -147,7 +147,8 @@ class TestIdempotencyConsistency:
 
     async def test_claim_release_reclaim_cycle(self) -> None:
         """Full claim → release → reclaim cycle produces correct results."""
-        from digitalkin.core.task_manager.redis.redis_idempotency import ClaimResult, RedisIdempotencyGuard
+        from digitalkin.core.task_manager.redis.redis_idempotency import RedisIdempotencyGuard
+        from digitalkin.models.core.redis import ClaimResult
 
         client = _FakeClient()
         guard = RedisIdempotencyGuard(client, claim_ttl=60)  # type: ignore[arg-type]

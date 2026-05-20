@@ -9,24 +9,13 @@ Integrates into ``GrpcClientWrapper.exec_grpc_query()`` as a pre/post hook.
 
 from __future__ import annotations
 
-import os
 import time
-from enum import Enum
 from typing import ClassVar
 
+from digitalkin.grpc_servers.exceptions import CircuitOpenError
 from digitalkin.logger import logger
-
-
-class CBState(Enum):
-    """Circuit breaker states."""
-
-    CLOSED = "closed"
-    OPEN = "open"
-    HALF_OPEN = "half_open"
-
-
-class CircuitOpenError(Exception):
-    """Raised when a call is attempted on an open circuit."""
+from digitalkin.models.grpc_servers.circuit_breaker import CBState
+from digitalkin.models.settings.grpc_client import CircuitBreakerSettings
 
 
 class CircuitBreaker:
@@ -55,21 +44,28 @@ class CircuitBreaker:
     def get_or_create(
         cls,
         service_id: str,
-        fail_max: int = int(os.environ.get("DIGITALKIN_CB_FAIL_MAX", "5")),
-        reset_timeout: float = float(os.environ.get("DIGITALKIN_CB_RESET_TIMEOUT", "30")),
+        fail_max: int | None = None,
+        reset_timeout: float | None = None,
     ) -> CircuitBreaker:
         """Get existing circuit breaker for a service or create one.
 
         Args:
             service_id: Service identifier.
             fail_max: Consecutive failures before opening.
+                Defaults to CircuitBreakerSettings.fail_max.
             reset_timeout: Seconds to wait before half-open probe.
+                Defaults to CircuitBreakerSettings.reset_timeout.
 
         Returns:
             Circuit breaker for this service.
         """
         if service_id not in cls._instances:
-            cls._instances[service_id] = cls(service_id, fail_max, reset_timeout)
+            settings = CircuitBreakerSettings()
+            cls._instances[service_id] = cls(
+                service_id,
+                fail_max if fail_max is not None else settings.fail_max,
+                reset_timeout if reset_timeout is not None else settings.reset_timeout,
+            )
         return cls._instances[service_id]
 
     def __init__(self, service_id: str, fail_max: int, reset_timeout: float) -> None:

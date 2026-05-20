@@ -2,51 +2,12 @@
 
 import datetime
 import io
-import logging
 import os
-from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from digitalkin.logger import logger
-
-# Phase 7.C: rotate per-task profile files to avoid unbounded growth.
-# Default keeps the most recent N profiles by mtime; configure via
-# ``DIGITALKIN_PROFILER_KEEP_N``.
-PROFILER_KEEP_N = int(os.environ.get("DIGITALKIN_PROFILER_KEEP_N", "100"))
-
-
-def _rotate_profiles(output_dir: str, keep_n: int, suffixes: tuple[str, ...]) -> None:
-    """Trim ``output_dir`` to the most recent ``keep_n`` files by mtime.
-
-    Args:
-        output_dir: Directory containing profile files.
-        keep_n: Number of files to keep. ``<= 0`` disables rotation.
-        suffixes: File extensions to include in rotation (e.g. ``(".html",)``).
-    """
-    if keep_n <= 0:
-        return
-    try:
-        candidates = [p for p in Path(output_dir).iterdir() if p.is_file() and p.suffix in suffixes]
-    except OSError:
-        return
-    if len(candidates) <= keep_n:
-        return
-    candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-    for stale in candidates[keep_n:]:
-        try:
-            stale.unlink()
-        except OSError:
-            logger.debug("Profiler rotation: could not delete %s", stale)
-
-
-class ProfilerMode(str, Enum):
-    """Profiler backend selection."""
-
-    NONE = "none"
-    VIZTRACER = "viztracer"
-    YAPPI = "yappi"
-    PYINSTRUMENT = "pyinstrument"
+from digitalkin.models.settings.profiling import ProfilerMode, ProfilingSettings
 
 
 class TaskProfiler:
@@ -58,6 +19,8 @@ class TaskProfiler:
     Yappi profiles the entire process, not individual tasks. When multiple tasks
     run concurrently, yappi stats reflect all of them.
     """
+
+    _settings: ClassVar[ProfilingSettings] = ProfilingSettings()
 
     def __init__(self, task_id: str, mode: ProfilerMode, output_dir: str) -> None:
         """Initialize the task profiler.
@@ -72,6 +35,30 @@ class TaskProfiler:
         self._output_dir = output_dir
         self._profiler: Any = None
         self._yappi_started: bool = False
+
+    @staticmethod
+    def _rotate_profiles(output_dir: str, keep_n: int, suffixes: tuple[str, ...]) -> None:
+        """Trim ``output_dir`` to the most recent ``keep_n`` files by mtime.
+
+        Args:
+            output_dir: Directory containing profile files.
+            keep_n: Number of files to keep. ``<= 0`` disables rotation.
+            suffixes: File extensions to include in rotation (e.g. ``(".html",)``).
+        """
+        if keep_n <= 0:
+            return
+        try:
+            candidates = [p for p in Path(output_dir).iterdir() if p.is_file() and p.suffix in suffixes]
+        except OSError:
+            return
+        if len(candidates) <= keep_n:
+            return
+        candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        for stale in candidates[keep_n:]:
+            try:
+                stale.unlink()
+            except OSError:  # noqa: PERF203
+                logger.debug("Profiler rotation: could not delete %s", stale)
 
     def start(self) -> None:
         """Start the profiler. No-op when mode is NONE."""
@@ -150,40 +137,10 @@ class TaskProfiler:
                 Path(path).write_text(self._profiler.output_html(), encoding="utf-8")
                 logger.info("Pyinstrument profile saved: %s", path)
                 logger.info("Pyinstrument summary:\n%s", self._profiler.output_text())
-                _rotate_profiles(self._output_dir, PROFILER_KEEP_N, (".html",))
+                self._rotate_profiles(self._output_dir, self._settings.profiler_keep_n, (".html",))
 
         except Exception:
             logger.exception("Failed to stop/save profiler %s for task %s", self._mode.value, self._task_id)
         finally:
             self._profiler = None
             self._yappi_started = False
-
-
-class _LogWriter:
-    """Adapter to redirect yappi print_all output to a logger."""
-
-    def __init__(self, target_logger: logging.Logger, level: int) -> None:
-        """Initialize the log writer.
-
-        Args:
-            target_logger: Logger to write to.
-            level: Logging level for output.
-        """
-        self._logger = target_logger
-        self._level = level
-        self._buffer: list[str] = []
-
-    def write(self, text: str) -> None:
-        """Buffer text lines for logging.
-
-        Args:
-            text: Text to write.
-        """
-        if text and text.strip():
-            self._buffer.append(text.rstrip())
-
-    def flush(self) -> None:
-        """Flush buffered lines to the logger."""
-        if self._buffer:
-            self._logger.log(self._level, "Yappi top functions:\n%s", "\n".join(self._buffer))
-            self._buffer.clear()

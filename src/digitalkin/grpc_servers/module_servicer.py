@@ -11,20 +11,20 @@ from agentic_mesh_protocol.module.v1 import (
     information_pb2,
     lifecycle_pb2,
     module_service_pb2_grpc,
-    monitoring_pb2,
 )
 from google.protobuf import json_format, struct_pb2
 
 from digitalkin.core.job_manager.base_job_manager import BaseJobManager
 from digitalkin.core.job_manager.single_job_manager import SingleJobManager
-from digitalkin.grpc_servers.gateway_constants import TOOLKIT_CACHE_TTL_S
-from digitalkin.grpc_servers.utils.exceptions import ServicerError
+from digitalkin.grpc_servers.exceptions import ServicerError
 from digitalkin.logger import logger
-from digitalkin.models.module.module import ModuleCodeModel, ModuleStatus
+from digitalkin.models.module.module import ModuleCodeModel
 from digitalkin.models.module.setup_types import SetupModel
+from digitalkin.models.services.services import ServicesMode
+from digitalkin.models.settings.gateway import GatewaySettings
+from digitalkin.models.settings.server.servicer import ModuleServicerSettings
 from digitalkin.modules._base_module import BaseModule
 from digitalkin.services.registry import GrpcRegistry, RegistryStrategy
-from digitalkin.services.services_models import ServicesMode
 from digitalkin.services.setup.default_setup import DefaultSetup
 from digitalkin.services.setup.grpc_setup import GrpcSetup
 from digitalkin.services.setup.setup_strategy import SetupStrategy, SetupVersionData
@@ -90,10 +90,11 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
 
         logger.debug("ModuleServicer initialized with SingleJobManager")
         self.setup = GrpcSetup() if self.args.services_mode == ServicesMode.REMOTE else DefaultSetup()
+        servicer_settings = ModuleServicerSettings()
         self._setup_cache: dict[str, SetupVersionData] = {}
-        self._setup_cache_max = int(os.environ.get("DIGITALKIN_SETUP_CACHE_MAX", "100"))
+        self._setup_cache_max = servicer_settings.setup_cache_max
         self._setup_inflight: dict[str, asyncio.Future[SetupVersionData]] = {}
-        self._completion_timeout = float(os.environ.get("DIGITALKIN_COMPLETION_TIMEOUT", "300.0"))
+        self._completion_timeout = servicer_settings.completion_timeout
 
         self._registry_cache = None
         self._tool_cache_by_setup = {}
@@ -147,7 +148,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         return value
 
     def set_tool_cache(self, setup_id: str, value: Any) -> None:
-        """Insert ``value`` with TTL ``TOOLKIT_CACHE_TTL_S``.
+        """Insert ``value`` with TTL ``GatewayQueueSettings.toolkit_cache_ttl_s``.
 
         Args:
             setup_id: Setup identifier.
@@ -156,7 +157,10 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         if len(self._tool_cache_by_setup) >= self._setup_cache_max:
             oldest_key = next(iter(self._tool_cache_by_setup))
             del self._tool_cache_by_setup[oldest_key]
-        self._tool_cache_by_setup[setup_id] = (value, time.monotonic() + TOOLKIT_CACHE_TTL_S)
+        self._tool_cache_by_setup[setup_id] = (
+            value,
+            time.monotonic() + GatewaySettings().queue.toolkit_cache_ttl_s,
+        )
 
     def _get_registry(self) -> RegistryStrategy | None:
         """Get a cached registry instance if configured.

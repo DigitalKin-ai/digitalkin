@@ -37,22 +37,16 @@ from redis.exceptions import RedisError
 
 from digitalkin.core.profiling.step_timer import StepTimer
 from digitalkin.core.task_manager.redis.proto_streams import ProtoStreamReader
-from digitalkin.grpc_servers.gateway_constants import (
-    DIAL_BACK_BIDI_TIMEOUT_S,
-    MAX_FROM_SEQ,
-    MAX_STREAMS,
-    validate_address,
-    validate_id,
-)
-from digitalkin.grpc_servers.stream_error_codes import StreamErrorCode
+from digitalkin.grpc_servers.m2m_call_registry import M2MCallRegistry
 from digitalkin.grpc_servers.stream_registry import StreamRegistry
 from digitalkin.grpc_servers.stream_session import StreamSession
 from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
+from digitalkin.grpc_servers.utils.validators import GatewayValidator
 from digitalkin.logger import logger
-from digitalkin.services.communication.grpc_communication import (
-    GrpcCommunication,
-    InvalidConsumerAddressError,
-)
+from digitalkin.models.grpc_servers.stream_error_codes import StreamErrorCode
+from digitalkin.models.settings.gateway import GatewaySettings
+from digitalkin.services.communication.exceptions import InvalidConsumerAddressError
+from digitalkin.services.communication.grpc_communication import GrpcCommunication
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterator
@@ -128,17 +122,19 @@ class GatewayServicer:
     def __init__(
         self,
         redis_client: RedisClient,
-        max_streams: int = MAX_STREAMS,
+        max_streams: int | None = None,
         circuit_breaker: CircuitBreaker | None = None,
         cache_handler: Any = None,
         client_config: Any = None,
         module_runner: ModuleRunner | None = None,
+        settings: GatewaySettings | None = None,
     ) -> None:
         """Initialize the gateway servicer.
 
         Args:
             redis_client: Redis for stream persistence and signals.
             max_streams: Maximum concurrent sessions (cluster-wide with Redis).
+                Falls back to ``settings.max_streams``.
             circuit_breaker: Optional circuit breaker for recording success/failure.
             cache_handler: Async callback for cache invalidation signals (from ModuleServer).
             client_config: ClientConfig for outbound dial-back to consumers
@@ -147,13 +143,21 @@ class GatewayServicer:
                 consumer's first reply lands. Required in embedded mode; the
                 dial-back is the sole entry point for module execution and
                 cannot proceed without it.
+            settings: Optional ``GatewaySettings`` instance. Tests pass a
+                preconfigured one; production defaults to env-var-backed values.
         """
-        self._registry = StreamRegistry(redis_client, max_streams=max_streams)
+        self._settings = settings if settings is not None else GatewaySettings()
+        effective_max_streams = max_streams if max_streams is not None else self._settings.max_streams
+        self._registry = StreamRegistry(redis_client, max_streams=effective_max_streams)
         self._circuit_breaker = circuit_breaker
         self._redis_client = redis_client
         self._cache_handler = cache_handler
         self._client_config = client_config
         self._module_runner = module_runner
+
+        # M2M outbound state — one ``M2MCallRegistry`` per servicer instance,
+        # shared with ``GrpcCommunication`` via the class-level slot below.
+        self._m2m = M2MCallRegistry(self._settings)
 
     def _spawn(self, coro: Any, *, name: str) -> asyncio.Task[Any]:
         """Schedule ``coro`` as a fire-and-forget task supervised by the reaper.
@@ -164,7 +168,7 @@ class GatewayServicer:
 
         Args:
             coro: Coroutine to schedule.
-            name: asyncio task name (for logs and ``[lat-audit]``).
+            name: asyncio task name (for logs).
 
         Returns:
             The created task.
@@ -174,10 +178,12 @@ class GatewayServicer:
         return task
 
     async def start(self) -> None:
-        """No-op start hook (no periodic reaper anymore — done-callbacks reap)."""
+        """Start the M2M call-registry TTL sweeper (the only background task here)."""
+        await self._m2m.start()
 
     async def stop(self) -> None:
-        """Shut down the registry — which cancels monitored tasks and reaps sessions."""
+        """Shut down the registries + cancel the M2M sweeper."""
+        await self._m2m.stop()
         await self._registry.shutdown()
 
     async def StartStream(
@@ -203,9 +209,9 @@ class GatewayServicer:
         }
 
         err = (
-            validate_id(task_id, "task_id")
-            or validate_id(request.setup_id, "setup_id")
-            or validate_id(request.mission_id, "mission_id")
+            GatewayValidator.validate_id(task_id, "task_id")
+            or GatewayValidator.validate_id(request.setup_id, "setup_id")
+            or GatewayValidator.validate_id(request.mission_id, "mission_id")
         )
         timer.mark("validate_ids")
         if err is not None:
@@ -218,7 +224,7 @@ class GatewayServicer:
         if isinstance(raw_address, bytes):
             raw_address = raw_address.decode("utf-8", errors="replace")
         client_address = raw_address.strip()
-        addr_err = validate_address(client_address, "x-client-address")
+        addr_err = GatewayValidator.validate_address(client_address, "x-client-address")
         timer.mark("validate_address")
         if addr_err is not None:
             logger.warning(
@@ -386,12 +392,33 @@ class GatewayServicer:
         task_id = first_msg.task_id
         from_seq = first_msg.seq
 
-        if validate_id(task_id, "task_id") is not None:
+        if GatewayValidator.validate_id(task_id, "task_id") is not None:
             async for out in self._fatal_close(task_id, "INVALID_ARGUMENT", "invalid task_id"):
                 yield out
             return
 
-        if from_seq > MAX_FROM_SEQ:
+        # Dial-back-receive dispatch: a remote gateway dialing back into this
+        # process to deliver outputs for an outbound call we initiated. The
+        # first inbound carries ``data.root.protocol == "stream.init"`` and
+        # the task_id matches an entry in the M2M call registry.
+        root_field = first_msg.data.fields.get("root") if first_msg.data else None
+        if root_field is not None:
+            protocol_field = root_field.struct_value.fields.get("protocol")
+            if protocol_field is not None and protocol_field.string_value == "stream.init":
+                if not self._m2m.has(task_id):
+                    logger.warning("[m2m-dialback] no outbound entry for task_id=%s", task_id)
+                    async for out in self._fatal_close(
+                        task_id,
+                        StreamErrorCode.DIAL_BACK_INTERNAL.value,
+                        "unknown outbound task_id",
+                    ):
+                        yield out
+                    return
+                async for out in self._m2m.handle_dial_back_receive(task_id, request_iterator):
+                    yield out
+                return
+
+        if from_seq > self._settings.stream.from_seq_limit:
             async for out in self._fatal_close(task_id, "INVALID_ARGUMENT", "seq out of range"):
                 yield out
             return
@@ -502,7 +529,7 @@ class GatewayServicer:
 
         # Task signals — require task_id + session
         task_id = request.task_id
-        if validate_id(task_id, "task_id") is not None:
+        if GatewayValidator.validate_id(task_id, "task_id") is not None:
             return gateway_pb2.ClientSignalResponse(success=False, task_id=task_id)
 
         action_lower = action_name.lower()
@@ -647,7 +674,7 @@ class GatewayServicer:
         try:
             stub, release = comm.dial_consumer_stream(address)
         except InvalidConsumerAddressError as exc:
-            # Defence-in-depth: StartStream's validate_address should have
+            # Defence-in-depth: StartStream's GatewayValidator.validate_address should have
             # caught this. Reaching here means the contract drifted.
             logger.exception("dial_consumer: invalid address %r", address, extra=log_extra)
             await self._emit_fatal_to_redis(
@@ -715,24 +742,32 @@ class GatewayServicer:
         # session.input_queue, which happens when we receive the consumer's
         # first StreamClient reply (carrying the query).
         output_started = asyncio.Event()
+        # Set once `_outgoing()` exits (after the final stream.end Struct was
+        # yielded). The inbound loop below uses this to bound how long it
+        # waits on the consumer to close — a misbehaving consumer would
+        # otherwise pin the BiDi open until keepalive surfaces UNAVAILABLE.
+        outgoing_done = asyncio.Event()
 
         async def _outgoing() -> AsyncGenerator:
-            yield init_server
-            logger.info(
-                "→ stream.init sent, waiting for consumer query before draining outputs",
-                extra={"task_id": task_id, "mission_id": mission_id, "setup_id": setup_id},
-            )
-            await output_started.wait()
-            logger.info(
-                "✓ Output drain started — streaming module outputs to consumer",
-                extra={"task_id": task_id, "mission_id": mission_id, "setup_id": setup_id},
-            )
-            async for cli_msg in self._consume_from_redis(task_id, from_seq=0):
-                yield gateway_pb2.StreamServer(
-                    task_id=task_id,
-                    seq=cli_msg.from_seq,
-                    data=cli_msg.data,
+            try:
+                yield init_server
+                logger.info(
+                    "→ stream.init sent, waiting for consumer query before draining outputs",
+                    extra={"task_id": task_id, "mission_id": mission_id, "setup_id": setup_id},
                 )
+                await output_started.wait()
+                logger.info(
+                    "✓ Output drain started — streaming module outputs to consumer",
+                    extra={"task_id": task_id, "mission_id": mission_id, "setup_id": setup_id},
+                )
+                async for cli_msg in self._consume_from_redis(task_id, from_seq=0):
+                    yield gateway_pb2.StreamServer(
+                        task_id=task_id,
+                        seq=cli_msg.from_seq,
+                        data=cli_msg.data,
+                    )
+            finally:
+                outgoing_done.set()
 
         async def _runner_fatal(code: str, message: str) -> None:
             await self._emit_fatal_to_redis(task_id, code=code, message=message, log_extra=log_extra)
@@ -755,7 +790,7 @@ class GatewayServicer:
                 address,
                 extra=log_extra,
             )
-            responses = stub.Stream(_outgoing(), timeout=DIAL_BACK_BIDI_TIMEOUT_S)
+            responses = stub.Stream(_outgoing(), timeout=self._settings.dial_back_bidi_timeout_s)
             first = True
             # `responses` items are deserialised by gRPC as the proto's
             # response type (StreamServer), but per the dial-back contract
@@ -763,7 +798,32 @@ class GatewayServicer:
             # match so reading `.data` / `.task_id` works either way. The
             # consumer-emitted message is the query (first) or follow-up
             # upstream input (subsequent).
-            async for upstream in responses:
+            #
+            # Once `_outgoing()` exits (post stream.end), we bound the
+            # inbound wait by ``self._settings.dial_back_close_grace_s``. A well-behaved
+            # consumer closes its response stream promptly when it sees
+            # stream.end (the `_DialBackServicer` in this same SDK does);
+            # the timeout is a guardrail for non-conforming consumers.
+            response_iter = aiter(responses)
+            while True:
+                try:
+                    if outgoing_done.is_set():
+                        upstream = await asyncio.wait_for(
+                            anext(response_iter),
+                            timeout=self._settings.dial_back_close_grace_s,
+                        )
+                    else:
+                        upstream = await anext(response_iter)
+                except StopAsyncIteration:
+                    break
+                except asyncio.TimeoutError:
+                    logger.info(
+                        "Consumer didn't close response stream within %.1fs after stream.end — closing BiDi",
+                        self._settings.dial_back_close_grace_s,
+                        extra=log_extra,
+                    )
+                    break
+
                 if not (upstream.data and len(upstream.data.fields) > 0):
                     continue
                 if first:
@@ -803,6 +863,16 @@ class GatewayServicer:
         except grpc.aio.AioRpcError as exc:
             code_name = exc.code().name
             details = exc.details() or ""
+            if exc.code() == grpc.StatusCode.DEADLINE_EXCEEDED:
+                # Bare "Deadline Exceeded" hides which deadline fired. Name it:
+                # the dial_back_bidi_timeout_s hard cap, with elapsed time and
+                # whether the consumer ever started the stream.
+                details = (
+                    f"dial-back BiDi hit the {self._settings.dial_back_bidi_timeout_s:.0f}s hard "
+                    f"deadline (dial_back_bidi_timeout_s) after "
+                    f"{(time.perf_counter_ns() - t_dial0) / 1e9:.1f}s "
+                    f"(output_started={output_started.is_set()})"
+                )
             logger.warning(
                 "dial_consumer BiDi failed: [%s] %s addr=%s",
                 code_name,

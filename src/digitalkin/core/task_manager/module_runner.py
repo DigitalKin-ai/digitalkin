@@ -14,17 +14,19 @@ directly when the consumer's first reply lands.
 
 from __future__ import annotations
 
+import json
 import time
 from typing import TYPE_CHECKING, Any
 
 from google.protobuf import json_format, struct_pb2
+from pydantic import ValidationError
 
+from digitalkin.core.exceptions import BackpressureTimeoutError
 from digitalkin.core.profiling.step_timer import StepTimer
-from digitalkin.core.profiling.task_profiler import ProfilerMode, TaskProfiler
-from digitalkin.core.task_manager.redis.proto_streams import BackpressureTimeoutError
-from digitalkin.grpc_servers.stream_error_codes import StreamErrorCode
+from digitalkin.core.profiling.task_profiler import TaskProfiler
 from digitalkin.logger import logger
-from digitalkin.models.settings.profiling import ProfilingSettings
+from digitalkin.models.grpc_servers.stream_error_codes import StreamErrorCode
+from digitalkin.models.settings.profiling import ProfilerMode, ProfilingSettings
 
 # Singleton — read profiler env once at import.
 _PROFILING = ProfilingSettings()
@@ -146,8 +148,21 @@ class ModuleRunner:
             # Convert input first (sync, sub-ms), then preload directly.
             # preload_instance runs the module's idempotent prepare() so the
             # eventual start() short-circuits past initialize().
+            top_level_keys = list(query.fields.keys())
+            query_byte_size = query.ByteSize()
+            logger.info(
+                "[input-debug] inbound Struct: top_keys=%s wire_bytes=%d",
+                top_level_keys,
+                query_byte_size,
+                extra=log_extra,
+            )
             input_dict = json_format.MessageToDict(query)
             timer.mark("struct_to_dict")
+            logger.debug(
+                "[input-debug] input_dict (truncated 4KB): %s",
+                repr(input_dict)[:4096],
+                extra=log_extra,
+            )
 
             input_data = self._servicer.module_class.create_input_model(input_dict)
             timer.mark("pydantic_input")
@@ -175,6 +190,37 @@ class ModuleRunner:
             timer.mark("create_job")
             timer.log("ModuleRunner", task_id)
 
+        except ValidationError as exc:
+            input_format_cls = (
+                self._servicer.module_class._extended_input_format  # noqa: SLF001
+                or self._servicer.module_class.input_format
+            )
+            model_name = input_format_cls.__name__ if input_format_cls is not None else "<unknown>"
+            dict_repr = repr(input_dict)[:4096] if "input_dict" in locals() else "<unbuilt>"
+            try:
+                errors_json = json.dumps(exc.errors(include_url=False), default=str)
+            except (TypeError, ValueError):
+                errors_json = repr(exc.errors())
+            missing_paths = [".".join(str(p) for p in e["loc"]) for e in exc.errors() if e["type"] == "missing"]
+            logger.error(
+                "[input-debug] ValidationError on input model %s\n"
+                "  module_class=%s top_keys=%s wire_bytes=%d missing=%s\n"
+                "  errors=%s\n"
+                "  input_dict=%s",
+                model_name,
+                self._servicer.module_class.__name__,
+                top_level_keys,
+                query_byte_size,
+                missing_paths,
+                errors_json,
+                dict_repr,
+                extra=log_extra,
+            )
+            missing_summary = f" missing_fields={missing_paths}" if missing_paths else ""
+            await on_fatal(
+                StreamErrorCode.INPUT_VALIDATION_ERROR.value,
+                f"input validation failed for {model_name}: top_keys={top_level_keys}{missing_summary}",
+            )
         except BackpressureTimeoutError as exc:
             logger.exception("ModuleRunner: backpressure timeout", extra=log_extra)
             await on_fatal(StreamErrorCode.BACKPRESSURE_TIMEOUT.value, str(exc))

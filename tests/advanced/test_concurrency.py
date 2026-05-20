@@ -84,7 +84,8 @@ class TestCircuitBreakerConcurrency:
 
     async def test_concurrent_failures_open_exactly_once(self) -> None:
         """50 concurrent failures on a CB with fail_max=5 opens it, doesn't crash."""
-        from digitalkin.grpc_servers.utils.circuit_breaker import CBState, CircuitBreaker
+        from digitalkin.grpc_servers.utils.circuit_breaker import CircuitBreaker
+        from digitalkin.models.grpc_servers.circuit_breaker import CBState
 
         cb = CircuitBreaker("conc_svc", fail_max=5, reset_timeout=30.0)
 
@@ -96,7 +97,8 @@ class TestCircuitBreakerConcurrency:
 
     async def test_concurrent_success_and_failure(self) -> None:
         """Mixed concurrent success/failure doesn't corrupt state."""
-        from digitalkin.grpc_servers.utils.circuit_breaker import CBState, CircuitBreaker
+        from digitalkin.grpc_servers.utils.circuit_breaker import CircuitBreaker
+        from digitalkin.models.grpc_servers.circuit_breaker import CBState
 
         cb = CircuitBreaker("mixed_svc", fail_max=10, reset_timeout=30.0)
 

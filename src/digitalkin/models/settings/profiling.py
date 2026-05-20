@@ -1,5 +1,7 @@
 """Profiling settings for task execution and asyncio inspection."""
 
+from enum import Enum
+
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -16,3 +18,13 @@ class ProfilingSettings(BaseSettings):
     profiler: str = Field(default="none", description="Profiler backend (none, pyinstrument, yappi, viztracer)")
     profile_output_dir: str = Field(default="./profiles", description="Directory for profile output files")
     uvloop: bool = Field(default=False, description="Enable uvloop event loop policy")
+    profiler_keep_n: int = Field(default=100, description="Number of recent profile files to keep before rotation")
+
+
+class ProfilerMode(str, Enum):
+    """Profiler backend selection."""
+
+    NONE = "none"
+    VIZTRACER = "viztracer"
+    YAPPI = "yappi"
+    PYINSTRUMENT = "pyinstrument"

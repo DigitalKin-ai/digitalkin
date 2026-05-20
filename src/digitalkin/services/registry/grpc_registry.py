@@ -15,7 +15,7 @@ from agentic_mesh_protocol.registry.v1 import (
 )
 from grpc_health.v1 import health_pb2, health_pb2_grpc
 
-from digitalkin.grpc_servers.utils.exceptions import ServerError
+from digitalkin.grpc_servers.exceptions import ServerError
 from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
 from digitalkin.grpc_servers.utils.grpc_error_handler import GrpcErrorHandlerMixin
 from digitalkin.logger import logger

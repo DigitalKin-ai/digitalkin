@@ -18,11 +18,8 @@ from collections import OrderedDict
 from typing import TYPE_CHECKING, Any
 
 from digitalkin.core.resilience.task_supervisor import log_unhandled
-from digitalkin.grpc_servers.gateway_constants import (
-    MAX_LOCAL_CACHE,
-    MAX_STREAMS,
-)
 from digitalkin.logger import logger
+from digitalkin.models.settings.gateway import GatewaySettings
 
 if TYPE_CHECKING:
     from digitalkin.core.task_manager.redis.redis_client import RedisClient
@@ -45,8 +42,8 @@ class StreamRegistry:
     def __init__(
         self,
         redis_client: RedisClient | None = None,  # noqa: ARG002 — kept for back-compat with callers
-        max_streams: int = MAX_STREAMS,
-        max_local: int = MAX_LOCAL_CACHE,
+        max_streams: int | None = None,
+        max_local: int | None = None,
     ) -> None:
         """Initialize the stream registry.
 
@@ -54,11 +51,14 @@ class StreamRegistry:
             redis_client: Unused (kept for back-compat); the registry no
                 longer touches Redis on register/unregister.
             max_streams: Maximum concurrent streams on this instance.
+                Defaults to ``GatewaySettings.max_streams``.
             max_local: Maximum sessions cached locally on this instance.
+                Defaults to ``GatewaySettings.max_local_cache``.
         """
+        settings = GatewaySettings()
         self._local_cache = OrderedDict()
-        self._max_local = max_local
-        self._max_streams = max_streams
+        self._max_local = max_local if max_local is not None else settings.max_local_cache
+        self._max_streams = max_streams if max_streams is not None else settings.max_streams
         self._monitored_tasks = set()
 
     @property
@@ -160,7 +160,7 @@ class StreamRegistry:
         # Local zombie sweep — replaces the old heartbeat-based reaper loop.
         name = task.get_name()
         if name.startswith("dial_consumer_"):
-            task_id = name[len("dial_consumer_"):]
+            task_id = name[len("dial_consumer_") :]
             if task_id in self._local_cache:
                 try:
                     loop = asyncio.get_running_loop()

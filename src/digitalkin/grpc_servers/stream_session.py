@@ -1,6 +1,6 @@
 """Per-task session descriptor for Gateway inter-module brokering.
 
-Phase 4.A reduced this from a queue holder to a thin descriptor:
+The session is a thin descriptor:
 all stream data (consumer→module input, module→consumer output)
 flows through Redis Streams. The session only carries identity, a
 stop event for graceful cancellation, and the dial-back orchestrator

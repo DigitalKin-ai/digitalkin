@@ -10,7 +10,7 @@ All other classes depend on it for Redis access.
 
 from digitalkin.core.task_manager.redis.redis_checkpoint import RedisCheckpointManager
 from digitalkin.core.task_manager.redis.redis_client import RedisClient
-from digitalkin.core.task_manager.redis.redis_idempotency import ClaimResult, RedisIdempotencyGuard
+from digitalkin.core.task_manager.redis.redis_idempotency import RedisIdempotencyGuard
 from digitalkin.core.task_manager.redis.redis_signal import RedisSendBuffer, SharedRedisListener
 from digitalkin.core.task_manager.redis.redis_state import RedisStateManager
 from digitalkin.core.task_manager.redis.redis_streams import (
@@ -18,6 +18,7 @@ from digitalkin.core.task_manager.redis.redis_streams import (
     RedisStreamReader,
     RedisStreamWriter,
 )
+from digitalkin.models.core.redis import ClaimResult
 
 __all__ = [
     "ClaimResult",

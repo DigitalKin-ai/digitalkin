@@ -3,27 +3,15 @@
 import asyncio
 import datetime
 from abc import ABC, abstractmethod
-from enum import Enum
 from typing import Any, Literal, TypeGuard
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
 from digitalkin.logger import logger
+from digitalkin.models.services.storage import DataType
 from digitalkin.services.base_strategy import BaseStrategy
-
-
-class StorageServiceError(Exception):
-    """Base exception for Setup service errors."""
-
-
-class DataType(Enum):
-    """Enum defining the types of data that can be stored."""
-
-    OUTPUT = "OUTPUT"
-    VIEW = "VIEW"
-    LOGS = "LOGS"
-    OTHER = "OTHER"
+from digitalkin.services.storage.exceptions import StorageServiceError
 
 
 class StorageRecord(BaseModel):

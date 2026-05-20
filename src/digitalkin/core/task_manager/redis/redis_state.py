@@ -7,12 +7,12 @@ but before the memory update, the system is consistent.
 
 from __future__ import annotations
 
-import os
 from datetime import datetime, timezone
 from typing import Any
 
 from digitalkin.core.task_manager.redis.redis_client import RedisClient  # noqa: TC001
 from digitalkin.logger import logger
+from digitalkin.models.settings.redis import RedisSettings
 
 
 class RedisStateManager:
@@ -29,16 +29,17 @@ class RedisStateManager:
     def __init__(
         self,
         redis_client: RedisClient,
-        task_ttl: int = int(os.environ.get("DIGITALKIN_REDIS_TASK_TTL", "86400")),
+        task_ttl: int | None = None,
     ) -> None:
         """Initialize state manager.
 
         Args:
             redis_client: Shared Redis connection.
-            task_ttl: TTL in seconds for task state keys (default 24h).
+            task_ttl: TTL in seconds for task state keys.
+                Defaults to RedisSettings.task_ttl.
         """
         self._redis_client = redis_client
-        self._task_ttl = task_ttl
+        self._task_ttl = task_ttl if task_ttl is not None else RedisSettings().task_ttl
 
     async def set_status(
         self,

@@ -9,8 +9,8 @@ from typing import Any
 from pydantic import BaseModel
 
 from digitalkin.logger import logger
+from digitalkin.models.services.storage import DataType
 from digitalkin.services.storage.storage_strategy import (
-    DataType,
     StorageRecord,
     StorageStrategy,
 )

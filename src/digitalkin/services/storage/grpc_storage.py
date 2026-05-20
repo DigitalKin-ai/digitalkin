@@ -7,10 +7,10 @@ from pydantic import BaseModel
 from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
 from digitalkin.logger import logger
 from digitalkin.models.grpc_servers.models import ClientConfig
+from digitalkin.models.services.storage import DataType
+from digitalkin.services.storage.exceptions import StorageServiceError
 from digitalkin.services.storage.storage_strategy import (
-    DataType,
     StorageRecord,
-    StorageServiceError,
     StorageStrategy,
 )
 from digitalkin.utils.proto_utils import proto_to_dict

@@ -7,7 +7,8 @@ from typing import Any
 from pydantic import ValidationError
 
 from digitalkin.logger import logger
-from digitalkin.services.setup.setup_strategy import SetupData, SetupServiceError, SetupStrategy, SetupVersionData
+from digitalkin.services.setup.exceptions import SetupServiceError
+from digitalkin.services.setup.setup_strategy import SetupData, SetupStrategy, SetupVersionData
 
 
 class DefaultSetup(SetupStrategy):

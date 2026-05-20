@@ -9,7 +9,7 @@ import pytest
 from grpc import aio as grpc_aio
 
 from digitalkin.grpc_servers._base_server import BaseServer
-from digitalkin.grpc_servers.utils.exceptions import (
+from digitalkin.grpc_servers.exceptions import (
     SecurityError,
     ServerStateError,
     ServicerError,

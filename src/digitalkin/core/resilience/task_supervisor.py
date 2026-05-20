@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-import asyncio
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from digitalkin.logger import logger
+
+if TYPE_CHECKING:
+    import asyncio
 
 
 def log_unhandled(task: asyncio.Task[Any]) -> None:

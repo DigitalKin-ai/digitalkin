@@ -4,8 +4,10 @@ import abc
 import asyncio
 import os
 
+from digitalkin.models.settings.profiling import ProfilingSettings
+
 # uvloop: faster event loop. Activated by DIGITALKIN_UVLOOP=true.
-if os.environ.get("DIGITALKIN_UVLOOP", "false").lower() == "true":
+if ProfilingSettings().uvloop:
     try:
         import uvloop
 
@@ -20,7 +22,7 @@ from typing import Any, ClassVar, cast
 import grpc
 from grpc import aio as grpc_aio
 
-from digitalkin.grpc_servers.utils.exceptions import (
+from digitalkin.grpc_servers.exceptions import (
     ConfigurationError,
     ReflectionError,
     SecurityError,

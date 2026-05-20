@@ -6,6 +6,7 @@ import asyncio
 from typing import TYPE_CHECKING
 
 from digitalkin.logger import logger
+from digitalkin.models.settings.queue import QueueSettings
 
 if TYPE_CHECKING:
     from digitalkin.models.module.tool_cache import ToolCache
@@ -88,15 +89,13 @@ class ModuleFactory:
 class QueueFactory:
     """Factory for creating asyncio queues with consistent configuration."""
 
-    # Default max queue size to prevent unbounded memory growth
-    DEFAULT_MAX_QUEUE_SIZE = 1000
-
     @staticmethod
-    def create_bounded_queue(maxsize: int = DEFAULT_MAX_QUEUE_SIZE) -> asyncio.Queue:
+    def create_bounded_queue(maxsize: int | None = None) -> asyncio.Queue:
         """Create a bounded asyncio queue with standard configuration.
 
         Args:
-            maxsize: Maximum queue size (default 1000, 0 means unlimited)
+            maxsize: Maximum queue size. ``None`` uses QueueSettings.max_size
+                (default 1000); 0 means unlimited.
 
         Returns:
             Bounded asyncio.Queue instance
@@ -111,6 +110,8 @@ class QueueFactory:
             # unlimited queue
             queue = QueueFactory.create_bounded_queue(maxsize=0)
         """
+        if maxsize is None:
+            maxsize = QueueSettings().max_size
         if maxsize < 0:
             msg = "maxsize must be >= 0"
             raise ValueError(msg)

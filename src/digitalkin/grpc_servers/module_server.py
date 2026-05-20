@@ -14,6 +14,7 @@ from digitalkin.grpc_servers.gateway_servicer import GatewayServicer
 from digitalkin.grpc_servers.module_servicer import ModuleServicer
 from digitalkin.logger import logger
 from digitalkin.models.grpc_servers.models import ClientConfig
+from digitalkin.models.settings.grpc_client import CircuitBreakerSettings
 from digitalkin.modules._base_module import BaseModule
 from digitalkin.services.registry import GrpcRegistry
 
@@ -50,10 +51,11 @@ class ModuleServer(BaseServer):
             from digitalkin.grpc_servers.interceptors.circuit_breaker_interceptor import CircuitBreakerInterceptor
             from digitalkin.grpc_servers.utils.circuit_breaker import CircuitBreaker
 
+            cb_settings = CircuitBreakerSettings()
             self._gateway_circuit_breaker = CircuitBreaker(
                 service_id="gateway",
-                fail_max=int(os.environ.get("DIGITALKIN_CB_FAIL_MAX", "5")),
-                reset_timeout=float(os.environ.get("DIGITALKIN_CB_RESET_TIMEOUT", "10")),
+                fail_max=cb_settings.fail_max,
+                reset_timeout=cb_settings.reset_timeout,
             )
             all_interceptors.append(CircuitBreakerInterceptor(self._gateway_circuit_breaker))
 
@@ -120,6 +122,14 @@ class ModuleServer(BaseServer):
             client_config=self.client_config,
             module_runner=module_runner,
         )
+
+        # Expose the live M2M call registry to every GrpcCommunication
+        # instance that's built later by services_config. This is what
+        # makes the M2M call_module flow single-port — the dial-back
+        # rendezvous lives on the running gateway, not a separate server.
+        from digitalkin.services.communication.grpc_communication import GrpcCommunication
+
+        GrpcCommunication.set_m2m_call_registry(self._gateway_servicer._m2m)
 
         self.register_servicer(
             self._gateway_servicer,

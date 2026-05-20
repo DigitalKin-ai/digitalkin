@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 def test_rotation_keeps_n_most_recent(tmp_path: Path) -> None:
     """Older files are deleted; the N most recent (by mtime) survive."""
-    from digitalkin.core.profiling.task_profiler import _rotate_profiles
+    from digitalkin.core.profiling.task_profiler import TaskProfiler
 
     # Create 7 fake .html files with increasing mtime stamps.
     files = []
@@ -24,7 +24,7 @@ def test_rotation_keeps_n_most_recent(tmp_path: Path) -> None:
         _os.utime(p, (ts, ts))
         files.append(p)
 
-    _rotate_profiles(str(tmp_path), keep_n=3, suffixes=(".html",))
+    TaskProfiler._rotate_profiles(str(tmp_path), keep_n=3, suffixes=(".html",))
 
     survivors = sorted(p.name for p in tmp_path.iterdir())
     # Most recent 3 = task-4, task-5, task-6.
@@ -32,23 +32,23 @@ def test_rotation_keeps_n_most_recent(tmp_path: Path) -> None:
 
 
 def test_rotation_disabled_when_keep_n_zero(tmp_path: Path) -> None:
-    from digitalkin.core.profiling.task_profiler import _rotate_profiles
+    from digitalkin.core.profiling.task_profiler import TaskProfiler
 
     for i in range(5):
         (tmp_path / f"f-{i}.html").write_text("<html/>")
-    _rotate_profiles(str(tmp_path), keep_n=0, suffixes=(".html",))
+    TaskProfiler._rotate_profiles(str(tmp_path), keep_n=0, suffixes=(".html",))
     assert sum(1 for _ in tmp_path.iterdir()) == 5
 
 
 def test_rotation_only_targets_matching_suffix(tmp_path: Path) -> None:
-    from digitalkin.core.profiling.task_profiler import _rotate_profiles
+    from digitalkin.core.profiling.task_profiler import TaskProfiler
 
     for i in range(5):
         (tmp_path / f"f-{i}.html").write_text("<html/>")
     keep = tmp_path / "f-keep.json"
     keep.write_text("{}")
 
-    _rotate_profiles(str(tmp_path), keep_n=2, suffixes=(".html",))
+    TaskProfiler._rotate_profiles(str(tmp_path), keep_n=2, suffixes=(".html",))
 
     # The .json file is preserved regardless; only .html is trimmed.
     names = sorted(p.suffix for p in tmp_path.iterdir())
@@ -58,7 +58,8 @@ def test_rotation_only_targets_matching_suffix(tmp_path: Path) -> None:
 
 def test_pyinstrument_save_triggers_rotation(tmp_path: Path) -> None:
     """End-to-end: TaskProfiler.stop in PYINSTRUMENT mode invokes rotation."""
-    from digitalkin.core.profiling.task_profiler import ProfilerMode, TaskProfiler
+    from digitalkin.core.profiling.task_profiler import TaskProfiler
+    from digitalkin.models.settings.profiling import ProfilerMode
 
     # Pre-populate the dir with old .html files.
     for i in range(5):
@@ -75,7 +76,7 @@ def test_pyinstrument_save_triggers_rotation(tmp_path: Path) -> None:
 
     profiler._profiler = _FakeProfiler()  # noqa: SLF001
 
-    with patch("digitalkin.core.profiling.task_profiler.PROFILER_KEEP_N", 3):
+    with patch.object(TaskProfiler._settings, "profiler_keep_n", 3):
         profiler.stop()
 
     # The new file plus 2 of the old ones (3 total) survive.

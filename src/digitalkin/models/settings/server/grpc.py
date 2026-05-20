@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from pydantic import Field, NonNegativeFloat
+from pydantic import Field, NonNegativeInt
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from digitalkin.models.grpc_servers.models import GrpcCompression
@@ -13,12 +13,12 @@ class GrpcServerSettings(BaseSettings):
 
     Attributes:
         compression (GrpcCompression): gRPC compression algorithm to use for server responses.
-        keepalive_time (NonNegativeFloat): Interval for server keepalive pings, in milliseconds.
-        keepalive_timeout (NonNegativeFloat): Timeout for server keepalive pings, in milliseconds.
-        min_ping_interval (NonNegativeFloat): Minimum interval between HTTP/2 pings on the server side, in milliseconds.
-        max_receive_message_lenght (NonNegativeFloat): Maximum message size the server can receive, in bytes.
-        max_send_message_length (NonNegativeFloat): Maximum message size the server can send, in bytes.
-        max_pings_without_data (NonNegativeFloat): Maximum number of pings the server allows without receiving any data.
+        keepalive_time (NonNegativeInt): Interval for server keepalive pings, in milliseconds.
+        keepalive_timeout (NonNegativeInt): Timeout for server keepalive pings, in milliseconds.
+        min_ping_interval (NonNegativeInt): Minimum interval between HTTP/2 pings on the server side, in milliseconds.
+        max_receive_message_lenght (NonNegativeInt): Maximum message size the server can receive, in bytes.
+        max_send_message_length (NonNegativeInt): Maximum message size the server can send, in bytes.
+        max_pings_without_data (NonNegativeInt): Maximum number of pings the server allows without receiving any data.
         keepalive_permit_without_calls (bool): Allow clients to send keepalive pings even when there are no active RPCs.
 
     """
@@ -37,32 +37,32 @@ class GrpcServerSettings(BaseSettings):
 
     # ── Options ───────────────────────────────────────────────────────────────────── #
 
-    keepalive_time: NonNegativeFloat = Field(
+    keepalive_time: NonNegativeInt = Field(
         120000,
         description="Interval for server keepalive pings.",
         alias="SERVER_GRPC_OPTIONS_KEEPALIVE_TIME",
     )
-    keepalive_timeout: NonNegativeFloat = Field(
+    keepalive_timeout: NonNegativeInt = Field(
         20000,
         description="Timeout for server keepalive pings.",
         alias="SERVER_GRPC_OPTIONS_KEEPALIVE_TIMEOUT",
     )
-    min_ping_interval: NonNegativeFloat = Field(
+    min_ping_interval: NonNegativeInt = Field(
         10000,
         description="Minimum interval between HTTP/2 pings on the server side.",
         alias="SERVER_GRPC_OPTIONS_MIN_PING_INTERVAL",
     )
-    max_receive_message_lenght: NonNegativeFloat = Field(
+    max_receive_message_lenght: NonNegativeInt = Field(
         100 * 1024 * 1024,
         description="Maximum message size the server can receive, in bytes.",
         alias="SERVER_GRPC_OPTIONS_MAX_RECEIVE_MESSAGE_LENGTH",
     )
-    max_send_message_length: NonNegativeFloat = Field(
+    max_send_message_length: NonNegativeInt = Field(
         100 * 1024 * 1024,
         description="Maximum message size the server can send, in bytes.",
         alias="SERVER_GRPC_OPTIONS_MAX_SEND_MESSAGE_LENGTH",
     )
-    max_pings_without_data: NonNegativeFloat = Field(
+    max_pings_without_data: NonNegativeInt = Field(
         0,
         description="Maximum number of pings the server allows without receiving any data. "
         "Setting to 0 allows unlimited pings, "

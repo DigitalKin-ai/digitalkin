@@ -168,10 +168,10 @@ def _mock_module_class() -> Mock:
 
 def test_env_var_configuration(monkeypatch: pytest.MonkeyPatch) -> None:
     """Strategy and timeout are read from env vars in __init__."""
-    monkeypatch.setenv("DIGITALKIN_BACKPRESSURE_STRATEGY", "reject")
-    monkeypatch.setenv("DIGITALKIN_BACKPRESSURE_TIMEOUT", "42.5")
+    monkeypatch.setenv("DIGITALKIN_JOB_MANAGER_BACKPRESSURE_STRATEGY", "reject")
+    monkeypatch.setenv("DIGITALKIN_JOB_MANAGER_BACKPRESSURE_TIMEOUT", "42.5")
 
-    from digitalkin.services.services_models import ServicesMode
+    from digitalkin.models.services.services import ServicesMode
 
     mgr = SingleJobManager(_mock_module_class(), ServicesMode.LOCAL, MagicMock())
 
@@ -181,10 +181,10 @@ def test_env_var_configuration(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_env_var_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     """Default strategy is BLOCK, default timeout is 30.0."""
-    monkeypatch.delenv("DIGITALKIN_BACKPRESSURE_STRATEGY", raising=False)
-    monkeypatch.delenv("DIGITALKIN_BACKPRESSURE_TIMEOUT", raising=False)
+    monkeypatch.delenv("DIGITALKIN_JOB_MANAGER_BACKPRESSURE_STRATEGY", raising=False)
+    monkeypatch.delenv("DIGITALKIN_JOB_MANAGER_BACKPRESSURE_TIMEOUT", raising=False)
 
-    from digitalkin.services.services_models import ServicesMode
+    from digitalkin.models.services.services import ServicesMode
 
     mgr = SingleJobManager(_mock_module_class(), ServicesMode.LOCAL, MagicMock())
 

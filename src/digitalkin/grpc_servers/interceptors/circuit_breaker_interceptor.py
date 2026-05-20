@@ -17,7 +17,8 @@ from typing import Any
 import grpc
 import grpc.aio
 
-from digitalkin.grpc_servers.utils.circuit_breaker import CircuitBreaker, CircuitOpenError
+from digitalkin.grpc_servers.exceptions import CircuitOpenError
+from digitalkin.grpc_servers.utils.circuit_breaker import CircuitBreaker
 from digitalkin.logger import logger
 
 

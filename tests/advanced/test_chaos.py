@@ -98,7 +98,9 @@ class TestCircuitBreakerChaos:
 
     async def test_sustained_failure_opens_circuit(self) -> None:
         """5 consecutive failures open the circuit, subsequent calls fail fast."""
-        from digitalkin.grpc_servers.utils.circuit_breaker import CBState, CircuitBreaker, CircuitOpenError
+        from digitalkin.grpc_servers.exceptions import CircuitOpenError
+        from digitalkin.grpc_servers.utils.circuit_breaker import CircuitBreaker
+        from digitalkin.models.grpc_servers.circuit_breaker import CBState
 
         cb = CircuitBreaker("chaos_svc", fail_max=5, reset_timeout=30.0)
 
@@ -113,7 +115,7 @@ class TestCircuitBreakerChaos:
     async def test_circuit_open_prevents_grpc_call(self) -> None:
         """When circuit is open, exec_grpc_query raises ServerError immediately."""
         from digitalkin.grpc_servers.utils.circuit_breaker import CircuitBreaker
-        from digitalkin.grpc_servers.utils.exceptions import ServerError
+        from digitalkin.grpc_servers.exceptions import ServerError
         from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
 
         cb = CircuitBreaker.get_or_create("ChaosService", fail_max=1, reset_timeout=30.0)

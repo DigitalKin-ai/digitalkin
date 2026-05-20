@@ -6,9 +6,9 @@ from typing import Annotated
 import pytest
 from pydantic import BaseModel, Field
 
+from digitalkin.models.utils.dynamic_schema import ResolveResult
 from digitalkin.utils.dynamic_schema import (
     DynamicField,
-    ResolveResult,
     get_dynamic_metadata,
     get_fetchers,
     has_dynamic,

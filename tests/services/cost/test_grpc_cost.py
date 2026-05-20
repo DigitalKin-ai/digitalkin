@@ -14,10 +14,12 @@ import grpc_testing
 import pytest
 from agentic_mesh_protocol.cost.v1 import cost_service_pb2, cost_service_pb2_grpc
 
-from digitalkin.grpc_servers.utils.exceptions import ServerError
+from digitalkin.grpc_servers.exceptions import ServerError
 from digitalkin.models.grpc_servers.models import ClientConfig
 from digitalkin.models.settings.utils.channel import ControlFlow, SecurityMode
-from digitalkin.services.cost.cost_strategy import CostConfig, CostData, CostServiceError, CostType
+from digitalkin.models.services.cost import CostType
+from digitalkin.services.cost.cost_strategy import CostConfig, CostData
+from digitalkin.services.cost.exceptions import CostServiceError
 from digitalkin.services.cost.grpc_cost import GrpcCost
 from mock_cost_servicer import MockCostServicer
 from tests.fixtures.grpc_fixtures import AsyncStubWrapper, FakeContext

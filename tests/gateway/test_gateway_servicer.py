@@ -323,17 +323,17 @@ class TestStream:
         assert _protocol_of(responses[1]) == "stream.end"
 
     async def test_from_seq_out_of_range_yields_fatal_error(self) -> None:
-        """Stream with from_seq above MAX_FROM_SEQ yields the sentinel error sequence."""
+        """Stream with from_seq above ``GatewayStreamSettings.from_seq_limit`` yields the sentinel error sequence."""
         try:
             from agentic_mesh_protocol.gateway.v1 import gateway_pb2  # noqa: F401
         except ImportError:
             pytest.skip("Gateway proto not installed")
 
-        from digitalkin.grpc_servers.gateway_constants import MAX_FROM_SEQ
+        from digitalkin.models.settings.gateway import GatewaySettings
 
         servicer = _mock_servicer()
 
-        init_msg = _make_stream_request(task_id="task_oor", seq=MAX_FROM_SEQ + 1)
+        init_msg = _make_stream_request(task_id="task_oor", seq=GatewaySettings().stream.from_seq_limit + 1)
         request_iter = _FakeRequestIterator([init_msg])
 
         context = _mock_context()

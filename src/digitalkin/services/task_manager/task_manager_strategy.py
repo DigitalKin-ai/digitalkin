@@ -5,10 +5,6 @@ from collections.abc import AsyncGenerator
 from typing import Any
 
 
-class TaskManagerServiceError(Exception):
-    """Error raised by task manager service operations."""
-
-
 class TaskManagerStrategy(ABC):
     """Abstract strategy for task manager signal management.
 

@@ -5,10 +5,10 @@ from pathlib import Path
 import pytest
 
 from digitalkin.services.filesystem import DefaultFilesystem
+from digitalkin.services.filesystem.exceptions import FilesystemServiceError
 from digitalkin.services.filesystem.filesystem_strategy import (
     FileFilter,
     FilesystemRecord,
-    FilesystemServiceError,
     UploadFileData,
 )
 

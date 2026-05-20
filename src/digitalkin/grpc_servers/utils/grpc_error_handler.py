@@ -4,7 +4,7 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import Any
 
-from digitalkin.grpc_servers.utils.exceptions import ServerError
+from digitalkin.grpc_servers.exceptions import ServerError
 from digitalkin.logger import logger
 
 

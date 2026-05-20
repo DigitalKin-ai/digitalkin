@@ -1,7 +1,6 @@
 """Tool reference types for module configuration."""
 
 import asyncio
-import os
 from typing import Annotated, ClassVar
 
 from pydantic import AfterValidator, BaseModel, BeforeValidator, Field, PlainSerializer
@@ -11,6 +10,7 @@ from pydantic_core import CoreSchema
 
 from digitalkin.logger import logger
 from digitalkin.models.module.tool_cache import ToolModuleInfo, module_info_to_tool_module_info
+from digitalkin.models.settings.module import ModuleSettings
 from digitalkin.services.communication.communication_strategy import CommunicationStrategy
 from digitalkin.services.registry import RegistryStrategy
 
@@ -25,7 +25,7 @@ class ToolSelection(BaseModel):
 class ToolReference(BaseModel):
     """Tool selection containing setup IDs and trigger filters."""
 
-    _TOOL_RESOLVE_TIMEOUT: ClassVar[float] = float(os.environ.get("DIGITALKIN_TOOL_RESOLVE_TIMEOUT", "10.0"))
+    _module_settings: ClassVar[ModuleSettings] = ModuleSettings()
 
     selected_tools: list[ToolSelection] = Field(
         default_factory=list, description="Selected tools with trigger filters."
@@ -34,7 +34,7 @@ class ToolReference(BaseModel):
     async def resolve(self, registry: RegistryStrategy, communication: CommunicationStrategy) -> list[ToolModuleInfo]:
         """Resolve selected tools using the registry.
 
-        Each tool resolution is bounded by DIGITALKIN_TOOL_RESOLVE_TIMEOUT (default 10s).
+        Each tool resolution is bounded by DIGITALKIN_MODULE_TOOL_RESOLVE_TIMEOUT (default 10s).
 
         Args:
             registry: Registry service for module discovery.
@@ -43,7 +43,7 @@ class ToolReference(BaseModel):
         Returns:
             List of ToolModuleInfo for resolved tools, filtered by enabled triggers.
         """
-        timeout = self._TOOL_RESOLVE_TIMEOUT
+        timeout = self._module_settings.tool_resolve_timeout
 
         async def _resolve_with_timeout(entry: ToolSelection) -> ToolModuleInfo | None:
             return await asyncio.wait_for(
@@ -86,7 +86,16 @@ class ToolReference(BaseModel):
         if not info:
             return None
         tool_info = await module_info_to_tool_module_info(info, entry.setup_id, setup.name, communication)
-        if enabled_triggers := {name for name, enabled in entry.triggers.items() if enabled}:
+        enabled_triggers = {name for name, enabled in entry.triggers.items() if enabled}
+        if enabled_triggers:
+            available = {t.name for t in tool_info.tools}
+            if unknown := enabled_triggers - available:
+                logger.warning(
+                    "Tool '%s' enables triggers the module does not expose: %s (available: %s)",
+                    entry.setup_id,
+                    sorted(unknown),
+                    sorted(available),
+                )
             tool_info.tools = [t for t in tool_info.tools if t.name in enabled_triggers]
         return tool_info
 

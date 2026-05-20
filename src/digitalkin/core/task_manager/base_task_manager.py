@@ -2,7 +2,6 @@
 
 import asyncio
 import contextlib
-import os
 import types
 from abc import ABC, abstractmethod
 from collections.abc import Coroutine
@@ -13,6 +12,7 @@ from typing_extensions import Self
 from digitalkin.core.task_manager.task_session import TaskSession
 from digitalkin.logger import logger
 from digitalkin.models.core.task_monitor import CancellationReason, SignalMessage, SignalType
+from digitalkin.models.settings.task_manager import TaskManagerSettings
 from digitalkin.modules._base_module import BaseModule
 
 
@@ -36,22 +36,23 @@ class BaseTaskManager(ABC):
         Args:
             default_timeout: Default timeout for task operations in seconds
         """
+        tm_settings = TaskManagerSettings()
         self.tasks = {}
         self.tasks_sessions = {}
         self.default_timeout = default_timeout
         self._shutdown_event = asyncio.Event()
         self._tasks_lock = asyncio.Lock()
-        self._max_concurrent_tasks = int(os.environ.get("DIGITALKIN_MAX_CONCURRENT_TASKS", "500"))
+        self._max_concurrent_tasks = tm_settings.max_concurrent_tasks
         self._task_slot = asyncio.Semaphore(self._max_concurrent_tasks)
         self._active_slots = 0
-        self._task_wait_timeout = float(os.environ.get("DIGITALKIN_TASK_WAIT_TIMEOUT", "30"))
-        self._stream_drain_timeout = float(os.environ.get("DIGITALKIN_STREAM_DRAIN_TIMEOUT", "2.0"))
+        self._task_wait_timeout = tm_settings.task_wait_timeout
+        self._stream_drain_timeout = tm_settings.stream_drain_timeout
 
         # Admission queue: allows tasks to wait for a slot instead of being rejected.
         # Total in-system capacity = max_concurrent + max_queued.
-        self._max_queued_tasks = int(os.environ.get("DIGITALKIN_MAX_QUEUED_TASKS", "5000"))
-        self._admission_timeout = float(os.environ.get("DIGITALKIN_ADMISSION_TIMEOUT", "5.0"))
-        self._queue_slot_timeout = float(os.environ.get("DIGITALKIN_QUEUE_SLOT_TIMEOUT", "600.0"))
+        self._max_queued_tasks = tm_settings.max_queued_tasks
+        self._admission_timeout = tm_settings.admission_timeout
+        self._queue_slot_timeout = tm_settings.queue_slot_timeout
         self._system_gate = asyncio.Semaphore(self._max_concurrent_tasks + self._max_queued_tasks)
         self._waiting_count = 0
 
@@ -167,7 +168,7 @@ class BaseTaskManager(ABC):
         1. Enter system gate (fast reject if running + queued >= total capacity).
         2. Wait for execution slot (patient wait — released tasks free slots).
 
-        When ``DIGITALKIN_MAX_QUEUED_TASKS=0`` (default) this behaves identically
+        When ``DIGITALKIN_TASK_MANAGER_MAX_QUEUED_TASKS=0`` (default) this behaves identically
         to the previous single-semaphore approach with ``_task_wait_timeout``.
 
         Args:
@@ -182,7 +183,7 @@ class BaseTaskManager(ABC):
             await self._acquire_direct(coro)
 
     async def _acquire_direct(self, coro: Coroutine[Any, Any, None]) -> None:
-        """Legacy path: single semaphore with timeout (DIGITALKIN_MAX_QUEUED_TASKS=0).
+        """Legacy path: single semaphore with timeout (DIGITALKIN_TASK_MANAGER_MAX_QUEUED_TASKS=0).
 
         Raises:
             RuntimeError: If no slot becomes available within the timeout.
@@ -211,7 +212,7 @@ class BaseTaskManager(ABC):
         """
         total_capacity = self._max_concurrent_tasks + self._max_queued_tasks
 
-        # Phase 1: Admit into system (fast reject if completely overloaded)
+        # Admit into system (fast reject if completely overloaded)
         try:
             await asyncio.wait_for(self._system_gate.acquire(), timeout=self._admission_timeout)
         except asyncio.TimeoutError:
@@ -221,7 +222,7 @@ class BaseTaskManager(ABC):
             )
             raise RuntimeError(msg) from None
 
-        # Phase 2: Wait for execution slot (bounded to catch zombie slot hoarding)
+        # Wait for execution slot (bounded to catch zombie slot hoarding)
         self._waiting_count += 1
         if self._waiting_count > 0:
             logger.info(
@@ -372,7 +373,7 @@ class BaseTaskManager(ABC):
         )
 
         try:
-            # Phase 1: Send cancel signal for graceful shutdown
+            # Send cancel signal for graceful shutdown
             await self.send_signal(task_id, mission_id, "cancel", {})
             await asyncio.wait_for(task, timeout=timeout)
 
@@ -392,7 +393,7 @@ class BaseTaskManager(ABC):
                 extra={"mission_id": mission_id, "task_id": task_id},
             )
 
-            # Phase 2: Force cancellation
+            # Force cancellation
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await task

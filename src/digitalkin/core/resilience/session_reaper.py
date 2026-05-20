@@ -12,10 +12,10 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import os
 from typing import TYPE_CHECKING
 
 from digitalkin.logger import logger
+from digitalkin.models.settings.resilience import ResilienceSettings
 
 if TYPE_CHECKING:
     from digitalkin.core.task_manager.base_task_manager import BaseTaskManager
@@ -40,19 +40,22 @@ class SessionReaper:
     def __init__(
         self,
         task_manager: BaseTaskManager,
-        ttl: float = float(os.environ.get("DIGITALKIN_SESSION_REAPER_TTL", "300")),
-        interval: float = float(os.environ.get("DIGITALKIN_SESSION_REAPER_INTERVAL", "60")),
+        ttl: float | None = None,
+        interval: float | None = None,
     ) -> None:
         """Initialize the session reaper.
 
         Args:
             task_manager: The task manager whose sessions to monitor.
             ttl: Seconds a session can be idle before reaping.
+                Defaults to ResilienceSettings.session_reaper_ttl.
             interval: Seconds between reaper scans.
+                Defaults to ResilienceSettings.session_reaper_interval.
         """
+        settings = ResilienceSettings()
         self._task_manager = task_manager
-        self._ttl = ttl
-        self._interval = interval
+        self._ttl = ttl if ttl is not None else settings.session_reaper_ttl
+        self._interval = interval if interval is not None else settings.session_reaper_interval
         self._task = None
         self._running = False
 

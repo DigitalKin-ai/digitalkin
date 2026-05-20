@@ -1,6 +1,5 @@
 """Data models for gRPC server configurations."""
 
-import os
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -8,7 +7,8 @@ from typing import Any
 import grpc
 from pydantic import BaseModel, Field, ValidationInfo, field_validator
 
-from digitalkin.grpc_servers.utils.exceptions import ConfigurationError, SecurityError
+from digitalkin.grpc_servers.exceptions import ConfigurationError, SecurityError
+from digitalkin.models.settings.grpc_client import GrpcChannelSettings, GrpcRetrySettings
 from digitalkin.models.settings.utils.channel import ControlFlow, SecurityMode
 
 
@@ -52,21 +52,21 @@ class RetryPolicy(BaseModel):
     """
 
     max_attempts: int = Field(
-        default_factory=lambda: int(os.environ.get("DIGITALKIN_GRPC_RETRY_MAX_ATTEMPTS", "5")),
+        default=5,
         ge=1,
         le=10,
         description="Maximum retry attempts including the original call",
     )
     initial_backoff: str = Field(
-        default_factory=lambda: os.environ.get("DIGITALKIN_GRPC_RETRY_INITIAL_BACKOFF", "0.1s"),
+        default="0.1s",
         description="Initial backoff duration (e.g., '0.1s')",
     )
     max_backoff: str = Field(
-        default_factory=lambda: os.environ.get("DIGITALKIN_GRPC_RETRY_MAX_BACKOFF", "10s"),
+        default="10s",
         description="Maximum backoff duration (e.g., '10s')",
     )
     backoff_multiplier: float = Field(
-        default_factory=lambda: float(os.environ.get("DIGITALKIN_GRPC_RETRY_BACKOFF_MULTIPLIER", "2.0")),
+        default=2.0,
         ge=1.0,
         description="Multiplier for exponential backoff",
     )
@@ -76,6 +76,21 @@ class RetryPolicy(BaseModel):
     )
 
     model_config = {"extra": "forbid", "frozen": True}
+
+    @classmethod
+    def from_settings(cls) -> "RetryPolicy":
+        """Build a retry policy with backoff values sourced from the environment.
+
+        Returns:
+            Retry policy populated from ``GrpcRetrySettings``.
+        """
+        settings = GrpcRetrySettings()
+        return cls(
+            max_attempts=settings.max_attempts,
+            initial_backoff=settings.initial_backoff,
+            max_backoff=settings.max_backoff,
+            backoff_multiplier=settings.backoff_multiplier,
+        )
 
     def to_service_config_json(self) -> str:
         """Serialize to gRPC service config JSON string.
@@ -202,31 +217,12 @@ class ClientConfig(ChannelConfig):
     """
 
     credentials: ClientCredentials | None = Field(None, description="Client credentials for secure mode")
-    retry_policy: RetryPolicy = Field(default_factory=RetryPolicy, description="Retry policy for failed RPCs")
+    retry_policy: RetryPolicy = Field(
+        default_factory=RetryPolicy.from_settings, description="Retry policy for failed RPCs"
+    )
     compression: GrpcCompression = Field(GrpcCompression.GZIP, description="gRPC compression algorithm")
     channel_options: list[tuple[str, Any]] = Field(
-        default_factory=lambda: [
-            ("grpc.max_receive_message_length", 100 * 1024 * 1024),
-            ("grpc.max_send_message_length", 100 * 1024 * 1024),
-            # === DNS Re-resolution (Critical for Container Environments) ===
-            (
-                "grpc.dns_min_time_between_resolutions_ms",
-                int(os.environ.get("DIGITALKIN_GRPC_DNS_RESOLUTION_MS", "500")),
-            ),
-            ("grpc.initial_reconnect_backoff_ms", int(os.environ.get("DIGITALKIN_GRPC_INITIAL_RECONNECT_MS", "1000"))),
-            ("grpc.max_reconnect_backoff_ms", int(os.environ.get("DIGITALKIN_GRPC_MAX_RECONNECT_MS", "10000"))),
-            ("grpc.min_reconnect_backoff_ms", int(os.environ.get("DIGITALKIN_GRPC_MIN_RECONNECT_MS", "500"))),
-            # === Keepalive Settings (Detect Dead Connections) ===
-            ("grpc.keepalive_time_ms", int(os.environ.get("DIGITALKIN_GRPC_KEEPALIVE_TIME_MS", "60000"))),
-            ("grpc.keepalive_timeout_ms", int(os.environ.get("DIGITALKIN_GRPC_KEEPALIVE_TIMEOUT_MS", "20000"))),
-            ("grpc.keepalive_permit_without_calls", True),
-            (
-                "grpc.http2.min_time_between_pings_ms",
-                int(os.environ.get("DIGITALKIN_GRPC_MIN_PING_INTERVAL_MS", "30000")),
-            ),
-            # === Retry Configuration ===
-            ("grpc.enable_retries", 1),
-        ],
+        default_factory=lambda: GrpcChannelSettings().to_channel_options(),
         description="Resilient gRPC channel options with DNS re-resolution, keepalive, and retries",
     )
 

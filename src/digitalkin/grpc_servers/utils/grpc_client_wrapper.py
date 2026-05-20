@@ -8,7 +8,6 @@ amplification across the mesh.
 
 import asyncio
 import logging
-import os
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -16,10 +15,11 @@ import grpc
 import grpc.aio
 
 from digitalkin.core.resilience.bulkhead import Bulkhead
-from digitalkin.grpc_servers.utils.circuit_breaker import CircuitBreaker, CircuitOpenError
-from digitalkin.grpc_servers.utils.exceptions import ServerError
+from digitalkin.grpc_servers.exceptions import CircuitOpenError, ServerError
+from digitalkin.grpc_servers.utils.circuit_breaker import CircuitBreaker
 from digitalkin.logger import logger
 from digitalkin.models.grpc_servers.models import ClientConfig
+from digitalkin.models.settings.grpc_client import GrpcClientSettings
 from digitalkin.models.settings.utils.channel import SecurityMode
 
 
@@ -47,9 +47,7 @@ class GrpcClientWrapper:
         grpc.StatusCode.INTERNAL,
         grpc.StatusCode.DEADLINE_EXCEEDED,
     }
-    _QUERY_MAX_RETRIES: ClassVar[int] = int(os.environ.get("DIGITALKIN_GRPC_QUERY_MAX_RETRIES", "2"))
-    _QUERY_BACKOFF_BASE_MS: ClassVar[float] = float(os.environ.get("DIGITALKIN_GRPC_QUERY_BACKOFF_BASE_MS", "50"))
-    _QUERY_DEFAULT_TIMEOUT: ClassVar[float] = float(os.environ.get("DIGITALKIN_GRPC_QUERY_TIMEOUT", "30"))
+    _grpc_client_settings: ClassVar[GrpcClientSettings] = GrpcClientSettings()
 
     @staticmethod
     def _build_channel_credentials(config: ClientConfig) -> grpc.ChannelCredentials | None:
@@ -216,8 +214,7 @@ class GrpcClientWrapper:
         Arguments:
             query_endpoint: rpc query name (e.g., "GetSetup", "CreateSetupVersion")
             request: gRPC protobuf request object
-            timeout: Per-call timeout in seconds. Falls back to _QUERY_DEFAULT_TIMEOUT
-                     (env DIGITALKIN_GRPC_QUERY_TIMEOUT, default 30s) when None.
+            timeout: Per-call timeout in seconds. ``None`` applies no client-side deadline.
 
         Returns:
             gRPC protobuf response object.
@@ -233,8 +230,9 @@ class GrpcClientWrapper:
             error_msg = f"[gRPC-client:{self.service_name}.{query_endpoint}] {e}"
             raise ServerError(error_msg) from e
 
-        max_retries = self._QUERY_MAX_RETRIES
-        backoff_delays = tuple(self._QUERY_BACKOFF_BASE_MS / 1000 * (2**i) for i in range(max_retries))
+        max_retries = self._grpc_client_settings.max_retries
+        backoff_base_ms = self._grpc_client_settings.backoff_base_ms
+        backoff_delays = tuple(backoff_base_ms / 1000 * (2**i) for i in range(max_retries))
         last_error: grpc.RpcError | None = None
 
         for attempt in range(max_retries + 1):
@@ -242,7 +240,6 @@ class GrpcClientWrapper:
                 await asyncio.sleep(backoff_delays[attempt - 1])
 
             try:
-                # getattr unavoidable: gRPC stubs expose RPC methods as dynamic attributes
                 rpc_method = getattr(self.stub, query_endpoint, None)  # type: ignore[arg-type]
                 if rpc_method is None:
                     msg = f"[gRPC-client:{self.service_name}] RPC method '{query_endpoint}' not found on stub"
@@ -288,30 +285,3 @@ class GrpcClientWrapper:
         )
         error_msg = f"[gRPC-client:{self.service_name}.{query_endpoint}] [{status_code}] {details}{suffix}"
         raise ServerError(error_msg) from last_error
-
-    async def poll_grpc(self, endpoint: str, request: Any, *, timeout: float) -> Any | None:
-        """Execute a single polling RPC. Returns None on DEADLINE_EXCEEDED (expected empty poll).
-
-        Unlike exec_grpc_query, DEADLINE_EXCEEDED is not an error for polling-style RPCs
-        where the server holds the connection until a result is available or timeout occurs.
-        No retry is performed — the caller is responsible for the retry loop.
-
-        Args:
-            endpoint: RPC method name on self.stub.
-            request: gRPC request protobuf.
-            timeout: Seconds before treating as 'no result available'.
-
-        Returns:
-            gRPC response, or None if DEADLINE_EXCEEDED.
-
-        Raises:
-            ServerError: For any non-DEADLINE_EXCEEDED gRPC error.
-        """
-        try:
-            # getattr unavoidable: gRPC stubs expose RPC methods as dynamic attributes
-            return await getattr(self.stub, endpoint)(request, timeout=timeout)
-        except grpc.RpcError as e:
-            if e.code() == grpc.StatusCode.DEADLINE_EXCEEDED:
-                return None
-            msg = f"[{self.service_name}.{endpoint}] [{e.code().name}] {e.details()}"
-            raise ServerError(msg) from e

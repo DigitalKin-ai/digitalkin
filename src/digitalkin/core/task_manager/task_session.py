@@ -10,7 +10,6 @@ spawned a fire-and-forget task per status change.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import datetime
 import traceback
 from typing import TYPE_CHECKING
@@ -52,7 +51,7 @@ class TaskSession:
 
     is_cancelled: asyncio.Event
     cancellation_reason: CancellationReason
-    _stream_closed: asyncio.Event
+    stream_closed_event: asyncio.Event
 
     # Exception tracking for enhanced logging
     _last_exception: str | None
@@ -104,7 +103,7 @@ class TaskSession:
 
         self.is_cancelled = asyncio.Event()
         self.cancellation_reason = CancellationReason.UNKNOWN
-        self._stream_closed = asyncio.Event()
+        self.stream_closed_event = asyncio.Event()
 
         # Exception tracking
         self._last_exception = None
@@ -145,7 +144,7 @@ class TaskSession:
             return
         try:
             await self._state_manager.set_status(self.task_id, value)
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.warning(
                 "Redis status write failed: task_id=%s status=%s",
                 self.task_id,
@@ -161,11 +160,11 @@ class TaskSession:
     @property
     def stream_closed(self) -> bool:
         """Check if stream termination was signaled."""
-        return self._stream_closed.is_set()
+        return self.stream_closed_event.is_set()
 
     def close_stream(self) -> None:
         """Signal that the stream should terminate."""
-        self._stream_closed.set()
+        self.stream_closed_event.set()
 
     @property
     def setup_id(self) -> str:

@@ -52,7 +52,8 @@ class TestCircuitBreakerProperties:
     @settings(max_examples=100)
     def test_failure_count_never_exceeds_fail_max_on_open(self, failures: list[str], fail_max: int) -> None:
         """The circuit opens at exactly fail_max consecutive failures, never more."""
-        from digitalkin.grpc_servers.utils.circuit_breaker import CBState, CircuitBreaker
+        from digitalkin.grpc_servers.utils.circuit_breaker import CircuitBreaker
+        from digitalkin.models.grpc_servers.circuit_breaker import CBState
 
         CircuitBreaker._instances.clear()
         cb = CircuitBreaker("prop_test", fail_max, reset_timeout=9999.0)
@@ -73,7 +74,8 @@ class TestCircuitBreakerProperties:
     @settings(max_examples=50)
     def test_success_always_resets_to_closed(self, fail_max: int) -> None:
         """A success call always resets the circuit to CLOSED regardless of prior failures."""
-        from digitalkin.grpc_servers.utils.circuit_breaker import CBState, CircuitBreaker
+        from digitalkin.grpc_servers.utils.circuit_breaker import CircuitBreaker
+        from digitalkin.models.grpc_servers.circuit_breaker import CBState
 
         CircuitBreaker._instances.clear()
         cb = CircuitBreaker("prop_reset", fail_max, reset_timeout=9999.0)

@@ -29,7 +29,9 @@ class _MinimalModule:
     start() touch. Avoids abstract-class instantiation overhead."""
 
 
-def _make_module_skeleton(setup_data: Any, *, initialize_side_effect: Any = None) -> Any:
+def _make_module_skeleton(
+    setup_data: Any, *, initialize_side_effect: Any = None, builds_tool_cache: bool = True
+) -> Any:
     """Build a minimal BaseModule-like instance for prepare()/start() tests.
 
     Bypasses the full ModuleFactory + ModuleContext wiring; we only
@@ -45,6 +47,7 @@ def _make_module_skeleton(setup_data: Any, *, initialize_side_effect: Any = None
     inst._prebuilt_tool_cache = None
     inst.trigger_handlers = {}
     inst._prepared = False
+    inst._builds_tool_cache = builds_tool_cache
 
     ctx = MagicMock()
     ctx.callbacks = MagicMock()
@@ -79,6 +82,19 @@ class TestPrepareIdempotent:
         m.triggers_discoverer.init_handlers.assert_called_once()
         setup.build_tool_cache.assert_awaited_once()
         assert m.context.callbacks.send_message is cb
+
+    async def test_tool_module_skips_tool_cache(self) -> None:
+        """A leaf module (`_builds_tool_cache=False`, e.g. ToolModule) skips build_tool_cache."""
+        setup = MagicMock()
+        m = _make_module_skeleton(setup, builds_tool_cache=False)
+        cb = AsyncMock()
+
+        await m.prepare(setup, cb)
+
+        assert m._prepared is True
+        m.initialize.assert_awaited_once()
+        m.triggers_discoverer.init_handlers.assert_called_once()
+        setup.build_tool_cache.assert_not_called()
 
     async def test_second_call_is_noop(self) -> None:
         setup = MagicMock()

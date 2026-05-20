@@ -2,16 +2,15 @@
 
 Prevents duplicate task execution after network partitions or worker
 restarts. Uses a Lua script that atomically reads and conditionally
-writes the claim key, eliminating the SET NX race (see §12.1).
+writes the claim key, eliminating the SET NX race.
 """
 
 from __future__ import annotations
 
-import os
-from enum import Enum
-
 from digitalkin.core.task_manager.redis.redis_client import RedisClient  # noqa: TC001
 from digitalkin.logger import logger
+from digitalkin.models.core.redis import ClaimResult
+from digitalkin.models.settings.redis import RedisSettings
 
 # Lua script: atomic claim with reclaim support.
 # KEYS[1] = idem:{task_id}, ARGV[1] = task_id, ARGV[2] = TTL
@@ -30,14 +29,6 @@ end
 """
 
 
-class ClaimResult(Enum):
-    """Result of an idempotency claim attempt."""
-
-    TAKEN = 0
-    CLAIMED = 1
-    RECLAIMED = 2
-
-
 class RedisIdempotencyGuard:
     """Atomic task claim using Redis Lua scripts.
 
@@ -52,16 +43,17 @@ class RedisIdempotencyGuard:
     def __init__(
         self,
         redis_client: RedisClient,
-        claim_ttl: int = int(os.environ.get("DIGITALKIN_REDIS_IDEM_TTL", "3600")),
+        claim_ttl: int | None = None,
     ) -> None:
         """Initialize idempotency guard.
 
         Args:
             redis_client: Shared Redis connection.
-            claim_ttl: TTL in seconds for claim keys (default 1h).
+            claim_ttl: TTL in seconds for claim keys.
+                Defaults to RedisSettings.idem_ttl.
         """
         self._redis_client = redis_client
-        self._claim_ttl = claim_ttl
+        self._claim_ttl = claim_ttl if claim_ttl is not None else RedisSettings().idem_ttl
 
     async def claim(self, task_id: str) -> ClaimResult:
         """Attempt to claim a task atomically.

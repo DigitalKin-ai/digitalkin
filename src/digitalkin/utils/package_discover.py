@@ -12,16 +12,9 @@ from typing import ClassVar
 from digitalkin.models.module.module_context import ModuleContext
 from digitalkin.models.module.module_types import DataTrigger
 from digitalkin.modules.trigger_handler import TriggerHandler
+from digitalkin.utils.exceptions import DiscoveryError, UnsafePackageError
 
 logger = logging.getLogger(__name__)
-
-
-class SecurityError(Exception):
-    """Raised when security constraints are violated."""
-
-
-class DiscoveryError(Exception):
-    """Raised when discovery fails due to invalid inputs."""
 
 
 class ModuleDiscoverer:
@@ -51,7 +44,7 @@ class ModuleDiscoverer:
 
         Raises:
             DiscoveryError: If packages list is invalid.
-            SecurityError: If file pattern or package names are unsafe.
+            UnsafePackageError: If file pattern or package names are unsafe.
         """
         if not self.packages or not isinstance(self.packages, list):
             msg = "Packages must be a non-empty list"
@@ -132,7 +125,7 @@ class ModuleDiscoverer:
             if not self._safe_import_module(module_name, module_file):
                 return False
 
-        except SecurityError:
+        except UnsafePackageError:
             logger.exception("Security violation %s", module_name)
             return False
         except Exception:
@@ -163,34 +156,34 @@ class ModuleDiscoverer:
             package_name: Dotted Python package name.
 
         Raises:
-            SecurityError: On invalid package names.
+            UnsafePackageError: On invalid package names.
         """
         if not package_name or not isinstance(package_name, str):
             msg = "Package name must be a non-empty string"
-            raise SecurityError(msg)
+            raise UnsafePackageError(msg)
         if any(part in package_name for part in ("..", "/", "\\", "\x00")):
             msg = "Invalid package name: %s"
-            raise SecurityError(msg, package_name)
+            raise UnsafePackageError(msg, package_name)
         if not all(part.isidentifier() for part in package_name.split(".")):
             msg = "Invalid Python package name: %s"
-            raise SecurityError(msg, package_name)
+            raise UnsafePackageError(msg, package_name)
 
     def _validate_file_pattern(self) -> None:
         """Validate that the file glob pattern is safe.
 
         Raises:
-            SecurityError: On dangerous patterns.
+            UnsafePackageError: On dangerous patterns.
         """
         pattern = self.file_pattern
         if not pattern or not isinstance(pattern, str):
             msg = "File pattern must be a non-empty string"
-            raise SecurityError(msg)
+            raise UnsafePackageError(msg)
         if any(d in pattern for d in ("..", "/", "\\", "\x00", "**/")):
             msg = "Dangerous pattern detected: %s"
-            raise SecurityError(msg, pattern)
+            raise UnsafePackageError(msg, pattern)
         if not pattern.endswith(".py"):
             msg = "Pattern must target Python files (.py)"
-            raise SecurityError(msg)
+            raise UnsafePackageError(msg)
 
     def _validate_module_path(self, module_path: Path, base_path: Path) -> None:
         """Ensure module_path resides under base_path and is within size limits.
@@ -200,23 +193,23 @@ class ModuleDiscoverer:
             base_path: Root directory for the package.
 
         Raises:
-            SecurityError: On invalid paths or oversize files.
+            UnsafePackageError: On invalid paths or oversize files.
         """
         try:
             resolved_module = module_path.resolve()
             resolved_base = base_path.resolve()
             if not str(resolved_module).startswith(str(resolved_base)):
                 msg = "Path traversal attempt: %s"
-                raise SecurityError(msg, module_path)
+                raise UnsafePackageError(msg, module_path)
             if not resolved_module.exists() or not resolved_module.is_file():
                 msg = "Invalid module path: %s"
-                raise SecurityError(msg, module_path)
+                raise UnsafePackageError(msg, module_path)
             if resolved_module.stat().st_size > self.max_file_size:
                 msg = "Module file too large: %s"
-                raise SecurityError(msg, module_path)
+                raise UnsafePackageError(msg, module_path)
         except (OSError, ValueError) as e:
             msg = "Invalid module path: %s"
-            raise SecurityError(msg, module_path) from e
+            raise UnsafePackageError(msg, module_path) from e
 
     def _is_safe_module_name(self, module_name: str) -> bool:
         """Check module name against forbidden patterns.

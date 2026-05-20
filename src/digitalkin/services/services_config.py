@@ -4,12 +4,13 @@ from typing import Any, ClassVar
 
 from pydantic import BaseModel, Field, PrivateAttr
 
+from digitalkin.models.services.services import ServicesMode
 from digitalkin.services.communication import CommunicationStrategy, DefaultCommunication, GrpcCommunication
 from digitalkin.services.cost import CostStrategy, DefaultCost, GrpcCost
 from digitalkin.services.filesystem import DefaultFilesystem, FilesystemStrategy, GrpcFilesystem
 from digitalkin.services.identity import DefaultIdentity, IdentityStrategy
 from digitalkin.services.registry import DefaultRegistry, GrpcRegistry, RegistryStrategy
-from digitalkin.services.services_models import ServicesMode, ServicesStrategy
+from digitalkin.services.services_models import ServicesStrategy
 from digitalkin.services.storage import DefaultStorage, GrpcStorage, StorageStrategy
 from digitalkin.services.user_profile import DefaultUserProfile, GrpcUserProfile, UserProfileStrategy
 

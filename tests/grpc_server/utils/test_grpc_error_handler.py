@@ -6,7 +6,7 @@ and unexpected exception conversion.
 
 import pytest
 
-from digitalkin.grpc_servers.utils.exceptions import ServerError
+from digitalkin.grpc_servers.exceptions import ServerError
 from digitalkin.grpc_servers.utils.grpc_error_handler import GrpcErrorHandlerMixin
 
 pytestmark = pytest.mark.timeout(5)

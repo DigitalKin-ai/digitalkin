@@ -12,12 +12,12 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
-import os
 from typing import TYPE_CHECKING, Any
 
 from digitalkin.core.resilience.task_supervisor import log_unhandled
 from digitalkin.core.task_manager.redis.redis_client import RedisClient  # noqa: TC001
 from digitalkin.logger import logger
+from digitalkin.models.settings.redis import RedisSettings
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -42,8 +42,8 @@ class RedisStreamWriter:
         self,
         task_id: str,
         redis_client: RedisClient,
-        stream_ttl: int = int(os.environ.get("DIGITALKIN_REDIS_STREAM_TTL", "300")),
-        maxlen: int = int(os.environ.get("DIGITALKIN_REDIS_STREAM_MAXLEN", "10000")),
+        stream_ttl: int | None = None,
+        maxlen: int | None = None,
     ) -> None:
         """Initialize stream writer.
 
@@ -51,14 +51,17 @@ class RedisStreamWriter:
             task_id: Unique task identifier.
             redis_client: Shared Redis connection.
             stream_ttl: TTL in seconds for the stream key after EOS.
+                Defaults to RedisStreamSettings.ttl.
             maxlen: Approximate max entries before trimming.
+                Defaults to RedisStreamSettings.maxlen.
         """
+        stream = RedisSettings().stream
         self._task_id = task_id
         self._redis_client = redis_client
         self._stream_key = f"task:{task_id}:stream"
         self._seq = 0
-        self._stream_ttl = stream_ttl
-        self._maxlen = maxlen
+        self._stream_ttl = stream_ttl if stream_ttl is not None else stream.ttl
+        self._maxlen = maxlen if maxlen is not None else stream.maxlen
 
     async def write(self, data: dict[str, Any]) -> int:
         """Write an output chunk to the stream.
@@ -120,10 +123,10 @@ class RedisStreamBatchWriter:
         self,
         task_id: str,
         redis_client: RedisClient,
-        stream_ttl: int = int(os.environ.get("DIGITALKIN_REDIS_STREAM_TTL", "300")),
-        maxlen: int = int(os.environ.get("DIGITALKIN_REDIS_STREAM_MAXLEN", "10000")),
-        batch_size: int = int(os.environ.get("DIGITALKIN_REDIS_STREAM_BATCH_SIZE", "20")),
-        flush_interval_ms: int = int(os.environ.get("DIGITALKIN_REDIS_STREAM_FLUSH_MS", "50")),
+        stream_ttl: int | None = None,
+        maxlen: int | None = None,
+        batch_size: int | None = None,
+        flush_interval_ms: int | None = None,
     ) -> None:
         """Initialize batched stream writer.
 
@@ -131,18 +134,23 @@ class RedisStreamBatchWriter:
             task_id: Unique task identifier.
             redis_client: Shared Redis connection.
             stream_ttl: TTL in seconds for the stream key after EOS.
+                Defaults to RedisStreamSettings.ttl.
             maxlen: Approximate max entries before trimming.
+                Defaults to RedisStreamSettings.maxlen.
             batch_size: Max items per pipeline flush.
+                Defaults to RedisStreamSettings.batch_size.
             flush_interval_ms: Max milliseconds before auto-flush.
+                Defaults to RedisStreamSettings.flush_ms.
         """
+        stream = RedisSettings().stream
         self._task_id = task_id
         self._redis_client = redis_client
         self._stream_key = f"task:{task_id}:stream"
         self._seq = 0
-        self._stream_ttl = stream_ttl
-        self._maxlen = maxlen
-        self._batch_size = batch_size
-        self._flush_interval = flush_interval_ms / 1000.0
+        self._stream_ttl = stream_ttl if stream_ttl is not None else stream.ttl
+        self._maxlen = maxlen if maxlen is not None else stream.maxlen
+        self._batch_size = batch_size if batch_size is not None else stream.batch_size
+        self._flush_interval = (flush_interval_ms if flush_interval_ms is not None else stream.flush_ms) / 1000.0
         self._pending = []
         self._flush_task = None
         self._stop_event = asyncio.Event()
@@ -247,7 +255,7 @@ class RedisStreamReader:
         self,
         task_id: str,
         redis_client: RedisClient,
-        cursor_ttl: int = int(os.environ.get("DIGITALKIN_REDIS_CURSOR_TTL", "360")),
+        cursor_ttl: int | None = None,
     ) -> None:
         """Initialize stream reader.
 
@@ -255,6 +263,7 @@ class RedisStreamReader:
             task_id: Unique task identifier.
             redis_client: Shared Redis connection.
             cursor_ttl: TTL in seconds for the cursor key (slightly > stream TTL).
+                Defaults to RedisSettings.cursor_ttl.
         """
         self._task_id = task_id
         self._redis_client = redis_client
@@ -262,7 +271,7 @@ class RedisStreamReader:
         self._cursor_key = f"task:{task_id}:cursor"
         self._last_id = "0-0"
         self._last_seq = 0
-        self._cursor_ttl = cursor_ttl
+        self._cursor_ttl = cursor_ttl if cursor_ttl is not None else RedisSettings().cursor_ttl
 
     async def restore_cursor(self) -> None:
         """Restore the read cursor from Redis (for crash recovery)."""

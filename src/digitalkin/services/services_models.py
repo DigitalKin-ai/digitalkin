@@ -1,11 +1,11 @@
 """This module contains the strategy models for the services."""
 
-from enum import Enum
 from typing import Generic, TypeVar
 
 from pydantic import BaseModel
 
 from digitalkin.logger import logger
+from digitalkin.models.services.services import ServicesMode
 from digitalkin.services.communication import CommunicationStrategy
 from digitalkin.services.cost import CostStrategy
 from digitalkin.services.filesystem import FilesystemStrategy
@@ -27,13 +27,6 @@ T = TypeVar(
     | UserProfileStrategy
     | TaskManagerStrategy,
 )
-
-
-class ServicesMode(str, Enum):
-    """Mode for strategy execution."""
-
-    LOCAL = "local"
-    REMOTE = "remote"
 
 
 class ServicesStrategy(BaseModel, Generic[T]):

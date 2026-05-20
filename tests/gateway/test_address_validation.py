@@ -1,4 +1,4 @@
-"""Tests for ``validate_address`` and StartStream's address-rejection path.
+"""Tests for ``GatewayValidator.validate_address`` and StartStream's address-rejection path.
 
 Per Phase 1.B of the dial-back rebuild plan: the gateway rejects
 StartStream up front when ``x-client-address`` is missing, malformed, or
@@ -12,17 +12,15 @@ from typing import Any
 
 import pytest
 
-from digitalkin.grpc_servers.gateway_constants import validate_address
-from digitalkin.services.communication.grpc_communication import (
-    InvalidConsumerAddressError,
-)
+from digitalkin.grpc_servers.utils.validators import GatewayValidator
+from digitalkin.services.communication.exceptions import InvalidConsumerAddressError
 from tests.gateway.test_gateway_servicer import _mock_context, _mock_servicer
 
 pytestmark = [pytest.mark.timeout(15)]
 
 
 class TestValidateAddress:
-    """Pure unit tests for ``gateway_constants.validate_address``."""
+    """Pure unit tests for ``GatewayValidator.validate_address``."""
 
     @pytest.mark.parametrize(
         "address",
@@ -36,7 +34,7 @@ class TestValidateAddress:
         ],
     )
     def test_valid(self, address: str) -> None:
-        assert validate_address(address, "x-client-address") is None
+        assert GatewayValidator.validate_address(address, "x-client-address") is None
 
     @pytest.mark.parametrize(
         ("address", "expected_substring"),
@@ -55,7 +53,7 @@ class TestValidateAddress:
         ],
     )
     def test_invalid(self, address: str, expected_substring: str) -> None:
-        err = validate_address(address, "x-client-address")
+        err = GatewayValidator.validate_address(address, "x-client-address")
         if expected_substring == "wildcard bind address" and err is not None and "must be host:port" in err:
             # IPv6 colon ambiguity: anything containing :: is wildcard-flavoured;
             # pattern rejects first. Either rejection is acceptable.

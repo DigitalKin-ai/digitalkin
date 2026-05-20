@@ -9,7 +9,6 @@ the in-memory queue (for local consumers) and a Redis Stream
 from __future__ import annotations
 
 import asyncio
-import os
 import uuid
 from typing import TYPE_CHECKING, Any
 
@@ -17,20 +16,23 @@ import grpc
 
 from digitalkin.core.common import ModuleFactory
 from digitalkin.core.job_manager.base_job_manager import BaseJobManager
+from digitalkin.core.profiling.step_timer import StepTimer
 from digitalkin.core.task_manager.local_task_manager import LocalTaskManager
+from digitalkin.core.task_manager.redis.redis_streams import RedisStreamWriter
 from digitalkin.core.task_manager.task_session import TaskSession
 from digitalkin.logger import logger
 from digitalkin.models.core.job_manager_models import BackpressureStrategy
 from digitalkin.models.module.base_types import DataModel, InputModelT, OutputModelT, SetupModelT
 from digitalkin.models.module.module import ModuleCodeModel
+from digitalkin.models.settings.task_manager import JobManagerSettings
+from digitalkin.services.task_manager.redis_task_manager import RedisTaskManager
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from digitalkin.core.task_manager.redis.redis_client import RedisClient
-    from digitalkin.core.task_manager.redis.redis_streams import RedisStreamWriter
+    from digitalkin.models.services.services import ServicesMode
     from digitalkin.modules._base_module import BaseModule
-    from digitalkin.services.services_models import ServicesMode
 
 
 class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
@@ -54,7 +56,7 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         services_mode: ServicesMode,
         redis_client: RedisClient,
         default_timeout: float = 300.0,
-        max_concurrent_tasks: int = int(os.environ.get("DIGITALKIN_MAX_CONCURRENT_TASKS", "100")),
+        max_concurrent_tasks: int | None = None,
     ) -> None:
         """Initialize the job manager.
 
@@ -62,22 +64,25 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             module_class: The class of the module to be managed.
             services_mode: The mode of operation for the services (e.g., ASYNC or SYNC).
             default_timeout: Default timeout for task operations
-            max_concurrent_tasks: Maximum number of concurrent tasks
+            max_concurrent_tasks: Maximum number of concurrent tasks. ``None`` keeps
+                the task manager's TaskManagerSettings-derived limit.
             redis_client: Redis client for signal delivery and stream persistence.
         """
         # Create local task manager for same-process execution
         task_manager = LocalTaskManager(default_timeout)
-        task_manager.max_concurrent_tasks = max_concurrent_tasks
+        if max_concurrent_tasks is not None:
+            task_manager.max_concurrent_tasks = max_concurrent_tasks
 
         # Initialize base job manager with task manager
         super().__init__(module_class, services_mode, task_manager)
 
+        jm_settings = JobManagerSettings()
         self._lock = asyncio.Lock()
-        self._config_setup_timeout = float(os.environ.get("DIGITALKIN_CONFIG_SETUP_TIMEOUT", "30.0"))
+        self._config_setup_timeout = jm_settings.config_setup_timeout
 
         # Backpressure configuration
-        self._backpressure_strategy = BackpressureStrategy(os.environ.get("DIGITALKIN_BACKPRESSURE_STRATEGY", "block"))
-        self._backpressure_timeout = float(os.environ.get("DIGITALKIN_BACKPRESSURE_TIMEOUT", "300.0"))
+        self._backpressure_strategy = jm_settings.backpressure_strategy
+        self._backpressure_timeout = jm_settings.backpressure_timeout
 
         # Redis for signal delivery and durable output persistence
         self._redis_client = redis_client
@@ -86,8 +91,6 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         # Pool one RedisTaskManager across all preload_instance calls.
         # The class is task-id-stateless; its `_listener` is already a
         # process-wide singleton via SharedRedisListener.get_or_create.
-        from digitalkin.services.task_manager.redis_task_manager import RedisTaskManager
-
         self._task_manager_strategy = RedisTaskManager(self._redis_client)
 
     async def start(self) -> None:
@@ -198,7 +201,8 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             logger.debug("Queue write rejected - session not found", extra={"job_id": job_id})
             return
 
-        # Serialize outside the lock — pure computation, no contention
+        # Serialize outside the lock — pure computation, no contention.
+        # Redis stores only bytes/strings, so a JSON-compatible dump is required.
         data = output_data.model_dump(mode="json")
 
         # P1: Redis write outside lock — XADD is idempotent, safe without serialization.
@@ -256,7 +260,7 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         tool_cache: Any = None,
         callback: Callable | None = None,
     ) -> tuple[Any, str, Callable]:
-        """Phase 3.A: Build + warm a module instance without input.
+        """Build + warm a module instance without input.
 
         Calls the factory, wires the redis task manager + callback, and
         runs the module's ``prepare()`` (which is idempotent — the later
@@ -279,8 +283,6 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         Returns:
             ``(module, job_id, callback)`` — pass to ``run_preloaded``.
         """
-        from digitalkin.core.profiling.step_timer import StepTimer
-
         timer = StepTimer()
         job_id = job_id or str(uuid.uuid4())
         module = ModuleFactory.create_module_instance(
@@ -299,8 +301,6 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         timer.mark("redis_task_manager")
 
         if callback is None:
-            from digitalkin.core.task_manager.redis.redis_streams import RedisStreamWriter
-
             self._stream_writers[job_id] = RedisStreamWriter(job_id, self._redis_client)
             callback = await self.job_specific_callback(self.add_to_queue, job_id)
             timer.mark("default_callback")
@@ -319,7 +319,7 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         setup_data: SetupModelT,
         callback: Callable,
     ) -> str:
-        """Phase 3.A: Run a pre-prepared module instance with input.
+        """Run a pre-prepared module instance with input.
 
         ``module`` must come from :meth:`preload_instance`. Schedules
         the run in the task manager and returns the job_id.
@@ -335,8 +335,6 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         Returns:
             The ``job_id`` (echoed for caller convenience).
         """
-        from digitalkin.core.profiling.step_timer import StepTimer
-
         timer = StepTimer()
         await self.create_task(
             job_id,

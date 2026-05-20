@@ -106,7 +106,8 @@ class TestBulkhead:
         assert len(results) == 5
 
     async def test_raises_when_full(self) -> None:
-        from digitalkin.core.resilience.bulkhead import Bulkhead, BulkheadFullError
+        from digitalkin.core.exceptions import BulkheadFullError
+        from digitalkin.core.resilience.bulkhead import Bulkhead
 
         bh = Bulkhead.for_service("full_svc", max_concurrent=1, acquire_timeout=0.05)
         barrier = asyncio.Event()

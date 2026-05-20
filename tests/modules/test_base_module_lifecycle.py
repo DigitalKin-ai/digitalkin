@@ -81,6 +81,7 @@ def _make_module_cls() -> type[BaseModule]:
         triggers_discoverer = ModuleDiscoverer(["test_pkg"])
         services_config_strategies: ClassVar[dict] = {}
         services_config_params: ClassVar[dict] = {}
+        _builds_tool_cache: ClassVar[bool] = True
 
         async def initialize(self, context, setup_data) -> None:  # noqa: ARG002
             pass

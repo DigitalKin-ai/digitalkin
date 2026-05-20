@@ -17,7 +17,8 @@ from digitalkin.core.job_manager.single_job_manager import SingleJobManager
 from digitalkin.core.task_manager.local_task_manager import LocalTaskManager
 from digitalkin.modules._base_module import BaseModule
 from digitalkin.services.services_config import ServicesConfig
-from digitalkin.services.services_models import ServicesMode, ServicesStrategy
+from digitalkin.models.services.services import ServicesMode
+from digitalkin.services.services_models import ServicesStrategy
 from digitalkin.services.task_manager.task_manager_strategy import TaskManagerStrategy
 
 

@@ -1,7 +1,5 @@
 """Redis connection and pool settings."""
 
-import os
-
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -11,10 +9,7 @@ class RedisPoolSettings(BaseSettings):
 
     model_config = SettingsConfigDict(env_prefix="DIGITALKIN_REDIS_", case_sensitive=False)
 
-    url: str = Field(
-        default_factory=lambda: os.environ.get("DIGITALKIN_REDIS_URL", "redis://localhost:6379/0"),
-        description="Redis connection URL",
-    )
+    url: str = Field(default="redis://localhost:6379/0", description="Redis connection URL")
     pool_size: int = Field(default=2000, description="Total Redis connection pool size")
     pool_size_default: int = Field(default=0, description="Non-blocking pool size (0 = pool_size // 2)")
     pool_size_blocking: int = Field(default=0, description="Blocking pool size for XREAD (0 = pool_size // 2)")
@@ -48,6 +43,17 @@ class RedisSignalSettings(BaseSettings):
     max_pending: int = Field(default=5000, description="Max pending signals in send buffer")
 
 
+class RedisStreamSettings(BaseSettings):
+    """Redis Stream configuration for durable task output."""
+
+    model_config = SettingsConfigDict(env_prefix="DIGITALKIN_REDIS_STREAM_", case_sensitive=False)
+
+    ttl: int = Field(default=300, description="Stream key TTL in seconds after EOS")
+    maxlen: int = Field(default=10000, description="Approximate max entries before trimming")
+    batch_size: int = Field(default=20, description="Max items per pipeline flush")
+    flush_ms: int = Field(default=50, description="Max ms between adaptive batch flushes")
+
+
 class RedisSettings(BaseSettings):
     """Top-level Redis configuration."""
 
@@ -55,6 +61,8 @@ class RedisSettings(BaseSettings):
 
     pool: RedisPoolSettings = Field(default_factory=RedisPoolSettings)
     signal: RedisSignalSettings = Field(default_factory=RedisSignalSettings)
+    stream: RedisStreamSettings = Field(default_factory=RedisStreamSettings)
     task_ttl: int = Field(default=86400, description="Task state TTL in seconds (1 day)")
     checkpoint_ttl: int = Field(default=300, description="Checkpoint TTL in seconds")
-    idempotency_ttl: int = Field(default=3600, description="Idempotency claim TTL in seconds")
+    idem_ttl: int = Field(default=3600, description="Idempotency claim TTL in seconds")
+    cursor_ttl: int = Field(default=360, description="Stream reader cursor key TTL in seconds")

@@ -4,7 +4,7 @@ Tests the complete flow from ToolReference definition to resolution via registry
 including recursive resolution in nested structures.
 """
 
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from pydantic import BaseModel, Field, TypeAdapter, ValidationError
@@ -273,6 +273,43 @@ class TestToolReferenceResolution:
         result = await ref.resolve(registry, communication)
 
         assert len(result) == 0
+
+    @pytest.mark.asyncio
+    async def test_unknown_trigger_names_warned_and_filtered(self, registry: FakeRegistry) -> None:
+        """Triggers naming protocols the module does not expose are warned and dropped."""
+        ref = ToolReference(
+            selected_tools=[
+                ToolSelection(
+                    setup_id="setup-search-001",
+                    triggers={"search": True, "healthcheck_ping": True, "bogus": True},
+                ),
+            ],
+        )
+        communication = create_mock_communication()
+
+        with patch("digitalkin.models.module.tool_reference.logger") as mock_logger:
+            result = await ref.resolve(registry, communication)
+
+        # The known trigger 'search' survives; unknown names are filtered out.
+        assert len(result) == 1
+        assert [t.name for t in result[0].tools] == ["search"]
+        # The unknown names are surfaced in a single warning.
+        mock_logger.warning.assert_called_once()
+        assert mock_logger.warning.call_args.args[2] == ["bogus", "healthcheck_ping"]
+
+    @pytest.mark.asyncio
+    async def test_known_triggers_emit_no_warning(self, registry: FakeRegistry) -> None:
+        """When every enabled trigger matches a real protocol, nothing is warned."""
+        ref = ToolReference(
+            selected_tools=[ToolSelection(setup_id="setup-search-001", triggers={"search": True})],
+        )
+        communication = create_mock_communication()
+
+        with patch("digitalkin.models.module.tool_reference.logger") as mock_logger:
+            result = await ref.resolve(registry, communication)
+
+        assert [t.name for t in result[0].tools] == ["search"]
+        mock_logger.warning.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_empty_selected_tools_returns_empty(self, registry: FakeRegistry) -> None:

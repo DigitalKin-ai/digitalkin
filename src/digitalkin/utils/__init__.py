@@ -1,5 +1,6 @@
 """General utils folder."""
 
+from digitalkin.models.utils.dynamic_schema import ResolveResult
 from digitalkin.utils.conditional_schema import (
     Conditional,
     ConditionalField,
@@ -12,7 +13,6 @@ from digitalkin.utils.dynamic_schema import (
     Dynamic,
     DynamicField,
     Fetcher,
-    ResolveResult,
     get_dynamic_metadata,
     get_fetchers,
     has_dynamic,

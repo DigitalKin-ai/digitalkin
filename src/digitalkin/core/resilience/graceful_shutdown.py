@@ -18,11 +18,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import os
 import signal
 from typing import TYPE_CHECKING, Any
 
 from digitalkin.logger import logger
+from digitalkin.models.settings.resilience import ResilienceSettings
 
 if TYPE_CHECKING:
     from digitalkin.core.task_manager.base_task_manager import BaseTaskManager
@@ -51,7 +51,7 @@ class GracefulShutdownHandler:
         task_manager: BaseTaskManager,
         checkpoint_mgr: RedisCheckpointManager | None = None,
         redis_client: RedisClient | None = None,
-        shutdown_timeout: float = float(os.environ.get("DIGITALKIN_SHUTDOWN_TIMEOUT", "30")),
+        shutdown_timeout: float | None = None,
     ) -> None:
         """Initialize the shutdown handler.
 
@@ -60,12 +60,15 @@ class GracefulShutdownHandler:
             checkpoint_mgr: Optional Redis checkpoint manager.
             redis_client: Optional Redis client to close on shutdown.
             shutdown_timeout: Max seconds for the entire shutdown sequence.
+                Defaults to ResilienceSettings.shutdown_timeout.
         """
         self._task_manager = task_manager
         self._checkpoint_mgr = checkpoint_mgr
         self._redis_client = redis_client
         self._shutdown_event = asyncio.Event()
-        self._shutdown_timeout = shutdown_timeout
+        self._shutdown_timeout = (
+            shutdown_timeout if shutdown_timeout is not None else ResilienceSettings().shutdown_timeout
+        )
         self._loop = None
         self._shutdown_task = None
 
@@ -107,22 +110,22 @@ class GracefulShutdownHandler:
 
     async def _do_shutdown(self) -> None:
         """Internal shutdown implementation."""
-        # Phase 0: Unregister signal handlers to prevent double-trigger
+        # Unregister signal handlers to prevent double-trigger
         if self._loop is not None:
             for sig in (signal.SIGTERM, signal.SIGINT):
                 with contextlib.suppress(Exception):
                     self._loop.remove_signal_handler(sig)
 
-        # Phase 1: Checkpoint all active sessions
+        # Checkpoint all active sessions
         if self._checkpoint_mgr is not None:
             await self._checkpoint_all_sessions()
 
-        # Phase 2: Cancel all tasks
+        # Cancel all tasks
         for mission_id in {s.mission_id for s in self._task_manager.tasks_sessions.values()}:
             with contextlib.suppress(Exception):
                 await self._task_manager.shutdown(mission_id, timeout=10.0)
 
-        # Phase 3: Close Redis
+        # Close Redis
         if self._redis_client is not None:
             with contextlib.suppress(Exception):
                 await self._redis_client.close()

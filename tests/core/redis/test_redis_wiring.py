@@ -194,7 +194,8 @@ class TestIdempotencyTTLReset:
     """Reclaim resets TTL to prevent stale holds."""
 
     async def test_reclaim_resets_ttl(self) -> None:
-        from digitalkin.core.task_manager.redis.redis_idempotency import ClaimResult, RedisIdempotencyGuard
+        from digitalkin.core.task_manager.redis.redis_idempotency import RedisIdempotencyGuard
+        from digitalkin.models.core.redis import ClaimResult
 
         client = _FakeClient()
         guard = RedisIdempotencyGuard(client, claim_ttl=60)  # type: ignore[arg-type]

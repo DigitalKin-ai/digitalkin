@@ -18,7 +18,8 @@ from pydantic import BaseModel, Field
 
 from digitalkin.models.grpc_servers.models import ClientConfig
 from digitalkin.services.storage.grpc_storage import GrpcStorage
-from digitalkin.services.storage.storage_strategy import DataType, StorageServiceError
+from digitalkin.services.storage.exceptions import StorageServiceError
+from digitalkin.models.services.storage import DataType
 from tests.fixtures.grpc_fixtures import AsyncStubWrapper, FakeContext
 from tests.services.storage.mock_storage_servicer import MockStorageServicer
 

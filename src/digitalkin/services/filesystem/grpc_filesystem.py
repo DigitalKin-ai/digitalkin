@@ -10,10 +10,10 @@ from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
 from digitalkin.grpc_servers.utils.grpc_error_handler import GrpcErrorHandlerMixin
 from digitalkin.logger import logger
 from digitalkin.models.grpc_servers.models import ClientConfig
+from digitalkin.services.filesystem.exceptions import FilesystemServiceError
 from digitalkin.services.filesystem.filesystem_strategy import (
     FileFilter,
     FilesystemRecord,
-    FilesystemServiceError,
     FilesystemStrategy,
     UploadFileData,
 )

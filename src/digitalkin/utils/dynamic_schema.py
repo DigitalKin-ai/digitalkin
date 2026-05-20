@@ -21,7 +21,6 @@ import asyncio
 import time
 import traceback
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
 from itertools import starmap
 from typing import TYPE_CHECKING, Any, TypeVar
 
@@ -29,6 +28,7 @@ if TYPE_CHECKING:
     from pydantic.fields import FieldInfo
 
 from digitalkin.logger import logger
+from digitalkin.models.utils.dynamic_schema import ResolveResult
 
 T = TypeVar("T")
 
@@ -37,52 +37,6 @@ Fetcher = Callable[[], T | Awaitable[T]]
 
 # Default timeout for fetcher resolution (None = no timeout)
 DEFAULT_TIMEOUT: float | None = None
-
-
-@dataclass
-class ResolveResult:
-    """Result of resolving dynamic fetchers.
-
-    Provides structured access to resolved values and any errors that occurred.
-    This allows callers to handle partial failures gracefully.
-
-    Attributes:
-        values: Dict mapping key names to successfully resolved values.
-        errors: Dict mapping key names to exceptions that occurred during resolution.
-    """
-
-    values: dict[str, Any] = field(default_factory=dict)
-    errors: dict[str, Exception] = field(default_factory=dict)
-
-    @property
-    def success(self) -> bool:
-        """Check if all fetchers resolved successfully.
-
-        Returns:
-            True if no errors occurred, False otherwise.
-        """
-        return len(self.errors) == 0
-
-    @property
-    def partial(self) -> bool:
-        """Check if some but not all fetchers succeeded.
-
-        Returns:
-            True if there are both values and errors, False otherwise.
-        """
-        return len(self.values) > 0 and len(self.errors) > 0
-
-    def get(self, key: str, default: T | None = None) -> T | None:
-        """Get a resolved value by key.
-
-        Args:
-            key: The fetcher key name.
-            default: Default value if key not found or errored.
-
-        Returns:
-            The resolved value or default.
-        """
-        return self.values.get(key, default)  # Generic T return, dict.get returns Any # type: ignore[return-value]
 
 
 class DynamicField:

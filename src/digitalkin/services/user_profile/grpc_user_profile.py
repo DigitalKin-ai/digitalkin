@@ -11,7 +11,8 @@ from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
 from digitalkin.grpc_servers.utils.grpc_error_handler import GrpcErrorHandlerMixin
 from digitalkin.logger import logger
 from digitalkin.models.grpc_servers.models import ClientConfig
-from digitalkin.services.user_profile.user_profile_strategy import UserProfileServiceError, UserProfileStrategy
+from digitalkin.services.user_profile.exceptions import UserProfileServiceError
+from digitalkin.services.user_profile.user_profile_strategy import UserProfileStrategy
 from digitalkin.utils.proto_utils import proto_to_dict
 
 

@@ -1,6 +1,5 @@
 """Define the module context used in the triggers."""
 
-import os
 from collections.abc import AsyncGenerator, Callable
 from datetime import tzinfo
 from types import SimpleNamespace
@@ -12,6 +11,7 @@ from google.protobuf import json_format
 from digitalkin.logger import logger
 from digitalkin.models.module.request_metadata import RequestMetadata
 from digitalkin.models.module.tool_cache import ToolCache, ToolDefinition, ToolModuleInfo
+from digitalkin.models.settings.module import ModuleSettings
 from digitalkin.services.communication.communication_strategy import CommunicationStrategy
 from digitalkin.services.cost.cost_strategy import CostStrategy
 from digitalkin.services.filesystem.filesystem_strategy import FilesystemStrategy
@@ -62,7 +62,7 @@ class Session(SimpleNamespace):
         self.mission_id = mission_id
         self.setup_id = setup_id
         self.setup_version_id = setup_version_id
-        self.timezone = timezone or ZoneInfo(os.environ.get("DIGITALKIN_TIMEZONE", "Europe/Paris"))
+        self.timezone = timezone or ZoneInfo(ModuleSettings().timezone)
 
         super().__init__(**kwargs)
 

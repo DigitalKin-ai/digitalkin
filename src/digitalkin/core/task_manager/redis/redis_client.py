@@ -63,11 +63,11 @@ class RedisClient:  # noqa: PLR0904
             decode_responses=False,
         )
 
-        from digitalkin.grpc_servers.gateway_constants import mask_redis_url
+        from digitalkin.grpc_servers.utils.validators import GatewayValidator
 
         logger.debug(
             "RedisClient created for %s (default_pool=%d, blocking_pool=%d)",
-            mask_redis_url(self.url),
+            GatewayValidator.mask_redis_url(self.url),
             default_size,
             blocking_size,
         )
@@ -84,9 +84,9 @@ class RedisClient:  # noqa: PLR0904
         try:
             return await asyncio.wait_for(self._client.ping(), timeout=timeout)  # type: ignore[arg-type]
         except Exception:
-            from digitalkin.grpc_servers.gateway_constants import mask_redis_url
+            from digitalkin.grpc_servers.utils.validators import GatewayValidator
 
-            logger.warning("Redis health check failed for %s", mask_redis_url(self.url), exc_info=True)
+            logger.warning("Redis health check failed for %s", GatewayValidator.mask_redis_url(self.url), exc_info=True)
             return False
 
     async def close(self) -> None:

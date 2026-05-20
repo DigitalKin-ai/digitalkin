@@ -8,9 +8,9 @@ from digitalkin.core.task_manager.base_task_manager import BaseTaskManager
 from digitalkin.core.task_manager.task_session import TaskSession
 from digitalkin.models.module.module import ModuleCodeModel
 from digitalkin.models.module.module_types import DataModel, InputModelT, OutputModelT, SetupModelT
+from digitalkin.models.services.services import ServicesMode
 from digitalkin.modules._base_module import BaseModule
 from digitalkin.services.services_config import ServicesConfig
-from digitalkin.services.services_models import ServicesMode
 
 
 class BaseJobManager(abc.ABC, Generic[InputModelT, OutputModelT, SetupModelT]):
@@ -58,7 +58,6 @@ class BaseJobManager(abc.ABC, Generic[InputModelT, OutputModelT, SetupModelT]):
         """Get tasks from the task manager."""
         return self._task_manager.tasks
 
-    # Delegate task lifecycle methods to task manager
     async def create_task(
         self,
         task_id: str,
@@ -68,6 +67,8 @@ class BaseJobManager(abc.ABC, Generic[InputModelT, OutputModelT, SetupModelT]):
         **kwargs: Any,
     ) -> None:
         """Create a task using the task manager.
+
+        Delegate task lifecycle methods to task manager
 
         Args:
             task_id: Unique identifier for the task

@@ -24,7 +24,7 @@ from agentic_mesh_protocol.gateway.v1 import gateway_pb2, gateway_service_pb2_gr
 from google.protobuf import struct_pb2
 from redis.exceptions import RedisError
 
-from digitalkin.grpc_servers.stream_error_codes import StreamErrorCode
+from digitalkin.models.grpc_servers.stream_error_codes import StreamErrorCode
 from tests.gateway.test_dial_consumer import (
     SKIP_NO_FAKEREDIS,
     _FakeConsumerServicer,
@@ -256,11 +256,11 @@ class TestModuleRuntimeError:
 
 
 # ===========================================================================
-# GatewayConsumer.stream_error helper
+# GrpcCommunication.stream_error helper
 # ===========================================================================
 
 
-class TestGatewayConsumerStreamError:
+class TestStreamErrorHelper:
     @staticmethod
     def _build_error(code: str, message: str) -> struct_pb2.Struct:
         s = struct_pb2.Struct()
@@ -274,15 +274,15 @@ class TestGatewayConsumerStreamError:
         return s
 
     def test_decodes_stream_error(self) -> None:
-        from digitalkin.services.communication import GatewayConsumer
+        from digitalkin.services.communication import GrpcCommunication
 
         data = self._build_error("DIAL_BACK_RPC_ERROR", "boom")
-        result = GatewayConsumer.stream_error(data)
+        result = GrpcCommunication.stream_error(data)
         assert result == ("DIAL_BACK_RPC_ERROR", "boom")
 
     def test_returns_none_for_non_error(self) -> None:
-        from digitalkin.services.communication import GatewayConsumer
+        from digitalkin.services.communication import GrpcCommunication
 
-        assert GatewayConsumer.stream_error(self._build_other("stream.start")) is None
-        assert GatewayConsumer.stream_error(self._build_other("agui_stream")) is None
-        assert GatewayConsumer.stream_error(struct_pb2.Struct()) is None
+        assert GrpcCommunication.stream_error(self._build_other("stream.start")) is None
+        assert GrpcCommunication.stream_error(self._build_other("agui_stream")) is None
+        assert GrpcCommunication.stream_error(struct_pb2.Struct()) is None

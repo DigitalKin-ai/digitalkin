@@ -22,7 +22,8 @@ from digitalkin.core.task_manager.local_task_manager import LocalTaskManager
 from digitalkin.core.task_manager.task_session import TaskSession
 from digitalkin.modules._base_module import BaseModule
 from digitalkin.services.services_config import ServicesConfig
-from digitalkin.services.services_models import ServicesMode, ServicesStrategy
+from digitalkin.models.services.services import ServicesMode
+from digitalkin.services.services_models import ServicesStrategy
 
 # Set timeout for all tests in this file (120 seconds)
 pytestmark = pytest.mark.timeout(120)

@@ -1,10 +1,6 @@
-"""Exceptions for the DigitalKin gRPC package."""
+"""Exceptions for the DigitalKin gRPC server package."""
 
-import grpc
-
-
-class DigitalKinError(Exception):
-    """Base exception for all DigitalKin errors."""
+from digitalkin.exceptions import DigitalKinError
 
 
 class ServerError(DigitalKinError):
@@ -29,3 +25,11 @@ class ServerStateError(ServerError):
 
 class ReflectionError(ServerError):
     """Error related to gRPC reflection service."""
+
+
+class CircuitOpenError(Exception):
+    """Raised when a call is attempted on an open circuit."""
+
+
+class M2MAtCapacityError(RuntimeError):
+    """Concurrency slot couldn't be acquired before timeout."""

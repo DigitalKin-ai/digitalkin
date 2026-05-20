@@ -2,7 +2,6 @@
 
 import asyncio
 import json
-import os
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Coroutine
 from typing import Any, ClassVar, Generic
@@ -22,6 +21,7 @@ from digitalkin.models.module.select_schema import SelectSchema
 from digitalkin.models.module.tool_cache import ToolCache
 from digitalkin.models.module.utility import EndOfStreamOutput, UtilityProtocol
 from digitalkin.models.services.storage import BaseRole
+from digitalkin.models.settings.module import ModuleSettings
 from digitalkin.modules.trigger_handler import TriggerHandler
 from digitalkin.services.services_config import ServicesConfig, ServicesStrategy
 from digitalkin.utils.package_discover import ModuleDiscoverer
@@ -57,6 +57,9 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
     triggers_discoverer: ClassVar[ModuleDiscoverer]
     _extended_input_format: ClassVar[type[DataModel] | None] = None
     _shared: ClassVar[dict[str, Any]] = {}
+    # Only tool-composing modules (ArchetypeModule) resolve a tool cache;
+    # a ToolModule is a leaf, so it skips the resolution entirely.
+    _builds_tool_cache: ClassVar[bool] = False
 
     @classmethod
     def clear_shared(cls) -> None:
@@ -87,13 +90,13 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
 
     @classmethod
     def get_module_id(cls) -> str:
-        """Get the module ID from environment variable or metadata.
+        """Get the module ID from settings or metadata.
 
         Returns:
-            The module_id from DIGITALKIN_MODULE_ID env var, or metadata module_id,
-            or "unknown" if neither exists.
+            The module_id from ModuleSettings.id (env DIGITALKIN_MODULE_ID), or
+            metadata module_id, or "unknown" if neither exists.
         """
-        return os.environ.get("DIGITALKIN_MODULE_ID") or cls.metadata.get("module_id", "unknown")
+        return ModuleSettings().id or cls.metadata.get("module_id", "unknown")
 
     def _init_strategies(self, mission_id: str, setup_id: str, setup_version_id: str) -> dict[str, Any]:
         """Initialize the services configuration.
@@ -140,7 +143,7 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
         self._status = ModuleStatus.CREATED
         self._prebuilt_tool_cache = tool_cache
         self.trigger_handlers: dict[str, tuple] = {}
-        # Phase 3.A: prepare() is idempotent. The flag lets the dial-back
+        # prepare() is idempotent. The flag lets the dial-back
         # orchestrator (`ModuleRunner`) preload `initialize()` while the
         # consumer's first reply is still in flight, then call `start()`
         # which short-circuits the prepare phase.
@@ -603,13 +606,14 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
         self.context.callbacks.send_message = callback
         timer.mark("set_callback")
 
-        tool_cache = self._prebuilt_tool_cache or await setup_data.build_tool_cache(
-            self.context.registry,
-            self.context.communication,
-        )
-        if tool_cache.entries:
-            self.context.tool_cache = tool_cache
-        timer.mark("build_tool_cache")
+        if self._builds_tool_cache:
+            tool_cache = self._prebuilt_tool_cache or await setup_data.build_tool_cache(
+                self.context.registry,
+                self.context.communication,
+            )
+            if tool_cache.entries:
+                self.context.tool_cache = tool_cache
+            timer.mark("build_tool_cache")
 
         await self.initialize(self.context, setup_data)
         timer.mark("initialize")
@@ -716,6 +720,8 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
         Args:
             config_setup_data: Setup data containing tool references.
         """
+        if not self._builds_tool_cache:
+            return
         logger.debug("Starting tool resolution", extra=self.context.session.current_ids())
         tool_cache = await config_setup_data.build_tool_cache(self.context.registry, self.context.communication)
         self.context.tool_cache = tool_cache

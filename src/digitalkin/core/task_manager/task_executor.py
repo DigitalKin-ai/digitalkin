@@ -45,7 +45,7 @@ class TaskExecutor:
             on_finalize: Optional async callable invoked at the end of the
                 supervisor's ``finally`` after stream drain — typically
                 ``manager._cleanup_task(task_id, mission_id)``.
-            stream_drain_timeout: Max seconds to wait for ``session._stream_closed``
+            stream_drain_timeout: Max seconds to wait for ``session.stream_closed_event``
                 before forcing finalize.
 
         Returns:
@@ -97,14 +97,14 @@ class TaskExecutor:
                 if on_finalize is not None:
                     try:
                         await asyncio.wait_for(
-                            session._stream_closed.wait(),  # noqa: SLF001
+                            session.stream_closed_event.wait(),
                             timeout=stream_drain_timeout,
                         )
                     except asyncio.TimeoutError:
                         logger.warning("Stream drain timeout, proceeding with cleanup", extra=ids)
                     try:
                         await on_finalize()
-                    except Exception:  # noqa: BLE001
+                    except Exception:
                         logger.exception("on_finalize raised — task may leak resources", extra=ids)
 
         task = asyncio.create_task(_run(), name=f"{task_id}_main")

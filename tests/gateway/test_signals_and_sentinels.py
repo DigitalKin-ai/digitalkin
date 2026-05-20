@@ -330,11 +330,11 @@ class TestStreamSentinels:
         assert _protocol_of(responses[1]) == "stream.end"
 
     async def test_stream_error_seq_out_of_range(self) -> None:
-        """Stream with seq > MAX_FROM_SEQ yields stream.error + stream.end."""
-        from digitalkin.grpc_servers.gateway_constants import MAX_FROM_SEQ
+        """Stream with seq > ``GatewayStreamSettings.from_seq_limit`` yields stream.error + stream.end."""
+        from digitalkin.models.settings.gateway import GatewaySettings
 
         servicer = _mock_servicer()
-        first = _make_first_msg(task_id="task_oor", seq=MAX_FROM_SEQ + 1)
+        first = _make_first_msg(task_id="task_oor", seq=GatewaySettings().stream.from_seq_limit + 1)
         request_iter = _FakeRequestIterator([first])
 
         responses = [r async for r in servicer.Stream(request_iter, _mock_context())]

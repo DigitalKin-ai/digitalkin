@@ -49,7 +49,7 @@ class TaskWrapper:
     3. Runs the coroutine inside the copied context.
     4. Resets ``TRACE_CTX`` to pre-call state via token (not to default).
 
-    This prevents the leak described in §5.1: a pooled coroutine carrying
+    This prevents a leak: a pooled coroutine carrying
     stale trace context from a previous request.
     """
 

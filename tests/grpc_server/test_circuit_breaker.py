@@ -11,7 +11,9 @@ from unittest.mock import patch
 
 import pytest
 
-from digitalkin.grpc_servers.utils.circuit_breaker import CBState, CircuitBreaker, CircuitOpenError
+from digitalkin.grpc_servers.exceptions import CircuitOpenError
+from digitalkin.grpc_servers.utils.circuit_breaker import CircuitBreaker
+from digitalkin.models.grpc_servers.circuit_breaker import CBState
 
 pytestmark = pytest.mark.timeout(10)
 
@@ -133,7 +135,7 @@ class TestCircuitBreakerIntegrationWithWrapper:
         cb = CircuitBreaker.get_or_create("TestService", fail_max=1, reset_timeout=30.0)
         cb.record_failure()
 
-        from digitalkin.grpc_servers.utils.exceptions import ServerError
+        from digitalkin.grpc_servers.exceptions import ServerError
 
         with pytest.raises(ServerError, match="Circuit open"):
             await wrapper.exec_grpc_query("Query", "request")

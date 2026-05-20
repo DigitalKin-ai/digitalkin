@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from digitalkin.services.services_config import ServicesConfig
-from digitalkin.services.services_models import ServicesMode
+from digitalkin.models.services.services import ServicesMode
 
 
 class TestSingletonStrategies:

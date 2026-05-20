@@ -15,6 +15,19 @@ class GatewayStreamSettings(BaseSettings):
     stream_read_block_ms: int = Field(default=50, description="XREAD block timeout in milliseconds")
     stream_batch_size: int = Field(default=20, description="Entries per pipeline flush")
     stream_flush_ms: int = Field(default=50, description="Max ms between adaptive flushes")
+    from_seq_multiplier: int = Field(
+        default=10,
+        description=(
+            "Upper bound on a client's resume `seq` value, expressed as a multiple "
+            "of ``redis_stream_maxlen``. Seq values above ``redis_stream_maxlen * "
+            "from_seq_multiplier`` are rejected as obviously out-of-range."
+        ),
+    )
+
+    @property
+    def from_seq_limit(self) -> int:
+        """Hard ceiling on a client-supplied resume cursor."""
+        return self.redis_stream_maxlen * self.from_seq_multiplier
 
 
 class GatewayBackpressureSettings(BaseSettings):
@@ -28,15 +41,70 @@ class GatewayBackpressureSettings(BaseSettings):
     backpressure_timeout_s: float = Field(default=30.0, description="Max seconds to wait on backpressure")
 
 
+class GatewayM2MSettings(BaseSettings):
+    """Resilience settings for in-module M2M outbound calls.
+
+    Wraps every ``GrpcCommunication.call_module`` invocation with a
+    TTL'd registry entry, a per-target circuit breaker, a process-wide
+    concurrency cap, and per-call deadlines. All fields are
+    env-overridable under the ``DIGITALKIN_M2M_`` prefix.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="DIGITALKIN_M2M_", case_sensitive=False)
+
+    call_ttl_s: float = Field(
+        default=300.0,
+        description=(
+            "Maximum lifetime of an outbound registry entry. A periodic sweeper "
+            "drops + signals entries past their TTL even if the call's finally "
+            "block never ran."
+        ),
+    )
+    call_sweeper_interval_s: float = Field(
+        default=30.0,
+        description="How often the TTL sweeper scans the outbound registry.",
+    )
+    call_timeout_s: float = Field(
+        default=120.0,
+        description=(
+            "Per-output deadline on the queue. Trips on producers that go silent without emitting stream.end."
+        ),
+    )
+    call_max_concurrent: int = Field(
+        default=200,
+        description="Process-local ceiling on in-flight outbound calls.",
+    )
+    call_acquire_timeout_s: float = Field(
+        default=30.0,
+        description="How long call_module blocks on the concurrency semaphore before raising.",
+    )
+    call_breaker_fail_max: int = Field(
+        default=5,
+        description="Failures (per target host:port) before the per-target circuit breaker opens.",
+    )
+    call_breaker_reset_timeout_s: float = Field(
+        default=30.0,
+        description="How long a breaker stays open before a half-open probe.",
+    )
+    call_cancel_signal_timeout_s: float = Field(
+        default=2.0,
+        description="Best-effort SendSignal(CANCEL) deadline when call_module is cancelled.",
+    )
+    call_queue_maxsize: int = Field(
+        default=1024,
+        description="Per-call output queue ceiling.",
+    )
+
+
 class GatewayQueueSettings(BaseSettings):
     """Queue and timeout settings for gateway sessions."""
 
     model_config = SettingsConfigDict(env_prefix="DIGITALKIN_", case_sensitive=False)
 
-    output_queue_size: int = Field(default=512, description="Retired in Phase 4.A; kept for forward-compat (no effect)")
-    input_queue_size: int = Field(default=512, description="Retired in Phase 4.A; kept for forward-compat (no effect)")
+    output_queue_size: int = Field(default=512, description="Retired; kept for forward-compat (no effect)")
+    input_queue_size: int = Field(default=512, description="Retired; kept for forward-compat (no effect)")
     enqueue_timeout_s: float = Field(
-        default=5.0, description="Retired in Phase 4.A; kept for forward-compat (no effect)"
+        default=5.0, description="Retired; kept for forward-compat (no effect)"
     )
     toolkit_cache_ttl_s: float = Field(
         default=600.0,
@@ -64,7 +132,17 @@ class GatewaySettings(BaseSettings):
             "task is cancelled if it has not completed within this window."
         ),
     )
+    dial_back_close_grace_s: float = Field(
+        default=2.0,
+        description=(
+            "Grace period after the gateway emits the terminal stream.end on the "
+            "dial-back BiDi before forcibly closing the inbound side. Guards "
+            "against a consumer that ignores stream.end and would otherwise hold "
+            "the BiDi open until keepalive (~2 min) surfaces UNAVAILABLE."
+        ),
+    )
 
     stream: GatewayStreamSettings = Field(default_factory=GatewayStreamSettings)
     backpressure: GatewayBackpressureSettings = Field(default_factory=GatewayBackpressureSettings)
     queue: GatewayQueueSettings = Field(default_factory=GatewayQueueSettings)
+    m2m: GatewayM2MSettings = Field(default_factory=GatewayM2MSettings)

@@ -101,11 +101,13 @@ class _FakeConsumerServicer(gateway_service_pb2_grpc.GatewayServiceServicer):
         query_data: dict | None = None,
         extra_upstream: list[dict] | None = None,
         hang: bool = False,
+        ignore_stream_end: bool = False,
     ) -> None:
         self.received: list[Any] = []
         self.query_data = query_data
         self.extra_upstream = extra_upstream or []
         self.hang = hang
+        self.ignore_stream_end = ignore_stream_end
 
     async def StartStream(self, request, context):
         return gateway_pb2.StartStreamResponse(accepted=False, task_id=request.task_id)
@@ -143,11 +145,11 @@ class _FakeConsumerServicer(gateway_service_pb2_grpc.GatewayServiceServicer):
         try:
             async for msg in request_iterator:
                 self.received.append(msg)
-                # Stop reading once we see stream.end.
+                # Stop reading once we see stream.end (unless misbehaving on purpose).
                 root = msg.data.fields.get("root")
                 if root is not None:
                     pf = root.struct_value.fields.get("protocol")
-                    if pf is not None and pf.string_value == "stream.end":
+                    if pf is not None and pf.string_value == "stream.end" and not self.ignore_stream_end:
                         return
         except Exception:
             return
@@ -489,36 +491,59 @@ class TestDialConsumer:
             isinstance(m, gateway_pb2.StreamServer) for m in seen_outgoing
         ), f"expected only StreamServer, got: {[type(m).__name__ for m in seen_outgoing]}"
 
-    async def test_dialback_servicer_yields_streamclient(self) -> None:
-        """SDK ``_DialBackServicer.Stream`` emits StreamClient on the dial-back.
+    # The three obsolete ``_DialBackServicer.Stream`` tests that lived here
+    # have been deleted. Their behavior (yield StreamClient with the cached
+    # query, return on stream.end / fatal stream.error) now lives on the
+    # unified ``GatewayServicer.Stream`` dial-back-receive branch and is
+    # covered by ``tests/gateway/test_gateway_servicer_dialback_branch.py``.
 
-        Pins the wire-direction (consumer → gateway = StreamClient).
-        """
-        import asyncio as _asyncio
+    @SKIP_NO_FAKEREDIS
+    async def test_dial_consumer_watchdog_closes_after_stream_end(self, gateway) -> None:
+        """Gateway watchdog: if the consumer ignores stream.end, the BiDi
+        is force-closed after ``GatewaySettings.dial_back_close_grace_s``
+        instead of waiting on keepalive (~2 min)."""
+        from digitalkin.core.task_manager.redis.proto_streams import ProtoStreamWriter
 
-        from digitalkin.services.communication.gateway_consumer import (
-            _DialBackServicer,
-            _TaskHandle,
-        )
+        # Shrink the grace window on the running gateway instance so the test
+        # doesn't have to idle seconds. Settings is a pydantic model — mutate
+        # the field directly on the existing instance.
+        original_grace = gateway._settings.dial_back_close_grace_s
+        gateway._settings.dial_back_close_grace_s = 0.3
+        try:
+            servicer = _FakeConsumerServicer(
+                query_data={"protocol": "test", "x": 1},
+                ignore_stream_end=True,  # misbehave: keep BiDi open
+            )
+            server = grpc.aio.server()
+            gateway_service_pb2_grpc.add_GatewayServiceServicer_to_server(servicer, server)
+            port = server.add_insecure_port("127.0.0.1:0")
+            await server.start()
+            try:
+                task_id = "task_watchdog"
+                writer = ProtoStreamWriter(task_id, gateway._redis_client)  # type: ignore[arg-type]
+                out = struct_pb2.Struct()
+                out.update({"protocol": "healthcheck_ping", "status": "pong"})
+                await writer.write_struct(out)
+                await writer.write_eos()
 
-        query = struct_pb2.Struct()
-        query.update({"root": {"protocol": "test", "x": 1}})
-        handle = _TaskHandle(task_id="t", query=query, output_queue=_asyncio.Queue())
-        servicer = _DialBackServicer({"t": handle})
+                ctx = _mock_context({"x-client-address": f"127.0.0.1:{port}"})
+                t0 = asyncio.get_event_loop().time()
+                await gateway.StartStream(_start_request(task_id), ctx)
+                # Wait until session is unregistered, which only happens after
+                # the dial-back's finally runs.
+                for _ in range(60):
+                    if gateway._registry.get(task_id) is None:
+                        break
+                    await asyncio.sleep(0.05)
+                elapsed = asyncio.get_event_loop().time() - t0
 
-        async def _req() -> AsyncIterator[gateway_pb2.StreamServer]:
-            # Dial-back input: the gateway sends StreamServer (sentinels +
-            # module output). First message is stream.init.
-            init = struct_pb2.Struct()
-            init.update({"root": {"protocol": "stream.init"}})
-            yield gateway_pb2.StreamServer(task_id="t", seq=0, data=init)
-
-        yielded: list[Any] = []
-        async for resp in servicer.Stream(_req(), context=None):  # type: ignore[arg-type]
-            yielded.append(resp)
-            break
-
-        assert yielded, "_DialBackServicer.Stream yielded nothing"
-        assert all(
-            isinstance(m, gateway_pb2.StreamClient) for m in yielded
-        ), f"expected only StreamClient, got: {[type(m).__name__ for m in yielded]}"
+                assert gateway._registry.get(task_id) is None, (
+                    "dial-back never finished — watchdog didn't fire"
+                )
+                # The dial-back should have completed within a small multiple of
+                # the grace window (Redis seeding + grace + bookkeeping).
+                assert elapsed < 3.0, f"watchdog took {elapsed:.2f}s — expected < 3.0s"
+            finally:
+                await server.stop(grace=0.1)
+        finally:
+            gateway._settings.dial_back_close_grace_s = original_grace

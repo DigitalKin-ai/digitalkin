@@ -15,7 +15,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from digitalkin.core.task_manager.redis.redis_idempotency import ClaimResult, RedisIdempotencyGuard
+from digitalkin.core.task_manager.redis.redis_idempotency import RedisIdempotencyGuard
+from digitalkin.models.core.redis import ClaimResult
 
 pytestmark = [pytest.mark.idempotency, pytest.mark.timeout(10)]
 

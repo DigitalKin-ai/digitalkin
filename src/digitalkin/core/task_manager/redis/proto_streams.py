@@ -24,31 +24,9 @@ from typing import TYPE_CHECKING
 
 from google.protobuf import struct_pb2
 
-from digitalkin.grpc_servers.gateway_constants import (
-    BACKPRESSURE_CHECK_INTERVAL,
-    BACKPRESSURE_DELAY_MS,
-    BACKPRESSURE_THRESHOLD,
-    BACKPRESSURE_TIMEOUT_S,
-    CURSOR_TTL_S,
-    STREAM_BATCH_SIZE,
-    STREAM_FLUSH_MS,
-    STREAM_MAXLEN,
-    STREAM_READ_BLOCK_MS,
-    STREAM_TTL_S,
-)
+from digitalkin.core.exceptions import BackpressureTimeoutError
 from digitalkin.logger import logger
-
-
-class BackpressureTimeoutError(Exception):
-    """Producer's XADD has been throttled past
-    :data:`GatewayBackpressureSettings.backpressure_timeout_s`.
-
-    Caller (typically the module's ``_on_output`` callback) must surface
-    this as ``stream.error(code=BACKPRESSURE_TIMEOUT)`` via the Phase 1
-    ``_emit_fatal_to_redis`` path so the consumer sees a typed sentinel
-    instead of a silent stall.
-    """
-
+from digitalkin.models.settings.gateway import GatewaySettings
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -74,14 +52,14 @@ class ProtoStreamWriter:
         task_id: str,
         redis_client: RedisClient,
         *,
-        stream_ttl: int = STREAM_TTL_S,
-        maxlen: int = STREAM_MAXLEN,
-        batch_size: int = STREAM_BATCH_SIZE,
-        flush_ms: int = STREAM_FLUSH_MS,
-        backpressure_threshold: float = BACKPRESSURE_THRESHOLD,
-        backpressure_delay_ms: int = BACKPRESSURE_DELAY_MS,
-        backpressure_check_interval: int = BACKPRESSURE_CHECK_INTERVAL,
-        backpressure_timeout_s: float = BACKPRESSURE_TIMEOUT_S,
+        stream_ttl: int | None = None,
+        maxlen: int | None = None,
+        batch_size: int | None = None,
+        flush_ms: int | None = None,
+        backpressure_threshold: float | None = None,
+        backpressure_delay_ms: int | None = None,
+        backpressure_check_interval: int | None = None,
+        backpressure_timeout_s: float | None = None,
     ) -> None:
         """Initialize proto stream writer.
 
@@ -103,21 +81,38 @@ class ProtoStreamWriter:
             backpressure_check_interval: Check XLEN every N writes.
             backpressure_timeout_s: Max seconds to wait on backpressure.
         """
+        settings = GatewaySettings()
+        effective_stream_ttl = stream_ttl if stream_ttl is not None else settings.stream.redis_stream_ttl
+        effective_maxlen = maxlen if maxlen is not None else settings.stream.redis_stream_maxlen
+        effective_batch_size = batch_size if batch_size is not None else settings.stream.stream_batch_size
+        effective_flush_ms = flush_ms if flush_ms is not None else settings.stream.stream_flush_ms
+        bp = settings.backpressure
+        effective_bp_threshold = (
+            backpressure_threshold if backpressure_threshold is not None else bp.backpressure_threshold
+        )
+        effective_bp_delay_ms = backpressure_delay_ms if backpressure_delay_ms is not None else bp.backpressure_delay_ms
+        effective_bp_check_interval = (
+            backpressure_check_interval if backpressure_check_interval is not None else bp.backpressure_check_interval
+        )
+        effective_bp_timeout_s = (
+            backpressure_timeout_s if backpressure_timeout_s is not None else bp.backpressure_timeout_s
+        )
+
         self._task_id = task_id
         self._redis_client = redis_client
         self._stream_key = f"task:{task_id}:stream"
         self._seq = 0
-        self._stream_ttl = stream_ttl
-        self._maxlen = maxlen
-        self._bp_threshold = int(maxlen * backpressure_threshold)
-        self._bp_delay = backpressure_delay_ms / 1000
-        self._bp_check_interval = backpressure_check_interval
-        self._bp_timeout = backpressure_timeout_s
+        self._stream_ttl = effective_stream_ttl
+        self._maxlen = effective_maxlen
+        self._bp_threshold = int(effective_maxlen * effective_bp_threshold)
+        self._bp_delay = effective_bp_delay_ms / 1000
+        self._bp_check_interval = effective_bp_check_interval
+        self._bp_timeout = effective_bp_timeout_s
         self._writes_since_check = 0
 
         # Adaptive batching
-        self._batch_size = batch_size
-        self._flush_interval = flush_ms / 1000
+        self._batch_size = effective_batch_size
+        self._flush_interval = effective_flush_ms / 1000
         self._pending: list[dict[str, str | bytes]] = []
         self._last_write_time = 0.0  # Ensures first write always goes direct (gap is huge)
         self._last_mode = "single"  # tracks current flush mode for logging
@@ -313,14 +308,15 @@ class ProtoStreamReader:
         self,
         task_id: str,
         redis_client: RedisClient,
-        cursor_ttl: int = CURSOR_TTL_S,
+        cursor_ttl: int | None = None,
     ) -> None:
         """Initialize proto stream reader.
 
         Args:
             task_id: Unique task identifier.
             redis_client: Shared Redis connection.
-            cursor_ttl: TTL in seconds for the cursor key.
+            cursor_ttl: TTL in seconds for the cursor key. Defaults to
+                ``GatewayStreamSettings.redis_cursor_ttl``.
         """
         self._task_id = task_id
         self._redis_client = redis_client
@@ -328,7 +324,7 @@ class ProtoStreamReader:
         self._cursor_key = f"task:{task_id}:cursor"
         self._last_id = "0-0"
         self._last_seq = 0
-        self._cursor_ttl = cursor_ttl
+        self._cursor_ttl = cursor_ttl if cursor_ttl is not None else GatewaySettings().stream.redis_cursor_ttl
 
     async def restore_cursor(self) -> None:
         """Restore the read cursor from Redis."""
@@ -346,7 +342,7 @@ class ProtoStreamReader:
     async def read_structs(
         self,
         count: int = 50,
-        block_ms: int = STREAM_READ_BLOCK_MS,
+        block_ms: int | None = None,
         cursor_save_interval: int = 100,
     ) -> AsyncGenerator[struct_pb2.Struct, None]:
         """Read proto Structs from the stream until EOS.
@@ -367,13 +363,14 @@ class ProtoStreamReader:
         Yields:
             Proto Struct objects from the stream.
         """
+        effective_block_ms = block_ms if block_ms is not None else GatewaySettings().stream.stream_read_block_ms
         entries_since_save = 0
         while True:
             t_xread_start = time.perf_counter_ns()
             result = await self._redis_client.xread(
                 {self._stream_key: self._last_id},
                 count=count,
-                block=block_ms,
+                block=effective_block_ms,
             )
             t_xread_end = time.perf_counter_ns()
             if not result:
@@ -386,8 +383,7 @@ class ProtoStreamReader:
                     eos = fields.get(b"eos", b"")
                     if eos == b"true":
                         logger.info(
-                            "[close-debug] reader_saw_eos: last_xread_block=%.2fms "
-                            "t_seen_ns=%d task_id=%s",
+                            "[close-debug] reader_saw_eos: last_xread_block=%.2fms t_seen_ns=%d task_id=%s",
                             (t_xread_end - t_xread_start) / 1e6,
                             t_xread_end,
                             self._task_id,

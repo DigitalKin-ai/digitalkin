@@ -29,7 +29,8 @@ from typing import ClassVar
 from digitalkin.models.module.module_context import ModuleContext
 from digitalkin.modules._base_module import BaseModule
 from digitalkin.services.services_config import ServicesConfig
-from digitalkin.services.services_models import ServicesMode, ServicesStrategy
+from digitalkin.models.services.services import ServicesMode
+from digitalkin.services.services_models import ServicesStrategy
 from tests.mocks.models import MockInputModel, MockOutputModel, MockSecretModel, MockSetupModel
 
 

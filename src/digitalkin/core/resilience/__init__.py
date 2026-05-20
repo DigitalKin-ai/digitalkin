@@ -7,7 +7,8 @@
 - ``StartupRestorer``: Redis checkpoint restore on startup.
 """
 
-from digitalkin.core.resilience.bulkhead import Bulkhead, BulkheadFullError
+from digitalkin.core.exceptions import BulkheadFullError
+from digitalkin.core.resilience.bulkhead import Bulkhead
 from digitalkin.core.resilience.graceful_shutdown import GracefulShutdownHandler, StartupRestorer
 from digitalkin.core.resilience.session_reaper import SessionReaper
 from digitalkin.core.resilience.watchdog import WatchdogThread
