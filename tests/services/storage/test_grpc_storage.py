@@ -15,12 +15,12 @@ import grpc_testing
 import pytest
 from agentic_mesh_protocol.storage.v1 import data_pb2, storage_service_pb2, storage_service_pb2_grpc
 from pydantic import BaseModel, Field
+from tests.fixtures.grpc_fixtures import AsyncStubWrapper, FakeContext
+from tests.services.storage.mock_storage_servicer import MockStorageServicer
 
 from digitalkin.models.grpc_servers.models import ClientConfig
 from digitalkin.services.storage.grpc_storage import GrpcStorage
 from digitalkin.services.storage.storage_strategy import DataType, StorageServiceError
-from tests.fixtures.grpc_fixtures import AsyncStubWrapper, FakeContext
-from tests.services.storage.mock_storage_servicer import MockStorageServicer
 
 # Set timeout for all tests in this file (20 seconds)
 pytestmark = pytest.mark.timeout(20)
@@ -118,8 +118,7 @@ def dummy_client_config() -> ClientConfig:
     Returns:
         ClientConfig instance with test values
     """
-    from digitalkin.models.settings.utils.channel import SecurityMode
-    from digitalkin.models.settings.utils.channel import ControlFlow
+    from digitalkin.models.settings.utils.channel import ControlFlow, SecurityMode
 
     return ClientConfig(
         host="localhost",
@@ -194,7 +193,7 @@ class TestStoreData:
         _, request, rpc = test_channel.take_unary_unary(method_desc)
 
         # Verify request
-        assert request.mission_id == MISSION_ID
+        assert request.context == MISSION_ID
         assert request.collection == collection
         assert request.record_id == record_id
         # data_type is now a protobuf enum integer value
@@ -215,7 +214,7 @@ class TestStoreData:
 
         # Verify result
         assert result is not None
-        assert result.mission_id == MISSION_ID
+        assert result.context == MISSION_ID
         assert result.collection == collection
         assert result.record_id == record_id
         assert result.data_type == DataType.OUTPUT
@@ -525,7 +524,7 @@ class TestRetrieveData:
         read_future = thread_pool.submit(asyncio.run, client.read(collection, record_id))
         _, read_request, read_rpc = test_channel.take_unary_unary(read_method_desc)
 
-        assert read_request.mission_id == MISSION_ID
+        assert read_request.context == MISSION_ID
         assert read_request.collection == collection
         assert read_request.record_id == record_id
 
@@ -693,7 +692,7 @@ class TestUpdateData:
         update_future = thread_pool.submit(asyncio.run, client.update(collection, record_id, updated_data))
         _, update_request, update_rpc = test_channel.take_unary_unary(update_method_desc)
 
-        assert update_request.mission_id == MISSION_ID
+        assert update_request.context == MISSION_ID
         assert update_request.collection == collection
         assert update_request.record_id == record_id
 
@@ -819,7 +818,7 @@ class TestDeleteData:
         remove_future = thread_pool.submit(asyncio.run, client.remove(collection, record_id))
         _, remove_request, remove_rpc = test_channel.take_unary_unary(remove_method_desc)
 
-        assert remove_request.mission_id == MISSION_ID
+        assert remove_request.context == MISSION_ID
         assert remove_request.collection == collection
         assert remove_request.record_id == record_id
 
@@ -983,7 +982,7 @@ class TestDeleteData:
         remove_future = thread_pool.submit(asyncio.run, client.remove_collection(collection))
         _, remove_request, remove_rpc = test_channel.take_unary_unary(remove_coll_method_desc)
 
-        assert remove_request.mission_id == MISSION_ID
+        assert remove_request.context == MISSION_ID
         assert remove_request.collection == collection
 
         remove_context = FakeContext()
@@ -1159,7 +1158,7 @@ class TestListData:
         list_future = thread_pool.submit(asyncio.run, client.list(collection))
         _, list_request, list_rpc = test_channel.take_unary_unary(list_method_desc)
 
-        assert list_request.mission_id == MISSION_ID
+        assert list_request.context == MISSION_ID
         assert list_request.collection == collection
 
         list_context = FakeContext()

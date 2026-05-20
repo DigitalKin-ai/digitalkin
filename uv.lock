@@ -23,7 +23,7 @@ wheels = [
 
 [[package]]
 name = "agentic-mesh-protocol"
-version = "0.2.3"
+version = "0.2.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "bump-my-version" },
@@ -33,9 +33,9 @@ dependencies = [
     { name = "protobuf" },
     { name = "protovalidate" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/4e/e7/8679acaa44b01bbc858275d3fa262e420d61f2a40598200e728924d1d247/agentic_mesh_protocol-0.2.3.tar.gz", hash = "sha256:a542f476d61b4d5acd3f03e7318cbd837ff016be996c1f80ad120222be2d1d95", size = 78843, upload-time = "2026-03-04T16:26:32.86Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/49/cf/35df606a8bdea46441ed8832ee1330860bd7d4e7724b9308a9ba3430babd/agentic_mesh_protocol-0.2.4.tar.gz", hash = "sha256:ee856bd5c891875418162af8251f4dd2df7ce3f50b713d038a77a4369ead1115", size = 79521, upload-time = "2026-05-06T15:50:49.989Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/fa/41/d487e2505531797aba03129187d1b4247499f37a57288a7b2b53d18050c0/agentic_mesh_protocol-0.2.3-py3-none-any.whl", hash = "sha256:ced7c0e4ca2e71ae02cfd8c908c7259165f8d4d98dad85a3e7b86ea0d701b1a9", size = 118882, upload-time = "2026-03-04T16:26:31.258Z" },
+    { url = "https://files.pythonhosted.org/packages/86/89/89cc28b35ffa6a6a68f22cc6236125b811aa1813d13abd7a32a76afee4e9/agentic_mesh_protocol-0.2.4-py3-none-any.whl", hash = "sha256:fece3e8293d0b74674453735fa6b13323043cc621fe8208e188d5f6bacd863fa", size = 119660, upload-time = "2026-05-06T15:50:48.18Z" },
 ]
 
 [[package]]
@@ -850,7 +850,7 @@ wheels = [
 
 [[package]]
 name = "digitalkin"
-version = "0.4.1.dev5"
+version = "0.4.2"
 source = { editable = "." }
 dependencies = [
     { name = "ag-ui-protocol" },
@@ -931,7 +931,7 @@ tests = [
 [package.metadata]
 requires-dist = [
     { name = "ag-ui-protocol", specifier = ">=0.1.14" },
-    { name = "agentic-mesh-protocol", specifier = "==0.2.3" },
+    { name = "agentic-mesh-protocol", specifier = "==0.2.4" },
     { name = "anyio", specifier = "==4.13.0" },
     { name = "asyncio-inspector", marker = "extra == 'profiling'", specifier = "==0.1.0" },
     { name = "grpcio-health-checking", specifier = "==1.78.0" },
