@@ -21787,13 +21787,13 @@ a JSON object of
 Methods:
 
 - **`close`** – Release resources held by this strategy. No-op by default.
-- **`list`** – Get all records within a collection scoped to this mission.
-- **`read`** – Get records from storage by key.
-- **`remove`** – Delete a record from the storage.
-- **`remove_collection`** – Wipe a record clean.
+- **`list`** – Get all records in a collection under the given scope.
+- **`read`** – Get a record by key under the given scope.
+- **`remove`** – Delete a record from the storage under the given scope.
+- **`remove_collection`** – Wipe a collection clean under the given scope.
 - **`store`** – Store a new record in the storage.
-- **`update`** – Validate & overwrite an existing record.
-- **`upsert`** – Insert or update a record atomically.
+- **`update`** – Validate & overwrite an existing record under the given scope.
+- **`upsert`** – Insert or update a record atomically under the given scope.
 
 #### close
 
@@ -21806,10 +21806,10 @@ Release resources held by this strategy. No-op by default.
 #### list
 
 ```python
-list(collection: str) -> list[StorageRecord]
+list(collection: str, scope: Scope = 'mission') -> list[StorageRecord]
 ```
 
-Get all records within a collection scoped to this mission.
+Get all records in a collection under the given scope.
 
 Parameters:
 
@@ -21817,17 +21817,21 @@ Parameters:
 
   (`str`) – The unique name for the record type
 
+- ##### **`scope`**
+
+  (`Scope`, default: `'mission'` ) – Which context to list (default: "mission").
+
 Returns:
 
-- `list[StorageRecord]` – A list of storage records belonging to this mission.
+- `list[StorageRecord]` – A list of storage records under the resolved context.
 
 #### read
 
 ```python
-read(collection: str, record_id: str) -> StorageRecord | None
+read(collection: str, record_id: str, scope: Scope = 'mission') -> StorageRecord | None
 ```
 
-Get records from storage by key.
+Get a record by key under the given scope.
 
 Parameters:
 
@@ -21839,18 +21843,21 @@ Parameters:
 
   (`str`) – The unique ID of the record
 
+- ##### **`scope`**
+
+  (`Scope`, default: `'mission'` ) – Which context to read from (default: "mission").
+
 Returns:
 
-- `StorageRecord | None` – A storage record with validated data, or None if not found
-- `StorageRecord | None` – or if the record belongs to a different mission.
+- `StorageRecord | None` – The matching record if it exists, otherwise None.
 
 #### remove
 
 ```python
-remove(collection: str, record_id: str) -> bool
+remove(collection: str, record_id: str, scope: Scope = 'mission') -> bool
 ```
 
-Delete a record from the storage.
+Delete a record from the storage under the given scope.
 
 Parameters:
 
@@ -21862,6 +21869,10 @@ Parameters:
 
   (`str`) – The unique ID of the record
 
+- ##### **`scope`**
+
+  (`Scope`, default: `'mission'` ) – Which context the record lives under (default: "mission").
+
 Returns:
 
 - `bool` – True if the deletion was successful, False otherwise
@@ -21869,16 +21880,20 @@ Returns:
 #### remove_collection
 
 ```python
-remove_collection(collection: str) -> bool
+remove_collection(collection: str, scope: Scope = 'mission') -> bool
 ```
 
-Wipe a record clean.
+Wipe a collection clean under the given scope.
 
 Parameters:
 
 - ##### **`collection`**
 
   (`str`) – The unique name for the record type
+
+- ##### **`scope`**
+
+  (`Scope`, default: `'mission'` ) – Which context the records live under (default: "mission").
 
 Returns:
 
@@ -21892,6 +21907,7 @@ store(
     record_id: str | None,
     data: dict[str, Any],
     data_type: Literal["OUTPUT", "VIEW", "LOGS", "OTHER"] = "OUTPUT",
+    scope: Scope = "mission",
 ) -> StorageRecord
 ```
 
@@ -21915,6 +21931,10 @@ Parameters:
 
   (`Literal['OUTPUT', 'VIEW', 'LOGS', 'OTHER']`, default: `'OUTPUT'` ) – The type of data being stored (default: OUTPUT)
 
+- ##### **`scope`**
+
+  (`Scope`, default: `'mission'` ) – "mission" (default) writes under the current mission context; "setup" writes under the setup-version context.
+
 Returns:
 
 - `StorageRecord` – The ID of the created record
@@ -21926,10 +21946,12 @@ Raises:
 #### update
 
 ```python
-update(collection: str, record_id: str, data: dict[str, Any]) -> StorageRecord | None
+update(
+    collection: str, record_id: str, data: dict[str, Any], scope: Scope = "mission"
+) -> StorageRecord | None
 ```
 
-Validate & overwrite an existing record.
+Validate & overwrite an existing record under the given scope.
 
 Parameters:
 
@@ -21945,6 +21967,10 @@ Parameters:
 
   (`dict[str, Any]`) – The new data to store
 
+- ##### **`scope`**
+
+  (`Scope`, default: `'mission'` ) – Which context the record lives under (default: "mission").
+
 Returns:
 
 - **`StorageRecord`** ( `StorageRecord | None` ) – The modified record
@@ -21957,12 +21983,13 @@ upsert(
     record_id: str,
     data: dict[str, Any],
     data_type: Literal["OUTPUT", "VIEW", "LOGS", "OTHER"] = "OUTPUT",
+    scope: Scope = "mission",
 ) -> StorageRecord
 ```
 
-Insert or update a record atomically.
+Insert or update a record atomically under the given scope.
 
-If a record with the given collection/record_id exists, it is updated; otherwise a new record is created. The operation is protected by a per-record lock to prevent races.
+If a record with the given collection/record_id exists under that context it is updated; otherwise a new record is created. The operation is protected by a per-record lock to prevent races.
 
 Parameters:
 
@@ -21981,6 +22008,10 @@ Parameters:
 - ##### **`data_type`**
 
   (`Literal['OUTPUT', 'VIEW', 'LOGS', 'OTHER']`, default: `'OUTPUT'` ) – The type of data being stored (default: OUTPUT)
+
+- ##### **`scope`**
+
+  (`Scope`, default: `'mission'` ) – Which context to upsert under (default: "mission").
 
 Returns:
 
@@ -22894,11 +22925,15 @@ StorageStrategy(
 
 Define CRUD + list/remove-collection against a collection/record store.
 
+Records are scoped by a `context` string (the proto field), which is either `self.mission_id` (mission scope, the default) or `self.setup_version_id` (setup-version scope). Both attributes are expected to already contain the full prefix (`missions:<id>` / `setup_versions:<id>`).
+
+Public methods accept `scope: Literal["mission", "setup"]` (default `"mission"`); internally we resolve it to the matching context string and pass that to the abstract `_store/_read/_update/_remove/_list/_remove_collection`.
+
 Parameters:
 
 - #### **`mission_id`**
 
-  (`str`) – The ID of the mission this strategy is associated with
+  (`str`) – Already-prefixed mission context (missions:<id>).
 
 - #### **`setup_id`**
 
@@ -22906,7 +22941,7 @@ Parameters:
 
 - #### **`setup_version_id`**
 
-  (`str`) – The ID of the setup version
+  (`str`) – Already-prefixed setup-version context (setup_versions:<id>).
 
 - #### **`config`**
 
@@ -22915,13 +22950,13 @@ Parameters:
 Methods:
 
 - **`close`** – Release resources held by this strategy. No-op by default.
-- **`list`** – Get all records within a collection scoped to this mission.
-- **`read`** – Get records from storage by key.
-- **`remove`** – Delete a record from the storage.
-- **`remove_collection`** – Wipe a record clean.
+- **`list`** – Get all records in a collection under the given scope.
+- **`read`** – Get a record by key under the given scope.
+- **`remove`** – Delete a record from the storage under the given scope.
+- **`remove_collection`** – Wipe a collection clean under the given scope.
 - **`store`** – Store a new record in the storage.
-- **`update`** – Validate & overwrite an existing record.
-- **`upsert`** – Insert or update a record atomically.
+- **`update`** – Validate & overwrite an existing record under the given scope.
+- **`upsert`** – Insert or update a record atomically under the given scope.
 
 #### close
 
@@ -22934,10 +22969,10 @@ Release resources held by this strategy. No-op by default.
 #### list
 
 ```python
-list(collection: str) -> list[StorageRecord]
+list(collection: str, scope: Scope = 'mission') -> list[StorageRecord]
 ```
 
-Get all records within a collection scoped to this mission.
+Get all records in a collection under the given scope.
 
 Parameters:
 
@@ -22945,17 +22980,21 @@ Parameters:
 
   (`str`) – The unique name for the record type
 
+- ##### **`scope`**
+
+  (`Scope`, default: `'mission'` ) – Which context to list (default: "mission").
+
 Returns:
 
-- `list[StorageRecord]` – A list of storage records belonging to this mission.
+- `list[StorageRecord]` – A list of storage records under the resolved context.
 
 #### read
 
 ```python
-read(collection: str, record_id: str) -> StorageRecord | None
+read(collection: str, record_id: str, scope: Scope = 'mission') -> StorageRecord | None
 ```
 
-Get records from storage by key.
+Get a record by key under the given scope.
 
 Parameters:
 
@@ -22967,18 +23006,21 @@ Parameters:
 
   (`str`) – The unique ID of the record
 
+- ##### **`scope`**
+
+  (`Scope`, default: `'mission'` ) – Which context to read from (default: "mission").
+
 Returns:
 
-- `StorageRecord | None` – A storage record with validated data, or None if not found
-- `StorageRecord | None` – or if the record belongs to a different mission.
+- `StorageRecord | None` – The matching record if it exists, otherwise None.
 
 #### remove
 
 ```python
-remove(collection: str, record_id: str) -> bool
+remove(collection: str, record_id: str, scope: Scope = 'mission') -> bool
 ```
 
-Delete a record from the storage.
+Delete a record from the storage under the given scope.
 
 Parameters:
 
@@ -22990,6 +23032,10 @@ Parameters:
 
   (`str`) – The unique ID of the record
 
+- ##### **`scope`**
+
+  (`Scope`, default: `'mission'` ) – Which context the record lives under (default: "mission").
+
 Returns:
 
 - `bool` – True if the deletion was successful, False otherwise
@@ -22997,16 +23043,20 @@ Returns:
 #### remove_collection
 
 ```python
-remove_collection(collection: str) -> bool
+remove_collection(collection: str, scope: Scope = 'mission') -> bool
 ```
 
-Wipe a record clean.
+Wipe a collection clean under the given scope.
 
 Parameters:
 
 - ##### **`collection`**
 
   (`str`) – The unique name for the record type
+
+- ##### **`scope`**
+
+  (`Scope`, default: `'mission'` ) – Which context the records live under (default: "mission").
 
 Returns:
 
@@ -23020,6 +23070,7 @@ store(
     record_id: str | None,
     data: dict[str, Any],
     data_type: Literal["OUTPUT", "VIEW", "LOGS", "OTHER"] = "OUTPUT",
+    scope: Scope = "mission",
 ) -> StorageRecord
 ```
 
@@ -23043,6 +23094,10 @@ Parameters:
 
   (`Literal['OUTPUT', 'VIEW', 'LOGS', 'OTHER']`, default: `'OUTPUT'` ) – The type of data being stored (default: OUTPUT)
 
+- ##### **`scope`**
+
+  (`Scope`, default: `'mission'` ) – "mission" (default) writes under the current mission context; "setup" writes under the setup-version context.
+
 Returns:
 
 - `StorageRecord` – The ID of the created record
@@ -23054,10 +23109,12 @@ Raises:
 #### update
 
 ```python
-update(collection: str, record_id: str, data: dict[str, Any]) -> StorageRecord | None
+update(
+    collection: str, record_id: str, data: dict[str, Any], scope: Scope = "mission"
+) -> StorageRecord | None
 ```
 
-Validate & overwrite an existing record.
+Validate & overwrite an existing record under the given scope.
 
 Parameters:
 
@@ -23073,6 +23130,10 @@ Parameters:
 
   (`dict[str, Any]`) – The new data to store
 
+- ##### **`scope`**
+
+  (`Scope`, default: `'mission'` ) – Which context the record lives under (default: "mission").
+
 Returns:
 
 - **`StorageRecord`** ( `StorageRecord | None` ) – The modified record
@@ -23085,12 +23146,13 @@ upsert(
     record_id: str,
     data: dict[str, Any],
     data_type: Literal["OUTPUT", "VIEW", "LOGS", "OTHER"] = "OUTPUT",
+    scope: Scope = "mission",
 ) -> StorageRecord
 ```
 
-Insert or update a record atomically.
+Insert or update a record atomically under the given scope.
 
-If a record with the given collection/record_id exists, it is updated; otherwise a new record is created. The operation is protected by a per-record lock to prevent races.
+If a record with the given collection/record_id exists under that context it is updated; otherwise a new record is created. The operation is protected by a per-record lock to prevent races.
 
 Parameters:
 
@@ -23109,6 +23171,10 @@ Parameters:
 - ##### **`data_type`**
 
   (`Literal['OUTPUT', 'VIEW', 'LOGS', 'OTHER']`, default: `'OUTPUT'` ) – The type of data being stored (default: OUTPUT)
+
+- ##### **`scope`**
+
+  (`Scope`, default: `'mission'` ) – Which context to upsert under (default: "mission").
 
 Returns:
 
@@ -32094,13 +32160,13 @@ a JSON object of
 Methods:
 
 - **`close`** – Release resources held by this strategy. No-op by default.
-- **`list`** – Get all records within a collection scoped to this mission.
-- **`read`** – Get records from storage by key.
-- **`remove`** – Delete a record from the storage.
-- **`remove_collection`** – Wipe a record clean.
+- **`list`** – Get all records in a collection under the given scope.
+- **`read`** – Get a record by key under the given scope.
+- **`remove`** – Delete a record from the storage under the given scope.
+- **`remove_collection`** – Wipe a collection clean under the given scope.
 - **`store`** – Store a new record in the storage.
-- **`update`** – Validate & overwrite an existing record.
-- **`upsert`** – Insert or update a record atomically.
+- **`update`** – Validate & overwrite an existing record under the given scope.
+- **`upsert`** – Insert or update a record atomically under the given scope.
 
 ##### close
 
@@ -32113,10 +32179,10 @@ Release resources held by this strategy. No-op by default.
 ##### list
 
 ```python
-list(collection: str) -> list[StorageRecord]
+list(collection: str, scope: Scope = 'mission') -> list[StorageRecord]
 ```
 
-Get all records within a collection scoped to this mission.
+Get all records in a collection under the given scope.
 
 Parameters:
 
@@ -32124,17 +32190,21 @@ Parameters:
 
   (`str`) – The unique name for the record type
 
+- ###### **`scope`**
+
+  (`Scope`, default: `'mission'` ) – Which context to list (default: "mission").
+
 Returns:
 
-- `list[StorageRecord]` – A list of storage records belonging to this mission.
+- `list[StorageRecord]` – A list of storage records under the resolved context.
 
 ##### read
 
 ```python
-read(collection: str, record_id: str) -> StorageRecord | None
+read(collection: str, record_id: str, scope: Scope = 'mission') -> StorageRecord | None
 ```
 
-Get records from storage by key.
+Get a record by key under the given scope.
 
 Parameters:
 
@@ -32146,18 +32216,21 @@ Parameters:
 
   (`str`) – The unique ID of the record
 
+- ###### **`scope`**
+
+  (`Scope`, default: `'mission'` ) – Which context to read from (default: "mission").
+
 Returns:
 
-- `StorageRecord | None` – A storage record with validated data, or None if not found
-- `StorageRecord | None` – or if the record belongs to a different mission.
+- `StorageRecord | None` – The matching record if it exists, otherwise None.
 
 ##### remove
 
 ```python
-remove(collection: str, record_id: str) -> bool
+remove(collection: str, record_id: str, scope: Scope = 'mission') -> bool
 ```
 
-Delete a record from the storage.
+Delete a record from the storage under the given scope.
 
 Parameters:
 
@@ -32169,6 +32242,10 @@ Parameters:
 
   (`str`) – The unique ID of the record
 
+- ###### **`scope`**
+
+  (`Scope`, default: `'mission'` ) – Which context the record lives under (default: "mission").
+
 Returns:
 
 - `bool` – True if the deletion was successful, False otherwise
@@ -32176,16 +32253,20 @@ Returns:
 ##### remove_collection
 
 ```python
-remove_collection(collection: str) -> bool
+remove_collection(collection: str, scope: Scope = 'mission') -> bool
 ```
 
-Wipe a record clean.
+Wipe a collection clean under the given scope.
 
 Parameters:
 
 - ###### **`collection`**
 
   (`str`) – The unique name for the record type
+
+- ###### **`scope`**
+
+  (`Scope`, default: `'mission'` ) – Which context the records live under (default: "mission").
 
 Returns:
 
@@ -32199,6 +32280,7 @@ store(
     record_id: str | None,
     data: dict[str, Any],
     data_type: Literal["OUTPUT", "VIEW", "LOGS", "OTHER"] = "OUTPUT",
+    scope: Scope = "mission",
 ) -> StorageRecord
 ```
 
@@ -32222,6 +32304,10 @@ Parameters:
 
   (`Literal['OUTPUT', 'VIEW', 'LOGS', 'OTHER']`, default: `'OUTPUT'` ) – The type of data being stored (default: OUTPUT)
 
+- ###### **`scope`**
+
+  (`Scope`, default: `'mission'` ) – "mission" (default) writes under the current mission context; "setup" writes under the setup-version context.
+
 Returns:
 
 - `StorageRecord` – The ID of the created record
@@ -32233,10 +32319,12 @@ Raises:
 ##### update
 
 ```python
-update(collection: str, record_id: str, data: dict[str, Any]) -> StorageRecord | None
+update(
+    collection: str, record_id: str, data: dict[str, Any], scope: Scope = "mission"
+) -> StorageRecord | None
 ```
 
-Validate & overwrite an existing record.
+Validate & overwrite an existing record under the given scope.
 
 Parameters:
 
@@ -32252,6 +32340,10 @@ Parameters:
 
   (`dict[str, Any]`) – The new data to store
 
+- ###### **`scope`**
+
+  (`Scope`, default: `'mission'` ) – Which context the record lives under (default: "mission").
+
 Returns:
 
 - **`StorageRecord`** ( `StorageRecord | None` ) – The modified record
@@ -32264,12 +32356,13 @@ upsert(
     record_id: str,
     data: dict[str, Any],
     data_type: Literal["OUTPUT", "VIEW", "LOGS", "OTHER"] = "OUTPUT",
+    scope: Scope = "mission",
 ) -> StorageRecord
 ```
 
-Insert or update a record atomically.
+Insert or update a record atomically under the given scope.
 
-If a record with the given collection/record_id exists, it is updated; otherwise a new record is created. The operation is protected by a per-record lock to prevent races.
+If a record with the given collection/record_id exists under that context it is updated; otherwise a new record is created. The operation is protected by a per-record lock to prevent races.
 
 Parameters:
 
@@ -32288,6 +32381,10 @@ Parameters:
 - ###### **`data_type`**
 
   (`Literal['OUTPUT', 'VIEW', 'LOGS', 'OTHER']`, default: `'OUTPUT'` ) – The type of data being stored (default: OUTPUT)
+
+- ###### **`scope`**
+
+  (`Scope`, default: `'mission'` ) – Which context to upsert under (default: "mission").
 
 Returns:
 
@@ -32339,15 +32436,15 @@ Methods:
 - **`close_all_cached_channels`** – Close all cached channels and reset the cache.
 - **`close_channel`** – Release this instance's ref on the cached channel.
 - **`exec_grpc_query`** – Execute a gRPC query with from the query's rpc endpoint name.
-- **`list`** – Get all records within a collection scoped to this mission.
+- **`list`** – Get all records in a collection under the given scope.
 - **`poll_grpc`** – Execute a single polling RPC. Returns None on DEADLINE_EXCEEDED (expected empty poll).
-- **`read`** – Get records from storage by key.
+- **`read`** – Get a record by key under the given scope.
 - **`release_cached_channel`** – Decrement refcount for a cache key and close channel when last ref is released.
-- **`remove`** – Delete a record from the storage.
-- **`remove_collection`** – Wipe a record clean.
+- **`remove`** – Delete a record from the storage under the given scope.
+- **`remove_collection`** – Wipe a collection clean under the given scope.
 - **`store`** – Store a new record in the storage.
-- **`update`** – Validate & overwrite an existing record.
-- **`upsert`** – Insert or update a record atomically.
+- **`update`** – Validate & overwrite an existing record under the given scope.
+- **`upsert`** – Insert or update a record atomically under the given scope.
 - **`wait_for_ready`** – Check if the gRPC channel can connect within timeout.
 
 ##### close
@@ -32413,10 +32510,10 @@ Raises:
 ##### list
 
 ```python
-list(collection: str) -> list[StorageRecord]
+list(collection: str, scope: Scope = 'mission') -> list[StorageRecord]
 ```
 
-Get all records within a collection scoped to this mission.
+Get all records in a collection under the given scope.
 
 Parameters:
 
@@ -32424,9 +32521,13 @@ Parameters:
 
   (`str`) – The unique name for the record type
 
+- ###### **`scope`**
+
+  (`Scope`, default: `'mission'` ) – Which context to list (default: "mission").
+
 Returns:
 
-- `list[StorageRecord]` – A list of storage records belonging to this mission.
+- `list[StorageRecord]` – A list of storage records under the resolved context.
 
 ##### poll_grpc
 
@@ -32463,10 +32564,10 @@ Raises:
 ##### read
 
 ```python
-read(collection: str, record_id: str) -> StorageRecord | None
+read(collection: str, record_id: str, scope: Scope = 'mission') -> StorageRecord | None
 ```
 
-Get records from storage by key.
+Get a record by key under the given scope.
 
 Parameters:
 
@@ -32478,10 +32579,13 @@ Parameters:
 
   (`str`) – The unique ID of the record
 
+- ###### **`scope`**
+
+  (`Scope`, default: `'mission'` ) – Which context to read from (default: "mission").
+
 Returns:
 
-- `StorageRecord | None` – A storage record with validated data, or None if not found
-- `StorageRecord | None` – or if the record belongs to a different mission.
+- `StorageRecord | None` – The matching record if it exists, otherwise None.
 
 ##### release_cached_channel
 
@@ -32500,10 +32604,10 @@ Parameters:
 ##### remove
 
 ```python
-remove(collection: str, record_id: str) -> bool
+remove(collection: str, record_id: str, scope: Scope = 'mission') -> bool
 ```
 
-Delete a record from the storage.
+Delete a record from the storage under the given scope.
 
 Parameters:
 
@@ -32515,6 +32619,10 @@ Parameters:
 
   (`str`) – The unique ID of the record
 
+- ###### **`scope`**
+
+  (`Scope`, default: `'mission'` ) – Which context the record lives under (default: "mission").
+
 Returns:
 
 - `bool` – True if the deletion was successful, False otherwise
@@ -32522,16 +32630,20 @@ Returns:
 ##### remove_collection
 
 ```python
-remove_collection(collection: str) -> bool
+remove_collection(collection: str, scope: Scope = 'mission') -> bool
 ```
 
-Wipe a record clean.
+Wipe a collection clean under the given scope.
 
 Parameters:
 
 - ###### **`collection`**
 
   (`str`) – The unique name for the record type
+
+- ###### **`scope`**
+
+  (`Scope`, default: `'mission'` ) – Which context the records live under (default: "mission").
 
 Returns:
 
@@ -32545,6 +32657,7 @@ store(
     record_id: str | None,
     data: dict[str, Any],
     data_type: Literal["OUTPUT", "VIEW", "LOGS", "OTHER"] = "OUTPUT",
+    scope: Scope = "mission",
 ) -> StorageRecord
 ```
 
@@ -32568,6 +32681,10 @@ Parameters:
 
   (`Literal['OUTPUT', 'VIEW', 'LOGS', 'OTHER']`, default: `'OUTPUT'` ) – The type of data being stored (default: OUTPUT)
 
+- ###### **`scope`**
+
+  (`Scope`, default: `'mission'` ) – "mission" (default) writes under the current mission context; "setup" writes under the setup-version context.
+
 Returns:
 
 - `StorageRecord` – The ID of the created record
@@ -32579,10 +32696,12 @@ Raises:
 ##### update
 
 ```python
-update(collection: str, record_id: str, data: dict[str, Any]) -> StorageRecord | None
+update(
+    collection: str, record_id: str, data: dict[str, Any], scope: Scope = "mission"
+) -> StorageRecord | None
 ```
 
-Validate & overwrite an existing record.
+Validate & overwrite an existing record under the given scope.
 
 Parameters:
 
@@ -32598,6 +32717,10 @@ Parameters:
 
   (`dict[str, Any]`) – The new data to store
 
+- ###### **`scope`**
+
+  (`Scope`, default: `'mission'` ) – Which context the record lives under (default: "mission").
+
 Returns:
 
 - **`StorageRecord`** ( `StorageRecord | None` ) – The modified record
@@ -32610,12 +32733,13 @@ upsert(
     record_id: str,
     data: dict[str, Any],
     data_type: Literal["OUTPUT", "VIEW", "LOGS", "OTHER"] = "OUTPUT",
+    scope: Scope = "mission",
 ) -> StorageRecord
 ```
 
-Insert or update a record atomically.
+Insert or update a record atomically under the given scope.
 
-If a record with the given collection/record_id exists, it is updated; otherwise a new record is created. The operation is protected by a per-record lock to prevent races.
+If a record with the given collection/record_id exists under that context it is updated; otherwise a new record is created. The operation is protected by a per-record lock to prevent races.
 
 Parameters:
 
@@ -32634,6 +32758,10 @@ Parameters:
 - ###### **`data_type`**
 
   (`Literal['OUTPUT', 'VIEW', 'LOGS', 'OTHER']`, default: `'OUTPUT'` ) – The type of data being stored (default: OUTPUT)
+
+- ###### **`scope`**
+
+  (`Scope`, default: `'mission'` ) – Which context to upsert under (default: "mission").
 
 Returns:
 
@@ -32690,11 +32818,15 @@ StorageStrategy(
 
 Define CRUD + list/remove-collection against a collection/record store.
 
+Records are scoped by a `context` string (the proto field), which is either `self.mission_id` (mission scope, the default) or `self.setup_version_id` (setup-version scope). Both attributes are expected to already contain the full prefix (`missions:<id>` / `setup_versions:<id>`).
+
+Public methods accept `scope: Literal["mission", "setup"]` (default `"mission"`); internally we resolve it to the matching context string and pass that to the abstract `_store/_read/_update/_remove/_list/_remove_collection`.
+
 Parameters:
 
 - ##### **`mission_id`**
 
-  (`str`) – The ID of the mission this strategy is associated with
+  (`str`) – Already-prefixed mission context (missions:<id>).
 
 - ##### **`setup_id`**
 
@@ -32702,7 +32834,7 @@ Parameters:
 
 - ##### **`setup_version_id`**
 
-  (`str`) – The ID of the setup version
+  (`str`) – Already-prefixed setup-version context (setup_versions:<id>).
 
 - ##### **`config`**
 
@@ -32711,13 +32843,13 @@ Parameters:
 Methods:
 
 - **`close`** – Release resources held by this strategy. No-op by default.
-- **`list`** – Get all records within a collection scoped to this mission.
-- **`read`** – Get records from storage by key.
-- **`remove`** – Delete a record from the storage.
-- **`remove_collection`** – Wipe a record clean.
+- **`list`** – Get all records in a collection under the given scope.
+- **`read`** – Get a record by key under the given scope.
+- **`remove`** – Delete a record from the storage under the given scope.
+- **`remove_collection`** – Wipe a collection clean under the given scope.
 - **`store`** – Store a new record in the storage.
-- **`update`** – Validate & overwrite an existing record.
-- **`upsert`** – Insert or update a record atomically.
+- **`update`** – Validate & overwrite an existing record under the given scope.
+- **`upsert`** – Insert or update a record atomically under the given scope.
 
 ##### close
 
@@ -32730,10 +32862,10 @@ Release resources held by this strategy. No-op by default.
 ##### list
 
 ```python
-list(collection: str) -> list[StorageRecord]
+list(collection: str, scope: Scope = 'mission') -> list[StorageRecord]
 ```
 
-Get all records within a collection scoped to this mission.
+Get all records in a collection under the given scope.
 
 Parameters:
 
@@ -32741,17 +32873,21 @@ Parameters:
 
   (`str`) – The unique name for the record type
 
+- ###### **`scope`**
+
+  (`Scope`, default: `'mission'` ) – Which context to list (default: "mission").
+
 Returns:
 
-- `list[StorageRecord]` – A list of storage records belonging to this mission.
+- `list[StorageRecord]` – A list of storage records under the resolved context.
 
 ##### read
 
 ```python
-read(collection: str, record_id: str) -> StorageRecord | None
+read(collection: str, record_id: str, scope: Scope = 'mission') -> StorageRecord | None
 ```
 
-Get records from storage by key.
+Get a record by key under the given scope.
 
 Parameters:
 
@@ -32763,18 +32899,21 @@ Parameters:
 
   (`str`) – The unique ID of the record
 
+- ###### **`scope`**
+
+  (`Scope`, default: `'mission'` ) – Which context to read from (default: "mission").
+
 Returns:
 
-- `StorageRecord | None` – A storage record with validated data, or None if not found
-- `StorageRecord | None` – or if the record belongs to a different mission.
+- `StorageRecord | None` – The matching record if it exists, otherwise None.
 
 ##### remove
 
 ```python
-remove(collection: str, record_id: str) -> bool
+remove(collection: str, record_id: str, scope: Scope = 'mission') -> bool
 ```
 
-Delete a record from the storage.
+Delete a record from the storage under the given scope.
 
 Parameters:
 
@@ -32786,6 +32925,10 @@ Parameters:
 
   (`str`) – The unique ID of the record
 
+- ###### **`scope`**
+
+  (`Scope`, default: `'mission'` ) – Which context the record lives under (default: "mission").
+
 Returns:
 
 - `bool` – True if the deletion was successful, False otherwise
@@ -32793,16 +32936,20 @@ Returns:
 ##### remove_collection
 
 ```python
-remove_collection(collection: str) -> bool
+remove_collection(collection: str, scope: Scope = 'mission') -> bool
 ```
 
-Wipe a record clean.
+Wipe a collection clean under the given scope.
 
 Parameters:
 
 - ###### **`collection`**
 
   (`str`) – The unique name for the record type
+
+- ###### **`scope`**
+
+  (`Scope`, default: `'mission'` ) – Which context the records live under (default: "mission").
 
 Returns:
 
@@ -32816,6 +32963,7 @@ store(
     record_id: str | None,
     data: dict[str, Any],
     data_type: Literal["OUTPUT", "VIEW", "LOGS", "OTHER"] = "OUTPUT",
+    scope: Scope = "mission",
 ) -> StorageRecord
 ```
 
@@ -32839,6 +32987,10 @@ Parameters:
 
   (`Literal['OUTPUT', 'VIEW', 'LOGS', 'OTHER']`, default: `'OUTPUT'` ) – The type of data being stored (default: OUTPUT)
 
+- ###### **`scope`**
+
+  (`Scope`, default: `'mission'` ) – "mission" (default) writes under the current mission context; "setup" writes under the setup-version context.
+
 Returns:
 
 - `StorageRecord` – The ID of the created record
@@ -32850,10 +33002,12 @@ Raises:
 ##### update
 
 ```python
-update(collection: str, record_id: str, data: dict[str, Any]) -> StorageRecord | None
+update(
+    collection: str, record_id: str, data: dict[str, Any], scope: Scope = "mission"
+) -> StorageRecord | None
 ```
 
-Validate & overwrite an existing record.
+Validate & overwrite an existing record under the given scope.
 
 Parameters:
 
@@ -32869,6 +33023,10 @@ Parameters:
 
   (`dict[str, Any]`) – The new data to store
 
+- ###### **`scope`**
+
+  (`Scope`, default: `'mission'` ) – Which context the record lives under (default: "mission").
+
 Returns:
 
 - **`StorageRecord`** ( `StorageRecord | None` ) – The modified record
@@ -32881,12 +33039,13 @@ upsert(
     record_id: str,
     data: dict[str, Any],
     data_type: Literal["OUTPUT", "VIEW", "LOGS", "OTHER"] = "OUTPUT",
+    scope: Scope = "mission",
 ) -> StorageRecord
 ```
 
-Insert or update a record atomically.
+Insert or update a record atomically under the given scope.
 
-If a record with the given collection/record_id exists, it is updated; otherwise a new record is created. The operation is protected by a per-record lock to prevent races.
+If a record with the given collection/record_id exists under that context it is updated; otherwise a new record is created. The operation is protected by a per-record lock to prevent races.
 
 Parameters:
 
@@ -32905,6 +33064,10 @@ Parameters:
 - ###### **`data_type`**
 
   (`Literal['OUTPUT', 'VIEW', 'LOGS', 'OTHER']`, default: `'OUTPUT'` ) – The type of data being stored (default: OUTPUT)
+
+- ###### **`scope`**
+
+  (`Scope`, default: `'mission'` ) – Which context to upsert under (default: "mission").
 
 Returns:
 
@@ -32961,13 +33124,13 @@ a JSON object of
 Methods:
 
 - **`close`** – Release resources held by this strategy. No-op by default.
-- **`list`** – Get all records within a collection scoped to this mission.
-- **`read`** – Get records from storage by key.
-- **`remove`** – Delete a record from the storage.
-- **`remove_collection`** – Wipe a record clean.
+- **`list`** – Get all records in a collection under the given scope.
+- **`read`** – Get a record by key under the given scope.
+- **`remove`** – Delete a record from the storage under the given scope.
+- **`remove_collection`** – Wipe a collection clean under the given scope.
 - **`store`** – Store a new record in the storage.
-- **`update`** – Validate & overwrite an existing record.
-- **`upsert`** – Insert or update a record atomically.
+- **`update`** – Validate & overwrite an existing record under the given scope.
+- **`upsert`** – Insert or update a record atomically under the given scope.
 
 ###### close
 
@@ -32980,10 +33143,10 @@ Release resources held by this strategy. No-op by default.
 ###### list
 
 ```python
-list(collection: str) -> list[StorageRecord]
+list(collection: str, scope: Scope = 'mission') -> list[StorageRecord]
 ```
 
-Get all records within a collection scoped to this mission.
+Get all records in a collection under the given scope.
 
 Parameters:
 
@@ -32991,17 +33154,21 @@ Parameters:
 
   (`str`) – The unique name for the record type
 
+- ###### **`scope`**
+
+  (`Scope`, default: `'mission'` ) – Which context to list (default: "mission").
+
 Returns:
 
-- `list[StorageRecord]` – A list of storage records belonging to this mission.
+- `list[StorageRecord]` – A list of storage records under the resolved context.
 
 ###### read
 
 ```python
-read(collection: str, record_id: str) -> StorageRecord | None
+read(collection: str, record_id: str, scope: Scope = 'mission') -> StorageRecord | None
 ```
 
-Get records from storage by key.
+Get a record by key under the given scope.
 
 Parameters:
 
@@ -33013,18 +33180,21 @@ Parameters:
 
   (`str`) – The unique ID of the record
 
+- ###### **`scope`**
+
+  (`Scope`, default: `'mission'` ) – Which context to read from (default: "mission").
+
 Returns:
 
-- `StorageRecord | None` – A storage record with validated data, or None if not found
-- `StorageRecord | None` – or if the record belongs to a different mission.
+- `StorageRecord | None` – The matching record if it exists, otherwise None.
 
 ###### remove
 
 ```python
-remove(collection: str, record_id: str) -> bool
+remove(collection: str, record_id: str, scope: Scope = 'mission') -> bool
 ```
 
-Delete a record from the storage.
+Delete a record from the storage under the given scope.
 
 Parameters:
 
@@ -33036,6 +33206,10 @@ Parameters:
 
   (`str`) – The unique ID of the record
 
+- ###### **`scope`**
+
+  (`Scope`, default: `'mission'` ) – Which context the record lives under (default: "mission").
+
 Returns:
 
 - `bool` – True if the deletion was successful, False otherwise
@@ -33043,16 +33217,20 @@ Returns:
 ###### remove_collection
 
 ```python
-remove_collection(collection: str) -> bool
+remove_collection(collection: str, scope: Scope = 'mission') -> bool
 ```
 
-Wipe a record clean.
+Wipe a collection clean under the given scope.
 
 Parameters:
 
 - ###### **`collection`**
 
   (`str`) – The unique name for the record type
+
+- ###### **`scope`**
+
+  (`Scope`, default: `'mission'` ) – Which context the records live under (default: "mission").
 
 Returns:
 
@@ -33066,6 +33244,7 @@ store(
     record_id: str | None,
     data: dict[str, Any],
     data_type: Literal["OUTPUT", "VIEW", "LOGS", "OTHER"] = "OUTPUT",
+    scope: Scope = "mission",
 ) -> StorageRecord
 ```
 
@@ -33089,6 +33268,10 @@ Parameters:
 
   (`Literal['OUTPUT', 'VIEW', 'LOGS', 'OTHER']`, default: `'OUTPUT'` ) – The type of data being stored (default: OUTPUT)
 
+- ###### **`scope`**
+
+  (`Scope`, default: `'mission'` ) – "mission" (default) writes under the current mission context; "setup" writes under the setup-version context.
+
 Returns:
 
 - `StorageRecord` – The ID of the created record
@@ -33100,10 +33283,12 @@ Raises:
 ###### update
 
 ```python
-update(collection: str, record_id: str, data: dict[str, Any]) -> StorageRecord | None
+update(
+    collection: str, record_id: str, data: dict[str, Any], scope: Scope = "mission"
+) -> StorageRecord | None
 ```
 
-Validate & overwrite an existing record.
+Validate & overwrite an existing record under the given scope.
 
 Parameters:
 
@@ -33119,6 +33304,10 @@ Parameters:
 
   (`dict[str, Any]`) – The new data to store
 
+- ###### **`scope`**
+
+  (`Scope`, default: `'mission'` ) – Which context the record lives under (default: "mission").
+
 Returns:
 
 - **`StorageRecord`** ( `StorageRecord | None` ) – The modified record
@@ -33131,12 +33320,13 @@ upsert(
     record_id: str,
     data: dict[str, Any],
     data_type: Literal["OUTPUT", "VIEW", "LOGS", "OTHER"] = "OUTPUT",
+    scope: Scope = "mission",
 ) -> StorageRecord
 ```
 
-Insert or update a record atomically.
+Insert or update a record atomically under the given scope.
 
-If a record with the given collection/record_id exists, it is updated; otherwise a new record is created. The operation is protected by a per-record lock to prevent races.
+If a record with the given collection/record_id exists under that context it is updated; otherwise a new record is created. The operation is protected by a per-record lock to prevent races.
 
 Parameters:
 
@@ -33155,6 +33345,10 @@ Parameters:
 - ###### **`data_type`**
 
   (`Literal['OUTPUT', 'VIEW', 'LOGS', 'OTHER']`, default: `'OUTPUT'` ) – The type of data being stored (default: OUTPUT)
+
+- ###### **`scope`**
+
+  (`Scope`, default: `'mission'` ) – Which context to upsert under (default: "mission").
 
 Returns:
 
@@ -33214,15 +33408,15 @@ Methods:
 - **`close_all_cached_channels`** – Close all cached channels and reset the cache.
 - **`close_channel`** – Release this instance's ref on the cached channel.
 - **`exec_grpc_query`** – Execute a gRPC query with from the query's rpc endpoint name.
-- **`list`** – Get all records within a collection scoped to this mission.
+- **`list`** – Get all records in a collection under the given scope.
 - **`poll_grpc`** – Execute a single polling RPC. Returns None on DEADLINE_EXCEEDED (expected empty poll).
-- **`read`** – Get records from storage by key.
+- **`read`** – Get a record by key under the given scope.
 - **`release_cached_channel`** – Decrement refcount for a cache key and close channel when last ref is released.
-- **`remove`** – Delete a record from the storage.
-- **`remove_collection`** – Wipe a record clean.
+- **`remove`** – Delete a record from the storage under the given scope.
+- **`remove_collection`** – Wipe a collection clean under the given scope.
 - **`store`** – Store a new record in the storage.
-- **`update`** – Validate & overwrite an existing record.
-- **`upsert`** – Insert or update a record atomically.
+- **`update`** – Validate & overwrite an existing record under the given scope.
+- **`upsert`** – Insert or update a record atomically under the given scope.
 - **`wait_for_ready`** – Check if the gRPC channel can connect within timeout.
 
 ###### close
@@ -33288,10 +33482,10 @@ Raises:
 ###### list
 
 ```python
-list(collection: str) -> list[StorageRecord]
+list(collection: str, scope: Scope = 'mission') -> list[StorageRecord]
 ```
 
-Get all records within a collection scoped to this mission.
+Get all records in a collection under the given scope.
 
 Parameters:
 
@@ -33299,9 +33493,13 @@ Parameters:
 
   (`str`) – The unique name for the record type
 
+- ###### **`scope`**
+
+  (`Scope`, default: `'mission'` ) – Which context to list (default: "mission").
+
 Returns:
 
-- `list[StorageRecord]` – A list of storage records belonging to this mission.
+- `list[StorageRecord]` – A list of storage records under the resolved context.
 
 ###### poll_grpc
 
@@ -33338,10 +33536,10 @@ Raises:
 ###### read
 
 ```python
-read(collection: str, record_id: str) -> StorageRecord | None
+read(collection: str, record_id: str, scope: Scope = 'mission') -> StorageRecord | None
 ```
 
-Get records from storage by key.
+Get a record by key under the given scope.
 
 Parameters:
 
@@ -33353,10 +33551,13 @@ Parameters:
 
   (`str`) – The unique ID of the record
 
+- ###### **`scope`**
+
+  (`Scope`, default: `'mission'` ) – Which context to read from (default: "mission").
+
 Returns:
 
-- `StorageRecord | None` – A storage record with validated data, or None if not found
-- `StorageRecord | None` – or if the record belongs to a different mission.
+- `StorageRecord | None` – The matching record if it exists, otherwise None.
 
 ###### release_cached_channel
 
@@ -33375,10 +33576,10 @@ Parameters:
 ###### remove
 
 ```python
-remove(collection: str, record_id: str) -> bool
+remove(collection: str, record_id: str, scope: Scope = 'mission') -> bool
 ```
 
-Delete a record from the storage.
+Delete a record from the storage under the given scope.
 
 Parameters:
 
@@ -33390,6 +33591,10 @@ Parameters:
 
   (`str`) – The unique ID of the record
 
+- ###### **`scope`**
+
+  (`Scope`, default: `'mission'` ) – Which context the record lives under (default: "mission").
+
 Returns:
 
 - `bool` – True if the deletion was successful, False otherwise
@@ -33397,16 +33602,20 @@ Returns:
 ###### remove_collection
 
 ```python
-remove_collection(collection: str) -> bool
+remove_collection(collection: str, scope: Scope = 'mission') -> bool
 ```
 
-Wipe a record clean.
+Wipe a collection clean under the given scope.
 
 Parameters:
 
 - ###### **`collection`**
 
   (`str`) – The unique name for the record type
+
+- ###### **`scope`**
+
+  (`Scope`, default: `'mission'` ) – Which context the records live under (default: "mission").
 
 Returns:
 
@@ -33420,6 +33629,7 @@ store(
     record_id: str | None,
     data: dict[str, Any],
     data_type: Literal["OUTPUT", "VIEW", "LOGS", "OTHER"] = "OUTPUT",
+    scope: Scope = "mission",
 ) -> StorageRecord
 ```
 
@@ -33443,6 +33653,10 @@ Parameters:
 
   (`Literal['OUTPUT', 'VIEW', 'LOGS', 'OTHER']`, default: `'OUTPUT'` ) – The type of data being stored (default: OUTPUT)
 
+- ###### **`scope`**
+
+  (`Scope`, default: `'mission'` ) – "mission" (default) writes under the current mission context; "setup" writes under the setup-version context.
+
 Returns:
 
 - `StorageRecord` – The ID of the created record
@@ -33454,10 +33668,12 @@ Raises:
 ###### update
 
 ```python
-update(collection: str, record_id: str, data: dict[str, Any]) -> StorageRecord | None
+update(
+    collection: str, record_id: str, data: dict[str, Any], scope: Scope = "mission"
+) -> StorageRecord | None
 ```
 
-Validate & overwrite an existing record.
+Validate & overwrite an existing record under the given scope.
 
 Parameters:
 
@@ -33473,6 +33689,10 @@ Parameters:
 
   (`dict[str, Any]`) – The new data to store
 
+- ###### **`scope`**
+
+  (`Scope`, default: `'mission'` ) – Which context the record lives under (default: "mission").
+
 Returns:
 
 - **`StorageRecord`** ( `StorageRecord | None` ) – The modified record
@@ -33485,12 +33705,13 @@ upsert(
     record_id: str,
     data: dict[str, Any],
     data_type: Literal["OUTPUT", "VIEW", "LOGS", "OTHER"] = "OUTPUT",
+    scope: Scope = "mission",
 ) -> StorageRecord
 ```
 
-Insert or update a record atomically.
+Insert or update a record atomically under the given scope.
 
-If a record with the given collection/record_id exists, it is updated; otherwise a new record is created. The operation is protected by a per-record lock to prevent races.
+If a record with the given collection/record_id exists under that context it is updated; otherwise a new record is created. The operation is protected by a per-record lock to prevent races.
 
 Parameters:
 
@@ -33509,6 +33730,10 @@ Parameters:
 - ###### **`data_type`**
 
   (`Literal['OUTPUT', 'VIEW', 'LOGS', 'OTHER']`, default: `'OUTPUT'` ) – The type of data being stored (default: OUTPUT)
+
+- ###### **`scope`**
+
+  (`Scope`, default: `'mission'` ) – Which context to upsert under (default: "mission").
 
 Returns:
 
@@ -33615,11 +33840,15 @@ StorageStrategy(
 
 Define CRUD + list/remove-collection against a collection/record store.
 
+Records are scoped by a `context` string (the proto field), which is either `self.mission_id` (mission scope, the default) or `self.setup_version_id` (setup-version scope). Both attributes are expected to already contain the full prefix (`missions:<id>` / `setup_versions:<id>`).
+
+Public methods accept `scope: Literal["mission", "setup"]` (default `"mission"`); internally we resolve it to the matching context string and pass that to the abstract `_store/_read/_update/_remove/_list/_remove_collection`.
+
 Parameters:
 
 - ###### **`mission_id`**
 
-  (`str`) – The ID of the mission this strategy is associated with
+  (`str`) – Already-prefixed mission context (missions:<id>).
 
 - ###### **`setup_id`**
 
@@ -33627,7 +33856,7 @@ Parameters:
 
 - ###### **`setup_version_id`**
 
-  (`str`) – The ID of the setup version
+  (`str`) – Already-prefixed setup-version context (setup_versions:<id>).
 
 - ###### **`config`**
 
@@ -33636,13 +33865,13 @@ Parameters:
 Methods:
 
 - **`close`** – Release resources held by this strategy. No-op by default.
-- **`list`** – Get all records within a collection scoped to this mission.
-- **`read`** – Get records from storage by key.
-- **`remove`** – Delete a record from the storage.
-- **`remove_collection`** – Wipe a record clean.
+- **`list`** – Get all records in a collection under the given scope.
+- **`read`** – Get a record by key under the given scope.
+- **`remove`** – Delete a record from the storage under the given scope.
+- **`remove_collection`** – Wipe a collection clean under the given scope.
 - **`store`** – Store a new record in the storage.
-- **`update`** – Validate & overwrite an existing record.
-- **`upsert`** – Insert or update a record atomically.
+- **`update`** – Validate & overwrite an existing record under the given scope.
+- **`upsert`** – Insert or update a record atomically under the given scope.
 
 ###### close
 
@@ -33655,10 +33884,10 @@ Release resources held by this strategy. No-op by default.
 ###### list
 
 ```python
-list(collection: str) -> list[StorageRecord]
+list(collection: str, scope: Scope = 'mission') -> list[StorageRecord]
 ```
 
-Get all records within a collection scoped to this mission.
+Get all records in a collection under the given scope.
 
 Parameters:
 
@@ -33666,17 +33895,21 @@ Parameters:
 
   (`str`) – The unique name for the record type
 
+- ###### **`scope`**
+
+  (`Scope`, default: `'mission'` ) – Which context to list (default: "mission").
+
 Returns:
 
-- `list[StorageRecord]` – A list of storage records belonging to this mission.
+- `list[StorageRecord]` – A list of storage records under the resolved context.
 
 ###### read
 
 ```python
-read(collection: str, record_id: str) -> StorageRecord | None
+read(collection: str, record_id: str, scope: Scope = 'mission') -> StorageRecord | None
 ```
 
-Get records from storage by key.
+Get a record by key under the given scope.
 
 Parameters:
 
@@ -33688,18 +33921,21 @@ Parameters:
 
   (`str`) – The unique ID of the record
 
+- ###### **`scope`**
+
+  (`Scope`, default: `'mission'` ) – Which context to read from (default: "mission").
+
 Returns:
 
-- `StorageRecord | None` – A storage record with validated data, or None if not found
-- `StorageRecord | None` – or if the record belongs to a different mission.
+- `StorageRecord | None` – The matching record if it exists, otherwise None.
 
 ###### remove
 
 ```python
-remove(collection: str, record_id: str) -> bool
+remove(collection: str, record_id: str, scope: Scope = 'mission') -> bool
 ```
 
-Delete a record from the storage.
+Delete a record from the storage under the given scope.
 
 Parameters:
 
@@ -33711,6 +33947,10 @@ Parameters:
 
   (`str`) – The unique ID of the record
 
+- ###### **`scope`**
+
+  (`Scope`, default: `'mission'` ) – Which context the record lives under (default: "mission").
+
 Returns:
 
 - `bool` – True if the deletion was successful, False otherwise
@@ -33718,16 +33958,20 @@ Returns:
 ###### remove_collection
 
 ```python
-remove_collection(collection: str) -> bool
+remove_collection(collection: str, scope: Scope = 'mission') -> bool
 ```
 
-Wipe a record clean.
+Wipe a collection clean under the given scope.
 
 Parameters:
 
 - ###### **`collection`**
 
   (`str`) – The unique name for the record type
+
+- ###### **`scope`**
+
+  (`Scope`, default: `'mission'` ) – Which context the records live under (default: "mission").
 
 Returns:
 
@@ -33741,6 +33985,7 @@ store(
     record_id: str | None,
     data: dict[str, Any],
     data_type: Literal["OUTPUT", "VIEW", "LOGS", "OTHER"] = "OUTPUT",
+    scope: Scope = "mission",
 ) -> StorageRecord
 ```
 
@@ -33764,6 +34009,10 @@ Parameters:
 
   (`Literal['OUTPUT', 'VIEW', 'LOGS', 'OTHER']`, default: `'OUTPUT'` ) – The type of data being stored (default: OUTPUT)
 
+- ###### **`scope`**
+
+  (`Scope`, default: `'mission'` ) – "mission" (default) writes under the current mission context; "setup" writes under the setup-version context.
+
 Returns:
 
 - `StorageRecord` – The ID of the created record
@@ -33775,10 +34024,12 @@ Raises:
 ###### update
 
 ```python
-update(collection: str, record_id: str, data: dict[str, Any]) -> StorageRecord | None
+update(
+    collection: str, record_id: str, data: dict[str, Any], scope: Scope = "mission"
+) -> StorageRecord | None
 ```
 
-Validate & overwrite an existing record.
+Validate & overwrite an existing record under the given scope.
 
 Parameters:
 
@@ -33794,6 +34045,10 @@ Parameters:
 
   (`dict[str, Any]`) – The new data to store
 
+- ###### **`scope`**
+
+  (`Scope`, default: `'mission'` ) – Which context the record lives under (default: "mission").
+
 Returns:
 
 - **`StorageRecord`** ( `StorageRecord | None` ) – The modified record
@@ -33806,12 +34061,13 @@ upsert(
     record_id: str,
     data: dict[str, Any],
     data_type: Literal["OUTPUT", "VIEW", "LOGS", "OTHER"] = "OUTPUT",
+    scope: Scope = "mission",
 ) -> StorageRecord
 ```
 
-Insert or update a record atomically.
+Insert or update a record atomically under the given scope.
 
-If a record with the given collection/record_id exists, it is updated; otherwise a new record is created. The operation is protected by a per-record lock to prevent races.
+If a record with the given collection/record_id exists under that context it is updated; otherwise a new record is created. The operation is protected by a per-record lock to prevent races.
 
 Parameters:
 
@@ -33830,6 +34086,10 @@ Parameters:
 - ###### **`data_type`**
 
   (`Literal['OUTPUT', 'VIEW', 'LOGS', 'OTHER']`, default: `'OUTPUT'` ) – The type of data being stored (default: OUTPUT)
+
+- ###### **`scope`**
+
+  (`Scope`, default: `'mission'` ) – Which context to upsert under (default: "mission").
 
 Returns:
 
