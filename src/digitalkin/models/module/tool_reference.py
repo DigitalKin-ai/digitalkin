@@ -69,7 +69,11 @@ class ToolReference(BaseModel):
         registry: RegistryStrategy,
         communication: CommunicationStrategy,
     ) -> ToolModuleInfo | None:
-        """Resolve a single tool selection.
+        """Resolve a single tool selection to its complete ``ToolModuleInfo``.
+
+        Per-selection trigger filtering is intentionally NOT applied here — the
+        cache is keyed by ``setup_id`` and shared across agents with disjoint
+        trigger sets; consumers (e.g. ``ModuleToolkit`` ``allowed_tools``) filter.
 
         Args:
             entry: Tool selection to resolve.
@@ -85,10 +89,7 @@ class ToolReference(BaseModel):
         info = await registry.discover_by_id(setup.module_id)
         if not info:
             return None
-        tool_info = await module_info_to_tool_module_info(info, entry.setup_id, setup.name, communication)
-        if enabled_triggers := {name for name, enabled in entry.triggers.items() if enabled}:
-            tool_info.tools = [t for t in tool_info.tools if t.name in enabled_triggers]
-        return tool_info
+        return await module_info_to_tool_module_info(info, entry.setup_id, setup.name, communication)
 
 
 class _ToolReferenceInputSchema:

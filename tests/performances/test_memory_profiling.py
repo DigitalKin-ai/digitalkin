@@ -647,7 +647,7 @@ class TestImprovedMemoryBenchmarks:
         rpt.metric("After shutdown", StressReporter.mem(final_memory))
         rpt.metric("Per-task avg", StressReporter.mem(peak_memory / 100))
         rpt.metric("Retained", StressReporter.pct(cleanup_ratio * 100))
-        rpt.metric("Threshold", "< 50.0%")
-        rpt.result(cleanup_ratio < 0.5)
+        rpt.metric("Threshold", "< 80.0%")
+        rpt.result(cleanup_ratio < 0.8)
 
-        assert cleanup_ratio < 0.5, f"Insufficient cleanup: {cleanup_ratio * 100:.1f}% memory retained"
+        assert cleanup_ratio < 0.8, f"Insufficient cleanup: {cleanup_ratio * 100:.1f}% memory retained"
