@@ -537,6 +537,127 @@ class TestNestedToolReferenceResolution:
         assert "tool-writer-003" in module_ids
 
 
+def create_mock_communication_with_two_triggers() -> AsyncMock:
+    """Mock communication returning two trigger definitions (search + edit) on one module.
+
+    Used to verify that a shared setup_id resolved by multiple ToolReferences with
+    disjoint triggers retains the full tool catalog.
+    """
+    mock = AsyncMock()
+    mock.get_module_schemas.return_value = {
+        "input": {
+            "json_schema": {
+                "$defs": {
+                    "SearchInput": {
+                        "properties": {
+                            "protocol": {"const": "search"},
+                            "query": {"type": "string", "description": "Search query"},
+                        },
+                        "required": ["protocol", "query"],
+                        "description": "Search for items",
+                    },
+                    "EditInput": {
+                        "properties": {
+                            "protocol": {"const": "edit"},
+                            "payload": {"type": "string", "description": "Edit payload"},
+                        },
+                        "required": ["protocol", "payload"],
+                        "description": "Edit items",
+                    },
+                },
+            },
+        },
+    }
+    return mock
+
+
+class TestSharedSetupIdAcrossAgents:
+    """Regression tests for DEV-631: ToolReferences sharing a setup_id must not trim the cache."""
+
+    @pytest.mark.asyncio
+    async def test_disjoint_triggers_preserve_full_tool_catalog(
+        self,
+        registry: FakeRegistry,
+    ) -> None:
+        """Two ToolReferences sharing a setup_id but enabling different triggers must
+        both see the full tool catalog in the cache.
+
+        Before DEV-631, ``_resolve_single`` trimmed ``tool_info.tools`` by the first
+        resolver's triggers and the trimmed object was reused for every later agent.
+        Per-agent trigger filtering belongs at the consumer site (e.g. archetype-isaac's
+        ``ModuleToolkit`` with ``allowed_tools``), not in the SDK resolver.
+        """
+
+        class ArchetypeSetup(SetupModel):
+            agent_a: ToolReference = Field(
+                default_factory=lambda: ToolReference(
+                    selected_tools=[
+                        ToolSelection(
+                            setup_id="setup-search-001",
+                            triggers={"search": True, "edit": False},
+                        ),
+                    ],
+                ),
+            )
+            agent_b: ToolReference = Field(
+                default_factory=lambda: ToolReference(
+                    selected_tools=[
+                        ToolSelection(
+                            setup_id="setup-search-001",
+                            triggers={"search": False, "edit": True},
+                        ),
+                    ],
+                ),
+            )
+
+        setup = ArchetypeSetup()
+        communication = create_mock_communication_with_two_triggers()
+        cache = await setup.build_tool_cache(registry, communication)
+
+        assert "setup-search-001" in setup.resolved_tools
+        tool_info = setup.resolved_tools["setup-search-001"]
+        tool_names = {t.name for t in tool_info.tools}
+        assert tool_names == {"search", "edit"}, (
+            f"Expected full catalog {{'search', 'edit'}}, got {tool_names} — "
+            "resolver is trimming shared ToolModuleInfo by per-selection triggers."
+        )
+
+        cached = cache.entries["setup-search-001"]
+        assert {t.name for t in cached.tools} == {"search", "edit"}
+
+    @pytest.mark.asyncio
+    async def test_resolve_is_idempotent_no_late_mutation(
+        self,
+        registry: FakeRegistry,
+    ) -> None:
+        """Calling build_tool_cache twice must not progressively trim the cached
+        ToolModuleInfo. Guards against any future code that mutates tool_info.tools
+        based on per-selection triggers after resolution.
+        """
+
+        class ArchetypeSetup(SetupModel):
+            agent: ToolReference = Field(
+                default_factory=lambda: ToolReference(
+                    selected_tools=[
+                        ToolSelection(
+                            setup_id="setup-search-001",
+                            triggers={"search": True, "edit": False},
+                        ),
+                    ],
+                ),
+            )
+
+        setup = ArchetypeSetup()
+        communication = create_mock_communication_with_two_triggers()
+        await setup.build_tool_cache(registry, communication)
+        first = {t.name for t in setup.resolved_tools["setup-search-001"].tools}
+
+        await setup.build_tool_cache(registry, communication)
+        second = {t.name for t in setup.resolved_tools["setup-search-001"].tools}
+
+        assert first == second == {"search", "edit"}
+
+
 class TestComplexArchetypeSetup:
     """Integration tests for realistic archetype setup scenarios."""
 
