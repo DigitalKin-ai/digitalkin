@@ -5,6 +5,7 @@ module lifecycle, monitoring, and schema introspection operations.
 """
 
 import asyncio
+import time
 from collections.abc import AsyncGenerator
 from typing import Any
 from unittest.mock import AsyncMock, Mock, patch
@@ -22,6 +23,7 @@ from google.protobuf import json_format, struct_pb2
 from digitalkin.core.job_manager.base_job_manager import BaseJobManager
 from digitalkin.grpc_servers.module_servicer import ModuleServicer
 from digitalkin.modules._base_module import BaseModule
+from digitalkin.services.setup.setup_strategy import SetupVersionData
 from tests.fixtures.grpc_fixtures import FakeContext
 
 
@@ -116,6 +118,7 @@ def module_servicer(mock_job_manager, mock_setup_strategy):
     servicer.setup = mock_setup_strategy
     servicer._setup_cache = {}
     servicer._setup_cache_max = 100
+    servicer._setup_cache_ttl = 60.0
     servicer._setup_inflight: dict[str, asyncio.Future] = {}
     servicer._completion_timeout = 300.0
 
@@ -279,6 +282,69 @@ class TestStartModule:
         with pytest.raises(KeyError, match="Attempt to overwrite 'message' in LogRecord"):
             async for _ in module_servicer.StartModule(request, fake_context):
                 pass
+
+
+class TestSetupCache:
+    """Tests for setup cache TTL and invalidation behavior."""
+
+    @pytest.mark.asyncio
+    async def test_resolve_setup_cache_hit_within_ttl(self, module_servicer):
+        """Test cache hit within TTL does not call the setup service."""
+        cached_version = SetupVersionData.model_construct(
+            id="version-123",
+            setup_id="setup-123",
+            content={"test": "setup"},
+        )
+        module_servicer._setup_cache["setup-123"] = (time.monotonic(), cached_version)
+
+        result = await module_servicer._resolve_setup("setup-123", "mission-456")
+
+        assert result is cached_version
+        module_servicer.setup.get_setup.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_resolve_setup_cache_expired_refetches(self, module_servicer):
+        """Test expired cache entry triggers a refetch and is replaced."""
+        stale_version = SetupVersionData.model_construct(
+            id="old-version",
+            setup_id="setup-123",
+            content={"old": "setup"},
+        )
+        module_servicer._setup_cache["setup-123"] = (time.monotonic() - 120.0, stale_version)
+
+        result = await module_servicer._resolve_setup("setup-123", "mission-456")
+
+        module_servicer.setup.get_setup.assert_called_once_with({"setup_id": "setup-123", "mission_id": "mission-456"})
+        assert result.id == "version-123"
+        assert module_servicer._setup_cache["setup-123"][1] is result
+
+    @pytest.mark.asyncio
+    async def test_config_setup_module_invalidates_cache(self, module_servicer, fake_context):
+        """Test ConfigSetupModule removes the stale entry and re-caches updated content."""
+        stale_version = SetupVersionData.model_construct(
+            id="old-version",
+            setup_id="setup-123",
+            content={"old": "setup"},
+        )
+        module_servicer._setup_cache["setup-123"] = (time.monotonic(), stale_version)
+
+        setup_version = setup_pb2.SetupVersion(
+            id="version-123",
+            setup_id="setup-123",
+            content=json_format.ParseDict({"existing": "config"}, struct_pb2.Struct()),
+        )
+        request = lifecycle_pb2.ConfigSetupModuleRequest(
+            mission_id="mission-456",
+            setup_version=setup_version,
+            content=json_format.ParseDict({"new": "config"}, struct_pb2.Struct()),
+        )
+
+        response = await module_servicer.ConfigSetupModule(request, fake_context)
+
+        assert response.success is True
+        cached = module_servicer._setup_cache["setup-123"][1]
+        assert cached.id == "version-123"
+        assert cached.content == {"updated": "config"}
 
 
 class TestStopModule:
