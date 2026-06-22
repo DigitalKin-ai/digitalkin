@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 from pydantic import BaseModel, Field
 
+from digitalkin.grpc_servers.exceptions import PermissionDeniedError
 from digitalkin.models.module.module import ModuleCodeModel, ModuleStatus
 from digitalkin.models.module.module_types import DataModel, DataTrigger, SetupModel
 from digitalkin.models.module.tool_cache import ToolCache
@@ -57,15 +58,12 @@ class _LcSecretModel(BaseModel):
 # ---------------------------------------------------------------------------
 
 _SERVICE_NAMES = {
-    "agent",
     "communication",
     "cost",
     "filesystem",
     "identity",
     "registry",
-    "snapshot",
     "storage",
-    "task_manager",
     "user_profile",
 }
 
@@ -84,6 +82,7 @@ def _make_module_cls() -> type[BaseModule]:
         triggers_discoverer = ModuleDiscoverer(["test_pkg"])
         services_config_strategies: ClassVar[dict] = {}
         services_config_params: ClassVar[dict] = {}
+        _builds_tool_cache: ClassVar[bool] = True
 
         async def initialize(self, context, setup_data) -> None:  # noqa: ARG002
             pass
@@ -99,6 +98,7 @@ def _instantiate(cls: type[BaseModule]) -> BaseModule:
     mock_config = Mock()
     mock_config.valid_strategy_names.return_value = _SERVICE_NAMES
     mock_config.init_strategy.side_effect = lambda *a, **kw: Mock()
+    mock_config._stateless_strategies = frozenset()
     cls.services_config = mock_config
     return cls(
         job_id="job-1",
@@ -162,6 +162,7 @@ class TestInit:
         mock_config = Mock()
         mock_config.valid_strategy_names.return_value = _SERVICE_NAMES
         mock_config.init_strategy.side_effect = lambda *a, **kw: Mock()
+        mock_config._stateless_strategies = frozenset()
         cls.services_config = mock_config
 
         cls(job_id="j", mission_id="m", setup_id="s", setup_version_id="sv")
@@ -344,14 +345,56 @@ class TestRunLifecycle:
         assert module.status == ModuleStatus.FAILED
 
     async def test_cancel_sets_cancelled(self) -> None:
-        """CancelledError in run sets status to CANCELLED."""
+        """CancelledError in run sets status to CANCELLED and re-raises (proper asyncio)."""
         cls = _make_module_cls()
         module = _instantiate(cls)
 
-        with patch.object(module, "run", new_callable=AsyncMock, side_effect=asyncio.CancelledError):
+        with (
+            patch.object(module, "run", new_callable=AsyncMock, side_effect=asyncio.CancelledError),
+            pytest.raises(asyncio.CancelledError),
+        ):
             await module._run_lifecycle(_LcInputModel(root=_LcInputTrigger()), _LcSetupModel())
 
         assert module.status == ModuleStatus.CANCELLED
+
+    @pytest.mark.unit
+    @pytest.mark.regression
+    async def test_permission_denied_notifies_and_stops(self) -> None:
+        """An uncaught PermissionDeniedError from run() sends a PermissionDenied code and stops (FAILED)."""
+        cls = _make_module_cls()
+        module = _instantiate(cls)
+        module.context.callbacks.send_message = AsyncMock()
+
+        with patch.object(module, "run", new_callable=AsyncMock, side_effect=PermissionDeniedError("denied")):
+            await module._run_lifecycle(_LcInputModel(root=_LcInputTrigger()), _LcSetupModel())
+
+        assert module.status == ModuleStatus.FAILED
+        module.context.callbacks.send_message.assert_awaited_once()
+        sent = module.context.callbacks.send_message.call_args[0][0]
+        assert isinstance(sent, ModuleCodeModel)
+        assert sent.code == "PermissionDenied"
+        assert sent.message == "denied"
+
+    @pytest.mark.unit
+    @pytest.mark.edge_case
+    async def test_permission_denied_caught_by_handler_continues(self) -> None:
+        """If run() catches PermissionDeniedError itself, the module completes cleanly (STOPPING), not FAILED."""
+        cls = _make_module_cls()
+        module = _instantiate(cls)
+        module.context.callbacks.send_message = AsyncMock()
+
+        async def _run_catches(input_data: object, setup_data: object) -> None:  # noqa: RUF029
+            denied = PermissionDeniedError("denied")
+            try:
+                raise denied
+            except PermissionDeniedError:
+                pass  # author tolerates an optional-service denial and keeps going
+
+        with patch.object(module, "run", new=_run_catches):
+            await module._run_lifecycle(_LcInputModel(root=_LcInputTrigger()), _LcSetupModel())
+
+        assert module.status == ModuleStatus.STOPPING
+        module.context.callbacks.send_message.assert_not_awaited()
 
 
 class TestStart:
@@ -376,8 +419,7 @@ class TestStart:
 
             await module.start(input_data, setup_data, callback)
 
-        # Module start info sent first
-        assert callback.await_count >= 1
+        # Module start info is now sent by the gateway, not by start()
         mock_init.assert_awaited_once()
         mock_stop.assert_awaited_once()
 
@@ -397,10 +439,33 @@ class TestStart:
             await module.start(input_data, setup_data, callback)
 
         assert module.status == ModuleStatus.FAILED
-        # Second callback call should be ModuleCodeModel
-        error_call = callback.call_args_list[1]
+        # Error callback sends ModuleCodeModel
+        error_call = callback.call_args_list[0]
         assert isinstance(error_call[0][0], ModuleCodeModel)
         assert error_call[0][0].code == "Error"
+
+    @pytest.mark.unit
+    async def test_init_permission_denied_sends_code(self) -> None:
+        """start() sends a PermissionDenied code (not generic Error) when init hits PERMISSION_DENIED."""
+        cls = _make_module_cls()
+        module = _instantiate(cls)
+
+        callback = AsyncMock()
+        done_callback = AsyncMock()
+        setup_data = _LcSetupModel()
+        input_data = _LcInputModel(root=_LcInputTrigger())
+
+        with (
+            patch.object(module, "initialize", new_callable=AsyncMock, side_effect=PermissionDeniedError("nope")),
+            patch.object(module, "stop", new_callable=AsyncMock),
+        ):
+            await module.start(input_data, setup_data, callback, done_callback=done_callback)
+
+        assert module.status == ModuleStatus.FAILED
+        sent = callback.call_args_list[0][0][0]
+        assert isinstance(sent, ModuleCodeModel)
+        assert sent.code == "PermissionDenied"
+        done_callback.assert_awaited_once_with(None)
 
     async def test_init_error_with_done_callback(self) -> None:
         """start() calls done_callback when init fails."""
@@ -458,7 +523,7 @@ class TestStop:
         module.context.callbacks.send_message.assert_awaited_once()
         # Verify EndOfStream was sent
         sent = module.context.callbacks.send_message.call_args[0][0]
-        assert sent.root.protocol == "end_of_stream"
+        assert sent.root.protocol == "stream.end"
 
     async def test_cleanup_error_sets_failed(self) -> None:
         """stop() sets FAILED when cleanup raises."""

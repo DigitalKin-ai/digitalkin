@@ -1,0 +1,42 @@
+sequenceDiagram
+    participant B as Module B
+    participant GW as Gateway
+    participant R as Redis
+    participant A as Module A
+
+    rect rgb(219, 234, 254)
+    Note over B,GW: 1. Module B requests
+    B->>GW: StartStream(task_id, input)
+    GW-->>B: ACK(task_id)
+    GW->>R: XADD ModuleStartInfo (seq=1)
+    GW->>A: StartModule + x-task-id
+    end
+
+    rect rgb(220, 252, 231)
+    Note over A,GW: 2. Module A produces (BiDi)
+    A->>GW: ProduceStream(init: task_id)
+    A->>GW: output chunks
+    GW->>R: XADD output (seq=2, 3, ...)
+    end
+
+    rect rgb(243, 232, 255)
+    Note over B,GW: 3. Module B consumes (BiDi)
+    B->>GW: ConsumeStream(init: task_id)
+    GW->>R: XREAD
+    GW-->>B: ModuleStartInfo (seq=1)
+    GW-->>B: output (seq=2, 3, ...)
+    end
+
+    rect rgb(254, 243, 199)
+    Note over B,A: 4. Bidirectional via Redis
+    B->>GW: data for A
+    GW->>R: write input stream
+    GW->>A: forward via ProduceStream
+    end
+
+    rect rgb(254, 226, 226)
+    Note over B,A: 5. Signals (out of band)
+    B->>GW: SendSignal(CANCEL)
+    GW->>R: PUBLISH signal_ch
+    R-->>A: PubSub → cancel
+    end

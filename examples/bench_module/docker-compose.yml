@@ -1,0 +1,78 @@
+# Production digital twin for benchmarking.
+#
+# Simulates Railway topology:
+#   - Separate Redis container (like Railway Redis addon)
+#   - Separate module container (like Railway service)
+#   - Network latency injection via tc netem (~0.5ms RTT, simulating same-region)
+#   - Resource limits matching Railway Hobby plan (1 vCPU, 1GB RAM)
+#
+# Usage:
+#   # Build and start
+#   docker compose -f examples/bench_module/docker-compose.yml up -d --build
+#
+#   # Run benchmark from host
+#   uv run python scripts/bench_sweep.py --host localhost --port 50055 \
+#     --setup-id setups:echo_bench -c 1,5,25,50,100,200,500,1000 -a 3 -d 30 \
+#     -o examples/bench_module/results/latest
+#
+#   # Teardown
+#   docker compose -f examples/bench_module/docker-compose.yml down -v
+
+services:
+  bench-redis:
+    container_name: dk-bench-redis
+    image: redis:7-alpine
+    network_mode: host
+    command: >
+      redis-server
+        --port 6389
+        --maxmemory 256mb
+        --maxmemory-policy allkeys-lru
+        --save ""
+        --appendonly no
+        --protected-mode no
+        --loglevel warning
+        --tcp-backlog 511
+        --timeout 0
+        --tcp-keepalive 300
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "6389", "ping"]
+      interval: 3s
+      timeout: 2s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+
+  bench-template-tool:
+    container_name: dk-bench-template-tool
+    build:
+      context: ../../
+      dockerfile: examples/bench_module/Dockerfile
+    network_mode: host
+    depends_on:
+      bench-redis:
+        condition: service_healthy
+    environment:
+      - DIGITALKIN_REDIS_URL=redis://127.0.0.1:6389/0
+      - DIGITALKIN_REDIS_POOL_SIZE=2000
+      - DIGITALKIN_MODULE_ID=modules:template_tool
+      - MODULE_SERVER_HOST=0.0.0.0
+      - MODULE_SERVER_MODE=async
+      - MODULE_SERVER_SECURITY=insecure
+      - MODULE_SERVER_ADVERTISE_HOST=127.0.0.1
+      - SERVER_GRPC_COMPRESSION=none
+      - SERVER_THREAD_POOL_WORKERS=1
+      - DIGITALKIN_UVLOOP=true
+      - DIGITALKIN_STREAM_BATCH_SIZE=20
+      - DIGITALKIN_STREAM_FLUSH_MS=50
+      - DIGITALKIN_STREAM_READ_BLOCK_MS=100
+      - DIGITALKIN_MAX_CONCURRENT_TASKS=500
+      - SERVICE_MODE=local
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G

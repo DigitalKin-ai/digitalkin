@@ -54,6 +54,17 @@ uv run mypy src/digitalkin
 uv run pre-commit run --all-files
 ```
 
+### Code Review & QA Agents (Claude Code)
+Review subagents + skills ship under `.claude/`. Run a subagent via the Task tool; invoke a skill with `/<name>`.
+- `code-reviewer` — enforces the `dk-review` rubric on a diff (read-only verdict)
+- `test-auditor` — audits coverage via the `dk-test-review` rubric
+- `grpc-breaking` — flags wire-breaking `.proto` changes vs a base ref
+- `grpc-test-coverage` — checks changed gRPC code has matching tests
+- `quality-gate` — runs `task linter` + `uv run mypy src/digitalkin`, reports pass/fail
+- Skills `dk-review` / `dk-test-review` — the code & test rubrics; mirror the rules in this file, so keep them in sync when conventions change.
+
+Globally available from `~/.claude`: `python-pro` (async/gRPC architecture) and `github-actions-architect` (CI/CD workflows) agents; `grpc-py-review` skill.
+
 ### Building and Publishing
 ```bash
 # Build package
@@ -81,15 +92,6 @@ uv run mkdocs build
 uv run mike deploy --push --update-aliases 0.3 latest
 ```
 
-### Taskiq (Distributed Job Execution)
-```bash
-# Enable RabbitMQ stream capability (required for Taskiq)
-sudo rabbitmq-plugins enable rabbitmq_stream
-
-# Start Taskiq worker
-task start-taskiq
-```
-
 ## Architecture Overview
 
 ### Core Components
@@ -115,7 +117,6 @@ task start-taskiq
 **Job Management** (`src/digitalkin/core/job_manager/`)
 - `BaseJobManager`: Abstract base extending TaskManager
 - `SingleJobManager`: In-memory execution for single-server deployments
-- `TaskiqJobManager`: Distributed execution using Taskiq + RabbitMQ for horizontal scaling
 - Jobs stream output via asyncio.Queue and callbacks
 
 **Task Management** (`src/digitalkin/core/task_manager/`)
@@ -219,7 +220,7 @@ Keep docstrings lean and professional. No flowery language, no numbered steps, n
 - **No ClassVar for single-use**: Don't create class attributes for values used only once
 
 ### IDs
-IDs flow through the entire system: `job_id`, `mission_id`, `setup_id`, `setup_version_id`. Always propagate these correctly.
+Propagate `task_id`, `setup_id`, and `mission_id` through the system whenever they are available.
 
 ### Pydantic Models
 All data models use Pydantic for validation and serialization. JSON schemas are generated for module introspection.
@@ -231,7 +232,7 @@ Most operations are async/await. Use `async def` for handlers and module methods
 Comprehensive type hints are used throughout. Always add type annotations to new code.
 
 ### Structured Logging
-The `extra` parameter is **only for global context IDs** that help correlate logs across the system (e.g., `job_id`, `mission_id`, `setup_id`, `setup_version_id`, `task_id`). These IDs are typically available via `self.session_ids` or `context.session.current_ids()`.
+The `extra` parameter is **only for global context IDs** that help correlate logs across the system (e.g., `task_id`, `setup_id`, `mission_id`). These IDs are typically available via `self.session_ids` or `context.session.current_ids()`.
 
 **Local-scope variables go in the log message, not in `extra`:**
 ```python
@@ -275,10 +276,9 @@ Use `pytest.mark.asyncio` for async tests. The `asyncio_mode = "auto"` setting i
 
 ## Integration Points
 
-- **RabbitMQ** (via Taskiq): Distributed job execution, message streaming
+- **Redis**: Durable message passing via Redis Streams, session state, signal pub/sub
 - **gRPC**: All inter-service communication
 - **Protobuf**: Message definitions from `digitalkin-proto` package
-- **Taskiq**: Optional distributed task execution (install with `pip install digitalkin[taskiq]`)
 
 ## Examples
 

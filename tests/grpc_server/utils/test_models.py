@@ -2,7 +2,7 @@
 
 import pytest
 
-from digitalkin.grpc_servers.utils.exceptions import ConfigurationError, SecurityError
+from digitalkin.grpc_servers.exceptions import ConfigurationError, SecurityError
 from digitalkin.models.settings.server.server import ServerSettings
 from digitalkin.models.settings.utils.channel import ControlFlow, SecurityMode, Credentials
 
@@ -131,6 +131,13 @@ class TestServerConfig:
         assert config.reflection is True
         # Check enable_health_check
         assert config.health_check is True
+
+    def test_server_grpc_options_are_int_typed(self) -> None:
+        """Server gRPC channel args must all be int — grpcio silently drops floats."""
+        from digitalkin.models.settings.server.grpc import GrpcServerSettings
+
+        for key, value in GrpcServerSettings().options:
+            assert isinstance(value, int), f"channel arg {key!r} is {type(value).__name__}, must be int"
 
     def test_server_config_custom(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Test custom values for ServerConfig."""

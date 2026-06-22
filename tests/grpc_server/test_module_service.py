@@ -15,7 +15,6 @@ import pytest
 from agentic_mesh_protocol.module.v1 import (
     information_pb2,
     lifecycle_pb2,
-    monitoring_pb2,
 )
 from agentic_mesh_protocol.setup.v1 import setup_pb2
 from google.protobuf import json_format, struct_pb2
@@ -89,9 +88,7 @@ def mock_job_manager():
     """Create a mock job manager for testing."""
     manager = AsyncMock(spec=BaseJobManager)
     manager.tasks = {}
-    manager.create_module_instance_job = AsyncMock(return_value="test-job-id")
     manager.create_config_setup_instance_job = AsyncMock(return_value="test-config-job-id")
-    manager.stop_module = AsyncMock(return_value=True)
     manager.generate_config_setup_module_response = AsyncMock(return_value={"updated": "config"})
     return manager
 
@@ -117,10 +114,10 @@ def module_servicer(mock_job_manager, mock_setup_strategy):
     servicer.job_manager = mock_job_manager
     servicer.setup = mock_setup_strategy
     servicer._setup_cache = {}
-    servicer._setup_cache_max = 100
-    servicer._setup_cache_ttl = 60.0
     servicer._setup_inflight: dict[str, asyncio.Future] = {}
-    servicer._completion_timeout = 300.0
+    servicer._registry_cache = None
+    servicer._tool_cache_by_setup = {}
+    servicer._communication_cache = None
 
     return servicer
 
@@ -129,249 +126,6 @@ def module_servicer(mock_job_manager, mock_setup_strategy):
 def fake_context():
     """Create a fake gRPC context for testing."""
     return FakeContext()
-
-
-class TestStartModule:
-    """Tests for StartModule streaming endpoint."""
-
-    @pytest.mark.asyncio
-    async def test_start_module_success(self, module_servicer, fake_context, mock_job_manager):
-        """Test successful module start with streaming output."""
-        # Setup request
-        input_struct = json_format.ParseDict(
-            {"message": "test"},
-            struct_pb2.Struct(),
-        )
-        request = lifecycle_pb2.StartModuleRequest(
-            setup_id="setup-123",
-            mission_id="mission-456",
-            input=input_struct,
-        )
-
-        # Mock stream consumer
-        async def mock_stream() -> AsyncGenerator[dict[str, Any], None]:  # noqa: RUF029
-            yield {"root": {"output": "message 1"}, "annotations": {}}
-            yield {"root": {"output": "message 2"}, "annotations": {}}
-            yield {"root": {"protocol": "end_of_stream"}, "annotations": {}}
-
-        mock_context_manager = AsyncMock()
-        mock_context_manager.__aenter__ = AsyncMock(return_value=mock_stream())
-        mock_context_manager.__aexit__ = AsyncMock(return_value=None)
-        mock_job_manager.generate_stream_consumer = Mock(return_value=mock_context_manager)
-
-        # Mock task completion
-        mock_job_manager.wait_for_completion = AsyncMock(return_value=None)
-
-        # Execute
-        responses = [response async for response in module_servicer.StartModule(request, fake_context)]
-
-        # Verify: 2 data messages + 1 end_of_stream message
-        assert len(responses) == 3
-        assert responses[0].success is True
-        assert responses[0].job_id == "test-job-id"
-        assert responses[-1].success is True  # End of stream
-
-        mock_job_manager.create_module_instance_job.assert_called_once()
-        mock_job_manager.clean_session.assert_called_once_with("test-job-id", mission_id="mission-456")
-
-    @pytest.mark.asyncio
-    async def test_start_module_no_setup_data(self, module_servicer, fake_context):
-        """Test module start returns failure response when setup data is not found."""
-        # Mock setup to return None
-        module_servicer.setup.get_setup = AsyncMock(return_value=None)
-
-        request = lifecycle_pb2.StartModuleRequest(
-            setup_id="invalid-setup",
-            mission_id="mission-456",
-            input=struct_pb2.Struct(),
-        )
-
-        # Execute - should return failure response, not raise exception
-        responses = [response async for response in module_servicer.StartModule(request, fake_context)]
-
-        # Verify - should get a single failure response with proper gRPC status
-        assert len(responses) == 1
-        assert responses[0].success is False
-        assert fake_context._code == grpc.StatusCode.NOT_FOUND
-        assert "No setup data found" in fake_context._details
-
-    @pytest.mark.asyncio
-    async def test_start_module_job_creation_fails(self, module_servicer, fake_context, mock_job_manager):
-        """Test module start when job creation fails."""
-        # Setup
-        mock_job_manager.create_module_instance_job = AsyncMock(return_value=None)
-
-        request = lifecycle_pb2.StartModuleRequest(
-            setup_id="setup-123",
-            mission_id="mission-456",
-            input=struct_pb2.Struct(),
-        )
-
-        # Execute
-        responses = [response async for response in module_servicer.StartModule(request, fake_context)]
-
-        # Verify
-        assert len(responses) == 1
-        assert responses[0].success is False
-        assert fake_context.get_code() == grpc.StatusCode.NOT_FOUND
-        assert "Failed to create module instance" in fake_context.get_details()
-
-    @pytest.mark.asyncio
-    async def test_start_module_with_error_in_stream(self, module_servicer, fake_context, mock_job_manager):
-        """Test module start handles errors in stream.
-
-        Note: There is a logging bug in the implementation where it uses
-        extra={"message": ...} which conflicts with logging's message field.
-        This test expects that KeyError.
-        """
-        # Setup request
-        request = lifecycle_pb2.StartModuleRequest(
-            setup_id="setup-123",
-            mission_id="mission-456",
-            input=struct_pb2.Struct(),
-        )
-
-        # Mock stream with error - code needs to be an actual grpc.StatusCode value
-        async def mock_stream_with_error() -> AsyncGenerator[dict[str, Any], None]:  # noqa: RUF029
-            yield {"output": "data 1"}
-            yield {
-                "error": {
-                    "code": grpc.StatusCode.INTERNAL.value[0],  # Get the integer value
-                    "error_message": "Internal error occurred",
-                }
-            }
-
-        mock_context_manager = AsyncMock()
-        mock_context_manager.__aenter__ = AsyncMock(return_value=mock_stream_with_error())
-        mock_context_manager.__aexit__ = AsyncMock(return_value=None)
-        mock_job_manager.generate_stream_consumer = Mock(return_value=mock_context_manager)
-        mock_job_manager.wait_for_completion = AsyncMock(return_value=None)
-
-        # Execute - expect KeyError due to logging bug
-        with pytest.raises(KeyError, match="Attempt to overwrite 'message' in LogRecord"):
-            async for _ in module_servicer.StartModule(request, fake_context):
-                pass
-
-    @pytest.mark.asyncio
-    async def test_start_module_with_exception_in_stream(self, module_servicer, fake_context, mock_job_manager):
-        """Test module start handles exceptions in stream.
-
-        Note: There is a logging bug in the implementation where it uses
-        extra={"message": ...} which conflicts with logging's message field.
-        This test expects that KeyError.
-        """
-        # Setup request
-        request = lifecycle_pb2.StartModuleRequest(
-            setup_id="setup-123",
-            mission_id="mission-456",
-            input=struct_pb2.Struct(),
-        )
-
-        # Mock stream with exception
-        async def mock_stream_with_exception() -> AsyncGenerator[dict[str, Any], None]:  # noqa: RUF029
-            yield {"output": "data 1"}
-            yield {"exception": "ValueError: Something went wrong", "short_description": "VALUE_ERROR"}
-
-        mock_context_manager = AsyncMock()
-        mock_context_manager.__aenter__ = AsyncMock(return_value=mock_stream_with_exception())
-        mock_context_manager.__aexit__ = AsyncMock(return_value=None)
-        mock_job_manager.generate_stream_consumer = Mock(return_value=mock_context_manager)
-        mock_job_manager.wait_for_completion = AsyncMock(return_value=None)
-
-        # Execute - expect KeyError due to logging bug
-        with pytest.raises(KeyError, match="Attempt to overwrite 'message' in LogRecord"):
-            async for _ in module_servicer.StartModule(request, fake_context):
-                pass
-
-
-class TestSetupCache:
-    """Tests for setup cache TTL and invalidation behavior."""
-
-    @pytest.mark.asyncio
-    async def test_resolve_setup_cache_hit_within_ttl(self, module_servicer):
-        """Test cache hit within TTL does not call the setup service."""
-        cached_version = SetupVersionData.model_construct(
-            id="version-123",
-            setup_id="setup-123",
-            content={"test": "setup"},
-        )
-        module_servicer._setup_cache["setup-123"] = (time.monotonic(), cached_version)
-
-        result = await module_servicer._resolve_setup("setup-123", "mission-456")
-
-        assert result is cached_version
-        module_servicer.setup.get_setup.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_resolve_setup_cache_expired_refetches(self, module_servicer):
-        """Test expired cache entry triggers a refetch and is replaced."""
-        stale_version = SetupVersionData.model_construct(
-            id="old-version",
-            setup_id="setup-123",
-            content={"old": "setup"},
-        )
-        module_servicer._setup_cache["setup-123"] = (time.monotonic() - 120.0, stale_version)
-
-        result = await module_servicer._resolve_setup("setup-123", "mission-456")
-
-        module_servicer.setup.get_setup.assert_called_once_with({"setup_id": "setup-123", "mission_id": "mission-456"})
-        assert result.id == "version-123"
-        assert module_servicer._setup_cache["setup-123"][1] is result
-
-    @pytest.mark.asyncio
-    async def test_config_setup_module_invalidates_cache(self, module_servicer, fake_context):
-        """Test ConfigSetupModule removes the stale entry and re-caches updated content."""
-        stale_version = SetupVersionData.model_construct(
-            id="old-version",
-            setup_id="setup-123",
-            content={"old": "setup"},
-        )
-        module_servicer._setup_cache["setup-123"] = (time.monotonic(), stale_version)
-
-        setup_version = setup_pb2.SetupVersion(
-            id="version-123",
-            setup_id="setup-123",
-            content=json_format.ParseDict({"existing": "config"}, struct_pb2.Struct()),
-        )
-        request = lifecycle_pb2.ConfigSetupModuleRequest(
-            mission_id="mission-456",
-            setup_version=setup_version,
-            content=json_format.ParseDict({"new": "config"}, struct_pb2.Struct()),
-        )
-
-        response = await module_servicer.ConfigSetupModule(request, fake_context)
-
-        assert response.success is True
-        cached = module_servicer._setup_cache["setup-123"][1]
-        assert cached.id == "version-123"
-        assert cached.content == {"updated": "config"}
-
-
-class TestStopModule:
-    """Tests for StopModule endpoint."""
-
-    @pytest.mark.asyncio
-    async def test_stop_module_success(self, module_servicer, fake_context, mock_job_manager):
-        """Test successful module stop."""
-        request = lifecycle_pb2.StopModuleRequest(job_id="test-job-id")
-
-        response = await module_servicer.StopModule(request, fake_context)
-
-        assert response.success is True
-        mock_job_manager.stop_module.assert_called_once_with("test-job-id")
-
-    @pytest.mark.asyncio
-    async def test_stop_module_not_found(self, module_servicer, fake_context, mock_job_manager):
-        """Test stop module when job is not found."""
-        mock_job_manager.stop_module = AsyncMock(return_value=False)
-
-        request = lifecycle_pb2.StopModuleRequest(job_id="nonexistent-job")
-
-        response = await module_servicer.StopModule(request, fake_context)
-
-        assert response.success is False
-        assert fake_context.get_code() == grpc.StatusCode.NOT_FOUND
-        assert "not found" in fake_context.get_details()
 
 
 class TestGetModuleInput:

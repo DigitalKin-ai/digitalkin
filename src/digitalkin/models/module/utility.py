@@ -4,7 +4,6 @@ These protocols are automatically available to all modules and don't need to be
 explicitly included in module output unions.
 """
 
-from datetime import datetime, timezone
 from typing import Any, ClassVar, Literal
 
 from pydantic import BaseModel, Field
@@ -25,33 +24,13 @@ class UtilityProtocol(DataTrigger):
 class EndOfStreamOutput(UtilityProtocol):
     """Signal that the stream has ended."""
 
-    protocol: Literal["end_of_stream"] = "end_of_stream"  # type: ignore[misc]
-
-
-class ModuleStartInfoOutput(UtilityProtocol):
-    """Output sent when module starts with execution context.
-
-    This protocol is sent as the first message when a module starts,
-    providing the client with essential execution context information.
-    """
-
-    protocol: Literal["module_start_info"] = "module_start_info"  # type: ignore[misc]
-    job_id: str = Field(..., description="Unique job identifier")
-    mission_id: str = Field(..., description="Mission identifier")
-    setup_id: str = Field(..., description="Setup identifier")
-    setup_version_id: str = Field(..., description="Setup version identifier")
-    module_id: str = Field(..., description="Module identifier")
-    module_name: str = Field(..., description="Human-readable module name")
-    started_at: str = Field(
-        default_factory=lambda: datetime.now(tz=timezone.utc).isoformat(),
-        description="ISO timestamp when module started",
-    )
+    protocol: Literal["stream.end"] = "stream.end"
 
 
 class HealthcheckPingInput(UtilityProtocol):
     """Input for healthcheck ping request."""
 
-    protocol: Literal["healthcheck_ping"] = "healthcheck_ping"  # type: ignore[misc]
+    protocol: Literal["healthcheck_ping"] = "healthcheck_ping"
 
 
 class HealthcheckPingOutput(UtilityProtocol):
@@ -60,7 +39,7 @@ class HealthcheckPingOutput(UtilityProtocol):
     Simple alive check that returns "pong" status.
     """
 
-    protocol: Literal["healthcheck_ping"] = "healthcheck_ping"  # type: ignore[misc]
+    protocol: Literal["healthcheck_ping"] = "healthcheck_ping"
     status: Literal["pong"] = "pong"
     latency_ms: float | None = Field(
         default=None,
@@ -85,7 +64,7 @@ class ServiceHealthStatus(BaseModel):
 class HealthcheckServicesInput(UtilityProtocol):
     """Input for healthcheck services request."""
 
-    protocol: Literal["healthcheck_services"] = "healthcheck_services"  # type: ignore[misc]
+    protocol: Literal["healthcheck_services"] = "healthcheck_services"
 
 
 class HealthcheckServicesOutput(UtilityProtocol):
@@ -94,7 +73,7 @@ class HealthcheckServicesOutput(UtilityProtocol):
     Reports the health status of all configured services.
     """
 
-    protocol: Literal["healthcheck_services"] = "healthcheck_services"  # type: ignore[misc]
+    protocol: Literal["healthcheck_services"] = "healthcheck_services"
     services: list[ServiceHealthStatus] = Field(
         ...,
         description="List of service health statuses",
@@ -108,7 +87,7 @@ class HealthcheckServicesOutput(UtilityProtocol):
 class HealthcheckStatusInput(UtilityProtocol):
     """Input for healthcheck status request."""
 
-    protocol: Literal["healthcheck_status"] = "healthcheck_status"  # type: ignore[misc]
+    protocol: Literal["healthcheck_status"] = "healthcheck_status"
 
 
 class HealthcheckStatusOutput(UtilityProtocol):
@@ -117,7 +96,7 @@ class HealthcheckStatusOutput(UtilityProtocol):
     Comprehensive module status including uptime, active jobs, and metadata.
     """
 
-    protocol: Literal["healthcheck_status"] = "healthcheck_status"  # type: ignore[misc]
+    protocol: Literal["healthcheck_status"] = "healthcheck_status"
     module_name: str = Field(..., description="Name of the module")
     module_status: str = Field(..., description="Current status of the module")
     uptime_seconds: float | None = Field(

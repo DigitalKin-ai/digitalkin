@@ -1,11 +1,13 @@
 """Server settings for the DigitalKin application."""
 
 import os
+from functools import lru_cache
 from typing import Any
 
 from pydantic import Field, NonNegativeInt
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from digitalkin.models.settings.profiling import ProfilingSettings
 from digitalkin.models.settings.server.channel import ServerChannelSettings
 from digitalkin.models.settings.server.grpc import GrpcServerSettings
 
@@ -16,6 +18,7 @@ class ServerSettings(BaseSettings):
     Attributes:
         channel (ServerChannelSettings): Settings for the server channel.
         grpc (GrpcServerSettings): Settings for the gRPC server.
+        profiling (ProfilingSettings): Profiling and debugging configuration.
         health_check (bool): Whether to enable the health check service.
         reflection (bool): Whether to enable reflection for the server.
         max_concurrent_rpcs (NonNegativeInt): Maximum number of RPCs handled in parallel by the server.
@@ -29,6 +32,8 @@ class ServerSettings(BaseSettings):
     channel: ServerChannelSettings = Field(default_factory=ServerChannelSettings)
 
     grpc: GrpcServerSettings = Field(default_factory=GrpcServerSettings)
+
+    profiling: ProfilingSettings = Field(default_factory=ProfilingSettings)
 
     health_check: bool = Field(default=True, description="Enable health check service")
     reflection: bool = Field(default=True, description="Enable reflection for the server")
@@ -45,3 +50,17 @@ class ServerSettings(BaseSettings):
     def __init__(self, **values: Any) -> None:
         """Initialize the ServerSettings instance."""
         super().__init__(**values)
+
+
+@lru_cache(maxsize=1)
+def get_server_settings() -> ServerSettings:
+    """Process-wide ``ServerSettings`` singleton.
+
+    Nested settings accessed via composition: ``.channel``, ``.grpc``,
+    ``.profiling``. Tests must call ``get_server_settings.cache_clear()`` after
+    mutating env.
+
+    Returns:
+        The shared ``ServerSettings`` instance.
+    """
+    return ServerSettings()

@@ -228,6 +228,104 @@ class TestResolvedToolsField:
         assert setup.resolved_tools == {}
 
 
+def _registry_resolving(setup_id: str, module_id: str, name: str) -> AsyncMock:
+    """Mock registry that resolves ``setup_id`` to a module with one ``search`` trigger."""
+    registry = AsyncMock()
+    registry.get_setup.return_value = SetupInfo(setup_id=setup_id, name=name, module_id=module_id)
+    registry.discover_by_id.return_value = ModuleInfo(
+        module_id=module_id,
+        module_type=RegistryModuleType.TOOL,
+        address="localhost",
+        port=50051,
+        version="1.0.0",
+        module_name=name,
+    )
+    return registry
+
+
+def _communication_with_search() -> AsyncMock:
+    """Mock communication whose module exposes a single ``search`` protocol."""
+    comm = AsyncMock()
+    comm.get_module_schemas.return_value = {
+        "input": {
+            "json_schema": {
+                "$defs": {
+                    "SearchInput": {
+                        "properties": {
+                            "protocol": {"const": "search"},
+                            "query": {"type": "string"},
+                        },
+                        "required": ["protocol", "query"],
+                    },
+                },
+            },
+        },
+    }
+    return comm
+
+
+class TestResolvedToolsNotPersisted:
+    """The stale-resolution fix: resolved_tools is runtime-only and never trusted across builds."""
+
+    @pytest.mark.asyncio
+    async def test_build_with_registry_ignores_stale_resolved_tools(self) -> None:
+        """A pre-populated empty entry must be discarded and re-resolved when a registry is present."""
+
+        class TestSetup(SetupModel):
+            my_tool: ToolReference
+
+        tool_ref = ToolReference(selected_tools=[ToolSelection(setup_id="setup-123", triggers={"search": True})])
+        setup = TestSetup(my_tool=tool_ref)
+        # Stale empty entry, as would be loaded from persisted content.
+        setup.resolved_tools["setup-123"] = ToolModuleInfo(
+            module_id="tool-123",
+            module_type=RegistryModuleType.TOOL,
+            address="localhost",
+            port=50051,
+            version="1.0.0",
+            module_name="TestTool",
+            setup_id="setup-123",
+            tool_name="TestTool",
+            tools=[],
+        )
+
+        registry = _registry_resolving("setup-123", "tool-123", "TestTool")
+        communication = _communication_with_search()
+        cache = await setup.build_tool_cache(registry, communication)
+
+        # Fresh resolution ran: the stale empty entry was discarded.
+        assert "setup-123" in cache.entries
+        assert [t.name for t in cache.entries["setup-123"].tools] == ["search"]
+        registry.get_setup.assert_awaited()
+
+    @pytest.mark.asyncio
+    async def test_resolved_tools_excluded_from_model_dump(self, sample_tool_module_info: ToolModuleInfo) -> None:
+        """resolved_tools is runtime state and must never serialize into persisted content."""
+
+        class TestSetup(SetupModel):
+            my_tool: ToolReference
+
+        setup = TestSetup(my_tool=ToolReference(selected_tools=[]))
+        setup.resolved_tools["setup-123"] = sample_tool_module_info
+
+        assert "resolved_tools" not in setup.model_dump()
+        assert "resolved_tools" not in setup.model_dump(mode="json")
+
+    @pytest.mark.asyncio
+    async def test_resolved_tools_not_reloaded_from_content(self, sample_tool_module_info: ToolModuleInfo) -> None:
+        """Round-trip: dumped content carries no resolved_tools, so a reload starts empty."""
+
+        class TestSetup(SetupModel):
+            my_tool: ToolReference
+
+        setup = TestSetup(my_tool=ToolReference(selected_tools=[]))
+        setup.resolved_tools["setup-123"] = sample_tool_module_info
+
+        content = setup.model_dump(mode="json")
+        reloaded = TestSetup(**content)
+        assert reloaded.resolved_tools == {}
+
+
 class TestToolReferenceSelectedTools:
     """Tests for ToolReference selected_tools property."""
 
@@ -284,10 +382,12 @@ class TestResolvedToolsCacheBehavior:
         assert len(setup.resolved_tools) == 1
 
     @pytest.mark.asyncio
-    async def test_second_resolution_uses_cache_skips_registry(
-        self, sample_tool_module_info: ToolModuleInfo
-    ) -> None:
-        """Test second resolve_tool_references uses cache, does not call registry."""
+    async def test_second_build_with_registry_reresolves(self, sample_tool_module_info: ToolModuleInfo) -> None:
+        """With a registry present, every build re-resolves — resolved_tools is NOT a cross-request cache.
+
+        Cross-request efficiency is the servicer-level ``_tool_cache_by_setup`` TTL cache's job;
+        ``resolved_tools`` must never short-circuit a fresh build, or stale/empty entries get frozen.
+        """
 
         class TestSetup(SetupModel):
             my_tool: ToolReference
@@ -295,74 +395,45 @@ class TestResolvedToolsCacheBehavior:
         tool_ref = ToolReference(selected_tools=[ToolSelection(setup_id="setup-123", triggers={"search": True})])
         setup = TestSetup(my_tool=tool_ref)
 
-        mock_registry = AsyncMock()
-        mock_registry.get_setup.return_value = SetupInfo(
-            setup_id="setup-123",
-            name="Test Setup",
-            module_id="tool-123",
-        )
-        mock_registry.discover_by_id.return_value = ModuleInfo(
-            module_id="tool-123",
-            module_type=RegistryModuleType.TOOL,
-            address="localhost",
-            port=50051,
-            version="1.0.0",
-            module_name="TestTool",
-            documentation="Test tool documentation",
-        )
+        mock_registry = _registry_resolving("setup-123", "tool-123", "TestTool")
+        mock_communication = _communication_with_search()
 
-        mock_communication = AsyncMock()
-        mock_communication.get_module_schemas.return_value = {
-            "input": {"json_schema": {"$defs": {}}},
-        }
-
-        # First resolution - registry called
         await setup.build_tool_cache(mock_registry, mock_communication)
         assert mock_registry.get_setup.call_count == 1
 
-        # Second resolution - should use cache, not registry
+        # Second build re-resolves (cache cleared at build start).
         await setup.build_tool_cache(mock_registry, mock_communication)
-
-        # Registry still only called once (from first resolution)
-        assert mock_registry.get_setup.call_count == 1
-        # resolved_tools still has the info
+        assert mock_registry.get_setup.call_count == 2
         assert len(setup.resolved_tools) == 1
 
     @pytest.mark.asyncio
-    async def test_serialization_preserves_resolved_tools(self, sample_tool_module_info: ToolModuleInfo) -> None:
-        """Test resolved_tools survives JSON serialization."""
+    async def test_serialization_drops_resolved_tools(self, sample_tool_module_info: ToolModuleInfo) -> None:
+        """resolved_tools must NOT survive JSON serialization (it's runtime state, not config)."""
 
         class TestSetup(SetupModel):
             my_tool: ToolReference
 
         tool_ref = ToolReference(selected_tools=[ToolSelection(setup_id="setup-123", triggers={"search": True})])
         setup = TestSetup(my_tool=tool_ref)
-
-        # Manually set resolved state using setup_id as key
         setup.resolved_tools["setup-123"] = sample_tool_module_info
 
-        # Serialize and deserialize
         json_data = setup.model_dump_json()
+        assert "resolved_tools" not in json_data
+
         restored_setup = TestSetup.model_validate_json(json_data)
+        assert restored_setup.resolved_tools == {}
 
-        # resolved_tools persists
-        assert "setup-123" in restored_setup.resolved_tools
-        assert restored_setup.resolved_tools["setup-123"] == sample_tool_module_info
-
-        # Second resolution uses cache, registry not called
-        mock_registry = AsyncMock()
-        mock_communication = AsyncMock()
-
+        # A reloaded setup re-resolves from the registry (no frozen cache).
+        mock_registry = _registry_resolving("setup-123", "tool-123", "TestTool")
+        mock_communication = _communication_with_search()
         await restored_setup.build_tool_cache(mock_registry, mock_communication)
-
-        mock_registry.get_setup.assert_not_called()
-        mock_registry.discover_by_id.assert_not_called()
+        mock_registry.get_setup.assert_awaited_once_with("setup-123")
 
     @pytest.mark.asyncio
-    async def test_multiple_tools_cache_behavior(
+    async def test_multiple_tools_reresolve_each_build(
         self, sample_tool_module_info: ToolModuleInfo, sample_tool_module_info_2: ToolModuleInfo
     ) -> None:
-        """Test cache behavior with multiple tools."""
+        """With a registry, both tools re-resolve on every build (no cross-request reuse)."""
 
         class TestSetup(SetupModel):
             tool_a: ToolReference
@@ -370,7 +441,7 @@ class TestResolvedToolsCacheBehavior:
 
         setup = TestSetup(
             tool_a=ToolReference(selected_tools=[ToolSelection(setup_id="setup-123", triggers={"search": True})]),
-            tool_b=ToolReference(selected_tools=[ToolSelection(setup_id="setup-456", triggers={"analyze": True})]),
+            tool_b=ToolReference(selected_tools=[ToolSelection(setup_id="setup-456", triggers={"search": True})]),
         )
 
         mock_registry = AsyncMock()
@@ -379,92 +450,44 @@ class TestResolvedToolsCacheBehavior:
             if setup_id == "setup-123"
             else SetupInfo(setup_id="setup-456", name="Tool B", module_id="tool-456")
         )
-        mock_registry.discover_by_id.side_effect = lambda module_id: (
-            ModuleInfo(
-                module_id="tool-123",
-                module_type=RegistryModuleType.TOOL,
-                address="localhost",
-                port=50051,
-                version="1.0.0",
-                module_name="ToolA",
-                documentation="Tool A",
-            )
-            if module_id == "tool-123"
-            else ModuleInfo(
-                module_id="tool-456",
-                module_type=RegistryModuleType.TOOL,
-                address="localhost",
-                port=50052,
-                version="1.0.0",
-                module_name="ToolB",
-                documentation="Tool B",
-            )
+        mock_registry.discover_by_id.side_effect = lambda module_id: ModuleInfo(
+            module_id=module_id,
+            module_type=RegistryModuleType.TOOL,
+            address="localhost",
+            port=50051,
+            version="1.0.0",
+            module_name=module_id,
         )
+        mock_communication = _communication_with_search()
 
-        mock_communication = AsyncMock()
-        mock_communication.get_module_schemas.return_value = {
-            "input": {"json_schema": {"$defs": {}}},
-        }
-
-        # First resolution - both tools resolved via registry
         await setup.build_tool_cache(mock_registry, mock_communication)
-
         assert mock_registry.get_setup.call_count == 2
         assert len(setup.resolved_tools) == 2
 
-        # Second resolution - both tools resolved from cache
+        # Second build re-resolves both (cache cleared, not reused).
         mock_registry.reset_mock()
         await setup.build_tool_cache(mock_registry, mock_communication)
-
-        mock_registry.get_setup.assert_not_called()
-        mock_registry.discover_by_id.assert_not_called()
+        assert mock_registry.get_setup.call_count == 2
         assert len(setup.resolved_tools) == 2
 
     @pytest.mark.asyncio
-    async def test_partial_cache_only_queries_missing(
-        self, sample_tool_module_info: ToolModuleInfo, sample_tool_module_info_2: ToolModuleInfo
+    async def test_no_registry_keeps_prepopulated_resolved_tools(
+        self, sample_tool_module_info: ToolModuleInfo
     ) -> None:
-        """Test that only uncached tools trigger registry calls."""
+        """Embedded/degraded path: with no registry, a pre-populated entry is kept and served."""
 
         class TestSetup(SetupModel):
-            tool_a: ToolReference
-            tool_b: ToolReference
+            my_tool: ToolReference
 
         setup = TestSetup(
-            tool_a=ToolReference(selected_tools=[ToolSelection(setup_id="setup-123", triggers={"search": True})]),
-            tool_b=ToolReference(selected_tools=[ToolSelection(setup_id="setup-456", triggers={"analyze": True})]),
+            my_tool=ToolReference(selected_tools=[ToolSelection(setup_id="setup-123", triggers={"search": True})]),
         )
-
-        # Pre-populate cache with only tool_a using setup_id as key
         setup.resolved_tools["setup-123"] = sample_tool_module_info
 
-        mock_registry = AsyncMock()
-        mock_registry.get_setup.return_value = SetupInfo(
-            setup_id="setup-456",
-            name="Tool B",
-            module_id="tool-456",
-        )
-        mock_registry.discover_by_id.return_value = ModuleInfo(
-            module_id="tool-456",
-            module_type=RegistryModuleType.TOOL,
-            address="localhost",
-            port=50052,
-            version="1.0.0",
-            module_name="ToolB",
-            documentation="Tool B",
-        )
-
-        mock_communication = AsyncMock()
-        mock_communication.get_module_schemas.return_value = {
-            "input": {"json_schema": {"$defs": {}}},
-        }
-
-        await setup.build_tool_cache(mock_registry, mock_communication)
-
-        # Only tool_b should trigger registry call
-        mock_registry.get_setup.assert_called_once_with("setup-456")
+        # No registry/communication → resolved_tools is NOT cleared, entry is reused.
+        cache = await setup.build_tool_cache()
         assert "setup-123" in setup.resolved_tools
-        assert len(setup.resolved_tools) == 2
+        assert cache.entries["setup-123"] == sample_tool_module_info
 
 
 class TestSlugify:

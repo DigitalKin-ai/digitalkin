@@ -73,3 +73,14 @@ class CostEvent(BaseModel):
     amount: float
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     metadata: dict[str, Any] | None = None
+
+
+class CostType(Enum):
+    """Enum defining the types of costs that can be registered."""
+
+    OTHER = "OTHER"
+    TOKEN_INPUT = "TOKEN_INPUT"
+    TOKEN_OUTPUT = "TOKEN_OUTPUT"
+    API_CALL = "API_CALL"
+    STORAGE = "STORAGE"
+    TIME = "TIME"

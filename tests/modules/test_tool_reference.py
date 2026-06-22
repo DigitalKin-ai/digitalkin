@@ -4,7 +4,8 @@ Tests the complete flow from ToolReference definition to resolution via registry
 including recursive resolution in nested structures.
 """
 
-from unittest.mock import AsyncMock
+import asyncio
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from pydantic import BaseModel, Field, TypeAdapter, ValidationError
@@ -273,6 +274,43 @@ class TestToolReferenceResolution:
         result = await ref.resolve(registry, communication)
 
         assert len(result) == 0
+
+    @pytest.mark.asyncio
+    async def test_unknown_trigger_names_warned_and_filtered(self, registry: FakeRegistry) -> None:
+        """Triggers naming protocols the module does not expose are warned and dropped."""
+        ref = ToolReference(
+            selected_tools=[
+                ToolSelection(
+                    setup_id="setup-search-001",
+                    triggers={"search": True, "healthcheck_ping": True, "bogus": True},
+                ),
+            ],
+        )
+        communication = create_mock_communication()
+
+        with patch("digitalkin.models.module.tool_reference.logger") as mock_logger:
+            result = await ref.resolve(registry, communication)
+
+        # The known trigger 'search' survives; unknown names are filtered out.
+        assert len(result) == 1
+        assert [t.name for t in result[0].tools] == ["search"]
+        # The unknown names are surfaced in a single warning.
+        mock_logger.warning.assert_called_once()
+        assert mock_logger.warning.call_args.args[2] == ["bogus", "healthcheck_ping"]
+
+    @pytest.mark.asyncio
+    async def test_known_triggers_emit_no_warning(self, registry: FakeRegistry) -> None:
+        """When every enabled trigger matches a real protocol, nothing is warned."""
+        ref = ToolReference(
+            selected_tools=[ToolSelection(setup_id="setup-search-001", triggers={"search": True})],
+        )
+        communication = create_mock_communication()
+
+        with patch("digitalkin.models.module.tool_reference.logger") as mock_logger:
+            result = await ref.resolve(registry, communication)
+
+        assert [t.name for t in result[0].tools] == ["search"]
+        mock_logger.warning.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_empty_selected_tools_returns_empty(self, registry: FakeRegistry) -> None:
@@ -834,3 +872,364 @@ class TestToolReferenceJsonSchema:
             {"setupId": "setup-2", "triggers": {"analyze": True}},
         ])
         assert len(ref.selected_tools) == 2
+
+
+def _mock_communication_empty_defs() -> AsyncMock:
+    """Communication whose ``get_module_schemas`` returns an input schema with empty ``$defs``."""
+    mock = AsyncMock()
+    mock.get_module_schemas.return_value = {"input": {"json_schema": {"$defs": {}}}}
+    return mock
+
+
+def _mock_communication_two_triggers() -> AsyncMock:
+    """Communication whose module exposes two protocols: ``search`` and ``analyze``."""
+    mock = AsyncMock()
+    mock.get_module_schemas.return_value = {
+        "input": {
+            "json_schema": {
+                "$defs": {
+                    "SearchInput": {
+                        "properties": {
+                            "protocol": {"const": "search"},
+                            "query": {"type": "string"},
+                        },
+                        "required": ["protocol", "query"],
+                    },
+                    "AnalyzeInput": {
+                        "properties": {
+                            "protocol": {"const": "analyze"},
+                            "text": {"type": "string"},
+                        },
+                        "required": ["protocol", "text"],
+                    },
+                },
+            },
+        },
+    }
+    return mock
+
+
+def _warnings(mock_logger: object) -> list[str]:
+    """Render every WARNING the patched logger received as the formatted message string."""
+    return [c.args[0] % c.args[1:] for c in mock_logger.warning.call_args_list]  # type: ignore[attr-defined]
+
+
+def _infos(mock_logger: object) -> list[str]:
+    """Same for INFO."""
+    return [c.args[0] % c.args[1:] for c in mock_logger.info.call_args_list]  # type: ignore[attr-defined]
+
+
+class TestResolveSingleLogs:
+    """Reason-tagged warnings and structured audit on every ``_resolve_single`` outcome."""
+
+    @pytest.mark.asyncio
+    async def test_setup_not_found_warns_with_reason(self) -> None:
+        registry = FakeRegistry()  # empty — no setup will be found
+        communication = create_mock_communication()
+        ref = ToolReference(selected_tools=[ToolSelection(setup_id="nope", triggers={"x": True})])
+
+        with patch("digitalkin.models.module.tool_reference.logger") as mock_logger:
+            result = await ref.resolve(registry, communication)
+
+        assert result == []
+        warnings = _warnings(mock_logger)
+        assert any("reason=setup_not_found" in w and "setup_id=nope" in w for w in warnings), warnings
+
+    @pytest.mark.asyncio
+    async def test_module_not_discovered_warns_with_reason(self) -> None:
+        registry = FakeRegistry()
+        registry.add_setup("setup-x", "missing-module-id", "X")  # setup points at unknown module
+        communication = create_mock_communication()
+        ref = ToolReference(selected_tools=[ToolSelection(setup_id="setup-x", triggers={"x": True})])
+
+        with patch("digitalkin.models.module.tool_reference.logger") as mock_logger:
+            result = await ref.resolve(registry, communication)
+
+        assert result == []
+        warnings = _warnings(mock_logger)
+        assert any("reason=module_not_discovered" in w for w in warnings), warnings
+
+    @pytest.mark.asyncio
+    async def test_schema_fetch_failed_logs_exception_with_reason(
+        self, registry: FakeRegistry,
+    ) -> None:
+        communication = AsyncMock()
+        communication.get_module_schemas.side_effect = RuntimeError("boom")
+        ref = ToolReference(
+            selected_tools=[ToolSelection(setup_id="setup-search-001", triggers={"search": True})],
+        )
+
+        with patch("digitalkin.models.module.tool_reference.logger") as mock_logger:
+            result = await ref.resolve(registry, communication)
+
+        assert result == []
+        # logger.exception is the call we expect; assert it was hit with the reason.
+        exc_calls = mock_logger.exception.call_args_list
+        assert any("reason=schema_fetch_failed" in (c.args[0] % c.args[1:]) for c in exc_calls), exc_calls
+
+    @pytest.mark.asyncio
+    async def test_audit_line_emitted_on_success(self, registry: FakeRegistry) -> None:
+        communication = _mock_communication_two_triggers()
+        ref = ToolReference(
+            selected_tools=[ToolSelection(setup_id="setup-search-001", triggers={"search": True})],
+        )
+
+        with patch("digitalkin.models.module.tool_reference.logger") as mock_logger:
+            await ref.resolve(registry, communication)
+
+        infos = _infos(mock_logger)
+        audit_lines = [i for i in infos if "[lat-audit] tool_resolve" in i]
+        assert len(audit_lines) == 1, audit_lines
+        line = audit_lines[0]
+        assert "setup_id=setup-search-001" in line
+        assert "module_available=2" in line
+        assert "post_filter=1" in line
+        assert "user_triggers_enabled=1" in line
+
+    @pytest.mark.asyncio
+    async def test_module_exposes_no_triggers_warns_with_reason(self, registry: FakeRegistry) -> None:
+        communication = _mock_communication_empty_defs()
+        ref = ToolReference(
+            selected_tools=[ToolSelection(setup_id="setup-search-001", triggers={"search": True})],
+        )
+
+        with patch("digitalkin.models.module.tool_reference.logger") as mock_logger:
+            result = await ref.resolve(registry, communication)
+
+        # Resolve succeeded structurally (returned ToolModuleInfo with empty tools list).
+        assert len(result) == 1
+        assert result[0].tools == []
+        warnings = _warnings(mock_logger)
+        zero_warns = [w for w in warnings if "Tool resolved with 0 functions" in w]
+        assert len(zero_warns) == 1, warnings
+        assert "reason=module_exposes_no_triggers" in zero_warns[0]
+        assert "module_available=0" in zero_warns[0]
+
+    @pytest.mark.asyncio
+    async def test_all_user_triggers_unknown_warns_with_reason(self, registry: FakeRegistry) -> None:
+        communication = _mock_communication_two_triggers()  # exposes 'search','analyze'
+        ref = ToolReference(
+            selected_tools=[
+                ToolSelection(setup_id="setup-search-001", triggers={"foo": True, "bar": True}),
+            ],
+        )
+
+        with patch("digitalkin.models.module.tool_reference.logger") as mock_logger:
+            result = await ref.resolve(registry, communication)
+
+        assert result[0].tools == []
+        warnings = _warnings(mock_logger)
+        # Two warnings expected: the existing "enables triggers the module does not expose"
+        # and the new "Tool resolved with 0 functions" with the reason.
+        assert any("does not expose" in w for w in warnings), warnings
+        zero_warns = [w for w in warnings if "Tool resolved with 0 functions" in w]
+        assert len(zero_warns) == 1
+        assert "reason=all_user_triggers_unknown" in zero_warns[0]
+
+    @pytest.mark.asyncio
+    async def test_partial_match_emits_no_zero_warning(self, registry: FakeRegistry) -> None:
+        communication = _mock_communication_two_triggers()
+        ref = ToolReference(
+            selected_tools=[
+                ToolSelection(setup_id="setup-search-001", triggers={"search": True, "bogus": True}),
+            ],
+        )
+
+        with patch("digitalkin.models.module.tool_reference.logger") as mock_logger:
+            result = await ref.resolve(registry, communication)
+
+        assert [t.name for t in result[0].tools] == ["search"]
+        warnings = _warnings(mock_logger)
+        # The "unknown" warning still fires for 'bogus'.
+        assert any("does not expose" in w for w in warnings)
+        # But no zero-functions warning since post_filter=1.
+        assert not any("Tool resolved with 0 functions" in w for w in warnings)
+
+    @pytest.mark.asyncio
+    async def test_debug_detail_gated_by_debug_level(self, registry: FakeRegistry) -> None:
+        """DEBUG ``tool_resolve detail`` line only emitted when the logger is at DEBUG."""
+        communication = _mock_communication_two_triggers()
+        ref = ToolReference(
+            selected_tools=[ToolSelection(setup_id="setup-search-001", triggers={"search": True})],
+        )
+
+        # DEBUG OFF.
+        with patch("digitalkin.models.module.tool_reference.logger") as mock_logger:
+            mock_logger.isEnabledFor.return_value = False
+            await ref.resolve(registry, communication)
+            debug_calls = mock_logger.debug.call_args_list
+            assert not any("tool_resolve detail" in (c.args[0] % c.args[1:]) for c in debug_calls)
+
+        # DEBUG ON.
+        with patch("digitalkin.models.module.tool_reference.logger") as mock_logger:
+            mock_logger.isEnabledFor.return_value = True
+            await ref.resolve(registry, communication)
+            debug_calls = mock_logger.debug.call_args_list
+            assert any("tool_resolve detail" in (c.args[0] % c.args[1:]) for c in debug_calls), debug_calls
+
+    @pytest.mark.asyncio
+    async def test_resolve_timeout_warns_with_reason(self, registry: FakeRegistry) -> None:
+        communication = create_mock_communication()
+        ref = ToolReference(
+            selected_tools=[ToolSelection(setup_id="setup-search-001", triggers={"search": True})],
+        )
+
+        async def _slow(*_: object, **__: object) -> None:
+            await asyncio.sleep(60)
+
+        with (
+            patch.object(ToolReference, "_resolve_single", new=_slow),
+            patch("digitalkin.models.module.tool_reference.get_module_settings") as mock_settings,
+            patch("digitalkin.models.module.tool_reference.logger") as mock_logger,
+        ):
+            mock_settings.return_value.tool_resolve_timeout = 0.01
+            result = await ref.resolve(registry, communication)
+
+        assert result == []
+        warnings = _warnings(mock_logger)
+        assert any("reason=resolve_timeout" in w for w in warnings), warnings
+
+    @pytest.mark.asyncio
+    async def test_resolve_exception_logs_with_reason(self, registry: FakeRegistry) -> None:
+        communication = create_mock_communication()
+        ref = ToolReference(
+            selected_tools=[ToolSelection(setup_id="setup-search-001", triggers={"search": True})],
+        )
+
+        async def _boom(*_: object, **__: object) -> None:  # noqa: RUF029
+            msg = "unexpected"
+            raise RuntimeError(msg)
+
+        with (
+            patch.object(ToolReference, "_resolve_single", new=_boom),
+            patch("digitalkin.models.module.tool_reference.logger") as mock_logger,
+        ):
+            result = await ref.resolve(registry, communication)
+
+        assert result == []
+        exc_calls = mock_logger.exception.call_args_list
+        assert any("reason=resolve_exception" in (c.args[0] % c.args[1:]) for c in exc_calls), exc_calls
+
+
+class TestCollectFromToolRefLogs:
+    """``_collect_from_tool_ref`` aggregates unresolved setup_ids and the cache-built log carries counts."""
+
+    @pytest.mark.asyncio
+    async def test_missing_setup_ids_emit_aggregate_warning(self, registry: FakeRegistry) -> None:
+        """One known + one unknown setup_id → cache has 1 entry, log warns about the missing one."""
+
+        class ArchetypeSetup(SetupModel):
+            tools: ToolReference = Field(
+                default_factory=lambda: ToolReference(selected_tools=[
+                    ToolSelection(setup_id="setup-search-001", triggers={"search": True}),
+                    ToolSelection(setup_id="setup-missing-999", triggers={"search": True}),
+                ]),
+            )
+
+        setup = ArchetypeSetup()
+        communication = create_mock_communication()
+
+        with patch("digitalkin.models.module.setup_types.logger") as mock_logger:
+            cache = await setup.build_tool_cache(registry, communication)
+
+        assert len(cache.entries) == 1
+        warnings = _warnings(mock_logger)
+        assert any(
+            "unresolved setup_id(s)" in w and "setup-missing-999" in w
+            for w in warnings
+        ), warnings
+
+    @pytest.mark.asyncio
+    async def test_tool_cache_built_log_includes_per_entry_counts(self, registry: FakeRegistry) -> None:
+        """The ``Tool cache built`` log carries ``setup_id=N`` pairs."""
+
+        class ArchetypeSetup(SetupModel):
+            tools: ToolReference = Field(
+                default_factory=lambda: ToolReference(selected_tools=[
+                    ToolSelection(setup_id="setup-search-001", triggers={"search": True}),
+                ]),
+            )
+
+        setup = ArchetypeSetup()
+        communication = create_mock_communication()
+
+        with patch("digitalkin.models.module.setup_types.logger") as mock_logger:
+            await setup.build_tool_cache(registry, communication)
+
+        infos = _infos(mock_logger)
+        built_lines = [i for i in infos if "Tool cache built:" in i]
+        assert len(built_lines) == 1, built_lines
+        assert "setup-search-001=1" in built_lines[0]
+
+
+class TestBlankToolSelectionHandling:
+    """Blank/incomplete tool selections are dropped at the input boundary; each drop is logged."""
+
+    def test_dict_missing_setup_id_is_dropped(self) -> None:
+        adapter = TypeAdapter(tool_reference_input())
+        ref = adapter.validate_python([
+            {"triggers": {"search": True}},  # missing setupId -> dropped (not kept as "")
+            {"setupId": "setup-123", "triggers": {"search": True}},
+        ])
+        assert [t.setup_id for t in ref.selected_tools] == ["setup-123"]
+
+    def test_explicit_empty_and_whitespace_setup_id_dropped(self) -> None:
+        adapter = TypeAdapter(tool_reference_input())
+        ref = adapter.validate_python([
+            {"setupId": "", "triggers": {"a": True}},
+            {"setupId": "   ", "triggers": {"a": True}},
+            {"setupId": "keep", "triggers": {"a": True}},
+        ])
+        assert [t.setup_id for t in ref.selected_tools] == ["keep"]
+
+    def test_each_dropped_row_is_logged_individually(self) -> None:
+        adapter = TypeAdapter(tool_reference_input())
+        with patch("digitalkin.models.module.tool_reference.logger") as mock_logger:
+            adapter.validate_python([
+                {"triggers": {"a": True}},
+                {"setupId": "", "triggers": {"b": True}},
+                {"setupId": "ok", "triggers": {"c": True}},
+            ])
+        drop_calls = [c for c in mock_logger.info.call_args_list if "dropped incomplete tool selection" in c.args[0]]
+        assert len(drop_calls) == 2  # one line per dropped row, not an aggregate count
+        logged = [c.args[1] for c in drop_calls]
+        assert {"triggers": {"a": True}} in logged
+        assert {"setupId": "", "triggers": {"b": True}} in logged
+
+    def test_min_tools_with_only_blank_rows_fails(self) -> None:
+        adapter = TypeAdapter(tool_reference_input(min_tools=1))
+        with pytest.raises(ValidationError):
+            adapter.validate_python([{"setupId": "", "triggers": {"a": True}}])
+
+    def test_min_tools_blank_plus_real_passes(self) -> None:
+        adapter = TypeAdapter(tool_reference_input(min_tools=1))
+        ref = adapter.validate_python([
+            {"setupId": "", "triggers": {"a": True}},
+            {"setupId": "real", "triggers": {"a": True}},
+        ])
+        assert len(ref.selected_tools) == 1
+
+    async def test_resolve_skips_blank_setup_id(self) -> None:
+        """Defensive: a directly-built blank selection never reaches get_setup('')."""
+
+        class RecordingRegistry(FakeRegistry):
+            def __init__(self) -> None:
+                super().__init__()
+                self.get_setup_calls: list[str] = []
+
+            async def get_setup(self, setup_id: str) -> SetupInfo | None:
+                self.get_setup_calls.append(setup_id)
+                return await FakeRegistry.get_setup(self, setup_id)
+
+        reg = RecordingRegistry()
+        reg.add_module(create_tool_module_info("mod-x", "X"))
+        reg.add_setup("x", "mod-x", "X")
+        ref = ToolReference(
+            selected_tools=[
+                ToolSelection(setup_id="", triggers={"search": True}),
+                ToolSelection(setup_id="x", triggers={"search": True}),
+            ]
+        )
+        await ref.resolve(reg, create_mock_communication())
+        assert "" not in reg.get_setup_calls
+        assert "x" in reg.get_setup_calls

@@ -1,10 +1,12 @@
-"""Task session easing task lifecycle management."""
+"""Task session lifecycle: status, cancellation, cleanup."""
+
+from __future__ import annotations
 
 import asyncio
-import contextlib
 import datetime
+import time
 import traceback
-from collections.abc import AsyncGenerator
+from typing import TYPE_CHECKING
 
 from digitalkin.logger import logger
 from digitalkin.models.core.task_monitor import (
@@ -12,20 +14,22 @@ from digitalkin.models.core.task_monitor import (
     SignalMessage,
     SignalType,
 )
-from digitalkin.modules._base_module import BaseModule
-from digitalkin.services.task_manager.task_manager_strategy import TaskManagerStrategy
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
+
+    from digitalkin.core.task_manager.redis.redis_state import RedisStateManager
+    from digitalkin.modules._base_module import BaseModule
+    from digitalkin.services.task_manager.task_manager_strategy import TaskManagerStrategy
 
 
 class TaskSession:
-    """Task Session with lifecycle management.
+    """Ephemeral lifecycle context for one task, optionally persisted to Redis."""
 
-    The Session defines the whole lifecycle of a task as an ephemeral context.
-    """
-
-    signal_service: TaskManagerStrategy
+    signal_service: TaskManagerStrategy | None
     module: BaseModule
 
-    status: str
+    _status: str
     signal_queue: AsyncGenerator | None
 
     task_id: str
@@ -37,17 +41,16 @@ class TaskSession:
 
     is_cancelled: asyncio.Event
     cancellation_reason: CancellationReason
-    _stream_closed: asyncio.Event
+    stream_closed_event: asyncio.Event
 
-    # Exception tracking for enhanced logging
     _last_exception: str | None
     _last_traceback: str | None
-
-    # Cleanup guard for idempotent cleanup
     _cleanup_done: bool
+    _state_manager: RedisStateManager | None
+    _pending_redis_tasks: set[asyncio.Task[None]]
 
-    # Signal listener failure tracking
-    _signal_listener_failed: bool
+    pending_signal_action: str = ""
+    last_signal_published_ns: int = 0
 
     def __init__(
         self,
@@ -55,6 +58,7 @@ class TaskSession:
         mission_id: str,
         module: BaseModule,
         queue_maxsize: int = 1000,
+        state_manager: RedisStateManager | None = None,
     ) -> None:
         """Initialize Task Session.
 
@@ -63,12 +67,16 @@ class TaskSession:
             mission_id: Mission identifier
             module: Module instance
             queue_maxsize: Maximum size for the queue (0 = unlimited)
+            state_manager: Optional Redis state manager for persistent status tracking
         """
+        # signal_service is None for config-setup TaskSessions (no signals to dispatch); see
+        # SingleJobManager.create_config_setup_instance_job. Real-task sessions get it wired
+        # by preload_instance setting context.task_manager before _create_session runs.
         self.signal_service = module.context.task_manager
         self.module = module
+        self._state_manager = state_manager
 
-        self.status = "pending"
-        # Bounded queue to prevent unbounded memory growth (max 1000 items)
+        self._status = "pending"
         self.queue: asyncio.Queue = asyncio.Queue(maxsize=queue_maxsize)
 
         self.task_id = task_id
@@ -80,25 +88,43 @@ class TaskSession:
 
         self.is_cancelled = asyncio.Event()
         self.cancellation_reason = CancellationReason.UNKNOWN
-        self._stream_closed = asyncio.Event()
+        self.stream_closed_event = asyncio.Event()
 
-        # Exception tracking
         self._last_exception = None
         self._last_traceback = None
-
-        # Cleanup guard
         self._cleanup_done = False
-
-        # Write lock — serialises final queue writes with session cleanup
         self._write_lock = asyncio.Lock()
-
-        # Signal listener failure tracking
-        self._signal_listener_failed = False
+        self.pending_signal_action = ""
+        self.last_signal_published_ns = 0
 
         logger.debug(
             "TaskSession initialized",
             extra={"task_id": task_id, "mission_id": mission_id},
         )
+
+    @property
+    def status(self) -> str:
+        """Current task status. Use ``set_status()`` to update."""
+        return self._status
+
+    async def set_status(self, value: str) -> None:
+        """Set status; persist to Redis if a state_manager is configured.
+
+        Args:
+            value: New status (e.g., "running", "completed", "cancelled").
+        """
+        self._status = value
+        if self._state_manager is None:
+            return
+        try:
+            await self._state_manager.set_status(self.task_id, value)
+        except Exception:
+            logger.warning(
+                "Redis status write failed: task_id=%s status=%s",
+                self.task_id,
+                value,
+                exc_info=True,
+            )
 
     @property
     def cancelled(self) -> bool:
@@ -108,25 +134,25 @@ class TaskSession:
     @property
     def stream_closed(self) -> bool:
         """Check if stream termination was signaled."""
-        return self._stream_closed.is_set()
+        return self.stream_closed_event.is_set()
 
     def close_stream(self) -> None:
         """Signal that the stream should terminate."""
-        self._stream_closed.set()
+        self.stream_closed_event.set()
 
     @property
     def setup_id(self) -> str:
-        """Get setup_id from module context."""
+        """The setup_id from the module context."""
         return self.module.context.session.setup_id
 
     @property
     def setup_version_id(self) -> str:
-        """Get setup_version_id from module context."""
+        """The setup_version_id from the module context."""
         return self.module.context.session.setup_version_id
 
     @property
     def session_ids(self) -> dict[str, str]:
-        """Get all session IDs from module context for structured logging."""
+        """All session IDs from the module context for structured logging."""
         return self.module.context.session.current_ids()
 
     def record_exception(self, exc: Exception) -> None:
@@ -138,48 +164,13 @@ class TaskSession:
         self._last_exception = str(exc)
         self._last_traceback = traceback.format_exc()
 
-    async def listen_signals(self) -> None:
-        """Signal listener for cancel signals via TaskManagerStrategy.
-
-        Subscribes to signal updates for this task_id and processes cancel signals.
-
-        Raises:
-            CancelledError: If task is cancelled during signal listening.
-        """
-        logger.info("Signal listener started", extra=self.session_ids)
-
-        sub_id, live_signals = await self.signal_service.subscribe_signals(self.task_id)
-        try:
-            async for signal in live_signals:
-                logger.info("Signal received: %s", signal, extra=self.session_ids)
-                if self.cancelled or self.stream_closed:
-                    break
-
-                if signal is None or signal.get("task_id") != self.task_id:
-                    continue
-
-                if signal.get("action") == "cancel":
-                    await self._handle_cancel(CancellationReason.SIGNAL_SERVICE_CANCEL)
-                elif signal.get("action") == "stop":
-                    await self._handle_stop()
-
-        except asyncio.CancelledError:
-            logger.info("Signal listener cancelled", extra=self.session_ids)
-            raise
-        except Exception:
-            self._signal_listener_failed = True
-            logger.exception("Signal listener fatal error", extra=self.session_ids)
-        finally:
-            with contextlib.suppress(Exception):
-                await self.signal_service.unsubscribe_signals(sub_id)
-            logger.info("Signal listener stopped", extra=self.session_ids)
-
     async def _handle_cancel(self, reason: CancellationReason = CancellationReason.UNKNOWN) -> None:
         """Idempotent cancellation with acknowledgment and reason tracking.
 
         Args:
             reason: The reason for cancellation (signal, cleanup, etc.)
         """
+        t0 = time.perf_counter_ns()
         if self.cancelled:
             logger.debug(
                 "Cancel ignored - already cancelled (existing=%s, new=%s)",
@@ -190,29 +181,44 @@ class TaskSession:
             return
 
         self.cancellation_reason = reason
-        self.status = "cancelled"
+        await self.set_status("cancelled")
         self.is_cancelled.set()
+        body_ns = time.perf_counter_ns() - t0
 
-        # Log with appropriate level based on reason
-        if reason in {CancellationReason.SUCCESS_CLEANUP, CancellationReason.FAILURE_CLEANUP}:
-            logger.debug("Task cancelled (%s)", reason.value, extra=self.session_ids)
-        else:
-            logger.info("Task cancelled (%s)", reason.value, extra=self.session_ids)
+        ack_t0 = time.perf_counter_ns()
+        ack_ok = False
+        if self.signal_service is not None:
+            try:
+                await self.signal_service.send_signal(
+                    self.task_id,
+                    SignalMessage(
+                        task_id=self.task_id,
+                        mission_id=self.mission_id,
+                        setup_id=self.setup_id,
+                        setup_version_id=self.setup_version_id,
+                        action=SignalType.ACK_CANCEL,
+                        cancellation_reason=reason,
+                    ).model_dump(exclude_none=True),
+                )
+                ack_ok = True
+            except Exception:
+                logger.warning("Cancel ack failed (best-effort)", extra=self.session_ids)
+        ack_ns = time.perf_counter_ns() - ack_t0
 
-        try:
-            await self.signal_service.send_signal(
-                self.task_id,
-                SignalMessage(
-                    task_id=self.task_id,
-                    mission_id=self.mission_id,
-                    setup_id=self.setup_id,
-                    setup_version_id=self.setup_version_id,
-                    action=SignalType.ACK_CANCEL,
-                    cancellation_reason=reason,
-                ).model_dump(exclude_none=True),
-            )
-        except Exception:
-            logger.warning("Cancel ack failed (best-effort)", extra=self.session_ids)
+        pub_ns = self.last_signal_published_ns
+        e2e_ms = (time.time_ns() - pub_ns) / 1e6 if pub_ns else 0.0
+        self.last_signal_published_ns = 0
+        logger.info(
+            "[lat-audit] signal_handle: handler=cancel reason=%s e2e_ms=%.2f "
+            "body_ms=%.2f ack_send_ms=%.2f ack_ok=%s task_id=%s",
+            reason.value,
+            e2e_ms,
+            body_ns / 1e6,
+            ack_ns / 1e6,
+            ack_ok,
+            self.task_id,
+            extra=self.session_ids,
+        )
 
     async def _handle_stop(self) -> None:
         """Idempotent graceful-stop with acknowledgment.
@@ -220,6 +226,7 @@ class TaskSession:
         Mirrors _handle_cancel: marks the task as cancelled with
         SIGNAL_SERVICE_STOP reason and sends ACK_STOP to the signal service.
         """
+        t0 = time.perf_counter_ns()
         if self.cancelled:
             logger.debug(
                 "Stop ignored - already cancelled (existing=%s)",
@@ -229,38 +236,47 @@ class TaskSession:
             return
 
         self.cancellation_reason = CancellationReason.SIGNAL_SERVICE_STOP
-        self.status = "cancelled"
+        await self.set_status("cancelled")
         self.is_cancelled.set()
-        logger.info("Task stop requested via signal", extra=self.session_ids)
+        body_ns = time.perf_counter_ns() - t0
 
-        try:
-            await self.signal_service.send_signal(
-                self.task_id,
-                SignalMessage(
-                    task_id=self.task_id,
-                    mission_id=self.mission_id,
-                    setup_id=self.setup_id,
-                    setup_version_id=self.setup_version_id,
-                    action=SignalType.ACK_STOP,
-                    cancellation_reason=CancellationReason.SIGNAL_SERVICE_STOP,
-                ).model_dump(exclude_none=True),
-            )
-        except Exception:
-            logger.warning("Stop ack failed (best-effort)", extra=self.session_ids)
+        ack_t0 = time.perf_counter_ns()
+        ack_ok = False
+        if self.signal_service is not None:
+            try:
+                await self.signal_service.send_signal(
+                    self.task_id,
+                    SignalMessage(
+                        task_id=self.task_id,
+                        mission_id=self.mission_id,
+                        setup_id=self.setup_id,
+                        setup_version_id=self.setup_version_id,
+                        action=SignalType.ACK_STOP,
+                        cancellation_reason=CancellationReason.SIGNAL_SERVICE_STOP,
+                    ).model_dump(exclude_none=True),
+                )
+                ack_ok = True
+            except Exception:
+                logger.warning("Stop ack failed (best-effort)", extra=self.session_ids)
+        ack_ns = time.perf_counter_ns() - ack_t0
+
+        pub_ns = self.last_signal_published_ns
+        e2e_ms = (time.time_ns() - pub_ns) / 1e6 if pub_ns else 0.0
+        self.last_signal_published_ns = 0
+        logger.info(
+            "[lat-audit] signal_handle: handler=stop reason=%s e2e_ms=%.2f "
+            "body_ms=%.2f ack_send_ms=%.2f ack_ok=%s task_id=%s",
+            CancellationReason.SIGNAL_SERVICE_STOP.value,
+            e2e_ms,
+            body_ns / 1e6,
+            ack_ns / 1e6,
+            ack_ok,
+            self.task_id,
+            extra=self.session_ids,
+        )
 
     async def cleanup(self) -> None:
-        """Clean up task session resources.
-
-        This method is idempotent - safe to call multiple times.
-        Second and subsequent calls are no-ops.
-
-        This includes:
-        - Clearing queue to free memory
-        - Cleaning up module context services
-        - Stopping module
-        - Clearing module reference
-        """
-        # Use basic IDs for logging since module may already be None from previous cleanup
+        """Drain queue, release services, stop the module. Idempotent."""
         ids = {"task_id": self.task_id, "mission_id": self.mission_id}
 
         if self._cleanup_done:
@@ -268,8 +284,7 @@ class TaskSession:
             return
         self._cleanup_done = True
 
-        # Clear queue to free memory
-        logger.debug("debug:cleanup queue size=%s task_id=%s", self.queue.qsize(), self.task_id)
+        logger.debug("Cleanup: draining queue (queue_size=%d)", self.queue.qsize(), extra=ids)
         try:
             while not self.queue.empty():
                 self.queue.get_nowait()
@@ -277,18 +292,15 @@ class TaskSession:
         except asyncio.QueueEmpty:
             pass
 
-        # Clean up module context services (e.g., gRPC channel pool, task_manager)
         if self.module is not None and self.module.context is not None:
             try:
                 await self.module.context.cleanup()
             except Exception:
                 logger.exception("Error cleaning up module context", extra=ids)
 
-        # Stop module
         try:
             await self.module.stop()
         except Exception:
             logger.exception("Error stopping module during cleanup", extra=ids)
 
-        # Clear module reference to allow garbage collection
-        self.module = None  # type: ignore[assignment]  # Allow GC; typed as BaseModule but set to None after cleanup
+        self.module = None  # type: ignore[assignment]

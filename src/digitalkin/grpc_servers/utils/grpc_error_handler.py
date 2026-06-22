@@ -4,7 +4,7 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import Any
 
-from digitalkin.grpc_servers.utils.exceptions import ServerError
+from digitalkin.grpc_servers.exceptions import PermissionDeniedError, ServerError
 from digitalkin.logger import logger
 
 
@@ -28,6 +28,7 @@ class GrpcErrorHandlerMixin:
             Context for the operation.
 
         Raises:
+            PermissionDeniedError: Re-raised as-is so the authz status is never masked.
             ServerError: For gRPC-related errors.
             service_error_class: For service-specific errors if provided.
         """
@@ -36,6 +37,8 @@ class GrpcErrorHandlerMixin:
 
         try:
             yield
+        except PermissionDeniedError:
+            raise
         except service_error_class as e:
             # Re-raise service-specific errors as-is
             msg = f"{service_error_class.__name__} in {operation}: {e}"

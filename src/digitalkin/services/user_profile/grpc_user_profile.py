@@ -11,8 +11,9 @@ from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
 from digitalkin.grpc_servers.utils.grpc_error_handler import GrpcErrorHandlerMixin
 from digitalkin.logger import logger
 from digitalkin.models.grpc_servers.models import ClientConfig
-from digitalkin.services.user_profile.user_profile_strategy import UserProfileServiceError, UserProfileStrategy
-from digitalkin.utils.proto_utils import proto_to_dict
+from digitalkin.services.user_profile.exceptions import UserProfileServiceError
+from digitalkin.services.user_profile.user_profile_strategy import UserProfileStrategy
+from digitalkin.utils.proto_utils import ProtoUtils
 
 
 class GrpcUserProfile(UserProfileStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
@@ -36,9 +37,16 @@ class GrpcUserProfile(UserProfileStrategy, GrpcClientWrapper, GrpcErrorHandlerMi
             client_config: Client configuration for gRPC connection
         """
         super().__init__(mission_id=mission_id, setup_id=setup_id, setup_version_id=setup_version_id)
-        channel = self._init_channel(client_config)
-        self.stub = user_profile_service_pb2_grpc.UserProfileServiceStub(channel)
+        self._init_channel(client_config)
+        self.stub = self._get_or_create_stub(user_profile_service_pb2_grpc.UserProfileServiceStub)
         logger.debug("Channel client 'UserProfile' initialized successfully")
+
+    async def close(self) -> None:
+        """Release this instance's pooled gRPC channel ref."""
+        await self.close_channel()
+        logger.debug(
+            "[VALIDATE D1] released channel for %s", self.service_name
+        )  # TODO(validate): remove after prod validation
 
     async def get_user_profile(self) -> dict[str, Any] | None:
         """Get user profile by mission_id (which maps to user_id).
@@ -57,7 +65,7 @@ class GrpcUserProfile(UserProfileStrategy, GrpcClientWrapper, GrpcErrorHandlerMi
                 logger.warning("No user profile found for mission_id: %s", self.mission_id)
                 return None
 
-            user_profile_dict = proto_to_dict(response.user_profile, with_defaults=True)
+            user_profile_dict = ProtoUtils.proto_to_dict(response.user_profile, with_defaults=True)
 
             logger.debug("Retrieved user profile for mission_id: %s", self.mission_id)
             return user_profile_dict

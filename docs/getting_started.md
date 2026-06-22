@@ -16,12 +16,6 @@ Or using [uv](https://astral.sh/uv):
 uv add digitalkin
 ```
 
-For distributed task execution with RabbitMQ, install the optional Taskiq integration:
-
-```bash
-pip install digitalkin[taskiq]
-```
-
 **Requirements**: Python 3.10+
 
 ## Quick Start: Creating Your First Module

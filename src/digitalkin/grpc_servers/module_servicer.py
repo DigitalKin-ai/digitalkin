@@ -1,10 +1,11 @@
 """Module servicer implementation for DigitalKin."""
 
 import asyncio
+import json
 import os
 import time
 from argparse import ArgumentParser, Namespace
-from collections.abc import AsyncGenerator
+from collections.abc import Awaitable, Callable
 from typing import Any, cast
 
 import grpc
@@ -12,40 +13,37 @@ from agentic_mesh_protocol.module.v1 import (
     information_pb2,
     lifecycle_pb2,
     module_service_pb2_grpc,
-    monitoring_pb2,
 )
 from google.protobuf import json_format, struct_pb2
-from pydantic import ValidationError
 
 from digitalkin.core.job_manager.base_job_manager import BaseJobManager
-from digitalkin.grpc_servers.utils.exceptions import ServerError, ServicerError
+from digitalkin.core.job_manager.single_job_manager import SingleJobManager
+from digitalkin.core.task_manager.redis.redis_signal import SharedRedisListener
+from digitalkin.grpc_servers.exceptions import ServicerError
 from digitalkin.logger import logger
-from digitalkin.models.core.job_manager_models import JobManagerMode
-from digitalkin.models.module.module import ModuleCodeModel, ModuleStatus
+from digitalkin.models.module.module import ModuleCodeModel
+from digitalkin.models.module.setup_types import SetupModel
+from digitalkin.models.services.services import ServicesMode
+from digitalkin.models.settings.gateway import get_gateway_settings
+from digitalkin.models.settings.server.servicer import get_module_servicer_settings
 from digitalkin.modules._base_module import BaseModule
 from digitalkin.services.registry import GrpcRegistry, RegistryStrategy
-from digitalkin.services.services_models import ServicesMode
 from digitalkin.services.setup.default_setup import DefaultSetup
 from digitalkin.services.setup.grpc_setup import GrpcSetup
-from digitalkin.services.setup.setup_strategy import SetupServiceError, SetupStrategy, SetupVersionData
+from digitalkin.services.setup.setup_strategy import SetupStrategy, SetupVersionData
 from digitalkin.utils.arg_parser import ArgParser
 from digitalkin.utils.development_mode_action import DevelopmentModeMappingAction
 
 
 class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
-    """Implementation of the ModuleService.
-
-    This servicer handles interactions with a DigitalKin module.
-
-    Attributes:
-        module: The module instance being served.
-        active_jobs: Dictionary tracking active module jobs.
-    """
+    """gRPC ModuleService implementation."""
 
     args: Namespace
     setup: SetupStrategy
     job_manager: BaseJobManager
-    _registry_cache: RegistryStrategy | None = None
+    _registry_cache: RegistryStrategy | None
+    _tool_cache_by_setup: dict[str, tuple[Any, float]]
+    _communication_cache: Any
 
     def _add_parser_args(self, parser: ArgumentParser) -> None:
         super()._add_parser_args(parser)
@@ -59,47 +57,49 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             dest="services_mode",
             help="Define Module Service configurations for endpoints",
         )
-        parser.add_argument(
-            "-jm",
-            "--job-manager",
-            type=JobManagerMode,
-            choices=list(JobManagerMode),
-            default=JobManagerMode.SINGLE,
-            dest="job_manager_mode",
-            help="Define Module job manager configurations for load balancing",
-        )
 
     def __init__(self, module_class: type[BaseModule]) -> None:
         """Initialize the module servicer.
 
         Args:
             module_class: The module type to serve.
+
+        Raises:
+            RuntimeError: If DIGITALKIN_REDIS_URL is not set.
         """
         super().__init__()
         module_class.discover()
         self.module_class = module_class
-        job_manager_class = self.args.job_manager_mode.get_manager_class()
-        self.job_manager = job_manager_class(module_class, self.args.services_mode)
 
-        logger.debug(
-            "ModuleServicer initialized with job manager: %s",
-            self.args.job_manager_mode,
-            extra={"job_manager": self.job_manager},
-        )
+        redis_url = os.environ.get("DIGITALKIN_REDIS_URL")
+        if not redis_url:
+            msg = "DIGITALKIN_REDIS_URL is required"
+            raise RuntimeError(msg)
+        from digitalkin.core.task_manager.redis import RedisClient
+
+        self._redis_client = RedisClient(redis_url)
+        self.job_manager = SingleJobManager(module_class, self.args.services_mode, redis_client=self._redis_client)
+
+        logger.debug("ModuleServicer initialized with SingleJobManager")
         self.setup = GrpcSetup() if self.args.services_mode == ServicesMode.REMOTE else DefaultSetup()
         self._setup_cache: dict[str, tuple[float, SetupVersionData]] = {}
-        self._setup_cache_max = int(os.environ.get("DIGITALKIN_SETUP_CACHE_MAX", "100"))
-        self._setup_cache_ttl = float(os.environ.get("DIGITALKIN_SETUP_CACHE_TTL", "600.0"))
         self._setup_inflight: dict[str, asyncio.Future[SetupVersionData]] = {}
-        self._completion_timeout = float(os.environ.get("DIGITALKIN_COMPLETION_TIMEOUT", "300.0"))
+
+        self._registry_cache = None
+        self._tool_cache_by_setup: dict[str, tuple[Any, float]] = {}
+        self._tool_cache_inflight: dict[str, asyncio.Future[Any]] = {}
+        self._communication_cache = None
 
     async def shutdown(self) -> None:
-        """Release servicer-level resources (GrpcSetup channel, registry cache)."""
+        """Release servicer-level resources (GrpcSetup channel, registry cache, Redis pools)."""
         if isinstance(self.setup, GrpcSetup):
             try:
                 await self.setup.close_channel()
             except Exception:
                 logger.exception("Error closing GrpcSetup channel")
+        # M8: close the Redis connection pools (were leaked on every server stop).
+        logger.info("[VALIDATE M8] closing module servicer Redis pools")  # TODO(validate): remove after prod validation
+        await self._redis_client.close()
 
         if isinstance(self._registry_cache, GrpcRegistry):
             try:
@@ -109,12 +109,98 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             self._registry_cache = None
 
         self._setup_cache.clear()
+        self._tool_cache_by_setup.clear()
+        SetupModel.clear_clean_model_cache()
 
-    def _get_registry(self) -> RegistryStrategy | None:
-        """Get a cached registry instance if configured.
+    def invalidate_setup_cache(self) -> None:
+        """Clear setup cache. Next request re-fetches from services-provider."""
+        self._setup_cache.clear()
+        self._setup_inflight.clear()
+
+    def invalidate_tool_cache(self) -> None:
+        """Clear tool cache. Next request re-resolves tool definitions."""
+        self._tool_cache_by_setup.clear()
+
+    def get_tool_cache(self, setup_id: str) -> Any | None:
+        """TTL'd lookup; ``None`` on miss or expiry.
+
+        Args:
+            setup_id: Setup identifier.
 
         Returns:
-            Cached GrpcRegistry instance if registry config exists, None otherwise.
+            Cached tool definition, or ``None``.
+        """
+        entry = self._tool_cache_by_setup.get(setup_id)
+        if entry is None:
+            return None
+        value, expires_at = entry
+        if time.monotonic() >= expires_at:
+            self._tool_cache_by_setup.pop(setup_id, None)
+            return None
+        return value
+
+    def set_tool_cache(self, setup_id: str, value: Any) -> None:
+        """Insert ``value`` with TTL ``GatewayQueueSettings.toolkit_cache_ttl_s``.
+
+        Args:
+            setup_id: Setup identifier.
+            value: Tool definition object to cache.
+        """
+        if len(self._tool_cache_by_setup) >= get_module_servicer_settings().setup_cache_max:
+            oldest_key = next(iter(self._tool_cache_by_setup))
+            del self._tool_cache_by_setup[oldest_key]
+        self._tool_cache_by_setup[setup_id] = (
+            value,
+            time.monotonic() + get_gateway_settings().queue.toolkit_cache_ttl_s,
+        )
+
+    async def get_or_build_tool_cache(
+        self,
+        setup_id: str,
+        builder: Callable[[], Awaitable[Any]],
+    ) -> Any:
+        """Singleflight TTL'd lookup; ``builder()`` runs at most once per miss.
+
+        Args:
+            setup_id: Setup identifier.
+            builder: Zero-arg coroutine factory; called only on miss.
+
+        Returns:
+            Cached or freshly-built tool cache value.
+        """
+        cached = self.get_tool_cache(setup_id)
+        if cached is not None:
+            return cached
+        inflight = self._tool_cache_inflight.get(setup_id)
+        if inflight is not None:
+            return await inflight
+        loop = asyncio.get_event_loop()
+        fut: asyncio.Future[Any] = loop.create_future()
+        self._tool_cache_inflight[setup_id] = fut
+        try:
+            value = await builder()
+            # Persist regardless of entry count, matching `_setup_cache`'s
+            # content-agnostic policy. An empty result (all tool refs
+            # NOT_FOUND in a degraded registry) is still a real observation
+            # the agent will act on. On recovery the existing
+            # ``invalidate_tool_cache`` hook (called from setup-update at
+            # ``module_servicer.py:367``) clears the entry.
+            if value is not None:
+                self.set_tool_cache(setup_id, value)
+            fut.set_result(value)
+        except Exception as exc:
+            fut.set_exception(exc)
+            raise
+        else:
+            return value
+        finally:
+            self._tool_cache_inflight.pop(setup_id, None)
+
+    def _get_registry(self) -> RegistryStrategy | None:
+        """Return the cached registry instance, or ``None`` if not configured.
+
+        Returns:
+            ``GrpcRegistry`` or ``None``.
         """
         if self._registry_cache is not None:
             return self._registry_cache
@@ -130,14 +216,36 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         self._registry_cache = GrpcRegistry("", "", "", client_config)
         return self._registry_cache
 
+    def _get_communication(self) -> Any:
+        """Return the cached communication instance, or ``None``.
+
+        Returns:
+            ``CommunicationStrategy`` or ``None``.
+        """
+        if self._communication_cache is not None:
+            return self._communication_cache
+
+        comm_config = self.module_class.services_config_params.get("communication")
+        if not comm_config:
+            return None
+
+        client_config = comm_config.get("client_config")
+        if not client_config:
+            return None
+
+        from digitalkin.services.communication.grpc_communication import GrpcCommunication
+
+        self._communication_cache = GrpcCommunication("", "", "", client_config)
+        return self._communication_cache
+
     def _cache_setup(self, setup_id: str, version_data: SetupVersionData) -> None:
-        """Cache setup version data with fetch timestamp, evicting oldest entry if at capacity."""
-        if len(self._setup_cache) >= self._setup_cache_max:
+        """Cache setup version data, evicting oldest entry if at capacity."""
+        if len(self._setup_cache) >= get_module_servicer_settings().setup_cache_max:
             oldest_key = next(iter(self._setup_cache))
             del self._setup_cache[oldest_key]
         self._setup_cache[setup_id] = (time.monotonic(), version_data)
 
-    async def _resolve_setup(self, setup_id: str, mission_id: str) -> SetupVersionData:
+    async def resolve_setup(self, setup_id: str, mission_id: str) -> SetupVersionData:
         """Return setup version data from cache or remote service.
 
         Args:
@@ -149,21 +257,17 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
 
         Raises:
             LookupError: No setup data found for setup_id.
-            SetupServiceError: Remote setup service returned an error.
-            ServerError: gRPC communication failed.
-            ValidationError: Setup data failed validation.
         """
         # Fast path: cache hit within TTL
         if (cached := self._setup_cache.get(setup_id)) is not None:
-            if time.monotonic() - cached[0] < self._setup_cache_ttl:
+            if time.monotonic() - cached[0] < get_module_servicer_settings().setup_cache_ttl:
                 logger.debug("debug:_resolve_setup cache hit setup_id=%s", setup_id)
                 return cached[1]
             del self._setup_cache[setup_id]
             logger.debug("debug:_resolve_setup cache expired setup_id=%s", setup_id)
 
-        # Coalesce concurrent misses: first caller fetches, others await the same future
         if setup_id in self._setup_inflight:
-            logger.debug("debug:_resolve_setup coalesced setup_id=%s", setup_id)
+            logger.debug("debug:resolve_setup coalesced setup_id=%s", setup_id)
             return await self._setup_inflight[setup_id]
 
         loop = asyncio.get_running_loop()
@@ -190,7 +294,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         Raises:
             LookupError: No setup data found for setup_id.
         """
-        logger.debug("debug:_resolve_setup cache miss setup_id=%s mission_id=%s", setup_id, mission_id)
+        logger.debug("debug:resolve_setup cache miss setup_id=%s mission_id=%s", setup_id, mission_id)
         setup_data = await self.setup.get_setup({"setup_id": setup_id, "mission_id": mission_id})
         if setup_data is None:
             raise LookupError(setup_id)
@@ -216,13 +320,10 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             ServicerError: if the setup data is not returned or job creation fails.
         """
         logger.info(
-            "ConfigSetupVersion called for module: '%s'",
+            "ConfigSetupVersion called for module '%s' setup_version=%s",
             self.module_class.__name__,
-            extra={
-                "module_class": self.module_class,
-                "setup_version": request.setup_version,
-                "mission_id": request.mission_id,
-            },
+            request.setup_version.id,
+            extra={"mission_id": request.mission_id},
         )
         setup_version = request.setup_version
         # Invalidate cached setup so concurrent/subsequent starts refetch the reconfigured version
@@ -241,12 +342,10 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             msg = "No config setup data returned."
             raise ServicerError(msg)
 
-        # Extract gRPC request metadata (headers) for propagation
         request_metadata: dict[str, str] = {
             str(k): str(v) for k, v in cast("list[tuple[str, str]]", context.invocation_metadata() or ())
         }
 
-        # create a task to run the module in background
         job_id = await self.job_manager.create_config_setup_instance_job(
             config_setup_data,
             request.mission_id,
@@ -263,33 +362,30 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         updated_setup_data = await self.job_manager.generate_config_setup_module_response(job_id)
         logger.info("Setup response received", extra={"job_id": job_id})
 
-        # Check if response is an error
         if isinstance(updated_setup_data, ModuleCodeModel):
             logger.error(
-                "Config setup failed",
-                extra={"job_id": job_id, "code": updated_setup_data.code, "error_message": updated_setup_data.message},
+                "Config setup failed: code=%s message=%s",
+                updated_setup_data.code,
+                updated_setup_data.message,
+                extra={"job_id": job_id},
             )
             context.set_code(grpc.StatusCode.INTERNAL)
             context.set_details(updated_setup_data.message or "Config setup failed")
             return lifecycle_pb2.ConfigSetupModuleResponse(success=False)
 
         if isinstance(updated_setup_data, dict) and "code" in updated_setup_data:
-            # ModuleCodeModel was serialized to dict
             logger.error(
-                "Config setup failed",
-                extra={
-                    "job_id": job_id,
-                    "code": updated_setup_data["code"],
-                    "error_message": updated_setup_data.get("message"),
-                },
+                "Config setup failed: code=%s message=%s",
+                updated_setup_data["code"],
+                updated_setup_data.get("message"),
+                extra={"job_id": job_id},
             )
             context.set_code(grpc.StatusCode.INTERNAL)
             context.set_details(updated_setup_data.get("message") or "Config setup failed")
             return lifecycle_pb2.ConfigSetupModuleResponse(success=False)
 
-        logger.debug("Updated setup data", extra={"job_id": job_id, "setup_data": updated_setup_data})
+        logger.debug("Updated setup data", extra={"job_id": job_id})
 
-        # Update cache
         self._cache_setup(
             setup_version.setup_id,
             SetupVersionData.model_construct(
@@ -298,369 +394,33 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
                 content=updated_setup_data,
             ),
         )
-        setup_version.content = json_format.ParseDict(  # type: ignore[misc]  # proto __slots__ not fully typed
+        self._tool_cache_by_setup.pop(setup_version.setup_id, None)
+
+        publish_ns = time.time_ns()
+        for action in ("invalidate_setup", "invalidate_tools"):
+            payload = json.dumps({
+                "action": action,
+                "setup_id": setup_version.setup_id,
+                "published_at_ns": publish_ns,
+                "origin": SharedRedisListener.PROCESS_ID,
+            })
+            try:
+                await self._redis_client.publish("signal_ch:_global_", payload)
+            except Exception:
+                logger.warning(
+                    "[gateway] cache-invalidate fan-out publish failed for action=%s "
+                    "setup_id=%s — peers may keep stale cache until TTL",
+                    action,
+                    setup_version.setup_id,
+                    exc_info=True,
+                )
+
+        setup_version.content = json_format.ParseDict(  # type: ignore[misc]
             updated_setup_data,
             struct_pb2.Struct(),
             ignore_unknown_fields=True,
         )
         return lifecycle_pb2.ConfigSetupModuleResponse(success=True, setup_version=setup_version)
-
-    async def StartModule(  # noqa: C901, PLR0911, PLR0912, PLR0915
-        self,
-        request: lifecycle_pb2.StartModuleRequest,
-        context: grpc.aio.ServicerContext,
-    ) -> AsyncGenerator[lifecycle_pb2.StartModuleResponse, Any]:
-        """Start a module execution.
-
-        Args:
-            request: Iterator of start module requests.
-            context: The gRPC context.
-
-        Yields:
-            Responses during module execution.
-
-        Raises:
-            ServicerError: the necessary query didn't work.
-        """
-        logger.info(
-            "StartModule called for module: '%s'",
-            self.module_class.__name__,
-            extra={"module_class": self.module_class, "setup_id": request.setup_id, "mission_id": request.mission_id},
-        )
-        # Process the module input
-        try:
-            input_data = self.module_class.create_input_model(json_format.MessageToDict(request.input))
-        except ValidationError as e:
-            logger.error(
-                "Input validation failed (setup_id=%s, mission_id=%s): %s",
-                request.setup_id,
-                request.mission_id,
-                e,
-                extra={
-                    "setup_id": request.setup_id,
-                    "mission_id": request.mission_id,
-                    "module_class": self.module_class.__name__,
-                    "error_type": "ValidationError",
-                },
-            )
-            context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
-            context.set_details(
-                f"[gRPC-server:ModuleService.StartModule] (setup_id={request.setup_id}, "
-                f"mission_id={request.mission_id}) Input validation failed: {e}"
-            )
-            yield lifecycle_pb2.StartModuleResponse(success=False)
-            return
-
-        try:
-            setup_version = await self._resolve_setup(request.setup_id, request.mission_id)
-        except LookupError:
-            logger.error(
-                "No setup data returned (setup_id=%s, mission_id=%s)",
-                request.setup_id,
-                request.mission_id,
-                extra={
-                    "setup_id": request.setup_id,
-                    "mission_id": request.mission_id,
-                    "module_class": self.module_class.__name__,
-                },
-            )
-            context.set_code(grpc.StatusCode.NOT_FOUND)
-            context.set_details(
-                f"[gRPC-server:ModuleService.StartModule] (setup_id={request.setup_id}, "
-                f"mission_id={request.mission_id}) No setup data found for setup_id"
-            )
-            yield lifecycle_pb2.StartModuleResponse(success=False)
-            return
-        except SetupServiceError as e:
-            logger.error(
-                "SetupServiceError: %s (setup_id=%s, mission_id=%s, mode=%s)",
-                e,
-                request.setup_id,
-                request.mission_id,
-                self.args.services_mode.name,
-                extra={
-                    "setup_id": request.setup_id,
-                    "mission_id": request.mission_id,
-                    "module_class": self.module_class.__name__,
-                    "error_type": "SetupServiceError",
-                },
-                exc_info=True,
-            )
-            context.set_code(grpc.StatusCode.UNAVAILABLE)
-            context.set_details(
-                f"[gRPC-server:ModuleService.StartModule] (setup_id={request.setup_id}, "
-                f"mission_id={request.mission_id}) Setup service unavailable: {e}"
-            )
-            yield lifecycle_pb2.StartModuleResponse(success=False)
-            return
-        except ServerError as e:
-            logger.error(
-                "ServerError fetching setup: %s (setup_id=%s, mission_id=%s)",
-                e,
-                request.setup_id,
-                request.mission_id,
-                extra={
-                    "setup_id": request.setup_id,
-                    "mission_id": request.mission_id,
-                    "module_class": self.module_class.__name__,
-                    "error_type": "ServerError",
-                },
-                exc_info=True,
-            )
-            context.set_code(grpc.StatusCode.UNAVAILABLE)
-            context.set_details(
-                f"[gRPC-server:ModuleService.StartModule] (setup_id={request.setup_id}, "
-                f"mission_id={request.mission_id}) gRPC communication error with Setup service: {e}"
-            )
-            yield lifecycle_pb2.StartModuleResponse(success=False)
-            return
-        except ValidationError as e:
-            logger.error(
-                "ValidationError on setup data: %s (setup_id=%s, mission_id=%s)",
-                e,
-                request.setup_id,
-                request.mission_id,
-                extra={
-                    "setup_id": request.setup_id,
-                    "mission_id": request.mission_id,
-                    "module_class": self.module_class.__name__,
-                    "error_type": "ValidationError",
-                },
-                exc_info=True,
-            )
-            context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
-            context.set_details(
-                f"[gRPC-server:ModuleService.StartModule] (setup_id={request.setup_id}, "
-                f"mission_id={request.mission_id}) Setup data validation failed: {e}"
-            )
-            yield lifecycle_pb2.StartModuleResponse(success=False)
-            return
-        except Exception as e:
-            error_type = type(e).__name__
-            logger.error(
-                "Unexpected %s fetching setup: %s (setup_id=%s, mission_id=%s)",
-                error_type,
-                e,
-                request.setup_id,
-                request.mission_id,
-                extra={
-                    "setup_id": request.setup_id,
-                    "mission_id": request.mission_id,
-                    "module_class": self.module_class.__name__,
-                    "error_type": error_type,
-                },
-                exc_info=True,
-            )
-            context.set_code(grpc.StatusCode.UNKNOWN)
-            context.set_details(
-                f"[gRPC-server:ModuleService.StartModule] (setup_id={request.setup_id}, "
-                f"mission_id={request.mission_id}) Unexpected {error_type} during setup fetch: {e}"
-            )
-            yield lifecycle_pb2.StartModuleResponse(success=False)
-            return
-
-        try:
-            setup_data = await self.module_class.create_setup_model(setup_version.content)
-        except ValidationError as e:
-            logger.error(
-                "Setup model validation failed (setup_id=%s, mission_id=%s): %s",
-                request.setup_id,
-                request.mission_id,
-                e,
-                extra={
-                    "setup_id": request.setup_id,
-                    "mission_id": request.mission_id,
-                    "module_class": self.module_class.__name__,
-                    "error_type": "ValidationError",
-                },
-                exc_info=True,
-            )
-            context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
-            context.set_details(f"[gRPC-server:ModuleService.StartModule] Setup model validation failed: {e}")
-            yield lifecycle_pb2.StartModuleResponse(success=False)
-            return
-
-        # Extract gRPC request metadata (headers) for propagation
-        request_metadata: dict[str, str] = {
-            str(k): str(v) for k, v in cast("list[tuple[str, str]]", context.invocation_metadata() or ())
-        }
-
-        # create a task to run the module in background
-        logger.debug(
-            "debug:StartModule creating job mission_id=%s setup_id=%s setup_version_id=%s",
-            request.mission_id,
-            setup_version.setup_id,
-            setup_version.id,
-        )
-        try:
-            job_id = await self.job_manager.create_module_instance_job(
-                input_data,
-                setup_data,
-                mission_id=request.mission_id,
-                setup_id=setup_version.setup_id,
-                setup_version_id=setup_version.id,
-                request_metadata=request_metadata,
-            )
-        except ConnectionError as e:
-            logger.error(
-                "Failed to create job, database connection error (setup_id=%s, mission_id=%s): %s",
-                request.setup_id,
-                request.mission_id,
-                e,
-                extra={
-                    "setup_id": request.setup_id,
-                    "mission_id": request.mission_id,
-                    "module_class": self.module_class.__name__,
-                },
-            )
-            context.set_code(grpc.StatusCode.UNAVAILABLE)
-            context.set_details(
-                f"[gRPC-server:ModuleService.StartModule] (setup_id={request.setup_id}, "
-                f"mission_id={request.mission_id}) Database connection failed: {e}"
-            )
-            yield lifecycle_pb2.StartModuleResponse(success=False)
-            return
-        except RuntimeError as e:
-            logger.error(
-                "Failed to create job, resource exhausted (setup_id=%s, mission_id=%s): %s",
-                request.setup_id,
-                request.mission_id,
-                e,
-                extra={
-                    "setup_id": request.setup_id,
-                    "mission_id": request.mission_id,
-                    "module_class": self.module_class.__name__,
-                },
-            )
-            context.set_code(grpc.StatusCode.RESOURCE_EXHAUSTED)
-            context.set_details(
-                f"[gRPC-server:ModuleService.StartModule] (setup_id={request.setup_id}, "
-                f"mission_id={request.mission_id}) {e}"
-            )
-            yield lifecycle_pb2.StartModuleResponse(success=False)
-            return
-        except Exception as e:
-            error_type = type(e).__name__
-            logger.error(
-                "Failed to create job, unexpected %s (setup_id=%s, mission_id=%s): %s",
-                error_type,
-                request.setup_id,
-                request.mission_id,
-                e,
-                extra={
-                    "setup_id": request.setup_id,
-                    "mission_id": request.mission_id,
-                    "module_class": self.module_class.__name__,
-                    "error_type": error_type,
-                },
-                exc_info=True,
-            )
-            context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(
-                f"[gRPC-server:ModuleService.StartModule] (setup_id={request.setup_id}, "
-                f"mission_id={request.mission_id}) Failed to create job: {error_type}: {e}"
-            )
-            yield lifecycle_pb2.StartModuleResponse(success=False)
-            return
-
-        if job_id is None:
-            context.set_code(grpc.StatusCode.NOT_FOUND)
-            context.set_details("Failed to create module instance")
-            yield lifecycle_pb2.StartModuleResponse(success=False)
-            return
-
-        try:
-            async with self.job_manager.generate_stream_consumer(job_id) as stream:
-                async for message in stream:
-                    # Early detection of client disconnection
-                    if context.cancelled():
-                        logger.info("Client disconnected", extra={"job_id": job_id})
-                        break
-
-                    if message.get("error", None) is not None:
-                        logger.error("Error in output_data", extra={"message": message})
-                        context.set_code(message["error"]["code"])
-                        context.set_details(message["error"]["error_message"])
-                        yield lifecycle_pb2.StartModuleResponse(success=False, job_id=job_id)
-                        break
-
-                    if message.get("exception", None) is not None:
-                        logger.error("Exception in output_data", extra={"message": message})
-                        context.set_code(message["short_description"])
-                        context.set_details(message["exception"])
-                        yield lifecycle_pb2.StartModuleResponse(success=False, job_id=job_id)
-                        break
-
-                    logger.debug("Yielding message from job %s", job_id)
-                    proto = json_format.ParseDict(message, struct_pb2.Struct(), ignore_unknown_fields=True)
-                    yield lifecycle_pb2.StartModuleResponse(success=True, output=proto, job_id=job_id)
-
-                    if message.get("root", {}).get("protocol") == "end_of_stream":
-                        logger.debug(
-                            "End of stream signal received",
-                            extra={"job_id": job_id, "mission_id": request.mission_id},
-                        )
-                        break
-        finally:
-            try:
-                completion_timeout = self._completion_timeout
-                await asyncio.wait_for(
-                    self.job_manager.wait_for_completion(job_id),
-                    timeout=completion_timeout,
-                )
-            except asyncio.TimeoutError:
-                logger.warning(
-                    "Timeout waiting for job completion, forcing cleanup",
-                    extra={"job_id": job_id, "mission_id": request.mission_id},
-                )
-                # Set cancellation reason on the session if it exists
-                if (session := self.job_manager.tasks_sessions.get(job_id)) is not None:
-                    from digitalkin.models.core.task_monitor import CancellationReason
-
-                    session.cancellation_reason = CancellationReason.TIMEOUT
-            except Exception:
-                logger.exception(
-                    "Error waiting for job completion",
-                    extra={"job_id": job_id, "mission_id": request.mission_id},
-                )
-            try:
-                await self.job_manager.clean_session(job_id, mission_id=request.mission_id)
-            except Exception:
-                logger.exception(
-                    "Error cleaning session",
-                    extra={"job_id": job_id, "mission_id": request.mission_id},
-                )
-
-        logger.info("Job %s finished", job_id)
-
-    async def StopModule(
-        self,
-        request: lifecycle_pb2.StopModuleRequest,
-        context: grpc.ServicerContext,
-    ) -> lifecycle_pb2.StopModuleResponse:
-        """Stop a running module execution.
-
-        Args:
-            request: The stop module request.
-            context: The gRPC context.
-
-        Returns:
-            A response indicating success or failure.
-        """
-        logger.debug(
-            "StopModule called",
-            extra={"module_class": self.module_class.__name__, "job_id": request.job_id},
-        )
-
-        response: bool = await self.job_manager.stop_module(request.job_id)
-        if not response:
-            logger.warning("Job not found for stop request", extra={"job_id": request.job_id})
-            context.set_code(grpc.StatusCode.NOT_FOUND)
-            context.set_details(f"Job {request.job_id} not found")
-            return lifecycle_pb2.StopModuleResponse(success=False)
-
-        logger.debug("Job stopped successfully", extra={"job_id": request.job_id})
-        return lifecycle_pb2.StopModuleResponse(success=True)
 
     async def GetModuleInput(
         self,
@@ -678,15 +438,13 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         """
         logger.debug("GetModuleInput called for module: '%s'", self.module_class.__name__)
 
-        # Get input schema if available
         try:
-            # Convert schema to proto format
             input_schema_proto = await self.module_class.get_input_format(
                 llm_format=request.llm_format,
             )
             input_format_struct = json_format.Parse(
                 text=input_schema_proto,
-                message=struct_pb2.Struct(),  # pylint: disable=no-member
+                message=struct_pb2.Struct(),
                 ignore_unknown_fields=True,
             )
         except NotImplementedError as e:
@@ -707,8 +465,8 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
 
     async def GetModuleSelectInput(
         self,
-        request: information_pb2.GetModuleSelectInputRequest,  # gRPC servicer signature # noqa: ARG002
-        context: grpc.ServicerContext,  # gRPC servicer signature
+        request: information_pb2.GetModuleSelectInputRequest,  # noqa: ARG002
+        context: grpc.ServicerContext,
     ) -> information_pb2.GetModuleSelectInputResponse:
         """Get the trigger selection schema for the module.
 
@@ -719,8 +477,6 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         Returns:
             A response with the module's select input schema.
         """
-        logger.debug("GetModuleSelectInput called for module: '%s'", self.module_class.__name__)
-
         try:
             select_input_schema_proto = await self.module_class.get_select_input_format()
             select_input_format_struct = json_format.Parse(
@@ -755,15 +511,13 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         """
         logger.debug("GetModuleOutput called for module: '%s'", self.module_class.__name__)
 
-        # Get output schema if available
         try:
-            # Convert schema to proto format
             output_schema_proto = await self.module_class.get_output_format(
                 llm_format=request.llm_format,
             )
             output_format_struct = json_format.Parse(
                 text=output_schema_proto,
-                message=struct_pb2.Struct(),  # pylint: disable=no-member
+                message=struct_pb2.Struct(),
                 ignore_unknown_fields=True,
             )
         except NotImplementedError as e:
@@ -798,13 +552,11 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         """
         logger.debug("GetModuleSetup called for module: '%s'", self.module_class.__name__)
 
-        # Get setup schema if available
         try:
-            # Convert schema to proto format
             setup_schema_proto = await self.module_class.get_setup_format(llm_format=request.llm_format)
             setup_format_struct = json_format.Parse(
                 text=setup_schema_proto,
-                message=struct_pb2.Struct(),  # pylint: disable=no-member
+                message=struct_pb2.Struct(),
                 ignore_unknown_fields=True,
             )
         except NotImplementedError as e:
@@ -839,13 +591,11 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         """
         logger.info("GetModuleSecret called for module: '%s'", self.module_class.__name__)
 
-        # Get secret schema if available
         try:
-            # Convert schema to proto format
             secret_schema_proto = await self.module_class.get_secret_format(llm_format=request.llm_format)
             secret_format_struct = json_format.Parse(
                 text=secret_schema_proto,
-                message=struct_pb2.Struct(),  # pylint: disable=no-member
+                message=struct_pb2.Struct(),
                 ignore_unknown_fields=True,
             )
         except NotImplementedError as e:
@@ -880,13 +630,11 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         """
         logger.debug("GetConfigSetupModule called for module: '%s'", self.module_class.__name__)
 
-        # Get setup schema if available
         try:
-            # Convert schema to proto format
             config_setup_schema_proto = await self.module_class.get_config_setup_format(llm_format=request.llm_format)
             config_setup_format_struct = json_format.Parse(
                 text=config_setup_schema_proto,
-                message=struct_pb2.Struct(),  # pylint: disable=no-member
+                message=struct_pb2.Struct(),
                 ignore_unknown_fields=True,
             )
         except NotImplementedError as e:

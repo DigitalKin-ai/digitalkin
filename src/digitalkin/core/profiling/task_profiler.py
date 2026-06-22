@@ -2,22 +2,12 @@
 
 import datetime
 import io
-import logging
 import os
-from enum import Enum
 from pathlib import Path
 from typing import Any
 
 from digitalkin.logger import logger
-
-
-class ProfilerMode(str, Enum):
-    """Profiler backend selection."""
-
-    NONE = "none"
-    VIZTRACER = "viztracer"
-    YAPPI = "yappi"
-    PYINSTRUMENT = "pyinstrument"
+from digitalkin.models.settings.profiling import ProfilerMode, get_profiling_settings
 
 
 class TaskProfiler:
@@ -44,12 +34,36 @@ class TaskProfiler:
         self._profiler: Any = None
         self._yappi_started: bool = False
 
+    @staticmethod
+    def _rotate_profiles(output_dir: str, keep_n: int, suffixes: tuple[str, ...]) -> None:
+        """Trim ``output_dir`` to the most recent ``keep_n`` files by mtime.
+
+        Args:
+            output_dir: Directory containing profile files.
+            keep_n: Number of files to keep. ``<= 0`` disables rotation.
+            suffixes: File extensions to include in rotation (e.g. ``(".html",)``).
+        """
+        if keep_n <= 0:
+            return
+        try:
+            candidates = [p for p in Path(output_dir).iterdir() if p.is_file() and p.suffix in suffixes]
+        except OSError:
+            return
+        if len(candidates) <= keep_n:
+            return
+        candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        for stale in candidates[keep_n:]:
+            try:
+                stale.unlink()
+            except OSError:  # noqa: PERF203
+                logger.debug("Profiler rotation: could not delete %s", stale)
+
     def start(self) -> None:
         """Start the profiler. No-op when mode is NONE."""
         if self._mode == ProfilerMode.NONE:
             return
 
-        try:
+        try:  # noqa: PLW0717
             os.makedirs(self._output_dir, exist_ok=True)
 
             if self._mode == ProfilerMode.VIZTRACER:
@@ -86,7 +100,7 @@ class TaskProfiler:
         if self._profiler is None and not self._yappi_started:
             return
 
-        try:
+        try:  # noqa: PLW0717
             timestamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S%f")
             base = f"{self._task_id}_{timestamp}"
 
@@ -121,39 +135,10 @@ class TaskProfiler:
                 Path(path).write_text(self._profiler.output_html(), encoding="utf-8")
                 logger.info("Pyinstrument profile saved: %s", path)
                 logger.info("Pyinstrument summary:\n%s", self._profiler.output_text())
+                self._rotate_profiles(self._output_dir, get_profiling_settings().profiler_keep_n, (".html",))
 
         except Exception:
             logger.exception("Failed to stop/save profiler %s for task %s", self._mode.value, self._task_id)
         finally:
             self._profiler = None
             self._yappi_started = False
-
-
-class _LogWriter:
-    """Adapter to redirect yappi print_all output to a logger."""
-
-    def __init__(self, target_logger: logging.Logger, level: int) -> None:
-        """Initialize the log writer.
-
-        Args:
-            target_logger: Logger to write to.
-            level: Logging level for output.
-        """
-        self._logger = target_logger
-        self._level = level
-        self._buffer: list[str] = []
-
-    def write(self, text: str) -> None:
-        """Buffer text lines for logging.
-
-        Args:
-            text: Text to write.
-        """
-        if text and text.strip():
-            self._buffer.append(text.rstrip())
-
-    def flush(self) -> None:
-        """Flush buffered lines to the logger."""
-        if self._buffer:
-            self._logger.log(self._level, "Yappi top functions:\n%s", "\n".join(self._buffer))
-            self._buffer.clear()

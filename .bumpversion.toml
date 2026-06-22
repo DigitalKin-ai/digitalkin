@@ -3,7 +3,7 @@
 # https://peps.python.org/pep-0440/
 
 [tool.bumpversion]
-    current_version = "0.4.5"
+    current_version = "1.0.0.dev21"
     parse = """(?x)
     (?P<major>0|[1-9]\\d*)\\.
     (?P<minor>0|[1-9]\\d*)\\.
@@ -14,17 +14,18 @@
     )?                                            # Release section is optional (for final releases)
     """
 
-    # Single serialize pattern - dot is encoded in release_type values
+    # Most complete format MUST be first — bump-my-version derives the
+    # list of bumpable parts from the first serialization pattern.
     serialize = [
-        "{major}.{minor}.{patch}",
         "{major}.{minor}.{patch}{release_type}{release_num}",
+        "{major}.{minor}.{patch}",
     ]
 
     # Configuration for version parts
     [tool.bumpversion.parts.release_type]
-        # Release progression: .dev -> a -> b -> rc -> final -> .post
+        # ORDER MATTERS: PEP 440 release progression — do not sort alphabetically
         optional_value = "final"                                      # When "final", the release_type is omitted
-        values         = [ ".dev", ".post", "a", "b", "final", "rc" ]
+        values         = [ ".dev", "a", "b", "rc", "final", ".post" ]
 
     # Files to update when bumping version
     [[tool.bumpversion.files]]

@@ -25,27 +25,16 @@ pytestmark = pytest.mark.timeout(60)
 
 
 @pytest_asyncio.fixture
-async def mock_signal_service() -> Mock:
+async def mock_signal_service() -> Mock:  # noqa: RUF029
     """Mock TaskManagerStrategy with all required async methods."""
     svc = Mock(spec=TaskManagerStrategy)
     svc.send_signal = AsyncMock(return_value={})
-    svc.subscribe_signals = AsyncMock(return_value=("sub_123", _empty_async_gen()))
-    svc.unsubscribe_signals = AsyncMock()
     svc.close = AsyncMock()
     return svc
 
 
-async def _empty_async_gen():
-    """Async generator that never yields and waits until cancelled."""
-    try:
-        await asyncio.Event().wait()
-    except asyncio.CancelledError:
-        return
-    yield  # pragma: no cover
-
-
 @pytest_asyncio.fixture
-async def mock_module(mock_signal_service: Mock) -> Mock:
+async def mock_module(mock_signal_service: Mock) -> Mock:  # noqa: RUF029
     """Mock BaseModule with signal service in context."""
     module = Mock(spec=BaseModule)
     module.stop = AsyncMock()
@@ -65,7 +54,7 @@ async def mock_module(mock_signal_service: Mock) -> Mock:
 
 
 @pytest_asyncio.fixture
-async def task_session(mock_module: Mock) -> TaskSession:
+async def task_session(mock_module: Mock) -> TaskSession:  # noqa: RUF029
     """Create a standard TaskSession for testing."""
     return TaskSession(
         task_id="task_test_001",
@@ -180,145 +169,6 @@ class TestCancellation:
 
 
 # ============================================================================
-# Test: Signal Listening
-# ============================================================================
-
-
-class TestSignalListening:
-    """Tests for listen_signals()."""
-
-    @pytest.mark.asyncio
-    async def test_listen_signals_subscribes(
-        self, task_session: TaskSession, mock_signal_service: Mock,
-    ) -> None:
-        """Test listen_signals subscribes to the signal service."""
-        # Make subscribe return generator that yields nothing then gets cancelled
-        mock_signal_service.subscribe_signals = AsyncMock(
-            return_value=("sub_123", _empty_async_gen()),
-        )
-
-        listen_task = asyncio.create_task(task_session.listen_signals())
-        await asyncio.sleep(0.05)
-        listen_task.cancel()
-
-        # Generator catches CancelledError and returns gracefully,
-        # so listen_signals completes normally (no CancelledError propagated)
-        await listen_task
-
-        mock_signal_service.subscribe_signals.assert_called_once_with(task_session.task_id)
-
-    @pytest.mark.asyncio
-    async def test_listen_signals_handles_cancel_signal(
-        self, task_session: TaskSession, mock_signal_service: Mock,
-    ) -> None:
-        """Test listen_signals processes cancel action."""
-
-        async def _gen_cancel():
-            yield {"task_id": task_session.task_id, "action": "cancel"}
-
-        mock_signal_service.subscribe_signals = AsyncMock(
-            return_value=("sub_cancel", _gen_cancel()),
-        )
-
-        await task_session.listen_signals()
-
-        assert task_session.cancelled
-        assert task_session.cancellation_reason == CancellationReason.SIGNAL_SERVICE_CANCEL
-
-    @pytest.mark.asyncio
-    async def test_listen_signals_ignores_other_task_ids(
-        self, task_session: TaskSession, mock_signal_service: Mock,
-    ) -> None:
-        """Test listen_signals ignores signals for different task_ids."""
-
-        async def _gen_wrong_task():
-            yield {"task_id": "other_task", "action": "cancel"}
-
-        mock_signal_service.subscribe_signals = AsyncMock(
-            return_value=("sub_wrong", _gen_wrong_task()),
-        )
-
-        # Generator yields one signal then exits, so listen_signals completes normally
-        await task_session.listen_signals()
-
-        assert not task_session.cancelled
-
-    @pytest.mark.asyncio
-    async def test_listen_signals_ignores_none_signals(
-        self, task_session: TaskSession, mock_signal_service: Mock,
-    ) -> None:
-        """Test listen_signals skips None signals."""
-
-        async def _gen_none():
-            yield None
-
-        mock_signal_service.subscribe_signals = AsyncMock(
-            return_value=("sub_none", _gen_none()),
-        )
-
-        # Generator yields one None then exits, so listen_signals completes normally
-        await task_session.listen_signals()
-
-        assert not task_session.cancelled
-
-    @pytest.mark.asyncio
-    async def test_listen_signals_stops_on_stream_closed(
-        self, task_session: TaskSession, mock_signal_service: Mock,
-    ) -> None:
-        """Test listen_signals breaks when stream_closed is set."""
-
-        async def _gen_slow():
-            await asyncio.sleep(0.05)
-            yield {"task_id": task_session.task_id, "action": "cancel"}
-
-        mock_signal_service.subscribe_signals = AsyncMock(
-            return_value=("sub_slow", _gen_slow()),
-        )
-
-        task_session.close_stream()
-        await task_session.listen_signals()
-
-        # Should not have processed the cancel (stream was already closed)
-        # Note: depends on timing - the signal listener checks cancelled || stream_closed
-
-    @pytest.mark.asyncio
-    async def test_listen_signals_unsubscribes_on_exit(
-        self, task_session: TaskSession, mock_signal_service: Mock,
-    ) -> None:
-        """Test listen_signals unsubscribes on completion."""
-
-        async def _gen_empty():
-            return
-            yield  # Make it a generator  # pragma: no cover
-
-        mock_signal_service.subscribe_signals = AsyncMock(
-            return_value=("sub_cleanup", _gen_empty()),
-        )
-
-        await task_session.listen_signals()
-
-        mock_signal_service.unsubscribe_signals.assert_called_once_with("sub_cleanup")
-
-    @pytest.mark.asyncio
-    async def test_listen_signals_exception_logged_not_raised(
-        self, task_session: TaskSession, mock_signal_service: Mock,
-    ) -> None:
-        """Test listen_signals logs fatal errors but doesn't crash."""
-
-        async def _gen_error():
-            msg = "generator exploded"
-            raise RuntimeError(msg)
-            yield  # pragma: no cover
-
-        mock_signal_service.subscribe_signals = AsyncMock(
-            return_value=("sub_error", _gen_error()),
-        )
-
-        # Should complete without raising
-        await task_session.listen_signals()
-
-
-# ============================================================================
 # Test: Stream Control
 # ============================================================================
 
@@ -354,7 +204,7 @@ class TestExceptionRecording:
         """Test exception recording."""
         try:
             msg = "test error"
-            raise ValueError(msg)
+            raise ValueError(msg)  # noqa: TRY301
         except ValueError as e:
             task_session.record_exception(e)
 
@@ -442,3 +292,76 @@ class TestCleanup:
 
         assert task_session.module is None
         assert task_session._cleanup_done
+
+
+# ============================================================================
+# Regression: config-setup TaskSession with no task_manager (the dev13 bug)
+# ============================================================================
+
+
+@pytest_asyncio.fixture
+async def mock_module_no_task_manager() -> Mock:  # noqa: RUF029
+    """Mock BaseModule mirroring the config-setup path: ``context.task_manager`` is ``None``.
+
+    ``SingleJobManager.create_config_setup_instance_job`` constructs a TaskSession before
+    any task_manager is wired (config jobs don't need signals); this fixture reproduces that.
+    """
+    module = Mock(spec=BaseModule)
+    module.stop = AsyncMock()
+    module.context = Mock()
+    module.context.session = Mock()
+    module.context.session.setup_id = "setup:cfg"
+    module.context.session.setup_version_id = "setup_version:cfg"
+    module.context.session.current_ids = Mock(return_value={
+        "mission_id": "missions:test",
+        "task_id": "cfg_task",
+        "setup_id": "setup:cfg",
+        "setup_version_id": "setup_version:cfg",
+    })
+    module.context.task_manager = None
+    module.context.cleanup = AsyncMock()
+    return module
+
+
+class TestTaskSessionNoTaskManager:
+    """A config-setup TaskSession must construct without an assert and degrade gracefully."""
+
+    async def test_constructs_without_assertion_error(self, mock_module_no_task_manager: Mock) -> None:
+        # Regression: a stray ``assert module.context.task_manager is not None`` previously broke
+        # ``SingleJobManager.create_config_setup_instance_job`` for every config call.
+        session = TaskSession(
+            task_id="cfg_task",
+            mission_id="missions:test",
+            module=mock_module_no_task_manager,
+        )
+        assert session.signal_service is None
+
+    async def test_handle_cancel_skips_send_signal(self, mock_module_no_task_manager: Mock) -> None:
+        session = TaskSession(
+            task_id="cfg_task",
+            mission_id="missions:test",
+            module=mock_module_no_task_manager,
+        )
+        # Must complete without raising AND without emitting the noisy "best-effort failed" WARNING.
+        await session._handle_cancel(CancellationReason.SIGNAL_SERVICE_CANCEL)
+
+    async def test_handle_stop_skips_send_signal(self, mock_module_no_task_manager: Mock) -> None:
+        session = TaskSession(
+            task_id="cfg_task",
+            mission_id="missions:test",
+            module=mock_module_no_task_manager,
+        )
+        await session._handle_stop()
+
+    async def test_base_task_manager_send_signal_returns_false(self, mock_module_no_task_manager: Mock) -> None:
+        from digitalkin.core.task_manager.local_task_manager import LocalTaskManager
+        mgr = LocalTaskManager()
+        session = TaskSession(
+            task_id="cfg_task",
+            mission_id="missions:test",
+            module=mock_module_no_task_manager,
+        )
+        mgr.tasks_sessions["cfg_task"] = session
+        # No signal_service -> graceful False, mirroring the "task not found" branch.
+        result = await mgr.send_signal("cfg_task", "missions:test", "STOP", {})
+        assert result is False

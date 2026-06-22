@@ -1,0 +1,134 @@
+"""Bulkhead pattern — per-service concurrency limits.
+
+Prevents one slow service from consuming all available concurrency.
+Each service gets its own ``asyncio.Semaphore`` with a configurable
+limit. When the limit is reached, callers wait up to ``acquire_timeout``
+before raising ``BulkheadFullError``.
+
+Usage in ModuleContext or service wrapper::
+
+    bulkhead = Bulkhead.for_service("storage")
+    async with bulkhead:
+        await storage.read(...)
+"""
+
+from __future__ import annotations
+
+import asyncio
+import os
+from typing import ClassVar
+
+from typing_extensions import Self
+
+from digitalkin.core.exceptions import BulkheadFullError
+from digitalkin.models.settings.resilience import get_bulkhead_settings
+
+
+class Bulkhead:
+    """Per-service concurrency limiter with timeout.
+
+    Implements the bulkhead pattern: each service gets isolated concurrency
+    so a failing/slow service cannot starve others. Singleton per service_id.
+    """
+
+    _instances: ClassVar[dict[str, Bulkhead]] = {}
+    _MAX_INSTANCES: ClassVar[int] = 256
+
+    _service_id: str
+    _semaphore: asyncio.Semaphore
+    _max_concurrent: int
+    _acquire_timeout: float
+    _active: int
+
+    @classmethod
+    def for_service(cls, service_id: str) -> Bulkhead:
+        """Get or create a bulkhead for a service.
+
+        Limits are sourced from ``BulkheadSettings`` (env
+        ``DIGITALKIN_BULKHEAD_DEFAULT_MAX`` and ``_TIMEOUT``), with a per-service
+        override via ``DIGITALKIN_BULKHEAD_{SERVICE_ID}_MAX``.
+
+        Args:
+            service_id: Service identifier (e.g., "storage", "registry").
+
+        Returns:
+            Bulkhead for this service.
+        """
+        if service_id in cls._instances:
+            return cls._instances[service_id]
+
+        if len(cls._instances) >= cls._MAX_INSTANCES:
+            oldest = next(iter(cls._instances))
+            del cls._instances[oldest]
+
+        settings = get_bulkhead_settings()
+        # Per-service override has a dynamic env-var suffix, so it cannot be a
+        # static settings field — read it directly, falling back to the setting.
+        env_max = os.environ.get(f"DIGITALKIN_BULKHEAD_{service_id.upper()}_MAX")
+        max_concurrent = int(env_max) if env_max is not None else settings.default_max
+
+        inst = cls(
+            service_id=service_id,
+            max_concurrent=max_concurrent,
+            acquire_timeout=settings.timeout,
+        )
+        cls._instances[service_id] = inst
+        return inst
+
+    @classmethod
+    def remove(cls, service_id: str) -> None:
+        """Remove a specific bulkhead instance."""
+        cls._instances.pop(service_id, None)
+
+    @classmethod
+    def clear_all(cls) -> None:
+        """Remove all bulkhead instances. For shutdown and testing."""
+        cls._instances.clear()
+
+    def __init__(self, service_id: str, max_concurrent: int, acquire_timeout: float) -> None:
+        """Initialize the bulkhead.
+
+        Args:
+            service_id: Service identifier.
+            max_concurrent: Maximum concurrent calls allowed.
+            acquire_timeout: Seconds to wait before raising BulkheadFullError.
+        """
+        self._service_id = service_id
+        self._max_concurrent = max_concurrent
+        self._acquire_timeout = acquire_timeout
+        self._semaphore = asyncio.Semaphore(max_concurrent)
+        self._active = 0
+
+    async def __aenter__(self) -> Self:
+        """Acquire a slot, waiting up to acquire_timeout.
+
+        Returns:
+            Self for use as async context manager.
+
+        Raises:
+            BulkheadFullError: If the semaphore cannot be acquired in time.
+        """
+        try:
+            acquired = await asyncio.wait_for(self._semaphore.acquire(), timeout=self._acquire_timeout)
+        except asyncio.TimeoutError:
+            active, limit, timeout = self._active, self._max_concurrent, self._acquire_timeout
+            msg = f"Bulkhead full for {self._service_id}: {active}/{limit} active, waited {timeout}s"
+            raise BulkheadFullError(msg) from None
+        if acquired:
+            self._active += 1
+        return self
+
+    async def __aexit__(self, *_exc: object) -> None:
+        """Release the slot."""
+        self._semaphore.release()
+        self._active -= 1
+
+    @property
+    def active(self) -> int:
+        """Number of currently active calls."""
+        return self._active
+
+    @property
+    def available(self) -> int:
+        """Number of available slots."""
+        return self._max_concurrent - self._active

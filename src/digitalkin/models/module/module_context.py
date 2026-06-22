@@ -1,22 +1,22 @@
 """Define the module context used in the triggers."""
 
-import os
 from collections.abc import AsyncGenerator, Callable
 from datetime import tzinfo
 from types import SimpleNamespace
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from google.protobuf import json_format
+
 from digitalkin.logger import logger
 from digitalkin.models.module.request_metadata import RequestMetadata
 from digitalkin.models.module.tool_cache import ToolCache, ToolDefinition, ToolModuleInfo
-from digitalkin.services.agent.agent_strategy import AgentStrategy
+from digitalkin.models.settings.module import get_module_settings
 from digitalkin.services.communication.communication_strategy import CommunicationStrategy
 from digitalkin.services.cost.cost_strategy import CostStrategy
 from digitalkin.services.filesystem.filesystem_strategy import FilesystemStrategy
 from digitalkin.services.identity.identity_strategy import IdentityStrategy
 from digitalkin.services.registry.registry_strategy import RegistryStrategy
-from digitalkin.services.snapshot.snapshot_strategy import SnapshotStrategy
 from digitalkin.services.storage.storage_strategy import StorageStrategy
 from digitalkin.services.task_manager.task_manager_strategy import TaskManagerStrategy
 from digitalkin.services.user_profile.user_profile_strategy import UserProfileStrategy
@@ -37,10 +37,12 @@ class Session(SimpleNamespace):
         mission_id: str,
         setup_id: str,
         setup_version_id: str,
-        timezone: tzinfo | None = None,
         **kwargs: dict[str, Any],
     ) -> None:
         """Init Module Session.
+
+        Timezone comes from ``ModuleSettings.timezone`` (env
+        ``DIGITALKIN_MODULE_TIMEZONE``).
 
         Raises:
             ValueError: If mandatory args are missing.
@@ -62,7 +64,7 @@ class Session(SimpleNamespace):
         self.mission_id = mission_id
         self.setup_id = setup_id
         self.setup_version_id = setup_version_id
-        self.timezone = timezone or ZoneInfo(os.environ.get("DIGITALKIN_TIMEZONE", "Europe/Paris"))
+        self.timezone = ZoneInfo(get_module_settings().timezone)
 
         super().__init__(**kwargs)
 
@@ -88,15 +90,13 @@ class ModuleContext:
     """
 
     # services list
-    agent: AgentStrategy
     communication: CommunicationStrategy
     cost: CostStrategy
     filesystem: FilesystemStrategy
     identity: IdentityStrategy
     registry: RegistryStrategy
-    snapshot: SnapshotStrategy
     storage: StorageStrategy
-    task_manager: TaskManagerStrategy
+    task_manager: TaskManagerStrategy | None
     user_profile: UserProfileStrategy
 
     session: Session
@@ -104,20 +104,18 @@ class ModuleContext:
     metadata: SimpleNamespace
     helpers: SimpleNamespace
     state: SimpleNamespace
+    shared: dict[str, Any]
     tool_cache: ToolCache
     request_metadata: RequestMetadata
 
     def __init__(  # All service strategies are mandatory constructor args # noqa: PLR0913, PLR0917
         self,
-        agent: AgentStrategy,
         communication: CommunicationStrategy,
         cost: CostStrategy,
         filesystem: FilesystemStrategy,
         identity: IdentityStrategy,
         registry: RegistryStrategy,
-        snapshot: SnapshotStrategy,
         storage: StorageStrategy,
-        task_manager: TaskManagerStrategy,
         user_profile: UserProfileStrategy,
         session: dict[str, Any],
         metadata: dict[str, Any] | None = None,
@@ -125,34 +123,36 @@ class ModuleContext:
         callbacks: dict[str, Any] | None = None,
         tool_cache: ToolCache | None = None,
         request_metadata: dict[str, str] | None = None,
+        borrowed: frozenset[str] | None = None,
+        shared: dict[str, Any] | None = None,
+        task_manager: TaskManagerStrategy | None = None,
     ) -> None:
         """Register mandatory services, session, metadata and callbacks.
 
         Args:
-            agent: AgentStrategy.
             communication: CommunicationStrategy.
             cost: CostStrategy.
             filesystem: FilesystemStrategy.
             identity: IdentityStrategy.
             registry: RegistryStrategy.
-            snapshot: SnapshotStrategy.
             storage: StorageStrategy.
-            task_manager: TaskManagerStrategy.
             user_profile: UserProfileStrategy.
+            task_manager: Optional, injected by SingleJobManager (RedisTaskManager).
             metadata: dict defining differents Module metadata.
             helpers: dict different user defined helpers.
             session: dict referring the session IDs or informations.
             callbacks: Functions allowing user to agent interaction.
             tool_cache: ToolCache with pre-resolved tool references from setup.
             request_metadata: gRPC request metadata (headers) from the incoming request.
+            borrowed: Strategy names that are shared singletons — skip .close() on cleanup.
+            shared: Server-lifetime cache shared across all module instances.
         """
-        self.agent = agent
+        self._borrowed = (borrowed or frozenset()) | frozenset({"task_manager"})
         self.communication = communication
         self.cost = cost
         self.filesystem = filesystem
         self.identity = identity
         self.registry = registry
-        self.snapshot = snapshot
         self.storage = storage
         self.task_manager = task_manager
         self.user_profile = user_profile
@@ -162,6 +162,7 @@ class ModuleContext:
         self.helpers = SimpleNamespace(**(helpers or {}))
         self.callbacks = SimpleNamespace(**(callbacks or {}))
         self.state = SimpleNamespace()
+        self.shared = shared if shared is not None else {}
         self.tool_cache = tool_cache or ToolCache()
         self.request_metadata = RequestMetadata(request_metadata)
 
@@ -344,7 +345,7 @@ class ModuleContext:
         ) -> AsyncGenerator[dict, None]:  # Tool kwargs are dynamically typed
             kwargs["protocol"] = protocol
             wrapped_input = {"root": kwargs}
-            async for response in communication.call_module(
+            async for output_proto in communication.call_module(
                 module_address=tool_module_info.address,
                 module_port=tool_module_info.port,
                 input_data=wrapped_input,
@@ -352,7 +353,7 @@ class ModuleContext:
                 mission_id=session.mission_id,
                 metadata=grpc_metadata,
             ):
-                yield response
+                yield json_format.MessageToDict(output_proto)
 
         tool_function.__name__ = tool_module_info.slug + "__" + tool_def.name
         tool_function.__doc__ = tool_def.description
@@ -360,20 +361,23 @@ class ModuleContext:
         return tool_function
 
     async def cleanup(self) -> None:
-        """Close all service strategies and release their resources."""
-        for service in (
-            self.task_manager,
-            self.communication,
-            self.cost,
-            self.storage,
-            self.registry,
-            self.filesystem,
-            self.user_profile,
-            self.agent,
-            self.identity,
-            self.snapshot,
-        ):
-            if service is not None:
+        """Close owned service strategies and release their resources.
+
+        Borrowed strategies (shared singletons) are skipped — they are
+        closed at server shutdown, not per-request.
+        """
+        owned = (
+            ("task_manager", self.task_manager),
+            ("communication", self.communication),
+            ("cost", self.cost),
+            ("storage", self.storage),
+            ("registry", self.registry),
+            ("filesystem", self.filesystem),
+            ("user_profile", self.user_profile),
+            ("identity", self.identity),
+        )
+        for name, service in owned:
+            if service is not None and name not in self._borrowed:
                 try:
                     await service.close()
                 except Exception:

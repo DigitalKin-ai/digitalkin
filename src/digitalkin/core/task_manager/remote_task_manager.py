@@ -12,7 +12,7 @@ class RemoteTaskManager(BaseTaskManager):
     """Task manager for distributed/remote execution.
 
     Only manages task metadata and signals - actual execution happens in remote workers.
-    Suitable for horizontally scaled deployments with Taskiq/Celery workers.
+    Suitable for horizontally scaled deployments with remote workers.
     """
 
     async def create_task(
@@ -38,11 +38,13 @@ class RemoteTaskManager(BaseTaskManager):
             RuntimeError: If task overload
         """
         await self._acquire_task_slot(coro)
-        try:
+        registered = False
+        try:  # noqa: PLW0717
             # Validate and register session atomically
             async with self._tasks_lock:
                 await self._validate_task_creation(task_id, mission_id, coro)
                 self._create_session(task_id, mission_id, module)
+                registered = True
 
             logger.info(
                 "Registering remote task: '%s'",
@@ -57,26 +59,27 @@ class RemoteTaskManager(BaseTaskManager):
             coro.close()
 
             logger.info(
-                "Remote task registered: '%s'",
+                "Remote task registered: '%s' (total_sessions=%d)",
                 task_id,
-                extra={
-                    "mission_id": mission_id,
-                    "task_id": task_id,
-                    "total_sessions": len(self.tasks_sessions),
-                },
+                len(self.tasks_sessions),
+                extra={"mission_id": mission_id, "task_id": task_id},
             )
 
-        except Exception as e:
+        except Exception:
             coro.close()
-            # Release semaphore if session was never registered (cleanup won't release it)
-            if task_id not in self.tasks_sessions:
-                self._task_slot.release()
-            else:
+            if registered:
                 await self._cleanup_task(task_id, mission_id=mission_id)
-            logger.error(
+            else:
+                # H2: this call never registered a session (e.g. duplicate task_id) —
+                # undo only THIS call's admission; never touch the live task.
+                logger.info(
+                    "[VALIDATE H2] remote create rejected without touching live task: '%s'",
+                    task_id,
+                )  # TODO(validate): remove after prod validation
+                self._release_admission()
+            logger.exception(
                 "Failed to register remote task: '%s'",
                 task_id,
-                extra={"mission_id": mission_id, "task_id": task_id, "error": str(e)},
-                exc_info=True,
+                extra={"mission_id": mission_id, "task_id": task_id},
             )
             raise

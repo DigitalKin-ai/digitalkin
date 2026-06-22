@@ -5,7 +5,7 @@ as well as env var configuration and closed-stream rejection.
 """
 
 import asyncio
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
 import pytest_asyncio
@@ -32,17 +32,23 @@ class _FakeOutput(BaseModel):
 
 
 def _make_manager(
+    monkeypatch: pytest.MonkeyPatch,
     strategy: BackpressureStrategy = BackpressureStrategy.BLOCK,
     timeout: float = 30.0,
 ) -> SingleJobManager:
     """Create a SingleJobManager with the given backpressure settings.
 
-    Uses object.__new__ to skip __init__, then sets up a mock _task_manager
-    so the tasks_sessions property (delegated from base class) works.
+    Sets the env vars that JobManagerSettings reads, clears the factory cache,
+    then uses ``object.__new__`` to skip ``__init__`` and wires a mock task
+    manager so the ``tasks_sessions`` property works.
     """
+    from digitalkin.models.settings.task_manager import get_job_manager_settings
+
+    monkeypatch.setenv("DIGITALKIN_JOB_MANAGER_BACKPRESSURE_STRATEGY", strategy.value)
+    monkeypatch.setenv("DIGITALKIN_JOB_MANAGER_BACKPRESSURE_TIMEOUT", str(timeout))
+    get_job_manager_settings.cache_clear()
+
     mgr = object.__new__(SingleJobManager)
-    mgr._backpressure_strategy = strategy
-    mgr._backpressure_timeout = timeout
 
     # tasks_sessions is a property on BaseJobManager that delegates to _task_manager
     mock_task_manager = Mock()
@@ -61,8 +67,6 @@ def _make_session(queue_maxsize: int = 2) -> TaskSession:
     module.context.session.setup_version_id = "sv:test"
     module.context.session.current_ids = Mock(return_value={"task_id": "t", "mission_id": "m"})
     module.context.task_manager = Mock(spec=TaskManagerStrategy)
-    module.context.task_manager.subscribe_signals = AsyncMock()
-    module.context.task_manager.unsubscribe_signals = AsyncMock()
     module.context.task_manager.send_signal = AsyncMock()
     module.context.cleanup = AsyncMock()
     return TaskSession("job-1", "mission-1", module, queue_maxsize=queue_maxsize)
@@ -74,9 +78,9 @@ def _make_session(queue_maxsize: int = 2) -> TaskSession:
 
 
 @pytest.mark.asyncio
-async def test_block_waits_and_succeeds() -> None:
+async def test_block_waits_and_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
     """BLOCK: queue full, consumer reads, put succeeds within timeout."""
-    mgr = _make_manager(BackpressureStrategy.BLOCK, timeout=5.0)
+    mgr = _make_manager(monkeypatch, BackpressureStrategy.BLOCK, timeout=5.0)
     session = _make_session(queue_maxsize=1)
     mgr.tasks_sessions["job-1"] = session
 
@@ -98,9 +102,9 @@ async def test_block_waits_and_succeeds() -> None:
 
 
 @pytest.mark.asyncio
-async def test_block_timeout_raises() -> None:
+async def test_block_timeout_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     """BLOCK: queue full, no consumer, timeout raises asyncio.TimeoutError."""
-    mgr = _make_manager(BackpressureStrategy.BLOCK, timeout=0.1)
+    mgr = _make_manager(monkeypatch, BackpressureStrategy.BLOCK, timeout=0.1)
     session = _make_session(queue_maxsize=1)
     mgr.tasks_sessions["job-1"] = session
 
@@ -116,9 +120,9 @@ async def test_block_timeout_raises() -> None:
 
 
 @pytest.mark.asyncio
-async def test_drop_oldest_preserves_current_behavior() -> None:
+async def test_drop_oldest_preserves_current_behavior(monkeypatch: pytest.MonkeyPatch) -> None:
     """DROP_OLDEST: drops oldest message when queue is full."""
-    mgr = _make_manager(BackpressureStrategy.DROP_OLDEST, timeout=30.0)
+    mgr = _make_manager(monkeypatch, BackpressureStrategy.DROP_OLDEST, timeout=30.0)
     session = _make_session(queue_maxsize=1)
     mgr.tasks_sessions["job-1"] = session
 
@@ -137,9 +141,9 @@ async def test_drop_oldest_preserves_current_behavior() -> None:
 
 
 @pytest.mark.asyncio
-async def test_reject_discards_new_message() -> None:
+async def test_reject_discards_new_message(monkeypatch: pytest.MonkeyPatch) -> None:
     """REJECT: queue unchanged, new message discarded."""
-    mgr = _make_manager(BackpressureStrategy.REJECT)
+    mgr = _make_manager(monkeypatch, BackpressureStrategy.REJECT)
     session = _make_session(queue_maxsize=1)
     mgr.tasks_sessions["job-1"] = session
 
@@ -168,28 +172,34 @@ def _mock_module_class() -> Mock:
 
 def test_env_var_configuration(monkeypatch: pytest.MonkeyPatch) -> None:
     """Strategy and timeout are read from env vars in __init__."""
-    monkeypatch.setenv("DIGITALKIN_BACKPRESSURE_STRATEGY", "reject")
-    monkeypatch.setenv("DIGITALKIN_BACKPRESSURE_TIMEOUT", "42.5")
+    monkeypatch.setenv("DIGITALKIN_JOB_MANAGER_BACKPRESSURE_STRATEGY", "reject")
+    monkeypatch.setenv("DIGITALKIN_JOB_MANAGER_BACKPRESSURE_TIMEOUT", "42.5")
 
-    from digitalkin.services.services_models import ServicesMode
+    from digitalkin.models.services.services import ServicesMode
 
-    mgr = SingleJobManager(_mock_module_class(), ServicesMode.LOCAL)
+    SingleJobManager(_mock_module_class(), ServicesMode.LOCAL, MagicMock())
 
-    assert mgr._backpressure_strategy == BackpressureStrategy.REJECT
-    assert mgr._backpressure_timeout == 42.5
+    from digitalkin.models.settings.task_manager import get_job_manager_settings
+
+    settings = get_job_manager_settings()
+    assert settings.backpressure_strategy == BackpressureStrategy.REJECT
+    assert settings.backpressure_timeout == 42.5
 
 
 def test_env_var_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     """Default strategy is BLOCK, default timeout is 30.0."""
-    monkeypatch.delenv("DIGITALKIN_BACKPRESSURE_STRATEGY", raising=False)
-    monkeypatch.delenv("DIGITALKIN_BACKPRESSURE_TIMEOUT", raising=False)
+    monkeypatch.delenv("DIGITALKIN_JOB_MANAGER_BACKPRESSURE_STRATEGY", raising=False)
+    monkeypatch.delenv("DIGITALKIN_JOB_MANAGER_BACKPRESSURE_TIMEOUT", raising=False)
 
-    from digitalkin.services.services_models import ServicesMode
+    from digitalkin.models.services.services import ServicesMode
 
-    mgr = SingleJobManager(_mock_module_class(), ServicesMode.LOCAL)
+    SingleJobManager(_mock_module_class(), ServicesMode.LOCAL, MagicMock())
 
-    assert mgr._backpressure_strategy == BackpressureStrategy.BLOCK
-    assert mgr._backpressure_timeout == 300.0
+    from digitalkin.models.settings.task_manager import get_job_manager_settings
+
+    settings = get_job_manager_settings()
+    assert settings.backpressure_strategy == BackpressureStrategy.BLOCK
+    assert settings.backpressure_timeout == 300.0
 
 
 # ============================================================================
@@ -199,9 +209,9 @@ def test_env_var_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("strategy", list(BackpressureStrategy))
-async def test_closed_stream_rejects(strategy: BackpressureStrategy) -> None:
+async def test_closed_stream_rejects(strategy: BackpressureStrategy, monkeypatch: pytest.MonkeyPatch) -> None:
     """Write is rejected after stream is closed, regardless of strategy."""
-    mgr = _make_manager(strategy)
+    mgr = _make_manager(monkeypatch, strategy)
     session = _make_session(queue_maxsize=10)
     session.close_stream()
     mgr.tasks_sessions["job-1"] = session
@@ -213,9 +223,9 @@ async def test_closed_stream_rejects(strategy: BackpressureStrategy) -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("strategy", list(BackpressureStrategy))
-async def test_missing_session_rejects(strategy: BackpressureStrategy) -> None:
+async def test_missing_session_rejects(strategy: BackpressureStrategy, monkeypatch: pytest.MonkeyPatch) -> None:
     """Write is rejected when session doesn't exist, regardless of strategy."""
-    mgr = _make_manager(strategy)
+    mgr = _make_manager(monkeypatch, strategy)
 
     # Should not raise
     await mgr.add_to_queue("nonexistent", _FakeOutput(value="ignored"))

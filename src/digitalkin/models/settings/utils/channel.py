@@ -7,7 +7,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, NonNegativeInt, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from digitalkin.grpc_servers.utils.exceptions import ConfigurationError, SecurityError
+from digitalkin.grpc_servers.exceptions import ConfigurationError, SecurityError
 
 
 class ControlFlow(str, Enum):
@@ -81,7 +81,7 @@ class BaseChannelSettings(BaseSettings):
 
     @property
     def address(self) -> str:
-        """Get the server address.
+        """The server address.
 
         Returns:
             The formatted address string

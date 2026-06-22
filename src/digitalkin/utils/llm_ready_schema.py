@@ -1,7 +1,4 @@
-"""LLM format schema for Pydantic models.
-
-This module provides functionality to generate JSON schemas for Pydantic models ready for LLMs.
-"""
+"""LLM-ready JSON schema generation for Pydantic models."""
 
 import copy
 from typing import Any
@@ -28,52 +25,53 @@ class CustomOrderSchema(GenerateJsonSchema):
             The sorted schema value.
         """
         if isinstance(value, dict):
-            # Define your preferred order
             preferred = ["title", "description", "type", "examples", "properties"]
-            # Collect all keys, putting preferred ones first
             keys = preferred + [k for k in value if k not in preferred]
-            # Recurse for each value
             return {k: self.sort(value[k], k) for k in keys if k in value}
         if isinstance(value, list):
             return [self.sort(v) for v in value]
         return value
 
 
-def inline_refs(schema: dict) -> dict:
-    """Recursively resolve and inline all $ref in the schema.
+class LlmReadySchema:
+    """Generate and inline JSON schemas for LLM consumption."""
 
-    Args:
-        schema: The JSON schema to inline.
+    @staticmethod
+    def inline_refs(schema: dict) -> dict:
+        """Recursively resolve and inline all $ref in the schema.
 
-    Returns:
-        The inlined JSON schema.
-    """
-    schema = copy.deepcopy(schema)
-    defs = schema.pop("$defs", {})
+        Args:
+            schema: The JSON schema to inline.
 
-    def _resolve(obj: Any) -> Any:
-        if isinstance(obj, dict):
-            if "$ref" in obj:
-                ref = obj["$ref"]
-                if ref.startswith("#/$defs/"):
-                    key = ref.split("/")[-1]
-                    return _resolve(defs[key])
-            return {k: _resolve(v) for k, v in obj.items()}
-        if isinstance(obj, list):
-            return [_resolve(item) for item in obj]
-        return obj
+        Returns:
+            The inlined JSON schema.
+        """
+        schema = copy.deepcopy(schema)
+        defs = schema.pop("$defs", {})
 
-    return _resolve(schema)
+        def _resolve(obj: Any) -> Any:
+            if isinstance(obj, dict):
+                if "$ref" in obj:
+                    ref = obj["$ref"]
+                    if ref.startswith("#/$defs/"):
+                        key = ref.split("/")[-1]
+                        return _resolve(defs[key])
+                return {k: _resolve(v) for k, v in obj.items()}
+            if isinstance(obj, list):
+                return [_resolve(item) for item in obj]
+            return obj
 
+        return _resolve(schema)
 
-def llm_ready_schema(model: type[BaseModel]) -> dict:
-    """Convert a Pydantic model to a JSON schema ready for LLMs.
+    @staticmethod
+    def llm_ready_schema(model: type[BaseModel]) -> dict:
+        """Convert a Pydantic model to a JSON schema ready for LLMs.
 
-    Args:
-        model: The Pydantic model to convert.
+        Args:
+            model: The Pydantic model to convert.
 
-    Returns:
-        The JSON schema as a dictionary.
-    """
-    schema = model.model_json_schema(schema_generator=CustomOrderSchema)
-    return inline_refs(schema)
+        Returns:
+            The JSON schema as a dictionary.
+        """
+        schema = model.model_json_schema(schema_generator=CustomOrderSchema)
+        return LlmReadySchema.inline_refs(schema)

@@ -1,8 +1,5 @@
-"""This module contains the models for the modules."""
+"""Module model exports. Import ag_ui types from ``digitalkin.models.module.ag_ui``."""
 
-# Import module_types first to avoid circular import with ag_ui
-# Note: AgUiEventOutput and AgUiOutput are not imported here to avoid circular imports.
-# Import them directly from digitalkin.models.module.ag_ui if needed.
 from digitalkin.models.module.module_context import ModuleContext
 from digitalkin.models.module.module_types import (
     DataModel,
@@ -23,19 +20,15 @@ from digitalkin.models.module.tool_reference import (
 )
 from digitalkin.models.module.utility import (
     EndOfStreamOutput,
-    ModuleStartInfoOutput,
     UtilityProtocol,
     UtilityRegistry,
 )
 
 __all__ = [
-    # Note: AgUiEventOutput and AgUiOutput removed to avoid circular imports
-    # Import them directly from digitalkin.models.module.ag_ui if needed
     "DataModel",
     "DataTrigger",
     "EndOfStreamOutput",
     "ModuleContext",
-    "ModuleStartInfoOutput",
     "RequestMetadata",
     "SelectSchema",
     "SetupModel",

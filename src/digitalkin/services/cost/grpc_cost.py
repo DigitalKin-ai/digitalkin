@@ -8,15 +8,14 @@ from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
 from digitalkin.grpc_servers.utils.grpc_error_handler import GrpcErrorHandlerMixin
 from digitalkin.logger import logger
 from digitalkin.models.grpc_servers.models import ClientConfig
-from digitalkin.models.services.cost import AmountLimit, QuantityLimit
+from digitalkin.models.services.cost import AmountLimit, CostType, QuantityLimit
 from digitalkin.services.cost.cost_strategy import (
     CostConfig,
     CostData,
-    CostServiceError,
     CostStrategy,
-    CostType,
 )
-from digitalkin.utils.proto_utils import proto_to_dict
+from digitalkin.services.cost.exceptions import CostServiceError
+from digitalkin.utils.proto_utils import ProtoUtils
 
 
 class GrpcCost(CostStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
@@ -37,9 +36,16 @@ class GrpcCost(CostStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
         self.config = config
         self._limits: dict[str, QuantityLimit | AmountLimit] = {}
         self._accumulated: dict[str, float] = {}
-        channel = self._init_channel(client_config)
-        self.stub = cost_service_pb2_grpc.CostServiceStub(channel)
+        self._init_channel(client_config)
+        self.stub = self._get_or_create_stub(cost_service_pb2_grpc.CostServiceStub)
         logger.debug("Channel client 'Cost' initialized successfully")
+
+    async def close(self) -> None:
+        """Release this instance's pooled gRPC channel ref."""
+        await self.close_channel()
+        logger.debug(
+            "[VALIDATE D1] released channel for %s", self.service_name
+        )  # TODO(validate): remove after prod validation
 
     async def set_limits(self, limits: list[QuantityLimit | AmountLimit]) -> None:
         """Set cost limits for this session.
@@ -138,7 +144,7 @@ class GrpcCost(CostStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
         async with self.handle_grpc_errors("GetCost", CostServiceError):
             request = cost_pb2.GetCostRequest(name=name, mission_id=self.mission_id)
             response: cost_pb2.GetCostResponse = await self.exec_grpc_query("GetCost", request)
-            cost_data_list = [proto_to_dict(cost, with_defaults=True) for cost in response.costs]
+            cost_data_list = [ProtoUtils.proto_to_dict(cost, with_defaults=True) for cost in response.costs]
             logger.debug("Costs retrieved with cost_dict: %s", cost_data_list)
             return [CostData.model_validate(cost_data) for cost_data in cost_data_list]
 
@@ -165,7 +171,7 @@ class GrpcCost(CostStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
                 ),
             )
             response: cost_pb2.GetCostsResponse = await self.exec_grpc_query("GetCosts", request)
-            cost_data_list = [proto_to_dict(cost, with_defaults=True) for cost in response.costs]
+            cost_data_list = [ProtoUtils.proto_to_dict(cost, with_defaults=True) for cost in response.costs]
             logger.debug("Filtered costs retrieved with cost_dict: %s", cost_data_list)
             return [CostData.model_validate(cost_data) for cost_data in cost_data_list]
 
@@ -180,7 +186,7 @@ class GrpcCost(CostStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
             response: cost_pb2.GetCostConfigResponse = await self.exec_grpc_query("GetCostConfig", request)
             config_list = []
             for config in response.configs:
-                config_dict = proto_to_dict(config, with_defaults=True)
+                config_dict = ProtoUtils.proto_to_dict(config, with_defaults=True)
                 # Map proto field names to CostConfig field names
                 config_list.append(
                     CostConfig(

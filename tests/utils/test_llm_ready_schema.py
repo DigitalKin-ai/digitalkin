@@ -2,7 +2,7 @@
 
 from pydantic import BaseModel, Field
 
-from digitalkin.utils.llm_ready_schema import CustomOrderSchema, inline_refs, llm_ready_schema
+from digitalkin.utils.llm_ready_schema import CustomOrderSchema, LlmReadySchema
 
 
 class TestCustomOrderSchema:
@@ -79,7 +79,7 @@ class TestInlineRefs:
                 "nested": {"$ref": "#/$defs/Inner"},
             },
         }
-        result = inline_refs(schema)
+        result = LlmReadySchema.inline_refs(schema)
         assert "$defs" not in result
         assert result["properties"]["nested"]["type"] == "object"
         assert result["properties"]["nested"]["properties"]["x"]["type"] == "string"
@@ -93,7 +93,7 @@ class TestInlineRefs:
             },
             "properties": {"branch": {"$ref": "#/$defs/Branch"}},
         }
-        result = inline_refs(schema)
+        result = LlmReadySchema.inline_refs(schema)
         assert result["properties"]["branch"]["properties"]["leaf"]["type"] == "string"
 
     def test_inline_refs_in_lists(self) -> None:
@@ -108,14 +108,14 @@ class TestInlineRefs:
                 {"$ref": "#/$defs/TypeB"},
             ],
         }
-        result = inline_refs(schema)
+        result = LlmReadySchema.inline_refs(schema)
         assert result["oneOf"][0]["type"] == "string"
         assert result["oneOf"][1]["type"] == "integer"
 
     def test_inline_no_refs(self) -> None:
         """Schema without $ref is returned unchanged (minus $defs)."""
         schema = {"type": "object", "properties": {"a": {"type": "string"}}}
-        result = inline_refs(schema)
+        result = LlmReadySchema.inline_refs(schema)
         assert result == schema
 
     def test_inline_does_not_mutate_original(self) -> None:
@@ -124,7 +124,7 @@ class TestInlineRefs:
             "$defs": {"X": {"type": "string"}},
             "properties": {"field": {"$ref": "#/$defs/X"}},
         }
-        inline_refs(schema)
+        LlmReadySchema.inline_refs(schema)
         assert "$defs" in schema
         assert "$ref" in schema["properties"]["field"]
 
@@ -136,7 +136,7 @@ class TestInlineRefs:
             "required": ["a"],
             "properties": {"a": {"type": "string"}},
         }
-        result = inline_refs(schema)
+        result = LlmReadySchema.inline_refs(schema)
         assert result["title"] == "Test"
         assert result["required"] == ["a"]
 
@@ -151,7 +151,7 @@ class TestLlmReadySchema:
             name: str = Field(description="The name")
             age: int = Field(default=0)
 
-        result = llm_ready_schema(SimpleModel)
+        result = LlmReadySchema.llm_ready_schema(SimpleModel)
         assert "properties" in result
         assert "name" in result["properties"]
         assert "age" in result["properties"]
@@ -166,7 +166,7 @@ class TestLlmReadySchema:
         class Outer(BaseModel):
             inner: Inner
 
-        result = llm_ready_schema(Outer)
+        result = LlmReadySchema.llm_ready_schema(Outer)
         assert "$defs" not in result
         # Inner model should be inlined into properties
         inner_schema = result["properties"]["inner"]
@@ -181,7 +181,7 @@ class TestLlmReadySchema:
 
             field: str = "value"
 
-        result = llm_ready_schema(OrderedModel)
+        result = LlmReadySchema.llm_ready_schema(OrderedModel)
         keys = list(result.keys())
         # title should come before type, type before properties
         if "title" in keys and "type" in keys:
@@ -198,7 +198,7 @@ class TestLlmReadySchema:
         class Container(BaseModel):
             items: list[Item]
 
-        result = llm_ready_schema(Container)
+        result = LlmReadySchema.llm_ready_schema(Container)
         assert "$defs" not in result
         items_schema = result["properties"]["items"]
         assert items_schema["type"] == "array"

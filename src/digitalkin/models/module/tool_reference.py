@@ -1,16 +1,17 @@
 """Tool reference types for module configuration."""
 
 import asyncio
-import os
-from typing import Annotated, ClassVar
+import logging
+from typing import Annotated
 
-from pydantic import AfterValidator, BaseModel, BeforeValidator, Field, PlainSerializer
+from pydantic import AfterValidator, BaseModel, Field, PlainSerializer, model_validator
 from pydantic.annotated_handlers import GetJsonSchemaHandler
 from pydantic.json_schema import JsonSchemaValue
 from pydantic_core import CoreSchema
 
 from digitalkin.logger import logger
-from digitalkin.models.module.tool_cache import ToolModuleInfo, module_info_to_tool_module_info
+from digitalkin.models.module.tool_cache import ToolModuleInfo
+from digitalkin.models.settings.module import get_module_settings
 from digitalkin.services.communication.communication_strategy import CommunicationStrategy
 from digitalkin.services.registry import RegistryStrategy
 
@@ -25,43 +26,102 @@ class ToolSelection(BaseModel):
 class ToolReference(BaseModel):
     """Tool selection containing setup IDs and trigger filters."""
 
-    _TOOL_RESOLVE_TIMEOUT: ClassVar[float] = float(os.environ.get("DIGITALKIN_TOOL_RESOLVE_TIMEOUT", "10.0"))
-
     selected_tools: list[ToolSelection] = Field(
         default_factory=list, description="Selected tools with trigger filters."
     )
 
-    async def resolve(self, registry: RegistryStrategy, communication: CommunicationStrategy) -> list[ToolModuleInfo]:
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_blank_selections(cls, data: object) -> object:
+        """Drop (and log) tool selections with an empty setup_id from raw list input.
+
+        react-jsonschema-form sends selections as a list; a placeholder row with no
+        ``setupId`` would otherwise become ``setup_id=""`` and hit ``get_setup("")``.
+
+        Args:
+            data: Raw validation input — a list of selection dicts from the frontend, or a dict.
+
+        Returns:
+            ``{"selected_tools": [...]}`` with blanks removed for list input; data unchanged otherwise.
+        """
+        if not isinstance(data, list):
+            return data
+        kept: list[object] = []
+        for e in data:
+            if isinstance(e, dict):
+                sid = (e.get("setup_id") or e.get("setupId") or "").strip()
+                if sid:
+                    kept.append({"setup_id": sid, "triggers": e.get("triggers", {})})
+                    continue
+            elif isinstance(e, ToolSelection):
+                if e.setup_id.strip():
+                    kept.append(e)
+                    continue
+            else:
+                kept.append(e)
+                continue
+            logger.info("tool_reference_input: dropped incomplete tool selection (empty setup_id): %r", e)
+        return {"selected_tools": kept}
+
+    async def resolve(
+        self,
+        registry: RegistryStrategy,
+        communication: CommunicationStrategy,
+        *,
+        trim: bool = True,
+    ) -> list[ToolModuleInfo]:
         """Resolve selected tools using the registry.
 
-        Each tool resolution is bounded by DIGITALKIN_TOOL_RESOLVE_TIMEOUT (default 10s).
+        Each tool resolution is bounded by ``DIGITALKIN_MODULE_TOOL_RESOLVE_TIMEOUT``
+        (default 10s). Inputs that fail to resolve are logged as WARNING with the
+        ``setup_id`` and a ``reason=...`` field; the returned list contains only
+        successful ``ToolModuleInfo``s. The caller can correlate against
+        ``self.selected_tools`` by ``setup_id``.
 
         Args:
             registry: Registry service for module discovery.
             communication: Communication service for module schemas.
+            trim: When True, each result is trimmed (on a copy) to the entry's enabled
+                triggers. When False, the full module catalog is returned — used to
+                populate the shared per-``setup_id`` cache so agents sharing a
+                ``setup_id`` with disjoint triggers keep the full catalog; per-agent
+                filtering then happens at the consumer.
 
         Returns:
-            List of ToolModuleInfo for resolved tools, filtered by enabled triggers.
+            List of resolved ``ToolModuleInfo``. Failed resolutions are logged and omitted.
         """
-        timeout = self._TOOL_RESOLVE_TIMEOUT
+        timeout = get_module_settings().tool_resolve_timeout
 
-        async def _resolve_with_timeout(entry: ToolSelection) -> ToolModuleInfo | None:
-            return await asyncio.wait_for(
-                ToolReference._resolve_single(entry, registry, communication),
-                timeout=timeout,
+        async def _bounded(entry: ToolSelection) -> ToolModuleInfo | None:
+            try:
+                tool_info = await asyncio.wait_for(
+                    ToolReference._resolve_single(entry, registry, communication),
+                    timeout=timeout,
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "Tool resolve failed: setup_id=%s reason=resolve_timeout timeout_s=%.1f",
+                    entry.setup_id,
+                    timeout,
+                )
+                return None
+            except Exception:
+                logger.exception(
+                    "Tool resolve failed: setup_id=%s reason=resolve_exception",
+                    entry.setup_id,
+                )
+                return None
+            if tool_info is None or not trim:
+                return tool_info
+            enabled = {name for name, on in entry.triggers.items() if on}
+            if not enabled:
+                return tool_info
+            return tool_info.model_copy(
+                update={"tools": [t for t in tool_info.tools if t.name in enabled]},
             )
 
-        results = await asyncio.gather(
-            *(_resolve_with_timeout(entry) for entry in self.selected_tools),
-            return_exceptions=True,
-        )
-        resolved: list[ToolModuleInfo] = []
-        for entry, result in zip(self.selected_tools, results):
-            if isinstance(result, BaseException):
-                logger.warning("Failed to resolve tool (setup_id=%s): %s", entry.setup_id, result)
-            elif isinstance(result, ToolModuleInfo):
-                resolved.append(result)
-        return resolved
+        results = await asyncio.gather(*(_bounded(e) for e in self.selected_tools if e.setup_id.strip()))
+        return [r for r in results if r is not None]
 
     @staticmethod
     async def _resolve_single(
@@ -69,11 +129,15 @@ class ToolReference(BaseModel):
         registry: RegistryStrategy,
         communication: CommunicationStrategy,
     ) -> ToolModuleInfo | None:
-        """Resolve a single tool selection to its complete ``ToolModuleInfo``.
+        """Resolve a single tool selection; emit one structured audit line per call.
 
-        Per-selection trigger filtering is intentionally NOT applied here — the
-        cache is keyed by ``setup_id`` and shared across agents with disjoint
-        trigger sets; consumers (e.g. ``ModuleToolkit`` ``allowed_tools``) filter.
+        Every failure path logs a ``WARNING`` with a ``reason=...`` field
+        (``setup_not_found``, ``module_not_discovered``, ``schema_fetch_failed``)
+        so callers don't need to re-derive the cause. Successful resolutions
+        emit ``[lat-audit] tool_resolve`` at INFO with input/output counts.
+        Post-filter results of zero functions emit a second ``WARNING`` naming
+        the structural cause (``module_exposes_no_triggers``,
+        ``all_user_triggers_unknown``, or ``post_filter_empty``).
 
         Args:
             entry: Tool selection to resolve.
@@ -81,15 +145,88 @@ class ToolReference(BaseModel):
             communication: Communication service for module schemas.
 
         Returns:
-            ToolModuleInfo if resolved, None otherwise.
+            ToolModuleInfo on success (possibly with empty ``tools``); ``None`` on registry miss.
         """
         setup = await registry.get_setup(entry.setup_id)
         if not setup or not setup.module_id:
+            logger.warning(
+                "Tool resolve failed: setup_id=%s reason=setup_not_found",
+                entry.setup_id,
+            )
             return None
         info = await registry.discover_by_id(setup.module_id)
         if not info:
+            logger.warning(
+                "Tool resolve failed: setup_id=%s tool_name=%s module_id=%s reason=module_not_discovered",
+                entry.setup_id,
+                setup.name,
+                setup.module_id,
+            )
             return None
-        return await module_info_to_tool_module_info(info, entry.setup_id, setup.name, communication)
+
+        try:
+            tool_info = await ToolModuleInfo.from_module_info(
+                info,
+                entry.setup_id,
+                setup.name,
+                communication,
+            )
+        except Exception:
+            logger.exception(
+                "Tool resolve failed: setup_id=%s tool_name=%s reason=schema_fetch_failed",
+                entry.setup_id,
+                setup.name,
+            )
+            return None
+
+        available = {t.name for t in tool_info.tools}
+        enabled_triggers = {name for name, enabled in entry.triggers.items() if enabled}
+
+        if enabled_triggers and (unknown := enabled_triggers - available):
+            logger.warning(
+                "Tool '%s' enables triggers the module does not expose: %s (available: %s)",
+                entry.setup_id,
+                sorted(unknown),
+                sorted(available),
+            )
+
+        post_count = len(available & enabled_triggers) if enabled_triggers else len(tool_info.tools)
+        logger.info(
+            "[lat-audit] tool_resolve: setup_id=%s slug=%s "
+            "user_triggers_enabled=%d user_triggers_total=%d "
+            "module_available=%d post_filter=%d",
+            entry.setup_id,
+            tool_info.slug,
+            len(enabled_triggers),
+            len(entry.triggers),
+            len(available),
+            post_count,
+        )
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "tool_resolve detail: setup_id=%s user_triggers=%s available=%s",
+                entry.setup_id,
+                dict(entry.triggers),
+                sorted(available),
+            )
+
+        if post_count == 0:
+            if not available:
+                reason = "module_exposes_no_triggers"
+            elif enabled_triggers and not (enabled_triggers & available):
+                reason = "all_user_triggers_unknown"
+            else:
+                reason = "post_filter_empty"
+            logger.warning(
+                "Tool resolved with 0 functions: setup_id=%s slug=%s reason=%s user_enabled=%d module_available=%d",
+                entry.setup_id,
+                tool_info.slug,
+                reason,
+                len(enabled_triggers),
+                len(available),
+            )
+
+        return tool_info
 
 
 class _ToolReferenceInputSchema:
@@ -174,26 +311,6 @@ def tool_reference_input(
         Annotated type for use in Pydantic models.
     """
 
-    def convert_to_tool_reference(v: object) -> ToolReference | object:
-        """Convert list of tool selection dicts to ToolReference.
-
-        Returns:
-            ToolReference if input is list, otherwise original value.
-        """
-        if isinstance(v, list):
-            return ToolReference(
-                selected_tools=[
-                    ToolSelection(
-                        setup_id=e.get("setup_id", e.get("setupId", "")),  # type: ignore[arg-type]
-                        triggers=e.get("triggers", {}),
-                    )
-                    if isinstance(e, dict)
-                    else e
-                    for e in v
-                ]
-            )
-        return v
-
     def validate_tools_count(v: ToolReference) -> ToolReference:
         """Validate selected_tools count against min/max constraints.
 
@@ -237,7 +354,6 @@ def tool_reference_input(
 
     return Annotated[  # type: ignore[return-value]  # Returns Annotated type, not ToolReference directly
         ToolReference,
-        BeforeValidator(convert_to_tool_reference),
         AfterValidator(validate_tools_count),
         PlainSerializer(serialize_to_list, return_type=list[dict[str, object]]),
         schema,
