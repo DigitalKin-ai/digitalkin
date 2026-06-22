@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+import time
 from argparse import ArgumentParser, Namespace
 from collections.abc import AsyncGenerator
 from typing import Any, cast
@@ -86,8 +87,9 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             extra={"job_manager": self.job_manager},
         )
         self.setup = GrpcSetup() if self.args.services_mode == ServicesMode.REMOTE else DefaultSetup()
-        self._setup_cache: dict[str, SetupVersionData] = {}
+        self._setup_cache: dict[str, tuple[float, SetupVersionData]] = {}
         self._setup_cache_max = int(os.environ.get("DIGITALKIN_SETUP_CACHE_MAX", "100"))
+        self._setup_cache_ttl = float(os.environ.get("DIGITALKIN_SETUP_CACHE_TTL", "600.0"))
         self._setup_inflight: dict[str, asyncio.Future[SetupVersionData]] = {}
         self._completion_timeout = float(os.environ.get("DIGITALKIN_COMPLETION_TIMEOUT", "300.0"))
 
@@ -129,11 +131,11 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         return self._registry_cache
 
     def _cache_setup(self, setup_id: str, version_data: SetupVersionData) -> None:
-        """Cache setup version data, evicting oldest entry if at capacity."""
+        """Cache setup version data with fetch timestamp, evicting oldest entry if at capacity."""
         if len(self._setup_cache) >= self._setup_cache_max:
             oldest_key = next(iter(self._setup_cache))
             del self._setup_cache[oldest_key]
-        self._setup_cache[setup_id] = version_data
+        self._setup_cache[setup_id] = (time.monotonic(), version_data)
 
     async def _resolve_setup(self, setup_id: str, mission_id: str) -> SetupVersionData:
         """Return setup version data from cache or remote service.
@@ -151,10 +153,13 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             ServerError: gRPC communication failed.
             ValidationError: Setup data failed validation.
         """
-        # Fast path: cache hit
+        # Fast path: cache hit within TTL
         if (cached := self._setup_cache.get(setup_id)) is not None:
-            logger.debug("debug:_resolve_setup cache hit setup_id=%s", setup_id)
-            return cached
+            if time.monotonic() - cached[0] < self._setup_cache_ttl:
+                logger.debug("debug:_resolve_setup cache hit setup_id=%s", setup_id)
+                return cached[1]
+            del self._setup_cache[setup_id]
+            logger.debug("debug:_resolve_setup cache expired setup_id=%s", setup_id)
 
         # Coalesce concurrent misses: first caller fetches, others await the same future
         if setup_id in self._setup_inflight:
@@ -220,6 +225,8 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             },
         )
         setup_version = request.setup_version
+        # Invalidate cached setup so concurrent/subsequent starts refetch the reconfigured version
+        self._setup_cache.pop(setup_version.setup_id, None)
         config_setup_data = self.module_class.create_config_setup_model(json_format.MessageToDict(request.content))
         setup_version_data = await self.module_class.create_setup_model(
             json_format.MessageToDict(request.setup_version.content),
