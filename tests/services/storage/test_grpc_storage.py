@@ -8,7 +8,10 @@ This test suite validates the GrpcStorage service implementation, including:
 """
 
 import asyncio
+import logging
+from collections.abc import Iterator
 from concurrent import futures
+from unittest.mock import AsyncMock, Mock
 
 import grpc
 import grpc_testing
@@ -18,9 +21,14 @@ from pydantic import BaseModel, Field
 from tests.fixtures.grpc_fixtures import AsyncStubWrapper, FakeContext
 from tests.services.storage.mock_storage_servicer import MockStorageServicer
 
+from digitalkin.grpc_servers.exceptions import CircuitOpenError, PermissionDeniedError, ServerError
+from digitalkin.grpc_servers.utils.circuit_breaker import CircuitBreaker
+from digitalkin.models.grpc_servers.circuit_breaker import CBState
 from digitalkin.models.grpc_servers.models import ClientConfig
+from digitalkin.models.services.storage import DataType
+from digitalkin.models.settings.grpc_client import get_circuit_breaker_settings, get_grpc_client_settings
+from digitalkin.services.storage.exceptions import StorageServiceError
 from digitalkin.services.storage.grpc_storage import GrpcStorage
-from digitalkin.services.storage.storage_strategy import DataType, StorageServiceError
 
 # Set timeout for all tests in this file (20 seconds)
 pytestmark = pytest.mark.timeout(20)
@@ -1475,3 +1483,141 @@ class TestStorageEdgeCases:
 #     """
 #
 # Add regression tests below as bugs are discovered and fixed.
+
+
+class TestCircuitBreakerInteraction:
+    """GrpcStorage behavior around the per-service circuit breaker.
+
+    Regression: a burst of new-session reads (each NOT_FOUND) opened the
+    StorageService breaker in production; every read/store then fast-failed
+    for ~30s and flooded logs (Railway dropped 2373 lines). Fix: application
+    codes (NOT_FOUND) must not trip the breaker, and expected circuit-open
+    rejections must log quietly.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _clear_breaker(self) -> Iterator[None]:
+        """Isolate the StorageService breaker singleton between tests.
+
+        Yields:
+            Control to the test with a cleared breaker registry.
+        """
+        CircuitBreaker._instances.clear()
+        yield
+        CircuitBreaker._instances.clear()
+
+    @staticmethod
+    def _open_storage_breaker(monkeypatch: pytest.MonkeyPatch) -> None:
+        """Force the StorageService breaker OPEN (fail_max=1, one failure)."""
+        monkeypatch.setenv("DIGITALKIN_CB_FAIL_MAX", "1")
+        get_circuit_breaker_settings.cache_clear()
+        cb = CircuitBreaker.get_or_create("StorageService")
+        cb.record_failure()
+        assert cb.state == CBState.OPEN
+
+    @pytest.mark.grpc
+    @pytest.mark.unit
+    async def test_store_logs_quietly_when_circuit_open(
+        self, client: GrpcStorage, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Open-circuit StoreRecord raises but logs at DEBUG (no stack trace)."""
+        self._open_storage_breaker(monkeypatch)
+        data = {"mission_id": MISSION_ID, "name": "x", "value": 1}
+
+        monkeypatch.setattr(logging.getLogger("digitalkin"), "propagate", True)
+        with (
+            caplog.at_level(logging.DEBUG, logger="digitalkin"),
+            pytest.raises(StorageServiceError) as exc_info,
+        ):
+            await client.store("test_collection", "rec_open", data)
+
+        # Cause chain preserved down to CircuitOpenError.
+        assert isinstance(exc_info.value.__cause__, ServerError)
+        assert isinstance(exc_info.value.__cause__.__cause__, CircuitOpenError)
+        # Quiet: a DEBUG "circuit open" line, and no ERROR/exception record.
+        assert any(r.levelno == logging.DEBUG and "circuit open" in r.getMessage() for r in caplog.records)
+        assert [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR] == []
+
+    @pytest.mark.grpc
+    @pytest.mark.unit
+    async def test_read_logs_quietly_when_circuit_open(
+        self, client: GrpcStorage, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Open-circuit ReadRecord returns None and logs at DEBUG only."""
+        self._open_storage_breaker(monkeypatch)
+
+        monkeypatch.setattr(logging.getLogger("digitalkin"), "propagate", True)
+        with caplog.at_level(logging.DEBUG, logger="digitalkin"):
+            result = await client.read("test_collection", "rec_missing")
+
+        assert result is None
+        assert any(r.levelno == logging.DEBUG and "circuit open" in r.getMessage() for r in caplog.records)
+        assert [r.getMessage() for r in caplog.records if r.levelno >= logging.INFO] == []
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    def test_not_found_keeps_breaker_closed(
+        self,
+        client: GrpcStorage,
+        test_channel: grpc_testing.Channel,
+        thread_pool: futures.ThreadPoolExecutor,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Real NOT_FOUND from the storage server must not open the breaker.
+
+        With fail_max=1 a single tick would open it under the old code; the
+        service responded, so it must stay CLOSED.
+        """
+        monkeypatch.setenv("DIGITALKIN_CB_FAIL_MAX", "1")
+        monkeypatch.setenv("DIGITALKIN_GRPC_QUERY_MAX_RETRIES", "0")
+        get_circuit_breaker_settings.cache_clear()
+        get_grpc_client_settings.cache_clear()
+
+        method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name["ReadRecord"]
+        future = thread_pool.submit(asyncio.run, client.read("test_collection", "missing"))
+        _meta, _req, rpc = test_channel.take_unary_unary(method_desc)
+        rpc.send_initial_metadata(())
+        rpc.terminate(data_pb2.ReadRecordResponse(), (), grpc.StatusCode.NOT_FOUND, "not found")
+        result = future.result(timeout=2.0)
+
+        assert result is None
+        assert CircuitBreaker.get_or_create("StorageService").state == CBState.CLOSED
+
+    @pytest.mark.grpc
+    @pytest.mark.edge_case
+    @pytest.mark.chaos
+    async def test_permission_denied_propagates_and_keeps_breaker_closed(self, client: GrpcStorage) -> None:
+        """A permission error from the channel middleware is re-raised (not swallowed to None); breaker untouched."""
+        CircuitBreaker.remove("StorageService")
+        client.stub = Mock()
+        client.stub.ReadRecord = AsyncMock(side_effect=PermissionDeniedError("[/StorageService/ReadRecord] denied"))
+
+        with pytest.raises(PermissionDeniedError):
+            await client.read("test_collection", "denied")
+        assert CircuitBreaker.get_or_create("StorageService").state == CBState.CLOSED
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    @pytest.mark.chaos
+    def test_unavailable_opens_breaker(
+        self,
+        client: GrpcStorage,
+        test_channel: grpc_testing.Channel,
+        thread_pool: futures.ThreadPoolExecutor,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Real UNAVAILABLE from the storage server still opens the breaker."""
+        monkeypatch.setenv("DIGITALKIN_CB_FAIL_MAX", "1")
+        monkeypatch.setenv("DIGITALKIN_GRPC_QUERY_MAX_RETRIES", "0")
+        get_circuit_breaker_settings.cache_clear()
+        get_grpc_client_settings.cache_clear()
+
+        method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name["ReadRecord"]
+        future = thread_pool.submit(asyncio.run, client.read("test_collection", "any"))
+        _meta, _req, rpc = test_channel.take_unary_unary(method_desc)
+        rpc.send_initial_metadata(())
+        rpc.terminate(data_pb2.ReadRecordResponse(), (), grpc.StatusCode.UNAVAILABLE, "down")
+        result = future.result(timeout=2.0)
+
+        assert result is None
+        assert CircuitBreaker.get_or_create("StorageService").state == CBState.OPEN

@@ -42,3 +42,12 @@ class FileHistory(BaseModel):
     """File history model."""
 
     files: list[FileModel] = Field(..., description="List of files")
+
+
+class DataType(Enum):
+    """Enum defining the types of data that can be stored."""
+
+    OUTPUT = "OUTPUT"
+    VIEW = "VIEW"
+    LOGS = "LOGS"
+    OTHER = "OTHER"

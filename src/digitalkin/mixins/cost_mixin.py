@@ -28,7 +28,7 @@ class CostMixin:
         try:
             await context.cost.add(name, cost_config_name, quantity)
         except Exception:
-            logger.error("Failed to add cost '%s' (config=%s), continuing", name, cost_config_name, exc_info=True)
+            logger.exception("Failed to add cost '%s' (config=%s), continuing", name, cost_config_name)
 
     @staticmethod
     async def get_cost(context: ModuleContext, name: str) -> list[CostData]:

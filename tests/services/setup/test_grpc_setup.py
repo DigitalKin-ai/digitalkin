@@ -4,6 +4,7 @@ import asyncio
 import datetime
 import secrets
 import string
+from unittest.mock import AsyncMock, Mock
 from concurrent import futures
 
 import grpc
@@ -16,6 +17,8 @@ from agentic_mesh_protocol.setup.v1 import (
 )
 from freezegun import freeze_time
 
+from digitalkin.grpc_servers.exceptions import PermissionDeniedError
+from digitalkin.grpc_servers.utils.circuit_breaker import CircuitBreaker
 from digitalkin.models.grpc_servers.models import ClientConfig
 from digitalkin.models.settings.utils.channel import ControlFlow, SecurityMode
 from digitalkin.services.setup.grpc_setup import GrpcSetup
@@ -179,6 +182,18 @@ class TestCreateSetup:
             == generate_setup_obj.current_setup_version.creation_date
         )
         assert dict(request.current_setup_version.content) == generate_setup_obj.current_setup_version.content
+
+    @freeze_time("2025-04-01 12:00:01")
+    @pytest.mark.grpc
+    @pytest.mark.edge_case
+    async def test_create_setup_permission_denied(self, client: GrpcSetup, generate_setup_obj: SetupData) -> None:
+        """setup's handler lets a permission error pass through unwrapped (not SetupServiceError)."""
+        CircuitBreaker.remove("SetupService")
+        client.stub = Mock()
+        client.stub.CreateSetup = AsyncMock(side_effect=PermissionDeniedError("[/SetupService/CreateSetup] denied"))
+
+        with pytest.raises(PermissionDeniedError):
+            await client.create_setup(generate_setup_obj.model_dump())
 
     @freeze_time("2025-04-01 12:00:01")
     @pytest.mark.grpc

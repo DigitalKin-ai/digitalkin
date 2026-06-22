@@ -1,0 +1,19 @@
+flowchart TD
+    A["Task completes"] --> B["Supervisor done callback"]
+    B --> C["_deferred_cleanup()"]
+    C --> D{"stream_closed?"}
+    D -->|yes| E["_cleanup_task()"]
+    D -->|"no — 60s timeout"| E
+    E --> F["Cancel pending Redis tasks"]
+    E --> G["Drain output queue"]
+    E --> H["Close module context\n(10 services)"]
+    E --> I["Release semaphore slot"]
+    E --> J["Pop from tasks_sessions"]
+    E --> K["Write EOS to Redis Stream"]
+
+    L["SessionReaper\n(every 60s)"] -->|"300s TTL expired"| E
+
+    M["GracefulShutdown\n(SIGTERM)"] --> N["Unregister signal handlers"]
+    N --> O["Checkpoint all sessions"]
+    O --> P["Cancel all tasks\n(10s timeout)"]
+    P --> Q["Close Redis connections"]

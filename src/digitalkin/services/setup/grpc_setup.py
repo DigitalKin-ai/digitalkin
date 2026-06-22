@@ -9,16 +9,16 @@ from agentic_mesh_protocol.setup.v1 import (
     setup_pb2,
     setup_service_pb2_grpc,
 )
-from google.protobuf import json_format
 from google.protobuf.struct_pb2 import Struct
 from pydantic import ValidationError
 
-from digitalkin.grpc_servers.utils.exceptions import ServerError
+from digitalkin.grpc_servers.exceptions import PermissionDeniedError, ServerError
 from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
 from digitalkin.logger import logger
 from digitalkin.models.grpc_servers.models import ClientConfig
-from digitalkin.services.setup.setup_strategy import SetupData, SetupServiceError, SetupStrategy, SetupVersionData
-from digitalkin.utils.proto_utils import proto_to_dict
+from digitalkin.services.setup.exceptions import SetupServiceError
+from digitalkin.services.setup.setup_strategy import SetupData, SetupStrategy, SetupVersionData
+from digitalkin.utils.proto_utils import ProtoUtils
 
 
 class GrpcSetup(SetupStrategy, GrpcClientWrapper):
@@ -35,9 +35,13 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
 
         Need to be call if the user register a gRPC channel.
         """
-        channel = self._init_channel(config)
-        self.stub = setup_service_pb2_grpc.SetupServiceStub(channel)
+        self._init_channel(config)
+        self.stub = self._get_or_create_stub(setup_service_pb2_grpc.SetupServiceStub)
         logger.debug("Channel client 'setup' initialized successfully")
+
+    async def close(self) -> None:
+        """Release this instance's pooled gRPC channel ref."""
+        await self.close_channel()
 
     @asynccontextmanager
     async def handle_grpc_errors(  # noqa: PLR6301
@@ -52,19 +56,21 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
             Allow error handling in context.
 
         Raises:
+            PermissionDeniedError: Service rejected the call with PERMISSION_DENIED.
             ValueError: Pydantic model validation failed - input data is malformed.
             ServerError: gRPC communication failed - remote service returned error or is unreachable.
             SetupServiceError: Unexpected error during setup operation - includes connection/timeout issues.
         """
         try:
             yield
+        except PermissionDeniedError:
+            raise
         except ValidationError as e:
             msg = f"Validation failed for {operation}: {e}"
             logger.error(
                 "ValidationError in %s: %s",
                 operation,
                 e,
-                extra={"operation": operation, "error_type": "ValidationError", "service_name": "SetupService"},
             )
             raise ValueError(msg) from e
         except grpc.RpcError as e:
@@ -76,7 +82,6 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
                 operation,
                 status_code,
                 details,
-                extra={"operation": operation, "error_type": "grpc.RpcError", "grpc_code": status_code},
             )
             raise ServerError(msg) from e
         except (TimeoutError, ConnectionError, OSError) as e:
@@ -87,7 +92,6 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
                 error_type,
                 operation,
                 e,
-                extra={"operation": operation, "error_type": error_type, "service_name": "SetupService"},
             )
             raise SetupServiceError(msg) from e
         except Exception as e:
@@ -98,7 +102,6 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
                 error_type,
                 operation,
                 e,
-                extra={"operation": operation, "error_type": error_type, "service_name": "SetupService"},
                 exc_info=True,
             )
             raise SetupServiceError(msg) from e
@@ -155,7 +158,7 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
                 version=setup_dict.get("version", ""),
             )
             response = await self.exec_grpc_query("GetSetup", request)
-            response_data = proto_to_dict(response)
+            response_data = ProtoUtils.proto_to_dict(response)
             return SetupData(**response_data["setup"])
 
     async def update_setup(self, setup_dict: dict[str, Any]) -> bool:
@@ -265,7 +268,7 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
                 raise ValidationError(msg)
             request = setup_pb2.GetSetupVersionRequest(setup_version_id=setup_version_id)
             response = await self.exec_grpc_query("GetSetupVersion", request)
-            return SetupVersionData(**proto_to_dict(response.setup_version))
+            return SetupVersionData(**ProtoUtils.proto_to_dict(response.setup_version))
 
     async def search_setup_versions(self, setup_version_dict: dict[str, Any]) -> list[SetupVersionData]:
         """Search for setup versions based on filters.
@@ -290,7 +293,7 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
                 version=setup_version_dict.get("version", ""),
             )
             response = await self.exec_grpc_query("SearchSetupVersions", request)
-            return [SetupVersionData(**proto_to_dict(sv)) for sv in response.setup_versions]
+            return [SetupVersionData(**ProtoUtils.proto_to_dict(sv)) for sv in response.setup_versions]
 
     async def update_setup_version(self, setup_version_dict: dict[str, Any]) -> bool:
         """Update an existing setup version.
@@ -373,6 +376,6 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
             )
             response = await self.exec_grpc_query("ListSetups", request)
             return {
-                "setups": [proto_to_dict(setup) for setup in response.setups],
+                "setups": [ProtoUtils.proto_to_dict(setup) for setup in response.setups],
                 "total_count": response.total_count,
             }

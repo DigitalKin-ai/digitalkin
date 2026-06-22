@@ -8,6 +8,9 @@ from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 from typing import Any, ClassVar
 
+from digitalkin.grpc_servers.interceptors.request_ids import RequestContext
+from digitalkin.models.settings.log import get_logging_settings
+
 
 class ColorJSONFormatter(logging.Formatter):
     """Color JSON formatter for development (pretty-printed with colors)."""
@@ -53,11 +56,9 @@ class ColorJSONFormatter(logging.Formatter):
             "module": record.module,
             "location": f"{record.pathname}:{record.lineno}:{record.funcName}",
         }
-        # Add exception info if present
         if record.exc_info:
             log_obj["exception"] = self.formatException(record.exc_info)
 
-        # Add any extra fields
         skip_attrs = {
             "name",
             "msg",
@@ -87,7 +88,6 @@ class ColorJSONFormatter(logging.Formatter):
         if extras:
             log_obj["extra"] = extras
 
-        # Pretty print with color
         color = self.COLORS.get(record.levelno, self.grey)
         if self.is_production:
             log_obj["message"] = f"{color}{log_obj.get('message', '')}{self.reset}"
@@ -150,83 +150,118 @@ class PlainJSONFormatter(logging.Formatter):
         return json.dumps(log_obj, default=str, separators=(",", ":"))
 
 
-def add_file_handler(logger: logging.Logger) -> None:
-    """Add a rotating file handler to a logger if ``DIGITALKIN_LOG_DIR`` is set.
+class RequestIdLogFilter(logging.Filter):
+    """Inject ambient request IDs (task/setup/mission) onto every log record."""
 
-    Only creates log files when the environment variable is explicitly set
-    and points to an existing directory.  Attaches a :class:`RotatingFileHandler`
-    (10 MB, 5 backups) with :class:`PlainJSONFormatter` at DEBUG level.
+    def filter(self, record: logging.LogRecord) -> bool:  # noqa: PLR6301
+        """Add ambient IDs to the record if present.
 
-    Args:
-        logger: The logger to attach the file handler to.
-    """
-    log_dir = os.environ.get("DIGITALKIN_LOG_DIR")
-    if not log_dir or not os.path.isdir(log_dir):
-        return
+        Uses ``setdefault`` so an explicit ``extra=`` at the call site wins.
 
-    log_file = os.environ.get("DIGITALKIN_LOG_FILE", os.path.join(log_dir, f"{logger.name}.log"))
-    fh = RotatingFileHandler(log_file, maxBytes=10 * 1024 * 1024, backupCount=5)
-    file_level = getattr(logging, os.environ.get("DIGITALKIN_FILE_LOG_LEVEL", "DEBUG").upper(), logging.DEBUG)
-    fh.setLevel(file_level)
-    fh.setFormatter(PlainJSONFormatter())
-    logger.addHandler(fh)
+        Args:
+            record: The log record to enrich.
+
+        Returns:
+            True — never drops records.
+        """
+        for key, value in RequestContext.current().items():
+            record.__dict__.setdefault(key, value)
+        return True
 
 
-def setup_logger(
-    name: str,
-    level: int = logging.INFO,
-    additional_loggers: dict[str, int] | None = None,
-    *,
-    is_production: bool | None = None,
-    configure_root: bool = True,
-) -> logging.Logger:
-    """Set up a logger with the ColorJSONFormatter.
+class LoggerFactory:
+    """Build configured loggers with JSON formatters and optional file output."""
 
-    Args:
-        name: Name of the logger to create
-        level: Logging level (default: logging.INFO)
-        is_production: Whether running in production. If None, checks RAILWAY_SERVICE_NAME env var
-        configure_root: Whether to configure root logger (default: True)
-        additional_loggers: Dict of additional logger names and their levels to configure
+    LEVEL_NAMES: ClassVar[dict[str, int]] = {
+        "DEBUG": logging.DEBUG,
+        "INFO": logging.INFO,
+        "WARNING": logging.WARNING,
+        "ERROR": logging.ERROR,
+        "CRITICAL": logging.CRITICAL,
+    }
 
-    Returns:
-        logging.Logger: Configured logger instance
-    """
-    # Determine if we're in production
-    if is_production is None:
-        is_production = os.getenv("RAILWAY_SERVICE_NAME") is not None
+    @staticmethod
+    def add_file_handler(logger: logging.Logger) -> None:
+        """Add a rotating file handler to a logger if ``DIGITALKIN_LOG_DIR`` is set.
 
-    # Configure root logger if requested
-    if configure_root:
-        logging.basicConfig(
-            level=logging.WARNING,
-            stream=sys.stdout,
-            datefmt="%Y-%m-%d %H:%M:%S",
-        )
+        Only creates log files when the environment variable is explicitly set
+        and points to an existing directory.  Attaches a :class:`RotatingFileHandler`
+        (10 MB, 5 backups) with :class:`PlainJSONFormatter` at DEBUG level.
 
-    # Configure additional loggers
-    if additional_loggers:
-        for logger_name, logger_level in additional_loggers.items():
-            logging.getLogger(logger_name).setLevel(logger_level)
+        Args:
+            logger: The logger to attach the file handler to.
+        """
+        settings = get_logging_settings()
+        log_dir = settings.dir
+        if not log_dir or not os.path.isdir(log_dir):
+            return
+        if any(isinstance(h, RotatingFileHandler) for h in logger.handlers):
+            # Low: idempotent — repeated setup_logger() calls must not stack handlers.
+            return
 
-    # Create and configure the main logger
-    logger = logging.getLogger(name)
-    logger.setLevel(level)
-    # Only add handler if not already configured
-    if not logger.handlers:
-        ch = logging.StreamHandler()
-        ch.setLevel(level)
-        ch.setFormatter(ColorJSONFormatter(is_production=is_production))
-        logger.addHandler(ch)
-        logger.propagate = False
+        log_file = settings.file or os.path.join(log_dir, f"{logger.name}.log")
+        fh = RotatingFileHandler(log_file, maxBytes=10 * 1024 * 1024, backupCount=5)
+        fh.setLevel(LoggerFactory.LEVEL_NAMES.get(settings.file_level.upper(), logging.DEBUG))
+        fh.setFormatter(PlainJSONFormatter())
+        fh.addFilter(RequestIdLogFilter())
+        logger.addHandler(fh)
 
-    # Attach a file handler for persistent DEBUG logs (if log dir exists)
-    add_file_handler(logger)
+    @staticmethod
+    def setup_logger(
+        name: str,
+        level: int = logging.INFO,
+        additional_loggers: dict[str, int] | None = None,
+        *,
+        is_production: bool | None = None,
+        configure_root: bool = True,
+    ) -> logging.Logger:
+        """Set up a logger with the ColorJSONFormatter.
 
-    return logger
+        Args:
+            name: Name of the logger to create
+            level: Logging level (default: logging.INFO)
+            is_production: Whether running in production. If None, checks RAILWAY_SERVICE_NAME env var
+            configure_root: Whether to configure root logger (default: True)
+            additional_loggers: Dict of additional logger names and their levels to configure
+
+        Returns:
+            logging.Logger: Configured logger instance
+        """
+        if is_production is None:
+            is_production = get_logging_settings().railway_service_name is not None
+
+        if configure_root:
+            logging.basicConfig(
+                level=logging.WARNING,
+                stream=sys.stdout,
+                datefmt="%Y-%m-%d %H:%M:%S",
+            )
+
+        if additional_loggers:
+            for logger_name, logger_level in additional_loggers.items():
+                logging.getLogger(logger_name).setLevel(logger_level)
+
+        logger = logging.getLogger(name)
+        logger.setLevel(level)
+        if not logger.handlers:
+            ch = logging.StreamHandler()
+            ch.setLevel(level)
+            ch.setFormatter(ColorJSONFormatter(is_production=is_production))
+            ch.addFilter(RequestIdLogFilter())
+            logger.addHandler(ch)
+            logger.propagate = False
+
+        LoggerFactory.add_file_handler(logger)
+
+        return logger
 
 
-logger = setup_logger(
+logger = LoggerFactory.setup_logger(
     "digitalkin",
-    level=getattr(logging, os.environ.get("DIGITALKIN_LOG_LEVEL", "INFO").upper(), logging.INFO),
+    level=LoggerFactory.LEVEL_NAMES.get(get_logging_settings().level.upper(), logging.INFO),
 )
+
+# Backwards-compatible re-exports for downstream that imported these directly
+# (e.g. ``archetype_ada/logger.py``). Aliases to the staticmethods, identical behaviour.
+setup_logger = LoggerFactory.setup_logger
+add_file_handler = LoggerFactory.add_file_handler

@@ -68,9 +68,7 @@ class UtilitySchemaExtender:
         original_types = cls._extract_union_types(original_annotation)  # type: ignore[arg-type]
         extended_types = (*original_types, *cls._output_protocols)
         union_type = Union[extended_types]  # type: ignore[valid-type]  # noqa: UP007
-        extended_root = Annotated[
-            union_type, Field(discriminator="protocol")  # type: ignore[valid-type]
-        ]
+        extended_root = Annotated[union_type, Field(discriminator="protocol")]
         return create_model(
             f"{base_model.__name__}Utilities",
             __base__=DataModel,
@@ -93,9 +91,7 @@ class UtilitySchemaExtender:
         original_types = cls._extract_union_types(original_annotation)  # type: ignore[arg-type]
         extended_types = (*original_types, *cls._input_protocols)
         union_type = Union[extended_types]  # type: ignore[valid-type]  # noqa: UP007
-        extended_root = Annotated[
-            union_type, Field(discriminator="protocol")  # type: ignore[valid-type]
-        ]
+        extended_root = Annotated[union_type, Field(discriminator="protocol")]
         return create_model(
             f"{base_model.__name__}Utilities",
             __base__=DataModel,

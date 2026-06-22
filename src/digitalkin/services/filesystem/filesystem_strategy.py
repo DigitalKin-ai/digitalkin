@@ -9,10 +9,6 @@ from pydantic import BaseModel, Field
 from digitalkin.services.base_strategy import BaseStrategy
 
 
-class FilesystemServiceError(Exception):
-    """Base exception for Filesystem service errors."""
-
-
 class FilesystemRecord(BaseModel):
     """Data model for filesystem operations."""
 

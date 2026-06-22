@@ -18,11 +18,8 @@ sys.modules["digitalkin.modules.trigger_handler"] = _fake_trigger_mod
 # Stub base_module to prevent import cycles (if referenced)
 sys.modules.setdefault("digitalkin.modules._base_module", types.ModuleType("digitalkin.modules._base_module"))
 
-from digitalkin.utils.package_discover import (  # noqa: E402
-    DiscoveryError,
-    ModuleDiscoverer,
-    SecurityError,
-)
+from digitalkin.utils.exceptions import DiscoveryError, UnsafePackageError  # noqa: E402
+from digitalkin.utils.package_discover import ModuleDiscoverer  # noqa: E402
 
 # Helper to create Python files
 
@@ -40,7 +37,7 @@ def test_validate_inputs_empty_packages():
 
 def test_validate_file_pattern_invalid():
     md = ModuleDiscoverer(packages=["pkg"], file_pattern="dangerous*/.py")
-    with pytest.raises(SecurityError):
+    with pytest.raises(UnsafePackageError):
         md._validate_file_pattern()
 
 
@@ -57,7 +54,7 @@ def test_validate_package_name_good():
 
 def test_validate_package_name_bad():
     for name in ["", None, "..pkg", "pkg/et", "pkg\\mod", "in valid"]:
-        with pytest.raises(SecurityError):
+        with pytest.raises(UnsafePackageError):
             ModuleDiscoverer._validate_package_name(name)
 
 
@@ -82,12 +79,12 @@ def test_validate_module_path(tmp_path):
     md._validate_module_path(file, base)
 
     md_large = ModuleDiscoverer(packages=["pkg"], file_pattern="*.py", max_file_size=1)
-    with pytest.raises(SecurityError):
+    with pytest.raises(UnsafePackageError):
         md_large._validate_module_path(file, base)
 
     other = tmp_path / "other.py"
     write_file(other)
-    with pytest.raises(SecurityError):
+    with pytest.raises(UnsafePackageError):
         md._validate_module_path(other, base)
 
 

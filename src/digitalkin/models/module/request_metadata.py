@@ -32,7 +32,7 @@ class RequestMetadata:
 
     @property
     def authorization(self) -> str | None:
-        """Get the Authorization header value (e.g., ``Bearer <token>``)."""
+        """The Authorization header value (e.g., ``Bearer <token>``)."""
         return self._raw.get("authorization")
 
     @property
@@ -49,7 +49,7 @@ class RequestMetadata:
 
     @property
     def api_key(self) -> str | None:
-        """Get the ``x-api-key`` header value."""
+        """The ``x-api-key`` header value."""
         return self._raw.get("x-api-key")
 
     def get(self, key: str, default: str | None = None) -> str | None:

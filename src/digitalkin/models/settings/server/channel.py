@@ -1,5 +1,6 @@
 """Server channel settings."""
 
+from functools import lru_cache
 from typing import Any
 
 from pydantic import Field
@@ -34,3 +35,15 @@ class ServerChannelSettings(BaseChannelSettings):
     def __init__(self, **values: Any) -> None:
         """Initialize ServerChannelSettings with default credentials if not provided."""
         super().__init__(**values)
+
+
+@lru_cache(maxsize=1)
+def get_server_channel_settings() -> ServerChannelSettings:
+    """Process-wide ``ServerChannelSettings`` singleton.
+
+    Tests must call ``get_server_channel_settings.cache_clear()`` after mutating env.
+
+    Returns:
+        The shared ``ServerChannelSettings`` instance.
+    """
+    return ServerChannelSettings()

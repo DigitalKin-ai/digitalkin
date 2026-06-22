@@ -5,10 +5,10 @@ from pathlib import Path
 import pytest
 
 from digitalkin.services.filesystem import DefaultFilesystem
+from digitalkin.services.filesystem.exceptions import FilesystemServiceError
 from digitalkin.services.filesystem.filesystem_strategy import (
     FileFilter,
     FilesystemRecord,
-    FilesystemServiceError,
     UploadFileData,
 )
 
@@ -290,8 +290,10 @@ class TestDefaultFilesystem:
         Args:
             filesystem: DefaultFilesystem instance
         """
-        with pytest.raises(FilesystemServiceError):
+        with pytest.raises(FilesystemServiceError) as ei:
             await filesystem.get_file("nonexistent_file_id")
+        # B904: the except re-raises ``from e`` so the cause chain is preserved.
+        assert isinstance(ei.value.__cause__, FilesystemServiceError)
 
     async def test_update_file_nonexistent(self, filesystem: DefaultFilesystem, sample_file_data: bytes) -> None:
         """Test updating a non-existent file.

@@ -161,10 +161,13 @@ class TestBatchingBehavior:
         ctx.storage.update.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_threshold_triggers_flush(self) -> None:
+    async def test_threshold_triggers_flush(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Reaching the threshold auto-flushes to storage."""
+        from digitalkin.models.settings.module import get_module_settings
+
+        monkeypatch.setenv("DIGITALKIN_MODULE_FILE_HISTORY_FLUSH_THRESHOLD", "3")
+        get_module_settings.cache_clear()
         mixin = _ConcreteMixin()
-        mixin._fh_flush_threshold = 3
         ctx = _make_context()
 
         await mixin.append_files_history(ctx, _make_files(1, "a"))

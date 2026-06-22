@@ -1,12 +1,4 @@
-"""Adapter to convert Agno events to DigitalKin framework-agnostic events.
-
-This adapter bridges Agno-specific events to the DigitalKin event model,
-allowing the core DigitalKin SDK to remain independent of Agno.
-
-The adapter owns ALL state management: tracking reasoning/content lifecycle,
-generating message_id and reasoning_id on each phase start, and emitting
-proper start/completed events for text message and reasoning sequences.
-"""
+"""Convert Agno streaming events into framework-agnostic DigitalKin events."""
 
 from __future__ import annotations
 
@@ -17,84 +9,32 @@ from typing import TYPE_CHECKING, Any, TypeAlias
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from agno.run.agent import (
-        BaseAgentRunEvent as _AgentBase,
-    )
-    from agno.run.agent import (
-        ReasoningCompletedEvent as _AgentReasoningCompleted,
-    )
-    from agno.run.agent import (
-        ReasoningContentDeltaEvent as _AgentReasoningContentDelta,
-    )
-    from agno.run.agent import (
-        ReasoningStartedEvent as _AgentReasoningStarted,
-    )
-    from agno.run.agent import (
-        ReasoningStepEvent as _AgentReasoningStep,
-    )
-    from agno.run.agent import (
-        RunCompletedEvent as _AgentRunCompleted,
-    )
-    from agno.run.agent import (
-        RunContentEvent as _AgentRunContent,
-    )
-    from agno.run.agent import (
-        RunErrorEvent as _AgentRunError,
-    )
-    from agno.run.agent import (
-        RunPausedEvent as _AgentRunPaused,
-    )
-    from agno.run.agent import (
-        RunStartedEvent as _AgentRunStarted,
-    )
-    from agno.run.agent import (
-        ToolCallCompletedEvent as _AgentToolCallCompleted,
-    )
-    from agno.run.agent import (
-        ToolCallErrorEvent as _AgentToolCallError,
-    )
-    from agno.run.agent import (
-        ToolCallStartedEvent as _AgentToolCallStarted,
-    )
-    from agno.run.team import (
-        BaseTeamRunEvent as _TeamBase,
-    )
-    from agno.run.team import (
-        ReasoningCompletedEvent as _TeamReasoningCompleted,
-    )
-    from agno.run.team import (
-        ReasoningContentDeltaEvent as _TeamReasoningContentDelta,
-    )
-    from agno.run.team import (
-        ReasoningStartedEvent as _TeamReasoningStarted,
-    )
-    from agno.run.team import (
-        ReasoningStepEvent as _TeamReasoningStep,
-    )
-    from agno.run.team import (
-        RunCompletedEvent as _TeamRunCompleted,
-    )
-    from agno.run.team import (
-        RunContentEvent as _TeamRunContent,
-    )
-    from agno.run.team import (
-        RunErrorEvent as _TeamRunError,
-    )
-    from agno.run.team import (
-        RunPausedEvent as _TeamRunPaused,
-    )
-    from agno.run.team import (
-        RunStartedEvent as _TeamRunStarted,
-    )
-    from agno.run.team import (
-        ToolCallCompletedEvent as _TeamToolCallCompleted,
-    )
-    from agno.run.team import (
-        ToolCallErrorEvent as _TeamToolCallError,
-    )
-    from agno.run.team import (
-        ToolCallStartedEvent as _TeamToolCallStarted,
-    )
+    from agno.run.agent import BaseAgentRunEvent as _AgentBase
+    from agno.run.agent import ReasoningCompletedEvent as _AgentReasoningCompleted
+    from agno.run.agent import ReasoningContentDeltaEvent as _AgentReasoningContentDelta
+    from agno.run.agent import ReasoningStartedEvent as _AgentReasoningStarted
+    from agno.run.agent import ReasoningStepEvent as _AgentReasoningStep
+    from agno.run.agent import RunCompletedEvent as _AgentRunCompleted
+    from agno.run.agent import RunContentEvent as _AgentRunContent
+    from agno.run.agent import RunErrorEvent as _AgentRunError
+    from agno.run.agent import RunPausedEvent as _AgentRunPaused
+    from agno.run.agent import RunStartedEvent as _AgentRunStarted
+    from agno.run.agent import ToolCallCompletedEvent as _AgentToolCallCompleted
+    from agno.run.agent import ToolCallErrorEvent as _AgentToolCallError
+    from agno.run.agent import ToolCallStartedEvent as _AgentToolCallStarted
+    from agno.run.team import BaseTeamRunEvent as _TeamBase
+    from agno.run.team import ReasoningCompletedEvent as _TeamReasoningCompleted
+    from agno.run.team import ReasoningContentDeltaEvent as _TeamReasoningContentDelta
+    from agno.run.team import ReasoningStartedEvent as _TeamReasoningStarted
+    from agno.run.team import ReasoningStepEvent as _TeamReasoningStep
+    from agno.run.team import RunCompletedEvent as _TeamRunCompleted
+    from agno.run.team import RunContentEvent as _TeamRunContent
+    from agno.run.team import RunErrorEvent as _TeamRunError
+    from agno.run.team import RunPausedEvent as _TeamRunPaused
+    from agno.run.team import RunStartedEvent as _TeamRunStarted
+    from agno.run.team import ToolCallCompletedEvent as _TeamToolCallCompleted
+    from agno.run.team import ToolCallErrorEvent as _TeamToolCallError
+    from agno.run.team import ToolCallStartedEvent as _TeamToolCallStarted
 
     AgnoRunEvent: TypeAlias = _AgentBase | _TeamBase
     AgnoRunStartedEvent: TypeAlias = _AgentRunStarted | _TeamRunStarted
@@ -133,20 +73,10 @@ logger = logging.getLogger(__name__)
 
 
 class AgnoStreamAdapter:
-    """Stateful converter: Agno streaming events -> DigitalKin events.
+    """Stateful Agno→DigitalKin event converter.
 
-    Tracks reasoning and content state so that events arriving on
-    ``RunEvent.run_content`` are automatically wrapped in proper
-    lifecycle events (TextMessageStarted/Completed, ReasoningStarted/Completed).
-
-    Usage::
-
-        adapter = AgnoStreamAdapter()
-        async for raw_event in agent.arun(..., stream=True, stream_events=True):
-            for event in adapter.to_digitalkin_events(raw_event):
-                await send(event)
-        for event in adapter.flush():
-            await send(event)
+    Auto-wraps ``run_content`` deltas in TextMessage/Reasoning lifecycle
+    events and tracks HITL pause state.
     """
 
     def __init__(self) -> None:
@@ -162,9 +92,6 @@ class AgnoStreamAdapter:
         self._active_run_id: str | None = None
         self._completed_run_ids: set[str] = set()
 
-        # HITL pause state — populated when a RunPausedEvent is seen
-        # (tools with external_execution=True). Callers can inspect these
-        # after streaming to decide whether to persist and resume later.
         self._is_paused: bool = False
         self._paused_tool_executions: list[Any] = []
         self._paused_requirements: list[Any] = []
@@ -273,7 +200,7 @@ class AgnoStreamAdapter:
             agno_event: Event from Agno's streaming API.
 
         Returns:
-            List of corresponding DigitalKin events (may be empty).
+            List of DigitalKin events (may be empty).
 
         Raises:
             ImportError: If the optional 'agno' dependency is not installed.
@@ -503,8 +430,8 @@ class AgnoStreamAdapter:
         ``_handle_tool_call_started``, etc.) or by ``flush()``.
 
         Returns:
-            List of events: optionally a ``ReasoningStartedEvent`` (if
-            auto-opened), followed by the ``ReasoningStepEvent``.
+            Optionally a ``ReasoningStartedEvent`` followed by the
+            ``ReasoningStepEvent``.
         """
         events: list[BaseAgentRunEvent] = []
 
@@ -512,11 +439,9 @@ class AgnoStreamAdapter:
         if not content:
             return events
 
-        # Close active text message if transitioning to reasoning
         if self._content_active:
             events.extend(self._close_content(timestamp))
 
-        # Auto-open reasoning lifecycle if not already active
         if not self._reasoning_active:
             self._current_reasoning_id = str(uuid.uuid4())
             self._reasoning_active = True
@@ -627,31 +552,12 @@ class AgnoStreamAdapter:
     def _handle_run_paused(self, agno_event: AgnoRunPausedEvent, timestamp: Any) -> list[BaseAgentRunEvent]:
         """Handle ``RunEvent.run_paused`` — HITL pause on external tool execution.
 
-        Agno does NOT emit ``tool_call_started`` / ``tool_call_completed`` for
-        tools declared with ``external_execution=True`` (see
-        ``agno/models/base.py`` where the emission is short-circuited). The
-        front therefore never sees the corresponding AG-UI ``ToolCallStart``
-        / ``ToolCallArgs`` / ``ToolCallEnd`` events unless we synthesize them.
-
-        This handler:
-
-        1. Closes any active reasoning / content sequence.
-        2. Iterates ``RunPausedEvent.tools`` and emits one pair of
-           ``ToolCallStartedEvent`` + ``ToolCallCompletedEvent`` per tool.
-           The ``ToolCallCompletedEvent`` carries ``content=None`` and
-           ``tool.result=None`` so the downstream AG-UI bridge emits
-           ``ToolCallEnd`` *without* a ``ToolCallResult`` (guarded by the
-           ``if result_content:`` check in ``AgUiMixin``).
-        3. Records pause state on the adapter (``is_paused``,
-           ``paused_tool_executions``, ``paused_requirements``) so callers
-           can detect the pause after streaming and persist the run for
-           later resumption.
+        Agno suppresses tool_call_started/completed for tools with
+        ``external_execution=True``; we re-emit them so the front sees
+        the call.
 
         Returns:
-            Synthesized tool-call events for the paused tools. The caller
-            is responsible for subsequently emitting the AG-UI
-            ``RunFinished`` with ``result.status = "awaiting_tool_result"``
-            — this adapter stays protocol-agnostic.
+            Synthesized tool-call events for the paused external tools.
         """
         events: list[BaseAgentRunEvent] = []
 
@@ -667,11 +573,7 @@ class AgnoStreamAdapter:
         self._paused_tool_executions = list(tools)
         self._paused_requirements = list(requirements)
 
-        # RunPausedEvent.tools contains ALL tools from run_response.tools
-        # (both server-side tools already executed and external ones awaiting
-        # client execution). We must only synthesize events for external tools
-        # — the server-side ones (e.g. ReasoningTools' think/analyze) were
-        # already streamed via the normal tool_call_started/completed path.
+        # Only synthesize for external tools; server-side ones already streamed.
         seen_ids: set[str] = set()
         for tool_exec in tools:
             if not getattr(tool_exec, "external_execution_required", False):
@@ -761,8 +663,6 @@ class AgnoStreamAdapter:
             events.extend(self._close_reasoning(None))
         return events
 
-    # ── Private Helpers ──────────────────────────────────────────────────
-
     def _close_reasoning(self, timestamp: Any) -> list[BaseAgentRunEvent]:
         """Close active reasoning sequence.
 
@@ -808,30 +708,22 @@ class AgnoStreamAdapter:
     def _handle_run_content(self, agno_event: AgnoRunContentEvent, timestamp: Any) -> list[BaseAgentRunEvent]:
         """Handle RunEvent.run_content — the core state machine.
 
-        Rules:
-        - reasoning_content non-empty: reasoning data (close content if transitioning)
-        - content non-empty: text data (close reasoning if transitioning)
-        - reasoning_content == "": close reasoning if active
-        - content == "": close content if active
-        - None values: ignored
+        Non-empty content opens or extends its sequence; empty strings close it.
 
         Returns:
-            List of DigitalKin events for this run_content chunk.
+            DigitalKin events for this chunk.
         """
         events: list[BaseAgentRunEvent] = []
 
         reasoning_content = agno_event.reasoning_content
         content = agno_event.content
 
-        # ── Reasoning content handling ──
         if reasoning_content is not None:
             events.extend(self._process_reasoning_content(reasoning_content, timestamp))
 
-        # ── Text content handling ──
         if content is not None:
             events.extend(self._process_text_content(content, timestamp))
 
-        # Edge case: neither reasoning_content nor content
         if reasoning_content is None and content is None:
             logger.debug("run_content with no content, skipping")
 
@@ -846,17 +738,13 @@ class AgnoStreamAdapter:
         events: list[BaseAgentRunEvent] = []
 
         if not reasoning_content:
-            # Empty string "" → signal to close reasoning
             if self._reasoning_active:
                 events.extend(self._close_reasoning(timestamp))
             return events
 
-        # Non-empty string → reasoning data
-        # Close text message if transitioning from content to reasoning
         if self._content_active:
             events.extend(self._close_content(timestamp))
 
-        # Auto-open reasoning on first chunk
         if not self._reasoning_active:
             self._current_reasoning_id = str(uuid.uuid4())
             logger.debug("Reasoning auto-started, id=%s", self._current_reasoning_id)
@@ -890,18 +778,14 @@ class AgnoStreamAdapter:
         events: list[BaseAgentRunEvent] = []
 
         if not content:
-            # Empty string "" → signal to close text message
             if self._content_active:
                 events.extend(self._close_content(timestamp))
             return events
 
-        # Non-empty string → text data
-        # Close reasoning if transitioning from reasoning to content
         if self._reasoning_active:
             logger.debug("Reasoning auto-completed (text content arrived)")
             events.extend(self._close_reasoning(timestamp))
 
-        # Auto-open text message on first chunk
         if not self._content_active:
             self._current_message_id = str(uuid.uuid4())
             events.append(

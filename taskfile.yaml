@@ -9,7 +9,7 @@ tasks:
   venv:
     desc: "Install project venv"
     cmds:
-      - uv venv --python 3.10
+      - test -f .venv/bin/python || uv venv --python 3.10
 
   install-deps:
     desc: "Install project dependencies from pyproject.toml"
@@ -27,7 +27,7 @@ tasks:
   dev-deps:
     desc: "Install development dependencies"
     cmds:
-      - uv sync --extra taskiq --group dev --group docs # uv pip install -e ".[taskiq]" --group dev --group docs
+      - uv sync --group dev --group docs
 
   examples-deps:
     desc: "Install examples dependencies"
@@ -114,7 +114,7 @@ tasks:
     desc: "Setup development environment"
     cmds:
       - task: venv
-      - uv sync --extra taskiq --group dev --group docs --group tests
+      - uv sync --group dev --group docs --group tests
       - task: setup-pre-commit
 
   docs-serve:
@@ -133,8 +133,3 @@ tasks:
       - task: linter
       - uv run mypy src/{{.PACKAGE_NAME}}
       - task: run-tests
-
-  start-taskiq:
-    desc: "Start TaskIQ worker. be sure to enable rabbitMQ stream capability"
-    cmds:
-      - taskiq worker digitalkin.core.job_manager.taskiq_broker:TASKIQ_BROKER -w 1

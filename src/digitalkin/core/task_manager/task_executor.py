@@ -1,236 +1,91 @@
-"""Task executor for running tasks with full lifecycle management."""
+"""Task executor — runs module as a single asyncio task.
+
+Signal cancellation: ``SharedRedisListener.dispatch_signal`` writes the
+side channel (``pending_signal_action`` + ``last_signal_published_ns``)
+on the ``TaskSession`` and calls ``task.cancel()``. The
+``except asyncio.CancelledError`` block below reads
+``pending_signal_action`` and invokes ``_handle_stop`` /
+``_handle_cancel`` so ACK + audit fire on the live path.
+"""
 
 import asyncio
-import contextlib
 import datetime
-import os
-from collections.abc import Coroutine
+from collections.abc import Awaitable, Callable, Coroutine
 from typing import Any
 
-from digitalkin.core.profiling.task_profiler import ProfilerMode, TaskProfiler
+from digitalkin.core.task_manager.redis.redis_signal import SharedRedisListener
 from digitalkin.core.task_manager.task_session import TaskSession
 from digitalkin.logger import logger
-from digitalkin.models.core.task_monitor import (
-    CancellationReason,
-    SignalMessage,
-    SignalType,
-)
+from digitalkin.models.core.task_monitor import CancellationReason
 
 
 class TaskExecutor:
-    """Executes tasks with the supervisor pattern (main + signal listener).
+    """Runs module coroutine as a single asyncio task.
 
-    Pure execution logic - no task registry or orchestration.
-    Used by workers to run distributed tasks or by TaskManager for local execution.
+    Signal cancellation: SharedRedisListener calls task.cancel() directly
+    when a cancel/stop signal arrives via Redis pub/sub. No supervisor,
+    no signal listener task — just the module coroutine.
     """
 
-    _profiler_mode: ProfilerMode = ProfilerMode(os.environ.get("DIGITALKIN_PROFILER", "none"))
-    _profile_output_dir: str = os.environ.get("DIGITALKIN_PROFILE_OUTPUT_DIR", "./profiles")
-
     @staticmethod
-    async def execute_task(  # noqa: C901, PLR0915 — supervisor pattern
+    async def execute_task(  # noqa: C901
         task_id: str,
         mission_id: str,
         coro: Coroutine[Any, Any, None],
         session: TaskSession,
+        *,
+        on_finalize: Callable[[], Awaitable[None]] | None = None,
+        stream_drain_timeout: float = 2.0,
     ) -> asyncio.Task[None]:
-        """Execute a task using the supervisor pattern.
+        """Execute a task as a single asyncio task.
 
-        Runs two concurrent sub-tasks:
-        - Main coroutine (the actual work)
-        - Signal listener (watches for stop/cancel signals)
-
-        The first task to complete determines the outcome.
+        Cleanup is folded into the supervisor's ``finally`` so no separate
+        fire-and-forget cleanup task is spawned (one fewer task per message).
 
         Args:
-            task_id: Unique identifier for the task
-            mission_id: Mission identifier for the task
-            coro: The coroutine to execute (module.start(...))
-            session: TaskSession for state management
+            task_id: Unique identifier for the task.
+            mission_id: Mission identifier for the task.
+            coro: The coroutine to execute (module.start(...)).
+            session: TaskSession for state management.
+            on_finalize: Optional async callable invoked at the end of the
+                supervisor's ``finally`` after stream drain — typically
+                ``manager._cleanup_task(task_id, mission_id)``.
+            stream_drain_timeout: Max seconds to wait for ``session.stream_closed_event``
+                before forcing finalize.
 
         Returns:
-            asyncio.Task: The supervisor task managing the lifecycle
+            The module task.
         """
+        ids = {"mission_id": mission_id, "task_id": task_id}
 
-        async def signal_wrapper() -> None:
-            """Send initial signal and listen for signals."""
-            try:
-                # Send start signal via signal service
-                await session.signal_service.send_signal(
-                    task_id,
-                    SignalMessage(
-                        task_id=task_id,
-                        mission_id=mission_id,
-                        setup_id=session.setup_id,
-                        setup_version_id=session.setup_version_id,
-                        action=SignalType.START,
-                    ).model_dump(exclude_none=True),
-                )
-                logger.info(
-                    "Task start signal sent",
-                    extra={"mission_id": mission_id, "task_id": task_id},
-                )
-                # Start listening for signals
-                await session.listen_signals()
-
-            except asyncio.CancelledError:
-                logger.info("Signal listener cancelled", extra={"mission_id": mission_id, "task_id": task_id})
-            finally:
-                with contextlib.suppress(Exception):
-                    await session.signal_service.send_signal(
-                        task_id,
-                        SignalMessage(
-                            task_id=task_id,
-                            mission_id=mission_id,
-                            setup_id=session.setup_id,
-                            setup_version_id=session.setup_version_id,
-                            action=SignalType.STOP,
-                            cancellation_reason=session.cancellation_reason,
-                            error_message=session._last_exception,  # noqa: SLF001
-                            exception_traceback=session._last_traceback,  # noqa: SLF001
-                        ).model_dump(exclude_none=True),
-                    )
-                logger.info("Signal listener ended", extra={"mission_id": mission_id, "task_id": task_id})
-
-        async def supervisor() -> None:  # noqa: C901, PLR0912, PLR0915
-            """Supervise the two concurrent tasks and handle outcomes.
-
-            Raises:
-                asyncio.CancelledError: If the supervisor task is cancelled.
-            """
-            profiler = TaskProfiler(task_id, TaskExecutor._profiler_mode, TaskExecutor._profile_output_dir)
-            profiler.start()
-
+        async def _run() -> None:
             session.started_at = datetime.datetime.now(datetime.timezone.utc)
-            session.status = "running"
-
-            main_task = None
-            sig_task = None
-            cleanup_reason = CancellationReason.UNKNOWN
+            await session.set_status("running")
 
             try:
-                main_task = asyncio.create_task(coro, name=f"{task_id}_main")
-                sig_task = asyncio.create_task(signal_wrapper(), name=f"{task_id}_listener")
-                done, pending = await asyncio.wait(
-                    [main_task, sig_task],
-                    return_when=asyncio.FIRST_COMPLETED,
-                )
+                await coro
 
-                # Determine cleanup reason based on which task completed first
-                completed = next(iter(done))
-
-                if completed is main_task:
-                    cleanup_reason = CancellationReason.SUCCESS_CLEANUP
-                elif completed is sig_task:
-                    if session._signal_listener_failed:  # noqa: SLF001
-                        cleanup_reason = CancellationReason.FAILURE_CLEANUP
-                    else:
-                        cleanup_reason = CancellationReason.SIGNAL_SERVICE_CANCEL
-
-                # Signal stream to close
-                session.close_stream()
-
-                # Cancel pending tasks with proper reason logging
-                if pending:
-                    await asyncio.sleep(0.01)  # Allow one event loop cycle
-
-                    pending_names = [t.get_name() for t in pending]
-                    logger.debug(
-                        "Cancelling pending tasks: %s, reason: %s",
-                        pending_names,
-                        cleanup_reason.value,
-                        extra={
-                            "mission_id": mission_id,
-                            "task_id": task_id,
-                            "pending_tasks": pending_names,
-                            "cancellation_reason": cleanup_reason.value,
-                        },
-                    )
-                    for t in pending:
-                        t.cancel()
-
-                # Propagate exception/result from the finished task
-                await completed
-
-                # Determine final status based on which task completed
-                if completed is main_task:
-                    session.status = "completed"
-                    session.cancellation_reason = CancellationReason.COMPLETED
-                    logger.info(
-                        "Main task completed successfully",
-                        extra={"mission_id": mission_id, "task_id": task_id},
-                    )
-                elif completed is sig_task:
-                    if session._signal_listener_failed:  # noqa: SLF001
-                        session.status = "failed"
-                        session.cancellation_reason = CancellationReason.GRPC_SERVICE_ERROR
-                        logger.error(
-                            "Signal listener failed, marking task as failed",
-                            extra={
-                                "mission_id": mission_id,
-                                "task_id": task_id,
-                                "cancellation_reason": CancellationReason.GRPC_SERVICE_ERROR.value,
-                            },
-                        )
-                    else:
-                        session.status = "cancelled"
-                        session.cancellation_reason = CancellationReason.SIGNAL_SERVICE_CANCEL
-                        logger.info(
-                            "Task cancelled via signal service",
-                            extra={
-                                "mission_id": mission_id,
-                                "task_id": task_id,
-                                "cancellation_reason": CancellationReason.SIGNAL_SERVICE_CANCEL.value,
-                            },
-                        )
+                await session.set_status("completed")
+                session.cancellation_reason = CancellationReason.COMPLETED
+                logger.info("Task completed", extra=ids)
 
             except asyncio.CancelledError:
-                session.status = "cancelled"
-                logger.info(
-                    "Task cancelled externally: '%s', reason: %s",
-                    task_id,
-                    session.cancellation_reason.value,
-                    extra={
-                        "mission_id": mission_id,
-                        "task_id": task_id,
-                        "cancellation_reason": session.cancellation_reason.value,
-                    },
-                )
-                cleanup_reason = CancellationReason.FAILURE_CLEANUP
-                raise
+                action = session.pending_signal_action
+                session.pending_signal_action = ""
+                if action == "stop":
+                    await session._handle_stop()  # noqa: SLF001
+                else:
+                    if session.cancellation_reason == CancellationReason.UNKNOWN:
+                        session.cancellation_reason = CancellationReason.SIGNAL_SERVICE_CANCEL
+                    await session._handle_cancel(session.cancellation_reason)  # noqa: SLF001
+                logger.info("Task cancelled (%s)", session.cancellation_reason.value, extra=ids)
             except Exception as e:
-                session.status = "failed"
-                cleanup_reason = CancellationReason.FAILURE_CLEANUP
+                await session.set_status("failed")
                 session.record_exception(e)
-                logger.exception(
-                    "Task failed with exception: '%s'",
-                    task_id,
-                    extra={"mission_id": mission_id, "task_id": task_id},
-                )
-                raise
+                logger.exception("Task failed: '%s'", task_id, extra=ids)
             finally:
-                profiler.stop()
                 session.completed_at = datetime.datetime.now(datetime.timezone.utc)
-                # Ensure all tasks are cleaned up with proper reason
-                tasks_to_cleanup = [t for t in [main_task, sig_task] if t is not None and not t.done()]
-                if tasks_to_cleanup:
-                    cleanup_names = [t.get_name() for t in tasks_to_cleanup]
-                    logger.debug(
-                        "Final cleanup of %d remaining tasks: %s, reason: %s",
-                        len(tasks_to_cleanup),
-                        cleanup_names,
-                        cleanup_reason.value,
-                        extra={
-                            "mission_id": mission_id,
-                            "task_id": task_id,
-                            "cleanup_count": len(tasks_to_cleanup),
-                            "cleanup_tasks": cleanup_names,
-                            "cancellation_reason": cleanup_reason.value,
-                        },
-                    )
-                    for t in tasks_to_cleanup:
-                        t.cancel()
-                    await asyncio.gather(*tasks_to_cleanup, return_exceptions=True)
+                session.close_stream()
 
                 duration = (
                     (session.completed_at - session.started_at).total_seconds()
@@ -238,19 +93,46 @@ class TaskExecutor:
                     else None
                 )
                 logger.info(
-                    "Task execution completed: '%s', status: %s, reason: %s, duration: %.2fs",
+                    "Task done: '%s' status=%s duration=%.2fs",
                     task_id,
                     session.status,
-                    session.cancellation_reason.value if session.status == "cancelled" else "n/a",
                     duration or 0,
-                    extra={
-                        "mission_id": mission_id,
-                        "task_id": task_id,
-                        "status": session.status,
-                        "cancellation_reason": session.cancellation_reason.value,
-                        "duration": duration,
-                    },
+                    extra=ids,
                 )
 
-        # Return the supervisor task to be awaited by caller
-        return asyncio.create_task(supervisor(), name=f"{task_id}_supervisor")
+                # Wait for stream drain then run finalize (slot release + session pop).
+                if on_finalize is not None:
+                    try:
+                        await asyncio.wait_for(
+                            session.stream_closed_event.wait(),
+                            timeout=stream_drain_timeout,
+                        )
+                    except asyncio.TimeoutError:
+                        logger.warning("Stream drain timeout, proceeding with cleanup", extra=ids)
+                    try:
+                        await on_finalize()
+                    except Exception:
+                        logger.exception("on_finalize raised — task may leak resources", extra=ids)
+
+        task = asyncio.create_task(_run(), name=f"{task_id}_main")
+
+        if session.signal_service is not None:
+            listener = SharedRedisListener.singleton_or_none()
+            if listener is None:
+                logger.warning(
+                    "No SharedRedisListener instance — signals disabled for task_id=%s",
+                    task_id,
+                    extra=ids,
+                )
+            else:
+                try:
+                    listener.register(task_id, session, task)
+                except Exception:
+                    logger.warning(
+                        "Signal registration failed — signals disabled for task_id=%s",
+                        task_id,
+                        extra=ids,
+                        exc_info=True,
+                    )
+
+        return task

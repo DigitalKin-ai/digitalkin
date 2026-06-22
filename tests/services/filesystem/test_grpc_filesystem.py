@@ -19,10 +19,10 @@ from grpc.framework.foundation import logging_pool
 
 from digitalkin.models.grpc_servers.models import ClientConfig
 from digitalkin.models.settings.utils.channel import ControlFlow, SecurityMode
+from digitalkin.services.filesystem.exceptions import FilesystemServiceError
 from digitalkin.services.filesystem.filesystem_strategy import (
     FileFilter,
     FilesystemRecord,
-    FilesystemServiceError,
     UploadFileData,
 )
 from digitalkin.services.filesystem.grpc_filesystem import GrpcFilesystem

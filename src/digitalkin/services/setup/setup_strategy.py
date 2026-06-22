@@ -7,10 +7,6 @@ from typing import Any
 from pydantic import BaseModel
 
 
-class SetupServiceError(Exception):
-    """Base exception for Setup service errors."""
-
-
 class SetupVersionData(BaseModel):
     """Pydantic model for SetupVersion data validation."""
 
