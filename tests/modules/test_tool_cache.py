@@ -370,10 +370,7 @@ class TestResolvedToolsCacheBehavior:
             documentation="Test tool documentation",
         )
 
-        mock_communication = AsyncMock()
-        mock_communication.get_module_schemas.return_value = {
-            "input": {"json_schema": {"$defs": {}}},
-        }
+        mock_communication = _communication_with_search()
 
         await setup.build_tool_cache(mock_registry, mock_communication)
 
