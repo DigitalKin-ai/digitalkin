@@ -22,6 +22,7 @@ from digitalkin.models.module.module_types import (
 from digitalkin.models.module.select_schema import SelectSchema
 from digitalkin.models.module.tool_cache import ToolCache
 from digitalkin.models.module.utility import EndOfStreamOutput, UtilityProtocol
+from digitalkin.models.services.registry import RegistryModuleType
 from digitalkin.models.services.storage import BaseRole
 from digitalkin.models.settings.module import get_module_settings
 from digitalkin.modules.trigger_handler import TriggerHandler
@@ -45,7 +46,7 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
     """BaseModule is the abstract base for all modules in the DigitalKin SDK."""
 
     name: str
-    description: str
+    description: str = ""
 
     setup_format: type[SetupModelT]
     input_format: type[InputModelT]
@@ -59,6 +60,7 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
     _extended_input_format: ClassVar[type[DataModel] | None] = None
     _shared: ClassVar[dict[str, Any]] = {}
     _builds_tool_cache: ClassVar[bool] = False
+    registry_type: ClassVar[RegistryModuleType] = RegistryModuleType.UNSPECIFIED
     """Only ArchetypeModule (tool-composing) resolves a tool cache."""
 
     @classmethod
@@ -233,6 +235,29 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
             return json.dumps({}, indent=2)
 
         return json.dumps(select_schema, indent=2)
+
+    @classmethod
+    def build_registry_documentation(cls) -> str:
+        """Assemble the registry documentation: author description + LLM-readable trigger table.
+
+        Enforces an author-written description of the archetype/tool specificity
+        (``cls.description``, falling back to ``metadata['description']``), then appends a
+        markdown table of the module's non-utility triggers for registry index search.
+
+        Returns:
+            Markdown documentation string sent as the registration ``documentation``.
+
+        Raises:
+            ValueError: If the module declares no description.
+        """
+        description = (cls.description or cls.metadata.get("description", "")).strip()
+        if not description:
+            msg = f"{cls.__name__} must define a non-empty 'description' for registry indexing"
+            raise ValueError(msg)
+        protocols = cls.triggers_discoverer.get_registered_protocols_with_info(exclude_utility=True)
+        rows = "\n".join(f"| {protocol} | {desc} |" for protocol, desc in sorted(protocols.items()))
+        table = f"| Trigger | Description |\n| --- | --- |\n{rows}" if rows else "_No triggers._"
+        return f"{description}\n\n## Triggers\n\n{table}"
 
     @classmethod
     async def get_output_format(cls, *, llm_format: bool) -> str:

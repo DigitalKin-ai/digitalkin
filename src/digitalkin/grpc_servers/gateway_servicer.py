@@ -1000,20 +1000,26 @@ class GatewayServicer:
             # ``dial_back_close_grace_s`` for non-conforming consumers.
             response_iter = aiter(responses)
             while True:
+                grace = get_gateway_settings().dial_back_close_grace_s
+                if outgoing_done.is_set():
+                    read: Any = asyncio.wait_for(anext(response_iter), timeout=grace)
+                else:
+                    # Bound a read parked before ``outgoing_done`` fires: once the outputs
+                    # (incl. a fatal stream.error+EOS) finish draining, switch to the close-grace
+                    # wait instead of parking to the ``dial_back_max_lifetime_s`` RPC deadline.
+                    pending = asyncio.ensure_future(anext(response_iter))
+                    drained = asyncio.ensure_future(outgoing_done.wait())
+                    await asyncio.wait({pending, drained}, return_when=asyncio.FIRST_COMPLETED)
+                    drained.cancel()
+                    read = pending if pending.done() else asyncio.wait_for(pending, timeout=grace)
                 try:
-                    if outgoing_done.is_set():
-                        upstream = await asyncio.wait_for(
-                            anext(response_iter),
-                            timeout=get_gateway_settings().dial_back_close_grace_s,
-                        )
-                    else:
-                        upstream = await anext(response_iter)
+                    upstream = await read
                 except StopAsyncIteration:
                     break
                 except asyncio.TimeoutError:
                     logger.info(
                         "Consumer didn't close response stream within %.1fs after stream.end — closing BiDi",
-                        get_gateway_settings().dial_back_close_grace_s,
+                        grace,
                         extra=log_extra,
                     )
                     break

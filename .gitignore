@@ -192,6 +192,11 @@ certs/
 docker-compose.override.yml
 
 CLAUDE.md
+docker/init_pycharm_helpers.sh
+scripts
 
 # Claude Code (share .claude/agents + .claude/skills; keep local settings out)
-.claude/settings.local.json
+.claude
+graphify-out
+.todo
+.playwright-mcp

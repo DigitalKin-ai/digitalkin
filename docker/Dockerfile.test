@@ -20,12 +20,9 @@ COPY pyproject.toml uv.lock /app/
 COPY src/ /app/src/
 COPY tests/ /app/tests/
 
-# install the EXACT locked versions (uv.lock) so the container matches the
-# resolved dev env — `uv pip install` alone re-resolves and drifts to newer
-# patches (e.g. grpcio 1.81.1 vs the locked 1.81.0), which breaks tests.
-RUN uv export --frozen --no-emit-project --group dev --group tests --no-hashes -o /tmp/requirements.txt && \
-    uv pip install --system -r /tmp/requirements.txt && \
-    uv pip install --system --no-deps -e "."
+# install project (editable) + extras; this layer installs heavy deps one time
+RUN uv pip install --system -e ".[taskiq]" && \
+    uv pip install --system --group dev --group tests
 
 # copy entrypoint script
 COPY docker/entrypoint-test.sh /entrypoint-test.sh

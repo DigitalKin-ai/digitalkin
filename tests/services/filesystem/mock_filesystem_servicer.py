@@ -60,6 +60,21 @@ class MockFilesystemServicer(filesystem_service_pb2_grpc.FilesystemServiceServic
             status=status,
         )
 
+    @staticmethod
+    def _resolve_context(kind: int) -> str:
+        """Resolve a context KIND enum to the concrete test id.
+
+        Mirrors the dev4 server contract: requests carry only the ContextFile kind;
+        the concrete id is resolved server-side — here from the fixed test ids.
+
+        Args:
+            kind: ContextFile enum value from the request.
+
+        Returns:
+            The concrete context id string.
+        """
+        return "setup" if kind == filesystem_pb2.CONTEXT_SETUP else "test_mission"
+
     def _generate_url(self, context: str, name: str) -> str:
         """Generate a fake URL for a file.
 
@@ -91,7 +106,7 @@ class MockFilesystemServicer(filesystem_service_pb2_grpc.FilesystemServiceServic
             total_failed = 0
 
             for file_data in request.files:
-                context = file_data.context
+                context = self._resolve_context(file_data.context)
                 name = file_data.name
 
                 # Initialize the context dict if it doesn't exist
@@ -172,7 +187,7 @@ class MockFilesystemServicer(filesystem_service_pb2_grpc.FilesystemServiceServic
             filesystem_pb2.GetFileResponse: The response containing the file
         """
         try:
-            context = request.context
+            context = self._resolve_context(request.context)
             file_id = request.file_id
 
             # Check if context exists
@@ -216,8 +231,10 @@ class MockFilesystemServicer(filesystem_service_pb2_grpc.FilesystemServiceServic
             filesystem_pb2.GetFilesResponse: The response containing matching files
         """
         try:
-            context = request.context
-            filters = FileFilter(**MessageToDict(request.filters))
+            context = self._resolve_context(request.context)
+            raw_filters = MessageToDict(request.filters)
+            raw_filters["context"] = "setup" if request.filters.context == filesystem_pb2.CONTEXT_SETUP else "mission"
+            filters = FileFilter(**raw_filters)
 
             # Check if context exists
             if context not in self.files:
@@ -294,7 +311,7 @@ class MockFilesystemServicer(filesystem_service_pb2_grpc.FilesystemServiceServic
             filesystem_pb2.UpdateFileResponse: The response containing the updated file
         """
         try:
-            context = request.context
+            context = self._resolve_context(request.context)
             file_id = request.file_id
 
             # Check if context exists
@@ -360,8 +377,10 @@ class MockFilesystemServicer(filesystem_service_pb2_grpc.FilesystemServiceServic
             filesystem_pb2.DeleteFilesResponse: The response indicating success or failure
         """
         try:
-            context = request.context
-            filters = FileFilter(**MessageToDict(request.filters))
+            context = self._resolve_context(request.context)
+            raw_filters = MessageToDict(request.filters)
+            raw_filters["context"] = "setup" if request.filters.context == filesystem_pb2.CONTEXT_SETUP else "mission"
+            filters = FileFilter(**raw_filters)
             permanent = request.permanent
 
             # Check if context exists

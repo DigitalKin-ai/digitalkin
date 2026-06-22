@@ -10,6 +10,7 @@ from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
 from digitalkin.grpc_servers.utils.grpc_error_handler import GrpcErrorHandlerMixin
 from digitalkin.logger import logger
 from digitalkin.models.grpc_servers.models import ClientConfig
+from digitalkin.models.services.services import Context
 from digitalkin.services.filesystem.exceptions import FilesystemServiceError
 from digitalkin.services.filesystem.filesystem_strategy import (
     FileFilter,
@@ -79,6 +80,35 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper, GrpcErrorHandlerMixi
             content=file.content,
         )
 
+    @staticmethod
+    def _context_enum(context: Context) -> filesystem_pb2.ContextFile:
+        """Map a context kind to the wire's context-kind enum.
+
+        Since dev4 the request carries only the kind; the concrete id is resolved
+        server-side from the request metadata stamped by ``RequestIdClientInterceptor``.
+        USERS/ORGANIZATIONS are read-only cross-owner scopes — only the kind is sent;
+        the server derives the owning user/organization from the request context (no id
+        is transmitted by the client).
+
+        Args:
+            context: The context kind.
+
+        Returns:
+            The matching ``ContextFile`` wire enum, ``CONTEXT_UNSPECIFIED`` otherwise.
+        """
+        # TODO(validate): remove after prod validation
+        # [VALIDATE CTXENUM] server resolves the concrete id from metadata
+        match context:
+            case Context.SETUP:
+                return filesystem_pb2.CONTEXT_SETUP
+            case Context.MISSIONS:
+                return filesystem_pb2.CONTEXT_MISSIONS
+            case Context.USERS:
+                return filesystem_pb2.CONTEXT_USERS
+            case Context.ORGANIZATIONS:
+                return filesystem_pb2.CONTEXT_ORGANIZATIONS
+        return filesystem_pb2.CONTEXT_UNSPECIFIED
+
     def _filter_to_proto(self, filters: FileFilter) -> filesystem_pb2.FileFilter:
         """Convert a FileFilter to a FileFilter proto message.
 
@@ -88,19 +118,13 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper, GrpcErrorHandlerMixi
         Returns:
             filesystem_pb2.FileFilter: The converted FileFilter proto message
         """
-        context_id = "unknown"
-        match filters.context:
-            case "setup":
-                context_id = self.setup_id
-            case "mission":
-                context_id = self.mission_id
         return filesystem_pb2.FileFilter(
             **filters.model_dump(exclude={"file_types", "status", "context"}),
             file_types=[self._file_type_to_enum(file_type) for file_type in filters.file_types]
             if filters.file_types
             else None,
             status=self._file_status_to_enum(filters.status) if filters.status else None,
-            context=context_id,
+            context=self._context_enum(filters.context),
         )
 
     def __init__(
@@ -152,7 +176,7 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper, GrpcErrorHandlerMixi
                     metadata_struct.update(file.metadata)
                 upload_files.append(
                     filesystem_pb2.UploadFileData(
-                        context=self.mission_id,
+                        context=filesystem_pb2.CONTEXT_MISSIONS,
                         name=file.name,
                         file_type=self._file_type_to_enum(file.file_type),
                         content_type=file.content_type or "application/octet-stream",
@@ -171,7 +195,7 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper, GrpcErrorHandlerMixi
     async def get_file(
         self,
         file_id: str,
-        context: Literal["mission", "setup"] = "mission",
+        context: Context = Context.MISSIONS,
         *,
         include_content: bool = False,
     ) -> FilesystemRecord:
@@ -179,7 +203,7 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper, GrpcErrorHandlerMixi
 
         Args:
             file_id: The ID of the file to be retrieved
-            context: The context of the files (mission or setup)
+            context: The context of the file (mission/setup, or user/organization for cross-owner reads)
             include_content: Whether to include file content in response
 
         Returns:
@@ -188,15 +212,10 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper, GrpcErrorHandlerMixi
         Raises:
             FilesystemServiceError: If there is an error retrieving the file
         """
-        match context:
-            case "setup":
-                context_id = self.setup_id
-            case "mission":
-                context_id = self.mission_id
         logger.debug("debug:get_file file_id=%s context=%s", file_id, context)
         async with self.handle_grpc_errors("GetFile", FilesystemServiceError):
             request = filesystem_pb2.GetFileRequest(
-                context=context_id,
+                context=self._context_enum(context),
                 file_id=file_id,
                 include_content=include_content,
             )
@@ -244,7 +263,7 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper, GrpcErrorHandlerMixi
         """
         async with self.handle_grpc_errors("UpdateFile", FilesystemServiceError):
             request = filesystem_pb2.UpdateFileRequest(
-                context=self.mission_id,
+                context=filesystem_pb2.CONTEXT_MISSIONS,
                 file_id=file_id,
                 content=content,
                 file_type=self._file_type_to_enum(file_type) if file_type else None,
@@ -279,7 +298,7 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper, GrpcErrorHandlerMixi
         logger.debug("debug:delete_files permanent=%s force=%s", permanent, force)
         async with self.handle_grpc_errors("DeleteFiles", FilesystemServiceError):
             request = filesystem_pb2.DeleteFilesRequest(
-                context=self.mission_id,
+                context=filesystem_pb2.CONTEXT_MISSIONS,
                 filters=self._filter_to_proto(filters),
                 permanent=permanent,
                 force=force,
@@ -309,14 +328,9 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper, GrpcErrorHandlerMixi
         Returns:
             tuple[list[FilesystemRecord], int]: List of files and total count
         """
-        match filters.context:
-            case "setup":
-                context_id = self.setup_id
-            case "mission":
-                context_id = self.mission_id
         async with self.handle_grpc_errors("GetFiles", FilesystemServiceError):
             request = filesystem_pb2.GetFilesRequest(
-                context=context_id,
+                context=self._context_enum(filters.context),
                 filters=self._filter_to_proto(filters),
                 include_content=include_content,
                 list_size=list_size,

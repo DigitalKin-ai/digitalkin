@@ -17,7 +17,7 @@ class TestToolCachePrebuilt:
 
         prebuilt = ToolCache()
         prebuilt.add(ToolModuleInfo(
-            module_id="mod:1", module_type="tool", address="localhost",
+            module_id="mod:1", module_type="tool_module", address="localhost",
             port=50055, setup_id="setups:test", tool_name="TestTool",
         ))
 

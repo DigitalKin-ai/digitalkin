@@ -722,6 +722,80 @@ def test_tool_call_started_closes_reasoning_and_content() -> None:
     assert started.tool.tool_args == {"q": "x"}
 
 
+def test_manager_tool_name_is_suffixed_with_action() -> None:
+    """A registry-manager call surfaces its action: services_manager → services_manager_create."""
+    from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
+
+    adapter = AgnoStreamAdapter()
+    tool = _make_tool(
+        tool_call_id="tc1",
+        tool_name="services_manager",
+        tool_args={"action": {"action": "create", "name": "x", "content": {"a": 1}}},
+    )
+    result = adapter.to_digitalkin_events(_make_event(_FakeRunEvent.tool_call_started, tool=tool))
+    started = next(e for e in result if isinstance(e, ToolCallStartedEvent))
+    assert started.tool is not None
+    assert started.tool.tool_name == "services_manager_create"
+    # Args are still forwarded verbatim — only the display name changes.
+    assert started.tool.tool_args == {"action": {"action": "create", "name": "x", "content": {"a": 1}}}
+
+
+def test_manager_tool_name_suffix_on_completed() -> None:
+    """The suffix is applied on completion too, so start/end labels match."""
+    from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
+
+    adapter = AgnoStreamAdapter()
+    tool = _make_tool(
+        tool_call_id="tc1",
+        tool_name="kins_manager",
+        tool_args={"action": {"action": "get", "setup_id": "s"}},
+        result="ok",
+    )
+    result = adapter.to_digitalkin_events(_make_event(_FakeRunEvent.tool_call_completed, tool=tool, content="ok"))
+    assert result[0].tool is not None
+    assert result[0].tool.tool_name == "kins_manager_get"
+
+
+def test_manager_tool_name_from_stringified_action() -> None:
+    """Some models send the nested action as a JSON string — surface the discriminator, not the blob."""
+    from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
+
+    adapter = AgnoStreamAdapter()
+    tool = _make_tool(
+        tool_call_id="tc1",
+        tool_name="tools_manager",
+        tool_args={"action": '{"action": "search", "query": "zzz", "limit": 5}'},
+    )
+    result = adapter.to_digitalkin_events(_make_event(_FakeRunEvent.tool_call_started, tool=tool))
+    started = next(e for e in result if isinstance(e, ToolCallStartedEvent))
+    assert started.tool is not None
+    assert started.tool.tool_name == "tools_manager_search"  # not tools_manager_{"action": ...}
+
+
+def test_non_manager_tool_name_is_unchanged() -> None:
+    """A plain tool keeps its name even when it carries an 'action' argument."""
+    from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
+
+    adapter = AgnoStreamAdapter()
+    tool = _make_tool(tool_call_id="tc1", tool_name="search", tool_args={"action": "noop"})
+    result = adapter.to_digitalkin_events(_make_event(_FakeRunEvent.tool_call_started, tool=tool))
+    started = next(e for e in result if isinstance(e, ToolCallStartedEvent))
+    assert started.tool is not None
+    assert started.tool.tool_name == "search"
+
+
+def test_manager_tool_name_unchanged_when_action_absent() -> None:
+    """A manager call with unreadable args falls back to the bare manager name."""
+    from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
+
+    adapter = AgnoStreamAdapter()
+    tool = _make_tool(tool_call_id="tc1", tool_name="tools_manager", tool_args=None)
+    result = adapter.to_digitalkin_events(_make_event(_FakeRunEvent.tool_call_started, tool=tool))
+    started = next(e for e in result if isinstance(e, ToolCallStartedEvent))
+    assert started.tool is not None
+    assert started.tool.tool_name == "tools_manager"
+
+
 def test_tool_call_started_without_tool() -> None:
     from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
 
@@ -851,6 +925,26 @@ def test_run_paused_synthesizes_tool_events_for_external_tool() -> None:
     assert completed.tool.result is None
     assert adapter.is_paused is True
     assert "ext1" in adapter._closed_tool_call_ids
+
+
+def test_run_paused_suffixes_manager_action_in_display_name() -> None:
+    """An external-execution manager (load_manager) surfaces its action, like the CRUD managers."""
+    from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
+
+    adapter = AgnoStreamAdapter()
+    tool = _make_tool_execution(
+        tool_call_id="load1",
+        tool_name="load_manager",
+        tool_args={"action": {"action": "tool", "setup_id": "s1"}},
+        external_execution_required=True,
+    )
+    result = adapter.to_digitalkin_events(
+        _make_event(_FakeRunEvent.run_paused, tools=[tool], requirements=[]),
+    )
+    started = result[0]
+    assert isinstance(started, ToolCallStartedEvent)
+    assert started.tool is not None
+    assert started.tool.tool_name == "load_manager_tool"
 
 
 def test_run_paused_skips_backend_only_tools() -> None:

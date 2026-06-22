@@ -1,5 +1,7 @@
 """Models for the Agno community integration."""
 
+from typing import Any
+
 from ag_ui.core.types import Message as AgUiMessage
 from pydantic import BaseModel, Field
 
@@ -26,3 +28,137 @@ class PauseInfo(BaseModel):
     run_id: str
     pending_tool_call_ids: list[str]
     new_messages: list[AgUiMessage] = Field(default_factory=list)
+
+
+class ToolOutputMetadata(BaseModel):
+    """Cost and execution metadata reported by a tool module itself.
+
+    Enables accurate cost aggregation across modules.
+
+    Attributes:
+        response_time_ms: Time taken for the API call(s) in milliseconds.
+        api_calls_made: Number of API calls made by the tool.
+        cost_estimate_usd: Estimated cost in USD.
+        tavily_credits_used: Tavily API credits consumed (if applicable).
+        search_depth: Search depth used (basic, advanced, etc.).
+        include_raw_content: Whether raw content was requested.
+        queries_count: Number of queries executed.
+        results_returned: Number of results returned.
+        urls_processed: Number of URLs processed (for extract operations).
+    """
+
+    response_time_ms: float | None = Field(default=None, description="API response time in ms")
+    api_calls_made: int = Field(default=1, description="Number of API calls made")
+    cost_estimate_usd: float | None = Field(default=None, description="Estimated cost in USD")
+    tavily_credits_used: int | None = Field(default=None, description="Tavily credits consumed")
+    search_depth: str | None = Field(default=None, description="Search depth used")
+    include_raw_content: bool = Field(default=False, description="Whether raw content was requested")
+    queries_count: int = Field(default=1, description="Number of queries executed")
+    results_returned: int = Field(default=0, description="Number of results returned")
+    urls_processed: int = Field(default=0, description="Number of URLs processed")
+
+
+class ToolCallMetadata(BaseModel):
+    """Metadata from a module tool call including cost and timing information.
+
+    Attributes:
+        module_id: The SDK module ID that was called (e.g., "modules:tool_websearch").
+        success: Whether the tool call completed successfully.
+        duration_ms: Execution time in milliseconds.
+        cost_tracked: Whether cost metadata is available from the tool.
+        error: Error message if the call failed, None otherwise.
+        input_kwargs: The kwargs passed to the tool (for debugging).
+        output_summary: Brief summary of the output (truncated for logs).
+        tool_metadata: Metadata returned by the tool itself (cost, API calls, etc.).
+    """
+
+    module_id: str = Field(..., description="The SDK module ID that was called")
+    success: bool = Field(..., description="Whether the tool call succeeded")
+    duration_ms: float = Field(..., description="Execution time in milliseconds")
+    cost_tracked: bool = Field(default=False, description="Whether cost metadata is available from tool")
+    error: str | None = Field(default=None, description="Error message if failed")
+    input_kwargs: dict[str, Any] | None = Field(
+        default=None,
+        description="Input kwargs passed to the tool for debugging",
+    )
+    output_summary: str | None = Field(
+        default=None,
+        description="Brief summary of the output (truncated)",
+    )
+    tool_metadata: ToolOutputMetadata | None = Field(
+        default=None,
+        description="Metadata returned by the tool module (cost, API calls, etc.)",
+    )
+
+    def to_success_dict(self) -> dict[str, Any]:
+        """Convert metadata to dict for successful responses.
+
+        Returns:
+            Dictionary with success-relevant fields (error excluded).
+        """
+        return self.model_dump(exclude={"error"})
+
+    def to_error_dict(self) -> dict[str, Any]:
+        """Convert metadata to dict for error responses.
+
+        Returns:
+            Dictionary with error-relevant fields.
+        """
+        return self.model_dump(include={"module_id", "success", "duration_ms", "error"})
+
+    def to_log_dict(self) -> dict[str, Any]:
+        """Convert metadata to dict for logging.
+
+        Returns:
+            Dictionary suitable for log extra data, large kwargs truncated.
+        """
+        data: dict[str, Any] = {
+            "module_id": self.module_id,
+            "success": self.success,
+            "duration_ms": self.duration_ms,
+            "cost_tracked": self.cost_tracked,
+        }
+        if self.error:
+            data["error"] = self.error
+        if self.input_kwargs:
+            max_len = 100
+            data["input_kwargs"] = {
+                k: (str(v)[:max_len] + "..." if len(str(v)) > max_len else v) for k, v in self.input_kwargs.items()
+            }
+        if self.output_summary:
+            data["output_summary"] = self.output_summary
+        if self.tool_metadata:
+            data["tool_metadata"] = self.tool_metadata.model_dump(exclude_none=True)
+        return data
+
+    @staticmethod
+    def extract_tool_metadata(output: dict[str, Any]) -> "ToolOutputMetadata | None":
+        """Extract tool metadata from a tool's output if present.
+
+        Args:
+            output: The tool output dictionary.
+
+        Returns:
+            ToolOutputMetadata if metadata is present, None otherwise.
+        """
+        if not isinstance(output, dict):
+            return None
+
+        metadata = output.get("metadata")
+        if not metadata or not isinstance(metadata, dict):
+            return None
+
+        try:
+            return ToolOutputMetadata(
+                response_time_ms=metadata.get("response_time_ms"),
+                api_calls_made=metadata.get("api_calls_made", 1),
+                cost_estimate_usd=metadata.get("cost_estimate_usd"),
+                tavily_credits_used=metadata.get("tavily_credits_used"),
+                search_depth=metadata.get("search_depth"),
+                include_raw_content=metadata.get("include_raw_content", False),
+                queries_count=metadata.get("queries_count", 1),
+                results_returned=metadata.get("results_returned", 0),
+                urls_processed=metadata.get("urls_processed", 0),
+            )
+        except Exception:
+            return None

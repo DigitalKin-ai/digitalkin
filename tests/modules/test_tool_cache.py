@@ -4,10 +4,13 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from digitalkin.grpc_servers.exceptions import PermissionDeniedError
+from digitalkin.models.module.module_context import ModuleContext, Session
 from digitalkin.models.module.setup_types import SetupModel
 from digitalkin.models.module.tool_cache import ToolCache, ToolDefinition, ToolModuleInfo
 from digitalkin.models.module.tool_reference import ToolReference, ToolSelection
 from digitalkin.models.services.registry import ModuleInfo, RegistryModuleType, SetupInfo
+from digitalkin.services.registry.exceptions import RegistryModuleNotFoundError
 
 
 @pytest.fixture
@@ -15,7 +18,7 @@ def sample_tool_module_info() -> ToolModuleInfo:
     """Create a sample ToolModuleInfo for testing."""
     return ToolModuleInfo(
         module_id="tool-123",
-        module_type=RegistryModuleType.TOOL,
+        module_type=RegistryModuleType.TOOL_MODULE,
         address="localhost",
         port=50051,
         version="1.0.0",
@@ -42,7 +45,7 @@ def sample_tool_module_info_2() -> ToolModuleInfo:
     """Create a second sample ToolModuleInfo for testing."""
     return ToolModuleInfo(
         module_id="tool-456",
-        module_type=RegistryModuleType.TOOL,
+        module_type=RegistryModuleType.TOOL_MODULE,
         address="localhost",
         port=50052,
         version="2.0.0",
@@ -117,6 +120,20 @@ class TestToolCache:
 
 class TestSetupModelToolCache:
     """Tests for SetupModel tool cache integration."""
+
+    def test_legacy_resolved_tools_vocabulary_parses(self) -> None:
+        """Setup content persisted by older SDKs (module_type 'tool') still validates.
+
+        Prod repro: stored setups carry resolved_tools entries with the legacy
+        'tool' label; the alias validator normalizes them instead of killing the run.
+        """
+        setup = SetupModel(
+            resolved_tools={
+                "setups:legacy": {"module_type": "tool", "setup_id": "setups:legacy", "tool_name": "Legacy"},
+            }
+        )
+        assert setup.resolved_tools["setups:legacy"].module_type == RegistryModuleType.TOOL_MODULE
+        assert "resolved_tools" not in setup.model_dump()  # exclude=True: never re-serialized
 
     @pytest.mark.asyncio
     async def test_build_tool_cache_from_resolved_tools(self, sample_tool_module_info: ToolModuleInfo) -> None:
@@ -234,7 +251,7 @@ def _registry_resolving(setup_id: str, module_id: str, name: str) -> AsyncMock:
     registry.get_setup.return_value = SetupInfo(setup_id=setup_id, name=name, module_id=module_id)
     registry.discover_by_id.return_value = ModuleInfo(
         module_id=module_id,
-        module_type=RegistryModuleType.TOOL,
+        module_type=RegistryModuleType.TOOL_MODULE,
         address="localhost",
         port=50051,
         version="1.0.0",
@@ -279,7 +296,7 @@ class TestResolvedToolsNotPersisted:
         # Stale empty entry, as would be loaded from persisted content.
         setup.resolved_tools["setup-123"] = ToolModuleInfo(
             module_id="tool-123",
-            module_type=RegistryModuleType.TOOL,
+            module_type=RegistryModuleType.TOOL_MODULE,
             address="localhost",
             port=50051,
             version="1.0.0",
@@ -362,7 +379,7 @@ class TestResolvedToolsCacheBehavior:
         )
         mock_registry.discover_by_id.return_value = ModuleInfo(
             module_id="tool-123",
-            module_type=RegistryModuleType.TOOL,
+            module_type=RegistryModuleType.TOOL_MODULE,
             address="localhost",
             port=50051,
             version="1.0.0",
@@ -370,10 +387,7 @@ class TestResolvedToolsCacheBehavior:
             documentation="Test tool documentation",
         )
 
-        mock_communication = AsyncMock()
-        mock_communication.get_module_schemas.return_value = {
-            "input": {"json_schema": {"$defs": {}}},
-        }
+        mock_communication = _communication_with_search()
 
         await setup.build_tool_cache(mock_registry, mock_communication)
 
@@ -452,7 +466,7 @@ class TestResolvedToolsCacheBehavior:
         )
         mock_registry.discover_by_id.side_effect = lambda module_id: ModuleInfo(
             module_id=module_id,
-            module_type=RegistryModuleType.TOOL,
+            module_type=RegistryModuleType.TOOL_MODULE,
             address="localhost",
             port=50051,
             version="1.0.0",
@@ -535,6 +549,95 @@ class TestSlugify:
         )
         assert "setup" not in info.slug
         assert info.slug == "my_tool"
+
+
+def _context_with(registry: AsyncMock, communication: AsyncMock) -> ModuleContext:
+    """Build a bare ModuleContext exposing only what ``resolve_tool`` touches."""
+    ctx = ModuleContext.__new__(ModuleContext)
+    ctx.tool_cache = ToolCache()
+    ctx.registry = registry
+    ctx.communication = communication
+    ctx.session = Session(job_id="job-1", mission_id="mission-1", setup_id="setup-1", setup_version_id="sv-1")
+    return ctx
+
+
+class TestModuleContextResolveTool:
+    """Tests for ModuleContext.resolve_tool — the on-demand tool loader."""
+
+    @pytest.mark.asyncio
+    async def test_resolves_and_saves_to_tool_cache(self) -> None:
+        """A resolved setup lands in the tool cache (constraint: loaded tools are cached)."""
+        ctx = _context_with(_registry_resolving("setup-123", "tool-123", "TestTool"), _communication_with_search())
+
+        info = await ctx.resolve_tool("setup-123")
+
+        assert info is not None
+        assert info.setup_id == "setup-123"
+        assert ctx.tool_cache.entries["setup-123"] is info
+
+    @pytest.mark.asyncio
+    async def test_cache_hit_still_checks_permission(self) -> None:
+        """A cache hit skips discovery/schema fetch but never the get_setup authz gate.
+
+        The tool cache is shared across missions of the same agent setup, so
+        skipping get_setup on a hit would let one mission's load bypass another
+        mission's permission check.
+        """
+        registry = _registry_resolving("setup-123", "tool-123", "TestTool")
+        communication = _communication_with_search()
+        ctx = _context_with(registry, communication)
+
+        first = await ctx.resolve_tool("setup-123")
+        registry.discover_by_id.reset_mock()
+        communication.get_module_schemas.reset_mock()
+        second = await ctx.resolve_tool("setup-123")
+
+        assert second is first
+        assert registry.get_setup.await_count == 2
+        registry.discover_by_id.assert_not_called()
+        communication.get_module_schemas.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_cache_hit_denied_when_permission_revoked(self) -> None:
+        """PermissionDeniedError on a cached setup_id still surfaces — the hit is gated."""
+        registry = _registry_resolving("setup-123", "tool-123", "TestTool")
+        ctx = _context_with(registry, _communication_with_search())
+
+        await ctx.resolve_tool("setup-123")
+        registry.get_setup.side_effect = PermissionDeniedError("revoked")
+
+        with pytest.raises(PermissionDeniedError):
+            await ctx.resolve_tool("setup-123")
+
+    @pytest.mark.asyncio
+    async def test_permission_denied_propagates(self) -> None:
+        """PermissionDeniedError is not swallowed — callers surface it distinctly."""
+        registry = AsyncMock()
+        registry.get_setup.side_effect = PermissionDeniedError("nope")
+        ctx = _context_with(registry, AsyncMock())
+
+        with pytest.raises(PermissionDeniedError):
+            await ctx.resolve_tool("setup-123")
+
+    @pytest.mark.asyncio
+    async def test_unknown_setup_returns_none(self) -> None:
+        """A setup the registry cannot resolve yields None (not an exception)."""
+        registry = AsyncMock()
+        registry.get_setup.return_value = None
+        ctx = _context_with(registry, AsyncMock())
+
+        assert await ctx.resolve_tool("missing") is None
+
+    @pytest.mark.asyncio
+    async def test_missing_module_returns_none(self) -> None:
+        """A setup whose backing module is gone yields None and caches nothing."""
+        registry = AsyncMock()
+        registry.get_setup.return_value = SetupInfo(setup_id="setup-123", name="X", module_id="tool-123")
+        registry.discover_by_id.side_effect = RegistryModuleNotFoundError("gone")
+        ctx = _context_with(registry, AsyncMock())
+
+        assert await ctx.resolve_tool("setup-123") is None
+        assert ctx.tool_cache.entries == {}
 
 
 class TestToolCacheCollision:
