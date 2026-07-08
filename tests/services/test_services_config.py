@@ -4,8 +4,17 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from digitalkin.services.services_config import ServicesConfig
+from digitalkin.models.grpc_servers.models import ClientConfig
 from digitalkin.models.services.services import ServicesMode
+from digitalkin.models.settings.utils.channel import ControlFlow, SecurityMode
+from digitalkin.services.secret.grpc_secret import GrpcSecret
+from digitalkin.services.services_config import ServicesConfig
+
+
+def _client_config(host: str = "[::]", port: int = 50051) -> ClientConfig:
+    return ClientConfig(
+        host=host, port=port, mode=ControlFlow.ASYNC, security=SecurityMode.INSECURE, credentials=None
+    )
 
 
 class TestSingletonStrategies:
@@ -50,6 +59,34 @@ class TestSingletonStrategies:
 
         reg_after = config.init_strategy("registry", "m1", "s1", "v1")
         assert reg_before is not reg_after, "Singleton cache should be cleared after mode switch"
+
+
+class TestSecretConfigInheritance:
+    """The secret service shares the UserProfileService backend → inherits its client_config."""
+
+    def test_secret_inherits_user_profile_client_config(self) -> None:
+        """Without a dedicated secret config, GrpcSecret builds from user_profile's client_config."""
+        cfg = _client_config()
+        config = ServicesConfig(
+            services_config_params={"user_profile": {"client_config": cfg}}, mode=ServicesMode.REMOTE
+        )
+
+        assert config.get_strategy_config("secret") == {"client_config": cfg}
+        secret = config.init_strategy("secret", "m", "s", "sv")
+        assert isinstance(secret, GrpcSecret)
+
+    def test_explicit_secret_config_wins(self) -> None:
+        """An explicit secret config is not overridden by user_profile's."""
+        up_cfg = _client_config(host="up", port=1)
+        secret_cfg = _client_config(host="secret", port=2)
+        config = ServicesConfig(
+            services_config_params={
+                "user_profile": {"client_config": up_cfg},
+                "secret": {"client_config": secret_cfg},
+            },
+            mode=ServicesMode.REMOTE,
+        )
+        assert config.get_strategy_config("secret")["client_config"] is secret_cfg
 
 
 class TestBorrowedCleanup:

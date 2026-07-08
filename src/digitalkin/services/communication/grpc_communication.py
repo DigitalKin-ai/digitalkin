@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import time
-import uuid
 from typing import TYPE_CHECKING, Any
 
 import grpc.aio
@@ -16,6 +15,7 @@ from agentic_mesh_protocol.module.v1 import (
 from google.protobuf import json_format, struct_pb2
 
 from digitalkin.core.profiling.step_timer import StepTimer
+from digitalkin.grpc_servers.interceptors.request_ids import RequestContext
 from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
 from digitalkin.grpc_servers.utils.validators import GatewayValidator
 from digitalkin.logger import logger
@@ -315,8 +315,7 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
             "target_key": target_key,
         }
 
-        task_id = str(uuid.uuid4())
-        log_extra["task_id"] = task_id
+        task_id = ""
         breaker = m2m.breaker_for(target_key)
 
         last_mark = "init"
@@ -342,6 +341,38 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
             timer.mark("acquire_slot")
             last_mark = "acquire_slot"
 
+            self._get_or_create_channel(module_address, module_port)
+            timer.mark("channel_create")
+            last_mark = "channel_create"
+            stub = self._get_or_create_stub(gateway_service_pb2_grpc.GatewayServiceStub)
+            timer.mark("stub_create")
+            last_mark = "stub_create"
+
+            # The gateway mints the sub-task id and links it to the running parent task.
+            try:
+                assoc = await stub.AssociateTask(
+                    gateway_pb2.AssociateTaskRequest(
+                        parent_task_id=RequestContext.current().get("task_id", ""),
+                    ),
+                )
+            except grpc.aio.AioRpcError as exc:
+                breaker.record_failure()
+                logger.warning(
+                    "[m2m] AssociateTask failed: [%s] %s",
+                    exc.code().name,
+                    exc.details() or "",
+                    extra=log_extra,
+                )
+                raise
+            task_id = assoc.task_id
+            if not task_id:
+                breaker.record_failure()
+                msg = f"target {target_key} returned no task_id from AssociateTask"
+                raise RuntimeError(msg)  # noqa: TRY301
+            log_extra["task_id"] = task_id
+            timer.mark("associate_task")
+            last_mark = "associate_task"
+
             output_queue: asyncio.Queue[struct_pb2.Struct | None] = asyncio.Queue(
                 maxsize=m2m_settings.call_queue_maxsize,
             )
@@ -360,13 +391,6 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
             registered = True
             timer.mark("register")
             last_mark = "register"
-
-            self._get_or_create_channel(module_address, module_port)
-            timer.mark("channel_create")
-            last_mark = "channel_create"
-            stub = self._get_or_create_stub(gateway_service_pb2_grpc.GatewayServiceStub)
-            timer.mark("stub_create")
-            last_mark = "stub_create"
 
             try:  # noqa: PLW0717
                 grpc_metadata: list[tuple[str, str]] = []
@@ -467,7 +491,7 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
                 cancelled = True
                 raise
             finally:
-                if cancelled and stub is not None:
+                if cancelled and stub is not None and task_id:
                     sig_t0 = time.perf_counter_ns()
                     sig_failure = ""
                     try:

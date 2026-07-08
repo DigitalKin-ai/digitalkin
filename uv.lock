@@ -23,7 +23,7 @@ wheels = [
 
 [[package]]
 name = "agentic-mesh-protocol"
-version = "1.0.0a1"
+version = "1.0.0a2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "bump-my-version" },
@@ -33,9 +33,9 @@ dependencies = [
     { name = "protobuf" },
     { name = "protovalidate" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/69/be/811c98f0868bcac21b34d25a698f9664e7e88d28ee0c62c9f5b7f704eaa3/agentic_mesh_protocol-1.0.0a1.tar.gz", hash = "sha256:d0957d56cc693a0f4400c770b16ff3b17e92445983f6948eb8e664ca3a09d352", size = 74207, upload-time = "2026-07-08T07:26:42.646Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/39/5f/e8483618de312ca607b85c3e315e7dbba5755a24173a9c75b6446b55ddf6/agentic_mesh_protocol-1.0.0a2.tar.gz", hash = "sha256:ea5c3c7f1fb94f1cb55b70e62a2e03c1bc524585bd81cabfbb6ab83669765ad0", size = 74620, upload-time = "2026-07-08T09:15:46.11Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/7c/b5/f4277ddf998d224365f41dada18a039c988bd17ab79e0c481849b61fcf03/agentic_mesh_protocol-1.0.0a1-py3-none-any.whl", hash = "sha256:7d063f5c1f5a1a30f109e22fe30773fbf19fa8dbb5790f9a21b83aa23c488688", size = 103452, upload-time = "2026-07-08T07:26:41.391Z" },
+    { url = "https://files.pythonhosted.org/packages/a7/69/48650853a7ad66ccf1951e6149afed1ec710ddeaa5f7bd9e4f905d225002/agentic_mesh_protocol-1.0.0a2-py3-none-any.whl", hash = "sha256:20d6a48f563bfe8f6bf47efd694d3204af140136690b819314aa47ddcf98779f", size = 103832, upload-time = "2026-07-08T09:15:44.531Z" },
 ]
 
 [[package]]
@@ -670,7 +670,7 @@ wheels = [
 
 [[package]]
 name = "digitalkin"
-version = "1.0.0.dev22"
+version = "1.0.0.dev23"
 source = { editable = "." }
 dependencies = [
     { name = "ag-ui-protocol" },
@@ -754,7 +754,7 @@ tests = [
 [package.metadata]
 requires-dist = [
     { name = "ag-ui-protocol", specifier = ">=0.1.18" },
-    { name = "agentic-mesh-protocol", specifier = "==1.0.0a1" },
+    { name = "agentic-mesh-protocol", specifier = "==1.0.0a2" },
     { name = "anyio", specifier = ">=4.13.0" },
     { name = "grpcio-health-checking", specifier = "==1.81.0" },
     { name = "grpcio-reflection", specifier = "==1.81.0" },

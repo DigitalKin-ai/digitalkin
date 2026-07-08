@@ -24,6 +24,7 @@ from agentic_mesh_protocol.gateway.v1 import gateway_pb2, gateway_service_pb2_gr
 from google.protobuf import struct_pb2
 
 from digitalkin.grpc_servers.gateway_servicer import GatewayServicer
+from digitalkin.grpc_servers.interceptors.request_ids import RequestContext
 from digitalkin.models.grpc_servers.models import ClientConfig
 from digitalkin.models.settings.utils.channel import SecurityMode
 from digitalkin.services.communication.grpc_communication import GrpcCommunication
@@ -34,11 +35,28 @@ pytestmark = [pytest.mark.timeout(15)]
 class _FakeCalleeGatewayServicer(gateway_service_pb2_grpc.GatewayServiceServicer):
     """Accepts StartStream, then dials back to the caller's gateway."""
 
-    def __init__(self, outputs: list[dict[str, Any]]) -> None:
+    def __init__(
+        self,
+        outputs: list[dict[str, Any]],
+        *,
+        associate_task_id: str = "task:child-1",
+        associate_error: bool = False,
+    ) -> None:
         self._outputs = outputs
+        self._associate_task_id = associate_task_id
+        self._associate_error = associate_error
         self.received_start: gateway_pb2.StartStreamRequest | None = None
+        self.received_parent_task_id: str = ""
         self.received_metadata: dict[str, str] = {}
         self._dial_tasks: list[asyncio.Task] = []
+
+    async def AssociateTask(  # noqa: N802
+        self, request: Any, context: grpc.aio.ServicerContext
+    ) -> Any:
+        self.received_parent_task_id = request.parent_task_id
+        if self._associate_error:
+            await context.abort(grpc.StatusCode.INTERNAL, "associate boom")
+        return gateway_pb2.AssociateTaskResponse(task_id=self._associate_task_id, parent_task_id=request.parent_task_id)
 
     async def StartStream(  # noqa: N802
         self, request: Any, context: grpc.aio.ServicerContext
@@ -54,12 +72,16 @@ class _FakeCalleeGatewayServicer(gateway_service_pb2_grpc.GatewayServiceServicer
         return gateway_pb2.StartStreamResponse(accepted=True, task_id=request.task_id)
 
     async def SendSignal(  # noqa: N802
-        self, request: Any, context: grpc.aio.ServicerContext  # noqa: ARG002
+        self,
+        request: Any,
+        context: grpc.aio.ServicerContext,  # noqa: ARG002
     ) -> Any:
         return gateway_pb2.ClientSignalResponse(success=True, task_id=request.task_id)
 
     async def Stream(  # noqa: N802
-        self, request_iterator: Any, context: grpc.aio.ServicerContext  # noqa: ARG002
+        self,
+        request_iterator: Any,
+        context: grpc.aio.ServicerContext,  # noqa: ARG002
     ) -> AsyncIterator[Any]:
         async for _msg in request_iterator:
             return
@@ -139,6 +161,24 @@ async def caller_gateway() -> AsyncIterator[tuple[GatewayServicer, str, int]]:
         await server.stop(grace=0.1)
 
 
+@pytest.fixture
+async def start_callee() -> AsyncIterator[Any]:
+    """Factory that starts a callee GatewayService server and returns its port; auto-stopped."""
+    servers: list[grpc.aio.Server] = []
+
+    async def _start(servicer: _FakeCalleeGatewayServicer) -> int:
+        server = grpc.aio.server()
+        gateway_service_pb2_grpc.add_GatewayServiceServicer_to_server(servicer, server)
+        port = server.add_insecure_port("127.0.0.1:0")
+        await server.start()
+        servers.append(server)
+        return port
+
+    yield _start
+    for s in servers:
+        await s.stop(grace=0.1)
+
+
 class TestM2MCallModule:
     async def test_round_trip_outputs_through_unified_gateway(
         self,
@@ -157,22 +197,23 @@ class TestM2MCallModule:
         )
 
         outputs: list[Any] = []
-        async for out_struct in comm.call_module(
-            module_address=callee_host,
-            module_port=callee_port,
-            input_data={"root": {"protocol": "transform", "text": "hello"}},
-            setup_id="setups:test",
-            mission_id="missions:test",
-        ):
-            outputs.append(out_struct)
+        token = RequestContext.bind(task_id="task:parent")
+        try:
+            async for out_struct in comm.call_module(
+                module_address=callee_host,
+                module_port=callee_port,
+                input_data={"root": {"protocol": "transform", "text": "hello"}},
+                setup_id="setups:test",
+                mission_id="missions:test",
+            ):
+                outputs.append(out_struct)
+        finally:
+            RequestContext.reset(token)
 
         # Two domain outputs + the stream.end sentinel that the dial-back
         # branch forwarded; call_module yields the sentinel too. Filter for
         # domain outputs in the assertion.
-        domain = [
-            o for o in outputs
-            if o.fields["root"].struct_value.fields["protocol"].string_value == "transform"
-        ]
+        domain = [o for o in outputs if o.fields["root"].struct_value.fields["protocol"].string_value == "transform"]
         assert [o.fields["root"].struct_value.fields["value"].string_value for o in domain] == [
             "hello-1",
             "hello-2",
@@ -182,8 +223,75 @@ class TestM2MCallModule:
         assert callee_servicer.received_start is not None
         assert callee_servicer.received_metadata.get("x-client-address", "").startswith("127.0.0.1:")
 
+        # The gateway-minted id (from AssociateTask) — not a client uuid — drove StartStream,
+        # and the running parent task_id propagated to AssociateTask.
+        assert callee_servicer.received_start.task_id == "task:child-1"
+        assert callee_servicer.received_parent_task_id == "task:parent"
+
         # Registry cleared, semaphore restored.
         from digitalkin.models.settings.gateway import get_gateway_settings
 
         assert not gw._m2m.entries
         assert gw._m2m._semaphore._value == get_gateway_settings().m2m.call_max_concurrent
+
+    async def test_associate_task_empty_task_id_raises(
+        self,
+        caller_gateway: tuple[GatewayServicer, str, int],
+        start_callee: Any,
+    ) -> None:
+        """An empty AssociateTask response aborts before StartStream and leaks nothing."""
+        gw, _host, _port = caller_gateway
+        callee = _FakeCalleeGatewayServicer(outputs=[], associate_task_id="")
+        port = await start_callee(callee)
+
+        comm = GrpcCommunication(
+            mission_id="missions:test",
+            setup_id="setups:test",
+            setup_version_id="setup_versions:test",
+            client_config=ClientConfig(host="127.0.0.1", port=port, security=SecurityMode.INSECURE),
+            m2m_calls=gw._m2m,
+        )
+
+        with pytest.raises(RuntimeError, match="no task_id"):
+            async for _ in comm.call_module(
+                module_address="127.0.0.1",
+                module_port=port,
+                input_data={"root": {"protocol": "transform"}},
+                setup_id="setups:test",
+                mission_id="missions:test",
+            ):
+                pass
+
+        assert callee.received_start is None
+        assert not gw._m2m.entries
+
+    async def test_associate_task_rpc_error_raises(
+        self,
+        caller_gateway: tuple[GatewayServicer, str, int],
+        start_callee: Any,
+    ) -> None:
+        """An AssociateTask RPC error aborts before StartStream and leaks nothing."""
+        gw, _host, _port = caller_gateway
+        callee = _FakeCalleeGatewayServicer(outputs=[], associate_error=True)
+        port = await start_callee(callee)
+
+        comm = GrpcCommunication(
+            mission_id="missions:test",
+            setup_id="setups:test",
+            setup_version_id="setup_versions:test",
+            client_config=ClientConfig(host="127.0.0.1", port=port, security=SecurityMode.INSECURE),
+            m2m_calls=gw._m2m,
+        )
+
+        with pytest.raises(grpc.aio.AioRpcError):
+            async for _ in comm.call_module(
+                module_address="127.0.0.1",
+                module_port=port,
+                input_data={"root": {"protocol": "transform"}},
+                setup_id="setups:test",
+                mission_id="missions:test",
+            ):
+                pass
+
+        assert callee.received_start is None
+        assert not gw._m2m.entries

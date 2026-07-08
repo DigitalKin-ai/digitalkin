@@ -28,7 +28,7 @@
 
     dependencies = [
         "ag-ui-protocol>=0.1.18",
-        "agentic-mesh-protocol==1.0.0a1",
+        "agentic-mesh-protocol==1.0.0a2",
         "anyio>=4.13.0",
         "grpcio-health-checking==1.81.0",
         "grpcio-reflection==1.81.0",
@@ -37,7 +37,7 @@
         "pydantic-settings>=2.14.1",
         "redis[hiredis]>=7.4.0,<9",
     ]
-    version = "1.0.0.dev22"
+    version = "1.0.0.dev23"
 
     [project.optional-dependencies]
         performance = [ "uvloop>=0.21" ]

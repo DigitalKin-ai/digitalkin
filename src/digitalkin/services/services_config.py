@@ -78,6 +78,12 @@ class ServicesConfig(BaseModel):
             self._strategies[name] = override if override is not None else defaults[name]
             self._configs[name] = services_config_params.get(name) or {}
 
+        # The secret service is backed by the UserProfileService — reuse the
+        # user_profile client_config (same host/port) when no dedicated secret
+        # config is registered, so GrpcSecret can build its channel.
+        if not self._configs.get("secret"):
+            self._configs["secret"] = self._configs.get("user_profile") or {}
+
     @classmethod
     def valid_strategy_names(cls) -> set[str]:
         """Get the list of valid strategy names.

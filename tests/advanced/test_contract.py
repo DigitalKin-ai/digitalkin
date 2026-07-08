@@ -6,7 +6,7 @@ proto/code drift early without running a server.
 
 Gateway lifecycle is in-band (sentinel Structs in StreamOutput.data
 keyed under data.root.protocol). The gateway exposes only the external
-consumer surface: StartStream, Stream, SendSignal.
+consumer surface: AssociateTask, StartStream, Stream, SendSignal.
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ SKIP_NO_GATEWAY = pytest.mark.skipif(
 
 
 # ===========================================================================
-# GatewayService contract — 3 RPCs: StartStream, Stream, SendSignal
+# GatewayService contract — 4 RPCs: AssociateTask, StartStream, Stream, SendSignal
 # ===========================================================================
 
 
@@ -36,12 +36,12 @@ SKIP_NO_GATEWAY = pytest.mark.skipif(
 class TestGatewayServiceContract:
     """Verify GatewayService proto shape."""
 
-    def test_service_has_three_rpcs(self) -> None:
+    def test_service_has_four_rpcs(self) -> None:
         from agentic_mesh_protocol.gateway.v1 import gateway_service_pb2_grpc
 
         servicer = gateway_service_pb2_grpc.GatewayServiceServicer
         methods = {m for m in dir(servicer) if not m.startswith("_")}
-        assert methods == {"StartStream", "Stream", "SendSignal"}
+        assert methods == {"AssociateTask", "StartStream", "Stream", "SendSignal"}
 
     def test_deleted_rpcs_absent(self) -> None:
         """ProduceStream and ConsumeStream must be gone."""
@@ -65,6 +65,20 @@ class TestGatewayServiceContract:
         msg = gateway_pb2.StartStreamResponse()
         fields = {f.name for f in msg.DESCRIPTOR.fields}
         assert fields == {"accepted", "task_id"}
+
+    def test_associate_task_request_fields(self) -> None:
+        from agentic_mesh_protocol.gateway.v1 import gateway_pb2
+
+        msg = gateway_pb2.AssociateTaskRequest()
+        fields = {f.name for f in msg.DESCRIPTOR.fields}
+        assert fields == {"parent_task_id"}
+
+    def test_associate_task_response_fields(self) -> None:
+        from agentic_mesh_protocol.gateway.v1 import gateway_pb2
+
+        msg = gateway_pb2.AssociateTaskResponse()
+        fields = {f.name for f in msg.DESCRIPTOR.fields}
+        assert fields == {"task_id", "parent_task_id"}
 
     def test_stream_request_is_flat_no_oneof(self) -> None:
         """StreamRequest is flat: task_id, from_seq, data — no oneof."""

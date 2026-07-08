@@ -131,6 +131,9 @@ class TestCircuitBreaker:
         stub_mock = MagicMock()
         stub_mock.StartStream = AsyncMock(side_effect=PermissionDeniedError("[/gateway/StartStream] denied"))
         stub_mock.SendSignal = AsyncMock()
+        stub_mock.AssociateTask = AsyncMock(
+            return_value=gateway_pb2.AssociateTaskResponse(task_id="tid"),
+        )
         comm._get_or_create_channel = MagicMock(return_value=MagicMock())  # type: ignore[method-assign]
         comm._get_or_create_stub = MagicMock(return_value=stub_mock)  # type: ignore[method-assign]
 
@@ -198,6 +201,9 @@ class TestBreakerSingleCount:
             return_value=gateway_pb2.StartStreamResponse(accepted=True, task_id="tid"),
         )
         stub_mock.SendSignal = AsyncMock()
+        stub_mock.AssociateTask = AsyncMock(
+            return_value=gateway_pb2.AssociateTaskResponse(task_id="tid"),
+        )
         comm._get_or_create_channel = MagicMock(return_value=MagicMock())  # type: ignore[method-assign]
         comm._get_or_create_stub = MagicMock(return_value=stub_mock)  # type: ignore[method-assign]
 
@@ -270,6 +276,9 @@ class TestCallTimeout:
             return_value=gateway_pb2.StartStreamResponse(accepted=True, task_id="tid"),
         )
         stub_mock.SendSignal = AsyncMock()
+        stub_mock.AssociateTask = AsyncMock(
+            return_value=gateway_pb2.AssociateTaskResponse(task_id="tid"),
+        )
         comm._get_or_create_channel = MagicMock(return_value=MagicMock())  # type: ignore[method-assign]
         comm._get_or_create_stub = MagicMock(return_value=stub_mock)  # type: ignore[method-assign]
 
@@ -297,6 +306,9 @@ class TestCancellation:
         )
         stub_mock.SendSignal = AsyncMock(
             return_value=gateway_pb2.ClientSignalResponse(success=True, task_id="tid"),
+        )
+        stub_mock.AssociateTask = AsyncMock(
+            return_value=gateway_pb2.AssociateTaskResponse(task_id="tid"),
         )
         comm._get_or_create_channel = MagicMock(return_value=MagicMock())  # type: ignore[method-assign]
         comm._get_or_create_stub = MagicMock(return_value=stub_mock)  # type: ignore[method-assign]
