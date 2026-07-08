@@ -38,6 +38,18 @@ class DefaultUserProfile(UserProfileStrategy):
         logger.debug("Retrieved user profile for mission_id: %s", self.mission_id)
         return self.db[self.mission_id]
 
+    async def check_resource_access(self, resource_type: int, resource_id: str) -> bool:  # noqa: ARG002, PLR6301
+        """Local strategy: grant access (no access backend in local mode).
+
+        Args:
+            resource_type: The ResourceType enum value.
+            resource_id: The resource identifier.
+
+        Returns:
+            True.
+        """
+        return True
+
     def add_user_profile(self, user_profile_data: dict[str, Any]) -> None:
         """Add a user profile to the in-memory database (helper for testing).
 

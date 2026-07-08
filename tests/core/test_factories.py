@@ -74,6 +74,7 @@ class MockModule(BaseModule[MockInputModel, MockOutputModel, MockSetupModel, Non
             "filesystem": None,
             "identity": None,
             "registry": None,
+            "secret": None,
             "storage": None,
             "user_profile": None,
         }

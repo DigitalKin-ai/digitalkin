@@ -19,3 +19,18 @@ class UserProfileStrategy(BaseStrategy, ABC):
         Raises:
             UserProfileServiceError: If the service call fails (not for missing profiles).
         """
+
+    @abstractmethod
+    async def check_resource_access(self, resource_type: int, resource_id: str) -> bool:
+        """Check whether the caller may access a resource.
+
+        Args:
+            resource_type: The ResourceType enum value (e.g. RESOURCE_TYPE_SETUP).
+            resource_id: The resource identifier (e.g. the setup_id).
+
+        Returns:
+            True if access is granted, False otherwise.
+
+        Raises:
+            UserProfileServiceError: If the service call fails.
+        """

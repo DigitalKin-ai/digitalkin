@@ -62,6 +62,7 @@ class MockModule(BaseModule):
             "filesystem": None,
             "identity": None,
             "registry": None,
+            "secret": None,
             "storage": None,
             "user_profile": None,
         }

@@ -14,12 +14,13 @@ from agentic_mesh_protocol.module.v1 import (
     lifecycle_pb2,
     module_service_pb2_grpc,
 )
+from agentic_mesh_protocol.user_profile.v1 import user_profile_pb2
 from google.protobuf import json_format, struct_pb2
 
 from digitalkin.core.job_manager.base_job_manager import BaseJobManager
 from digitalkin.core.job_manager.single_job_manager import SingleJobManager
 from digitalkin.core.task_manager.redis.redis_signal import SharedRedisListener
-from digitalkin.grpc_servers.exceptions import ServicerError
+from digitalkin.grpc_servers.exceptions import PermissionDeniedError, ServicerError
 from digitalkin.logger import logger
 from digitalkin.models.module.module import ModuleCodeModel
 from digitalkin.models.module.setup_types import SetupModel
@@ -31,6 +32,7 @@ from digitalkin.services.registry import GrpcRegistry, RegistryStrategy
 from digitalkin.services.setup.default_setup import DefaultSetup
 from digitalkin.services.setup.grpc_setup import GrpcSetup
 from digitalkin.services.setup.setup_strategy import SetupStrategy, SetupVersionData
+from digitalkin.services.user_profile import DefaultUserProfile, GrpcUserProfile, UserProfileStrategy
 from digitalkin.utils.arg_parser import ArgParser
 from digitalkin.utils.development_mode_action import DevelopmentModeMappingAction
 
@@ -40,6 +42,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
 
     args: Namespace
     setup: SetupStrategy
+    user_profile: UserProfileStrategy
     job_manager: BaseJobManager
     _registry_cache: RegistryStrategy | None
     _tool_cache_by_setup: dict[str, tuple[Any, float]]
@@ -82,6 +85,16 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
 
         logger.debug("ModuleServicer initialized with SingleJobManager")
         self.setup = GrpcSetup() if self.args.services_mode == ServicesMode.REMOTE else DefaultSetup()
+        # Access-control client gating the setup cache. Always built, always called (fail-closed).
+        if self.args.services_mode == ServicesMode.REMOTE:
+            up_cfg = self.module_class.services_config_params.get("user_profile") or {}
+            up_client_config = up_cfg.get("client_config")
+            if not up_client_config:
+                msg = "user_profile client_config is required for setup access control"
+                raise RuntimeError(msg)
+            self.user_profile = GrpcUserProfile("", "", "", up_client_config)
+        else:
+            self.user_profile = DefaultUserProfile("", "", "")
         self._setup_cache: dict[str, tuple[float, SetupVersionData]] = {}
         self._setup_inflight: dict[str, asyncio.Future[SetupVersionData]] = {}
 
@@ -97,6 +110,11 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
                 await self.setup.close_channel()
             except Exception:
                 logger.exception("Error closing GrpcSetup channel")
+        if isinstance(self.user_profile, GrpcUserProfile):
+            try:
+                await self.user_profile.close_channel()
+            except Exception:
+                logger.exception("Error closing GrpcUserProfile channel")
         # M8: close the Redis connection pools (were leaked on every server stop).
         logger.info("[VALIDATE M8] closing module servicer Redis pools")  # TODO(validate): remove after prod validation
         await self._redis_client.close()
@@ -245,6 +263,19 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             del self._setup_cache[oldest_key]
         self._setup_cache[setup_id] = (time.monotonic(), version_data)
 
+    async def _check_setup_access(self, setup_id: str) -> None:
+        """Block if the caller may not access the setup (RESOURCE_TYPE_SETUP).
+
+        Args:
+            setup_id: The setup identifier being resolved.
+
+        Raises:
+            PermissionDeniedError: If access to the setup is denied.
+        """
+        if not await self.user_profile.check_resource_access(user_profile_pb2.RESOURCE_TYPE_SETUP, setup_id):
+            msg = f"access denied to setup {setup_id}"
+            raise PermissionDeniedError(msg)
+
     async def resolve_setup(self, setup_id: str, mission_id: str) -> SetupVersionData:
         """Return setup version data from cache or remote service.
 
@@ -257,7 +288,9 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
 
         Raises:
             LookupError: No setup data found for setup_id.
+            PermissionDeniedError: If the caller may not access this setup.
         """
+        await self._check_setup_access(setup_id)
         # Fast path: cache hit within TTL
         if (cached := self._setup_cache.get(setup_id)) is not None:
             if time.monotonic() - cached[0] < get_module_servicer_settings().setup_cache_ttl:
@@ -326,6 +359,12 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             extra={"mission_id": request.mission_id},
         )
         setup_version = request.setup_version
+        if not await self.user_profile.check_resource_access(
+            user_profile_pb2.RESOURCE_TYPE_SETUP, setup_version.setup_id
+        ):
+            context.set_code(grpc.StatusCode.PERMISSION_DENIED)
+            context.set_details(f"access denied to setup {setup_version.setup_id}")
+            return lifecycle_pb2.ConfigSetupModuleResponse(success=False)
         # Invalidate cached setup so concurrent/subsequent starts refetch the reconfigured version
         self._setup_cache.pop(setup_version.setup_id, None)
         config_setup_data = self.module_class.create_config_setup_model(json_format.MessageToDict(request.content))

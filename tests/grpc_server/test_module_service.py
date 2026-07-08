@@ -17,9 +17,11 @@ from agentic_mesh_protocol.module.v1 import (
     lifecycle_pb2,
 )
 from agentic_mesh_protocol.setup.v1 import setup_pb2
+from agentic_mesh_protocol.user_profile.v1 import user_profile_pb2
 from google.protobuf import json_format, struct_pb2
 
 from digitalkin.core.job_manager.base_job_manager import BaseJobManager
+from digitalkin.grpc_servers.exceptions import PermissionDeniedError
 from digitalkin.grpc_servers.module_servicer import ModuleServicer
 from digitalkin.modules._base_module import BaseModule
 from digitalkin.services.setup.setup_strategy import SetupVersionData
@@ -113,6 +115,8 @@ def module_servicer(mock_job_manager, mock_setup_strategy):
     servicer.module_class = MockModule
     servicer.job_manager = mock_job_manager
     servicer.setup = mock_setup_strategy
+    servicer.user_profile = AsyncMock()
+    servicer.user_profile.check_resource_access = AsyncMock(return_value=True)
     servicer._setup_cache = {}
     servicer._setup_inflight: dict[str, asyncio.Future] = {}
     servicer._registry_cache = None
@@ -385,3 +389,16 @@ class TestConfigSetupModule:
 
             with pytest.raises(Exception, match="No config setup data returned"):
                 await module_servicer.ConfigSetupModule(request, fake_context)
+
+
+class TestSetupAccessGate:
+    """Setup access control gating resolve_setup."""
+
+    async def test_resolve_setup_denied_raises(self, module_servicer: ModuleServicer) -> None:
+        """A denied setup blocks resolve_setup with PermissionDeniedError before any fetch."""
+        module_servicer.user_profile.check_resource_access = AsyncMock(return_value=False)
+        with pytest.raises(PermissionDeniedError):
+            await module_servicer.resolve_setup("setups:x", "missions:m")
+        module_servicer.user_profile.check_resource_access.assert_awaited_once_with(
+            user_profile_pb2.RESOURCE_TYPE_SETUP, "setups:x"
+        )

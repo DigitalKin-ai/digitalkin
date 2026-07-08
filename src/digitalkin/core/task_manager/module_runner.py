@@ -13,6 +13,7 @@ from redis.exceptions import RedisError
 from digitalkin.core.exceptions import BackpressureTimeoutError
 from digitalkin.core.profiling.step_timer import StepTimer
 from digitalkin.core.profiling.task_profiler import TaskProfiler
+from digitalkin.grpc_servers.exceptions import PermissionDeniedError
 from digitalkin.grpc_servers.interceptors.request_ids import RequestContext
 from digitalkin.logger import logger
 from digitalkin.models.grpc_servers.stream_error_codes import StreamErrorCode
@@ -226,6 +227,9 @@ class ModuleRunner:
                 StreamErrorCode.REDIS_UNAVAILABLE.value,
                 f"redis unavailable: {type(exc).__name__}: {exc}",
             )
+        except PermissionDeniedError as exc:
+            logger.warning("ModuleRunner: setup access denied: %s", exc, extra=log_extra)
+            await on_fatal(StreamErrorCode.SETUP_ACCESS_DENIED.value, str(exc))
         except Exception as exc:
             logger.exception("ModuleRunner: module job failed", extra=log_extra)
             await on_fatal(

@@ -63,6 +63,7 @@ _SERVICE_NAMES = {
     "filesystem",
     "identity",
     "registry",
+    "secret",
     "storage",
     "user_profile",
 }

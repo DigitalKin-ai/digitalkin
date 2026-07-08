@@ -1,6 +1,6 @@
 """Digital Kin UserProfile Service gRPC Client."""
 
-from typing import Any
+from typing import Any, cast
 
 from agentic_mesh_protocol.user_profile.v1 import (
     user_profile_pb2,
@@ -69,3 +69,24 @@ class GrpcUserProfile(UserProfileStrategy, GrpcClientWrapper, GrpcErrorHandlerMi
 
             logger.debug("Retrieved user profile for mission_id: %s", self.mission_id)
             return user_profile_dict
+
+    async def check_resource_access(self, resource_type: int, resource_id: str) -> bool:
+        """Check whether the caller may access a resource (e.g. a setup).
+
+        Args:
+            resource_type: The ResourceType enum value (e.g. RESOURCE_TYPE_SETUP).
+            resource_id: The resource identifier (e.g. the setup_id).
+
+        Returns:
+            True if access is granted, False otherwise.
+
+        Raises:
+            UserProfileServiceError: If the gRPC operation fails.
+        """
+        async with self.handle_grpc_errors("CheckResourceAccess", UserProfileServiceError):
+            request = user_profile_pb2.CheckResourceAccessRequest(
+                resource_type=cast("user_profile_pb2.ResourceType", resource_type),
+                resource_id=resource_id,
+            )
+            response = await self.exec_grpc_query("CheckResourceAccess", request)
+            return response.allowed

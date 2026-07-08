@@ -17,6 +17,7 @@ from digitalkin.services.cost.cost_strategy import CostStrategy
 from digitalkin.services.filesystem.filesystem_strategy import FilesystemStrategy
 from digitalkin.services.identity.identity_strategy import IdentityStrategy
 from digitalkin.services.registry.registry_strategy import RegistryStrategy
+from digitalkin.services.secret.secret_strategy import SecretStrategy
 from digitalkin.services.storage.storage_strategy import StorageStrategy
 from digitalkin.services.task_manager.task_manager_strategy import TaskManagerStrategy
 from digitalkin.services.user_profile.user_profile_strategy import UserProfileStrategy
@@ -95,6 +96,7 @@ class ModuleContext:
     filesystem: FilesystemStrategy
     identity: IdentityStrategy
     registry: RegistryStrategy
+    secret: SecretStrategy
     storage: StorageStrategy
     task_manager: TaskManagerStrategy | None
     user_profile: UserProfileStrategy
@@ -115,6 +117,7 @@ class ModuleContext:
         filesystem: FilesystemStrategy,
         identity: IdentityStrategy,
         registry: RegistryStrategy,
+        secret: SecretStrategy,
         storage: StorageStrategy,
         user_profile: UserProfileStrategy,
         session: dict[str, Any],
@@ -135,6 +138,7 @@ class ModuleContext:
             filesystem: FilesystemStrategy.
             identity: IdentityStrategy.
             registry: RegistryStrategy.
+            secret: SecretStrategy.
             storage: StorageStrategy.
             user_profile: UserProfileStrategy.
             task_manager: Optional, injected by SingleJobManager (RedisTaskManager).
@@ -153,6 +157,7 @@ class ModuleContext:
         self.filesystem = filesystem
         self.identity = identity
         self.registry = registry
+        self.secret = secret
         self.storage = storage
         self.task_manager = task_manager
         self.user_profile = user_profile
@@ -374,6 +379,7 @@ class ModuleContext:
             ("registry", self.registry),
             ("filesystem", self.filesystem),
             ("user_profile", self.user_profile),
+            ("secret", self.secret),
             ("identity", self.identity),
         )
         for name, service in owned:

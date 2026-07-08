@@ -10,6 +10,7 @@ from digitalkin.services.cost import CostStrategy, DefaultCost, GrpcCost
 from digitalkin.services.filesystem import DefaultFilesystem, FilesystemStrategy, GrpcFilesystem
 from digitalkin.services.identity import DefaultIdentity, IdentityStrategy
 from digitalkin.services.registry import DefaultRegistry, GrpcRegistry, RegistryStrategy
+from digitalkin.services.secret import DefaultSecret, GrpcSecret, SecretStrategy
 from digitalkin.services.services_models import ServicesStrategy
 from digitalkin.services.storage import DefaultStorage, GrpcStorage, StorageStrategy
 from digitalkin.services.user_profile import DefaultUserProfile, GrpcUserProfile, UserProfileStrategy
@@ -36,6 +37,7 @@ class ServicesConfig(BaseModel):
         "identity",
         "communication",
         "user_profile",
+        "secret",
     }
 
     def __init__(
@@ -67,6 +69,7 @@ class ServicesConfig(BaseModel):
             "identity": ServicesStrategy(local=DefaultIdentity, remote=DefaultIdentity),
             "communication": ServicesStrategy(local=DefaultCommunication, remote=GrpcCommunication),
             "user_profile": ServicesStrategy(local=DefaultUserProfile, remote=GrpcUserProfile),
+            "secret": ServicesStrategy(local=DefaultSecret, remote=GrpcSecret),
         }
 
         # Apply strategy overrides
@@ -161,6 +164,11 @@ class ServicesConfig(BaseModel):
     def user_profile(self) -> type[UserProfileStrategy]:
         """The user_profile service strategy class for the current mode."""
         return self._strategies["user_profile"][self.mode.value]
+
+    @property
+    def secret(self) -> type[SecretStrategy]:
+        """The secret service strategy class for the current mode."""
+        return self._strategies["secret"][self.mode.value]
 
     def update_mode(self, mode: ServicesMode) -> None:
         """Update the strategy mode.

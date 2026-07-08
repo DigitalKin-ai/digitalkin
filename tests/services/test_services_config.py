@@ -67,6 +67,7 @@ class TestBorrowedCleanup:
         ctx = ModuleContext(
             communication=comm, cost=cost,
             filesystem=AsyncMock(), identity=AsyncMock(), registry=reg,
+            secret=AsyncMock(),
             storage=AsyncMock(),
             user_profile=AsyncMock(),
             session={"job_id": "j1", "mission_id": "m1", "setup_id": "s1", "setup_version_id": "v1"},
@@ -93,6 +94,7 @@ class TestBorrowedCleanup:
         ctx = ModuleContext(
             communication=comm, cost=AsyncMock(),
             filesystem=AsyncMock(), identity=AsyncMock(), registry=reg,
+            secret=AsyncMock(),
             storage=AsyncMock(), task_manager=AsyncMock(),
             user_profile=AsyncMock(),
             session={"job_id": "j1", "mission_id": "m1", "setup_id": "s1", "setup_version_id": "v1"},

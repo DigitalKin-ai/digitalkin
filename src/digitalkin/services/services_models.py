@@ -11,6 +11,7 @@ from digitalkin.services.cost import CostStrategy
 from digitalkin.services.filesystem import FilesystemStrategy
 from digitalkin.services.identity import IdentityStrategy
 from digitalkin.services.registry import RegistryStrategy
+from digitalkin.services.secret import SecretStrategy
 from digitalkin.services.storage import StorageStrategy
 from digitalkin.services.task_manager.task_manager_strategy import TaskManagerStrategy
 from digitalkin.services.user_profile import UserProfileStrategy
@@ -23,6 +24,7 @@ T = TypeVar(
     | FilesystemStrategy
     | IdentityStrategy
     | RegistryStrategy
+    | SecretStrategy
     | StorageStrategy
     | UserProfileStrategy
     | TaskManagerStrategy,

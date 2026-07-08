@@ -663,3 +663,51 @@ class TestGetUserProfileEdgeCases:
         assert result2["email"] == "user2@example.com"
         assert result1["credits"][0]["total"] == "100"
         assert result2["credits"][0]["total"] == "200"
+
+
+class TestCheckResourceAccess:
+    """Tests for check_resource_access (setup access control)."""
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    @pytest.mark.smoke
+    def test_check_resource_access_allowed(
+        self,
+        client: GrpcUserProfile,
+        test_channel: grpc_testing.Channel,
+        thread_pool: futures.ThreadPoolExecutor,
+    ) -> None:
+        """An allowed verdict returns True and forwards resource_type + resource_id."""
+        method_desc = user_profile_service_pb2.DESCRIPTOR.services_by_name["UserProfileService"].methods_by_name[
+            "CheckResourceAccess"
+        ]
+        future = thread_pool.submit(
+            asyncio.run, client.check_resource_access(user_profile_pb2.RESOURCE_TYPE_SETUP, "setups:x")
+        )
+        _, request, rpc = test_channel.take_unary_unary(method_desc)
+
+        assert request.resource_type == user_profile_pb2.RESOURCE_TYPE_SETUP
+        assert request.resource_id == "setups:x"
+
+        rpc.terminate(user_profile_pb2.CheckResourceAccessResponse(allowed=True), (), grpc.StatusCode.OK, "")
+        assert future.result(timeout=5.0) is True
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    @pytest.mark.edge_case
+    def test_check_resource_access_denied(
+        self,
+        client: GrpcUserProfile,
+        test_channel: grpc_testing.Channel,
+        thread_pool: futures.ThreadPoolExecutor,
+    ) -> None:
+        """A denied verdict returns False."""
+        method_desc = user_profile_service_pb2.DESCRIPTOR.services_by_name["UserProfileService"].methods_by_name[
+            "CheckResourceAccess"
+        ]
+        future = thread_pool.submit(
+            asyncio.run, client.check_resource_access(user_profile_pb2.RESOURCE_TYPE_SETUP, "setups:x")
+        )
+        _, _request, rpc = test_channel.take_unary_unary(method_desc)
+        rpc.terminate(user_profile_pb2.CheckResourceAccessResponse(allowed=False), (), grpc.StatusCode.OK, "")
+        assert future.result(timeout=5.0) is False

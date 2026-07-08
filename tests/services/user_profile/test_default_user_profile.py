@@ -23,3 +23,7 @@ class TestDefaultUserProfile:
         a.add_user_profile({"x": 1})
         b = DefaultUserProfile(mission_id="mb", setup_id="s", setup_version_id="sv")
         assert await b.get_user_profile() is None
+
+    async def test_check_resource_access_allows(self) -> None:
+        # Local strategy has no access backend → always grants.
+        assert await _profile().check_resource_access(1, "setups:x") is True
