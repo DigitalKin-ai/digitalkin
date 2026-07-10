@@ -208,8 +208,8 @@ class TaskSession:
         pub_ns = self.last_signal_published_ns
         e2e_ms = (time.time_ns() - pub_ns) / 1e6 if pub_ns else 0.0
         self.last_signal_published_ns = 0
-        logger.info(
-            "[lat-audit] signal_handle: handler=cancel reason=%s e2e_ms=%.2f "
+        logger.debug(
+            "[perf] signal_handle: handler=cancel reason=%s e2e_ms=%.2f "
             "body_ms=%.2f ack_send_ms=%.2f ack_ok=%s task_id=%s",
             reason.value,
             e2e_ms,
@@ -263,8 +263,8 @@ class TaskSession:
         pub_ns = self.last_signal_published_ns
         e2e_ms = (time.time_ns() - pub_ns) / 1e6 if pub_ns else 0.0
         self.last_signal_published_ns = 0
-        logger.info(
-            "[lat-audit] signal_handle: handler=stop reason=%s e2e_ms=%.2f "
+        logger.debug(
+            "[perf] signal_handle: handler=stop reason=%s e2e_ms=%.2f "
             "body_ms=%.2f ack_send_ms=%.2f ack_ok=%s task_id=%s",
             CancellationReason.SIGNAL_SERVICE_STOP.value,
             e2e_ms,

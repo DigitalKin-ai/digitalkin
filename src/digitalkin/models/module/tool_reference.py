@@ -134,7 +134,7 @@ class ToolReference(BaseModel):
         Every failure path logs a ``WARNING`` with a ``reason=...`` field
         (``setup_not_found``, ``module_not_discovered``, ``schema_fetch_failed``)
         so callers don't need to re-derive the cause. Successful resolutions
-        emit ``[lat-audit] tool_resolve`` at INFO with input/output counts.
+        emit ``[perf] tool_resolve`` at DEBUG with input/output counts.
         Post-filter results of zero functions emit a second ``WARNING`` naming
         the structural cause (``module_exposes_no_triggers``,
         ``all_user_triggers_unknown``, or ``post_filter_empty``).
@@ -191,8 +191,8 @@ class ToolReference(BaseModel):
             )
 
         post_count = len(available & enabled_triggers) if enabled_triggers else len(tool_info.tools)
-        logger.info(
-            "[lat-audit] tool_resolve: setup_id=%s slug=%s "
+        logger.debug(
+            "[perf] tool_resolve: setup_id=%s slug=%s "
             "user_triggers_enabled=%d user_triggers_total=%d "
             "module_available=%d post_filter=%d",
             entry.setup_id,

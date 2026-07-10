@@ -44,9 +44,6 @@ class GrpcUserProfile(UserProfileStrategy, GrpcClientWrapper, GrpcErrorHandlerMi
     async def close(self) -> None:
         """Release this instance's pooled gRPC channel ref."""
         await self.close_channel()
-        logger.debug(
-            "[VALIDATE D1] released channel for %s", self.service_name
-        )  # TODO(validate): remove after prod validation
 
     async def get_user_profile(self) -> dict[str, Any] | None:
         """Get user profile by mission_id (which maps to user_id).

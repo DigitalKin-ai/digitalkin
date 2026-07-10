@@ -42,9 +42,6 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
     async def close(self) -> None:
         """Release this instance's pooled gRPC channel ref."""
         await self.close_channel()
-        logger.debug(
-            "[VALIDATE D1] released channel for %s", self.service_name
-        )  # TODO(validate): remove after prod validation
 
     @asynccontextmanager
     async def handle_grpc_errors(  # noqa: PLR6301

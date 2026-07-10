@@ -83,10 +83,7 @@ class M2MCallRegistry:
         )
         self._breakers[target_key] = breaker
         if len(self._breakers) > 256:  # noqa: PLR2004
-            evicted, _ = self._breakers.popitem(last=False)
-            logger.info(
-                "[VALIDATE D4] evicted LRU m2m breaker target=%s", evicted
-            )  # TODO(validate): remove after prod validation
+            self._breakers.popitem(last=False)
         return breaker
 
     async def acquire_slot(self) -> None:
@@ -222,10 +219,6 @@ class M2MCallRegistry:
                     is_fatal = fatal_field is not None and fatal_field.bool_value
                     if is_fatal:
                         # M2: breaker outcome recorded only in call_module (was double-counted here).
-                        logger.warning(
-                            "[VALIDATE M2] fatal dial-back; breaker recorded only in call_module: task_id=%s",
-                            task_id,
-                        )  # TODO(validate): remove after prod validation
                         return
         finally:
             with contextlib.suppress(asyncio.QueueFull):

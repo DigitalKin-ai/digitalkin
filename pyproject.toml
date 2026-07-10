@@ -37,7 +37,7 @@
         "pydantic-settings>=2.14.1",
         "redis[hiredis]>=7.4.0,<9",
     ]
-    version = "1.0.0.dev23"
+    version = "1.0.0.dev24"
 
     [project.optional-dependencies]
         performance = [ "uvloop>=0.21" ]

@@ -197,9 +197,6 @@ class ModuleServer(BaseServer):
         from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
 
         # M9: close channels (resets ref_counts, clears stubs + breakers) instead of a bare cache clear.
-        logger.info(
-            "[VALIDATE M9] closing all cached gRPC channels on INVALIDATE_CHANNELS"
-        )  # TODO(validate): remove after prod validation
         await GrpcClientWrapper.close_all_cached_channels()
         Bulkhead.clear_all()
 
@@ -331,7 +328,6 @@ class ModuleServer(BaseServer):
         if self._gateway_redis_client is not None:
             # M8: this server created the gateway's Redis client, so it closes it (owner closes;
             # the gateway only borrows). Pools were leaked on every server stop.
-            logger.info("[VALIDATE M8] closing gateway Redis pools")  # TODO(validate): remove after prod validation
             try:
                 await self._gateway_redis_client.close()
             except Exception:

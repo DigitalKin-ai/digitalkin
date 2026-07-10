@@ -193,10 +193,12 @@ class GatewayServicer:
             )  # TODO(validate): remove after prod validation
             return gateway_pb2.AssociateTaskResponse(task_id="", parent_task_id=parent_task_id)
 
-        logger.info("AssociateTask: parent=%s child=%s", parent_task_id, child_task_id)
+        logger.info(
+            "[VALIDATE AT1] AssociateTask: parent=%s child=%s", parent_task_id, child_task_id
+        )  # TODO(validate): remove after prod validation
         return gateway_pb2.AssociateTaskResponse(task_id=child_task_id, parent_task_id=parent_task_id)
 
-    async def StartStream(  # noqa: PLR0911, PLR0915
+    async def StartStream(  # noqa: PLR0911
         self,
         request: Any,
         context: grpc.aio.ServicerContext,
@@ -247,11 +249,6 @@ class GatewayServicer:
             return gateway_pb2.StartStreamResponse(accepted=False, task_id=task_id)
 
         if self._registry.get(task_id) is not None:
-            logger.info(
-                "[VALIDATE RD1] StartStream refused: a dial is already live for task_id=%s",
-                task_id,
-                extra=log_extra,
-            )  # TODO(validate): remove after prod validation
             return gateway_pb2.StartStreamResponse(accepted=False, task_id=task_id)
         timer.mark("dedup_check")
 
@@ -262,20 +259,9 @@ class GatewayServicer:
         try:
             claim = await self._idempotency.claim(task_id, SharedRedisListener.PROCESS_ID)
         except RedisError:
-            logger.warning(
-                "[VALIDATE R2] StartStream claim Redis failure → accepted=False",
-                extra=log_extra,
-                exc_info=True,
-            )  # TODO(validate): remove after prod validation
             return gateway_pb2.StartStreamResponse(accepted=False, task_id=task_id)
         timer.mark("idempotency_claim")
         if claim is not ClaimResult.CLAIMED:
-            logger.info(
-                "[VALIDATE RD1] StartStream refused: task already claimed/running task_id=%s (%s)",
-                task_id,
-                claim.name,
-                extra=log_extra,
-            )  # TODO(validate): remove after prod validation
             return gateway_pb2.StartStreamResponse(accepted=False, task_id=task_id)
 
         session = StreamSession(task_id=task_id)
@@ -310,11 +296,6 @@ class GatewayServicer:
                 {"pb": start_info.SerializeToString(), "seq": "0"},
             )
         except RedisError:
-            logger.warning(
-                "[VALIDATE R2] StartStream xadd(stream.start) Redis failure → accepted=False",
-                extra=log_extra,
-                exc_info=True,
-            )  # TODO(validate): remove after prod validation
             # Claimed + registered but the stream couldn't be seeded: undo both so a retry re-runs.
             with contextlib.suppress(RedisError):
                 await self._idempotency.release(task_id)
@@ -571,8 +552,8 @@ class GatewayServicer:
                         extra=log_extra,
                         exc_info=True,
                     )
-                logger.info(
-                    "[lat-audit] SendSignal: %s path=cache total=%.2fms action=%s setup_id=%s",
+                logger.debug(
+                    "[perf] SendSignal: %s path=cache total=%.2fms action=%s setup_id=%s",
                     timer.format_steps(),
                     timer.total_ms(),
                     action_name,
@@ -618,8 +599,8 @@ class GatewayServicer:
             await self._redis_client.publish(f"signal_ch:{task_id}", payload)
             timer.mark("redis_publish")
             last_mark = "redis_publish"
-            logger.info(
-                "[lat-audit] SendSignal: %s path=redis total=%.2fms action=%s task_id=%s",
+            logger.debug(
+                "[perf] SendSignal: %s path=redis total=%.2fms action=%s task_id=%s",
                 timer.format_steps(),
                 timer.total_ms(),
                 action_name,
@@ -728,12 +709,6 @@ class GatewayServicer:
             except StopAsyncIteration:
                 return
             except asyncio.TimeoutError:
-                logger.warning(
-                    "[VALIDATE B1] stream read idle %.0fs with no EOS (producer likely died) — "
-                    "closing stream: task_id=%s",
-                    idle,
-                    task_id,
-                )  # TODO(validate): remove after prod validation
                 yield self._sentinel(
                     0,
                     task_id,
@@ -745,10 +720,6 @@ class GatewayServicer:
                 yield self._sentinel(0, task_id, "stream.end")
                 return
             except RedisError:
-                logger.warning(
-                    "[VALIDATE R2] stream read Redis failure — closing stream: task_id=%s",
-                    task_id,
-                )  # TODO(validate): remove after prod validation
                 yield self._sentinel(
                     0,
                     task_id,
@@ -829,21 +800,9 @@ class GatewayServicer:
                 if deadline is None:
                     deadline = now + reconnect.window_s
                 if now >= deadline:
-                    logger.info(
-                        "[VALIDATE RD1] dial-back gave up after %.0fs reconnect window: task_id=%s attempts=%d",
-                        reconnect.window_s,
-                        task_id,
-                        attempt,
-                    )  # TODO(validate): remove after prod validation
                     break
                 attempt += 1
                 delay = min(random.uniform(reconnect.backoff_base_s, reconnect.backoff_max_s), deadline - now)  # noqa: S311
-                logger.info(
-                    "[VALIDATE RD1] dial-back disconnected — re-dial attempt %d in %.1fs (resume): task_id=%s",
-                    attempt,
-                    delay,
-                    task_id,
-                )  # TODO(validate): remove after prod validation
                 await asyncio.sleep(max(0.0, delay))
                 resume = True
         finally:
@@ -1028,11 +987,6 @@ class GatewayServicer:
                         )
                         return
                     except RedisError:
-                        logger.warning(
-                            "[VALIDATE R2] dial-back stream read Redis failure — closing BiDi: task_id=%s",
-                            task_id,
-                            extra=log_extra,
-                        )  # TODO(validate): remove after prod validation
                         for sc in (
                             self._sentinel(
                                 0,
@@ -1101,14 +1055,6 @@ class GatewayServicer:
                 if first and resume:
                     limit = get_gateway_settings().stream.from_seq_limit
                     resume_cursor = min(upstream.from_seq, limit)
-                    if upstream.from_seq > limit:
-                        logger.warning(
-                            "[VALIDATE RESUME1] resume cursor %d exceeds limit %d, clamped: task_id=%s",
-                            upstream.from_seq,
-                            limit,
-                            task_id,
-                            extra=log_extra,
-                        )  # TODO(validate): remove after prod validation
                     logger.info(
                         "← Consumer resume cursor=%d received — resuming output (no re-run)",
                         resume_cursor,
@@ -1147,18 +1093,11 @@ class GatewayServicer:
                     first = False
                     continue
                 # Follow-up multi-turn input → task's input stream.
-                try:
+                with contextlib.suppress(RedisError):
                     await self._redis_client.xadd(
                         f"task:{task_id}:input",
                         {"pb": upstream.data.SerializeToString()},
                     )
-                except RedisError:
-                    logger.warning(
-                        "[VALIDATE R2] dropped follow-up input (redis unavailable): task_id=%s data=%s",
-                        task_id,
-                        str(upstream.data)[:512],
-                        extra=log_extra,
-                    )  # TODO(validate): remove after prod validation
         except grpc.aio.AioRpcError as exc:
             code_name = exc.code().name
             details = exc.details() or ""

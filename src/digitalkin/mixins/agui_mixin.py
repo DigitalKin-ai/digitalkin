@@ -30,7 +30,6 @@ from ag_ui.core.events import ToolCallEndEvent as AgUiToolCallEndEvent
 from ag_ui.core.events import ToolCallResultEvent as AgUiToolCallResultEvent
 from ag_ui.core.events import ToolCallStartEvent as AgUiToolCallStartEvent
 
-from digitalkin.logger import logger
 from digitalkin.models.events import (
     AgentRunEvent,
     BaseAgentRunEvent,
@@ -408,9 +407,6 @@ class AgUiMixin:
         event: CustomEvent,
     ) -> None:
         """Handle custom event - emit AG-UI CustomEvent."""
-        logger.info(
-            "[VALIDATE M15] CustomEvent dispatched via AG-UI: name=%s", event.name
-        )  # TODO(validate): remove after prod validation
         from ag_ui.core.events import CustomEvent as AgUiCustomEvent  # pylint: disable=C0415
 
         from digitalkin.models.module.ag_ui import AgUiCustomEventOutput  # pylint: disable=C0415

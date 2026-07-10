@@ -197,9 +197,6 @@ class LoggerFactory:
             return
         if any(isinstance(h, RotatingFileHandler) for h in logger.handlers):
             # Low: idempotent — repeated setup_logger() calls must not stack handlers.
-            logger.debug(
-                "[VALIDATE Low-loghandler] file handler already attached, skipping"
-            )  # TODO(validate): remove after prod validation
             return
 
         log_file = settings.file or os.path.join(log_dir, f"{logger.name}.log")

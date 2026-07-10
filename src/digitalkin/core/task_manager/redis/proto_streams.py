@@ -150,12 +150,6 @@ class ProtoStreamReader:
                         s.ParseFromString(pb_bytes)
                     except DecodeError:
                         # M6: poison entry (truncated/corrupt pb) — drop it, keep the stream alive.
-                        logger.warning(
-                            "[VALIDATE M6] dropped corrupt proto stream entry: task_id=%s seq=%d bytes=%d",
-                            self._task_id,
-                            seq,
-                            len(pb_bytes),
-                        )  # TODO(validate): remove after prod validation
                         continue
                     yield s
 

@@ -21,6 +21,7 @@ from digitalkin.core.job_manager.base_job_manager import BaseJobManager
 from digitalkin.core.job_manager.single_job_manager import SingleJobManager
 from digitalkin.core.task_manager.redis.redis_signal import SharedRedisListener
 from digitalkin.grpc_servers.exceptions import PermissionDeniedError, ServicerError
+from digitalkin.grpc_servers.interceptors.request_ids import RequestContext
 from digitalkin.logger import logger
 from digitalkin.models.module.module import ModuleCodeModel
 from digitalkin.models.module.setup_types import SetupModel
@@ -116,7 +117,6 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             except Exception:
                 logger.exception("Error closing GrpcUserProfile channel")
         # M8: close the Redis connection pools (were leaked on every server stop).
-        logger.info("[VALIDATE M8] closing module servicer Redis pools")  # TODO(validate): remove after prod validation
         await self._redis_client.close()
 
         if isinstance(self._registry_cache, GrpcRegistry):
@@ -272,9 +272,17 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         Raises:
             PermissionDeniedError: If access to the setup is denied.
         """
-        if not await self.user_profile.check_resource_access(user_profile_pb2.RESOURCE_TYPE_SETUP, setup_id):
+        allowed = await self.user_profile.check_resource_access(user_profile_pb2.RESOURCE_TYPE_SETUP, setup_id)
+        ids = RequestContext.current()
+        if not allowed:
+            logger.info(
+                "[VALIDATE AC1] setup access DENIED: setup_id=%s", setup_id, extra=ids
+            )  # TODO(validate): remove after prod validation
             msg = f"access denied to setup {setup_id}"
             raise PermissionDeniedError(msg)
+        logger.info(
+            "[VALIDATE AC1] setup access granted: setup_id=%s", setup_id, extra=ids
+        )  # TODO(validate): remove after prod validation
 
     async def resolve_setup(self, setup_id: str, mission_id: str) -> SetupVersionData:
         """Return setup version data from cache or remote service.
@@ -362,6 +370,9 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         if not await self.user_profile.check_resource_access(
             user_profile_pb2.RESOURCE_TYPE_SETUP, setup_version.setup_id
         ):
+            logger.info(
+                "[VALIDATE AC1] setup config access DENIED: setup_id=%s", setup_version.setup_id
+            )  # TODO(validate): remove after prod validation
             context.set_code(grpc.StatusCode.PERMISSION_DENIED)
             context.set_details(f"access denied to setup {setup_version.setup_id}")
             return lifecycle_pb2.ConfigSetupModuleResponse(success=False)

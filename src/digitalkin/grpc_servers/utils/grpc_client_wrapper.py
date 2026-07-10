@@ -225,7 +225,7 @@ class GrpcClientWrapper:
         cls._stub_cache.clear()
         CircuitBreaker.clear_all()
 
-    async def exec_grpc_query(  # noqa: C901, PLR0912, PLR0914, PLR0915
+    async def exec_grpc_query(  # noqa: PLR0914
         self,
         query_endpoint: str,
         request: Any,
@@ -256,11 +256,6 @@ class GrpcClientWrapper:
         if rpc_method is None:
             # M3: validate the method before claiming the half-open probe lock,
             # so a missing method can't escape cb.check() and wedge the breaker.
-            logger.info(
-                "[VALIDATE M3] RPC method missing, raised before breaker probe: %s.%s",
-                self.service_name,
-                query_endpoint,
-            )  # TODO(validate): remove after prod validation
             msg = f"[gRPC-client:{self.service_name}] RPC method '{query_endpoint}' not found on stub"
             raise ServerError(msg)
 
@@ -273,13 +268,6 @@ class GrpcClientWrapper:
 
         grpc_settings = get_grpc_client_settings()
         eff_timeout = timeout if timeout is not None else grpc_settings.timeout
-        if timeout is None:
-            logger.info(
-                "[VALIDATE H1] default gRPC deadline applied: %.1fs (%s.%s)",
-                eff_timeout,
-                self.service_name,
-                query_endpoint,
-            )  # TODO(validate): remove after prod validation
         max_retries = grpc_settings.max_retries
         backoff_base_ms = grpc_settings.backoff_base_ms
         backoff_delays = tuple(backoff_base_ms / 1000 * (2**i) for i in range(max_retries))
@@ -342,9 +330,4 @@ class GrpcClientWrapper:
             raise ServerError(error_msg) from last_error
         finally:
             # Free a half-open probe the loop never resolved (e.g. CancelledError mid-call or backoff).
-            if cb.release_probe():
-                logger.info(
-                    "[VALIDATE R1] released abandoned circuit probe: %s.%s",
-                    self.service_name,
-                    query_endpoint,
-                )  # TODO(validate): remove after prod validation
+            cb.release_probe()

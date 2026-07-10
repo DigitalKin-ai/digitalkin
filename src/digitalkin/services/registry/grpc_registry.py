@@ -63,9 +63,6 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
     async def close(self) -> None:
         """Release this instance's pooled gRPC channel ref."""
         await self.close_channel()
-        logger.debug(
-            "[VALIDATE D1] released channel for %s", self.service_name
-        )  # TODO(validate): remove after prod validation
 
     async def wait_for_ready(self, timeout: float = 1.0) -> bool:
         """Probe the registry via the standard gRPC Health Check service.

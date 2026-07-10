@@ -108,8 +108,8 @@ class SharedRedisListener:
             self._pubsub = self._redis_client.pubsub()
             await self._pubsub.psubscribe("signal_ch:*")
             psub_ms = (time.perf_counter_ns() - psub_t0) / 1e6
-            logger.info(
-                "[lat-audit] signal_psubscribe: psubscribe_ms=%.2f pattern=signal_ch:* phase=boot origin=%s",
+            logger.debug(
+                "[perf] signal_psubscribe: psubscribe_ms=%.2f pattern=signal_ch:* phase=boot origin=%s",
                 psub_ms,
                 SharedRedisListener.PROCESS_ID,
             )
@@ -142,8 +142,8 @@ class SharedRedisListener:
         task.add_done_callback(lambda _: self.unregister(task_id))
 
         self._counters["subscribed"] += 1
-        logger.info(
-            "[lat-audit] signal_subscribe: register_ms=%.2f active_subs=%d task_id=%s origin=%s",
+        logger.debug(
+            "[perf] signal_subscribe: register_ms=%.2f active_subs=%d task_id=%s origin=%s",
             (time.perf_counter_ns() - reg_t0) / 1e6,
             len(self._task_refs),
             task_id,
@@ -176,14 +176,11 @@ class SharedRedisListener:
         if action.startswith("invalidate_"):
             origin = data.get("origin")
             if origin is not None and origin == SharedRedisListener.PROCESS_ID:
-                logger.debug(
-                    "[VALIDATE D3b] skipped self-originated invalidate action=%s", action
-                )  # TODO(validate): remove after prod validation
                 return True
             setup_id = data.get("setup_id", "")
             self._counters["invalidated"] += 1
-            logger.info(
-                "[lat-audit] signal_invalidate: e2e_ms=%.2f action=%s setup_id=%s",
+            logger.debug(
+                "[perf] signal_invalidate: e2e_ms=%.2f action=%s setup_id=%s",
                 e2e_ms,
                 action,
                 setup_id,
@@ -196,8 +193,8 @@ class SharedRedisListener:
                 inv_task.add_done_callback(log_unhandled)
             return True
 
-        logger.info(
-            "[lat-audit] signal_dispatch: e2e_ms=%.2f dispatch_ms=%.2f action=%s task_id=%s",
+        logger.debug(
+            "[perf] signal_dispatch: e2e_ms=%.2f dispatch_ms=%.2f action=%s task_id=%s",
             e2e_ms,
             (time.perf_counter_ns() - dispatch_t0) / 1e6,
             action,
@@ -253,8 +250,8 @@ class SharedRedisListener:
                     psub_t0 = time.perf_counter_ns()
                     await self._pubsub.psubscribe("signal_ch:*")
                     psub_ms = (time.perf_counter_ns() - psub_t0) / 1e6
-                    logger.info(
-                        "[lat-audit] signal_psubscribe: psubscribe_ms=%.2f pattern=signal_ch:* phase=loop",
+                    logger.debug(
+                        "[perf] signal_psubscribe: psubscribe_ms=%.2f pattern=signal_ch:* phase=loop",
                         psub_ms,
                     )
                 msg = await self._pubsub.get_message(ignore_subscribe_messages=True, timeout=0.5)
@@ -264,8 +261,8 @@ class SharedRedisListener:
                         route_task_id, data, raw_json = parsed
                         pub_ns = data.get("published_at_ns") or 0
                         e2e_ms = (time.time_ns() - pub_ns) / 1e6 if pub_ns else 0.0
-                        logger.info(
-                            "[lat-audit] signal_route: e2e_ms=%.2f action=%s task_id=%s",
+                        logger.debug(
+                            "[perf] signal_route: e2e_ms=%.2f action=%s task_id=%s",
                             e2e_ms,
                             data.get("action", ""),
                             route_task_id,
@@ -279,9 +276,6 @@ class SharedRedisListener:
                 if self._pubsub is not None:
                     with contextlib.suppress(Exception):
                         await self._pubsub.aclose()
-                    logger.info(
-                        "[VALIDATE D3a] closed stale pubsub before reconnect (backoff=%.1fs)", backoff
-                    )  # TODO(validate): remove after prod validation
                 self._pubsub = None
                 logger.exception("SharedRedisListener iteration error, retrying in %.1fs", backoff)
                 await asyncio.sleep(backoff)
@@ -290,8 +284,8 @@ class SharedRedisListener:
             now = time.monotonic()
             if now - self._last_counters_log >= 60.0:  # noqa: PLR2004
                 c = self._counters
-                logger.info(
-                    "[lat-audit] signal_counters: origin=%s received=%d deduped=%d evicted=%d "
+                logger.debug(
+                    "[perf] signal_counters: origin=%s received=%d deduped=%d evicted=%d "
                     "dropped=%d listener_restarts=%d active_subs=%d subscribed_total=%d "
                     "invalidated=%d",
                     SharedRedisListener.PROCESS_ID,

@@ -58,6 +58,17 @@ class GrpcSecret(SecretStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
             request = user_profile_pb2.GetSetupSecretRequest(setup_id=self.setup_id, mission_id=self.mission_id)
             response = await self.exec_grpc_query("GetSetupSecret", request)
             if not response.success:
-                logger.warning("No secret found for setup_id: %s", self.setup_id)
+                logger.info(
+                    "[VALIDATE SC1] secret fetch: setup_id=%s mission_id=%s success=False",
+                    self.setup_id,
+                    self.mission_id,
+                )  # TODO(validate): remove after prod validation
                 return None
-            return ProtoUtils.proto_to_dict(response.secret, with_defaults=True)
+            secret = ProtoUtils.proto_to_dict(response.secret, with_defaults=True)
+            logger.info(
+                "[VALIDATE SC1] secret fetch: setup_id=%s mission_id=%s success=True keys=%d",
+                self.setup_id,
+                self.mission_id,
+                len(secret),
+            )  # TODO(validate): remove after prod validation
+            return secret

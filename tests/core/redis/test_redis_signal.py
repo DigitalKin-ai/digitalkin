@@ -395,9 +395,11 @@ class TestSharedRedisListenerLifecycle:
 
         records: list[logging.LogRecord] = []
         handler = logging.Handler()
-        handler.setLevel(logging.INFO)
+        handler.setLevel(logging.DEBUG)
         handler.emit = records.append  # type: ignore[method-assign]
         digitalkin_logger = logging.getLogger("digitalkin")
+        prev_level = digitalkin_logger.level
+        digitalkin_logger.setLevel(logging.DEBUG)
         digitalkin_logger.addHandler(handler)
 
         listener = SharedRedisListener(_make_mock_client())
@@ -409,6 +411,7 @@ class TestSharedRedisListenerLifecycle:
             assert "phase=boot" in audit[0]
         finally:
             digitalkin_logger.removeHandler(handler)
+            digitalkin_logger.setLevel(prev_level)
             await listener.close()
 
     async def test_signal_counters_audit_contains_origin(self) -> None:
@@ -420,9 +423,11 @@ class TestSharedRedisListenerLifecycle:
 
         records: list[logging.LogRecord] = []
         handler = logging.Handler()
-        handler.setLevel(logging.INFO)
+        handler.setLevel(logging.DEBUG)
         handler.emit = records.append  # type: ignore[method-assign]
         digitalkin_logger = logging.getLogger("digitalkin")
+        prev_level = digitalkin_logger.level
+        digitalkin_logger.setLevel(logging.DEBUG)
         digitalkin_logger.addHandler(handler)
 
         listener = SharedRedisListener(_make_mock_client())
@@ -439,6 +444,7 @@ class TestSharedRedisListenerLifecycle:
             assert f"origin={SharedRedisListener.PROCESS_ID}" in counters[0]
         finally:
             digitalkin_logger.removeHandler(handler)
+            digitalkin_logger.setLevel(prev_level)
             await listener.close()
 
 

@@ -72,10 +72,6 @@ class RemoteTaskManager(BaseTaskManager):
             else:
                 # H2: this call never registered a session (e.g. duplicate task_id) —
                 # undo only THIS call's admission; never touch the live task.
-                logger.info(
-                    "[VALIDATE H2] remote create rejected without touching live task: '%s'",
-                    task_id,
-                )  # TODO(validate): remove after prod validation
                 self._release_admission()
             logger.exception(
                 "Failed to register remote task: '%s'",

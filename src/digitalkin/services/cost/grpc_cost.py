@@ -43,9 +43,6 @@ class GrpcCost(CostStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
     async def close(self) -> None:
         """Release this instance's pooled gRPC channel ref."""
         await self.close_channel()
-        logger.debug(
-            "[VALIDATE D1] released channel for %s", self.service_name
-        )  # TODO(validate): remove after prod validation
 
     async def set_limits(self, limits: list[QuantityLimit | AmountLimit]) -> None:
         """Set cost limits for this session.

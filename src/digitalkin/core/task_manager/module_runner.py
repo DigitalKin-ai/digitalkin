@@ -114,12 +114,6 @@ class ModuleRunner:
                     await self._redis_client.expire(stream_key, stream_settings.redis_stream_ttl)
                     t_eos_write_end = time.perf_counter_ns()
                     logger.info(
-                        "[VALIDATE M4] proto stream wrote %d seq'd entries (maxlen=%d): task_id=%s",
-                        seq,
-                        stream_maxlen,
-                        task_id,
-                    )  # TODO(validate): remove after prod validation
-                    logger.info(
                         "[close-debug] producer_eos_write: xadd_expire=%.2fms t_done_ns=%d task_id=%s",
                         (t_eos_write_end - t_eos_write_start) / 1e6,
                         t_eos_write_end,
@@ -137,8 +131,8 @@ class ModuleRunner:
                 # Arm a TTL on first XADD; final EXPIRE on stream.end shortens it.
                 if not first_logged:
                     elapsed_ms = (time.perf_counter_ns() - runner_start_ns) / 1e6
-                    logger.info(
-                        "[lat-audit] producer_first_byte_to_redis: %.1fms task_id=%s",
+                    logger.debug(
+                        "[perf] producer_first_byte_to_redis: %.1fms task_id=%s",
                         elapsed_ms,
                         task_id,
                         extra=log_extra,
@@ -218,11 +212,6 @@ class ModuleRunner:
             logger.exception("ModuleRunner: backpressure timeout", extra=log_extra)
             await on_fatal(StreamErrorCode.BACKPRESSURE_TIMEOUT.value, str(exc))
         except RedisError as exc:
-            logger.error(
-                "[VALIDATE R2] ModuleRunner: Redis unavailable writing output: task_id=%s",
-                task_id,
-                extra=log_extra,
-            )  # TODO(validate): remove after prod validation
             await on_fatal(
                 StreamErrorCode.REDIS_UNAVAILABLE.value,
                 f"redis unavailable: {type(exc).__name__}: {exc}",

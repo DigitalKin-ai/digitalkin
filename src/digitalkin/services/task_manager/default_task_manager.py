@@ -42,10 +42,7 @@ class DefaultTaskManager(TaskManagerStrategy):
         self._signals[task_id] = data
         self._signals.move_to_end(task_id)
         if len(self._signals) > 10000:  # noqa: PLR2004
-            evicted, _ = self._signals.popitem(last=False)
-            logger.info(
-                "[VALIDATE D5] evicted LRU signal record task_id=%s", evicted
-            )  # TODO(validate): remove after prod validation
+            self._signals.popitem(last=False)
         return data
 
     async def close(self) -> None:

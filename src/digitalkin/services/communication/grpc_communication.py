@@ -369,6 +369,13 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
                 breaker.record_failure()
                 msg = f"target {target_key} returned no task_id from AssociateTask"
                 raise RuntimeError(msg)  # noqa: TRY301
+            logger.info(
+                "[VALIDATE AT2] AssociateTask minted: parent=%s child=%s target=%s",
+                RequestContext.current().get("task_id", ""),
+                task_id,
+                target_key,
+                extra=log_extra,
+            )  # TODO(validate): remove after prod validation
             log_extra["task_id"] = task_id
             timer.mark("associate_task")
             last_mark = "associate_task"
@@ -474,8 +481,8 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
                 gaps_ms_sorted = sorted(g / 1e6 for g in gaps_ns)
                 max_gap_ms = gaps_ms_sorted[-1] if gaps_ms_sorted else 0.0
                 p95_gap_ms = gaps_ms_sorted[int(0.95 * (len(gaps_ms_sorted) - 1))] if gaps_ms_sorted else 0.0
-                logger.info(
-                    "[lat-audit] [m2m] call_module: %s chunks=%d max_gap_ms=%.2f "
+                logger.debug(
+                    "[perf] [m2m] call_module: %s chunks=%d max_gap_ms=%.2f "
                     "p95_gap_ms=%.2f max_qdepth=%d total=%.2fms task_id=%s",
                     timer.format_steps(),
                     chunks_seen,
@@ -508,8 +515,8 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
                         sig_failure = type(exc).__name__
                     sig_ms = (time.perf_counter_ns() - sig_t0) / 1e6
                     if not sig_failure:
-                        logger.info(
-                            "[lat-audit] [m2m] send_signal: action=CANCEL rpc_ms=%.2f task_id=%s",
+                        logger.debug(
+                            "[perf] [m2m] send_signal: action=CANCEL rpc_ms=%.2f task_id=%s",
                             sig_ms,
                             task_id,
                             extra=log_extra,

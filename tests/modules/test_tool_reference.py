@@ -919,6 +919,11 @@ def _infos(mock_logger: object) -> list[str]:
     return [c.args[0] % c.args[1:] for c in mock_logger.info.call_args_list]  # type: ignore[attr-defined]
 
 
+def _debugs(mock_logger: object) -> list[str]:
+    """Same for DEBUG."""
+    return [c.args[0] % c.args[1:] for c in mock_logger.debug.call_args_list]  # type: ignore[attr-defined]
+
+
 class TestResolveSingleLogs:
     """Reason-tagged warnings and structured audit on every ``_resolve_single`` outcome."""
 
@@ -977,8 +982,8 @@ class TestResolveSingleLogs:
         with patch("digitalkin.models.module.tool_reference.logger") as mock_logger:
             await ref.resolve(registry, communication)
 
-        infos = _infos(mock_logger)
-        audit_lines = [i for i in infos if "[lat-audit] tool_resolve" in i]
+        debugs = _debugs(mock_logger)
+        audit_lines = [i for i in debugs if "[perf] tool_resolve" in i]
         assert len(audit_lines) == 1, audit_lines
         line = audit_lines[0]
         assert "setup_id=setup-search-001" in line

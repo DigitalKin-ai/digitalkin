@@ -76,11 +76,6 @@ class StreamRegistry:
         settings = get_gateway_settings()
         if len(self._local_cache) >= settings.max_streams:
             # H3: reject at capacity instead of evicting a live session.
-            logger.info(
-                "[VALIDATE H3] stream registry at capacity (%d), rejecting task_id=%s",
-                settings.max_streams,
-                session.task_id,
-            )  # TODO(validate): remove after prod validation
             return False
 
         self._local_cache[session.task_id] = session

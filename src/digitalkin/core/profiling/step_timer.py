@@ -51,9 +51,9 @@ class StepTimer:
         total = (self._last - self._t0) / 1e6
         parts.append(f"total={total:.2f}ms")
         if task_id:
-            logger.info("[lat-audit] %s: %s task_id=%s", prefix, " ".join(parts), task_id)
+            logger.debug("[perf] %s: %s task_id=%s", prefix, " ".join(parts), task_id)
         else:
-            logger.info("[lat-audit] %s: %s", prefix, " ".join(parts))
+            logger.debug("[perf] %s: %s", prefix, " ".join(parts))
 
     def total_ms(self) -> float:
         """Total elapsed time across all marks in milliseconds.
