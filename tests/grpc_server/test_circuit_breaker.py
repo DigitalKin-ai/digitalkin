@@ -140,7 +140,7 @@ class TestCircuitBreakerIntegrationWithWrapper:
 
         wrapper = object.__new__(GrpcClientWrapper)
         wrapper.service_name = "TestService"
-        wrapper.stub = type("Stub", (), {"Query": lambda self, req, timeout: req})()
+        wrapper.stub = type("Stub", (), {"Query": lambda _self, req, _timeout, _metadata=None: req})()
 
         # Pre-open the circuit (fail_max=1 → single failure opens it)
         monkeypatch.setenv("DIGITALKIN_CB_FAIL_MAX", "1")
@@ -164,7 +164,9 @@ class TestCircuitBreakerIntegrationWithWrapper:
             def details(self) -> str:
                 return "boom"
 
-        async def _raise(_self: object, _req: object, timeout: object = None) -> None:  # noqa: RUF029
+        async def _raise(  # noqa: RUF029
+            _self: object, _req: object, timeout: object = None, metadata: object = None
+        ) -> None:
             raise _Err
 
         return type("Stub", (), {"ReadRecord": _raise})()

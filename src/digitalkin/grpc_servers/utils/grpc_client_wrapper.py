@@ -230,6 +230,7 @@ class GrpcClientWrapper:
         query_endpoint: str,
         request: Any,
         timeout: float | None = None,
+        metadata: tuple[tuple[str, str], ...] | None = None,
     ) -> Any:
         """Execute a gRPC query with circuit breaker protection and retry.
 
@@ -245,6 +246,8 @@ class GrpcClientWrapper:
             query_endpoint: rpc query name (e.g., "GetSetup", "CreateSetupVersion")
             request: gRPC protobuf request object
             timeout: Per-call timeout in seconds. ``None`` applies no client-side deadline.
+            metadata: Optional gRPC metadata pairs (e.g. an idempotency key); the same
+                metadata is sent on every retry attempt.
 
         Returns:
             gRPC protobuf response object.
@@ -279,7 +282,7 @@ class GrpcClientWrapper:
                     await asyncio.sleep(backoff_delays[attempt - 1])
 
                 try:
-                    response = await rpc_method(request, timeout=eff_timeout)
+                    response = await rpc_method(request, timeout=eff_timeout, metadata=metadata)
                 except grpc.RpcError as e:
                     last_error = e
                     if e.code() in self._RETRYABLE_CODES and attempt < max_retries:

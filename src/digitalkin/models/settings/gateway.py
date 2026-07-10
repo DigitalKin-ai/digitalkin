@@ -93,6 +93,10 @@ class GatewayM2MSettings(BaseSettings):
         default=2.0,
         description="Best-effort SendSignal(CANCEL) deadline when call_module is cancelled.",
     )
+    call_associate_timeout_s: float = Field(
+        default=5.0,
+        description="Per-call deadline on the backend AssociateTask mint (bounded, not the 30s default).",
+    )
     call_queue_maxsize: int = Field(
         default=1024,
         gt=0,

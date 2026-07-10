@@ -56,13 +56,19 @@ def _gw() -> GatewayServicer:
 
 
 def _comm(gw: GatewayServicer) -> GrpcCommunication:
-    return GrpcCommunication(
+    comm = GrpcCommunication(
         mission_id="missions:test",
         setup_id="setups:test",
         setup_version_id="setup_versions:test",
         client_config=ClientConfig(host="127.0.0.1", port=1, security=SecurityMode.INSECURE),
         m2m_calls=gw._m2m,
+        gateway_backend_config=ClientConfig(host="127.0.0.1", port=1, security=SecurityMode.INSECURE),
     )
+    # These tests exercise TARGET-side resilience; the backend mint always succeeds.
+    comm._gateway_backend.exec_grpc_query = AsyncMock(  # type: ignore[union-attr, method-assign]
+        return_value=gateway_pb2.AssociateTaskResponse(task_id="tid")
+    )
+    return comm
 
 
 class TestTTLSweeper:
@@ -131,9 +137,6 @@ class TestCircuitBreaker:
         stub_mock = MagicMock()
         stub_mock.StartStream = AsyncMock(side_effect=PermissionDeniedError("[/gateway/StartStream] denied"))
         stub_mock.SendSignal = AsyncMock()
-        stub_mock.AssociateTask = AsyncMock(
-            return_value=gateway_pb2.AssociateTaskResponse(task_id="tid"),
-        )
         comm._get_or_create_channel = MagicMock(return_value=MagicMock())  # type: ignore[method-assign]
         comm._get_or_create_stub = MagicMock(return_value=stub_mock)  # type: ignore[method-assign]
 
@@ -201,9 +204,6 @@ class TestBreakerSingleCount:
             return_value=gateway_pb2.StartStreamResponse(accepted=True, task_id="tid"),
         )
         stub_mock.SendSignal = AsyncMock()
-        stub_mock.AssociateTask = AsyncMock(
-            return_value=gateway_pb2.AssociateTaskResponse(task_id="tid"),
-        )
         comm._get_or_create_channel = MagicMock(return_value=MagicMock())  # type: ignore[method-assign]
         comm._get_or_create_stub = MagicMock(return_value=stub_mock)  # type: ignore[method-assign]
 
@@ -276,9 +276,6 @@ class TestCallTimeout:
             return_value=gateway_pb2.StartStreamResponse(accepted=True, task_id="tid"),
         )
         stub_mock.SendSignal = AsyncMock()
-        stub_mock.AssociateTask = AsyncMock(
-            return_value=gateway_pb2.AssociateTaskResponse(task_id="tid"),
-        )
         comm._get_or_create_channel = MagicMock(return_value=MagicMock())  # type: ignore[method-assign]
         comm._get_or_create_stub = MagicMock(return_value=stub_mock)  # type: ignore[method-assign]
 
@@ -306,9 +303,6 @@ class TestCancellation:
         )
         stub_mock.SendSignal = AsyncMock(
             return_value=gateway_pb2.ClientSignalResponse(success=True, task_id="tid"),
-        )
-        stub_mock.AssociateTask = AsyncMock(
-            return_value=gateway_pb2.AssociateTaskResponse(task_id="tid"),
         )
         comm._get_or_create_channel = MagicMock(return_value=MagicMock())  # type: ignore[method-assign]
         comm._get_or_create_stub = MagicMock(return_value=stub_mock)  # type: ignore[method-assign]

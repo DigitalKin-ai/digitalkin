@@ -7,7 +7,6 @@ import contextlib
 import json
 import random
 import time
-import uuid
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
@@ -159,44 +158,13 @@ class GatewayServicer:
         await self._m2m.stop()
         await self._registry.shutdown()
 
-    async def AssociateTask(
-        self,
-        request: Any,
-        context: grpc.aio.ServicerContext,  # noqa: ARG002
-    ) -> Any:
-        """Mint a sub-task id linked to a running parent task.
+    async def AssociateTask(self, request: Any, context: grpc.aio.ServicerContext) -> Any:  # noqa: ARG002, PLR6301
+        """Not served by the SDK — the backend mints sub-tasks.
 
-        Args:
-            request: AssociateTaskRequest proto.
-            context: gRPC service context.
-
-        Returns:
-            AssociateTaskResponse(task_id, parent_task_id); empty ``task_id`` on rejection.
+        Present only so the generated ``add_GatewayServiceServicer_to_server`` finds all
+        four RPCs; nothing dials the module for it. Callers use the backend endpoint.
         """
-        parent_task_id = request.parent_task_id
-        err = GatewayValidator.validate_id(parent_task_id, "parent_task_id")
-        if err is not None:
-            logger.warning("AssociateTask rejected: %s", err)
-            return gateway_pb2.AssociateTaskResponse(task_id="", parent_task_id=parent_task_id)
-
-        child_task_id = str(uuid.uuid4())
-        ttl = get_gateway_settings().stream.redis_stream_initial_ttl
-        try:
-            await self._redis_client.sadd(f"task:{parent_task_id}:children", child_task_id)
-            await self._redis_client.expire(f"task:{parent_task_id}:children", ttl)
-            await self._redis_client.set(f"task:{child_task_id}:parent", parent_task_id, ex=ttl)
-        except RedisError:
-            logger.warning(
-                "[VALIDATE AT1] AssociateTask persist failed parent=%s → task_id=''",
-                parent_task_id,
-                exc_info=True,
-            )  # TODO(validate): remove after prod validation
-            return gateway_pb2.AssociateTaskResponse(task_id="", parent_task_id=parent_task_id)
-
-        logger.info(
-            "[VALIDATE AT1] AssociateTask: parent=%s child=%s", parent_task_id, child_task_id
-        )  # TODO(validate): remove after prod validation
-        return gateway_pb2.AssociateTaskResponse(task_id=child_task_id, parent_task_id=parent_task_id)
+        await context.abort(grpc.StatusCode.UNIMPLEMENTED, "AssociateTask is served by the backend")
 
     async def StartStream(  # noqa: PLR0911
         self,

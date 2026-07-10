@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+import uuid
 from typing import TYPE_CHECKING, Any
 
 import grpc.aio
@@ -34,6 +35,21 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable, Callable
 
     from digitalkin.grpc_servers.m2m_call_registry import M2MCallRegistry
+
+
+class _GatewayBackendClient(GrpcClientWrapper):
+    """Resilient client to the backend GatewayService (own circuit breaker) for AssociateTask."""
+
+    service_name: str = "GatewayBackendService"
+
+    def __init__(self, client_config: ClientConfig) -> None:
+        """Dial the backend GatewayService and cache its stub.
+
+        Args:
+            client_config: Backend services-provider config (same host as user_profile).
+        """
+        self._init_channel(client_config)
+        self.stub = self._get_or_create_stub(gateway_service_pb2_grpc.GatewayServiceStub)
 
 
 class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
@@ -95,6 +111,7 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
         setup_version_id: str,
         client_config: ClientConfig,
         m2m_calls: M2MCallRegistry | None = None,
+        gateway_backend_config: ClientConfig | None = None,
     ) -> None:
         """Initialize the gRPC communication client.
 
@@ -105,11 +122,16 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
             client_config: gRPC client config.
             m2m_calls: Optional ``M2MCallRegistry``; falls back to the
                 class-level slot from :meth:`set_m2m_call_registry`.
+            gateway_backend_config: Backend GatewayService config for AssociateTask
+                (same host as user_profile). Required for M2M tool calls.
         """
         BaseStrategy.__init__(self, mission_id, setup_id, setup_version_id)
         self.client_config = client_config
         self._m2m_calls = m2m_calls if m2m_calls is not None else self._shared_m2m_calls
         self._pool_keys: set[str] = set()
+        self._gateway_backend = (
+            _GatewayBackendClient(gateway_backend_config) if gateway_backend_config is not None else None
+        )
 
         logger.debug("Initialized GrpcCommunication (security=%s)", client_config.security)
 
@@ -146,6 +168,8 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
     async def close(self) -> None:
         """Release all pooled gRPC channels."""
         await self.close_all_channels()
+        if self._gateway_backend is not None:
+            await self._gateway_backend.close_channel()
 
     def dial_consumer_stream(
         self,
@@ -341,37 +365,28 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
             timer.mark("acquire_slot")
             last_mark = "acquire_slot"
 
-            self._get_or_create_channel(module_address, module_port)
-            timer.mark("channel_create")
-            last_mark = "channel_create"
-            stub = self._get_or_create_stub(gateway_service_pb2_grpc.GatewayServiceStub)
-            timer.mark("stub_create")
-            last_mark = "stub_create"
-
-            # The gateway mints the sub-task id and links it to the running parent task.
-            try:
-                assoc = await stub.AssociateTask(
-                    gateway_pb2.AssociateTaskRequest(
-                        parent_task_id=RequestContext.current().get("task_id", ""),
-                    ),
-                )
-            except grpc.aio.AioRpcError as exc:
-                breaker.record_failure()
-                logger.warning(
-                    "[m2m] AssociateTask failed: [%s] %s",
-                    exc.code().name,
-                    exc.details() or "",
-                    extra=log_extra,
-                )
-                raise
+            # The BACKEND mints + registers the sub-task (linked to the running parent's
+            # mission), so it is a real task the tool module's CheckResourceAccess accepts.
+            # Resilient: deadline + retry + own breaker via exec_grpc_query; retries are safe
+            # because the idempotency nonce dedupes them backend-side. Fail-closed on error.
+            if self._gateway_backend is None:
+                msg = "gateway_backend_config is required for M2M AssociateTask"
+                raise RuntimeError(msg)  # noqa: TRY301
+            parent_task_id = RequestContext.current().get("task_id", "")
+            idem_key = uuid.uuid4().hex  # idempotency nonce, NOT a task_id (backend mints the id)
+            assoc = await self._gateway_backend.exec_grpc_query(
+                "AssociateTask",
+                gateway_pb2.AssociateTaskRequest(parent_task_id=parent_task_id),
+                timeout=m2m_settings.call_associate_timeout_s,
+                metadata=(("x-idempotency-key", idem_key),),
+            )
             task_id = assoc.task_id
             if not task_id:
-                breaker.record_failure()
-                msg = f"target {target_key} returned no task_id from AssociateTask"
+                msg = f"backend returned no task_id from AssociateTask (parent={parent_task_id})"
                 raise RuntimeError(msg)  # noqa: TRY301
             logger.info(
                 "[VALIDATE AT2] AssociateTask minted: parent=%s child=%s target=%s",
-                RequestContext.current().get("task_id", ""),
+                parent_task_id,
                 task_id,
                 target_key,
                 extra=log_extra,
@@ -379,6 +394,13 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
             log_extra["task_id"] = task_id
             timer.mark("associate_task")
             last_mark = "associate_task"
+
+            self._get_or_create_channel(module_address, module_port)
+            timer.mark("channel_create")
+            last_mark = "channel_create"
+            stub = self._get_or_create_stub(gateway_service_pb2_grpc.GatewayServiceStub)
+            timer.mark("stub_create")
+            last_mark = "stub_create"
 
             output_queue: asyncio.Queue[struct_pb2.Struct | None] = asyncio.Queue(
                 maxsize=m2m_settings.call_queue_maxsize,

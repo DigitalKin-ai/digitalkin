@@ -84,6 +84,14 @@ class ServicesConfig(BaseModel):
         if not self._configs.get("secret"):
             self._configs["secret"] = self._configs.get("user_profile") or {}
 
+        # AssociateTask is minted by the backend (same services-provider as user_profile /
+        # CheckResourceAccess). In REMOTE mode, give the communication client that backend
+        # address so it can dial AssociateTask for M2M tool calls. Skipped in LOCAL (no backend,
+        # and DefaultCommunication takes no such arg).
+        up_client_config = (self._configs.get("user_profile") or {}).get("client_config")
+        if up_client_config is not None:
+            self._configs["communication"].setdefault("gateway_backend_config", up_client_config)
+
     @classmethod
     def valid_strategy_names(cls) -> set[str]:
         """Get the list of valid strategy names.

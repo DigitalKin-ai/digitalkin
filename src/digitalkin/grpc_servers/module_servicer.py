@@ -253,7 +253,12 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
 
         from digitalkin.services.communication.grpc_communication import GrpcCommunication
 
-        self._communication_cache = GrpcCommunication("", "", "", client_config)
+        gateway_backend_config = (self.module_class.services_config_params.get("user_profile") or {}).get(
+            "client_config"
+        )
+        self._communication_cache = GrpcCommunication(
+            "", "", "", client_config, gateway_backend_config=gateway_backend_config
+        )
         return self._communication_cache
 
     def _cache_setup(self, setup_id: str, version_data: SetupVersionData) -> None:

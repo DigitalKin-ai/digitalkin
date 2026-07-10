@@ -92,7 +92,6 @@ def _mock_servicer(
         redis_client.publish = AsyncMock(return_value=0)
         redis_client.get = AsyncMock(return_value=None)
         redis_client.set = AsyncMock(return_value=True)
-        redis_client.sadd = AsyncMock(return_value=1)
         pipe_mock = MagicMock()
         pipe_mock.xadd = MagicMock(return_value=pipe_mock)
         pipe_mock.execute = AsyncMock(return_value=[])
@@ -427,62 +426,3 @@ class TestStream:
         await servicer._read_peer_upstream(request_iter, "task_empty", session)  # noqa: SLF001
 
         servicer._redis_client.xadd.assert_not_called()  # noqa: SLF001
-
-
-# ===========================================================================
-# AssociateTask
-# ===========================================================================
-
-
-class TestAssociateTask:
-    """AssociateTask: gateway mints a sub-task id linked to the parent and persists both links."""
-
-    async def test_mints_and_persists_parent_child(self) -> None:
-        """A valid parent yields a fresh child id, echoes the parent, and writes both links."""
-        from agentic_mesh_protocol.gateway.v1 import gateway_pb2
-
-        from digitalkin.models.settings.gateway import get_gateway_settings
-
-        ttl = get_gateway_settings().stream.redis_stream_initial_ttl
-        servicer = _mock_servicer()
-        request = gateway_pb2.AssociateTaskRequest(parent_task_id="parent-1")
-
-        response = await servicer.AssociateTask(request, MagicMock())
-
-        assert response.task_id  # non-empty, gateway-minted (not a client uuid)
-        assert response.parent_task_id == "parent-1"
-
-        child = response.task_id
-        servicer._redis_client.sadd.assert_awaited_once_with("task:parent-1:children", child)  # noqa: SLF001
-        servicer._redis_client.expire.assert_awaited_once_with("task:parent-1:children", ttl)  # noqa: SLF001
-        set_args, set_kwargs = servicer._redis_client.set.call_args  # noqa: SLF001
-        assert set_args[0] == f"task:{child}:parent"
-        assert set_args[1] == "parent-1"
-        assert set_kwargs["ex"] == ttl
-
-    async def test_invalid_parent_returns_empty(self) -> None:
-        """An empty/invalid parent_task_id is rejected with an empty task_id and no writes."""
-        from agentic_mesh_protocol.gateway.v1 import gateway_pb2
-
-        servicer = _mock_servicer()
-        request = gateway_pb2.AssociateTaskRequest(parent_task_id="")
-
-        response = await servicer.AssociateTask(request, MagicMock())
-
-        assert response.task_id == ""
-        servicer._redis_client.sadd.assert_not_awaited()  # noqa: SLF001
-
-    async def test_redis_error_returns_empty(self) -> None:
-        """A Redis failure while persisting yields an empty task_id (fail-closed)."""
-        from redis.exceptions import RedisError
-
-        from agentic_mesh_protocol.gateway.v1 import gateway_pb2
-
-        servicer = _mock_servicer()
-        servicer._redis_client.sadd = AsyncMock(side_effect=RedisError("boom"))  # noqa: SLF001
-        request = gateway_pb2.AssociateTaskRequest(parent_task_id="parent-1")
-
-        response = await servicer.AssociateTask(request, MagicMock())
-
-        assert response.task_id == ""
-        assert response.parent_task_id == "parent-1"
