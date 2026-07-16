@@ -17,6 +17,8 @@ from digitalkin.models.services.registry import (
     ModuleInfo,
     RegistryModuleStatus,
     RegistryModuleType,
+    RegistrySetupStatus,
+    RegistryVisibility,
     SetupInfo,
 )
 from digitalkin.services.registry import RegistryStrategy
@@ -53,7 +55,8 @@ class FakeRegistry(RegistryStrategy):
         self,
         name: str | None = None,
         module_type: str | None = None,
-        organization_id: str | None = None,
+        limit: int = 20,
+        offset: int = 0,
     ) -> list[ModuleInfo]:
         if name and name in self._search_results:
             return self._search_results[name]
@@ -62,12 +65,26 @@ class FakeRegistry(RegistryStrategy):
     async def get_status(self, module_id: str) -> None:
         return None
 
+    async def search_setups(  # noqa: PLR0913
+        self,
+        query: str | None = None,
+        setup_ids: list[str] | None = None,
+        module_ids: list[str] | None = None,
+        module_types: list[RegistryModuleType] | None = None,
+        statuses: list[RegistrySetupStatus] | None = None,
+        visibilities: list[RegistryVisibility] | None = None,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> list[SetupInfo]:
+        return []
+
     async def register(
         self,
         module_id: str,
         address: str,
         port: int,
         version: str,
+        module_type: RegistryModuleType = RegistryModuleType.UNSPECIFIED,
     ) -> ModuleInfo | None:
         return None
 
@@ -110,7 +127,7 @@ def create_tool_module_info(
     """Create a ToolModuleInfo for testing."""
     return ToolModuleInfo(
         module_id=module_id,
-        module_type=RegistryModuleType.TOOL,
+        module_type=RegistryModuleType.TOOL_MODULE,
         address="localhost",
         port=port,
         version="1.0.0",
@@ -135,7 +152,7 @@ def create_tool_module_info(
 def search_tool_info() -> ModuleInfo:
     return ModuleInfo(
         module_id="tool-search-001",
-        module_type=RegistryModuleType.TOOL,
+        module_type=RegistryModuleType.TOOL_MODULE,
         address="localhost",
         port=50051,
         version="1.0.0",
@@ -147,7 +164,7 @@ def search_tool_info() -> ModuleInfo:
 def analyzer_tool_info() -> ModuleInfo:
     return ModuleInfo(
         module_id="tool-analyzer-002",
-        module_type=RegistryModuleType.TOOL,
+        module_type=RegistryModuleType.TOOL_MODULE,
         address="localhost",
         port=50052,
         version="2.0.0",
@@ -159,7 +176,7 @@ def analyzer_tool_info() -> ModuleInfo:
 def writer_tool_info() -> ModuleInfo:
     return ModuleInfo(
         module_id="tool-writer-003",
-        module_type=RegistryModuleType.TOOL,
+        module_type=RegistryModuleType.TOOL_MODULE,
         address="localhost",
         port=50053,
         version="1.5.0",

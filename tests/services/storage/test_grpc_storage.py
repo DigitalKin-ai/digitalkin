@@ -1270,6 +1270,39 @@ class TestListData:
         assert results[0].collection == "test_collection"
         assert results[0].data.name == "Collection 1"
 
+    @pytest.mark.grpc
+    @pytest.mark.edge_case
+    async def test_list_skips_invalid_records(self, client: GrpcStorage) -> None:
+        """Test that a record failing schema validation is skipped, not the whole list.
+
+        Verifies:
+        - Records written by other modules with a foreign shape do not empty the list
+        - Valid records in the same collection are still returned
+        """
+        from unittest.mock import AsyncMock
+
+        from google.protobuf.struct_pb2 import Struct
+
+        def _record(record_id: str, data: dict) -> data_pb2.StorageRecord:
+            struct = Struct()
+            struct.update(data)
+            return data_pb2.StorageRecord(
+                context=MISSION_ID,
+                collection="test_collection",
+                record_id=record_id,
+                data=struct,
+                data_type=data_pb2.DataType.Value("OUTPUT"),
+            )
+
+        valid = _record("valid", {"mission_id": MISSION_ID, "name": "ok", "value": 1})
+        invalid = _record("foreign", {"unexpected": "shape"})
+        client.exec_grpc_query = AsyncMock(  # type: ignore[method-assign]
+            return_value=data_pb2.ListRecordsResponse(records=[invalid, valid])
+        )
+
+        results = await client._list("test_collection", MISSION_ID)
+        assert [r.record_id for r in results] == ["valid"]
+
 
 class TestStorageEdgeCases:
     """Tests for edge cases and error handling.

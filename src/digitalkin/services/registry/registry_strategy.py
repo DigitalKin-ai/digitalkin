@@ -6,7 +6,11 @@ from typing import Any
 from digitalkin.models.services.registry import (
     ModuleInfo,
     RegistryModuleStatus,
+    RegistryModuleType,
+    RegistrySetupStatus,
+    RegistryVisibility,
     SetupInfo,
+    SetupSummary,
 )
 from digitalkin.services.base_strategy import BaseStrategy
 from digitalkin.services.registry.registry_models import ModuleStatusInfo
@@ -40,17 +44,96 @@ class RegistryStrategy(BaseStrategy, ABC):
         self,
         name: str | None = None,
         module_type: str | None = None,
-        organization_id: str | None = None,
+        limit: int = 20,
+        offset: int = 0,
     ) -> list[ModuleInfo]:
-        """Search for modules by criteria.
+        """Search the module catalog (module blueprints; needs a setup to be invocable).
 
         Args:
-            name: Filter by name (partial match via query).
-            module_type: Filter by type (archetype, tool).
-            organization_id: Filter by organization.
+            name: Case-insensitive free text matched against module name AND documentation.
+            module_type: Filter by type (archetype, tool_module).
+            limit: Max results (1-100).
+            offset: Pagination offset.
 
         Returns:
-            List of matching modules.
+            List of matching modules as trimmed ModuleInfo (address/port are never
+            populated by search — resolve via discover_by_id when wiring communication).
+        """
+        ...
+
+    async def search_tools(
+        self,
+        name: str | None = None,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> list[ModuleInfo]:
+        """Tool registry view: modules of type TOOL_MODULE.
+
+        Args:
+            name: Case-insensitive free text matched against module name AND documentation.
+            limit: Max results (1-100).
+            offset: Pagination offset.
+
+        Returns:
+            List of matching tool modules.
+        """
+        return await self.search(
+            name=name,
+            module_type=RegistryModuleType.TOOL_MODULE.value,
+            limit=limit,
+            offset=offset,
+        )
+
+    async def search_kins(
+        self,
+        name: str | None = None,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> list[ModuleInfo]:
+        """Kin registry view: modules of type ARCHETYPE.
+
+        Args:
+            name: Case-insensitive free text matched against module name AND documentation.
+            limit: Max results (1-100).
+            offset: Pagination offset.
+
+        Returns:
+            List of matching archetype (kin) modules.
+        """
+        return await self.search(
+            name=name,
+            module_type=RegistryModuleType.ARCHETYPE.value,
+            limit=limit,
+            offset=offset,
+        )
+
+    @abstractmethod
+    async def search_setups(
+        self,
+        query: str | None = None,
+        setup_ids: list[str] | None = None,
+        module_ids: list[str] | None = None,
+        module_types: list[RegistryModuleType] | None = None,
+        statuses: list[RegistrySetupStatus] | None = None,
+        visibilities: list[RegistryVisibility] | None = None,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> list[SetupSummary]:
+        """Search the setup catalog (configured, invocable module instances).
+
+        Args:
+            query: Case-insensitive free text matched against setup name AND documentation.
+            setup_ids: Restrict to these setup ids.
+            module_ids: Restrict to setups backed by these modules.
+            module_types: Filter by backing module type (tool_module, archetype).
+            statuses: Filter by setup status. None = no filter; agent-facing callers
+                should pass READY/CONFIGURATION_SUCCEEDED for invocable setups.
+            visibilities: Filter by visibility.
+            limit: Max results (1-100).
+            offset: Pagination offset.
+
+        Returns:
+            Matching setups as ``SetupSummary`` (no ``config`` field by construction).
         """
         ...
 
@@ -66,17 +149,21 @@ class RegistryStrategy(BaseStrategy, ABC):
         address: str,
         port: int,
         version: str,
+        module_type: RegistryModuleType = RegistryModuleType.UNSPECIFIED,
+        documentation: str = "",
     ) -> ModuleInfo | None:
         """Register a module with the registry.
 
-        Note: The new proto only updates address/port/version for an existing module.
-        The module must already exist in the registry database.
+        Note: The module must already exist in the registry database; registration
+        updates its address/port/version and declares its type.
 
         Args:
             module_id: Unique module identifier.
             address: Network address.
             port: Network port.
             version: Module version.
+            module_type: Declared module type (tool or archetype/kin).
+            documentation: Internal documentation for registry index search.
 
         Returns:
             ModuleInfo if successful, None otherwise.

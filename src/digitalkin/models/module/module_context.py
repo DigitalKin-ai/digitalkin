@@ -13,6 +13,7 @@ from digitalkin.models.module.request_metadata import RequestMetadata
 from digitalkin.models.module.tool_cache import ToolCache, ToolDefinition, ToolModuleInfo
 from digitalkin.models.settings.module import get_module_settings
 from digitalkin.services.communication.communication_strategy import CommunicationStrategy
+from digitalkin.services.communication.exceptions import ToolCallError
 from digitalkin.services.cost.cost_strategy import CostStrategy
 from digitalkin.services.filesystem.filesystem_strategy import FilesystemStrategy
 from digitalkin.services.identity.identity_strategy import IdentityStrategy
@@ -358,7 +359,14 @@ class ModuleContext:
                 mission_id=session.mission_id,
                 metadata=grpc_metadata,
             ):
-                yield json_format.MessageToDict(output_proto)
+                frame = json_format.MessageToDict(output_proto)
+                root = frame.get("root")
+                # A fatal stream.error (e.g. SETUP_ACCESS_DENIED) must abort the tool call,
+                # not surface as a benign result — otherwise the parent run never terminates.
+                if isinstance(root, dict) and root.get("protocol") == "stream.error" and root.get("fatal"):
+                    msg = f"[{root.get('code', '')}] {root.get('message', '')}"
+                    raise ToolCallError(msg)
+                yield frame
 
         tool_function.__name__ = tool_module_info.slug + "__" + tool_def.name
         tool_function.__doc__ = tool_def.description

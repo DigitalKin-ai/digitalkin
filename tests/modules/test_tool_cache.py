@@ -15,7 +15,7 @@ def sample_tool_module_info() -> ToolModuleInfo:
     """Create a sample ToolModuleInfo for testing."""
     return ToolModuleInfo(
         module_id="tool-123",
-        module_type=RegistryModuleType.TOOL,
+        module_type=RegistryModuleType.TOOL_MODULE,
         address="localhost",
         port=50051,
         version="1.0.0",
@@ -42,7 +42,7 @@ def sample_tool_module_info_2() -> ToolModuleInfo:
     """Create a second sample ToolModuleInfo for testing."""
     return ToolModuleInfo(
         module_id="tool-456",
-        module_type=RegistryModuleType.TOOL,
+        module_type=RegistryModuleType.TOOL_MODULE,
         address="localhost",
         port=50052,
         version="2.0.0",
@@ -234,7 +234,7 @@ def _registry_resolving(setup_id: str, module_id: str, name: str) -> AsyncMock:
     registry.get_setup.return_value = SetupInfo(setup_id=setup_id, name=name, module_id=module_id)
     registry.discover_by_id.return_value = ModuleInfo(
         module_id=module_id,
-        module_type=RegistryModuleType.TOOL,
+        module_type=RegistryModuleType.TOOL_MODULE,
         address="localhost",
         port=50051,
         version="1.0.0",
@@ -279,7 +279,7 @@ class TestResolvedToolsNotPersisted:
         # Stale empty entry, as would be loaded from persisted content.
         setup.resolved_tools["setup-123"] = ToolModuleInfo(
             module_id="tool-123",
-            module_type=RegistryModuleType.TOOL,
+            module_type=RegistryModuleType.TOOL_MODULE,
             address="localhost",
             port=50051,
             version="1.0.0",
@@ -362,7 +362,7 @@ class TestResolvedToolsCacheBehavior:
         )
         mock_registry.discover_by_id.return_value = ModuleInfo(
             module_id="tool-123",
-            module_type=RegistryModuleType.TOOL,
+            module_type=RegistryModuleType.TOOL_MODULE,
             address="localhost",
             port=50051,
             version="1.0.0",
@@ -449,7 +449,7 @@ class TestResolvedToolsCacheBehavior:
         )
         mock_registry.discover_by_id.side_effect = lambda module_id: ModuleInfo(
             module_id=module_id,
-            module_type=RegistryModuleType.TOOL,
+            module_type=RegistryModuleType.TOOL_MODULE,
             address="localhost",
             port=50051,
             version="1.0.0",
