@@ -251,6 +251,8 @@ class ModuleServer(BaseServer):
             address=advertise_address,
             port=get_server_settings().channel.port,
             version=version,
+            module_type=self.module_class.registry_type,
+            documentation=self.module_class.build_registry_documentation(),
         )
 
         if not result:

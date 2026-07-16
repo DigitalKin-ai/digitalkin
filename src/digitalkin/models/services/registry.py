@@ -20,7 +20,8 @@ class RegistryModuleType(str, Enum):
 
     UNSPECIFIED = "unspecified"
     ARCHETYPE = "archetype"
-    TOOL = "tool"
+    TOOL_MODULE = "tool_module"
+    SERVICE = "service"
 
 
 class ModuleInfo(BaseModel):
@@ -72,6 +73,28 @@ class SetupInfo(BaseModel):
     owner_id: str | None = None
     card_id: str | None = None
     module_id: str | None = None
+    module_name: str | None = None
+    module_type: RegistryModuleType | None = None
     setup_version_id: str | None = None
     setup_version: str | None = None
     config: dict[str, Any] | None = None
+
+
+class SetupSummary(BaseModel):
+    """Search-safe setup view — the shape returned by ``search_setups``.
+
+    Deliberately has no ``config`` field: a setup's secrets can never be
+    serialized from a search result. Use ``get_setup`` for the full ``SetupInfo``.
+    """
+
+    setup_id: str
+    name: str
+    documentation: str | None = None
+    status: RegistrySetupStatus | None = None
+    visibility: RegistryVisibility | None = None
+    organization_id: str | None = None
+    module_id: str | None = None
+    module_name: str | None = None
+    module_type: RegistryModuleType | None = None
+    setup_version_id: str | None = None
+    setup_version: str | None = None

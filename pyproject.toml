@@ -28,17 +28,16 @@
 
     dependencies = [
         "ag-ui-protocol>=0.1.18",
-        "agentic-mesh-protocol==1.0.0b0",
+        "agentic-mesh-protocol==1.0.1.dev4",
         "anyio>=4.13.0",
-        "grpcio-health-checking==1.81.0",
-        "grpcio-reflection==1.81.0",
-        "grpcio-status==1.81.0",
-        "pydantic>=2.12.4",
+        "grpcio-health-checking==1.82.1",
+        "grpcio-reflection==1.82.1",
+        "grpcio-status==1.82.1",
         "pydantic-settings>=2.14.1",
+        "pydantic>=2.12.4",
         "redis[hiredis]>=7.4.0,<9",
     ]
-
-    version = "1.0.1.dev0"
+    version = "1.0.2.dev2"
 
     [project.optional-dependencies]
         agno = [ "agno>=2.6" ]
@@ -85,7 +84,7 @@
         "twine>=6.2.0",
         "types-grpcio-health-checking>=1.0.0.20260518",
         "types-grpcio-reflection>=1.0.0.20260508",
-        "types-grpcio>=1.0.0.20260518",
+        "types-grpcio>=1.82.1.20260711",
         "types-protobuf>=7.34.1.20260518",
         "typos>=1.48.0",
     ]
@@ -148,12 +147,12 @@
         "buck-out",
         "build",
         "dist",
-        "scripts",
         "docs/*",
         "examples/*",
         "factory.py",
         "generate_certificates.py",
         "node_modules",
+        "scripts",
         "tests/*",
         "venv",
     ]
@@ -270,10 +269,10 @@
         skip-magic-trailing-comma = false
 
 [tool.mypy]
-    exclude                = [ "examples", "tests", "scripts" ]
+    exclude                = [ "examples", "scripts", "tests" ]
     ignore_missing_imports = true
-    warn_unused_ignores    = true
     warn_redundant_casts   = true
+    warn_unused_ignores    = true
 
 [tool.pytest.ini_options]
 
