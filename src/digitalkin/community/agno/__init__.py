@@ -20,6 +20,11 @@ optional ``agno`` dependency at import time and is therefore NOT exported here;
 import it directly::
 
     from digitalkin.community.agno.module_toolkit import ModuleToolkit
+
+Default agent toolkits (``ChatHistoryTools``, ``UserProfileTools``,
+``RegistryTools``, ``DefaultToolkits``) live in
+:mod:`digitalkin.community.agno.toolkits` — imported separately because they
+require the optional ``agno`` dependency at import time.
 """
 
 from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter

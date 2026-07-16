@@ -80,8 +80,8 @@ class TestCauseChaining:
 
     async def test_default_setup_wraps_validation_error(self) -> None:
         setup = DefaultSetup()
-        with pytest.raises(SetupServiceError) as ei:
-            await setup.create_setup_version({"data": {}, "setup_id": "s1"})
+        with pytest.raises(ValueError, match="Validation failed for SetupData") as ei:
+            await setup.create_setup({"name": "n", "content": "not-a-dict"})
         assert isinstance(ei.value.__cause__, ValidationError)
 
     def test_get_trigger_wraps_stop_iteration(self) -> None:

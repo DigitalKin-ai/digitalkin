@@ -18,7 +18,11 @@ class SetupVersionData(BaseModel):
 
 
 class SetupData(BaseModel):
-    """Pydantic model for Setup data validation."""
+    """Pydantic model for Setup data validation.
+
+    ``status``/``visibility`` carry the proto enum names (e.g. ``READY``,
+    ``VISIBILITY_PRIVATE``); empty when the backend predates them.
+    """
 
     id: str
     name: str
@@ -26,10 +30,17 @@ class SetupData(BaseModel):
     owner_id: str
     module_id: str
     current_setup_version: SetupVersionData
+    status: str = ""
+    visibility: str = ""
 
 
 class SetupStrategy(ABC):
-    """Abstract base class for setup strategies."""
+    """Abstract base class for setup strategies.
+
+    Mirrors the SetupService protocol: setup-level CRUD plus visibility change.
+    The version lifecycle is platform-owned — content flows through the setup's
+    ``current_setup_version``, never through standalone version RPCs.
+    """
 
     def __init__(self) -> None:
         """Initialize the setup strategy."""
@@ -38,40 +49,51 @@ class SetupStrategy(ABC):
         """Lifecycle hook for post-initialization. Subclasses override with specific params."""
 
     @abstractmethod
-    async def create_setup(self, setup_dict: dict[str, Any]) -> str:
-        """Create a new setup with comprehensive validation.
-
-        Args:
-            setup_dict: Dictionary containing setup details.
-
-        Returns:
-            bool: Success status of setup creation.
-
-        Raises:
-            ValidationError: If setup data is invalid.
-            GrpcOperationError: If gRPC operation fails.
-        """
-
-    @abstractmethod
     async def get_setup(self, setup_dict: dict[str, Any]) -> SetupData:
         """Retrieve a setup by its unique identifier.
 
         Args:
-            setup_dict: Dictionary with 'name' and optional 'version'.
+            setup_dict: Dictionary with 'setup_id' and optional 'version'.
 
         Returns:
-            Dict[str, Any]: Setup details including optional setup version.
+            The setup with its current version populated.
+        """
+
+    async def create_service_setup(self, name: str, content: dict[str, Any]) -> SetupData:
+        """Create a service setup — a shareable configuration document.
+
+        Only a name and the content JSON are needed; everything else (owner,
+        organisation, backing module, kind) is derived server-side.
+
+        Args:
+            name: Human-readable service name.
+            content: The service configuration JSON.
+
+        Returns:
+            The created setup with its initial version.
+        """
+        return await self.create_setup({"name": name, "content": content})
+
+    @abstractmethod
+    async def create_setup(self, setup_dict: dict[str, Any]) -> SetupData:
+        """Create a new setup; owner/organisation/module derive from the request context.
+
+        Args:
+            setup_dict: Dictionary with 'name' and 'content'.
+
+        Returns:
+            The created setup with its initial version.
         """
 
     @abstractmethod
-    async def update_setup(self, setup_dict: dict[str, Any]) -> bool:
-        """Update an existing setup.
+    async def update_setup(self, setup_dict: dict[str, Any]) -> SetupData:
+        """Update a setup's name and current version content.
 
         Args:
-            setup_dict: Dictionary with setup update details.
+            setup_dict: Dictionary with 'setup_id', 'name' and 'content'.
 
         Returns:
-            bool: Success status of the update operation.
+            The updated setup with its current version.
         """
 
     @abstractmethod
@@ -79,78 +101,20 @@ class SetupStrategy(ABC):
         """Delete a setup by its unique identifier.
 
         Args:
-            setup_dict: Dictionary with the setup 'name'.
+            setup_dict: Dictionary with the 'setup_id'.
 
         Returns:
             bool: Success status of deletion.
         """
 
     @abstractmethod
-    async def create_setup_version(self, setup_version_dict: dict[str, Any]) -> str:
-        """Create a new setup version.
+    async def change_visibility(self, setup_dict: dict[str, Any]) -> SetupData:
+        """Change a setup's visibility scope.
 
         Args:
-            setup_version_dict: Dictionary with setup version details.
+            setup_dict: Dictionary with 'setup_id' and 'visibility'
+                (``public`` | ``private`` | ``internal``).
 
         Returns:
-            str: name of setup version creation.
-        """
-
-    @abstractmethod
-    async def get_setup_version(self, setup_version_dict: dict[str, Any]) -> SetupVersionData:
-        """Retrieve a setup version by its unique identifier.
-
-        Args:
-            setup_version_dict: Dictionary with the setup version 'name'.
-
-        Returns:
-            Dict[str, Any]: Setup version details.
-        """
-
-    @abstractmethod
-    async def search_setup_versions(self, setup_version_dict: dict[str, Any]) -> list[SetupVersionData]:
-        """Search for setup versions based on filters.
-
-        Args:
-            setup_version_dict: Dictionary with optional 'name' and 'version' filters.
-
-        Returns:
-            List[Dict[str, Any]]: A list of matching setup version details.
-        """
-
-    @abstractmethod
-    async def update_setup_version(self, setup_version_dict: dict[str, Any]) -> bool:
-        """Update an existing setup version.
-
-        Args:
-            setup_version_dict: Dictionary with setup version update details.
-
-        Returns:
-            bool: Success status of the update operation.
-        """
-
-    @abstractmethod
-    async def delete_setup_version(self, setup_version_dict: dict[str, Any]) -> bool:
-        """Delete a setup version by its unique identifier.
-
-        Args:
-            setup_version_dict: Dictionary with the setup version 'name'.
-
-        Returns:
-            bool: Success status of version deletion.
-        """
-
-    @abstractmethod
-    async def list_setups(self, list_dict: dict[str, Any]) -> dict[str, Any]:
-        """List setups with optional filtering and pagination.
-
-        Args:
-            list_dict: Dictionary with optional filters:
-                - organisation_id: Filter by organisation
-                - owner_id: Filter by owner
-                - limit: Maximum number of results
-                - offset: Number of results to skip
-
-        Returns:
-            dict[str, Any]: Dictionary with 'setups' list and 'total_count'.
+            The setup with its updated visibility.
         """

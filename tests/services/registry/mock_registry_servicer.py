@@ -21,6 +21,8 @@ class MockRegistryServicer(registry_service_pb2_grpc.RegistryServiceServicer):
         super().__init__()
         # module_id -> module data
         self.registered_modules: dict[str, dict[str, Any]] = {}
+        # setup_id -> setup data
+        self.setups: dict[str, dict[str, Any]] = {}
 
     def _create_module_descriptor(self, module_data: dict[str, Any]) -> registry_models_pb2.ModuleDescriptor:
         """Create a ModuleDescriptor from module data.
@@ -34,7 +36,7 @@ class MockRegistryServicer(registry_service_pb2_grpc.RegistryServiceServicer):
         # Map module type string to proto enum
         type_mapping = {
             "archetype": registry_enums_pb2.MODULE_TYPE_ARCHETYPE,
-            "tool": registry_enums_pb2.MODULE_TYPE_TOOL,
+            "tool_module": registry_enums_pb2.MODULE_TYPE_TOOL_MODULE,
         }
         module_type = type_mapping.get(module_data.get("module_type", ""), registry_enums_pb2.MODULE_TYPE_UNSPECIFIED)
 
@@ -74,13 +76,17 @@ class MockRegistryServicer(registry_service_pb2_grpc.RegistryServiceServicer):
             logger.warning("Mock: Module '%s' not found for registration", module_id)
             return registry_requests_pb2.RegisterModuleResponse()
 
-        # Update the module info
+        # Update the module info; a declared module_type overrides the stored one
         self.registered_modules[module_id].update({
             "address": request.address,
             "port": request.port,
             "version": request.version,
             "status": registry_enums_pb2.MODULE_STATUS_ACTIVE,
         })
+        if request.module_type != registry_enums_pb2.MODULE_TYPE_UNSPECIFIED:
+            self.registered_modules[module_id]["module_type"] = (
+                registry_enums_pb2.ModuleType.Name(request.module_type).removeprefix("MODULE_TYPE_").lower()
+            )
 
         logger.debug("Mock: Module %s registered at %s:%d", module_id, request.address, request.port)
         return registry_requests_pb2.RegisterModuleResponse(
@@ -116,42 +122,72 @@ class MockRegistryServicer(registry_service_pb2_grpc.RegistryServiceServicer):
         self.registered_modules[module_id]["status"] = registry_enums_pb2.MODULE_STATUS_ACTIVE
         return registry_requests_pb2.HeartbeatResponse(status=registry_enums_pb2.MODULE_STATUS_ACTIVE)
 
-    def DiscoverModules(
-        self,
-        request: registry_requests_pb2.DiscoverModulesRequest,
-        context: grpc.ServicerContext,
-    ) -> registry_requests_pb2.DiscoverModulesResponse:
-        """Discover modules based on search criteria.
+    def _create_module_summary(self, module_data: dict[str, Any]) -> registry_models_pb2.ModuleSummary:
+        """Create a ModuleSummary from module data.
 
         Args:
-            request: The discover modules request.
+            module_data: The module data dictionary.
+
+        Returns:
+            ModuleSummary protobuf message.
+        """
+        type_mapping = {
+            "archetype": registry_enums_pb2.MODULE_TYPE_ARCHETYPE,
+            "tool_module": registry_enums_pb2.MODULE_TYPE_TOOL_MODULE,
+        }
+        return registry_models_pb2.ModuleSummary(
+            id=module_data["module_id"],
+            name=module_data.get("name", module_data["module_id"]),
+            module_type=type_mapping.get(module_data.get("module_type", ""), registry_enums_pb2.MODULE_TYPE_UNSPECIFIED),
+            version=module_data.get("version", ""),
+            status=module_data.get("status", registry_enums_pb2.MODULE_STATUS_READY),
+            visibility=module_data.get("visibility", registry_enums_pb2.VISIBILITY_PRIVATE),
+            organization_id=module_data.get("organization_id", ""),
+            documentation=module_data.get("documentation", ""),
+        )
+
+    def SearchModules(
+        self,
+        request: registry_requests_pb2.SearchModulesRequest,
+        context: grpc.ServicerContext,
+    ) -> registry_requests_pb2.SearchModulesResponse:
+        """Search modules based on search criteria.
+
+        Args:
+            request: The search modules request.
             context: The gRPC context.
 
         Returns:
-            DiscoverModulesResponse with matching modules.
+            SearchModulesResponse with matching module summaries and total count.
         """
-        logger.debug("Mock: Discovering modules with query '%s'", request.query)
+        logger.debug("Mock: Searching modules with query '%s'", request.query)
 
         results = list(self.registered_modules.values())
 
-        # Filter by query (name match)
-        if request.query:
-            results = [m for m in results if request.query in m.get("name", m["module_id"])]
-
-        # Filter by module types if specified
+        if request.module_ids:
+            results = [m for m in results if m["module_id"] in request.module_ids]
         if request.module_types:
-            type_strings = []
-            for mt in request.module_types:
-                if mt == registry_enums_pb2.MODULE_TYPE_ARCHETYPE:
-                    type_strings.append("archetype")
-                elif mt == registry_enums_pb2.MODULE_TYPE_TOOL:
-                    type_strings.append("tool")
-            if type_strings:
-                results = [m for m in results if m.get("module_type", "") in type_strings]
+            type_strings = [
+                registry_enums_pb2.ModuleType.Name(mt).removeprefix("MODULE_TYPE_").lower()
+                for mt in request.module_types
+            ]
+            results = [m for m in results if m.get("module_type", "") in type_strings]
+        if request.query:
+            needle = request.query.lower()
+            results = [
+                m
+                for m in results
+                if needle in m.get("name", m["module_id"]).lower() or needle in m.get("documentation", "").lower()
+            ]
 
-        logger.debug("Mock: Found %d matching modules", len(results))
-        return registry_requests_pb2.DiscoverModulesResponse(
-            modules=[self._create_module_descriptor(m) for m in results]
+        total = len(results)
+        limit = request.limit or 20
+        results = results[request.offset : request.offset + limit]
+
+        logger.debug("Mock: Found %d matching modules (returning %d)", total, len(results))
+        return registry_requests_pb2.SearchModulesResponse(
+            modules=[self._create_module_summary(m) for m in results],
+            total=total,
         )
 
     def GetModule(
@@ -180,23 +216,80 @@ class MockRegistryServicer(registry_service_pb2_grpc.RegistryServiceServicer):
 
         return self._create_module_descriptor(self.registered_modules[request.module_id])
 
-    def DiscoverSetups(
-        self,
-        request: registry_requests_pb2.DiscoverSetupsRequest,
-        context: grpc.ServicerContext,
-    ) -> registry_requests_pb2.DiscoverSetupsResponse:
-        """Discover setups based on search criteria.
+    def _create_setup_summary(self, setup_data: dict[str, Any]) -> registry_models_pb2.SetupSummary:
+        """Create a SetupSummary from setup data.
 
         Args:
-            request: The discover setups request.
+            setup_data: The setup data dictionary.
+
+        Returns:
+            SetupSummary protobuf message.
+        """
+        type_mapping = {
+            "archetype": registry_enums_pb2.MODULE_TYPE_ARCHETYPE,
+            "tool_module": registry_enums_pb2.MODULE_TYPE_TOOL_MODULE,
+        }
+        return registry_models_pb2.SetupSummary(
+            id=setup_data["setup_id"],
+            name=setup_data.get("name", setup_data["setup_id"]),
+            documentation=setup_data.get("documentation", ""),
+            status=setup_data.get("status", registry_enums_pb2.SETUP_STATUS_READY),
+            visibility=setup_data.get("visibility", registry_enums_pb2.VISIBILITY_PRIVATE),
+            organization_id=setup_data.get("organization_id", ""),
+            module_id=setup_data.get("module_id", ""),
+            module_name=setup_data.get("module_name", ""),
+            module_type=type_mapping.get(setup_data.get("module_type", ""), registry_enums_pb2.MODULE_TYPE_UNSPECIFIED),
+            setup_version_id=setup_data.get("setup_version_id", ""),
+            setup_version=setup_data.get("setup_version", ""),
+        )
+
+    def SearchSetups(
+        self,
+        request: registry_requests_pb2.SearchSetupsRequest,
+        context: grpc.ServicerContext,
+    ) -> registry_requests_pb2.SearchSetupsResponse:
+        """Search setups based on search criteria.
+
+        Args:
+            request: The search setups request.
             context: The gRPC context.
 
         Returns:
-            DiscoverSetupsResponse with matching setups.
+            SearchSetupsResponse with matching setup summaries and total count.
         """
-        logger.debug("Mock: Discovering setups with query '%s'", request.query)
-        # Not implemented in mock - return empty
-        return registry_requests_pb2.DiscoverSetupsResponse()
+        logger.debug("Mock: Searching setups with query '%s'", request.query)
+
+        results = list(self.setups.values())
+
+        if request.setup_ids:
+            results = [s for s in results if s["setup_id"] in request.setup_ids]
+        if request.module_ids:
+            results = [s for s in results if s.get("module_id", "") in request.module_ids]
+        if request.module_types:
+            type_strings = [
+                registry_enums_pb2.ModuleType.Name(mt).removeprefix("MODULE_TYPE_").lower()
+                for mt in request.module_types
+            ]
+            results = [s for s in results if s.get("module_type", "") in type_strings]
+        if request.statuses:
+            results = [s for s in results if s.get("status", registry_enums_pb2.SETUP_STATUS_READY) in request.statuses]
+        if request.query:
+            needle = request.query.lower()
+            results = [
+                s
+                for s in results
+                if needle in s.get("name", s["setup_id"]).lower() or needle in s.get("documentation", "").lower()
+            ]
+
+        total = len(results)
+        limit = request.limit or 20
+        results = results[request.offset : request.offset + limit]
+
+        logger.debug("Mock: Found %d matching setups (returning %d)", total, len(results))
+        return registry_requests_pb2.SearchSetupsResponse(
+            setups=[self._create_setup_summary(s) for s in results],
+            total=total,
+        )
 
     def GetSetup(
         self,

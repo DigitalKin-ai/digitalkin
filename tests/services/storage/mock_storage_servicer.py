@@ -47,15 +47,19 @@ class MockStorageServicer(storage_service_pb2_grpc.StorageServiceServicer):
 
     def _create_proto_record(
         self,
-        ctx: str,
+        ctx: int,
         collection: str,
         record_id: str,
         record_data: dict[str, Any],
     ) -> data_pb2.StorageRecord:
         """Convert internal record data to proto StorageRecord.
 
+        Mirrors the dev4 server contract: the request carries only the context KIND
+        (ContextStorage enum); the concrete prefixed id is resolved server-side —
+        here from the fixed test ids.
+
         Args:
-            ctx: Owner context (`missions:<id>` or `setup_versions:<id>`)
+            ctx: Context kind from the request (ContextStorage enum value)
             collection: Collection name
             record_id: Record ID
             record_data: The record data dictionary
@@ -63,6 +67,9 @@ class MockStorageServicer(storage_service_pb2_grpc.StorageServiceServicer):
         Returns:
             data_pb2.StorageRecord: Proto storage record
         """
+        resolved = (
+            "setup_versions:test_version" if ctx == data_pb2.CONTEXT_SETUP_VERSIONS else "missions:test_mission"
+        )
         # Convert data dict to Struct
         data_struct = json_format.ParseDict(
             record_data["data"],
@@ -88,7 +95,7 @@ class MockStorageServicer(storage_service_pb2_grpc.StorageServiceServicer):
             update_ts.FromDatetime(update_dt)
 
         return data_pb2.StorageRecord(
-            context=ctx,
+            context=resolved,
             collection=collection,
             record_id=record_id,
             data_type=value,

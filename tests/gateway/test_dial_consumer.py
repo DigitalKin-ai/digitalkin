@@ -101,12 +101,14 @@ class _FakeConsumerServicer(gateway_service_pb2_grpc.GatewayServiceServicer):
         extra_upstream: list[dict] | None = None,
         hang: bool = False,
         ignore_stream_end: bool = False,
+        hold_open: bool = False,
     ) -> None:
         self.received: list[Any] = []
         self.query_data = query_data
         self.extra_upstream = extra_upstream or []
         self.hang = hang
         self.ignore_stream_end = ignore_stream_end
+        self.hold_open = hold_open
 
     async def StartStream(self, request, context):
         return gateway_pb2.StartStreamResponse(accepted=False, task_id=request.task_id)
@@ -139,6 +141,19 @@ class _FakeConsumerServicer(gateway_service_pb2_grpc.GatewayServiceServicer):
             ustruct = struct_pb2.Struct()
             ustruct.update(payload)
             yield gateway_pb2.StreamServer(seq=0, task_id=first.task_id, data=ustruct)
+
+        if self.hold_open:
+            # Drain in the background but NEVER close the response stream, even after
+            # the gateway half-closes its send side. This keeps the gateway's inbound
+            # read parked, so only the gateway's own close logic (bounded once outputs
+            # finish draining) can tear the BiDi down — the BUG 1 regression shape.
+            try:
+                async for msg in request_iterator:
+                    self.received.append(msg)
+            except Exception:  # noqa: BLE001
+                return
+            await asyncio.sleep(3600)
+            return
 
         # Drain any outputs the gateway pushes (it's pushing StreamClients to us).
         try:
@@ -544,4 +559,66 @@ class TestDialConsumer:
                 await server.stop(grace=0.1)
         finally:
             os.environ.pop("DIGITALKIN_GATEWAY_DIAL_BACK_CLOSE_GRACE_S", None)
+            get_gateway_settings.cache_clear()
+
+    @SKIP_NO_FAKEREDIS
+    async def test_dial_consumer_closes_after_fatal_when_consumer_holds_open(self, gateway) -> None:
+        """BUG 1 regression: after a SETUP_ACCESS_DENIED (fatal stream.error + EOS) finishes
+        draining, the dial-back BiDi tears down within ``dial_back_close_grace_s`` even when the
+        consumer holds its response stream open — instead of parking to ``dial_back_max_lifetime_s``.
+
+        Pre-fix, the receive loop commits to an unbounded inbound read before ``outgoing_done``
+        fires and never re-evaluates, so it blocks to the lifetime ceiling.
+        """
+        import os
+
+        from digitalkin.models.settings.gateway import get_gateway_settings
+
+        os.environ["DIGITALKIN_GATEWAY_DIAL_BACK_CLOSE_GRACE_S"] = "0.2"
+        os.environ["DIGITALKIN_GATEWAY_DIAL_BACK_MAX_LIFETIME_S"] = "3.0"
+        get_gateway_settings.cache_clear()
+        try:
+            servicer = _FakeConsumerServicer(
+                query_data={"protocol": "agui_stream", "user_prompt": "hi"},
+                hold_open=True,
+            )
+            server = grpc.aio.server()
+            gateway_service_pb2_grpc.add_GatewayServiceServicer_to_server(servicer, server)
+            port = server.add_insecure_port("127.0.0.1:0")
+            await server.start()
+            try:
+                task_id = "task_fatal_hold"
+                stream_key = f"task:{task_id}:stream"
+                err = struct_pb2.Struct()
+                err.update({
+                    "root": {
+                        "protocol": "stream.error",
+                        "code": "SETUP_ACCESS_DENIED",
+                        "message": "denied",
+                        "fatal": True,
+                    }
+                })
+                await gateway._redis_client.xadd(stream_key, {"pb": err.SerializeToString(), "seq": "1"})
+                await gateway._redis_client.xadd(stream_key, {"eos": b"true"})
+
+                ctx = _mock_context({"x-client-address": f"127.0.0.1:{port}"})
+                t0 = asyncio.get_event_loop().time()
+                await gateway.StartStream(_start_request(task_id), ctx)
+                for _ in range(80):
+                    if gateway._registry.get(task_id) is None:
+                        break
+                    await asyncio.sleep(0.05)
+                elapsed = asyncio.get_event_loop().time() - t0
+
+                assert gateway._registry.get(task_id) is None, (
+                    "dial-back never finished — the BiDi hung past close_grace (BUG 1)"
+                )
+                # Fix bounds teardown by close_grace (0.2s); the regression parks to
+                # max_lifetime (3.0s). A threshold well below 3.0s proves the fix.
+                assert elapsed < 1.5, f"dial-back took {elapsed:.2f}s — expected teardown near close_grace"
+            finally:
+                await server.stop(grace=0.1)
+        finally:
+            os.environ.pop("DIGITALKIN_GATEWAY_DIAL_BACK_CLOSE_GRACE_S", None)
+            os.environ.pop("DIGITALKIN_GATEWAY_DIAL_BACK_MAX_LIFETIME_S", None)
             get_gateway_settings.cache_clear()

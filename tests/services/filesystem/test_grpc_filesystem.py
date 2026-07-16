@@ -288,7 +288,7 @@ class TestUploadFiles:
         upload_request = filesystem_pb2.UploadFilesRequest(
             files=[
                 filesystem_pb2.UploadFileData(
-                    context=file_metadata["context"],
+                    context=filesystem_pb2.CONTEXT_SETUP,
                     name=file_metadata["name"],
                     file_type=GrpcFilesystem._file_type_to_enum(file_metadata["file_type"]),
                     content_type=file_metadata["content_type"],
@@ -348,7 +348,7 @@ class TestGetFile:
         upload_request = filesystem_pb2.UploadFilesRequest(
             files=[
                 filesystem_pb2.UploadFileData(
-                    context=file_metadata["context"],
+                    context=filesystem_pb2.CONTEXT_SETUP,
                     name=file_metadata["name"],
                     file_type=GrpcFilesystem._file_type_to_enum(file_metadata["file_type"]),
                     content_type=file_metadata["content_type"],
@@ -374,7 +374,7 @@ class TestGetFile:
 
         # Create a request object for the mock servicer
         get_request = filesystem_pb2.GetFileRequest(
-            context=file_metadata["context"],
+            context=filesystem_pb2.CONTEXT_SETUP,
             file_id=file_id,
             include_content=False,
         )
@@ -457,7 +457,7 @@ class TestGetFiles:
 
         upload_files = [
             filesystem_pb2.UploadFileData(
-                context=file_metadata["context"],
+                context=filesystem_pb2.CONTEXT_SETUP,
                 name=name,
                 file_type=GrpcFilesystem._file_type_to_enum(file_metadata["file_type"]),
                 content_type=file_metadata["content_type"],
@@ -497,9 +497,9 @@ class TestGetFiles:
 
         # Create a request object for the mock servicer
         get_request = filesystem_pb2.GetFilesRequest(
-            context=file_metadata["context"],
+            context=filesystem_pb2.CONTEXT_SETUP,
             filters=filesystem_pb2.FileFilter(
-                context=file_metadata["context"],
+                context=filesystem_pb2.CONTEXT_SETUP,
                 file_types=[GrpcFilesystem._file_type_to_enum(file_metadata["file_type"])],
                 status=GrpcFilesystem._file_status_to_enum(file_metadata["status"]),
             ),
@@ -550,16 +550,6 @@ class TestGetFiles:
         )
 
         _, _, rpc = test_channel.take_unary_unary(method_desc)
-        filesystem_pb2.GetFilesRequest(
-            context="nonexistent_context",
-            filters=filesystem_pb2.FileFilter(
-                context="nonexistent_context",
-                file_types=[GrpcFilesystem._file_type_to_enum(file_metadata["file_type"])],
-                status=GrpcFilesystem._file_status_to_enum(file_metadata["status"]),
-            ),
-            list_size=10,
-            offset=0,
-        )
         empty_response = filesystem_pb2.GetFilesResponse(files=[], total_count=0)
         rpc.send_initial_metadata(())
         rpc.terminate(empty_response, (), grpc.StatusCode.OK, "")
@@ -604,7 +594,7 @@ class TestUpdateFile:
         upload_request = filesystem_pb2.UploadFilesRequest(
             files=[
                 filesystem_pb2.UploadFileData(
-                    context=file_metadata["context"],
+                    context=filesystem_pb2.CONTEXT_SETUP,
                     name=file_metadata["name"],
                     file_type=GrpcFilesystem._file_type_to_enum(file_metadata["file_type"]),
                     content_type=file_metadata["content_type"],
@@ -642,7 +632,7 @@ class TestUpdateFile:
 
         # Create a request object for the mock servicer
         update_request = filesystem_pb2.UpdateFileRequest(
-            context=file_metadata["context"],
+            context=filesystem_pb2.CONTEXT_SETUP,
             file_id=file_id,
             content=updated_content,
             file_type=GrpcFilesystem._file_type_to_enum("DOCUMENT"),
@@ -739,7 +729,7 @@ class TestDeleteFiles:
 
         upload_files = [
             filesystem_pb2.UploadFileData(
-                context=file_metadata["context"],
+                context=filesystem_pb2.CONTEXT_SETUP,
                 name=name,
                 file_type=GrpcFilesystem._file_type_to_enum(file_metadata["file_type"]),
                 content_type=file_metadata["content_type"],
@@ -779,9 +769,9 @@ class TestDeleteFiles:
 
         # Create a request object for the mock servicer
         delete_request = filesystem_pb2.DeleteFilesRequest(
-            context=file_metadata["context"],
+            context=filesystem_pb2.CONTEXT_SETUP,
             filters=filesystem_pb2.FileFilter(
-                context=file_metadata["context"],
+                context=filesystem_pb2.CONTEXT_SETUP,
                 file_types=[GrpcFilesystem._file_type_to_enum(file_metadata["file_type"])],
                 status=GrpcFilesystem._file_status_to_enum(file_metadata["status"]),
             ),
@@ -948,7 +938,7 @@ class TestFilesystemEdgeCases:
         upload_request = filesystem_pb2.UploadFilesRequest(
             files=[
                 filesystem_pb2.UploadFileData(
-                    context=file_metadata["context"],
+                    context=filesystem_pb2.CONTEXT_SETUP,
                     name=file_metadata["name"],
                     file_type=GrpcFilesystem._file_type_to_enum(file_metadata["file_type"]),
                     content_type=file_metadata["content_type"],
@@ -985,7 +975,7 @@ class TestFilesystemEdgeCases:
         method_desc = service_desc.methods_by_name["UpdateFile"]
         _, _, rpc = test_channel.take_unary_unary(method_desc)
         update_request = filesystem_pb2.UpdateFileRequest(
-            context=file_metadata["context"],
+            context=filesystem_pb2.CONTEXT_SETUP,
             file_id=file_id,
             status=GrpcFilesystem._file_status_to_enum("ACTIVE"),
         )
@@ -1002,7 +992,7 @@ class TestFilesystemEdgeCases:
         method_desc = service_desc.methods_by_name["GetFile"]
         _, _, rpc = test_channel.take_unary_unary(method_desc)
         get_request = filesystem_pb2.GetFileRequest(
-            context=file_metadata["context"],
+            context=filesystem_pb2.CONTEXT_SETUP,
             file_id=file_id,
         )
         response = mock_servicer.GetFile(get_request, FakeContext())
@@ -1029,10 +1019,8 @@ class TestFilesystemEdgeCases:
             ),
         )
 
-        # Build proto filter manually to avoid context ID conversion
-        # The mock servicer expects raw context ("setup") not ID ("setup:1")
         filters_proto = filesystem_pb2.FileFilter(
-            context=file_metadata["context"],
+            context=filesystem_pb2.CONTEXT_SETUP,
             file_types=[GrpcFilesystem._file_type_to_enum(file_metadata["file_type"])],
             status=GrpcFilesystem._file_status_to_enum("ACTIVE"),
         )
@@ -1040,7 +1028,7 @@ class TestFilesystemEdgeCases:
         method_desc = service_desc.methods_by_name["DeleteFiles"]
         _, _, rpc = test_channel.take_unary_unary(method_desc)
         delete_request = filesystem_pb2.DeleteFilesRequest(
-            context=file_metadata["context"],
+            context=filesystem_pb2.CONTEXT_SETUP,
             filters=filters_proto,
             permanent=False,
             force=False,
