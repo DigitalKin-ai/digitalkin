@@ -11,3 +11,7 @@ class M2MTargetUnavailable(RuntimeError):  # noqa: N818  # public API name, pred
 
 class M2MCallTimeout(RuntimeError):  # noqa: N818  # public API name, predates the refactor
     """``output_queue.get()`` exceeded ``call_timeout_s`` waiting for a target output."""
+
+
+class ToolCallError(RuntimeError):
+    """A called tool module returned a fatal ``stream.error``; message carries ``[CODE] message``."""

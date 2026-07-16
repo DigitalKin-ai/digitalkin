@@ -89,3 +89,94 @@ async def test_on_output_writes_seq_and_maxlen() -> None:
     eos = [x for x in redis.xadds if x[1].get("eos") == b"true"]
     assert len(eos) == 1
     assert eos[0][2] is None
+
+
+async def test_servicer_setup_is_borrowed_into_module_context() -> None:
+    """Constraint: the runner hands the servicer's setup service to preload_instance.
+
+    The wiring must happen inside preload_instance (before prepare()/initialize()
+    builds the toolkits), so the runner passes the strategy + invalidation hook
+    as arguments instead of assigning context.setup after the fact.
+    """
+    get_gateway_settings.cache_clear()
+    redis = _RecordingRedis()
+
+    setup_version = MagicMock(content={}, setup_id="setups:s1", id="setup_versions:v1")
+    servicer = MagicMock()
+    servicer.resolve_setup = AsyncMock(return_value=setup_version)
+    servicer.module_class.create_setup_model = AsyncMock(return_value=MagicMock())
+    servicer.get_tool_cache = MagicMock(return_value=MagicMock())
+    servicer.module_class.create_input_model = MagicMock(return_value=MagicMock())
+
+    module = MagicMock()
+    preload_kwargs: dict[str, Any] = {}
+
+    async def _preload(setup_data: Any, **kwargs: Any) -> tuple[Any, str, Any]:  # noqa: ARG001
+        preload_kwargs.update(kwargs)
+        return module, kwargs["job_id"], kwargs["callback"]
+
+    async def _run_instance(**_: Any) -> None:
+        return
+
+    servicer.job_manager.preload_instance = _preload
+    servicer.job_manager.run_instance = _run_instance
+
+    runner = ModuleRunner(redis_client=redis, servicer=servicer)  # type: ignore[arg-type]
+
+    async def _on_fatal(code: str, message: str) -> None:  # noqa: ARG001
+        return
+
+    with patch("digitalkin.core.task_manager.module_runner.TaskProfiler"):
+        await runner.run(
+            struct_pb2.Struct(),
+            task_id="t-setup",
+            setup_id="setups:s1",
+            mission_id="missions:m1",
+            on_fatal=_on_fatal,
+        )
+
+    assert preload_kwargs["setup"] is servicer.setup
+    assert preload_kwargs["invalidate_setup"] is servicer.invalidate_setup_cache
+
+
+async def test_preload_wires_setup_before_prepare() -> None:
+    """SetupTools depends on context.setup being visible inside initialize().
+
+    ``prepare()`` (which runs ``initialize()``) must observe the borrowed setup
+    strategy and the invalidation callback — wiring them after preload would
+    silently drop SetupTools from every agent built in initialize().
+    """
+    from types import SimpleNamespace
+
+    from digitalkin.core.job_manager.single_job_manager import SingleJobManager
+
+    mgr = SingleJobManager.__new__(SingleJobManager)
+    mgr.module_class = MagicMock()
+    mgr._redis_task_manager = MagicMock()
+
+    module = MagicMock()
+    module.context = SimpleNamespace(callbacks=SimpleNamespace(), setup=None, task_manager=None)
+    seen: dict[str, Any] = {}
+
+    async def _prepare(setup_data: Any, callback: Any) -> None:  # noqa: ARG001
+        seen["setup"] = module.context.setup
+        seen["invalidate"] = vars(module.context.callbacks).get("invalidate_setup")
+
+    module.prepare = _prepare
+    setup_strategy = object()
+    invalidate = MagicMock()
+
+    with patch("digitalkin.core.job_manager.single_job_manager.ModuleFactory") as factory:
+        factory.create_module_instance.return_value = module
+        await mgr.preload_instance(
+            MagicMock(),
+            mission_id="missions:m1",
+            setup_id="setups:s1",
+            setup_version_id="setup_versions:v1",
+            callback=AsyncMock(),
+            setup=setup_strategy,
+            invalidate_setup=invalidate,
+        )
+
+    assert seen["setup"] is setup_strategy
+    assert seen["invalidate"] is invalidate

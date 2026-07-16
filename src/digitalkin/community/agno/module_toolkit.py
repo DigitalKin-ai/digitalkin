@@ -16,10 +16,10 @@ from typing import Any
 
 from ag_ui.core.events import CustomEvent as AgUiCustomEvent
 from agno.media import Image
-from agno.tools import Toolkit
 from agno.tools.function import Function, ToolResult
 
 from digitalkin.community.agno.models import ToolCallMetadata, ToolOutputMetadata
+from digitalkin.community.agno.toolkits.base import DkToolkit
 from digitalkin.core.profiling.step_timer import StepTimer
 from digitalkin.logger import logger
 from digitalkin.models.module import ModuleContext
@@ -38,7 +38,7 @@ TOOL_CONTENT_PROTOCOL = "tool_content"
 AGUI_CUSTOM_PROTOCOL = "agui_custom"
 
 
-class ModuleToolkit(Toolkit):
+class ModuleToolkit(DkToolkit):
     """Agno Toolkit wrapper for SDK module tools.
 
     Wraps a ToolModuleInfo containing multiple ToolDefinitions into
@@ -170,7 +170,7 @@ class ModuleToolkit(Toolkit):
             or tool_module_info.module_name
             or tool_module_info.slug.replace(":", "_").replace(".", "_")
         )
-        super().__init__(name=f"{toolkit_name}_toolkit", tools=agno_functions)
+        super().__init__(name=f"{toolkit_name}_toolkit", tools=agno_functions, context=self._context)
 
     @property
     def module_id(self) -> str:

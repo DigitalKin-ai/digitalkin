@@ -74,6 +74,26 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
             update_date=update_date,
         )
 
+    def _build_record_or_skip(self, proto: data_pb2.StorageRecord) -> StorageRecord | None:
+        """Convert a proto record, or log and return None if conversion/validation fails.
+
+        Keeps one foreign-shaped record (e.g. written by another module) from
+        failing an entire ListRecords result.
+
+        Args:
+            proto: gRPC StorageRecord
+
+        Returns:
+            The converted record, or None if it could not be validated.
+        """
+        try:
+            return self._build_record_from_proto(proto)
+        except Exception:
+            logger.warning(
+                "Skipping invalid record %s:%s in ListRecords", proto.collection, proto.record_id, exc_info=True
+            )
+            return None
+
     async def _store(self, record: StorageRecord) -> StorageRecord:
         """Create a new record in the database.
 
@@ -138,6 +158,12 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
                 logger.debug("gRPC ReadRecord skipped (circuit open) for %s:%s", collection, record_id)
             else:
                 logger.info("gRPC ReadRecord failed for %s:%s: %s", collection, record_id, e)
+            return None
+
+        try:
+            return self._build_record_from_proto(resp.stored_data)
+        except Exception:
+            logger.warning("Invalid record data for %s:%s in ReadRecord", collection, record_id, exc_info=True)
             return None
 
     async def _update(
@@ -223,7 +249,6 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
                 collection=collection,
             )
             resp = await self.exec_grpc_query("ListRecords", req)
-            return [self._build_record_from_proto(r) for r in resp.records]
         except PermissionDeniedError:
             # TODO(validate): remove after prod validation
             logger.warning("[VALIDATE PD1] storage ListRecords permission denied")
@@ -234,6 +259,8 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
             else:
                 logger.warning("gRPC ListRecords failed for %s: %s", collection, e)
             return []
+
+        return [record for r in resp.records if (record := self._build_record_or_skip(r)) is not None]
 
     async def _remove_collection(self, collection: str, context: str) -> bool:
         """Delete an entire collection via gRPC scoped to a specific context.
