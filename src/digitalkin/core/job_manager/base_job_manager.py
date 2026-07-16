@@ -214,6 +214,8 @@ class BaseJobManager(abc.ABC, Generic[InputModelT, OutputModelT, SetupModelT]):
         job_id: str | None = None,
         tool_cache: Any = None,
         callback: Callable | None = None,
+        setup: Any = None,
+        invalidate_setup: Callable[[], None] | None = None,
     ) -> tuple[Any, str, Callable]:
         """Build a module instance and run its idempotent ``prepare()``.
 

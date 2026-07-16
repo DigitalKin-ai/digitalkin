@@ -177,6 +177,9 @@ class ModuleRunner:
             input_data = self._servicer.module_class.create_input_model(input_dict)
             timer.mark("pydantic_input")
 
+            # Share the servicer's setup service (same instance + channel) so setup-CRUD
+            # toolkits can reach it; borrowed, so context cleanup never closes it. Wired
+            # inside preload_instance, before prepare()/initialize() builds the toolkits.
             module, job_id, callback = await self._servicer.job_manager.preload_instance(
                 setup_data,
                 mission_id=mission_id,
@@ -186,6 +189,8 @@ class ModuleRunner:
                 job_id=task_id,
                 tool_cache=tool_cache,
                 callback=_on_output,
+                setup=self._servicer.setup,
+                invalidate_setup=self._servicer.invalidate_setup_cache,
             )
             timer.mark("preload_join")
 

@@ -235,6 +235,8 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         job_id: str | None = None,
         tool_cache: Any = None,
         callback: Callable | None = None,
+        setup: Any = None,
+        invalidate_setup: Callable[[], None] | None = None,
     ) -> tuple[Any, str, Callable]:
         """Build a module instance and run its idempotent ``prepare()``.
 
@@ -250,6 +252,10 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             job_id: Optional externally-provided job ID.
             tool_cache: Pre-resolved ToolCache.
             callback: Direct output callback; ``None`` wires the in-memory queue.
+            setup: Borrowed SetupStrategy (servicer's shared instance); wired
+                before ``prepare()`` so ``initialize()`` can build setup toolkits.
+            invalidate_setup: Callback clearing the servicer's setup cache after
+                an agent-driven setup edit; installed on ``context.callbacks``.
 
         Returns:
             ``(module, job_id, callback)``.
@@ -268,6 +274,12 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         timer.mark("factory_create")
 
         module.context.task_manager = self._redis_task_manager
+        # Borrowed services must be wired before prepare(): initialize() runs
+        # inside prepare() and is where modules build their toolkits.
+        if setup is not None:
+            module.context.setup = setup
+        if invalidate_setup is not None:
+            module.context.callbacks.invalidate_setup = invalidate_setup
         timer.mark("redis_task_manager")
 
         if callback is None:
