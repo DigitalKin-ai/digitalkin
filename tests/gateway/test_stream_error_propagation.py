@@ -22,6 +22,7 @@ import grpc.aio
 import pytest
 from agentic_mesh_protocol.gateway.v1 import gateway_pb2, gateway_service_pb2_grpc
 from google.protobuf import struct_pb2
+from pydantic import BaseModel, ValidationError
 from redis.exceptions import RedisError
 
 from digitalkin.models.grpc_servers.stream_error_codes import StreamErrorCode
@@ -251,6 +252,105 @@ class TestModuleRuntimeError:
             assert code == StreamErrorCode.MODULE_RUNTIME_ERROR.value
             assert "ValueError" in message
             assert "bad input" in message
+        finally:
+            await redis.close()
+
+
+# ===========================================================================
+# Site 8: ValidationError phases in ModuleRunner — setup model vs input model.
+# Regression for the staging incident where a setup-phase ValidationError
+# crashed the input-phase handler with UnboundLocalError on top_level_keys.
+# ===========================================================================
+
+
+def _real_validation_error() -> ValidationError:
+    """Produce a genuine pydantic ValidationError (not directly constructible in v2)."""
+
+    class _Strict(BaseModel):
+        required_field: int
+
+    try:
+        _Strict.model_validate({})
+    except ValidationError as exc:
+        return exc
+    raise AssertionError("model_validate unexpectedly succeeded")
+
+
+@SKIP_NO_FAKEREDIS
+class TestValidationErrorPhases:
+    @staticmethod
+    def _servicer() -> MagicMock:
+        servicer = MagicMock()
+        servicer.module_class.__name__ = "FakeModule"
+        servicer.resolve_setup = AsyncMock(return_value=MagicMock())
+        servicer.module_class.create_setup_model = AsyncMock(return_value=MagicMock())
+        servicer.module_class.create_input_model = MagicMock(return_value=MagicMock())
+        servicer.get_tool_cache = MagicMock(return_value=MagicMock())
+        servicer.job_manager.preload_instance = AsyncMock(return_value=(MagicMock(), "task_val", AsyncMock()))
+        servicer.job_manager.run_instance = AsyncMock()
+        return servicer
+
+    async def test_setup_validation_error_emits_setup_code(self) -> None:
+        from digitalkin.core.task_manager.module_runner import ModuleRunner
+
+        redis = _FakeRedisClient()
+        try:
+            servicer = self._servicer()
+            servicer.module_class.create_setup_model = AsyncMock(side_effect=_real_validation_error())
+            runner = ModuleRunner(redis_client=redis, servicer=servicer)  # type: ignore[arg-type]
+
+            received: list[tuple[str, str]] = []
+
+            async def _on_fatal(code: str, message: str) -> None:
+                received.append((code, message))
+
+            await runner.run(
+                struct_pb2.Struct(),
+                task_id="task_val",
+                setup_id="setups:staging_rag",
+                mission_id="missions:m1",
+                on_fatal=_on_fatal,
+            )
+
+            assert len(received) == 1
+            code, message = received[0]
+            assert code == StreamErrorCode.SETUP_VALIDATION_ERROR.value
+            assert "setup validation failed" in message
+            assert "setups:staging_rag" in message
+            assert "required_field" in message
+            servicer.job_manager.preload_instance.assert_not_awaited()
+        finally:
+            await redis.close()
+
+    async def test_input_validation_error_emits_input_code(self) -> None:
+        from digitalkin.core.task_manager.module_runner import ModuleRunner
+
+        redis = _FakeRedisClient()
+        try:
+            servicer = self._servicer()
+            servicer.module_class.create_input_model = MagicMock(side_effect=_real_validation_error())
+            servicer.module_class._extended_input_format = None
+            servicer.module_class.input_format = type("FakeInput", (), {})
+            runner = ModuleRunner(redis_client=redis, servicer=servicer)  # type: ignore[arg-type]
+
+            received: list[tuple[str, str]] = []
+
+            async def _on_fatal(code: str, message: str) -> None:
+                received.append((code, message))
+
+            await runner.run(
+                struct_pb2.Struct(),
+                task_id="task_val",
+                setup_id="setups:s1",
+                mission_id="missions:m1",
+                on_fatal=_on_fatal,
+            )
+
+            assert len(received) == 1
+            code, message = received[0]
+            assert code == StreamErrorCode.INPUT_VALIDATION_ERROR.value
+            assert "input validation failed" in message
+            assert "FakeInput" in message
         finally:
             await redis.close()
 

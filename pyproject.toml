@@ -37,9 +37,10 @@
         "pydantic-settings>=2.14.1",
         "redis[hiredis]>=7.4.0,<9",
     ]
-    version = "1.0.0a0"
+    version = "1.0.1.dev0"
 
     [project.optional-dependencies]
+        agno        = [ "agno>=2.6" ]
         performance = [ "uvloop>=0.21" ]
         profiling = [
             "pyinstrument>=5.1.2",
@@ -96,6 +97,7 @@
         "tomli>=2.4.1",
     ]
     tests = [
+        "agno>=2.6",
         "fakeredis[lua]>=2.35.1",
         "freezegun>=1.5.5",
         "grpcio-testing>=1.81.0",
