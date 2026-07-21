@@ -1,0 +1,18 @@
+flowchart LR
+  C(["External client / Module B"])
+  subgraph GW["GATEWAY — stateless broker"]
+    RPC["StartStream · Stream (BiDi) · SendSignal"]
+    REG["StreamRegistry · M2MCallRegistry"]
+  end
+  subgraph R["REDIS — data + signal plane"]
+    KS["task:{id} · :stream · :input · :cursor"]
+    SG["signal_ch:{id} · signal_ch:_global_"]
+  end
+  subgraph M["MODULE — ModuleRunner + SingleJobManager"]
+    RUN["resolve setup → run → _on_output"]
+  end
+  C <-->|"3 RPCs"| GW
+  GW -->|"XADD input / signals"| R
+  R -->|"XREAD outputs"| GW
+  M -->|"XADD outputs"| R
+  R -->|"XREAD input / SUBSCRIBE signals"| M

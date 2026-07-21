@@ -1,0 +1,2606 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="A modular framework for building AI agents with gRPC servers and flexible service strategies">
+      
+      
+      
+        <link rel="canonical" href="https://digitalkin.com/dev/gateway_protocol/">
+      
+      
+        <link rel="prev" href="../architecture_presentation/">
+      
+      
+        <link rel="next" href="../getting_started/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/logo.png">
+      <meta name="generator" content="mkdocs-ProperDocs 1.6.7, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>Gateway Protocol - DigitalKin</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/_markdown_exec_pyodide.css">
+    
+      <link rel="stylesheet" href="../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#gateway-protocol" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="DigitalKin" class="md-header__button md-logo" aria-label="DigitalKin" data-md-component="logo">
+      
+  <img src="../assets/logo.png" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            DigitalKin
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Gateway Protocol
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m14.3 16-.7-2h-3.2l-.7 2H7.8L11 7h2l3.2 9zM20 8.69V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12zm-9.15 3.96h2.3L12 9z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="teal" data-md-color-accent="purple"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_2" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="black" data-md-color-accent="lime"  aria-label="Switch to system preference"  type="radio" name="__palette" id="__palette_2">
+    
+      <label class="md-header__button md-icon" title="Switch to system preference" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/DigitalKin-ai/digitalkin" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    DigitalKin-ai/digitalkin
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+    
+      
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href=".." class="md-tabs__link">
+        
+  
+  
+    
+  
+  DigitalKin Python SDK
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../architecture_presentation/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  DigitalKin SDK v1.0.0
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    <li class="md-tabs__item md-tabs__item--active">
+      <a href="./" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Gateway Protocol
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../getting_started/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Getting Started
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../grpc-tuning/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  gRPC &amp; Concurrency Tuning Guide
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../guides/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Guides
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../next_steps/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Next Steps — Production Readiness Roadmap
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../sdk_redis_platform_talk/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Sdk redis platform talk
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../sdk_redis_platform_talk_nontech/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Sdk redis platform talk nontech
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../security_hardening_plan/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Security Hardening Plan — Gateway Architecture
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../session_report/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Session Report — Gateway + Redis Architecture
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../testing_strategy/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Testing Strategy — Gateway + Redis Architecture (20K Concurrent)
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../api/api/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Api
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../architecture/admission-queue/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Architecture
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../changelog/0.3.4_to_0.3.5.dev0/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Changelog
+
+      </a>
+    </li>
+  
+
+      
+    </ul>
+  </div>
+</nav>
+    
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="DigitalKin" class="md-nav__button md-logo" aria-label="DigitalKin" data-md-component="logo">
+      
+  <img src="../assets/logo.png" alt="logo">
+
+    </a>
+    DigitalKin
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/DigitalKin-ai/digitalkin" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    DigitalKin-ai/digitalkin
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    DigitalKin Python SDK
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture_presentation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    DigitalKin SDK v1.0.0
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Gateway Protocol
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Gateway Protocol
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#tldr" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TL;DR
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#service-surface" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Service surface
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Service surface">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#startstream" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        StartStream
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#stream-streamclient-client-gateway" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Stream — StreamClient (client → gateway)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#stream-streamserver-gateway-client" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Stream — StreamServer (gateway → client)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#sendsignal" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        SendSignal
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-stream-sentinel-namespace" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The stream.* sentinel namespace
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#resume-semantics-from_seq" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Resume semantics — from_seq
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#server-initiated-dial-back-callback-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Server-initiated dial-back (callback flow)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Server-initiated dial-back (callback flow)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#how-to-opt-in" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How to opt in
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#init-handshake" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Init handshake
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#field-semantics-in-the-dial-back-direction" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Field semantics in the dial-back direction
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#buffer-and-recovery" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Buffer and recovery
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#consumer-side-skeleton-python" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Consumer-side skeleton (Python)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#when-to-use-which-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        When to use which flow
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#quick-start-python" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Quick start — Python
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#quick-start-typescript-node" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Quick start — TypeScript / Node
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#patterns-gotchas" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Patterns &amp; gotchas
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Patterns &amp; gotchas">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#one-client-per-task" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        One client per task
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-first-streamclient-carries-the-query" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The first StreamClient carries the query
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#sending-more-upstream-input" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sending more upstream input
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cancelling" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cancelling
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cache-invalidation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cache invalidation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#errors-are-not-aioaiorpcerror" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Errors are NOT aio.AioRpcError
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recoverable-warnings" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Recoverable warnings
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#timing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Timing
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#wire-shape-cheat-sheet" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Wire-shape cheat-sheet
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-changed-from-earlier-protocol-versions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What changed from earlier protocol versions
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../getting_started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../grpc-tuning/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    gRPC &amp; Concurrency Tuning Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../guides/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guides
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../next_steps/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Next Steps — Production Readiness Roadmap
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../sdk_redis_platform_talk/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Sdk redis platform talk
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../sdk_redis_platform_talk_nontech/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Sdk redis platform talk nontech
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../security_hardening_plan/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Security Hardening Plan — Gateway Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../session_report/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Session Report — Gateway + Redis Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../testing_strategy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Testing Strategy — Gateway + Redis Architecture (20K Concurrent)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_13" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../api/api/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Api
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_13" id="__nav_13_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_13_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_13">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Api
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/dynamic_schema/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Dynamic Schema
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_14" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../architecture/admission-queue/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_14" id="__nav_14_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_14_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_14">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/concurrency-model/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Concurrency Model
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/resilience/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Retry &amp; Fault Tolerance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/sdk-flow/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    SDK Flow: Server to Module Execution
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_15" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../changelog/0.3.4_to_0.3.5.dev0/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changelog
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_15" id="__nav_15_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_15_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_15">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Changelog
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../changelog/0.3.5_to_0.4.0/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    0.3.5 to 0.4.0
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../changelog/0.4.1/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    0.4.0 → 0.4.1 — AG-UI Frontend Tools (HITL)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../changelog/0.4.2/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    0.4.1 → 0.4.2 — Front-end Tools &amp; Custom AG-UI Events
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../changelog/0.4.3/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    0.4.2 → 0.4.3 — Live Tool-module Schema Refetching
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../changelog/0.4.4/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    0.4.3 → 0.4.4 — Tool-trigger Filtering Fix (DEV-631)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#tldr" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TL;DR
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#service-surface" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Service surface
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Service surface">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#startstream" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        StartStream
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#stream-streamclient-client-gateway" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Stream — StreamClient (client → gateway)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#stream-streamserver-gateway-client" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Stream — StreamServer (gateway → client)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#sendsignal" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        SendSignal
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-stream-sentinel-namespace" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The stream.* sentinel namespace
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#resume-semantics-from_seq" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Resume semantics — from_seq
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#server-initiated-dial-back-callback-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Server-initiated dial-back (callback flow)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Server-initiated dial-back (callback flow)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#how-to-opt-in" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How to opt in
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#init-handshake" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Init handshake
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#field-semantics-in-the-dial-back-direction" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Field semantics in the dial-back direction
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#buffer-and-recovery" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Buffer and recovery
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#consumer-side-skeleton-python" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Consumer-side skeleton (Python)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#when-to-use-which-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        When to use which flow
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#quick-start-python" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Quick start — Python
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#quick-start-typescript-node" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Quick start — TypeScript / Node
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#patterns-gotchas" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Patterns &amp; gotchas
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Patterns &amp; gotchas">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#one-client-per-task" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        One client per task
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-first-streamclient-carries-the-query" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The first StreamClient carries the query
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#sending-more-upstream-input" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sending more upstream input
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cancelling" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cancelling
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cache-invalidation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cache invalidation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#errors-are-not-aioaiorpcerror" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Errors are NOT aio.AioRpcError
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recoverable-warnings" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Recoverable warnings
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#timing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Timing
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#wire-shape-cheat-sheet" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Wire-shape cheat-sheet
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-changed-from-earlier-protocol-versions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What changed from earlier protocol versions
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+                
+
+
+
+  
+
+
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+    <a href="https://github.com/DigitalKin-ai/digitalkin/edit/main/docs/gateway_protocol.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+    
+      
+    
+    <a href="https://github.com/DigitalKin-ai/digitalkin/raw/main/docs/gateway_protocol.md" title="View source of this page" class="md-content__button md-icon">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M17 18c.56 0 1 .44 1 1s-.44 1-1 1-1-.44-1-1 .44-1 1-1m0-3c-2.73 0-5.06 1.66-6 4 .94 2.34 3.27 4 6 4s5.06-1.66 6-4c-.94-2.34-3.27-4-6-4m0 6.5a2.5 2.5 0 0 1-2.5-2.5 2.5 2.5 0 0 1 2.5-2.5 2.5 2.5 0 0 1 2.5 2.5 2.5 2.5 0 0 1-2.5 2.5M9.27 20H6V4h7v5h5v4.07c.7.08 1.36.25 2 .49V8l-6-6H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h4.5a8.2 8.2 0 0 1-1.23-2"/></svg>
+    </a>
+  
+
+
+<h1 id="gateway-protocol">Gateway Protocol<a class="headerlink" href="#gateway-protocol" title="Permanent link">¤</a></h1>
+<p>External clients (web UI, modules, any gRPC caller) talk to a producer module through the <strong>Gateway</strong> — a single small gRPC service. This document is language-agnostic; examples use Python and TypeScript pseudo-code interchangeably.</p>
+<h2 id="tldr">TL;DR<a class="headerlink" href="#tldr" title="Permanent link">¤</a></h2>
+<p>Three RPCs, one BiDi data channel, in-band lifecycle:</p>
+<div class="language-text highlight"><pre><span></span><code>  Client                      Gateway                       SDK module
+   │                             │                              │
+   │ ── StartStream ────────────►│                              │
+   │ ◄────────── ack ────────────│                              │
+   │                             │ ── dispatch (Redis) ────────►│
+   │                             │                              │
+   │ ── Stream(StreamClient) ───►│                              │
+   │                             │ ◄── output (Redis) ──────────│
+   │ ◄── StreamServer{stream.start}──                            │
+   │ ◄── StreamServer{&lt;output&gt;}──                               │
+   │      ...                    │                              │
+   │ ◄── StreamServer{stream.end}──                              │
+</code></pre></div>
+<ol>
+<li><strong><code>StartStream</code></strong> — unary. Reserves a task slot and dispatches the module. Returns <code>{ accepted, task_id }</code>.</li>
+<li><strong><code>Stream</code></strong> — BiDi. Client sends <code>StreamClient</code> messages (the first carries the <strong>query</strong>, in <code>data</code>). Server yields <code>StreamServer</code> messages until the stream closes cleanly.</li>
+<li><strong><code>SendSignal</code></strong> — unary. Out-of-band controls: cancel a task, or invalidate caches.</li>
+</ol>
+<p>Lifecycle, errors, warnings travel <strong>inside the data channel</strong> as Struct sentinels (<code>stream.start</code>, <code>stream.end</code>, <code>stream.error</code>). gRPC status codes are not used to signal stream-level events on <code>Stream</code>.</p>
+<hr />
+<h2 id="service-surface">Service surface<a class="headerlink" href="#service-surface" title="Permanent link">¤</a></h2>
+<div class="language-proto highlight"><pre><span></span><code><span class="kd">service</span><span class="w"> </span><span class="n">GatewayService</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="k">rpc</span><span class="w"> </span><span class="n">StartStream</span><span class="p">(</span><span class="n">StartStreamRequest</span><span class="p">)</span><span class="w"> </span><span class="k">returns</span><span class="w"> </span><span class="p">(</span><span class="n">StartStreamResponse</span><span class="p">);</span>
+<span class="w">  </span><span class="k">rpc</span><span class="w"> </span><span class="n">Stream</span><span class="p">(</span><span class="n">stream</span><span class="w"> </span><span class="n">StreamClient</span><span class="p">)</span><span class="w"> </span><span class="k">returns</span><span class="w"> </span><span class="p">(</span><span class="n">stream</span><span class="w"> </span><span class="n">StreamServer</span><span class="p">);</span>
+<span class="w">  </span><span class="k">rpc</span><span class="w"> </span><span class="n">SendSignal</span><span class="p">(</span><span class="n">ClientSignalRequest</span><span class="p">)</span><span class="w"> </span><span class="k">returns</span><span class="w"> </span><span class="p">(</span><span class="n">ClientSignalResponse</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre></div>
+<h3 id="startstream"><code>StartStream</code><a class="headerlink" href="#startstream" title="Permanent link">¤</a></h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>task_id</code></td>
+<td><code>string</code></td>
+<td>Required. Client-chosen unique ID (UUIDv4 recommended).</td>
+</tr>
+<tr>
+<td><code>setup_id</code></td>
+<td><code>string</code></td>
+<td>Required. Must start with <code>setups:</code>.</td>
+</tr>
+<tr>
+<td><code>mission_id</code></td>
+<td><code>string</code></td>
+<td>Required. Must start with <code>missions:</code>.</td>
+</tr>
+</tbody>
+</table>
+<p>Returns <code>{ accepted: bool, task_id: string }</code>. <code>accepted=false</code> means the gateway is at capacity or the IDs are invalid; do not open <code>Stream</code>.</p>
+<h3 id="stream-streamclient-client-gateway"><code>Stream</code> — <code>StreamClient</code> (client → gateway)<a class="headerlink" href="#stream-streamclient-client-gateway" title="Permanent link">¤</a></h3>
+<div class="language-text highlight"><pre><span></span><code>{ uint64 from_seq, string task_id, google.protobuf.Struct data }
+</code></pre></div>
+<ul>
+<li><strong>First message</strong> (mandatory): <code>task_id</code> set, <code>data</code> carries the <strong>query</strong> that becomes the SDK module's first input.</li>
+<li><strong>Subsequent messages</strong>: <code>data</code> carries any additional upstream input (multi-turn, tool responses, …). <code>task_id</code> and <code>from_seq</code> are ignored after the first.</li>
+</ul>
+<h3 id="stream-streamserver-gateway-client"><code>Stream</code> — <code>StreamServer</code> (gateway → client)<a class="headerlink" href="#stream-streamserver-gateway-client" title="Permanent link">¤</a></h3>
+<div class="language-text highlight"><pre><span></span><code>{ uint64 seq, google.protobuf.Struct data }
+</code></pre></div>
+<ul>
+<li><code>seq</code>: monotonic from 1, assigned by the gateway when persisting to Redis. <strong>Stateful clients</strong> save the highest seq received and pass it back as <code>from_seq</code> on reconnect; <strong>stateless clients</strong> ignore it.</li>
+<li><code>data</code>: a Struct with a top-level <code>root</code> object whose <code>protocol</code> field disambiguates payload type.</li>
+</ul>
+<h3 id="sendsignal"><code>SendSignal</code><a class="headerlink" href="#sendsignal" title="Permanent link">¤</a></h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>task_id</code></td>
+<td><code>string</code></td>
+<td>Required for <code>CANCEL</code>. Ignored for <code>INVALIDATE_*</code>.</td>
+</tr>
+<tr>
+<td><code>action</code></td>
+<td><code>SignalAction</code></td>
+<td>Required. See the enum below.</td>
+</tr>
+</tbody>
+</table>
+<p>Returns <code>{ success: bool, task_id: string }</code>.</p>
+<div class="language-text highlight"><pre><span></span><code>enum SignalAction {
+  UNSPECIFIED = 0;
+  CANCEL              = 1;  // per-task cancellation (requires task_id)
+  INVALIDATE_ALL      = 2;  // wipe all caches
+  INVALIDATE_CHANNELS = 3;  // gRPC channel pool, stubs, CB, bulkhead
+  INVALIDATE_MODELS   = 4;  // Pydantic model class cache
+  INVALIDATE_SETUP    = 5;  // setup JSON cache
+  INVALIDATE_TOOLS    = 6;  // resolved tools
+  INVALIDATE_SHARED   = 7;  // BaseModule._shared (litellm, toolkits, ...)
+}
+</code></pre></div>
+<p><code>CANCEL</code> publishes on the per-task Redis pub/sub channel. <code>INVALIDATE_*</code> is a server-wide operation routed to the SDK's cache handler — it does not need a task_id and does not affect any in-flight tasks.</p>
+<hr />
+<h2 id="the-stream-sentinel-namespace">The <code>stream.*</code> sentinel namespace<a class="headerlink" href="#the-stream-sentinel-namespace" title="Permanent link">¤</a></h2>
+<p>Every gateway-emitted control entry uses a Struct shaped:</p>
+<div class="language-text highlight"><pre><span></span><code>data = { &quot;root&quot;: { &quot;protocol&quot;: &quot;stream.&lt;verb&gt;&quot;, ... } }
+</code></pre></div>
+<p>Domain output from the module uses <strong>non-prefixed</strong> protocols (<code>text_chunk</code>, <code>tool_call</code>, <code>agui_event</code>, …) — they cannot collide with control sentinels.</p>
+<table>
+<thead>
+<tr>
+<th><code>protocol</code></th>
+<th>Fields</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>stream.start</code></td>
+<td><code>task_id, mission_id, setup_id, started_at</code></td>
+<td>First entry on every stream. Seeded by the gateway.</td>
+</tr>
+<tr>
+<td><code>stream.end</code></td>
+<td><code>task_id</code></td>
+<td><strong>Last</strong> entry on every stream. Always present, no exceptions.</td>
+</tr>
+<tr>
+<td><code>stream.error</code></td>
+<td><code>code, message, fatal, task_id</code></td>
+<td>Failure event. If <code>fatal=true</code>, immediately followed by <code>stream.end</code>.</td>
+</tr>
+<tr>
+<td><code>stream.warn</code></td>
+<td><code>code, message</code></td>
+<td>Recoverable issue. Stream continues.</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Invariant:</strong> every stream ends with exactly one <code>stream.end</code>. Fatal errors are <em>two</em> writes — <code>stream.error(fatal=true)</code> then <code>stream.end</code> — because the diagnostic event and the structural terminator have separate jobs.</p>
+<p><code>code</code> values follow gRPC status names: <code>INVALID_ARGUMENT</code>, <code>NOT_FOUND</code>, <code>RESOURCE_EXHAUSTED</code>, <code>INTERNAL</code>, <code>UNAVAILABLE</code>, …</p>
+<hr />
+<h2 id="resume-semantics-from_seq">Resume semantics — <code>from_seq</code><a class="headerlink" href="#resume-semantics-from_seq" title="Permanent link">¤</a></h2>
+<p>Two profiles, no extra fields needed:</p>
+<p><strong>Stateless</strong> (web UIs, simple callers)
+- Always send <code>from_seq = 0</code>.
+- Server replays the full stream from <code>seq=1</code>.
+- Ignore <code>seq</code> on <code>StreamServer</code>.
+- After a disconnect: reconnect with <code>from_seq=0</code>. Expect duplicate delivery; that's the cost of being stateless.</p>
+<p><strong>Stateful</strong> (durable consumers)
+- Track <code>highest_seq</code> = max seq received.
+- On reconnect: send <code>from_seq = highest_seq</code>. Server delivers <code>seq &gt; from_seq</code> only.
+- Optional gap detection: if <code>next.seq != prev.seq + 1</code>, an upstream truncation happened (Redis stream trim).</p>
+<p>The resume window is bounded by Redis stream retention. If <code>from_seq</code> predates the oldest retained entry, the server delivers from the oldest available — the client sees a seq jump.</p>
+<hr />
+<h2 id="server-initiated-dial-back-callback-flow">Server-initiated dial-back (callback flow)<a class="headerlink" href="#server-initiated-dial-back-callback-flow" title="Permanent link">¤</a></h2>
+<p>Two ways to consume a task's output:</p>
+<ol>
+<li><strong>Client opens <code>Stream</code></strong> (default). Module-to-module callers fit this — they're already long-lived, can hold a BiDi connection, and prefer to pull.</li>
+<li><strong>Server dials the client</strong> (callback). External clients (web UI / chainlit) that prefer to be pushed to. The client runs its own <code>GatewayService</code> server (same proto, no extra service definition) and tells the gateway where to dial.</li>
+</ol>
+<h3 id="how-to-opt-in">How to opt in<a class="headerlink" href="#how-to-opt-in" title="Permanent link">¤</a></h3>
+<p>Add the gRPC metadata header <code>x-client-address: host:port</code> to the <code>StartStream</code> call. The gateway acks the unary, then opens a BiDi to the address you advertised.</p>
+<div class="language-python highlight"><pre><span></span><code><span class="n">metadata</span> <span class="o">=</span> <span class="p">((</span><span class="s2">&quot;x-client-address&quot;</span><span class="p">,</span> <span class="s2">&quot;10.0.0.5:50080&quot;</span><span class="p">),)</span>
+<span class="n">ack</span> <span class="o">=</span> <span class="k">await</span> <span class="n">stub</span><span class="o">.</span><span class="n">StartStream</span><span class="p">(</span><span class="n">req</span><span class="p">,</span> <span class="n">metadata</span><span class="o">=</span><span class="n">metadata</span><span class="p">)</span>
+</code></pre></div>
+<h3 id="init-handshake">Init handshake<a class="headerlink" href="#init-handshake" title="Permanent link">¤</a></h3>
+<p>Exactly one extra round on the BiDi at startup; everything after is a normal <code>Stream</code> flow inverted in direction.</p>
+<div class="language-text highlight"><pre><span></span><code>Gateway (gRPC client)                              Consumer (gRPC server)
+        │                                                  │
+        │ ── StreamClient(data={protocol:&quot;stream.init&quot;}) ─►│
+        │                                                  │
+        │ ◄── StreamServer(data=&lt;query&gt;) ──────────────────│  ← consumer sends the query
+        │                                                  │
+        │ ── StreamClient(from_seq=N, data=&lt;output_N&gt;) ───►│  ← gateway pushes outputs
+        │ ── StreamClient(from_seq=N+1, data=&lt;output_N+1&gt;)►│
+        │      ...                                         │
+        │ ── StreamClient(data={protocol:&quot;stream.end&quot;}) ──►│  ← terminator
+</code></pre></div>
+<p>The query payload from the consumer is delivered to the SDK module exactly like the first message in the client-initiated <code>Stream</code> flow. The dispatcher unblocks on <code>session.input_queue</code> once the query lands. From there, the producer's lifecycle is identical to the standard path.</p>
+<h3 id="field-semantics-in-the-dial-back-direction">Field semantics in the dial-back direction<a class="headerlink" href="#field-semantics-in-the-dial-back-direction" title="Permanent link">¤</a></h3>
+<p><code>StreamClient</code> and <code>StreamServer</code> are reused without proto changes. The semantics on the <strong>gateway → client</strong> push direction:</p>
+<ul>
+<li><code>StreamClient.task_id</code> — repeated on every message; the consumer can multiplex many concurrent pushes by task.</li>
+<li><code>StreamClient.from_seq</code> — repurposed as the <strong>per-message seq</strong> (the originating <code>seq</code> from <code>_consume_from_redis</code>). On the M2M flow <code>from_seq</code> was the resume point; here it's the per-frame counter.</li>
+<li><code>StreamClient.data</code> — the actual output payload, identical to what <code>Stream</code>'s <code>StreamServer.data</code> would carry.</li>
+</ul>
+<p>On the <strong>client → gateway</strong> upstream direction:</p>
+<ul>
+<li><code>StreamServer.data</code> — first message is the query; subsequent messages are additional upstream input (multi-turn turns, tool replies). Both feed the module's <code>session.input_queue</code>.</li>
+</ul>
+<h3 id="buffer-and-recovery">Buffer and recovery<a class="headerlink" href="#buffer-and-recovery" title="Permanent link">¤</a></h3>
+<p>Outputs are persisted to the Redis stream <code>task:&lt;task_id&gt;:stream</code> with retention = <code>STREAM_TTL_S</code>. If the dial-back BiDi drops mid-stream:</p>
+<ul>
+<li>The producer keeps writing to Redis (no back-pressure on the producer from a flaky consumer).</li>
+<li>The consumer can recover by re-issuing <code>StartStream</code> (server dedups on existing <code>task_id</code>) and either re-advertising <code>x-client-address</code> for another push attempt, or opening <code>Stream</code> BiDi directly with <code>from_seq=&lt;last_seq&gt;</code> to pull the rest.</li>
+<li>Data remains available for the configured retention window.</li>
+</ul>
+<h3 id="consumer-side-skeleton-python">Consumer-side skeleton (Python)<a class="headerlink" href="#consumer-side-skeleton-python" title="Permanent link">¤</a></h3>
+<div class="language-python highlight"><pre><span></span><code><span class="k">class</span><span class="w"> </span><span class="nc">ConsumerCallback</span><span class="p">(</span><span class="n">gateway_service_pb2_grpc</span><span class="o">.</span><span class="n">GatewayServiceServicer</span><span class="p">):</span>
+    <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">Stream</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">request_iterator</span><span class="p">,</span> <span class="n">context</span><span class="p">):</span>
+        <span class="c1"># 1. First incoming StreamClient should be stream.init.</span>
+        <span class="n">first</span> <span class="o">=</span> <span class="k">await</span> <span class="n">anext</span><span class="p">(</span><span class="n">request_iterator</span><span class="p">)</span>
+        <span class="c1"># (sanity-check: first.data.fields[&quot;root&quot;].struct_value.fields[&quot;protocol&quot;] == &quot;stream.init&quot;)</span>
+
+        <span class="c1"># 2. Send the query as the first StreamServer reply.</span>
+        <span class="n">query</span> <span class="o">=</span> <span class="n">struct_pb2</span><span class="o">.</span><span class="n">Struct</span><span class="p">()</span>
+        <span class="n">query</span><span class="o">.</span><span class="n">update</span><span class="p">({</span><span class="s2">&quot;protocol&quot;</span><span class="p">:</span> <span class="s2">&quot;agui_stream&quot;</span><span class="p">,</span> <span class="s2">&quot;messages&quot;</span><span class="p">:</span> <span class="p">[</span><span class="o">...</span><span class="p">]})</span>
+        <span class="k">yield</span> <span class="n">gateway_pb2</span><span class="o">.</span><span class="n">StreamServer</span><span class="p">(</span><span class="n">seq</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">task_id</span><span class="o">=</span><span class="n">first</span><span class="o">.</span><span class="n">task_id</span><span class="p">,</span> <span class="n">data</span><span class="o">=</span><span class="n">query</span><span class="p">)</span>
+
+        <span class="c1"># 3. Read pushed outputs.</span>
+        <span class="k">async</span> <span class="k">for</span> <span class="n">msg</span> <span class="ow">in</span> <span class="n">request_iterator</span><span class="p">:</span>
+            <span class="n">proto</span> <span class="o">=</span> <span class="n">msg</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">fields</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;root&quot;</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">proto</span> <span class="ow">and</span> <span class="n">proto</span><span class="o">.</span><span class="n">struct_value</span><span class="o">.</span><span class="n">fields</span><span class="p">[</span><span class="s2">&quot;protocol&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">string_value</span> <span class="o">==</span> <span class="s2">&quot;stream.end&quot;</span><span class="p">:</span>
+                <span class="k">return</span>
+            <span class="n">handle</span><span class="p">(</span><span class="n">msg</span><span class="o">.</span><span class="n">data</span><span class="p">)</span>
+            <span class="c1"># Optional: yield more StreamServer messages for additional upstream input</span>
+</code></pre></div>
+<p>The consumer does not implement <code>StartStream</code> or <code>SendSignal</code> (those are gateway-only); only <code>Stream</code> is needed. Most gRPC servers let you implement just one method of a service.</p>
+<h3 id="when-to-use-which-flow">When to use which flow<a class="headerlink" href="#when-to-use-which-flow" title="Permanent link">¤</a></h3>
+<ul>
+<li><strong>Use <code>Stream</code> BiDi (client-initiated)</strong> if your consumer is a module or any long-lived process that can hold an outbound gRPC stream open.</li>
+<li><strong>Use callback dial-back (server-initiated)</strong> if your consumer is a web UI/edge service that prefers receiving pushes, can run a small gRPC server, and is reachable from the gateway (no NAT/firewall blocks the gateway → consumer direction).</li>
+</ul>
+<p>The two flows coexist on the same gateway. A consumer that doesn't pass <code>x-client-address</code> is not affected by the callback path.</p>
+<hr />
+<h2 id="quick-start-python">Quick start — Python<a class="headerlink" href="#quick-start-python" title="Permanent link">¤</a></h2>
+<div class="language-python highlight"><pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn">uuid</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">grpc</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">google.protobuf</span><span class="w"> </span><span class="kn">import</span> <span class="n">struct_pb2</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">agentic_mesh_protocol.gateway.v1</span><span class="w"> </span><span class="kn">import</span> <span class="n">gateway_pb2</span><span class="p">,</span> <span class="n">gateway_service_pb2_grpc</span>
+
+<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">call</span><span class="p">(</span><span class="n">host</span><span class="p">,</span> <span class="n">setup_id</span><span class="p">,</span> <span class="n">mission_id</span><span class="p">,</span> <span class="n">query</span><span class="p">):</span>
+    <span class="n">channel</span> <span class="o">=</span> <span class="n">grpc</span><span class="o">.</span><span class="n">aio</span><span class="o">.</span><span class="n">insecure_channel</span><span class="p">(</span><span class="n">host</span><span class="p">)</span>
+    <span class="n">stub</span> <span class="o">=</span> <span class="n">gateway_service_pb2_grpc</span><span class="o">.</span><span class="n">GatewayServiceStub</span><span class="p">(</span><span class="n">channel</span><span class="p">)</span>
+
+    <span class="n">task_id</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">uuid</span><span class="o">.</span><span class="n">uuid4</span><span class="p">())</span>
+
+    <span class="c1"># 1. StartStream — get the ack.</span>
+    <span class="n">ack</span> <span class="o">=</span> <span class="k">await</span> <span class="n">stub</span><span class="o">.</span><span class="n">StartStream</span><span class="p">(</span><span class="n">gateway_pb2</span><span class="o">.</span><span class="n">StartStreamRequest</span><span class="p">(</span>
+        <span class="n">task_id</span><span class="o">=</span><span class="n">task_id</span><span class="p">,</span> <span class="n">setup_id</span><span class="o">=</span><span class="n">setup_id</span><span class="p">,</span> <span class="n">mission_id</span><span class="o">=</span><span class="n">mission_id</span><span class="p">,</span>
+    <span class="p">))</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">ack</span><span class="o">.</span><span class="n">accepted</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span><span class="s2">&quot;rejected&quot;</span><span class="p">)</span>
+
+    <span class="c1"># 2. Build the query Struct.</span>
+    <span class="n">data</span> <span class="o">=</span> <span class="n">struct_pb2</span><span class="o">.</span><span class="n">Struct</span><span class="p">()</span>
+    <span class="n">data</span><span class="o">.</span><span class="n">update</span><span class="p">({</span><span class="s2">&quot;root&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;protocol&quot;</span><span class="p">:</span> <span class="s2">&quot;agui_stream&quot;</span><span class="p">,</span> <span class="s2">&quot;messages&quot;</span><span class="p">:</span> <span class="p">[</span><span class="n">query</span><span class="p">]}})</span>
+
+    <span class="c1"># 3. Open Stream BiDi — first message carries the query.</span>
+    <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">client_stream</span><span class="p">():</span>
+        <span class="k">yield</span> <span class="n">gateway_pb2</span><span class="o">.</span><span class="n">StreamClient</span><span class="p">(</span><span class="n">task_id</span><span class="o">=</span><span class="n">task_id</span><span class="p">,</span> <span class="n">from_seq</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">data</span><span class="o">=</span><span class="n">data</span><span class="p">)</span>
+
+    <span class="k">async</span> <span class="k">for</span> <span class="n">msg</span> <span class="ow">in</span> <span class="n">stub</span><span class="o">.</span><span class="n">Stream</span><span class="p">(</span><span class="n">client_stream</span><span class="p">()):</span>
+        <span class="n">proto</span> <span class="o">=</span> <span class="n">msg</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">fields</span><span class="p">[</span><span class="s2">&quot;root&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">struct_value</span><span class="o">.</span><span class="n">fields</span><span class="p">[</span><span class="s2">&quot;protocol&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">string_value</span>
+        <span class="k">if</span> <span class="n">proto</span> <span class="o">==</span> <span class="s2">&quot;stream.start&quot;</span><span class="p">:</span>
+            <span class="k">continue</span>
+        <span class="k">if</span> <span class="n">proto</span> <span class="o">==</span> <span class="s2">&quot;stream.error&quot;</span><span class="p">:</span>
+            <span class="n">err</span> <span class="o">=</span> <span class="n">msg</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">fields</span><span class="p">[</span><span class="s2">&quot;root&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">struct_value</span><span class="o">.</span><span class="n">fields</span>
+            <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;ERROR </span><span class="si">{</span><span class="n">err</span><span class="p">[</span><span class="s1">&#39;code&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">string_value</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">err</span><span class="p">[</span><span class="s1">&#39;message&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">string_value</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+            <span class="c1"># If fatal, stream.end follows; we just keep iterating.</span>
+            <span class="k">continue</span>
+        <span class="k">if</span> <span class="n">proto</span> <span class="o">==</span> <span class="s2">&quot;stream.end&quot;</span><span class="p">:</span>
+            <span class="k">break</span>
+        <span class="c1"># Domain output — handle as needed</span>
+        <span class="n">handle</span><span class="p">(</span><span class="n">msg</span><span class="o">.</span><span class="n">data</span><span class="p">)</span>
+
+    <span class="k">await</span> <span class="n">channel</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+</code></pre></div>
+<h2 id="quick-start-typescript-node">Quick start — TypeScript / Node<a class="headerlink" href="#quick-start-typescript-node" title="Permanent link">¤</a></h2>
+<div class="language-ts highlight"><pre><span></span><code><span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">v4</span><span class="w"> </span><span class="kr">as</span><span class="w"> </span><span class="nx">uuid</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s2">&quot;uuid&quot;</span><span class="p">;</span>
+<span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">Struct</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s2">&quot;google-protobuf/google/protobuf/struct_pb&quot;</span><span class="p">;</span>
+<span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">GatewayServiceClient</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s2">&quot;./gen/gateway_service_grpc_pb&quot;</span><span class="p">;</span>
+<span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">StartStreamRequest</span><span class="p">,</span><span class="w"> </span><span class="nx">StreamClient</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s2">&quot;./gen/gateway_pb&quot;</span><span class="p">;</span>
+
+<span class="k">async</span><span class="w"> </span><span class="kd">function</span><span class="w"> </span><span class="nx">call</span><span class="p">(</span><span class="nx">host</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="nx">setupId</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="nx">missionId</span><span class="o">:</span><span class="w"> </span><span class="kt">string</span><span class="p">,</span><span class="w"> </span><span class="nx">query</span><span class="o">:</span><span class="w"> </span><span class="kt">any</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="nx">client</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="ow">new</span><span class="w"> </span><span class="nx">GatewayServiceClient</span><span class="p">(</span><span class="nx">host</span><span class="p">,</span><span class="w"> </span><span class="cm">/* credentials */</span><span class="p">);</span>
+<span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="nx">taskId</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">uuid</span><span class="p">();</span>
+
+<span class="w">  </span><span class="c1">// 1. StartStream</span>
+<span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="nx">ack</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">await</span><span class="w"> </span><span class="ow">new</span><span class="w"> </span><span class="nb">Promise</span><span class="o">&lt;</span><span class="nx">any</span><span class="o">&gt;</span><span class="p">((</span><span class="nx">resolve</span><span class="p">,</span><span class="w"> </span><span class="nx">reject</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">const</span><span class="w"> </span><span class="nx">req</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="ow">new</span><span class="w"> </span><span class="nx">StartStreamRequest</span><span class="p">()</span>
+<span class="w">      </span><span class="p">.</span><span class="nx">setTaskId</span><span class="p">(</span><span class="nx">taskId</span><span class="p">).</span><span class="nx">setSetupId</span><span class="p">(</span><span class="nx">setupId</span><span class="p">).</span><span class="nx">setMissionId</span><span class="p">(</span><span class="nx">missionId</span><span class="p">);</span>
+<span class="w">    </span><span class="nx">client</span><span class="p">.</span><span class="nx">startStream</span><span class="p">(</span><span class="nx">req</span><span class="p">,</span><span class="w"> </span><span class="p">(</span><span class="nx">err</span><span class="p">,</span><span class="w"> </span><span class="nx">resp</span><span class="p">)</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="nx">reject</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="nx">resolve</span><span class="p">(</span><span class="nx">resp</span><span class="p">));</span>
+<span class="w">  </span><span class="p">});</span>
+<span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="nx">ack</span><span class="p">.</span><span class="nx">getAccepted</span><span class="p">())</span><span class="w"> </span><span class="k">throw</span><span class="w"> </span><span class="ow">new</span><span class="w"> </span><span class="ne">Error</span><span class="p">(</span><span class="s2">&quot;rejected&quot;</span><span class="p">);</span>
+
+<span class="w">  </span><span class="c1">// 2. Build query Struct</span>
+<span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="nx">data</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">Struct</span><span class="p">.</span><span class="nx">fromJavaScript</span><span class="p">({</span><span class="w"> </span><span class="nx">root</span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">protocol</span><span class="o">:</span><span class="w"> </span><span class="s2">&quot;agui_stream&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">messages</span><span class="o">:</span><span class="w"> </span><span class="p">[</span><span class="nx">query</span><span class="p">]</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="p">});</span>
+
+<span class="w">  </span><span class="c1">// 3. Open Stream BiDi — first message carries the query</span>
+<span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="nx">call</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">client</span><span class="p">.</span><span class="nx">stream</span><span class="p">();</span>
+<span class="w">  </span><span class="kd">const</span><span class="w"> </span><span class="nx">first</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="ow">new</span><span class="w"> </span><span class="nx">StreamClient</span><span class="p">().</span><span class="nx">setTaskId</span><span class="p">(</span><span class="nx">taskId</span><span class="p">).</span><span class="nx">setFromSeq</span><span class="p">(</span><span class="mf">0</span><span class="p">).</span><span class="nx">setData</span><span class="p">(</span><span class="nx">data</span><span class="p">);</span>
+<span class="w">  </span><span class="nx">call</span><span class="p">.</span><span class="nx">write</span><span class="p">(</span><span class="nx">first</span><span class="p">);</span>
+
+<span class="w">  </span><span class="k">for</span><span class="w"> </span><span class="k">await</span><span class="w"> </span><span class="p">(</span><span class="kd">const</span><span class="w"> </span><span class="nx">msg</span><span class="w"> </span><span class="k">of</span><span class="w"> </span><span class="nx">call</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kd">const</span><span class="w"> </span><span class="nx">proto</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">msg</span><span class="p">.</span><span class="nx">getData</span><span class="p">().</span><span class="nx">getFieldsMap</span><span class="p">().</span><span class="nx">get</span><span class="p">(</span><span class="s2">&quot;root&quot;</span><span class="p">)</span>
+<span class="w">                     </span><span class="p">.</span><span class="nx">getStructValue</span><span class="p">().</span><span class="nx">getFieldsMap</span><span class="p">().</span><span class="nx">get</span><span class="p">(</span><span class="s2">&quot;protocol&quot;</span><span class="p">).</span><span class="nx">getStringValue</span><span class="p">();</span>
+<span class="w">    </span><span class="k">switch</span><span class="w"> </span><span class="p">(</span><span class="nx">proto</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="k">case</span><span class="w"> </span><span class="s2">&quot;stream.start&quot;</span><span class="o">:</span><span class="w"> </span><span class="k">continue</span><span class="p">;</span>
+<span class="w">      </span><span class="k">case</span><span class="w"> </span><span class="s2">&quot;stream.error&quot;</span><span class="o">:</span>
+<span class="w">        </span><span class="kd">const</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">msg</span><span class="p">.</span><span class="nx">getData</span><span class="p">().</span><span class="nx">getFieldsMap</span><span class="p">().</span><span class="nx">get</span><span class="p">(</span><span class="s2">&quot;root&quot;</span><span class="p">).</span><span class="nx">getStructValue</span><span class="p">().</span><span class="nx">getFieldsMap</span><span class="p">();</span>
+<span class="w">        </span><span class="nx">console</span><span class="p">.</span><span class="nx">error</span><span class="p">(</span><span class="sb">`ERROR </span><span class="si">${</span><span class="nx">err</span><span class="p">.</span><span class="nx">get</span><span class="p">(</span><span class="s2">&quot;code&quot;</span><span class="p">).</span><span class="nx">getStringValue</span><span class="p">()</span><span class="si">}</span><span class="sb">: </span><span class="si">${</span><span class="nx">err</span><span class="p">.</span><span class="nx">get</span><span class="p">(</span><span class="s2">&quot;message&quot;</span><span class="p">).</span><span class="nx">getStringValue</span><span class="p">()</span><span class="si">}</span><span class="sb">`</span><span class="p">);</span>
+<span class="w">        </span><span class="k">continue</span><span class="p">;</span>
+<span class="w">      </span><span class="k">case</span><span class="w"> </span><span class="s2">&quot;stream.end&quot;</span><span class="o">:</span>
+<span class="w">        </span><span class="nx">call</span><span class="p">.</span><span class="nx">end</span><span class="p">();</span>
+<span class="w">        </span><span class="k">return</span><span class="p">;</span>
+<span class="w">      </span><span class="nx">default</span><span class="o">:</span>
+<span class="w">        </span><span class="kt">handle</span><span class="p">(</span><span class="nx">msg</span><span class="p">.</span><span class="nx">getData</span><span class="p">());</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+<hr />
+<h2 id="patterns-gotchas">Patterns &amp; gotchas<a class="headerlink" href="#patterns-gotchas" title="Permanent link">¤</a></h2>
+<h3 id="one-client-per-task">One client per task<a class="headerlink" href="#one-client-per-task" title="Permanent link">¤</a></h3>
+<p>Each task is its own gRPC stream. Don't multiplex multiple tasks onto one <code>Stream</code> call — <code>task_id</code> is bound on the first message.</p>
+<h3 id="the-first-streamclient-carries-the-query">The first <code>StreamClient</code> carries the query<a class="headerlink" href="#the-first-streamclient-carries-the-query" title="Permanent link">¤</a></h3>
+<p>There is no separate "init" message. The first frame is <strong>both</strong> the registration (task_id + from_seq) <strong>and</strong> the query (data). The server delivers <code>data</code> to the SDK module as its first input.</p>
+<h3 id="sending-more-upstream-input">Sending more upstream input<a class="headerlink" href="#sending-more-upstream-input" title="Permanent link">¤</a></h3>
+<p>After the first message you may keep sending <code>StreamClient</code> frames; only <code>data</code> is read. Use this for multi-turn conversation, tool responses streamed back, etc.</p>
+<h3 id="cancelling">Cancelling<a class="headerlink" href="#cancelling" title="Permanent link">¤</a></h3>
+<p><code>SendSignal(action=CANCEL, task_id=&lt;tid&gt;)</code>. The gateway publishes on <code>signal_ch:&lt;tid&gt;</code>; the SDK module receives the signal and shuts down. Your <code>Stream</code> call ends with the usual <code>stream.end</code>.</p>
+<h3 id="cache-invalidation">Cache invalidation<a class="headerlink" href="#cache-invalidation" title="Permanent link">¤</a></h3>
+<p><code>SendSignal(action=INVALIDATE_*)</code> is server-wide. Running tasks are not affected — a dict-swap pattern preserves their references. Useful for forcing a re-fetch of setups/tools after a configuration change.</p>
+<h3 id="errors-are-not-aioaiorpcerror">Errors are NOT <code>aio.AioRpcError</code><a class="headerlink" href="#errors-are-not-aioaiorpcerror" title="Permanent link">¤</a></h3>
+<p>A misbehaving <code>Stream</code> call <strong>does not</strong> raise <code>aio.AioRpcError</code> from the call iterator on common failures — it yields a <code>stream.error</code> Struct, then <code>stream.end</code>, then closes cleanly. Treat your RPC iteration as data-only; reserve gRPC-level exception handling for transport faults (channel down, deadline exceeded).</p>
+<h3 id="recoverable-warnings">Recoverable warnings<a class="headerlink" href="#recoverable-warnings" title="Permanent link">¤</a></h3>
+<p><code>stream.error(fatal=false)</code> and <code>stream.warn</code> keep the stream open. Log them; don't tear down on every error event.</p>
+<h3 id="timing">Timing<a class="headerlink" href="#timing" title="Permanent link">¤</a></h3>
+<p>Timestamps are not in <code>StreamServer</code> (intentionally minimal). Stamp on receive if you need them. The gateway logs end-to-end latency server-side.</p>
+<hr />
+<h2 id="wire-shape-cheat-sheet">Wire-shape cheat-sheet<a class="headerlink" href="#wire-shape-cheat-sheet" title="Permanent link">¤</a></h2>
+<div class="language-text highlight"><pre><span></span><code>StartStreamRequest  := { task_id, setup_id, mission_id }
+StartStreamResponse := { accepted, task_id }
+
+StreamClient  := { from_seq, task_id, data: Struct }    // client → server
+StreamServer  := { seq, data: Struct }                  // server → client
+
+ClientSignalRequest  := { task_id, action: SignalAction }
+ClientSignalResponse := { success, task_id }
+</code></pre></div>
+<p><code>data.root.protocol</code> discriminates payload type. <code>stream.*</code> is reserved for gateway-emitted control sentinels. Module-defined protocols (your domain output) use any other string.</p>
+<hr />
+<h2 id="what-changed-from-earlier-protocol-versions">What changed from earlier protocol versions<a class="headerlink" href="#what-changed-from-earlier-protocol-versions" title="Permanent link">¤</a></h2>
+<p>For repos migrating from the previous shape:</p>
+<ul>
+<li><code>ProduceStream</code> RPC and all <code>ProduceStream*</code> messages → <strong>deleted</strong>. Producer modules write directly to Redis; no gRPC connection from module to gateway.</li>
+<li><code>ConsumeStream</code> → renamed <code>Stream</code>.</li>
+<li><code>GatewayResponse</code> envelope, <code>StreamStatus</code>, <code>StreamError</code>, <code>ServerHeartbeat</code>, <code>Checkpoint</code> → <strong>deleted</strong>. Use <code>stream.*</code> sentinels instead.</li>
+<li><code>StartStreamRequest.input</code> field → <strong>deleted</strong>. The query lives on the first <code>StreamClient.data</code>.</li>
+<li>Sentinel rename: <code>module_start_info</code> → <code>stream.start</code>; <code>end_of_stream</code> → <code>stream.end</code>.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../architecture_presentation/" class="md-footer__link md-footer__link--prev" aria-label="Previous: DigitalKin SDK v1.0.0">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                DigitalKin SDK v1.0.0
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../getting_started/" class="md-footer__link md-footer__link--next" aria-label="Next: Getting Started">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                Getting Started
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      Copyright &copy; 2025 Digitalkin
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+      
+      
+    
+    <a href="https://github.com/digitalkin-ai" target="_blank" rel="noopener" title="github.com" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+    </a>
+  
+    
+    
+    
+    
+      
+      
+    
+    <a href="https://pypi.org/project/digitalkin/" target="_blank" rel="noopener" title="pypi.org" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.8 200.5c-7.7-30.9-22.3-54.2-53.4-54.2h-40.1v47.4c0 36.8-31.2 67.8-66.8 67.8H172.7c-29.2 0-53.4 25-53.4 54.3v101.8c0 29 25.2 46 53.4 54.3 33.8 9.9 66.3 11.7 106.8 0 26.9-7.8 53.4-23.5 53.4-54.3v-40.7H226.2v-13.6h160.2c31.1 0 42.6-21.7 53.4-54.2 11.2-33.5 10.7-65.7 0-108.6M286.2 444.7a20.4 20.4 0 1 1 0-40.7 20.4 20.4 0 1 1 0 40.7M167.8 248.1h106.8c29.7 0 53.4-24.5 53.4-54.3V91.9c0-29-24.4-50.7-53.4-55.6-35.8-5.9-74.7-5.6-106.8.1-45.2 8-53.4 24.7-53.4 55.6v40.7h106.9v13.6h-147c-31.1 0-58.3 18.7-66.8 54.2-9.8 40.7-10.2 66.1 0 108.6 7.6 31.6 25.7 54.2 56.8 54.2H101v-48.8c0-35.3 30.5-66.4 66.8-66.4m-6.6-183.4a20.4 20.4 0 1 1 0 40.8 20.4 20.4 0 1 1 0-40.8"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["announce.dismiss", "content.action.edit", "content.action.view", "content.code.annotate", "content.code.copy", "content.tooltips", "navigation.footer", "navigation.instant.preview", "navigation.path", "navigation.sections", "navigation.tabs", "navigation.tabs.sticky", "navigation.top", "search.highlight", "search.suggest", "toc.follow"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "stable", "provider": "mike"}}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+        <script src="../assets/_markdown_exec_pyodide.js"></script>
+      
+    
+  </body>
+</html>

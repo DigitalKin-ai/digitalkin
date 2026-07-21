@@ -1,0 +1,15 @@
+gantt
+    title After — Platform overhead per request (p50)
+    dateFormat X
+    axisFormat %Lms
+
+    section Request path
+    gRPC parse           :b1, 0, 1
+    Gateway dispatch     :b2, 1, 1
+    Redis XADD output    :b3, 2, 1
+    Module.start         :b4, 3, 2
+    Redis XREAD          :b5, 5, 1
+    Queue → gRPC         :b6, 6, 1
+
+    section Total
+    Platform overhead    :done, 0, 7

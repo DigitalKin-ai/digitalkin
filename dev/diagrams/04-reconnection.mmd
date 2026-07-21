@@ -1,0 +1,19 @@
+sequenceDiagram
+    participant B as Module B
+    participant GW as Gateway
+    participant R as Redis
+
+    B->>GW: ConsumeStream (init: task_id, from_seq=0)
+    GW->>R: XREAD from 0-0
+    GW-->>B: seq=1
+    GW-->>B: seq=2
+    GW-->>B: seq=3
+
+    Note over B: Module B disconnects
+
+    B->>GW: ConsumeStream (init: task_id, from_seq=3)
+    GW->>R: XREAD (restore cursor)
+    GW-->>B: seq=4
+    GW-->>B: seq=5
+
+    Note over B,R: No data lost — cursor persisted in Redis

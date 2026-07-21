@@ -9,6 +9,7 @@ Modules:
 - **`__version__`** – Version information.
 - **`community`** – Community integrations for DigitalKin.
 - **`core`** – Core of Digitlakin defining the task management and sub-modules.
+- **`exceptions`** – Root exception for the DigitalKin SDK.
 - **`grpc_servers`** – This package contains the gRPC server and client implementations.
 - **`logger`** – This module sets up a logger.
 - **`mixins`** – Mixin definitions.
@@ -20,6 +21,10 @@ Modules:
 Classes:
 
 - **`ArchetypeModule`** – ArchetypeModule extends BaseModule to implement specific module types.
+- **`GrpcCommunication`** – gRPC client for module-to-module communication.
+- **`M2MAtCapacityError`** – Concurrency slot couldn't be acquired before timeout.
+- **`M2MCallTimeout`** – output_queue.get() exceeded call_timeout_s waiting for a target output.
+- **`M2MTargetUnavailable`** – The per-target circuit breaker is open; fast-fail without hitting the wire.
 - **`ModuleContext`** – ModuleContext provides a container for strategies and resources used by a module.
 - **`ModuleStatus`** – Possible module's state.
 - **`ServicesConfig`** – Service class describing the available services in a Module.
@@ -35,6 +40,7 @@ ArchetypeModule(
     setup_id: str,
     setup_version_id: str,
     request_metadata: dict[str, str] | None = None,
+    tool_cache: ToolCache | None = None,
 )
 ```
 
@@ -75,10 +81,15 @@ Parameters:
 
   (`dict[str, str] | None`, default: `None` ) – gRPC request metadata (headers) from the incoming request.
 
+- ### **`tool_cache`**
+
+  (`ToolCache | None`, default: `None` ) – Pre-resolved ToolCache (skips per-request gRPC resolution).
+
 Methods:
 
 - **`__init_subclass__`** – Ensure each subclass has its own copy of mutable class variables.
 - **`cleanup`** – Run the module.
+- **`clear_shared`** – Swap shared cache with a fresh dict.
 - **`create_config_setup_model`** – Create the setup model from the setup data.
 - **`create_input_model`** – Create the input model from the input data.
 - **`create_output_model`** – Create the output model from the output data.
@@ -88,12 +99,13 @@ Methods:
 - **`get_config_setup_format`** – Gets the JSON schema of the config setup format model.
 - **`get_cost_format`** – Get the JSON schema of the cost configuration.
 - **`get_input_format`** – Get the JSON schema of the input format model.
-- **`get_module_id`** – Get the module ID from environment variable or metadata.
+- **`get_module_id`** – Get the module ID from settings or metadata.
 - **`get_output_format`** – Get the JSON schema of the output format model.
 - **`get_secret_format`** – Get the JSON schema of the secret format model.
 - **`get_select_input_format`** – Get the JSON schema for trigger selection UI.
 - **`get_setup_format`** – Gets the JSON schema of the setup format model.
 - **`initialize`** – Initialize the module.
+- **`prepare`** – Wire callbacks, build tool cache, run initialize(), discover triggers.
 - **`register`** – Dynamically register the trigger class.
 - **`run`** – Run the module by dispatching to the appropriate trigger handler.
 - **`run_config_setup`** – Run config setup the module.
@@ -103,7 +115,7 @@ Methods:
 
 Attributes:
 
-- **`status`** (`ModuleStatus`) – Get the module status.
+- **`status`** (`ModuleStatus`) – The module status.
 
 ### status
 
@@ -111,7 +123,7 @@ Attributes:
 status: ModuleStatus
 ```
 
-Get the module status.
+The module status.
 
 Returns:
 
@@ -132,6 +144,16 @@ cleanup() -> None
 ```
 
 Run the module.
+
+### clear_shared
+
+```python
+clear_shared() -> None
+```
+
+Swap shared cache with a fresh dict.
+
+Running tasks keep their existing `context.shared` reference (old dict). New module instances get the fresh empty dict.
 
 ### create_config_setup_model
 
@@ -320,12 +342,12 @@ Raises:
 get_module_id() -> str
 ```
 
-Get the module ID from environment variable or metadata.
+Get the module ID from settings or metadata.
 
 Returns:
 
-- `str` – The module_id from DIGITALKIN_MODULE_ID env var, or metadata module_id,
-- `str` – or "unknown" if neither exists.
+- `str` – The module_id from ModuleSettings.id (env DIGITALKIN_MODULE_ID), or
+- `str` – metadata module_id, or "unknown" if neither exists.
 
 ### get_output_format
 
@@ -417,6 +439,36 @@ initialize(context: ModuleContext, setup_data: SetupModelT) -> None
 ```
 
 Initialize the module.
+
+### prepare
+
+```python
+prepare(
+    setup_data: SetupModelT,
+    callback: Callable[
+        [OutputModelT | ModuleCodeModel | DataModel[UtilityProtocol]],
+        Coroutine[Any, Any, None],
+    ],
+) -> None
+```
+
+Wire callbacks, build tool cache, run `initialize()`, discover triggers.
+
+Idempotent — second call is a no-op. Lets the dial-back orchestrator pay the `initialize()` cost off the critical path.
+
+Parameters:
+
+- #### **`setup_data`**
+
+  (`SetupModelT`) – The setup configuration for the module.
+
+- #### **`callback`**
+
+  (`Callable[[OutputModelT | ModuleCodeModel | DataModel[UtilityProtocol]], Coroutine[Any, Any, None]]`) – Output callback installed on the module context.
+
+Raises:
+
+- `Exception` – anything raised by build_tool_cache, initialize, or init_handlers propagates so the caller can convert to stream.error.
 
 ### register
 
@@ -517,19 +569,398 @@ stop() -> None
 
 Stop the module. Idempotent — second call is a no-op.
 
+## GrpcCommunication
+
+```python
+GrpcCommunication(
+    mission_id: str,
+    setup_id: str,
+    setup_version_id: str,
+    client_config: ClientConfig,
+    m2m_calls: M2MCallRegistry | None = None,
+    gateway_backend_config: ClientConfig | None = None,
+)
+```
+
+```
+              flowchart TD
+              digitalkin.GrpcCommunication[GrpcCommunication]
+              digitalkin.services.communication.communication_strategy.CommunicationStrategy[CommunicationStrategy]
+              digitalkin.services.base_strategy.BaseStrategy[BaseStrategy]
+              digitalkin.grpc_servers.utils.grpc_client_wrapper.GrpcClientWrapper[GrpcClientWrapper]
+
+                              digitalkin.services.communication.communication_strategy.CommunicationStrategy --> digitalkin.GrpcCommunication
+                                digitalkin.services.base_strategy.BaseStrategy --> digitalkin.services.communication.communication_strategy.CommunicationStrategy
+                
+
+                digitalkin.grpc_servers.utils.grpc_client_wrapper.GrpcClientWrapper --> digitalkin.GrpcCommunication
+                
+
+
+              click digitalkin.GrpcCommunication href "" "digitalkin.GrpcCommunication"
+              click digitalkin.services.communication.communication_strategy.CommunicationStrategy href "" "digitalkin.services.communication.communication_strategy.CommunicationStrategy"
+              click digitalkin.services.base_strategy.BaseStrategy href "" "digitalkin.services.base_strategy.BaseStrategy"
+              click digitalkin.grpc_servers.utils.grpc_client_wrapper.GrpcClientWrapper href "" "digitalkin.grpc_servers.utils.grpc_client_wrapper.GrpcClientWrapper"
+```
+
+gRPC client for module-to-module communication.
+
+Parameters:
+
+- ### **`mission_id`**
+
+  (`str`) – Mission identifier.
+
+- ### **`setup_id`**
+
+  (`str`) – Setup identifier.
+
+- ### **`setup_version_id`**
+
+  (`str`) – Setup version identifier.
+
+- ### **`client_config`**
+
+  (`ClientConfig`) – gRPC client config.
+
+- ### **`m2m_calls`**
+
+  (`M2MCallRegistry | None`, default: `None` ) – Optional M2MCallRegistry; falls back to the class-level slot from :meth:set_m2m_call_registry.
+
+- ### **`gateway_backend_config`**
+
+  (`ClientConfig | None`, default: `None` ) – Backend GatewayService config for AssociateTask (same host as user_profile). Required for M2M tool calls.
+
+Methods:
+
+- **`call_module`** – Invoke a remote module through its GatewayService and stream output.
+- **`close`** – Release all pooled gRPC channels.
+- **`close_all_cached_channels`** – Close all cached channels, reset cache, and clear circuit breakers.
+- **`close_all_channels`** – Release refs on all pooled gRPC channels.
+- **`close_channel`** – Release this instance's ref on the cached channel.
+- **`dial_consumer_stream`** – Open (or reuse) a pooled channel to a consumer's GatewayService.
+- **`evict_cached_channel`** – Force-close and remove a cached channel regardless of refcount.
+- **`evict_consumer_channel`** – Force a fresh channel on the next dial to address.
+- **`exec_grpc_query`** – Execute a gRPC query with circuit breaker protection and retry.
+- **`get_module_schemas`** – Get module schemas via gRPC.
+- **`release_cached_channel`** – Decrement refcount for a cache key and close channel when last ref is released.
+- **`set_m2m_call_registry`** – Register the process-singleton M2MCallRegistry for call_module.
+- **`stream_error`** – Decode a stream.error Struct from :meth:call_module.
+
+### call_module
+
+```python
+call_module(
+    module_address: str,
+    module_port: int,
+    input_data: dict | Struct,
+    setup_id: str,
+    mission_id: str,
+    callback: Callable[[Struct], Awaitable[None]] | None = None,
+    metadata: dict[str, str] | None = None,
+) -> AsyncGenerator[Struct, None]
+```
+
+Invoke a remote module through its GatewayService and stream output.
+
+Resilience belts (concurrency cap, per-target breaker, deadline, TTL, CANCEL propagation) come from :class:`GatewayM2MSettings`.
+
+Parameters:
+
+- #### **`module_address`**
+
+  (`str`) – Target module's gateway host.
+
+- #### **`module_port`**
+
+  (`int`) – Target module's gateway port.
+
+- #### **`input_data`**
+
+  (`dict | Struct`) – First input (dict or Struct).
+
+- #### **`setup_id`**
+
+  (`str`) – Setup configuration ID.
+
+- #### **`mission_id`**
+
+  (`str`) – Mission context ID.
+
+- #### **`callback`**
+
+  (`Callable[[Struct], Awaitable[None]] | None`, default: `None` ) – Optional async callback per output Struct.
+
+- #### **`metadata`**
+
+  (`dict[str, str] | None`, default: `None` ) – Optional gRPC metadata for StartStream.
+
+Yields:
+
+- `AsyncGenerator[Struct, None]` – google.protobuf.Struct per remote output.
+
+Raises:
+
+- `CancelledError` – Task cancelled.
+- `AioRpcError` – gRPC errors.
+- `RuntimeError` – No GatewayServicer wired.
+- `M2MAtCapacityError` – Concurrency semaphore timed out.
+- `M2MTargetUnavailable` – Target's breaker is open.
+- `M2MCallTimeout` – Output queue stalled past call_timeout_s.
+
+### close
+
+```python
+close() -> None
+```
+
+Release all pooled gRPC channels.
+
+### close_all_cached_channels
+
+```python
+close_all_cached_channels() -> None
+```
+
+Close all cached channels, reset cache, and clear circuit breakers.
+
+Intended for server shutdown to ensure clean resource release. Clears circuit breaker singletons to prevent unbounded growth from dynamically discovered services.
+
+### close_all_channels
+
+```python
+close_all_channels() -> None
+```
+
+Release refs on all pooled gRPC channels.
+
+### close_channel
+
+```python
+close_channel() -> None
+```
+
+Release this instance's ref on the cached channel.
+
+The underlying channel is only closed when the last ref is released. When the last ref is released, the corresponding circuit breaker singleton is also removed to prevent unbounded accumulation.
+
+### dial_consumer_stream
+
+```python
+dial_consumer_stream(
+    address: str,
+) -> tuple[GatewayServiceStub, Callable[[], Awaitable[None]]]
+```
+
+Open (or reuse) a pooled channel to a consumer's GatewayService.
+
+Parameters:
+
+- #### **`address`**
+
+  (`str`) – host:port of the consumer's GatewayService.
+
+Returns:
+
+- `tuple[GatewayServiceStub, Callable[[], Awaitable[None]]]` – (stub, release_channel) — await release_channel() when done.
+
+Raises:
+
+- `InvalidConsumerAddressError` – If address is not host:port.
+
+### evict_cached_channel
+
+```python
+evict_cached_channel(key: str) -> None
+```
+
+Force-close and remove a cached channel regardless of refcount.
+
+Guarantees a fresh connection on re-dial: a channel left cached after a peer died can be wedged mid-reconnect, so a resume must not reuse it. A missing key is a no-op.
+
+Parameters:
+
+- #### **`key`**
+
+  (`str`) – Channel cache key to evict.
+
+### evict_consumer_channel
+
+```python
+evict_consumer_channel(address: str) -> None
+```
+
+Force a fresh channel on the next dial to `address`.
+
+Removes any cached (possibly wedged) channel so a resume re-dial does not reuse a connection left broken by a peer that died. No-op if the address is malformed or no channel is cached.
+
+Parameters:
+
+- #### **`address`**
+
+  (`str`) – host:port of the consumer's GatewayService.
+
+### exec_grpc_query
+
+```python
+exec_grpc_query(
+    query_endpoint: str,
+    request: Any,
+    timeout: float | None = None,
+    metadata: tuple[tuple[str, str], ...] | None = None,
+) -> Any
+```
+
+Execute a gRPC query with circuit breaker protection and retry.
+
+The circuit breaker is per-service (keyed on `service_name`). When the circuit is OPEN, calls fail immediately with `CircuitOpenError` wrapped in `ServerError` — no network round-trip, no timeout wait.
+
+Retries on transient errors (UNAVAILABLE, INTERNAL, DEADLINE_EXCEEDED) with exponential backoff. Retry count and backoff base are configurable via DIGITALKIN_GRPC_QUERY_MAX_RETRIES and DIGITALKIN_GRPC_QUERY_BACKOFF_BASE_MS.
+
+Parameters:
+
+- #### **`query_endpoint`**
+
+  (`str`) – rpc query name (e.g., "GetSetup", "CreateSetupVersion")
+
+- #### **`request`**
+
+  (`Any`) – gRPC protobuf request object
+
+- #### **`timeout`**
+
+  (`float | None`, default: `None` ) – Per-call timeout in seconds. None applies no client-side deadline.
+
+- #### **`metadata`**
+
+  (`tuple[tuple[str, str], ...] | None`, default: `None` ) – Optional gRPC metadata pairs (e.g. an idempotency key); the same metadata is sent on every retry attempt.
+
+Returns:
+
+- `Any` – gRPC protobuf response object.
+
+Raises:
+
+- `ServerError` – gRPC error with status code and details for caller to handle.
+
+### get_module_schemas
+
+```python
+get_module_schemas(
+    module_address: str, module_port: int, *, llm_format: bool = False
+) -> dict[str, dict]
+```
+
+Get module schemas via gRPC.
+
+Parameters:
+
+- #### **`module_address`**
+
+  (`str`) – Target module address
+
+- #### **`module_port`**
+
+  (`int`) – Target module port
+
+- #### **`llm_format`**
+
+  (`bool`, default: `False` ) – Return LLM-friendly format
+
+Returns:
+
+- `dict[str, dict]` – Dictionary containing schemas: input, output, setup, secret, cost
+
+### release_cached_channel
+
+```python
+release_cached_channel(key: str) -> None
+```
+
+Decrement refcount for a cache key and close channel when last ref is released.
+
+Parameters:
+
+- #### **`key`**
+
+  (`str`) – Channel cache key to release.
+
+### set_m2m_call_registry
+
+```python
+set_m2m_call_registry(registry: M2MCallRegistry | None) -> None
+```
+
+Register the process-singleton `M2MCallRegistry` for `call_module`.
+
+### stream_error
+
+```python
+stream_error(data: Struct) -> tuple[str, str] | None
+```
+
+Decode a `stream.error` Struct from :meth:`call_module`.
+
+Parameters:
+
+- #### **`data`**
+
+  (`Struct`) – A Struct yielded by call_module.
+
+Returns:
+
+- `tuple[str, str] | None` – (code, message) if data is a stream.error, else None.
+
+## M2MAtCapacityError
+
+```
+              flowchart TD
+              digitalkin.M2MAtCapacityError[M2MAtCapacityError]
+
+              
+
+              click digitalkin.M2MAtCapacityError href "" "digitalkin.M2MAtCapacityError"
+```
+
+Concurrency slot couldn't be acquired before timeout.
+
+## M2MCallTimeout
+
+```
+              flowchart TD
+              digitalkin.M2MCallTimeout[M2MCallTimeout]
+
+              
+
+              click digitalkin.M2MCallTimeout href "" "digitalkin.M2MCallTimeout"
+```
+
+`output_queue.get()` exceeded `call_timeout_s` waiting for a target output.
+
+## M2MTargetUnavailable
+
+```
+              flowchart TD
+              digitalkin.M2MTargetUnavailable[M2MTargetUnavailable]
+
+              
+
+              click digitalkin.M2MTargetUnavailable href "" "digitalkin.M2MTargetUnavailable"
+```
+
+The per-target circuit breaker is open; fast-fail without hitting the wire.
+
 ## ModuleContext
 
 ```python
 ModuleContext(
-    agent: AgentStrategy,
     communication: CommunicationStrategy,
     cost: CostStrategy,
     filesystem: FilesystemStrategy,
     identity: IdentityStrategy,
     registry: RegistryStrategy,
-    snapshot: SnapshotStrategy,
+    secret: SecretStrategy,
     storage: StorageStrategy,
-    task_manager: TaskManagerStrategy,
     user_profile: UserProfileStrategy,
     session: dict[str, Any],
     metadata: dict[str, Any] | None = None,
@@ -537,6 +968,9 @@ ModuleContext(
     callbacks: dict[str, Any] | None = None,
     tool_cache: ToolCache | None = None,
     request_metadata: dict[str, str] | None = None,
+    borrowed: frozenset[str] | None = None,
+    shared: dict[str, Any] | None = None,
+    task_manager: TaskManagerStrategy | None = None,
 )
 ```
 
@@ -545,10 +979,6 @@ ModuleContext provides a container for strategies and resources used by a module
 This context object is designed to be passed to module components, providing them with access to shared strategies and resources. Additional attributes may be set dynamically.
 
 Parameters:
-
-- ### **`agent`**
-
-  (`AgentStrategy`) – AgentStrategy.
 
 - ### **`communication`**
 
@@ -570,21 +1000,21 @@ Parameters:
 
   (`RegistryStrategy`) – RegistryStrategy.
 
-- ### **`snapshot`**
+- ### **`secret`**
 
-  (`SnapshotStrategy`) – SnapshotStrategy.
+  (`SecretStrategy`) – SecretStrategy.
 
 - ### **`storage`**
 
   (`StorageStrategy`) – StorageStrategy.
 
-- ### **`task_manager`**
-
-  (`TaskManagerStrategy`) – TaskManagerStrategy.
-
 - ### **`user_profile`**
 
   (`UserProfileStrategy`) – UserProfileStrategy.
+
+- ### **`task_manager`**
+
+  (`TaskManagerStrategy | None`, default: `None` ) – Optional, injected by SingleJobManager (RedisTaskManager).
 
 - ### **`metadata`**
 
@@ -610,9 +1040,17 @@ Parameters:
 
   (`dict[str, str] | None`, default: `None` ) – gRPC request metadata (headers) from the incoming request.
 
+- ### **`borrowed`**
+
+  (`frozenset[str] | None`, default: `None` ) – Strategy names that are shared singletons — skip .close() on cleanup.
+
+- ### **`shared`**
+
+  (`dict[str, Any] | None`, default: `None` ) – Server-lifetime cache shared across all module instances.
+
 Methods:
 
-- **`cleanup`** – Close all service strategies and release their resources.
+- **`cleanup`** – Close owned service strategies and release their resources.
 - **`create_openai_style_tools`** – Create OpenAI-style function calling schemas for a tool module.
 - **`create_tool_functions`** – Create tool functions for all protocols in a tool setup.
 - **`get_module_schemas_by_id`** – Get module schemas by ID, discovering address/port from registry.
@@ -623,7 +1061,9 @@ Methods:
 cleanup() -> None
 ```
 
-Close all service strategies and release their resources.
+Close owned service strategies and release their resources.
+
+Borrowed strategies (shared singletons) are skipped — they are closed at server shutdown, not per-request.
 
 ### create_openai_style_tools
 
@@ -757,24 +1197,14 @@ Methods:
 
 Attributes:
 
-- **`agent`** (`type[AgentStrategy]`) – Get the agent service strategy class based on the current mode.
-- **`communication`** (`type[CommunicationStrategy]`) – Get the communication service strategy class based on the current mode.
-- **`cost`** (`type[CostStrategy]`) – Get the cost service strategy class based on the current mode.
-- **`filesystem`** (`type[FilesystemStrategy]`) – Get the filesystem service strategy class based on the current mode.
-- **`identity`** (`type[IdentityStrategy]`) – Get the identity service strategy class based on the current mode.
-- **`registry`** (`type[RegistryStrategy]`) – Get the registry service strategy class based on the current mode.
-- **`snapshot`** (`type[SnapshotStrategy]`) – Get the snapshot service strategy class based on the current mode.
-- **`storage`** (`type[StorageStrategy]`) – Get the storage service strategy class based on the current mode.
-- **`task_manager`** (`type[TaskManagerStrategy]`) – Get the task_manager service strategy class based on the current mode.
-- **`user_profile`** (`type[UserProfileStrategy]`) – Get the user_profile service strategy class based on the current mode.
-
-### agent
-
-```python
-agent: type[AgentStrategy]
-```
-
-Get the agent service strategy class based on the current mode.
+- **`communication`** (`type[CommunicationStrategy]`) – The communication service strategy class for the current mode.
+- **`cost`** (`type[CostStrategy]`) – The cost service strategy class for the current mode.
+- **`filesystem`** (`type[FilesystemStrategy]`) – The filesystem service strategy class for the current mode.
+- **`identity`** (`type[IdentityStrategy]`) – The identity service strategy class for the current mode.
+- **`registry`** (`type[RegistryStrategy]`) – The registry service strategy class for the current mode.
+- **`secret`** (`type[SecretStrategy]`) – The secret service strategy class for the current mode.
+- **`storage`** (`type[StorageStrategy]`) – The storage service strategy class for the current mode.
+- **`user_profile`** (`type[UserProfileStrategy]`) – The user_profile service strategy class for the current mode.
 
 ### communication
 
@@ -782,7 +1212,7 @@ Get the agent service strategy class based on the current mode.
 communication: type[CommunicationStrategy]
 ```
 
-Get the communication service strategy class based on the current mode.
+The communication service strategy class for the current mode.
 
 ### cost
 
@@ -790,7 +1220,7 @@ Get the communication service strategy class based on the current mode.
 cost: type[CostStrategy]
 ```
 
-Get the cost service strategy class based on the current mode.
+The cost service strategy class for the current mode.
 
 ### filesystem
 
@@ -798,7 +1228,7 @@ Get the cost service strategy class based on the current mode.
 filesystem: type[FilesystemStrategy]
 ```
 
-Get the filesystem service strategy class based on the current mode.
+The filesystem service strategy class for the current mode.
 
 ### identity
 
@@ -806,7 +1236,7 @@ Get the filesystem service strategy class based on the current mode.
 identity: type[IdentityStrategy]
 ```
 
-Get the identity service strategy class based on the current mode.
+The identity service strategy class for the current mode.
 
 ### registry
 
@@ -814,15 +1244,15 @@ Get the identity service strategy class based on the current mode.
 registry: type[RegistryStrategy]
 ```
 
-Get the registry service strategy class based on the current mode.
+The registry service strategy class for the current mode.
 
-### snapshot
+### secret
 
 ```python
-snapshot: type[SnapshotStrategy]
+secret: type[SecretStrategy]
 ```
 
-Get the snapshot service strategy class based on the current mode.
+The secret service strategy class for the current mode.
 
 ### storage
 
@@ -830,15 +1260,7 @@ Get the snapshot service strategy class based on the current mode.
 storage: type[StorageStrategy]
 ```
 
-Get the storage service strategy class based on the current mode.
-
-### task_manager
-
-```python
-task_manager: type[TaskManagerStrategy]
-```
-
-Get the task_manager service strategy class based on the current mode.
+The storage service strategy class for the current mode.
 
 ### user_profile
 
@@ -846,7 +1268,7 @@ Get the task_manager service strategy class based on the current mode.
 user_profile: type[UserProfileStrategy]
 ```
 
-Get the user_profile service strategy class based on the current mode.
+The user_profile service strategy class for the current mode.
 
 ### get_strategy_config
 
@@ -935,6 +1357,7 @@ ToolModule(
     setup_id: str,
     setup_version_id: str,
     request_metadata: dict[str, str] | None = None,
+    tool_cache: ToolCache | None = None,
 )
 ```
 
@@ -975,10 +1398,15 @@ Parameters:
 
   (`dict[str, str] | None`, default: `None` ) – gRPC request metadata (headers) from the incoming request.
 
+- ### **`tool_cache`**
+
+  (`ToolCache | None`, default: `None` ) – Pre-resolved ToolCache (skips per-request gRPC resolution).
+
 Methods:
 
 - **`__init_subclass__`** – Ensure each subclass has its own copy of mutable class variables.
 - **`cleanup`** – Run the module.
+- **`clear_shared`** – Swap shared cache with a fresh dict.
 - **`create_config_setup_model`** – Create the setup model from the setup data.
 - **`create_input_model`** – Create the input model from the input data.
 - **`create_output_model`** – Create the output model from the output data.
@@ -988,12 +1416,13 @@ Methods:
 - **`get_config_setup_format`** – Gets the JSON schema of the config setup format model.
 - **`get_cost_format`** – Get the JSON schema of the cost configuration.
 - **`get_input_format`** – Get the JSON schema of the input format model.
-- **`get_module_id`** – Get the module ID from environment variable or metadata.
+- **`get_module_id`** – Get the module ID from settings or metadata.
 - **`get_output_format`** – Get the JSON schema of the output format model.
 - **`get_secret_format`** – Get the JSON schema of the secret format model.
 - **`get_select_input_format`** – Get the JSON schema for trigger selection UI.
 - **`get_setup_format`** – Gets the JSON schema of the setup format model.
 - **`initialize`** – Initialize the module.
+- **`prepare`** – Wire callbacks, build tool cache, run initialize(), discover triggers.
 - **`register`** – Dynamically register the trigger class.
 - **`run`** – Run the module by dispatching to the appropriate trigger handler.
 - **`run_config_setup`** – Run config setup the module.
@@ -1003,7 +1432,7 @@ Methods:
 
 Attributes:
 
-- **`status`** (`ModuleStatus`) – Get the module status.
+- **`status`** (`ModuleStatus`) – The module status.
 
 ### status
 
@@ -1011,7 +1440,7 @@ Attributes:
 status: ModuleStatus
 ```
 
-Get the module status.
+The module status.
 
 Returns:
 
@@ -1032,6 +1461,16 @@ cleanup() -> None
 ```
 
 Run the module.
+
+### clear_shared
+
+```python
+clear_shared() -> None
+```
+
+Swap shared cache with a fresh dict.
+
+Running tasks keep their existing `context.shared` reference (old dict). New module instances get the fresh empty dict.
 
 ### create_config_setup_model
 
@@ -1220,12 +1659,12 @@ Raises:
 get_module_id() -> str
 ```
 
-Get the module ID from environment variable or metadata.
+Get the module ID from settings or metadata.
 
 Returns:
 
-- `str` – The module_id from DIGITALKIN_MODULE_ID env var, or metadata module_id,
-- `str` – or "unknown" if neither exists.
+- `str` – The module_id from ModuleSettings.id (env DIGITALKIN_MODULE_ID), or
+- `str` – metadata module_id, or "unknown" if neither exists.
 
 ### get_output_format
 
@@ -1317,6 +1756,36 @@ initialize(context: ModuleContext, setup_data: SetupModelT) -> None
 ```
 
 Initialize the module.
+
+### prepare
+
+```python
+prepare(
+    setup_data: SetupModelT,
+    callback: Callable[
+        [OutputModelT | ModuleCodeModel | DataModel[UtilityProtocol]],
+        Coroutine[Any, Any, None],
+    ],
+) -> None
+```
+
+Wire callbacks, build tool cache, run `initialize()`, discover triggers.
+
+Idempotent — second call is a no-op. Lets the dial-back orchestrator pay the `initialize()` cost off the critical path.
+
+Parameters:
+
+- #### **`setup_data`**
+
+  (`SetupModelT`) – The setup configuration for the module.
+
+- #### **`callback`**
+
+  (`Callable[[OutputModelT | ModuleCodeModel | DataModel[UtilityProtocol]], Coroutine[Any, Any, None]]`) – Output callback installed on the module context.
+
+Raises:
+
+- `Exception` – anything raised by build_tool_cache, initialize, or init_handlers propagates so the caller can convert to stream.error.
 
 ### register
 
@@ -1467,6 +1936,7 @@ Each handler declares
 
 Methods:
 
+- **`__init_subclass__`** – Build dispatch table from unbound method references.
 - **`add_cost`** – Add a cost entry using the cost strategy.
 - **`append_files_history`** – Append files to file history.
 - **`clear_fh_mission_cache`** – Remove a mission's entries from in-memory caches after flush.
@@ -1484,6 +1954,14 @@ Methods:
 - **`store_storage`** – Store data using the storage strategy.
 - **`update_storage`** – Update existing data in storage.
 - **`upsert_storage`** – Insert or update data in storage atomically.
+
+### __init_subclass__
+
+```python
+__init_subclass__(**kwargs: Any) -> None
+```
+
+Build dispatch table from unbound method references.
 
 ### add_cost
 
@@ -1521,7 +1999,7 @@ append_files_history(context: ModuleContext, files: list[FileModel]) -> None
 
 Append files to file history.
 
-Files are added to the in-memory cache immediately. A storage write is deferred until the batch threshold is reached (default 10, env: DIGITALKIN_FILE_HISTORY_FLUSH_THRESHOLD) or flush_file_history().
+Files are added to the in-memory cache immediately. A storage write is deferred until the batch threshold is reached (default 10, env: DIGITALKIN_MODULE_FILE_HISTORY_FLUSH_THRESHOLD) or flush_file_history().
 
 Parameters:
 
@@ -1955,33 +2433,29 @@ Agno framework integration for DigitalKin.
 Adapters, converters, and HITL helpers for building DigitalKin modules on top of the Agno agent framework. Exports:
 
 - :class:`AgnoStreamAdapter` — Agno streaming events → DigitalKin events.
-- :func:`agui_tool_to_external_function` / :func:`make_tools_factory` — register AG-UI client-side (frontend) tools as Agno external Functions.
-- :class:`AgnoHitlRunner`, :class:`PausedRunStore`, :class:`PauseInfo`, :class:`PausedRunRecord`, :data:`HITL_STORAGE_CONFIG`, :func:`emit_awaiting_tool_result` — human-in-the-loop (HITL) runner that persists a paused Agno run via the module's :class:`~digitalkin.services.storage.StorageStrategy` and resumes it when the front replies with a `ToolMessage`.
+- :class:`AguiTools` — register AG-UI client-side (frontend) tools as Agno external Functions.
+- :class:`AgnoHitlRunner`, :class:`PausedRunStore`, :class:`PauseInfo`, :class:`PausedRunRecord`, :data:`HITL_STORAGE_CONFIG`, :class:`HitlEvents` — human-in-the-loop (HITL) runner that persists a paused Agno run via the module's :class:`~digitalkin.services.storage.StorageStrategy` and resumes it when the front replies with a `ToolMessage`.
 
 Modules:
 
-- **`agno_adapter`** – Adapter to convert Agno events to DigitalKin framework-agnostic events.
+- **`agno_adapter`** – Convert Agno streaming events into framework-agnostic DigitalKin events.
 - **`agui_tools`** – AG-UI frontend tools → Agno external Functions.
-- **`hitl`** – Human-in-the-loop (HITL) runner for Agno agents with AG-UI frontend tools.
+- **`hitl`** – HITL runner for Agno agents with AG-UI frontend tools.
+- **`models`** – Models for the Agno community integration.
 
 Classes:
 
-- **`AgnoHitlRunner`** – High-level runner for an Agno agent with AG-UI frontend-tool support.
-- **`AgnoStreamAdapter`** – Stateful converter: Agno streaming events -> DigitalKin events.
+- **`AgnoHitlRunner`** – Runs an Agno agent and persists/resumes paused runs on external tools.
+- **`AgnoStreamAdapter`** – Stateful Agno→DigitalKin event converter.
+- **`AguiTools`** – Convert AG-UI frontend tool declarations into Agno external Functions.
+- **`HitlEvents`** – AG-UI message conversion and event emission for the HITL flow.
 - **`PauseInfo`** – Summary of a paused Agno run.
-- **`PausedRunRecord`** – Persistent snapshot of an Agno run paused on external tool execution.
-- **`PausedRunStore`** – Thin wrapper around :class:StorageStrategy for the paused_runs collection.
-
-Functions:
-
-- **`agui_tool_to_external_function`** – Wrap an AG-UI tool definition as an Agno external Function.
-- **`emit_awaiting_tool_result`** – Emit an AG-UI RunFinished with status="awaiting_tool_result".
-- **`emit_messages_snapshot`** – Emit an AG-UI MessagesSnapshot event.
-- **`make_tools_factory`** – Build an Agno tools factory that merges base tools with per-run AG-UI tools.
+- **`PausedRunRecord`** – Snapshot of an Agno run paused on external tool execution.
+- **`PausedRunStore`** – Storage wrapper for the paused_runs collection.
 
 Attributes:
 
-- **`HITL_STORAGE_CONFIG`** (`dict[str, type[BaseModel]]`) – Drop-in storage config fragment — merge into your module's services_config_params.
+- **`HITL_STORAGE_CONFIG`** (`dict[str, type[BaseModel]]`) – Storage config fragment for the paused_runs collection.
 
 #### HITL_STORAGE_CONFIG
 
@@ -1991,18 +2465,7 @@ HITL_STORAGE_CONFIG: dict[str, type[BaseModel]] = {
 }
 ```
 
-Drop-in storage config fragment — merge into your module's `services_config_params`.
-
-Example::
-
-```text
-services_config_params = {
-    "storage": {
-        "config": {**HITL_STORAGE_CONFIG, "my_other_collection": MyModel},
-        ...
-    },
-}
-```
+Storage config fragment for the `paused_runs` collection.
 
 #### AgnoHitlRunner
 
@@ -2016,31 +2479,25 @@ AgnoHitlRunner(
 )
 ```
 
-High-level runner for an Agno agent with AG-UI frontend-tool support.
-
-Wraps a configured :class:`~agno.agent.Agent` and a :class:`PausedRunStore`, and exposes three levels of API:
-
-- :meth:`run` / :meth:`continue_paused_run` — low-level: stream one Agno run (fresh or resumed) and return a :class:`PauseInfo` if it paused on an external tool.
-- :meth:`try_resume` — inspects an AG-UI input and resumes iff a matching :class:`~ag_ui.core.types.ToolMessage` is present.
-- :meth:`handle_agui_input` — all-in-one: detects resume vs fresh message, dispatches, and (optionally) emits the awaiting `RunFinished` event on pause. Use this one from a trigger.
+Runs an Agno agent and persists/resumes paused runs on external tools.
 
 Parameters:
 
 - ##### **`agent`**
 
-  (`Agent`) – The Agno agent. It must be built with tools=make_tools_factory(base_tools) and cache_callables=False — otherwise the frontend tools injected per-run won't reach the LLM.
+  (`Agent`) – Agno agent built with tools=make_tools_factory(...) and cache_callables=False.
 
 - ##### **`storage`**
 
-  (`StorageStrategy | None`, default: `None` ) – Convenience: if provided and store is not, a :class:PausedRunStore is constructed automatically.
+  (`StorageStrategy | None`, default: `None` ) – If provided without store, a :class:PausedRunStore is built automatically.
 
 - ##### **`store`**
 
-  (`PausedRunStore | None`, default: `None` ) – Pre-built paused-run store. Wins over storage.
+  (`PausedRunStore | None`, default: `None` ) – Pre-built paused-run store; wins over storage.
 
 - ##### **`dependency_key`**
 
-  (`str`, default: `'agui_tools'` ) – The Agno dependencies key under which the runner passes the per-run AG-UI tool list. Must match the key used by :func:make_tools_factory. Defaults to "agui_tools".
+  (`str`, default: `'agui_tools'` ) – Agno dependencies key carrying the AG-UI tool list (must match :func:make_tools_factory).
 
 Raises:
 
@@ -2048,8 +2505,8 @@ Raises:
 
 Methods:
 
-- **`continue_paused_run`** – Resume a previously paused run.
-- **`handle_agui_input`** – One-shot dispatch of an AG-UI RunAgentInput.
+- **`continue_paused_run`** – Resume a previously paused run with tool results.
+- **`handle_agui_input`** – Dispatch an AG-UI RunAgentInput (resume / abandon / fresh).
 - **`run`** – Stream a fresh Agno run.
 - **`try_resume`** – Try to resume a paused run from an AG-UI input.
 
@@ -2066,37 +2523,34 @@ continue_paused_run(
 ) -> PauseInfo | None
 ```
 
-Resume a previously paused run.
-
-Loads the persisted :class:`~agno.run.agent.RunOutput`, injects the tool results into the matching :class:`~agno.run.requirement.RunRequirement` entries, and calls :meth:`~agno.agent.Agent.acontinue_run`. On normal completion the storage record is removed; on re-pause it is refreshed.
+Resume a previously paused run with tool results.
 
 Parameters:
 
 - ###### **`thread_id`**
 
-  (`str`) – AG-UI thread identifier (the storage key).
+  (`str`) – AG-UI thread identifier (storage key).
 
 - ###### **`tool_results`**
 
-  (`dict[str, str]`) – Mapping of tool_call_id → serialized result (typically a JSON string). Every pending tool must be resolved — unresolved requirements will stall the run.
+  (`dict[str, str]`) – tool_call_id → serialized result. Every pending tool must be resolved.
 
 - ###### **`send`**
 
-  (`Callable[[BaseAgentRunEvent], Coroutine[Any, Any, None]]`) – Digitalkin-event callback (same contract as :meth:run).
+  (`Callable[[BaseAgentRunEvent], Coroutine[Any, Any, None]]`) – Digitalkin-event callback.
 
 - ###### **`run_id`**
 
-  (`str | None`, default: `None` ) – AG-UI run identifier for this resume turn. Used to emit a synthetic RUN_STARTED before streaming — Agno emits RunContinued (not RunStarted) on resume.
+  (`str | None`, default: `None` ) – AG-UI run id for this resume turn.
 
 - ###### **`agui_tools`**
 
-  (`list[Tool] | None`, default: `None` ) – Frontend tool definitions for the resumed run. The AG-UI client should re-send the same list it provided at the original turn so tool schemas stay registered.
+  (`list[Tool] | None`, default: `None` ) – Frontend tool definitions (re-send the original list).
 
 Returns:
 
-- `PauseInfo | None` – None on final completion. A fresh :class:PauseInfo when
-- `PauseInfo | None` – the resumed run paused again (cascading frontend tools). If
-- `PauseInfo | None` – no paused record exists for thread_id, returns None.
+- `PauseInfo | None` – None on completion or missing record; a new
+- `PauseInfo | None` – class:PauseInfo on re-pause.
 
 ##### handle_agui_input
 
@@ -2111,43 +2565,36 @@ handle_agui_input(
 ) -> PauseInfo | None
 ```
 
-One-shot dispatch of an AG-UI `RunAgentInput`.
+Dispatch an AG-UI `RunAgentInput` (resume / abandon / fresh).
 
-Handles the three cases in order:
-
-1. Resume a paused run if the input carries a matching `ToolMessage` (see :meth:`try_resume`).
-1. Drop a stale paused record if the input is a new `UserMessage` while a tool was pending (HITL abandon).
-1. Fresh run on the last `UserMessage` in `input_data.messages` (or on the explicit `message` argument).
-
-When a run pauses (fresh or resumed) and `context` is provided, this method also emits the AG-UI `RunFinished` with `status="awaiting_tool_result"` via :func:`emit_awaiting_tool_result`. Pass `context=None` if you want to emit it yourself.
+When a run pauses and `context` is provided, the awaiting `RunFinished` event is emitted automatically.
 
 Parameters:
 
 - ###### **`input_data`**
 
-  (`Any`) – Any object with thread_id, messages, and tools attributes (typically an AgUiStreamInput).
+  (`Any`) – Object exposing thread_id, messages, tools.
 
 - ###### **`send`**
 
-  (`Callable[[BaseAgentRunEvent], Coroutine[Any, Any, None]]`) – Digitalkin-event callback (e.g. wrapping self.send_message(context, event) in a trigger).
+  (`Callable[[BaseAgentRunEvent], Coroutine[Any, Any, None]]`) – Digitalkin-event callback.
 
 - ###### **`context`**
 
-  (`ModuleContext | None`, default: `None` ) – If provided, the awaiting RunFinished is emitted automatically on pause.
+  (`ModuleContext | None`, default: `None` ) – If provided, emit the awaiting RunFinished on pause.
 
 - ###### **`message`**
 
-  (`str | None`, default: `None` ) – Override the user prompt extraction. Normally left as None — the runner picks the last UserMessage content from input_data.messages.
+  (`str | None`, default: `None` ) – Override the user prompt (default: last UserMessage).
 
 - ###### **`images`**
 
-  (`list[Any] | None`, default: `None` ) – Optional multimodal inputs forwarded to Agno.
+  (`list[Any] | None`, default: `None` ) – Optional multimodal inputs.
 
 Returns:
 
-- `PauseInfo | None` – None on normal completion (or when no actionable input
-- `PauseInfo | None` – was found). A :class:PauseInfo on pause (already emitted to
-- `PauseInfo | None` – the front if context was provided).
+- `PauseInfo | None` – None on completion or no actionable input; a :class:PauseInfo
+- `PauseInfo | None` – on pause.
 
 ##### run
 
@@ -2168,31 +2615,27 @@ Parameters:
 
 - ###### **`message`**
 
-  (`str`) – User prompt to send to the agent.
+  (`str`) – User prompt.
 
 - ###### **`send`**
 
-  (`Callable[[BaseAgentRunEvent], Coroutine[Any, Any, None]]`) – Async callback invoked for each digitalkin event produced by :class:AgnoStreamAdapter. Typically maps through :meth:AgUiMixin.send_message.
+  (`Callable[[BaseAgentRunEvent], Coroutine[Any, Any, None]]`) – Async callback for each digitalkin event.
 
 - ###### **`thread_id`**
 
-  (`str`) – AG-UI thread identifier (used as the paused-run storage key if the run pauses).
+  (`str`) – AG-UI thread identifier (storage key on pause).
 
 - ###### **`agui_tools`**
 
-  (`list[Tool] | None`, default: `None` ) – Frontend tools declared by the AG-UI client for this run. Merged with the agent's base tools through the factory; None or empty is equivalent to "no frontend tools this turn".
+  (`list[Tool] | None`, default: `None` ) – Frontend tools declared by the AG-UI client.
 
 - ###### **`images`**
 
-  (`list[Any] | None`, default: `None` ) – Optional multimodal inputs forwarded to Agno.
+  (`list[Any] | None`, default: `None` ) – Optional multimodal inputs.
 
 Returns:
 
-- `PauseInfo | None` – None on normal completion. A :class:PauseInfo if the run
-- `PauseInfo | None` – paused on one or more external tool calls — the caller is
-- `PauseInfo | None` – responsible for emitting the awaiting RunFinished (use
-- `PauseInfo | None` – func:emit_awaiting_tool_result or let
-- `PauseInfo | None` – meth:handle_agui_input do it).
+- `PauseInfo | None` – None on completion; a :class:PauseInfo if paused.
 
 ##### try_resume
 
@@ -2204,19 +2647,10 @@ try_resume(
 
 Try to resume a paused run from an AG-UI input.
 
-The `input_data` only needs to duck-type `thread_id`, `messages`, and `tools` (typically an `AgUiStreamInput`). This method:
-
-1. Loads the paused record for `input_data.thread_id`. Returns `(False, None)` if there is none.
-1. Looks for `ToolMessage` entries in `input_data.messages` whose `tool_call_id` matches a pending one.
-1. If any match → dispatches :meth:`continue_paused_run` and returns `(True, pause_info_or_none)`.
-1. If no match but the last message is a fresh `UserMessage`, drops the stale record (HITL abandon) and returns `(False, None)`.
-
 Returns:
 
-- `bool` – (resumed, pause_info):
-- `PauseInfo | None` – (False, None): no resume, caller should run the fresh-message path.
-- `tuple[bool, PauseInfo | None]` – (True, None): resume ran to normal completion.
-- `tuple[bool, PauseInfo | None]` – (True, PauseInfo): resume paused again (cascading tools).
+- `bool` – (False, None) if no resume should happen, (True, None)
+- `PauseInfo | None` – on completion, or (True, PauseInfo) on re-pause.
 
 #### AgnoStreamAdapter
 
@@ -2224,20 +2658,9 @@ Returns:
 AgnoStreamAdapter()
 ```
 
-Stateful converter: Agno streaming events -> DigitalKin events.
+Stateful Agno→DigitalKin event converter.
 
-Tracks reasoning and content state so that events arriving on `RunEvent.run_content` are automatically wrapped in proper lifecycle events (TextMessageStarted/Completed, ReasoningStarted/Completed).
-
-Usage::
-
-```text
-adapter = AgnoStreamAdapter()
-async for raw_event in agent.arun(..., stream=True, stream_events=True):
-    for event in adapter.to_digitalkin_events(raw_event):
-        await send(event)
-for event in adapter.flush():
-    await send(event)
-```
+Auto-wraps `run_content` deltas in TextMessage/Reasoning lifecycle events and tracks HITL pause state.
 
 Methods:
 
@@ -2302,21 +2725,161 @@ Parameters:
 
 Returns:
 
-- `list[BaseAgentRunEvent]` – List of corresponding DigitalKin events (may be empty).
+- `list[BaseAgentRunEvent]` – List of DigitalKin events (may be empty).
 
 Raises:
 
 - `ImportError` – If the optional 'agno' dependency is not installed.
 
-#### PauseInfo
+#### AguiTools
+
+Convert AG-UI frontend tool declarations into Agno external Functions.
+
+Methods:
+
+- **`agui_tool_to_external_function`** – Wrap an AG-UI tool definition as an Agno external Function.
+- **`make_tools_factory`** – Build an Agno tools factory merging base tools with per-run AG-UI tools.
+
+##### agui_tool_to_external_function
 
 ```python
-PauseInfo(
+agui_tool_to_external_function(tool: Tool) -> Function
+```
+
+Wrap an AG-UI tool definition as an Agno external `Function`.
+
+The resulting :class:`Function` carries the AG-UI schema as-is and is marked `external_execution=True` so Agno emits the tool-call events but skips the entrypoint and pauses the run when the LLM invokes it.
+
+Parameters:
+
+- ###### **`tool`**
+
+  (`Tool`) – An :class:ag_ui.core.types.Tool from RunAgentInput.tools.
+
+Returns:
+
+- **`An`** ( `Function` ) – class:agno.tools.function.Function ready to plug into an agent.
+
+##### make_tools_factory
+
+```python
+make_tools_factory(
+    base_tools: list[Any], dependency_key: str = "agui_tools"
+) -> Callable[[RunContext], list[Any]]
+```
+
+Build an Agno `tools` factory merging base tools with per-run AG-UI tools.
+
+The returned callable is the value passed to `Agent(tools=...)`. On every run Agno resolves it with the current `RunContext`; the factory reads `run_context.dependencies[dependency_key]` (the per-run AG-UI tool list), converts them to external Functions, and concatenates them with `base_tools`.
+
+Parameters:
+
+- ###### **`base_tools`**
+
+  (`list[Any]`) – Toolkits / Functions always available, passed through.
+
+- ###### **`dependency_key`**
+
+  (`str`, default: `'agui_tools'` ) – Key in run_context.dependencies for the per-run AG-UI tool list. Defaults to "agui_tools".
+
+Returns:
+
+- `Callable[[RunContext], list[Any]]` – A callable for Agent(tools=...). Set cache_callables=False
+- `Callable[[RunContext], list[Any]]` – so it is re-invoked every run.
+
+#### HitlEvents
+
+AG-UI message conversion and event emission for the HITL flow.
+
+Methods:
+
+- **`agno_messages_to_agui`** – Convert Agno messages into AG-UI messages.
+- **`emit_awaiting_tool_result`** – Emit an AG-UI RunFinished with status="awaiting_tool_result".
+- **`emit_messages_snapshot`** – Emit an AG-UI MessagesSnapshot event.
+
+##### agno_messages_to_agui
+
+```python
+agno_messages_to_agui(agno_messages: list[Any]) -> list[Message]
+```
+
+Convert Agno messages into AG-UI messages.
+
+Drops system/developer/reasoning; reshapes assistant `tool_calls` into AG-UI :class:`~ag_ui.core.types.ToolCall` objects.
+
+Parameters:
+
+- ###### **`agno_messages`**
+
+  (`list[Any]`) – Value of RunOutput.messages at pause time.
+
+Returns:
+
+- `list[Message]` – AG-UI :class:~ag_ui.core.types.Message instances.
+
+##### emit_awaiting_tool_result
+
+```python
+emit_awaiting_tool_result(
+    context: ModuleContext,
+    *,
     thread_id: str,
     run_id: str,
     pending_tool_call_ids: list[str],
-    new_messages: list[Message] = list(),
-)
+) -> None
+```
+
+Emit an AG-UI `RunFinished` with `status="awaiting_tool_result"`.
+
+This is the protocol signal telling the front "the run paused on a client-side tool; execute it and reply with a `ToolMessage`". It goes out via `context.callbacks.send_message` (bypassing the standard :class:`~digitalkin.mixins.agui_mixin.AgUiMixin` event mapping, which has no notion of an "awaiting" status).
+
+Parameters:
+
+- ###### **`context`**
+
+  (`ModuleContext`) – Current module context.
+
+- ###### **`thread_id`**
+
+  (`str`) – AG-UI thread identifier.
+
+- ###### **`run_id`**
+
+  (`str`) – Run identifier to echo back in the finished event.
+
+- ###### **`pending_tool_call_ids`**
+
+  (`list[str]`) – The tool_call_id values the front must execute and resolve — echoed in result.pending_tool_call_ids so the front can match them.
+
+##### emit_messages_snapshot
+
+```python
+emit_messages_snapshot(context: ModuleContext, messages: list[Message]) -> None
+```
+
+Emit an AG-UI `MessagesSnapshot` event.
+
+Typically called just before :func:`emit_awaiting_tool_result` on a paused run so the front has an authoritative view of the conversation (including the assistant message carrying the frontend `tool_calls`, which cannot be reconstructed from the streamed tool-call events alone).
+
+Parameters:
+
+- ###### **`context`**
+
+  (`ModuleContext`) – Current module context.
+
+- ###### **`messages`**
+
+  (`list[Message]`) – List of AG-UI messages, typically produced by :func:agno_messages_to_agui from RunOutput.messages.
+
+#### PauseInfo
+
+```
+              flowchart TD
+              digitalkin.community.agno.PauseInfo[PauseInfo]
+
+              
+
+              click digitalkin.community.agno.PauseInfo href "" "digitalkin.community.agno.PauseInfo"
 ```
 
 Summary of a paused Agno run.
@@ -2336,9 +2899,7 @@ Returned by :meth:`AgnoHitlRunner.run` and related methods whenever the run paus
               click digitalkin.community.agno.PausedRunRecord href "" "digitalkin.community.agno.PausedRunRecord"
 ```
 
-Persistent snapshot of an Agno run paused on external tool execution.
-
-Stored in the `paused_runs` collection keyed by `thread_id`. The `payload` field holds `RunOutput.to_dict()` verbatim so :meth:`agno.run.agent.RunOutput.from_dict` can round-trip the run on any replica when the front replies with the tool result(s).
+Snapshot of an Agno run paused on external tool execution.
 
 #### PausedRunStore
 
@@ -2346,20 +2907,18 @@ Stored in the `paused_runs` collection keyed by `thread_id`. The `payload` field
 PausedRunStore(storage: StorageStrategy)
 ```
 
-Thin wrapper around :class:`StorageStrategy` for the `paused_runs` collection.
-
-Owns serialization of :class:`~agno.run.agent.RunOutput` and keying by `thread_id`. Instances are cheap — create one per trigger handler.
+Storage wrapper for the `paused_runs` collection.
 
 Parameters:
 
 - ##### **`storage`**
 
-  (`StorageStrategy`) – The module's storage strategy. The collection paused_runs must be registered with :class:PausedRunRecord — use :data:HITL_STORAGE_CONFIG.
+  (`StorageStrategy`) – The module's storage strategy. The paused_runs collection must be registered with :class:PausedRunRecord (see :data:HITL_STORAGE_CONFIG).
 
 Methods:
 
 - **`delete`** – Remove the paused run record for a thread.
-- **`load`** – Fetch the paused run record for a thread.
+- **`load`** – Fetch the paused run record for a thread, or None.
 - **`save`** – Serialize and store a paused RunOutput.
 
 ##### delete
@@ -2376,7 +2935,7 @@ Remove the paused run record for a thread.
 load(thread_id: str) -> PausedRunRecord | None
 ```
 
-Fetch the paused run record for a thread.
+Fetch the paused run record for a thread, or `None`.
 
 Parameters:
 
@@ -2386,7 +2945,7 @@ Parameters:
 
 Returns:
 
-- **`The`** ( `PausedRunRecord | None` ) – class:PausedRunRecord if one exists, otherwise None.
+- **`The`** ( `PausedRunRecord | None` ) – class:PausedRunRecord if one exists, else None.
 
 ##### save
 
@@ -2400,7 +2959,7 @@ Parameters:
 
 - ###### **`run_output`**
 
-  (`RunOutput`) – The paused Agno run (is_paused=True with populated requirements).
+  (`RunOutput`) – The paused Agno run (is_paused=True).
 
 - ###### **`thread_id`**
 
@@ -2410,120 +2969,13 @@ Returns:
 
 - **`A`** ( `PauseInfo` ) – class:PauseInfo describing what was persisted.
 
-#### agui_tool_to_external_function
-
-```python
-agui_tool_to_external_function(tool: Tool) -> Function
-```
-
-Wrap an AG-UI tool definition as an Agno external `Function`.
-
-The resulting :class:`Function` carries the AG-UI schema as-is (Agno accepts raw JSON Schema via `parameters`) and is marked with `external_execution=True` so Agno emits the tool-call events but skips the entrypoint and pauses the run when the LLM invokes it.
-
-Parameters:
-
-- ##### **`tool`**
-
-  (`Tool`) – An :class:ag_ui.core.types.Tool from RunAgentInput.tools.
-
-Returns:
-
-- **`An`** ( `Function` ) – class:agno.tools.function.Function ready to be plugged into
-- `Function` – an Agno agent's tool list.
-
-#### emit_awaiting_tool_result
-
-```python
-emit_awaiting_tool_result(
-    context: ModuleContext,
-    *,
-    thread_id: str,
-    run_id: str,
-    pending_tool_call_ids: list[str],
-) -> None
-```
-
-Emit an AG-UI `RunFinished` with `status="awaiting_tool_result"`.
-
-This is the protocol signal telling the front "the run paused on a client-side tool; execute it and reply with a `ToolMessage`". It goes out via `context.callbacks.send_message` (bypassing the standard :class:`~digitalkin.mixins.agui_mixin.AgUiMixin` event mapping, which has no notion of an "awaiting" status).
-
-Parameters:
-
-- ##### **`context`**
-
-  (`ModuleContext`) – Current module context.
-
-- ##### **`thread_id`**
-
-  (`str`) – AG-UI thread identifier.
-
-- ##### **`run_id`**
-
-  (`str`) – Run identifier to echo back in the finished event.
-
-- ##### **`pending_tool_call_ids`**
-
-  (`list[str]`) – The tool_call_id values the front must execute and resolve — echoed in result.pending_tool_call_ids so the front can match them.
-
-#### emit_messages_snapshot
-
-```python
-emit_messages_snapshot(context: ModuleContext, messages: list[Message]) -> None
-```
-
-Emit an AG-UI `MessagesSnapshot` event.
-
-Typically called just before :func:`emit_awaiting_tool_result` on a paused run so the front has an authoritative view of the conversation (including the assistant message carrying the frontend `tool_calls`, which cannot be reconstructed from the streamed tool-call events alone).
-
-Parameters:
-
-- ##### **`context`**
-
-  (`ModuleContext`) – Current module context.
-
-- ##### **`messages`**
-
-  (`list[Message]`) – List of AG-UI messages, typically produced by :func:\_agno_messages_to_agui from RunOutput.messages.
-
-#### make_tools_factory
-
-```python
-make_tools_factory(
-    base_tools: list[Any], dependency_key: str = _DEFAULT_DEPENDENCY_KEY
-) -> Callable[[RunContext], list[Any]]
-```
-
-Build an Agno `tools` factory that merges base tools with per-run AG-UI tools.
-
-The returned callable is the value you pass to `Agent(tools=...)`. On every run, Agno resolves the factory with the current :class:`~agno.run.base.RunContext` (see :func:`agno.utils.callables.aresolve_callable_tools`). The factory reads `run_context.dependencies[dependency_key]` — the list of :class:`~ag_ui.core.types.Tool` you passed via `agent.arun(dependencies={dependency_key: [...]})` — converts them to external :class:`Function` objects, and concatenates them with the `base_tools`.
-
-Parameters:
-
-- ##### **`base_tools`**
-
-  (`list[Any]`) – Toolkits / Functions always available to the agent (e.g. AsyncDuckDuckGoTools()). Passed through unchanged.
-
-- ##### **`dependency_key`**
-
-  (`str`, default: `_DEFAULT_DEPENDENCY_KEY` ) – The key in run_context.dependencies under which the caller places the per-run AG-UI tool list. Defaults to "agui_tools".
-
-Returns:
-
-- `Callable[[RunContext], list[Any]]` – A callable suitable for :class:agno.agent.Agent's tools=
-- `Callable[[RunContext], list[Any]]` – parameter. Set cache_callables=False on the Agent so this
-- `Callable[[RunContext], list[Any]]` – factory is re-invoked on every run.
-
 #### agno_adapter
 
-Adapter to convert Agno events to DigitalKin framework-agnostic events.
-
-This adapter bridges Agno-specific events to the DigitalKin event model, allowing the core DigitalKin SDK to remain independent of Agno.
-
-The adapter owns ALL state management: tracking reasoning/content lifecycle, generating message_id and reasoning_id on each phase start, and emitting proper start/completed events for text message and reasoning sequences.
+Convert Agno streaming events into framework-agnostic DigitalKin events.
 
 Classes:
 
-- **`AgnoStreamAdapter`** – Stateful converter: Agno streaming events -> DigitalKin events.
+- **`AgnoStreamAdapter`** – Stateful Agno→DigitalKin event converter.
 
 ##### AgnoStreamAdapter
 
@@ -2531,20 +2983,9 @@ Classes:
 AgnoStreamAdapter()
 ```
 
-Stateful converter: Agno streaming events -> DigitalKin events.
+Stateful Agno→DigitalKin event converter.
 
-Tracks reasoning and content state so that events arriving on `RunEvent.run_content` are automatically wrapped in proper lifecycle events (TextMessageStarted/Completed, ReasoningStarted/Completed).
-
-Usage::
-
-```text
-adapter = AgnoStreamAdapter()
-async for raw_event in agent.arun(..., stream=True, stream_events=True):
-    for event in adapter.to_digitalkin_events(raw_event):
-        await send(event)
-for event in adapter.flush():
-    await send(event)
-```
+Auto-wraps `run_content` deltas in TextMessage/Reasoning lifecycle events and tracks HITL pause state.
 
 Methods:
 
@@ -2609,7 +3050,7 @@ Parameters:
 
 Returns:
 
-- `list[BaseAgentRunEvent]` – List of corresponding DigitalKin events (may be empty).
+- `list[BaseAgentRunEvent]` – List of DigitalKin events (may be empty).
 
 Raises:
 
@@ -2619,39 +3060,24 @@ Raises:
 
 AG-UI frontend tools → Agno external Functions.
 
-The AG-UI protocol lets the client declare its own tools in `RunAgentInput.tools`. Those tools are meant to be executed on the frontend (a UI widget, a browser-local API call, a user prompt, …) rather than by the agent process. This module provides the glue to expose them to an Agno :class:`~agno.agent.Agent` as regular :class:`~agno.tools.function.Function` objects marked with `external_execution=True`: when the LLM "calls" one, Agno pauses the run (via :class:`~agno.run.agent.RunPausedEvent`) instead of executing an entrypoint — letting the caller stream the tool-call events to the front and resume later via :meth:`~agno.agent.Agent.acontinue_run`.
+The AG-UI protocol lets the client declare its own tools in `RunAgentInput.tools`, meant to be executed on the frontend rather than by the agent process. :class:`AguiTools` exposes them to an Agno agent as :class:`~agno.tools.function.Function` objects marked `external_execution=True`: when the LLM "calls" one, Agno pauses the run instead of executing an entrypoint, letting the caller stream the tool-call events to the front and resume later.
 
-Usage::
+See `examples/` and the :class:`~digitalkin.community.agno.AgnoHitlRunner` docstring for end-to-end usage.
 
-```text
-from digitalkin.community.agno import make_tools_factory
-from agno.agent import Agent
+Classes:
 
-agent = Agent(
-    tools=make_tools_factory([AsyncDuckDuckGoTools()]),
-    cache_callables=False,           # critical — see make_tools_factory
-    ...
-)
+- **`AguiTools`** – Convert AG-UI frontend tool declarations into Agno external Functions.
 
-async for ev in agent.arun(
-    message,
-    dependencies={"agui_tools": input_data.tools},
-    stream=True,
-    stream_events=True,
-):
-    ...
-```
+##### AguiTools
 
-Notes
+Convert AG-UI frontend tool declarations into Agno external Functions.
 
-`dependencies` is Agno's standard per-run injection bus. We use it as a transport channel to hand the frontend tools to the tools factory on every run — the tools themselves are actually registered through the `tools=factory` mechanism, not through `dependencies`. `cache_callables=False` is required so the factory is re-invoked on each run (otherwise the first resolved tool list is cached forever and subsequent requests would not see new frontend tools).
-
-Functions:
+Methods:
 
 - **`agui_tool_to_external_function`** – Wrap an AG-UI tool definition as an Agno external Function.
-- **`make_tools_factory`** – Build an Agno tools factory that merges base tools with per-run AG-UI tools.
+- **`make_tools_factory`** – Build an Agno tools factory merging base tools with per-run AG-UI tools.
 
-##### agui_tool_to_external_function
+###### agui_tool_to_external_function
 
 ```python
 agui_tool_to_external_function(tool: Tool) -> Function
@@ -2659,7 +3085,7 @@ agui_tool_to_external_function(tool: Tool) -> Function
 
 Wrap an AG-UI tool definition as an Agno external `Function`.
 
-The resulting :class:`Function` carries the AG-UI schema as-is (Agno accepts raw JSON Schema via `parameters`) and is marked with `external_execution=True` so Agno emits the tool-call events but skips the entrypoint and pauses the run when the LLM invokes it.
+The resulting :class:`Function` carries the AG-UI schema as-is and is marked `external_execution=True` so Agno emits the tool-call events but skips the entrypoint and pauses the run when the LLM invokes it.
 
 Parameters:
 
@@ -2669,107 +3095,51 @@ Parameters:
 
 Returns:
 
-- **`An`** ( `Function` ) – class:agno.tools.function.Function ready to be plugged into
-- `Function` – an Agno agent's tool list.
+- **`An`** ( `Function` ) – class:agno.tools.function.Function ready to plug into an agent.
 
-##### make_tools_factory
+###### make_tools_factory
 
 ```python
 make_tools_factory(
-    base_tools: list[Any], dependency_key: str = _DEFAULT_DEPENDENCY_KEY
+    base_tools: list[Any], dependency_key: str = "agui_tools"
 ) -> Callable[[RunContext], list[Any]]
 ```
 
-Build an Agno `tools` factory that merges base tools with per-run AG-UI tools.
+Build an Agno `tools` factory merging base tools with per-run AG-UI tools.
 
-The returned callable is the value you pass to `Agent(tools=...)`. On every run, Agno resolves the factory with the current :class:`~agno.run.base.RunContext` (see :func:`agno.utils.callables.aresolve_callable_tools`). The factory reads `run_context.dependencies[dependency_key]` — the list of :class:`~ag_ui.core.types.Tool` you passed via `agent.arun(dependencies={dependency_key: [...]})` — converts them to external :class:`Function` objects, and concatenates them with the `base_tools`.
+The returned callable is the value passed to `Agent(tools=...)`. On every run Agno resolves it with the current `RunContext`; the factory reads `run_context.dependencies[dependency_key]` (the per-run AG-UI tool list), converts them to external Functions, and concatenates them with `base_tools`.
 
 Parameters:
 
 - ###### **`base_tools`**
 
-  (`list[Any]`) – Toolkits / Functions always available to the agent (e.g. AsyncDuckDuckGoTools()). Passed through unchanged.
+  (`list[Any]`) – Toolkits / Functions always available, passed through.
 
 - ###### **`dependency_key`**
 
-  (`str`, default: `_DEFAULT_DEPENDENCY_KEY` ) – The key in run_context.dependencies under which the caller places the per-run AG-UI tool list. Defaults to "agui_tools".
+  (`str`, default: `'agui_tools'` ) – Key in run_context.dependencies for the per-run AG-UI tool list. Defaults to "agui_tools".
 
 Returns:
 
-- `Callable[[RunContext], list[Any]]` – A callable suitable for :class:agno.agent.Agent's tools=
-- `Callable[[RunContext], list[Any]]` – parameter. Set cache_callables=False on the Agent so this
-- `Callable[[RunContext], list[Any]]` – factory is re-invoked on every run.
+- `Callable[[RunContext], list[Any]]` – A callable for Agent(tools=...). Set cache_callables=False
+- `Callable[[RunContext], list[Any]]` – so it is re-invoked every run.
 
 #### hitl
 
-Human-in-the-loop (HITL) runner for Agno agents with AG-UI frontend tools.
+HITL runner for Agno agents with AG-UI frontend tools.
 
-This module provides the high-level glue to build an Agno-powered module that supports AG-UI *frontend tools* — tools declared by the AG-UI client and executed on the front rather than on the agent process. The flow is:
-
-1. The front sends `RunAgentInput` with a `tools` list.
-1. The LLM calls one of those tools.
-1. Agno emits `RunPausedEvent` (its HITL signal) and freezes the run.
-1. We persist the paused :class:`~agno.run.agent.RunOutput` via the module's :class:`~digitalkin.services.storage.StorageStrategy`, keyed by `thread_id`.
-1. We emit an AG-UI `RunFinished` with `result={"status": "awaiting_tool_result", "pending_tool_call_ids": [...]}` so the front knows to execute the tool and reply.
-1. On the next `RunAgentInput` carrying a matching `ToolMessage`, we load the paused run, inject the result into the corresponding :class:`~agno.run.requirement.RunRequirement`, and resume via :meth:`~agno.agent.Agent.acontinue_run`.
-
-The design keeps the process stateless (every replica can resume any thread) because all the state lives in the storage service.
-
-Typical usage inside a module trigger::
-
-```text
-from digitalkin.community.agno import (
-    AgnoHitlRunner,
-    HITL_STORAGE_CONFIG,
-    make_tools_factory,
-)
-
-# In your Module class — register the storage schema
-services_config_params = {
-    "storage": {
-        "config": {
-            **HITL_STORAGE_CONFIG,
-            "agno_sessions": AgnoSession,
-            ...
-        },
-        ...
-    },
-    ...
-}
-
-# In your agent factory
-agent = Agent(
-    tools=make_tools_factory([MyBaseToolkit()]),
-    cache_callables=False,
-    ...
-)
-
-# In your trigger handler
-runner = AgnoHitlRunner(agent=agent, storage=context.storage)
-pause_info = await runner.handle_agui_input(
-    input_data=input_data,
-    send=send,
-    context=context,        # enables auto-emission of awaiting RunFinished
-)
-```
-
-`handle_agui_input` will figure out whether this is a fresh user message, a resume of a paused run, or an abandon (new user message while a tool was pending) and dispatch accordingly.
+Pauses on external tool calls, persists the run via storage, and resumes via :meth:`Agent.acontinue_run` once the front replies. See `docs/community/agno.md` for the full flow.
 
 Classes:
 
-- **`AgnoHitlRunner`** – High-level runner for an Agno agent with AG-UI frontend-tool support.
-- **`PauseInfo`** – Summary of a paused Agno run.
-- **`PausedRunRecord`** – Persistent snapshot of an Agno run paused on external tool execution.
-- **`PausedRunStore`** – Thin wrapper around :class:StorageStrategy for the paused_runs collection.
-
-Functions:
-
-- **`emit_awaiting_tool_result`** – Emit an AG-UI RunFinished with status="awaiting_tool_result".
-- **`emit_messages_snapshot`** – Emit an AG-UI MessagesSnapshot event.
+- **`AgnoHitlRunner`** – Runs an Agno agent and persists/resumes paused runs on external tools.
+- **`HitlEvents`** – AG-UI message conversion and event emission for the HITL flow.
+- **`PausedRunRecord`** – Snapshot of an Agno run paused on external tool execution.
+- **`PausedRunStore`** – Storage wrapper for the paused_runs collection.
 
 Attributes:
 
-- **`HITL_STORAGE_CONFIG`** (`dict[str, type[BaseModel]]`) – Drop-in storage config fragment — merge into your module's services_config_params.
+- **`HITL_STORAGE_CONFIG`** (`dict[str, type[BaseModel]]`) – Storage config fragment for the paused_runs collection.
 
 ##### HITL_STORAGE_CONFIG
 
@@ -2779,18 +3149,7 @@ HITL_STORAGE_CONFIG: dict[str, type[BaseModel]] = {
 }
 ```
 
-Drop-in storage config fragment — merge into your module's `services_config_params`.
-
-Example::
-
-```text
-services_config_params = {
-    "storage": {
-        "config": {**HITL_STORAGE_CONFIG, "my_other_collection": MyModel},
-        ...
-    },
-}
-```
+Storage config fragment for the `paused_runs` collection.
 
 ##### AgnoHitlRunner
 
@@ -2804,31 +3163,25 @@ AgnoHitlRunner(
 )
 ```
 
-High-level runner for an Agno agent with AG-UI frontend-tool support.
-
-Wraps a configured :class:`~agno.agent.Agent` and a :class:`PausedRunStore`, and exposes three levels of API:
-
-- :meth:`run` / :meth:`continue_paused_run` — low-level: stream one Agno run (fresh or resumed) and return a :class:`PauseInfo` if it paused on an external tool.
-- :meth:`try_resume` — inspects an AG-UI input and resumes iff a matching :class:`~ag_ui.core.types.ToolMessage` is present.
-- :meth:`handle_agui_input` — all-in-one: detects resume vs fresh message, dispatches, and (optionally) emits the awaiting `RunFinished` event on pause. Use this one from a trigger.
+Runs an Agno agent and persists/resumes paused runs on external tools.
 
 Parameters:
 
 - ###### **`agent`**
 
-  (`Agent`) – The Agno agent. It must be built with tools=make_tools_factory(base_tools) and cache_callables=False — otherwise the frontend tools injected per-run won't reach the LLM.
+  (`Agent`) – Agno agent built with tools=make_tools_factory(...) and cache_callables=False.
 
 - ###### **`storage`**
 
-  (`StorageStrategy | None`, default: `None` ) – Convenience: if provided and store is not, a :class:PausedRunStore is constructed automatically.
+  (`StorageStrategy | None`, default: `None` ) – If provided without store, a :class:PausedRunStore is built automatically.
 
 - ###### **`store`**
 
-  (`PausedRunStore | None`, default: `None` ) – Pre-built paused-run store. Wins over storage.
+  (`PausedRunStore | None`, default: `None` ) – Pre-built paused-run store; wins over storage.
 
 - ###### **`dependency_key`**
 
-  (`str`, default: `'agui_tools'` ) – The Agno dependencies key under which the runner passes the per-run AG-UI tool list. Must match the key used by :func:make_tools_factory. Defaults to "agui_tools".
+  (`str`, default: `'agui_tools'` ) – Agno dependencies key carrying the AG-UI tool list (must match :func:make_tools_factory).
 
 Raises:
 
@@ -2836,8 +3189,8 @@ Raises:
 
 Methods:
 
-- **`continue_paused_run`** – Resume a previously paused run.
-- **`handle_agui_input`** – One-shot dispatch of an AG-UI RunAgentInput.
+- **`continue_paused_run`** – Resume a previously paused run with tool results.
+- **`handle_agui_input`** – Dispatch an AG-UI RunAgentInput (resume / abandon / fresh).
 - **`run`** – Stream a fresh Agno run.
 - **`try_resume`** – Try to resume a paused run from an AG-UI input.
 
@@ -2854,37 +3207,34 @@ continue_paused_run(
 ) -> PauseInfo | None
 ```
 
-Resume a previously paused run.
-
-Loads the persisted :class:`~agno.run.agent.RunOutput`, injects the tool results into the matching :class:`~agno.run.requirement.RunRequirement` entries, and calls :meth:`~agno.agent.Agent.acontinue_run`. On normal completion the storage record is removed; on re-pause it is refreshed.
+Resume a previously paused run with tool results.
 
 Parameters:
 
 - ###### **`thread_id`**
 
-  (`str`) – AG-UI thread identifier (the storage key).
+  (`str`) – AG-UI thread identifier (storage key).
 
 - ###### **`tool_results`**
 
-  (`dict[str, str]`) – Mapping of tool_call_id → serialized result (typically a JSON string). Every pending tool must be resolved — unresolved requirements will stall the run.
+  (`dict[str, str]`) – tool_call_id → serialized result. Every pending tool must be resolved.
 
 - ###### **`send`**
 
-  (`Callable[[BaseAgentRunEvent], Coroutine[Any, Any, None]]`) – Digitalkin-event callback (same contract as :meth:run).
+  (`Callable[[BaseAgentRunEvent], Coroutine[Any, Any, None]]`) – Digitalkin-event callback.
 
 - ###### **`run_id`**
 
-  (`str | None`, default: `None` ) – AG-UI run identifier for this resume turn. Used to emit a synthetic RUN_STARTED before streaming — Agno emits RunContinued (not RunStarted) on resume.
+  (`str | None`, default: `None` ) – AG-UI run id for this resume turn.
 
 - ###### **`agui_tools`**
 
-  (`list[Tool] | None`, default: `None` ) – Frontend tool definitions for the resumed run. The AG-UI client should re-send the same list it provided at the original turn so tool schemas stay registered.
+  (`list[Tool] | None`, default: `None` ) – Frontend tool definitions (re-send the original list).
 
 Returns:
 
-- `PauseInfo | None` – None on final completion. A fresh :class:PauseInfo when
-- `PauseInfo | None` – the resumed run paused again (cascading frontend tools). If
-- `PauseInfo | None` – no paused record exists for thread_id, returns None.
+- `PauseInfo | None` – None on completion or missing record; a new
+- `PauseInfo | None` – class:PauseInfo on re-pause.
 
 ###### handle_agui_input
 
@@ -2899,43 +3249,36 @@ handle_agui_input(
 ) -> PauseInfo | None
 ```
 
-One-shot dispatch of an AG-UI `RunAgentInput`.
+Dispatch an AG-UI `RunAgentInput` (resume / abandon / fresh).
 
-Handles the three cases in order:
-
-1. Resume a paused run if the input carries a matching `ToolMessage` (see :meth:`try_resume`).
-1. Drop a stale paused record if the input is a new `UserMessage` while a tool was pending (HITL abandon).
-1. Fresh run on the last `UserMessage` in `input_data.messages` (or on the explicit `message` argument).
-
-When a run pauses (fresh or resumed) and `context` is provided, this method also emits the AG-UI `RunFinished` with `status="awaiting_tool_result"` via :func:`emit_awaiting_tool_result`. Pass `context=None` if you want to emit it yourself.
+When a run pauses and `context` is provided, the awaiting `RunFinished` event is emitted automatically.
 
 Parameters:
 
 - ###### **`input_data`**
 
-  (`Any`) – Any object with thread_id, messages, and tools attributes (typically an AgUiStreamInput).
+  (`Any`) – Object exposing thread_id, messages, tools.
 
 - ###### **`send`**
 
-  (`Callable[[BaseAgentRunEvent], Coroutine[Any, Any, None]]`) – Digitalkin-event callback (e.g. wrapping self.send_message(context, event) in a trigger).
+  (`Callable[[BaseAgentRunEvent], Coroutine[Any, Any, None]]`) – Digitalkin-event callback.
 
 - ###### **`context`**
 
-  (`ModuleContext | None`, default: `None` ) – If provided, the awaiting RunFinished is emitted automatically on pause.
+  (`ModuleContext | None`, default: `None` ) – If provided, emit the awaiting RunFinished on pause.
 
 - ###### **`message`**
 
-  (`str | None`, default: `None` ) – Override the user prompt extraction. Normally left as None — the runner picks the last UserMessage content from input_data.messages.
+  (`str | None`, default: `None` ) – Override the user prompt (default: last UserMessage).
 
 - ###### **`images`**
 
-  (`list[Any] | None`, default: `None` ) – Optional multimodal inputs forwarded to Agno.
+  (`list[Any] | None`, default: `None` ) – Optional multimodal inputs.
 
 Returns:
 
-- `PauseInfo | None` – None on normal completion (or when no actionable input
-- `PauseInfo | None` – was found). A :class:PauseInfo on pause (already emitted to
-- `PauseInfo | None` – the front if context was provided).
+- `PauseInfo | None` – None on completion or no actionable input; a :class:PauseInfo
+- `PauseInfo | None` – on pause.
 
 ###### run
 
@@ -2956,31 +3299,27 @@ Parameters:
 
 - ###### **`message`**
 
-  (`str`) – User prompt to send to the agent.
+  (`str`) – User prompt.
 
 - ###### **`send`**
 
-  (`Callable[[BaseAgentRunEvent], Coroutine[Any, Any, None]]`) – Async callback invoked for each digitalkin event produced by :class:AgnoStreamAdapter. Typically maps through :meth:AgUiMixin.send_message.
+  (`Callable[[BaseAgentRunEvent], Coroutine[Any, Any, None]]`) – Async callback for each digitalkin event.
 
 - ###### **`thread_id`**
 
-  (`str`) – AG-UI thread identifier (used as the paused-run storage key if the run pauses).
+  (`str`) – AG-UI thread identifier (storage key on pause).
 
 - ###### **`agui_tools`**
 
-  (`list[Tool] | None`, default: `None` ) – Frontend tools declared by the AG-UI client for this run. Merged with the agent's base tools through the factory; None or empty is equivalent to "no frontend tools this turn".
+  (`list[Tool] | None`, default: `None` ) – Frontend tools declared by the AG-UI client.
 
 - ###### **`images`**
 
-  (`list[Any] | None`, default: `None` ) – Optional multimodal inputs forwarded to Agno.
+  (`list[Any] | None`, default: `None` ) – Optional multimodal inputs.
 
 Returns:
 
-- `PauseInfo | None` – None on normal completion. A :class:PauseInfo if the run
-- `PauseInfo | None` – paused on one or more external tool calls — the caller is
-- `PauseInfo | None` – responsible for emitting the awaiting RunFinished (use
-- `PauseInfo | None` – func:emit_awaiting_tool_result or let
-- `PauseInfo | None` – meth:handle_agui_input do it).
+- `PauseInfo | None` – None on completion; a :class:PauseInfo if paused.
 
 ###### try_resume
 
@@ -2992,123 +3331,42 @@ try_resume(
 
 Try to resume a paused run from an AG-UI input.
 
-The `input_data` only needs to duck-type `thread_id`, `messages`, and `tools` (typically an `AgUiStreamInput`). This method:
-
-1. Loads the paused record for `input_data.thread_id`. Returns `(False, None)` if there is none.
-1. Looks for `ToolMessage` entries in `input_data.messages` whose `tool_call_id` matches a pending one.
-1. If any match → dispatches :meth:`continue_paused_run` and returns `(True, pause_info_or_none)`.
-1. If no match but the last message is a fresh `UserMessage`, drops the stale record (HITL abandon) and returns `(False, None)`.
-
 Returns:
 
-- `bool` – (resumed, pause_info):
-- `PauseInfo | None` – (False, None): no resume, caller should run the fresh-message path.
-- `tuple[bool, PauseInfo | None]` – (True, None): resume ran to normal completion.
-- `tuple[bool, PauseInfo | None]` – (True, PauseInfo): resume paused again (cascading tools).
+- `bool` – (False, None) if no resume should happen, (True, None)
+- `PauseInfo | None` – on completion, or (True, PauseInfo) on re-pause.
 
-##### PauseInfo
+##### HitlEvents
 
-```python
-PauseInfo(
-    thread_id: str,
-    run_id: str,
-    pending_tool_call_ids: list[str],
-    new_messages: list[Message] = list(),
-)
-```
-
-Summary of a paused Agno run.
-
-Returned by :meth:`AgnoHitlRunner.run` and related methods whenever the run paused on one or more external tool calls. Callers typically use it to emit the AG-UI awaiting-tool-result event to the front.
-
-`new_messages` carries the AG-UI messages generated by Agno during the paused run (user echoes, the assistant message with `tool_calls`, and any tool results emitted before the pause). It's provided because Agno does not emit stream events from which the front can reconstruct the assistant-with-tool-calls message — in particular, when the LLM goes straight from reasoning to a frontend tool call without emitting any text. Consumers typically push these messages to the front via a :class:`~ag_ui.core.events.MessagesSnapshotEvent` so the client has an authoritative view of the conversation.
-
-##### PausedRunRecord
-
-```
-              flowchart TD
-              digitalkin.community.agno.hitl.PausedRunRecord[PausedRunRecord]
-
-              
-
-              click digitalkin.community.agno.hitl.PausedRunRecord href "" "digitalkin.community.agno.hitl.PausedRunRecord"
-```
-
-Persistent snapshot of an Agno run paused on external tool execution.
-
-Stored in the `paused_runs` collection keyed by `thread_id`. The `payload` field holds `RunOutput.to_dict()` verbatim so :meth:`agno.run.agent.RunOutput.from_dict` can round-trip the run on any replica when the front replies with the tool result(s).
-
-##### PausedRunStore
-
-```python
-PausedRunStore(storage: StorageStrategy)
-```
-
-Thin wrapper around :class:`StorageStrategy` for the `paused_runs` collection.
-
-Owns serialization of :class:`~agno.run.agent.RunOutput` and keying by `thread_id`. Instances are cheap — create one per trigger handler.
-
-Parameters:
-
-- ###### **`storage`**
-
-  (`StorageStrategy`) – The module's storage strategy. The collection paused_runs must be registered with :class:PausedRunRecord — use :data:HITL_STORAGE_CONFIG.
+AG-UI message conversion and event emission for the HITL flow.
 
 Methods:
 
-- **`delete`** – Remove the paused run record for a thread.
-- **`load`** – Fetch the paused run record for a thread.
-- **`save`** – Serialize and store a paused RunOutput.
+- **`agno_messages_to_agui`** – Convert Agno messages into AG-UI messages.
+- **`emit_awaiting_tool_result`** – Emit an AG-UI RunFinished with status="awaiting_tool_result".
+- **`emit_messages_snapshot`** – Emit an AG-UI MessagesSnapshot event.
 
-###### delete
-
-```python
-delete(thread_id: str) -> None
-```
-
-Remove the paused run record for a thread.
-
-###### load
+###### agno_messages_to_agui
 
 ```python
-load(thread_id: str) -> PausedRunRecord | None
+agno_messages_to_agui(agno_messages: list[Any]) -> list[Message]
 ```
 
-Fetch the paused run record for a thread.
+Convert Agno messages into AG-UI messages.
+
+Drops system/developer/reasoning; reshapes assistant `tool_calls` into AG-UI :class:`~ag_ui.core.types.ToolCall` objects.
 
 Parameters:
 
-- ###### **`thread_id`**
+- ###### **`agno_messages`**
 
-  (`str`) – AG-UI thread identifier.
-
-Returns:
-
-- **`The`** ( `PausedRunRecord | None` ) – class:PausedRunRecord if one exists, otherwise None.
-
-###### save
-
-```python
-save(run_output: RunOutput, thread_id: str) -> PauseInfo
-```
-
-Serialize and store a paused `RunOutput`.
-
-Parameters:
-
-- ###### **`run_output`**
-
-  (`RunOutput`) – The paused Agno run (is_paused=True with populated requirements).
-
-- ###### **`thread_id`**
-
-  (`str`) – AG-UI thread identifier (the record key).
+  (`list[Any]`) – Value of RunOutput.messages at pause time.
 
 Returns:
 
-- **`A`** ( `PauseInfo` ) – class:PauseInfo describing what was persisted.
+- `list[Message]` – AG-UI :class:~ag_ui.core.types.Message instances.
 
-##### emit_awaiting_tool_result
+###### emit_awaiting_tool_result
 
 ```python
 emit_awaiting_tool_result(
@@ -3142,7 +3400,7 @@ Parameters:
 
   (`list[str]`) – The tool_call_id values the front must execute and resolve — echoed in result.pending_tool_call_ids so the front can match them.
 
-##### emit_messages_snapshot
+###### emit_messages_snapshot
 
 ```python
 emit_messages_snapshot(context: ModuleContext, messages: list[Message]) -> None
@@ -3160,7 +3418,113 @@ Parameters:
 
 - ###### **`messages`**
 
-  (`list[Message]`) – List of AG-UI messages, typically produced by :func:\_agno_messages_to_agui from RunOutput.messages.
+  (`list[Message]`) – List of AG-UI messages, typically produced by :func:agno_messages_to_agui from RunOutput.messages.
+
+##### PausedRunRecord
+
+```
+              flowchart TD
+              digitalkin.community.agno.hitl.PausedRunRecord[PausedRunRecord]
+
+              
+
+              click digitalkin.community.agno.hitl.PausedRunRecord href "" "digitalkin.community.agno.hitl.PausedRunRecord"
+```
+
+Snapshot of an Agno run paused on external tool execution.
+
+##### PausedRunStore
+
+```python
+PausedRunStore(storage: StorageStrategy)
+```
+
+Storage wrapper for the `paused_runs` collection.
+
+Parameters:
+
+- ###### **`storage`**
+
+  (`StorageStrategy`) – The module's storage strategy. The paused_runs collection must be registered with :class:PausedRunRecord (see :data:HITL_STORAGE_CONFIG).
+
+Methods:
+
+- **`delete`** – Remove the paused run record for a thread.
+- **`load`** – Fetch the paused run record for a thread, or None.
+- **`save`** – Serialize and store a paused RunOutput.
+
+###### delete
+
+```python
+delete(thread_id: str) -> None
+```
+
+Remove the paused run record for a thread.
+
+###### load
+
+```python
+load(thread_id: str) -> PausedRunRecord | None
+```
+
+Fetch the paused run record for a thread, or `None`.
+
+Parameters:
+
+- ###### **`thread_id`**
+
+  (`str`) – AG-UI thread identifier.
+
+Returns:
+
+- **`The`** ( `PausedRunRecord | None` ) – class:PausedRunRecord if one exists, else None.
+
+###### save
+
+```python
+save(run_output: RunOutput, thread_id: str) -> PauseInfo
+```
+
+Serialize and store a paused `RunOutput`.
+
+Parameters:
+
+- ###### **`run_output`**
+
+  (`RunOutput`) – The paused Agno run (is_paused=True).
+
+- ###### **`thread_id`**
+
+  (`str`) – AG-UI thread identifier (the record key).
+
+Returns:
+
+- **`A`** ( `PauseInfo` ) – class:PauseInfo describing what was persisted.
+
+#### models
+
+Models for the Agno community integration.
+
+Classes:
+
+- **`PauseInfo`** – Summary of a paused Agno run.
+
+##### PauseInfo
+
+```
+              flowchart TD
+              digitalkin.community.agno.models.PauseInfo[PauseInfo]
+
+              
+
+              click digitalkin.community.agno.models.PauseInfo href "" "digitalkin.community.agno.models.PauseInfo"
+```
+
+Summary of a paused Agno run.
+
+Returned by :meth:`AgnoHitlRunner.run` and related methods whenever the run paused on one or more external tool calls. Callers typically use it to emit the AG-UI awaiting-tool-result event to the front.
+
+`new_messages` carries the AG-UI messages generated by Agno during the paused run (user echoes, the assistant message with `tool_calls`, and any tool results emitted before the pause). It's provided because Agno does not emit stream events from which the front can reconstruct the assistant-with-tool-calls message — in particular, when the LLM goes straight from reasoning to a frontend tool call without emitting any text. Consumers typically push these messages to the front via a :class:`~ag_ui.core.events.MessagesSnapshotEvent` so the client has an authoritative view of the conversation.
 
 ## core
 
@@ -3169,8 +3533,10 @@ Core of Digitlakin defining the task management and sub-modules.
 Modules:
 
 - **`common`** – Common utilities for the core module.
+- **`exceptions`** – Exceptions for the DigitalKin core package.
 - **`job_manager`** – Job Manager logic.
 - **`profiling`** – Profiling and monitoring tools for DigitalKin tasks and servers.
+- **`resilience`** – Resilience patterns for fault tolerance.
 - **`task_manager`** – Base task manager logic.
 
 ### common
@@ -3204,6 +3570,7 @@ create_module_instance(
     setup_id: str,
     setup_version_id: str,
     request_metadata: dict[str, str] | None = None,
+    tool_cache: ToolCache | None = None,
 ) -> BaseModule
 ```
 
@@ -3237,6 +3604,10 @@ Parameters:
 
   (`dict[str, str] | None`, default: `None` ) – gRPC request metadata (headers) to forward to the module.
 
+- ###### **`tool_cache`**
+
+  (`ToolCache | None`, default: `None` ) – Pre-resolved ToolCache to inject on the module instance.
+
 Returns:
 
 - `BaseModule` – Instantiated module
@@ -3260,7 +3631,7 @@ Methods:
 ##### create_bounded_queue
 
 ```python
-create_bounded_queue(maxsize: int = DEFAULT_MAX_QUEUE_SIZE) -> Queue
+create_bounded_queue(maxsize: int | None = None) -> Queue
 ```
 
 Create a bounded asyncio queue with standard configuration.
@@ -3269,7 +3640,7 @@ Parameters:
 
 - ###### **`maxsize`**
 
-  (`int`, default: `DEFAULT_MAX_QUEUE_SIZE` ) – Maximum queue size (default 1000, 0 means unlimited)
+  (`int | None`, default: `None` ) – Maximum queue size. None uses QueueSettings.max_size (default 1000); 0 means unlimited.
 
 Returns:
 
@@ -3318,6 +3689,7 @@ create_module_instance(
     setup_id: str,
     setup_version_id: str,
     request_metadata: dict[str, str] | None = None,
+    tool_cache: ToolCache | None = None,
 ) -> BaseModule
 ```
 
@@ -3351,6 +3723,10 @@ Parameters:
 
   (`dict[str, str] | None`, default: `None` ) – gRPC request metadata (headers) to forward to the module.
 
+- ###### **`tool_cache`**
+
+  (`ToolCache | None`, default: `None` ) – Pre-resolved ToolCache to inject on the module instance.
+
 Returns:
 
 - `BaseModule` – Instantiated module
@@ -3374,7 +3750,7 @@ Methods:
 ###### create_bounded_queue
 
 ```python
-create_bounded_queue(maxsize: int = DEFAULT_MAX_QUEUE_SIZE) -> Queue
+create_bounded_queue(maxsize: int | None = None) -> Queue
 ```
 
 Create a bounded asyncio queue with standard configuration.
@@ -3383,7 +3759,7 @@ Parameters:
 
 - ###### **`maxsize`**
 
-  (`int`, default: `DEFAULT_MAX_QUEUE_SIZE` ) – Maximum queue size (default 1000, 0 means unlimited)
+  (`int | None`, default: `None` ) – Maximum queue size. None uses QueueSettings.max_size (default 1000); 0 means unlimited.
 
 Returns:
 
@@ -3405,6 +3781,69 @@ queue = QueueFactory.create_bounded_queue(maxsize=500)
 
 queue = QueueFactory.create_bounded_queue(maxsize=0)
 
+### exceptions
+
+Exceptions for the DigitalKin core package.
+
+Classes:
+
+- **`BackpressureTimeoutError`** – Producer's XADD throttled past the backpressure timeout.
+- **`BulkheadFullError`** – Raised when a bulkhead semaphore cannot be acquired within timeout.
+- **`RedisUnreachableError`** – Raised at gateway boot when Redis ping fails.
+
+#### BackpressureTimeoutError
+
+```
+              flowchart TD
+              digitalkin.core.exceptions.BackpressureTimeoutError[BackpressureTimeoutError]
+
+              
+
+              click digitalkin.core.exceptions.BackpressureTimeoutError href "" "digitalkin.core.exceptions.BackpressureTimeoutError"
+```
+
+Producer's XADD throttled past the backpressure timeout.
+
+Throttled past `JobManagerSettings.backpressure_timeout`. Caller (typically the module's `_on_output` callback) must surface this as `stream.error(code=BACKPRESSURE_TIMEOUT)` via the `_emit_fatal_to_redis` path so the consumer sees a typed sentinel instead of a silent stall.
+
+#### BulkheadFullError
+
+```
+              flowchart TD
+              digitalkin.core.exceptions.BulkheadFullError[BulkheadFullError]
+
+              
+
+              click digitalkin.core.exceptions.BulkheadFullError href "" "digitalkin.core.exceptions.BulkheadFullError"
+```
+
+Raised when a bulkhead semaphore cannot be acquired within timeout.
+
+#### RedisUnreachableError
+
+```python
+RedisUnreachableError(masked_url: str)
+```
+
+```
+              flowchart TD
+              digitalkin.core.exceptions.RedisUnreachableError[RedisUnreachableError]
+
+              
+
+              click digitalkin.core.exceptions.RedisUnreachableError href "" "digitalkin.core.exceptions.RedisUnreachableError"
+```
+
+Raised at gateway boot when Redis ping fails.
+
+Redis is a required dependency for gateway operation (stream persistence, pub/sub signals). Failing fast at boot is preferable to lazy first-request failures that surface as opaque task errors.
+
+Parameters:
+
+- ##### **`masked_url`**
+
+  (`str`) – Redis connection URL with credentials masked.
+
 ### job_manager
 
 Job Manager logic.
@@ -3413,8 +3852,6 @@ Modules:
 
 - **`base_job_manager`** – Background module manager.
 - **`single_job_manager`** – Background module manager with single instance.
-- **`taskiq_broker`** – Taskiq broker & RSTREAM producer for the job manager.
-- **`taskiq_job_manager`** – Taskiq job manager module.
 
 #### base_job_manager
 
@@ -3464,26 +3901,22 @@ Parameters:
 Methods:
 
 - **`cancel_task`** – Cancel a task.
-- **`clean_session`** – Clean a task's session.
 - **`create_config_setup_instance_job`** – Create and start a new module job.
-- **`create_module_instance_job`** – Create and start a new job for the module's instance.
 - **`create_task`** – Create a task using the task manager.
 - **`generate_config_setup_module_response`** – Generate a stream consumer for a module's output data.
-- **`generate_stream_consumer`** – Generate a stream consumer for the job's message stream.
 - **`job_specific_callback`** – Generate a job-specific callback function.
 - **`list_modules`** – List all modules along with their statuses.
+- **`preload_instance`** – Build a module instance and run its idempotent prepare().
+- **`run_instance`** – Run a pre-prepared module instance (from preload_instance) with input.
 - **`send_signal`** – Send signal to a task.
 - **`shutdown`** – Shutdown all tasks.
 - **`start`** – Start the job manager.
 - **`stop`** – Stop the job manager and clean up resources.
-- **`stop_all_modules`** – Stop all currently running module jobs.
-- **`stop_module`** – Stop a running module job.
-- **`wait_for_completion`** – Wait for a task to complete.
 
 Attributes:
 
-- **`tasks`** (`dict[str, Any]`) – Get tasks from the task manager.
-- **`tasks_sessions`** (`dict[str, TaskSession]`) – Get task sessions from the task manager.
+- **`tasks`** (`dict[str, Any]`) – Tasks from the task manager.
+- **`tasks_sessions`** (`dict[str, TaskSession]`) – Task sessions from the task manager.
 
 ###### tasks
 
@@ -3491,7 +3924,7 @@ Attributes:
 tasks: dict[str, Any]
 ```
 
-Get tasks from the task manager.
+Tasks from the task manager.
 
 ###### tasks_sessions
 
@@ -3499,7 +3932,7 @@ Get tasks from the task manager.
 tasks_sessions: dict[str, TaskSession]
 ```
 
-Get task sessions from the task manager.
+Task sessions from the task manager.
 
 ###### cancel_task
 
@@ -3522,28 +3955,6 @@ Parameters:
 - ###### **`timeout`**
 
   (`float | None`, default: `None` ) – Optional timeout in seconds to wait for the cancellation to complete.
-
-Returns:
-
-- **`bool`** ( `bool` ) – True if the task was successfully cancelled, False otherwise.
-
-###### clean_session
-
-```python
-clean_session(task_id: str, mission_id: str) -> bool
-```
-
-Clean a task's session.
-
-Parameters:
-
-- ###### **`task_id`**
-
-  (`str`) – Unique identifier for the task.
-
-- ###### **`mission_id`**
-
-  (`str`) – Mission identifier.
 
 Returns:
 
@@ -3595,51 +4006,6 @@ Raises:
 
 - `Exception` – If the module fails to start.
 
-###### create_module_instance_job
-
-```python
-create_module_instance_job(
-    input_data: InputModelT,
-    setup_data: SetupModelT,
-    mission_id: str,
-    setup_id: str,
-    setup_version_id: str,
-    request_metadata: dict[str, str] | None = None,
-) -> str
-```
-
-Create and start a new job for the module's instance.
-
-Parameters:
-
-- ###### **`input_data`**
-
-  (`InputModelT`) – The input data required to start the job.
-
-- ###### **`setup_data`**
-
-  (`SetupModelT`) – The setup configuration for the module.
-
-- ###### **`mission_id`**
-
-  (`str`) – The mission ID associated with the job.
-
-- ###### **`setup_id`**
-
-  (`str`) – The setup ID.
-
-- ###### **`setup_version_id`**
-
-  (`str`) – The setup version ID associated with the module.
-
-- ###### **`request_metadata`**
-
-  (`dict[str, str] | None`, default: `None` ) – gRPC request metadata (headers) to forward to the module.
-
-Returns:
-
-- **`str`** ( `str` ) – The unique identifier (job ID) of the created job.
-
 ###### create_task
 
 ```python
@@ -3653,6 +4019,8 @@ create_task(
 ```
 
 Create a task using the task manager.
+
+Delegate task lifecycle methods to task manager
 
 Parameters:
 
@@ -3696,26 +4064,6 @@ Returns:
 
 - `SetupModelT | ModuleCodeModel` – SetupModelT | ModuleCodeModel: the SetupModelT object fully processed, or an error code.
 
-###### generate_stream_consumer
-
-```python
-generate_stream_consumer(
-    job_id: str,
-) -> AbstractAsyncContextManager[AsyncGenerator[dict[str, Any], None]]
-```
-
-Generate a stream consumer for the job's message stream.
-
-Parameters:
-
-- ###### **`job_id`**
-
-  (`str`) – The unique identifier of the job to filter messages for.
-
-Yields:
-
-- `AbstractAsyncContextManager[AsyncGenerator[dict[str, Any], None]]` – dict\[str, Any\]: The messages from the associated module's stream.
-
 ###### job_specific_callback
 
 ```python
@@ -3752,6 +4100,46 @@ List all modules along with their statuses.
 Returns:
 
 - `dict[str, dict[str, Any]]` – dict\[str, dict[str, Any]\]: A dictionary containing information about all modules and their statuses.
+
+###### preload_instance
+
+```python
+preload_instance(
+    setup_data: SetupModelT,
+    mission_id: str,
+    setup_id: str,
+    setup_version_id: str,
+    request_metadata: dict[str, str] | None = None,
+    job_id: str | None = None,
+    tool_cache: Any = None,
+    callback: Callable | None = None,
+) -> tuple[Any, str, Callable]
+```
+
+Build a module instance and run its idempotent `prepare()`.
+
+Returns:
+
+- `tuple[Any, str, Callable]` – Tuple of (prepared module instance, job_id, output callback).
+
+###### run_instance
+
+```python
+run_instance(
+    module: Any,
+    job_id: str,
+    mission_id: str,
+    input_data: InputModelT,
+    setup_data: SetupModelT,
+    callback: Callable,
+) -> str
+```
+
+Run a pre-prepared module instance (from `preload_instance`) with input.
+
+Returns:
+
+- `str` – The job_id of the scheduled run.
 
 ###### send_signal
 
@@ -3811,60 +4199,11 @@ Stop the job manager and clean up resources.
 
 Default no-op. Subclasses with external connections override.
 
-###### stop_all_modules
-
-```python
-stop_all_modules() -> None
-```
-
-Stop all currently running module jobs.
-
-This method ensures that all active jobs are gracefully terminated.
-
-###### stop_module
-
-```python
-stop_module(job_id: str) -> bool
-```
-
-Stop a running module job.
-
-Parameters:
-
-- ###### **`job_id`**
-
-  (`str`) – The unique identifier of the job to stop.
-
-Returns:
-
-- **`bool`** ( `bool` ) – True if the job was successfully stopped, False if it does not exist.
-
-###### wait_for_completion
-
-```python
-wait_for_completion(job_id: str) -> None
-```
-
-Wait for a task to complete.
-
-This method blocks until the specified job has reached a terminal state. The implementation varies by job manager type:
-
-- SingleJobManager: Awaits the asyncio.Task directly
-- TaskiqJobManager: Polls task status
-
-Parameters:
-
-- ###### **`job_id`**
-
-  (`str`) – The unique identifier of the job to wait for.
-
-Raises:
-
-- `KeyError` – If the job_id is not found.
-
 #### single_job_manager
 
 Background module manager with single instance.
+
+Supports optional Redis Streams for durable output persistence. When a `RedisClient` is provided, output is written to both the in-memory queue (for local consumers) and a Redis Stream (for crash recovery and reconnection via `from_seq`).
 
 Classes:
 
@@ -3876,8 +4215,8 @@ Classes:
 SingleJobManager(
     module_class: type[BaseModule],
     services_mode: ServicesMode,
+    redis_client: RedisClient,
     default_timeout: float = 300.0,
-    max_concurrent_tasks: int = int(get("DIGITALKIN_MAX_CONCURRENT_TASKS", "100")),
 )
 ```
 
@@ -3898,6 +4237,10 @@ Manages a single instance of a module job.
 
 This class ensures that only one instance of a module job is active at a time. It provides functionality to create, stop, and monitor module jobs, as well as to handle their output data.
 
+When `redis_client` is provided, output is dual-written to both the in-memory queue and a Redis Stream for crash recovery and reconnection.
+
+Concurrency / backpressure / setup-timeout come from `JobManagerSettings` and `TaskManagerSettings`.
+
 Parameters:
 
 - ###### **`module_class`**
@@ -3910,36 +4253,32 @@ Parameters:
 
 - ###### **`default_timeout`**
 
-  (`float`, default: `300.0` ) – Default timeout for task operations
+  (`float`, default: `300.0` ) – Default timeout for task operations.
 
-- ###### **`max_concurrent_tasks`**
+- ###### **`redis_client`**
 
-  (`int`, default: `int(get('DIGITALKIN_MAX_CONCURRENT_TASKS', '100'))` ) – Maximum number of concurrent tasks
+  (`RedisClient`) – Redis client for signal delivery and stream persistence.
 
 Methods:
 
 - **`add_to_queue`** – Add output data to the queue for a specific job.
 - **`cancel_task`** – Cancel a task.
-- **`clean_session`** – Clean a task's session.
 - **`create_config_setup_instance_job`** – Create and start a new module setup configuration job.
-- **`create_module_instance_job`** – Create and start a new module job.
 - **`create_task`** – Create a task using the task manager.
 - **`generate_config_setup_module_response`** – Generate a stream consumer for a module's output data.
-- **`generate_stream_consumer`** – Generate a stream consumer for a module's output data.
 - **`job_specific_callback`** – Generate a job-specific callback function.
 - **`list_modules`** – List all modules along with their statuses.
+- **`preload_instance`** – Build a module instance and run its idempotent prepare().
+- **`run_instance`** – Run a pre-prepared module instance with input.
 - **`send_signal`** – Send signal to a task.
 - **`shutdown`** – Shutdown all tasks.
 - **`start`** – Start manager (no-op, no external connections needed).
 - **`stop`** – Stop the job manager and clean up resources.
-- **`stop_all_modules`** – Stop all currently running module jobs.
-- **`stop_module`** – Stop a running module job.
-- **`wait_for_completion`** – Wait for a task to complete by awaiting its asyncio.Task.
 
 Attributes:
 
-- **`tasks`** (`dict[str, Any]`) – Get tasks from the task manager.
-- **`tasks_sessions`** (`dict[str, TaskSession]`) – Get task sessions from the task manager.
+- **`tasks`** (`dict[str, Any]`) – Tasks from the task manager.
+- **`tasks_sessions`** (`dict[str, TaskSession]`) – Task sessions from the task manager.
 
 ###### tasks
 
@@ -3947,7 +4286,7 @@ Attributes:
 tasks: dict[str, Any]
 ```
 
-Get tasks from the task manager.
+Tasks from the task manager.
 
 ###### tasks_sessions
 
@@ -3955,7 +4294,7 @@ Get tasks from the task manager.
 tasks_sessions: dict[str, TaskSession]
 ```
 
-Get task sessions from the task manager.
+Task sessions from the task manager.
 
 ###### add_to_queue
 
@@ -4013,28 +4352,6 @@ Returns:
 
 - **`bool`** ( `bool` ) – True if the task was successfully cancelled, False otherwise.
 
-###### clean_session
-
-```python
-clean_session(task_id: str, mission_id: str) -> bool
-```
-
-Clean a task's session.
-
-Parameters:
-
-- ###### **`task_id`**
-
-  (`str`) – Unique identifier for the task.
-
-- ###### **`mission_id`**
-
-  (`str`) – Mission identifier.
-
-Returns:
-
-- **`bool`** ( `bool` ) – True if the task was successfully cleaned, False otherwise.
-
 ###### create_config_setup_instance_job
 
 ```python
@@ -4079,55 +4396,6 @@ Raises:
 
 - `Exception` – If the module fails to start.
 
-###### create_module_instance_job
-
-```python
-create_module_instance_job(
-    input_data: InputModelT,
-    setup_data: SetupModelT,
-    mission_id: str,
-    setup_id: str,
-    setup_version_id: str,
-    request_metadata: dict[str, str] | None = None,
-) -> str
-```
-
-Create and start a new module job.
-
-Parameters:
-
-- ###### **`input_data`**
-
-  (`InputModelT`) – The input data required to start the job.
-
-- ###### **`setup_data`**
-
-  (`SetupModelT`) – The setup configuration for the module.
-
-- ###### **`mission_id`**
-
-  (`str`) – The mission ID associated with the job.
-
-- ###### **`setup_id`**
-
-  (`str`) – The setup ID associated with the module.
-
-- ###### **`setup_version_id`**
-
-  (`str`) – The setup Version ID associated with the module.
-
-- ###### **`request_metadata`**
-
-  (`dict[str, str] | None`, default: `None` ) – gRPC request metadata (headers) to forward to the module.
-
-Returns:
-
-- **`str`** ( `str` ) – The unique identifier (job ID) of the created job.
-
-Raises:
-
-- `Exception` – If the module fails to start.
-
 ###### create_task
 
 ```python
@@ -4141,6 +4409,8 @@ create_task(
 ```
 
 Create a task using the task manager.
+
+Delegate task lifecycle methods to task manager
 
 Parameters:
 
@@ -4184,28 +4454,6 @@ Returns:
 
 - `SetupModelT | ModuleCodeModel` – SetupModelT | ModuleCodeModel: the SetupModelT object fully processed.
 
-###### generate_stream_consumer
-
-```python
-generate_stream_consumer(
-    job_id: str,
-) -> AsyncIterator[AsyncGenerator[dict[str, Any], None]]
-```
-
-Generate a stream consumer for a module's output data.
-
-This method creates an asynchronous generator that streams output data from a specific module job. If the module does not exist, it generates an error message.
-
-Parameters:
-
-- ###### **`job_id`**
-
-  (`str`) – The unique identifier of the job.
-
-Yields:
-
-- **`AsyncGenerator`** ( `AsyncIterator[AsyncGenerator[dict[str, Any], None]]` ) – A stream of output data or error messages.
-
 ###### job_specific_callback
 
 ```python
@@ -4242,6 +4490,110 @@ List all modules along with their statuses.
 Returns:
 
 - `dict[str, dict[str, Any]]` – dict\[str, dict[str, Any]\]: A dictionary containing information about all modules and their statuses.
+
+###### preload_instance
+
+```python
+preload_instance(
+    setup_data: SetupModelT,
+    mission_id: str,
+    setup_id: str,
+    setup_version_id: str,
+    request_metadata: dict[str, str] | None = None,
+    job_id: str | None = None,
+    tool_cache: Any = None,
+    callback: Callable | None = None,
+) -> tuple[Any, str, Callable]
+```
+
+Build a module instance and run its idempotent `prepare()`.
+
+Lets the orchestrator pay init costs in parallel with the consumer's first reply.
+
+Parameters:
+
+- ###### **`setup_data`**
+
+  (`SetupModelT`) – Setup configuration.
+
+- ###### **`mission_id`**
+
+  (`str`) – Mission ID.
+
+- ###### **`setup_id`**
+
+  (`str`) – Setup ID.
+
+- ###### **`setup_version_id`**
+
+  (`str`) – Setup version ID.
+
+- ###### **`request_metadata`**
+
+  (`dict[str, str] | None`, default: `None` ) – gRPC request headers.
+
+- ###### **`job_id`**
+
+  (`str | None`, default: `None` ) – Optional externally-provided job ID.
+
+- ###### **`tool_cache`**
+
+  (`Any`, default: `None` ) – Pre-resolved ToolCache.
+
+- ###### **`callback`**
+
+  (`Callable | None`, default: `None` ) – Direct output callback; None wires the in-memory queue.
+
+Returns:
+
+- `tuple[Any, str, Callable]` – (module, job_id, callback).
+
+###### run_instance
+
+```python
+run_instance(
+    module: Any,
+    job_id: str,
+    mission_id: str,
+    input_data: InputModelT,
+    setup_data: SetupModelT,
+    callback: Callable,
+) -> str
+```
+
+Run a pre-prepared module instance with input.
+
+`module` must come from :meth:`preload_instance`. Schedules the run in the task manager and returns the job_id.
+
+Parameters:
+
+- ###### **`module`**
+
+  (`Any`) – Pre-prepared module instance.
+
+- ###### **`job_id`**
+
+  (`str`) – Job/task ID assigned by preload_instance.
+
+- ###### **`mission_id`**
+
+  (`str`) – Mission ID for task manager scoping.
+
+- ###### **`input_data`**
+
+  (`InputModelT`) – The first input (the query) to feed run().
+
+- ###### **`setup_data`**
+
+  (`SetupModelT`) – The setup the instance was prepared with.
+
+- ###### **`callback`**
+
+  (`Callable`) – Output callback (already attached to context).
+
+Returns:
+
+- `str` – The job_id (echoed for caller convenience).
 
 ###### send_signal
 
@@ -4299,893 +4651,19 @@ Stop the job manager and clean up resources.
 
 Default no-op. Subclasses with external connections override.
 
-###### stop_all_modules
-
-```python
-stop_all_modules() -> None
-```
-
-Stop all currently running module jobs.
-
-###### stop_module
-
-```python
-stop_module(job_id: str) -> bool
-```
-
-Stop a running module job.
-
-Parameters:
-
-- ###### **`job_id`**
-
-  (`str`) – The unique identifier of the job to stop.
-
-Returns:
-
-- **`bool`** ( `bool` ) – True if the module was successfully stopped, False if it does not exist.
-
-Raises:
-
-- `Exception` – If an error occurs while stopping the module.
-
-###### wait_for_completion
-
-```python
-wait_for_completion(job_id: str) -> None
-```
-
-Wait for a task to complete by awaiting its asyncio.Task.
-
-Idempotent — safe to call after the task has already been cleaned up (e.g. by deferred cleanup during signal cancellation).
-
-Parameters:
-
-- ###### **`job_id`**
-
-  (`str`) – The unique identifier of the job to wait for.
-
-#### taskiq_broker
-
-Taskiq broker & RSTREAM producer for the job manager.
-
-Classes:
-
-- **`PickleFormatter`** – Formatter that pickles the JSON-dumped TaskiqMessage.
-- **`TaskiqBrokerConfig`** – Configuration and lifecycle management for Taskiq broker and RStream producer.
-- **`TaskiqLifecycleMiddleware`** – Lifecycle middleware for structured logging and safety-net EndOfStreamOutput.
-
-Functions:
-
-- **`run_config_module`** – TaskIQ task allowing a module to compute in the background asynchronously.
-- **`run_start_module`** – TaskIQ task allowing a module to compute in the background asynchronously.
-
-##### PickleFormatter
-
-```
-              flowchart TD
-              digitalkin.core.job_manager.taskiq_broker.PickleFormatter[PickleFormatter]
-
-              
-
-              click digitalkin.core.job_manager.taskiq_broker.PickleFormatter href "" "digitalkin.core.job_manager.taskiq_broker.PickleFormatter"
-```
-
-Formatter that pickles the JSON-dumped TaskiqMessage.
-
-This lets you send arbitrary Python objects (classes, functions, etc.) by first converting to JSON-safe primitives, then pickling that string.
-
-Methods:
-
-- **`dumps`** – Dumps message from python complex object to JSON.
-- **`loads`** – Recreate Python object from bytes.
-
-###### dumps
-
-```python
-dumps(message: TaskiqMessage) -> BrokerMessage
-```
-
-Dumps message from python complex object to JSON.
-
-Parameters:
-
-- ###### **`message`**
-
-  (`TaskiqMessage`) – TaskIQ message
-
-Returns:
-
-- `BrokerMessage` – BrokerMessage with mandatory information for TaskIQ
-
-###### loads
-
-```python
-loads(message: bytes) -> TaskiqMessage
-```
-
-Recreate Python object from bytes.
-
-Non-pickle messages (e.g. raw JSON left in the queue by other producers) are logged and converted to a no-op `TaskiqMessage` so that Taskiq acknowledges (consumes) them instead of nack-ing and re-delivering in a loop.
-
-Parameters:
-
-- ###### **`message`**
-
-  (`bytes`) – Broker message from bytes.
-
-Returns:
-
-- `TaskiqMessage` – message with TaskIQ format
-
-##### TaskiqBrokerConfig
-
-Configuration and lifecycle management for Taskiq broker and RStream producer.
-
-Methods:
-
-- **`cleanup_global_resources`** – Clean up global resources (producer and broker connections).
-- **`define_broker`** – Create AioPikaBroker with tuned QoS for worker prefetch control.
-- **`define_producer`** – Create RStream producer with tuned settings for sustained throughput.
-- **`init_rstream`** – Init a stream for every tasks.
-- **`send_message_to_stream`** – Add a message frame to the RStream.
-
-###### cleanup_global_resources
-
-```python
-cleanup_global_resources() -> None
-```
-
-Clean up global resources (producer and broker connections).
-
-This should be called during shutdown to prevent connection leaks.
-
-###### define_broker
-
-```python
-define_broker() -> AioPikaBroker
-```
-
-Create AioPikaBroker with tuned QoS for worker prefetch control.
-
-Returns:
-
-- `AioPikaBroker` – Broker connected to RabbitMQ with custom formatter.
-
-###### define_producer
-
-```python
-define_producer() -> Producer
-```
-
-Create RStream producer with tuned settings for sustained throughput.
-
-Tuning:
-
-- `default_batch_publishing_delay`: Flush batches every 100ms (default 3s) for lower streaming latency during long-running tasks.
-- `default_context_switch_value`: Yield to the event loop every 100 messages (default 1000) to keep concurrent coroutines responsive under heavy output.
-
-Returns:
-
-- `Producer` – Producer connected to RabbitMQ.
-
-###### init_rstream
-
-```python
-init_rstream() -> None
-```
-
-Init a stream for every tasks.
-
-###### send_message_to_stream
-
-```python
-send_message_to_stream(job_id: str, output_data: DataModel | ModuleCodeModel) -> None
-```
-
-Add a message frame to the RStream.
-
-Uses Pydantic's Rust-based model_dump_json() and direct string embedding to avoid the overhead of model_dump() → dict → json.dumps() → encode().
-
-Parameters:
-
-- ###### **`job_id`**
-
-  (`str`) – ID of the job that sent the message.
-
-- ###### **`output_data`**
-
-  (`DataModel | ModuleCodeModel`) – Message body as a OutputModelT or error / stream_code.
-
-##### TaskiqLifecycleMiddleware
-
-```
-              flowchart TD
-              digitalkin.core.job_manager.taskiq_broker.TaskiqLifecycleMiddleware[TaskiqLifecycleMiddleware]
-
-              
-
-              click digitalkin.core.job_manager.taskiq_broker.TaskiqLifecycleMiddleware href "" "digitalkin.core.job_manager.taskiq_broker.TaskiqLifecycleMiddleware"
-```
-
-Lifecycle middleware for structured logging and safety-net EndOfStreamOutput.
-
-Methods:
-
-- **`on_error`** – Safety net: send EndOfStreamOutput if worker task failed to.
-- **`post_execute`** – Log task completion.
-- **`pre_execute`** – Log task start.
-
-###### on_error
-
-```python
-on_error(
-    message: TaskiqMessage, result: TaskiqResult, exception: BaseException
-) -> None
-```
-
-Safety net: send EndOfStreamOutput if worker task failed to.
-
-###### post_execute
-
-```python
-post_execute(message: TaskiqMessage, result: TaskiqResult) -> None
-```
-
-Log task completion.
-
-###### pre_execute
-
-```python
-pre_execute(message: TaskiqMessage) -> TaskiqMessage
-```
-
-Log task start.
-
-Returns:
-
-- `TaskiqMessage` – The unmodified message.
-
-##### run_config_module
-
-```python
-run_config_module(
-    mission_id: str,
-    setup_id: str,
-    setup_version_id: str,
-    module_class: type[BaseModule],
-    services_mode: ServicesMode,
-    config_setup_data: dict,
-    request_metadata: dict[str, str] | None = None,
-    registry_config: dict[str, Any] | None = None,
-    context: Context = TaskiqDepends(),
-) -> None
-```
-
-TaskIQ task allowing a module to compute in the background asynchronously.
-
-Parameters:
-
-- ###### **`mission_id`**
-
-  (`str`) – str,
-
-- ###### **`setup_id`**
-
-  (`str`) – The setup ID associated with the module.
-
-- ###### **`setup_version_id`**
-
-  (`str`) – The setup ID associated with the module.
-
-- ###### **`module_class`**
-
-  (`type[BaseModule]`) – type[BaseModule],
-
-- ###### **`services_mode`**
-
-  (`ServicesMode`) – ServicesMode,
-
-- ###### **`config_setup_data`**
-
-  (`dict`) – dict,
-
-- ###### **`request_metadata`**
-
-  (`dict[str, str] | None`, default: `None` ) – gRPC request metadata (headers) to forward to the module.
-
-- ###### **`registry_config`**
-
-  (`dict[str, Any] | None`, default: `None` ) – Registry config (client_config) forwarded from the main process.
-
-- ###### **`context`**
-
-  (`Context`, default: `TaskiqDepends()` ) – Allow TaskIQ context access
-
-##### run_start_module
-
-```python
-run_start_module(
-    mission_id: str,
-    setup_id: str,
-    setup_version_id: str,
-    module_class: type[BaseModule],
-    services_mode: ServicesMode,
-    input_data: dict,
-    setup_data: dict,
-    request_metadata: dict[str, str] | None = None,
-    registry_config: dict[str, Any] | None = None,
-    context: Context = TaskiqDepends(),
-) -> None
-```
-
-TaskIQ task allowing a module to compute in the background asynchronously.
-
-Parameters:
-
-- ###### **`mission_id`**
-
-  (`str`) – str,
-
-- ###### **`setup_id`**
-
-  (`str`) – The setup ID associated with the module.
-
-- ###### **`setup_version_id`**
-
-  (`str`) – The setup ID associated with the module.
-
-- ###### **`module_class`**
-
-  (`type[BaseModule]`) – type[BaseModule],
-
-- ###### **`services_mode`**
-
-  (`ServicesMode`) – ServicesMode,
-
-- ###### **`input_data`**
-
-  (`dict`) – dict,
-
-- ###### **`setup_data`**
-
-  (`dict`) – dict,
-
-- ###### **`request_metadata`**
-
-  (`dict[str, str] | None`, default: `None` ) – gRPC request metadata (headers) to forward to the module.
-
-- ###### **`registry_config`**
-
-  (`dict[str, Any] | None`, default: `None` ) – Registry config (client_config) forwarded from the main process.
-
-- ###### **`context`**
-
-  (`Context`, default: `TaskiqDepends()` ) – Allow TaskIQ context access
-
-#### taskiq_job_manager
-
-Taskiq job manager module.
-
-Classes:
-
-- **`TaskiqJobManager`** – Taskiq job manager for running modules in Taskiq tasks.
-
-##### TaskiqJobManager
-
-```python
-TaskiqJobManager(
-    module_class: type[BaseModule],
-    services_mode: ServicesMode,
-    default_timeout: float = 300.0,
-    stream_timeout: float = float(get("DIGITALKIN_RSTREAM_TIMEOUT", "30.0")),
-)
-```
-
-```
-              flowchart TD
-              digitalkin.core.job_manager.taskiq_job_manager.TaskiqJobManager[TaskiqJobManager]
-              digitalkin.core.job_manager.base_job_manager.BaseJobManager[BaseJobManager]
-
-                              digitalkin.core.job_manager.base_job_manager.BaseJobManager --> digitalkin.core.job_manager.taskiq_job_manager.TaskiqJobManager
-                
-
-
-              click digitalkin.core.job_manager.taskiq_job_manager.TaskiqJobManager href "" "digitalkin.core.job_manager.taskiq_job_manager.TaskiqJobManager"
-              click digitalkin.core.job_manager.base_job_manager.BaseJobManager href "" "digitalkin.core.job_manager.base_job_manager.BaseJobManager"
-```
-
-Taskiq job manager for running modules in Taskiq tasks.
-
-Parameters:
-
-- ###### **`module_class`**
-
-  (`type[BaseModule]`) – The class of the module to be managed
-
-- ###### **`services_mode`**
-
-  (`ServicesMode`) – The mode of operation for the services
-
-- ###### **`default_timeout`**
-
-  (`float`, default: `300.0` ) – Default timeout for task operations
-
-- ###### **`stream_timeout`**
-
-  (`float`, default: `float(get('DIGITALKIN_RSTREAM_TIMEOUT', '30.0'))` ) – Timeout for stream consumer operations
-
-Methods:
-
-- **`cancel_task`** – Cancel a task.
-- **`clean_session`** – Clean a task's session.
-- **`create_config_setup_instance_job`** – Create and start a new module setup configuration job.
-- **`create_module_instance_job`** – Launches the module_task in Taskiq, returns the Taskiq task id as job_id.
-- **`create_task`** – Create a task using the task manager.
-- **`generate_config_setup_module_response`** – Generate a stream consumer for a module's output data.
-- **`generate_stream_consumer`** – Generate a stream consumer for the RStream stream.
-- **`get_module_status`** – Get module status from local session.
-- **`job_specific_callback`** – Generate a job-specific callback function.
-- **`list_modules`** – List all modules tracked in the registry with their statuses.
-- **`send_signal`** – Send signal to a task.
-- **`shutdown`** – Shutdown all tasks.
-- **`start`** – Start the TaskiqJobManager (no-op for external connections).
-- **`stop`** – Stop the TaskiqJobManager, cancel workers, and clean up all resources.
-- **`stop_all_modules`** – Stop all running modules tracked in the registry.
-- **`stop_module`** – Stop a running module using TaskManager.
-- **`wait_for_completion`** – Wait for a task to complete via stream-closed event.
-
-Attributes:
-
-- **`tasks`** (`dict[str, Any]`) – Get tasks from the task manager.
-- **`tasks_sessions`** (`dict[str, TaskSession]`) – Get task sessions from the task manager.
-
-###### tasks
-
-```python
-tasks: dict[str, Any]
-```
-
-Get tasks from the task manager.
-
-###### tasks_sessions
-
-```python
-tasks_sessions: dict[str, TaskSession]
-```
-
-Get task sessions from the task manager.
-
-###### cancel_task
-
-```python
-cancel_task(task_id: str, mission_id: str, timeout: float | None = None) -> bool
-```
-
-Cancel a task.
-
-Parameters:
-
-- ###### **`task_id`**
-
-  (`str`) – Unique identifier for the task.
-
-- ###### **`mission_id`**
-
-  (`str`) – Mission identifier.
-
-- ###### **`timeout`**
-
-  (`float | None`, default: `None` ) – Optional timeout in seconds to wait for the cancellation to complete.
-
-Returns:
-
-- **`bool`** ( `bool` ) – True if the task was successfully cancelled, False otherwise.
-
-###### clean_session
-
-```python
-clean_session(task_id: str, mission_id: str) -> bool
-```
-
-Clean a task's session.
-
-Parameters:
-
-- ###### **`task_id`**
-
-  (`str`) – Unique identifier for the task.
-
-- ###### **`mission_id`**
-
-  (`str`) – Mission identifier.
-
-Returns:
-
-- **`bool`** ( `bool` ) – True if the task was successfully cancelled, False otherwise.
-
-###### create_config_setup_instance_job
-
-```python
-create_config_setup_instance_job(
-    config_setup_data: SetupModelT,
-    mission_id: str,
-    setup_id: str,
-    setup_version_id: str,
-    request_metadata: dict[str, str] | None = None,
-) -> str
-```
-
-Create and start a new module setup configuration job.
-
-Parameters:
-
-- ###### **`config_setup_data`**
-
-  (`SetupModelT`) – The input data required to start the job.
-
-- ###### **`mission_id`**
-
-  (`str`) – The mission ID associated with the job.
-
-- ###### **`setup_id`**
-
-  (`str`) – The setup ID associated with the module.
-
-- ###### **`setup_version_id`**
-
-  (`str`) – The setup ID.
-
-- ###### **`request_metadata`**
-
-  (`dict[str, str] | None`, default: `None` ) – gRPC request metadata (headers) to forward to the module.
-
-Returns:
-
-- **`str`** ( `str` ) – The unique identifier (job ID) of the created job.
-
-Raises:
-
-- `TypeError` – If the function is called with bad data type.
-- `ValueError` – If the module fails to start.
-
-###### create_module_instance_job
-
-```python
-create_module_instance_job(
-    input_data: InputModelT,
-    setup_data: SetupModelT,
-    mission_id: str,
-    setup_id: str,
-    setup_version_id: str,
-    request_metadata: dict[str, str] | None = None,
-) -> str
-```
-
-Launches the module_task in Taskiq, returns the Taskiq task id as job_id.
-
-Parameters:
-
-- ###### **`input_data`**
-
-  (`InputModelT`) – Input data for the module
-
-- ###### **`setup_data`**
-
-  (`SetupModelT`) – Setup data for the module
-
-- ###### **`mission_id`**
-
-  (`str`) – Mission ID for the module
-
-- ###### **`setup_id`**
-
-  (`str`) – The setup ID associated with the module.
-
-- ###### **`setup_version_id`**
-
-  (`str`) – The setup ID associated with the module.
-
-- ###### **`request_metadata`**
-
-  (`dict[str, str] | None`, default: `None` ) – gRPC request metadata (headers) to forward to the module.
-
-Returns:
-
-- **`job_id`** ( `str` ) – The Taskiq task id.
-
-Raises:
-
-- `ValueError` – If the task is not found.
-
-###### create_task
-
-```python
-create_task(
-    task_id: str,
-    mission_id: str,
-    module: BaseModule,
-    coro: Coroutine[Any, Any, None],
-    **kwargs: Any,
-) -> None
-```
-
-Create a task using the task manager.
-
-Parameters:
-
-- ###### **`task_id`**
-
-  (`str`) – Unique identifier for the task
-
-- ###### **`mission_id`**
-
-  (`str`) – Mission identifier
-
-- ###### **`module`**
-
-  (`BaseModule`) – Module instance
-
-- ###### **`coro`**
-
-  (`Coroutine[Any, Any, None]`) – Coroutine to execute
-
-- ###### **`**kwargs`**
-
-  (`Any`, default: `{}` ) – Additional arguments for task creation
-
-###### generate_config_setup_module_response
-
-```python
-generate_config_setup_module_response(job_id: str) -> SetupModelT
-```
-
-Generate a stream consumer for a module's output data.
-
-Parameters:
-
-- ###### **`job_id`**
-
-  (`str`) – The unique identifier of the job.
-
-Returns:
-
-- **`SetupModelT`** ( `SetupModelT` ) – the SetupModelT object fully processed.
-
-Raises:
-
-- `TimeoutError` – If waiting for the setup response times out.
-
-###### generate_stream_consumer
-
-```python
-generate_stream_consumer(
-    job_id: str,
-) -> AsyncIterator[AsyncGenerator[dict[str, Any], None]]
-```
-
-Generate a stream consumer for the RStream stream.
-
-Parameters:
-
-- ###### **`job_id`**
-
-  (`str`) – The job ID to filter messages.
-
-Yields:
-
-- **`messages`** ( `AsyncIterator[AsyncGenerator[dict[str, Any], None]]` ) – The stream messages from the associated module.
-
-###### get_module_status
-
-```python
-get_module_status(job_id: str) -> str
-```
-
-Get module status from local session.
-
-Parameters:
-
-- ###### **`job_id`**
-
-  (`str`) – The unique identifier of the job.
-
-Returns:
-
-- `str` – Status string (e.g. "pending", "running", "completed", "failed", "cancelled").
-
-###### job_specific_callback
-
-```python
-job_specific_callback(
-    callback: Callable[[str, DataModel | ModuleCodeModel], Coroutine[Any, Any, None]],
-    job_id: str,
-) -> Callable[[DataModel | ModuleCodeModel], Coroutine[Any, Any, None]]
-```
-
-Generate a job-specific callback function.
-
-Parameters:
-
-- ###### **`callback`**
-
-  (`Callable[[str, DataModel | ModuleCodeModel], Coroutine[Any, Any, None]]`) – The callback function to be executed when the job completes.
-
-- ###### **`job_id`**
-
-  (`str`) – The unique identifier of the job.
-
-Returns:
-
-- **`Callable`** ( `Callable[[DataModel | ModuleCodeModel], Coroutine[Any, Any, None]]` ) – A wrapped callback function that includes the job ID.
-
-###### list_modules
-
-```python
-list_modules() -> dict[str, dict[str, Any]]
-```
-
-List all modules tracked in the registry with their statuses.
-
-Returns:
-
-- `dict[str, dict[str, Any]]` – dict\[str, dict[str, Any]\]: A dictionary containing information about all tracked modules.
-
-###### send_signal
-
-```python
-send_signal(task_id: str, mission_id: str, signal_type: str, payload: dict) -> bool
-```
-
-Send signal to a task.
-
-Parameters:
-
-- ###### **`task_id`**
-
-  (`str`) – Unique identifier for the task.
-
-- ###### **`mission_id`**
-
-  (`str`) – Mission identifier.
-
-- ###### **`signal_type`**
-
-  (`str`) – Type of signal to send.
-
-- ###### **`payload`**
-
-  (`dict`) – Payload data for the signal.
-
-Returns:
-
-- **`bool`** ( `bool` ) – True if the signal was successfully sent, False otherwise.
-
-###### shutdown
-
-```python
-shutdown(mission_id: str, timeout: float = 30.0) -> None
-```
-
-Shutdown all tasks.
-
-###### start
-
-```python
-start() -> None
-```
-
-Start the TaskiqJobManager (no-op for external connections).
-
-###### stop
-
-```python
-stop() -> None
-```
-
-Stop the TaskiqJobManager, cancel workers, and clean up all resources.
-
-###### stop_all_modules
-
-```python
-stop_all_modules() -> None
-```
-
-Stop all running modules tracked in the registry.
-
-###### stop_module
-
-```python
-stop_module(job_id: str) -> bool
-```
-
-Stop a running module using TaskManager.
-
-Parameters:
-
-- ###### **`job_id`**
-
-  (`str`) – The Taskiq task id to stop.
-
-Returns:
-
-- **`bool`** ( `bool` ) – True if the signal was successfully sent, False otherwise.
-
-###### wait_for_completion
-
-```python
-wait_for_completion(job_id: str, max_wait: float = 600.0) -> None
-```
-
-Wait for a task to complete via stream-closed event.
-
-Relies on `_on_message` setting `_stream_closed` when `end_of_stream` arrives from RStream. Falls back to `max_wait` timeout for crash scenarios.
-
-Parameters:
-
-- ###### **`job_id`**
-
-  (`str`) – The unique identifier of the job to wait for.
-
-- ###### **`max_wait`**
-
-  (`float`, default: `600.0` ) – Maximum time in seconds to wait before giving up.
-
-Raises:
-
-- `TimeoutError` – If max_wait is exceeded.
-
 ### profiling
 
 Profiling and monitoring tools for DigitalKin tasks and servers.
 
 Modules:
 
-- **`asyncio_monitor`** – Server-level asyncio task monitor via asyncio-inspector.
+- **`step_timer`** – Zero-alloc step timer for latency audit.
 - **`task_profiler`** – Per-task profiling wrapper for VizTracer, Yappi, and Pyinstrument.
 
 Classes:
 
-- **`AsyncioMonitor`** – Server-level asyncio task monitor with HTTP stats endpoint.
 - **`ProfilerMode`** – Profiler backend selection.
 - **`TaskProfiler`** – Per-task profiling wrapper. Zero-cost when mode is NONE.
-
-#### AsyncioMonitor
-
-```python
-AsyncioMonitor(port: int)
-```
-
-Server-level asyncio task monitor with HTTP stats endpoint.
-
-Wraps asyncio-inspector to expose real-time asyncio task statistics on an HTTP endpoint. Gracefully degrades if the package is not installed.
-
-Parameters:
-
-- ##### **`port`**
-
-  (`int`) – HTTP port for the stats endpoint.
-
-Methods:
-
-- **`start`** – Start the asyncio-inspector HTTP server.
-- **`stop`** – Stop the asyncio-inspector HTTP server.
-
-##### start
-
-```python
-start() -> None
-```
-
-Start the asyncio-inspector HTTP server.
-
-##### stop
-
-```python
-stop() -> None
-```
-
-Stop the asyncio-inspector HTTP server.
 
 #### ProfilerMode
 
@@ -5247,50 +4725,101 @@ stop() -> None
 
 Stop the profiler, log summary, and save output. No-op when mode is NONE.
 
-#### asyncio_monitor
+#### step_timer
 
-Server-level asyncio task monitor via asyncio-inspector.
+Zero-alloc step timer for latency audit.
+
+Instrument the dispatch hot path with named ns-resolution marks. One call emits one log line: `prefix: step1=Xms step2=Yms ... total=Zms task_id=...`.
+
+Usage:
+
+```text
+timer = StepTimer()
+timer.mark("validate")
+timer.mark("registry_lookup")
+...
+timer.log("dispatch", task_id)
+```
 
 Classes:
 
-- **`AsyncioMonitor`** – Server-level asyncio task monitor with HTTP stats endpoint.
+- **`StepTimer`** – Lightweight step timer. perf_counter_ns() resolution.
 
-##### AsyncioMonitor
+##### StepTimer
 
 ```python
-AsyncioMonitor(port: int)
+StepTimer()
 ```
 
-Server-level asyncio task monitor with HTTP stats endpoint.
+Lightweight step timer. `perf_counter_ns()` resolution.
 
-Wraps asyncio-inspector to expose real-time asyncio task statistics on an HTTP endpoint. Gracefully degrades if the package is not installed.
+Designed for the audit hot path — no allocations beyond a list of `(name, ns)` tuples. Idiomatic call:
 
-Parameters:
-
-- ###### **`port`**
-
-  (`int`) – HTTP port for the stats endpoint.
+```text
+t = StepTimer()
+t.mark("a"); t.mark("b"); t.mark("c")
+t.log("dispatch", task_id="abc")
+```
 
 Methods:
 
-- **`start`** – Start the asyncio-inspector HTTP server.
-- **`stop`** – Stop the asyncio-inspector HTTP server.
+- **`elapsed_now_ms`** – Elapsed ms since __init__, independent of mark cadence.
+- **`format_steps`** – Render recorded marks as name=X.XXms ... (no total, no prefix).
+- **`log`** – Emit one info line with all step deltas + total.
+- **`mark`** – Record a step with its delta from the previous mark.
+- **`total_ms`** – Total elapsed time across all marks in milliseconds.
 
-###### start
-
-```python
-start() -> None
-```
-
-Start the asyncio-inspector HTTP server.
-
-###### stop
+###### elapsed_now_ms
 
 ```python
-stop() -> None
+elapsed_now_ms() -> float
 ```
 
-Stop the asyncio-inspector HTTP server.
+Elapsed ms since `__init__`, independent of mark cadence.
+
+Returns:
+
+- **`float`** ( `float` ) – time elapsed in ms at call time.
+
+###### format_steps
+
+```python
+format_steps() -> str
+```
+
+Render recorded marks as `name=X.XXms ...` (no total, no prefix).
+
+Returns:
+
+- **`str`** ( `str` ) – space-separated name=delta_ms pairs.
+
+###### log
+
+```python
+log(prefix: str, task_id: str = '') -> None
+```
+
+Emit one info line with all step deltas + total.
+
+###### mark
+
+```python
+mark(name: str) -> None
+```
+
+Record a step with its delta from the previous mark.
+
+###### total_ms
+
+```python
+total_ms() -> float
+```
+
+Total elapsed time across all marks in milliseconds.
+
+Returns:
+
+- **`float`** ( `float` ) – time elapsed in ms
 
 #### task_profiler
 
@@ -5298,21 +4827,7 @@ Per-task profiling wrapper for VizTracer, Yappi, and Pyinstrument.
 
 Classes:
 
-- **`ProfilerMode`** – Profiler backend selection.
 - **`TaskProfiler`** – Per-task profiling wrapper. Zero-cost when mode is NONE.
-
-##### ProfilerMode
-
-```
-              flowchart TD
-              digitalkin.core.profiling.task_profiler.ProfilerMode[ProfilerMode]
-
-              
-
-              click digitalkin.core.profiling.task_profiler.ProfilerMode href "" "digitalkin.core.profiling.task_profiler.ProfilerMode"
-```
-
-Profiler backend selection.
 
 ##### TaskProfiler
 
@@ -5361,6 +4876,310 @@ stop() -> None
 
 Stop the profiler, log summary, and save output. No-op when mode is NONE.
 
+### resilience
+
+Resilience patterns for fault tolerance.
+
+- `Bulkhead`: Per-service concurrency limiter.
+
+Modules:
+
+- **`bulkhead`** – Bulkhead pattern — per-service concurrency limits.
+- **`task_supervisor`** – Tiny helper: log unhandled exceptions on fire-and-forget asyncio tasks.
+
+Classes:
+
+- **`Bulkhead`** – Per-service concurrency limiter with timeout.
+- **`BulkheadFullError`** – Raised when a bulkhead semaphore cannot be acquired within timeout.
+
+#### Bulkhead
+
+```python
+Bulkhead(service_id: str, max_concurrent: int, acquire_timeout: float)
+```
+
+Per-service concurrency limiter with timeout.
+
+Implements the bulkhead pattern: each service gets isolated concurrency so a failing/slow service cannot starve others. Singleton per service_id.
+
+Parameters:
+
+- ##### **`service_id`**
+
+  (`str`) – Service identifier.
+
+- ##### **`max_concurrent`**
+
+  (`int`) – Maximum concurrent calls allowed.
+
+- ##### **`acquire_timeout`**
+
+  (`float`) – Seconds to wait before raising BulkheadFullError.
+
+Methods:
+
+- **`__aenter__`** – Acquire a slot, waiting up to acquire_timeout.
+- **`__aexit__`** – Release the slot.
+- **`clear_all`** – Remove all bulkhead instances. For shutdown and testing.
+- **`for_service`** – Get or create a bulkhead for a service.
+- **`remove`** – Remove a specific bulkhead instance.
+
+Attributes:
+
+- **`active`** (`int`) – Number of currently active calls.
+- **`available`** (`int`) – Number of available slots.
+
+##### active
+
+```python
+active: int
+```
+
+Number of currently active calls.
+
+##### available
+
+```python
+available: int
+```
+
+Number of available slots.
+
+##### __aenter__
+
+```python
+__aenter__() -> Self
+```
+
+Acquire a slot, waiting up to acquire_timeout.
+
+Returns:
+
+- `Self` – Self for use as async context manager.
+
+Raises:
+
+- `BulkheadFullError` – If the semaphore cannot be acquired in time.
+
+##### __aexit__
+
+```python
+__aexit__(*_exc: object) -> None
+```
+
+Release the slot.
+
+##### clear_all
+
+```python
+clear_all() -> None
+```
+
+Remove all bulkhead instances. For shutdown and testing.
+
+##### for_service
+
+```python
+for_service(service_id: str) -> Bulkhead
+```
+
+Get or create a bulkhead for a service.
+
+Limits are sourced from `BulkheadSettings` (env `DIGITALKIN_BULKHEAD_DEFAULT_MAX` and `_TIMEOUT`), with a per-service override via `DIGITALKIN_BULKHEAD_{SERVICE_ID}_MAX`.
+
+Parameters:
+
+- ###### **`service_id`**
+
+  (`str`) – Service identifier (e.g., "storage", "registry").
+
+Returns:
+
+- `Bulkhead` – Bulkhead for this service.
+
+##### remove
+
+```python
+remove(service_id: str) -> None
+```
+
+Remove a specific bulkhead instance.
+
+#### BulkheadFullError
+
+```
+              flowchart TD
+              digitalkin.core.resilience.BulkheadFullError[BulkheadFullError]
+
+              
+
+              click digitalkin.core.resilience.BulkheadFullError href "" "digitalkin.core.resilience.BulkheadFullError"
+```
+
+Raised when a bulkhead semaphore cannot be acquired within timeout.
+
+#### bulkhead
+
+Bulkhead pattern — per-service concurrency limits.
+
+Prevents one slow service from consuming all available concurrency. Each service gets its own `asyncio.Semaphore` with a configurable limit. When the limit is reached, callers wait up to `acquire_timeout` before raising `BulkheadFullError`.
+
+Usage in ModuleContext or service wrapper::
+
+```text
+bulkhead = Bulkhead.for_service("storage")
+async with bulkhead:
+    await storage.read(...)
+```
+
+Classes:
+
+- **`Bulkhead`** – Per-service concurrency limiter with timeout.
+
+##### Bulkhead
+
+```python
+Bulkhead(service_id: str, max_concurrent: int, acquire_timeout: float)
+```
+
+Per-service concurrency limiter with timeout.
+
+Implements the bulkhead pattern: each service gets isolated concurrency so a failing/slow service cannot starve others. Singleton per service_id.
+
+Parameters:
+
+- ###### **`service_id`**
+
+  (`str`) – Service identifier.
+
+- ###### **`max_concurrent`**
+
+  (`int`) – Maximum concurrent calls allowed.
+
+- ###### **`acquire_timeout`**
+
+  (`float`) – Seconds to wait before raising BulkheadFullError.
+
+Methods:
+
+- **`__aenter__`** – Acquire a slot, waiting up to acquire_timeout.
+- **`__aexit__`** – Release the slot.
+- **`clear_all`** – Remove all bulkhead instances. For shutdown and testing.
+- **`for_service`** – Get or create a bulkhead for a service.
+- **`remove`** – Remove a specific bulkhead instance.
+
+Attributes:
+
+- **`active`** (`int`) – Number of currently active calls.
+- **`available`** (`int`) – Number of available slots.
+
+###### active
+
+```python
+active: int
+```
+
+Number of currently active calls.
+
+###### available
+
+```python
+available: int
+```
+
+Number of available slots.
+
+###### __aenter__
+
+```python
+__aenter__() -> Self
+```
+
+Acquire a slot, waiting up to acquire_timeout.
+
+Returns:
+
+- `Self` – Self for use as async context manager.
+
+Raises:
+
+- `BulkheadFullError` – If the semaphore cannot be acquired in time.
+
+###### __aexit__
+
+```python
+__aexit__(*_exc: object) -> None
+```
+
+Release the slot.
+
+###### clear_all
+
+```python
+clear_all() -> None
+```
+
+Remove all bulkhead instances. For shutdown and testing.
+
+###### for_service
+
+```python
+for_service(service_id: str) -> Bulkhead
+```
+
+Get or create a bulkhead for a service.
+
+Limits are sourced from `BulkheadSettings` (env `DIGITALKIN_BULKHEAD_DEFAULT_MAX` and `_TIMEOUT`), with a per-service override via `DIGITALKIN_BULKHEAD_{SERVICE_ID}_MAX`.
+
+Parameters:
+
+- ###### **`service_id`**
+
+  (`str`) – Service identifier (e.g., "storage", "registry").
+
+Returns:
+
+- `Bulkhead` – Bulkhead for this service.
+
+###### remove
+
+```python
+remove(service_id: str) -> None
+```
+
+Remove a specific bulkhead instance.
+
+#### task_supervisor
+
+Tiny helper: log unhandled exceptions on fire-and-forget asyncio tasks.
+
+Functions:
+
+- **`log_unhandled`** – Done-callback that logs uncaught exceptions on a fire-and-forget task.
+
+##### log_unhandled
+
+```python
+log_unhandled(task: Task[Any]) -> None
+```
+
+Done-callback that logs uncaught exceptions on a fire-and-forget task.
+
+Cancellation and clean exits are silent. Anything else is logged at error level with the task name and traceback — this replaces asyncio's opaque `Task exception was never retrieved` warning with an actionable log line.
+
+Usage:
+
+```text
+task = asyncio.create_task(coro, name="my_daemon")
+task.add_done_callback(log_unhandled)
+```
+
+Parameters:
+
+- ###### **`task`**
+
+  (`Task[Any]`) – The done asyncio task to inspect.
+
 ### task_manager
 
 Base task manager logic.
@@ -5369,9 +5188,11 @@ Modules:
 
 - **`base_task_manager`** – Base task manager with common lifecycle management.
 - **`local_task_manager`** – Local task manager for single-process execution.
+- **`module_runner`** – Module runner invoked by the dial-back orchestrator.
+- **`redis`** – Redis infrastructure for core task management.
 - **`remote_task_manager`** – Remote task manager for distributed execution.
-- **`task_executor`** – Task executor for running tasks with full lifecycle management.
-- **`task_session`** – Task session easing task lifecycle management.
+- **`task_executor`** – Task executor — runs module as a single asyncio task.
+- **`task_session`** – Task session lifecycle: status, cancellation, cleanup.
 
 #### base_task_manager
 
@@ -5379,7 +5200,7 @@ Base task manager with common lifecycle management.
 
 Classes:
 
-- **`BaseTaskManager`** – Base task manager with common lifecycle management.
+- **`BaseTaskManager`** – Shared task orchestration, signaling, and cancellation logic.
 
 ##### BaseTaskManager
 
@@ -5396,15 +5217,15 @@ BaseTaskManager(default_timeout: float = 300.0)
               click digitalkin.core.task_manager.base_task_manager.BaseTaskManager href "" "digitalkin.core.task_manager.base_task_manager.BaseTaskManager"
 ```
 
-Base task manager with common lifecycle management.
+Shared task orchestration, signaling, and cancellation logic.
 
-Provides shared functionality for task orchestration, monitoring, signaling, and cancellation. Subclasses implement specific execution strategies (local or remote).
+Subclasses implement local or remote execution strategies.
 
 Parameters:
 
 - ###### **`default_timeout`**
 
-  (`float`, default: `300.0` ) – Default timeout for task operations in seconds
+  (`float`, default: `300.0` ) – Default timeout for task operations in seconds.
 
 Methods:
 
@@ -5419,8 +5240,8 @@ Methods:
 
 Attributes:
 
-- **`max_concurrent_tasks`** (`int`) – Maximum number of concurrent tasks.
-- **`running_tasks`** (`set[str]`) – Get IDs of currently running tasks.
+- **`max_concurrent_tasks`** (`int`) – Maximum number of concurrent tasks (from TaskManagerSettings).
+- **`running_tasks`** (`set[str]`) – IDs of currently running tasks.
 - **`task_count`** (`int`) – Number of active tasks (pending or running).
 
 ###### max_concurrent_tasks
@@ -5429,7 +5250,7 @@ Attributes:
 max_concurrent_tasks: int
 ```
 
-Maximum number of concurrent tasks.
+Maximum number of concurrent tasks (from `TaskManagerSettings`).
 
 ###### running_tasks
 
@@ -5437,7 +5258,7 @@ Maximum number of concurrent tasks.
 running_tasks: set[str]
 ```
 
-Get IDs of currently running tasks.
+IDs of currently running tasks.
 
 ###### task_count
 
@@ -5690,8 +5511,8 @@ Methods:
 
 Attributes:
 
-- **`max_concurrent_tasks`** (`int`) – Maximum number of concurrent tasks.
-- **`running_tasks`** (`set[str]`) – Get IDs of currently running tasks.
+- **`max_concurrent_tasks`** (`int`) – Maximum number of concurrent tasks (from TaskManagerSettings).
+- **`running_tasks`** (`set[str]`) – IDs of currently running tasks.
 - **`task_count`** (`int`) – Number of active tasks (pending or running).
 
 ###### max_concurrent_tasks
@@ -5700,7 +5521,7 @@ Attributes:
 max_concurrent_tasks: int
 ```
 
-Maximum number of concurrent tasks.
+Maximum number of concurrent tasks (from `TaskManagerSettings`).
 
 ###### running_tasks
 
@@ -5708,7 +5529,7 @@ Maximum number of concurrent tasks.
 running_tasks: set[str]
 ```
 
-Get IDs of currently running tasks.
+IDs of currently running tasks.
 
 ###### task_count
 
@@ -5909,6 +5730,1903 @@ Parameters:
 
   (`float`, default: `30.0` ) – Timeout for shutdown operations
 
+#### module_runner
+
+Module runner invoked by the dial-back orchestrator.
+
+Classes:
+
+- **`ModuleRunner`** – Run one task end-to-end: setup → module instance → output drain.
+
+##### ModuleRunner
+
+```python
+ModuleRunner(redis_client: RedisClient, servicer: ModuleServicer)
+```
+
+Run one task end-to-end: setup → module instance → output drain.
+
+Parameters:
+
+- ###### **`redis_client`**
+
+  (`RedisClient`) – Redis used to write module outputs.
+
+- ###### **`servicer`**
+
+  (`ModuleServicer`) – ModuleServicer for setup and job management.
+
+Methods:
+
+- **`run`** – Execute one module task to completion.
+
+###### run
+
+```python
+run(
+    query: Struct,
+    *,
+    task_id: str,
+    setup_id: str,
+    mission_id: str,
+    on_fatal: Callable[[str, str], Awaitable[None]],
+) -> None
+```
+
+Execute one module task to completion.
+
+Parameters:
+
+- ###### **`query`**
+
+  (`Struct`) – First input Struct received from the consumer.
+
+- ###### **`task_id`**
+
+  (`str`) – Task identifier (stream key task:{task_id}:stream).
+
+- ###### **`setup_id`**
+
+  (`str`) – Setup identifier.
+
+- ###### **`mission_id`**
+
+  (`str`) – Mission identifier (logging context).
+
+- ###### **`on_fatal`**
+
+  (`Callable[[str, str], Awaitable[None]]`) – Async callback (code, message) invoked on unhandled exception; the caller writes stream.error + EOS.
+
+#### redis
+
+Redis infrastructure for core task management.
+
+Provides durable state persistence and lossless token streaming. These are core infrastructure concerns, not swappable service strategies.
+
+The `RedisClient` singleton manages connection pooling. All other classes depend on it for Redis access.
+
+Modules:
+
+- **`proto_streams`** – Zero-copy proto binary stream reader for Redis.
+- **`redis_client`** – Redis connection pool manager with split read/write pools.
+- **`redis_idempotency`** – At-most-once task-execution guard backed by an atomic Redis claim.
+- **`redis_signal`** – Redis signal transport: SharedRedisListener (pub/sub receive) + RedisSendBuffer (batched publish).
+- **`redis_state`** – Redis-backed lifecycle state manager.
+
+Classes:
+
+- **`ClaimResult`** – Result of an idempotency claim attempt.
+- **`RedisClient`** – Redis connection pool manager with split read/write pools.
+- **`RedisIdempotency`** – Atomic idem:{task_id} claim guarding at-most-once execution.
+- **`RedisStateManager`** – Persists task lifecycle state to Redis hashes.
+- **`SharedRedisListener`** – One PubSub connection per Redis URL; direct-dispatches signals to tasks.
+
+##### ClaimResult
+
+```
+              flowchart TD
+              digitalkin.core.task_manager.redis.ClaimResult[ClaimResult]
+
+              
+
+              click digitalkin.core.task_manager.redis.ClaimResult href "" "digitalkin.core.task_manager.redis.ClaimResult"
+```
+
+Result of an idempotency claim attempt.
+
+##### RedisClient
+
+```python
+RedisClient(redis_url: str)
+```
+
+Redis connection pool manager with split read/write pools.
+
+Attributes:
+
+- **`url`** (`str`) – The Redis connection URL (masked in logs).
+
+Pool sizing comes from `RedisPoolSettings` (env `DIGITALKIN_REDIS_POOL_SIZE`, `…POOL_SIZE_DEFAULT`, `…POOL_SIZE_BLOCKING`).
+
+Parameters:
+
+- ###### **`redis_url`**
+
+  (`str`) – Redis connection URL. Falls back to RedisPoolSettings.url.
+
+Methods:
+
+- **`close`** – Close both connection pools.
+- **`decr`** – Decrement a key's integer value by 1.
+- **`delete`** – Delete one or more keys.
+- **`eval`** – Execute a Lua script on Redis.
+- **`expire`** – Set a TTL on a key.
+- **`get`** – Get the value of a key.
+- **`hgetall`** – Get all fields and values in a Redis hash.
+- **`hset`** – Set fields in a Redis hash.
+- **`ping`** – Health check.
+- **`pipeline`** – Return a Pipeline for batched command execution.
+- **`publish`** – Publish a message to a Redis pub/sub channel.
+- **`pubsub`** – Return a PubSub object for subscribe operations.
+- **`sadd`** – Add members to a Redis set.
+- **`set`** – Set a key to a value with optional TTL.
+- **`smembers`** – Get all members of a Redis set.
+- **`srem`** – Remove members from a Redis set.
+- **`verify`** – Verify Redis is reachable by pinging both pools.
+- **`xadd`** – Append an entry to a Redis Stream.
+- **`xlen`** – Get the number of entries in a Redis Stream.
+- **`xread`** – Read entries from one or more Redis Streams.
+- **`xrevrange`** – Read stream entries in reverse order (newest first).
+- **`zadd`** – Add members to a sorted set with scores.
+- **`zrangebyscore`** – Get members with scores between min and max.
+- **`zrem`** – Remove members from a sorted set.
+
+###### close
+
+```python
+close() -> None
+```
+
+Close both connection pools.
+
+###### decr
+
+```python
+decr(name: str) -> int
+```
+
+Decrement a key's integer value by 1.
+
+Parameters:
+
+- ###### **`name`**
+
+  (`str`) – Key to decrement.
+
+Returns:
+
+- `int` – Value after decrement.
+
+###### delete
+
+```python
+delete(*names: str) -> int
+```
+
+Delete one or more keys.
+
+Parameters:
+
+- ###### **`*names`**
+
+  (`str`, default: `()` ) – Keys to delete.
+
+Returns:
+
+- `int` – Number of keys deleted.
+
+###### eval
+
+```python
+eval(script: str, keys: list[str], args: list[str]) -> int | str | bytes | None
+```
+
+Execute a Lua script on Redis.
+
+Parameters:
+
+- ###### **`script`**
+
+  (`str`) – Lua script source.
+
+- ###### **`keys`**
+
+  (`list[str]`) – Redis keys accessed by the script (KEYS[]).
+
+- ###### **`args`**
+
+  (`list[str]`) – Arguments passed to the script (ARGV[]).
+
+Returns:
+
+- `int | str | bytes | None` – Script return value.
+
+###### expire
+
+```python
+expire(name: str, seconds: int) -> bool
+```
+
+Set a TTL on a key.
+
+Parameters:
+
+- ###### **`name`**
+
+  (`str`) – Key to expire.
+
+- ###### **`seconds`**
+
+  (`int`) – TTL in seconds.
+
+Returns:
+
+- `bool` – True if the timeout was set.
+
+###### get
+
+```python
+get(name: str) -> bytes | None
+```
+
+Get the value of a key.
+
+Parameters:
+
+- ###### **`name`**
+
+  (`str`) – Key name.
+
+Returns:
+
+- `bytes | None` – Value as bytes, or None if key does not exist.
+
+###### hgetall
+
+```python
+hgetall(name: str) -> dict[bytes, bytes]
+```
+
+Get all fields and values in a Redis hash.
+
+Parameters:
+
+- ###### **`name`**
+
+  (`str`) – Redis hash key.
+
+Returns:
+
+- `dict[bytes, bytes]` – All field-value pairs as bytes.
+
+###### hset
+
+```python
+hset(name: str, mapping: dict[str, str | bytes]) -> int
+```
+
+Set fields in a Redis hash.
+
+Parameters:
+
+- ###### **`name`**
+
+  (`str`) – Redis hash key.
+
+- ###### **`mapping`**
+
+  (`dict[str, str | bytes]`) – Field-value pairs to set.
+
+Returns:
+
+- `int` – Number of fields added (not updated).
+
+###### ping
+
+```python
+ping() -> bool
+```
+
+Health check.
+
+Returns:
+
+- `bool` – True if Redis responds.
+
+###### pipeline
+
+```python
+pipeline() -> Pipeline
+```
+
+Return a Pipeline for batched command execution.
+
+Returns:
+
+- `Pipeline` – Pipeline instance that queues commands and executes them in one round-trip.
+
+###### publish
+
+```python
+publish(channel: str, message: str | bytes) -> int
+```
+
+Publish a message to a Redis pub/sub channel.
+
+Parameters:
+
+- ###### **`channel`**
+
+  (`str`) – Channel name.
+
+- ###### **`message`**
+
+  (`str | bytes`) – Message payload.
+
+Returns:
+
+- `int` – Number of subscribers that received the message.
+
+###### pubsub
+
+```python
+pubsub() -> PubSub
+```
+
+Return a PubSub object for subscribe operations.
+
+Returns:
+
+- `PubSub` – PubSub instance bound to this client's connection pool.
+
+###### sadd
+
+```python
+sadd(name: str, *values: str) -> int
+```
+
+Add members to a Redis set.
+
+Parameters:
+
+- ###### **`name`**
+
+  (`str`) – Set key.
+
+- ###### **`*values`**
+
+  (`str`, default: `()` ) – Members to add.
+
+Returns:
+
+- `int` – Number of members added.
+
+###### set
+
+```python
+set(name: str, value: str | bytes, *, ex: int | None = None) -> bool
+```
+
+Set a key to a value with optional TTL.
+
+Parameters:
+
+- ###### **`name`**
+
+  (`str`) – Key name.
+
+- ###### **`value`**
+
+  (`str | bytes`) – Value to set.
+
+- ###### **`ex`**
+
+  (`int | None`, default: `None` ) – TTL in seconds.
+
+Returns:
+
+- `bool` – True if set successfully.
+
+###### smembers
+
+```python
+smembers(name: str) -> set[bytes]
+```
+
+Get all members of a Redis set.
+
+Parameters:
+
+- ###### **`name`**
+
+  (`str`) – Set key.
+
+Returns:
+
+- `set[bytes]` – Set of member values as bytes.
+
+###### srem
+
+```python
+srem(name: str, *values: str) -> int
+```
+
+Remove members from a Redis set.
+
+Parameters:
+
+- ###### **`name`**
+
+  (`str`) – Set key.
+
+- ###### **`*values`**
+
+  (`str`, default: `()` ) – Members to remove.
+
+Returns:
+
+- `int` – Number of members removed.
+
+###### verify
+
+```python
+verify() -> bool
+```
+
+Verify Redis is reachable by pinging both pools.
+
+Pings `_client` and `_blocking_client` concurrently so the first XADD and first XREAD don't each pay DNS+TCP+AUTH on cold pools.
+
+Timeout comes from `RedisPoolSettings.health_check_timeout` (env `DIGITALKIN_REDIS_HEALTH_CHECK_TIMEOUT`).
+
+Returns:
+
+- `bool` – True if both pools responded, False if either is unreachable.
+
+###### xadd
+
+```python
+xadd(name: str, fields: dict[str, str | bytes], *, maxlen: int | None = None) -> bytes
+```
+
+Append an entry to a Redis Stream.
+
+Parameters:
+
+- ###### **`name`**
+
+  (`str`) – Stream key.
+
+- ###### **`fields`**
+
+  (`dict[str, str | bytes]`) – Field-value pairs for the stream entry.
+
+- ###### **`maxlen`**
+
+  (`int | None`, default: `None` ) – Optional cap on stream length (approximate trimming).
+
+Returns:
+
+- `bytes` – The auto-generated entry ID.
+
+###### xlen
+
+```python
+xlen(name: str) -> int
+```
+
+Get the number of entries in a Redis Stream.
+
+Parameters:
+
+- ###### **`name`**
+
+  (`str`) – Stream key.
+
+Returns:
+
+- `int` – Number of entries.
+
+###### xread
+
+```python
+xread(streams: dict[str, str | bytes], *, count: int = 50, block: int = 1000) -> list
+```
+
+Read entries from one or more Redis Streams.
+
+Uses the dedicated blocking pool so long-held connections don't starve non-blocking operations (xadd, hset, etc.).
+
+Parameters:
+
+- ###### **`streams`**
+
+  (`dict[str, str | bytes]`) – Mapping of stream_key to last-seen entry ID.
+
+- ###### **`count`**
+
+  (`int`, default: `50` ) – Maximum entries per stream per call.
+
+- ###### **`block`**
+
+  (`int`, default: `1000` ) – Milliseconds to block waiting for new entries (0 = no block).
+
+Returns:
+
+- `list` – List of \[stream_key, [(entry_id, fields), ...]\] pairs.
+
+###### xrevrange
+
+```python
+xrevrange(
+    name: str, max_id: str = "+", min_id: str = "-", count: int | None = None
+) -> list
+```
+
+Read stream entries in reverse order (newest first).
+
+Parameters:
+
+- ###### **`name`**
+
+  (`str`) – Stream key.
+
+- ###### **`max_id`**
+
+  (`str`, default: `'+'` ) – Upper bound entry ID (inclusive). Default "+" = newest.
+
+- ###### **`min_id`**
+
+  (`str`, default: `'-'` ) – Lower bound entry ID (inclusive). Default "-" = oldest.
+
+- ###### **`count`**
+
+  (`int | None`, default: `None` ) – Maximum entries to return.
+
+Returns:
+
+- `list` – List of (entry_id, fields) tuples, newest first.
+
+###### zadd
+
+```python
+zadd(name: str, mapping: dict[str, float]) -> int
+```
+
+Add members to a sorted set with scores.
+
+Parameters:
+
+- ###### **`name`**
+
+  (`str`) – Sorted set key.
+
+- ###### **`mapping`**
+
+  (`dict[str, float]`) – {member: score} pairs.
+
+Returns:
+
+- `int` – Number of members added.
+
+###### zrangebyscore
+
+```python
+zrangebyscore(
+    name: str, min_score: float | str = "-inf", max_score: float | str = "+inf"
+) -> list[bytes]
+```
+
+Get members with scores between min and max.
+
+Parameters:
+
+- ###### **`name`**
+
+  (`str`) – Sorted set key.
+
+- ###### **`min_score`**
+
+  (`float | str`, default: `'-inf'` ) – Minimum score (inclusive).
+
+- ###### **`max_score`**
+
+  (`float | str`, default: `'+inf'` ) – Maximum score (inclusive).
+
+Returns:
+
+- `list[bytes]` – List of member values.
+
+###### zrem
+
+```python
+zrem(name: str, *members: str) -> int
+```
+
+Remove members from a sorted set.
+
+Parameters:
+
+- ###### **`name`**
+
+  (`str`) – Sorted set key.
+
+- ###### **`*members`**
+
+  (`str`, default: `()` ) – Members to remove.
+
+Returns:
+
+- `int` – Number of members removed.
+
+##### RedisIdempotency
+
+```python
+RedisIdempotency(redis_client: RedisClient)
+```
+
+Atomic `idem:{task_id}` claim guarding at-most-once execution.
+
+Parameters:
+
+- ###### **`redis_client`**
+
+  (`RedisClient`) – Redis used for the atomic claim.
+
+Methods:
+
+- **`claim`** – Atomically claim execution of task_id.
+- **`release`** – Drop the claim so the task can be retried immediately.
+
+###### claim
+
+```python
+claim(task_id: str, instance_id: str) -> ClaimResult
+```
+
+Atomically claim execution of `task_id`.
+
+`CLAIMED` on the first claim; `RECLAIMED` if `instance_id` already owns it (same replica retrying); `TAKEN` if another replica owns it. The GET/SET is a single Lua eval so concurrent callers can never both win. The script returns the `ClaimResult` integer value (0/1/2) — a Redis integer reply.
+
+Parameters:
+
+- ###### **`task_id`**
+
+  (`str`) – Task whose execution is being claimed.
+
+- ###### **`instance_id`**
+
+  (`str`) – Stable per-process identifier of the claimer.
+
+Returns:
+
+- `ClaimResult` – The claim outcome.
+
+###### release
+
+```python
+release(task_id: str) -> None
+```
+
+Drop the claim so the task can be retried immediately.
+
+Used when a claim was acquired but execution could not start (e.g. the session was rejected at capacity), so the TTL doesn't block a legitimate retry.
+
+Parameters:
+
+- ###### **`task_id`**
+
+  (`str`) – Task whose claim is released.
+
+##### RedisStateManager
+
+```python
+RedisStateManager(redis_client: RedisClient)
+```
+
+Persists task lifecycle state to Redis hashes.
+
+Each task's state is stored at `task:{task_id}` with fields: status, created_at, started_at, completed_at, cancellation_reason, error_message, exception_traceback.
+
+TTL comes from `RedisSettings.task_ttl` (env `DIGITALKIN_REDIS_TASK_TTL`).
+
+Parameters:
+
+- ###### **`redis_client`**
+
+  (`RedisClient`) – Shared Redis connection.
+
+Methods:
+
+- **`get_status`** – Read current task state from Redis.
+- **`record_exception`** – Persist exception info alongside task state.
+- **`register_task`** – Register a new task with initial pending status.
+- **`set_status`** – Write a status transition to Redis.
+
+###### get_status
+
+```python
+get_status(task_id: str) -> dict[str, str]
+```
+
+Read current task state from Redis.
+
+Parameters:
+
+- ###### **`task_id`**
+
+  (`str`) – Unique task identifier.
+
+Returns:
+
+- `dict[str, str]` – Dict of field-value pairs, empty if task not found.
+
+###### record_exception
+
+```python
+record_exception(
+    task_id: str, error_message: str, exception_traceback: str | None = None
+) -> None
+```
+
+Persist exception info alongside task state.
+
+Parameters:
+
+- ###### **`task_id`**
+
+  (`str`) – Unique task identifier.
+
+- ###### **`error_message`**
+
+  (`str`) – Error message.
+
+- ###### **`exception_traceback`**
+
+  (`str | None`, default: `None` ) – Optional traceback string.
+
+###### register_task
+
+```python
+register_task(
+    task_id: str, mission_id: str, setup_id: str = "", setup_version_id: str = ""
+) -> None
+```
+
+Register a new task with initial pending status.
+
+Parameters:
+
+- ###### **`task_id`**
+
+  (`str`) – Unique task identifier.
+
+- ###### **`mission_id`**
+
+  (`str`) – Mission this task belongs to.
+
+- ###### **`setup_id`**
+
+  (`str`, default: `''` ) – Setup configuration ID.
+
+- ###### **`setup_version_id`**
+
+  (`str`, default: `''` ) – Setup version ID.
+
+###### set_status
+
+```python
+set_status(task_id: str, status: str, **fields: Any) -> None
+```
+
+Write a status transition to Redis.
+
+Writes atomically via HSET before the caller updates in-memory state.
+
+Parameters:
+
+- ###### **`task_id`**
+
+  (`str`) – Unique task identifier.
+
+- ###### **`status`**
+
+  (`str`) – New status value.
+
+- ###### **`**fields`**
+
+  (`Any`, default: `{}` ) – Additional fields to write (started_at, completed_at, etc.).
+
+##### SharedRedisListener
+
+```python
+SharedRedisListener(redis_client: RedisClient)
+```
+
+One PubSub connection per Redis URL; direct-dispatches signals to tasks.
+
+Methods:
+
+- **`close`** – Stop the listener and close the PubSub connection.
+- **`dispatch_signal`** – Route a signal: cancel/stop → side channel + task.cancel(); other actions → audit-only.
+- **`get_or_create`** – Reuse the listener for this Redis URL or create one; bumps refcount.
+- **`register`** – Store session + task refs; sub-millisecond, never awaits.
+- **`release`** – Drop one refcount; close + drop the instance at zero.
+- **`set_cache_invalidator`** – Register the (action_name, setup_id) handler invoked for invalidate\_\* signals.
+- **`singleton_or_none`** – Return the single active listener; None if absent.
+- **`start`** – Open PubSub, PSUBSCRIBE signal_ch:\*, and start the listen loop. Idempotent under concurrent callers.
+- **`unregister`** – Drop the task_id. Loop lifetime is process-wide; close() is the only stop site.
+
+Attributes:
+
+- **`PROCESS_ID`** (`str`) – Per-process UUID generated at class definition; identifies this listener on
+
+###### PROCESS_ID
+
+```python
+PROCESS_ID: str = uuid.uuid4().hex
+```
+
+Per-process UUID generated at class definition; identifies this listener on `signal_ch:_global_` broadcasts. `os.getpid()` collides in Docker (always 1).
+
+###### close
+
+```python
+close() -> None
+```
+
+Stop the listener and close the PubSub connection.
+
+###### dispatch_signal
+
+```python
+dispatch_signal(task_id: str, data: dict[str, Any], raw_json: str) -> bool
+```
+
+Route a signal: `cancel`/`stop` → side channel + `task.cancel()`; other actions → audit-only.
+
+Returns:
+
+- `bool` – True if dispatched, False on dedup or already-done task.
+
+###### get_or_create
+
+```python
+get_or_create(key: str, redis_client: RedisClient) -> SharedRedisListener
+```
+
+Reuse the listener for this Redis URL or create one; bumps refcount.
+
+Returns:
+
+- `SharedRedisListener` – The listener for key.
+
+###### register
+
+```python
+register(task_id: str, session: TaskSession, task: Task[None]) -> None
+```
+
+Store session + task refs; sub-millisecond, never awaits.
+
+Raises:
+
+- `RuntimeError` – If max registered tasks is exceeded or start() was never called.
+
+###### release
+
+```python
+release(key: str) -> None
+```
+
+Drop one refcount; close + drop the instance at zero.
+
+###### set_cache_invalidator
+
+```python
+set_cache_invalidator(handler: CacheInvalidator) -> None
+```
+
+Register the `(action_name, setup_id)` handler invoked for `invalidate_*` signals.
+
+###### singleton_or_none
+
+```python
+singleton_or_none() -> SharedRedisListener | None
+```
+
+Return the single active listener; `None` if absent.
+
+Returns:
+
+- `SharedRedisListener | None` – The lone instance, or None when \_instances is empty.
+
+Raises:
+
+- `RuntimeError` – If more than one instance exists.
+
+###### start
+
+```python
+start() -> None
+```
+
+Open PubSub, PSUBSCRIBE `signal_ch:*`, and start the listen loop. Idempotent under concurrent callers.
+
+###### unregister
+
+```python
+unregister(task_id: str) -> None
+```
+
+Drop the task_id. Loop lifetime is process-wide; `close()` is the only stop site.
+
+##### proto_streams
+
+Zero-copy proto binary stream reader for Redis.
+
+Reads `google.protobuf.Struct` entries stored as serialized binary bytes in a Redis Stream (`{pb, seq}` entries + an `eos` marker), as written by `module_runner._on_output` on the Gateway hot path. Avoids the JSON round-trip:
+
+Read: Redis XREAD → bytes → `Struct.ParseFromString()` (~0.1-0.5ms) vs JSON: Redis XREAD → `json.loads()` → dict → `Struct.update()` (~3-8ms)
+
+Classes:
+
+- **`ProtoStreamReader`** – Reads proto Struct binary bytes from a Redis Stream.
+
+###### ProtoStreamReader
+
+```python
+ProtoStreamReader(task_id: str, redis_client: RedisClient)
+```
+
+Reads proto Struct binary bytes from a Redis Stream.
+
+Zero-copy read: bytes → `ParseFromString()` → proto Struct. No JSON parsing, no dict intermediate.
+
+Cursor TTL comes from `GatewayStreamSettings.redis_cursor_ttl` (env `DIGITALKIN_REDIS_CURSOR_TTL`).
+
+Parameters:
+
+- ###### **`task_id`**
+
+  (`str`) – Unique task identifier.
+
+- ###### **`redis_client`**
+
+  (`RedisClient`) – Shared Redis connection.
+
+Methods:
+
+- **`read_structs`** – Read proto Structs from the stream until EOS.
+- **`restore_cursor`** – Restore the read cursor from Redis.
+
+###### read_structs
+
+```python
+read_structs(
+    count: int = 50, cursor_save_interval: int = 100, skip_to_seq: int | None = None
+) -> AsyncGenerator[Struct, None]
+```
+
+Read proto Structs from the stream until EOS.
+
+Blocks on `XREAD` for up to `block_ms` per iteration. Entries are deserialized via `ParseFromString()` (zero-copy from Redis bytes). Terminates when an entry with `eos=true` is read.
+
+Cursor is saved every `cursor_save_interval` entries (not every XREAD batch) to reduce Redis SET ops under high concurrency. Worst-case crash re-reads up to `cursor_save_interval` entries.
+
+Parameters:
+
+- ###### **`count`**
+
+  (`int`, default: `50` ) – Max entries per XREAD call.
+
+- ###### **`cursor_save_interval`**
+
+  (`int`, default: `100` ) – Save cursor every N entries (default 100).
+
+- ###### **`skip_to_seq`**
+
+  (`int | None`, default: `None` ) – If set, entries with stored seq \<= skip_to_seq are consumed (cursor and gap detection advance) but not yielded, so a resumed reader starts past the consumer's cursor.
+
+Yields:
+
+- `AsyncGenerator[Struct, None]` – Proto Struct objects from the stream.
+
+###### restore_cursor
+
+```python
+restore_cursor() -> None
+```
+
+Restore the read cursor from Redis.
+
+##### redis_client
+
+Redis connection pool manager with split read/write pools.
+
+Uses two pools: `_client` for non-blocking commands (xadd, hset, etc.) and `_blocking_client` for blocking commands (xread). This prevents blocking readers from starving writers under high concurrency.
+
+Created once at startup, passed via dependency injection, closed on shutdown.
+
+Classes:
+
+- **`RedisClient`** – Redis connection pool manager with split read/write pools.
+
+###### RedisClient
+
+```python
+RedisClient(redis_url: str)
+```
+
+Redis connection pool manager with split read/write pools.
+
+Attributes:
+
+- **`url`** (`str`) – The Redis connection URL (masked in logs).
+
+Pool sizing comes from `RedisPoolSettings` (env `DIGITALKIN_REDIS_POOL_SIZE`, `…POOL_SIZE_DEFAULT`, `…POOL_SIZE_BLOCKING`).
+
+Parameters:
+
+- ###### **`redis_url`**
+
+  (`str`) – Redis connection URL. Falls back to RedisPoolSettings.url.
+
+Methods:
+
+- **`close`** – Close both connection pools.
+- **`decr`** – Decrement a key's integer value by 1.
+- **`delete`** – Delete one or more keys.
+- **`eval`** – Execute a Lua script on Redis.
+- **`expire`** – Set a TTL on a key.
+- **`get`** – Get the value of a key.
+- **`hgetall`** – Get all fields and values in a Redis hash.
+- **`hset`** – Set fields in a Redis hash.
+- **`ping`** – Health check.
+- **`pipeline`** – Return a Pipeline for batched command execution.
+- **`publish`** – Publish a message to a Redis pub/sub channel.
+- **`pubsub`** – Return a PubSub object for subscribe operations.
+- **`sadd`** – Add members to a Redis set.
+- **`set`** – Set a key to a value with optional TTL.
+- **`smembers`** – Get all members of a Redis set.
+- **`srem`** – Remove members from a Redis set.
+- **`verify`** – Verify Redis is reachable by pinging both pools.
+- **`xadd`** – Append an entry to a Redis Stream.
+- **`xlen`** – Get the number of entries in a Redis Stream.
+- **`xread`** – Read entries from one or more Redis Streams.
+- **`xrevrange`** – Read stream entries in reverse order (newest first).
+- **`zadd`** – Add members to a sorted set with scores.
+- **`zrangebyscore`** – Get members with scores between min and max.
+- **`zrem`** – Remove members from a sorted set.
+
+###### close
+
+```python
+close() -> None
+```
+
+Close both connection pools.
+
+###### decr
+
+```python
+decr(name: str) -> int
+```
+
+Decrement a key's integer value by 1.
+
+Parameters:
+
+- ###### **`name`**
+
+  (`str`) – Key to decrement.
+
+Returns:
+
+- `int` – Value after decrement.
+
+###### delete
+
+```python
+delete(*names: str) -> int
+```
+
+Delete one or more keys.
+
+Parameters:
+
+- ###### **`*names`**
+
+  (`str`, default: `()` ) – Keys to delete.
+
+Returns:
+
+- `int` – Number of keys deleted.
+
+###### eval
+
+```python
+eval(script: str, keys: list[str], args: list[str]) -> int | str | bytes | None
+```
+
+Execute a Lua script on Redis.
+
+Parameters:
+
+- ###### **`script`**
+
+  (`str`) – Lua script source.
+
+- ###### **`keys`**
+
+  (`list[str]`) – Redis keys accessed by the script (KEYS[]).
+
+- ###### **`args`**
+
+  (`list[str]`) – Arguments passed to the script (ARGV[]).
+
+Returns:
+
+- `int | str | bytes | None` – Script return value.
+
+###### expire
+
+```python
+expire(name: str, seconds: int) -> bool
+```
+
+Set a TTL on a key.
+
+Parameters:
+
+- ###### **`name`**
+
+  (`str`) – Key to expire.
+
+- ###### **`seconds`**
+
+  (`int`) – TTL in seconds.
+
+Returns:
+
+- `bool` – True if the timeout was set.
+
+###### get
+
+```python
+get(name: str) -> bytes | None
+```
+
+Get the value of a key.
+
+Parameters:
+
+- ###### **`name`**
+
+  (`str`) – Key name.
+
+Returns:
+
+- `bytes | None` – Value as bytes, or None if key does not exist.
+
+###### hgetall
+
+```python
+hgetall(name: str) -> dict[bytes, bytes]
+```
+
+Get all fields and values in a Redis hash.
+
+Parameters:
+
+- ###### **`name`**
+
+  (`str`) – Redis hash key.
+
+Returns:
+
+- `dict[bytes, bytes]` – All field-value pairs as bytes.
+
+###### hset
+
+```python
+hset(name: str, mapping: dict[str, str | bytes]) -> int
+```
+
+Set fields in a Redis hash.
+
+Parameters:
+
+- ###### **`name`**
+
+  (`str`) – Redis hash key.
+
+- ###### **`mapping`**
+
+  (`dict[str, str | bytes]`) – Field-value pairs to set.
+
+Returns:
+
+- `int` – Number of fields added (not updated).
+
+###### ping
+
+```python
+ping() -> bool
+```
+
+Health check.
+
+Returns:
+
+- `bool` – True if Redis responds.
+
+###### pipeline
+
+```python
+pipeline() -> Pipeline
+```
+
+Return a Pipeline for batched command execution.
+
+Returns:
+
+- `Pipeline` – Pipeline instance that queues commands and executes them in one round-trip.
+
+###### publish
+
+```python
+publish(channel: str, message: str | bytes) -> int
+```
+
+Publish a message to a Redis pub/sub channel.
+
+Parameters:
+
+- ###### **`channel`**
+
+  (`str`) – Channel name.
+
+- ###### **`message`**
+
+  (`str | bytes`) – Message payload.
+
+Returns:
+
+- `int` – Number of subscribers that received the message.
+
+###### pubsub
+
+```python
+pubsub() -> PubSub
+```
+
+Return a PubSub object for subscribe operations.
+
+Returns:
+
+- `PubSub` – PubSub instance bound to this client's connection pool.
+
+###### sadd
+
+```python
+sadd(name: str, *values: str) -> int
+```
+
+Add members to a Redis set.
+
+Parameters:
+
+- ###### **`name`**
+
+  (`str`) – Set key.
+
+- ###### **`*values`**
+
+  (`str`, default: `()` ) – Members to add.
+
+Returns:
+
+- `int` – Number of members added.
+
+###### set
+
+```python
+set(name: str, value: str | bytes, *, ex: int | None = None) -> bool
+```
+
+Set a key to a value with optional TTL.
+
+Parameters:
+
+- ###### **`name`**
+
+  (`str`) – Key name.
+
+- ###### **`value`**
+
+  (`str | bytes`) – Value to set.
+
+- ###### **`ex`**
+
+  (`int | None`, default: `None` ) – TTL in seconds.
+
+Returns:
+
+- `bool` – True if set successfully.
+
+###### smembers
+
+```python
+smembers(name: str) -> set[bytes]
+```
+
+Get all members of a Redis set.
+
+Parameters:
+
+- ###### **`name`**
+
+  (`str`) – Set key.
+
+Returns:
+
+- `set[bytes]` – Set of member values as bytes.
+
+###### srem
+
+```python
+srem(name: str, *values: str) -> int
+```
+
+Remove members from a Redis set.
+
+Parameters:
+
+- ###### **`name`**
+
+  (`str`) – Set key.
+
+- ###### **`*values`**
+
+  (`str`, default: `()` ) – Members to remove.
+
+Returns:
+
+- `int` – Number of members removed.
+
+###### verify
+
+```python
+verify() -> bool
+```
+
+Verify Redis is reachable by pinging both pools.
+
+Pings `_client` and `_blocking_client` concurrently so the first XADD and first XREAD don't each pay DNS+TCP+AUTH on cold pools.
+
+Timeout comes from `RedisPoolSettings.health_check_timeout` (env `DIGITALKIN_REDIS_HEALTH_CHECK_TIMEOUT`).
+
+Returns:
+
+- `bool` – True if both pools responded, False if either is unreachable.
+
+###### xadd
+
+```python
+xadd(name: str, fields: dict[str, str | bytes], *, maxlen: int | None = None) -> bytes
+```
+
+Append an entry to a Redis Stream.
+
+Parameters:
+
+- ###### **`name`**
+
+  (`str`) – Stream key.
+
+- ###### **`fields`**
+
+  (`dict[str, str | bytes]`) – Field-value pairs for the stream entry.
+
+- ###### **`maxlen`**
+
+  (`int | None`, default: `None` ) – Optional cap on stream length (approximate trimming).
+
+Returns:
+
+- `bytes` – The auto-generated entry ID.
+
+###### xlen
+
+```python
+xlen(name: str) -> int
+```
+
+Get the number of entries in a Redis Stream.
+
+Parameters:
+
+- ###### **`name`**
+
+  (`str`) – Stream key.
+
+Returns:
+
+- `int` – Number of entries.
+
+###### xread
+
+```python
+xread(streams: dict[str, str | bytes], *, count: int = 50, block: int = 1000) -> list
+```
+
+Read entries from one or more Redis Streams.
+
+Uses the dedicated blocking pool so long-held connections don't starve non-blocking operations (xadd, hset, etc.).
+
+Parameters:
+
+- ###### **`streams`**
+
+  (`dict[str, str | bytes]`) – Mapping of stream_key to last-seen entry ID.
+
+- ###### **`count`**
+
+  (`int`, default: `50` ) – Maximum entries per stream per call.
+
+- ###### **`block`**
+
+  (`int`, default: `1000` ) – Milliseconds to block waiting for new entries (0 = no block).
+
+Returns:
+
+- `list` – List of \[stream_key, [(entry_id, fields), ...]\] pairs.
+
+###### xrevrange
+
+```python
+xrevrange(
+    name: str, max_id: str = "+", min_id: str = "-", count: int | None = None
+) -> list
+```
+
+Read stream entries in reverse order (newest first).
+
+Parameters:
+
+- ###### **`name`**
+
+  (`str`) – Stream key.
+
+- ###### **`max_id`**
+
+  (`str`, default: `'+'` ) – Upper bound entry ID (inclusive). Default "+" = newest.
+
+- ###### **`min_id`**
+
+  (`str`, default: `'-'` ) – Lower bound entry ID (inclusive). Default "-" = oldest.
+
+- ###### **`count`**
+
+  (`int | None`, default: `None` ) – Maximum entries to return.
+
+Returns:
+
+- `list` – List of (entry_id, fields) tuples, newest first.
+
+###### zadd
+
+```python
+zadd(name: str, mapping: dict[str, float]) -> int
+```
+
+Add members to a sorted set with scores.
+
+Parameters:
+
+- ###### **`name`**
+
+  (`str`) – Sorted set key.
+
+- ###### **`mapping`**
+
+  (`dict[str, float]`) – {member: score} pairs.
+
+Returns:
+
+- `int` – Number of members added.
+
+###### zrangebyscore
+
+```python
+zrangebyscore(
+    name: str, min_score: float | str = "-inf", max_score: float | str = "+inf"
+) -> list[bytes]
+```
+
+Get members with scores between min and max.
+
+Parameters:
+
+- ###### **`name`**
+
+  (`str`) – Sorted set key.
+
+- ###### **`min_score`**
+
+  (`float | str`, default: `'-inf'` ) – Minimum score (inclusive).
+
+- ###### **`max_score`**
+
+  (`float | str`, default: `'+inf'` ) – Maximum score (inclusive).
+
+Returns:
+
+- `list[bytes]` – List of member values.
+
+###### zrem
+
+```python
+zrem(name: str, *members: str) -> int
+```
+
+Remove members from a sorted set.
+
+Parameters:
+
+- ###### **`name`**
+
+  (`str`) – Sorted set key.
+
+- ###### **`*members`**
+
+  (`str`, default: `()` ) – Members to remove.
+
+Returns:
+
+- `int` – Number of members removed.
+
+##### redis_idempotency
+
+At-most-once task-execution guard backed by an atomic Redis claim.
+
+A single `StartStream` per `task_id` should drive exactly one module execution. Without a durable guard, a retried or duplicated `StartStream` (after the in-memory session was torn down, or from a second gateway replica) would re-dial and re-run the module. The claim key `idem:{task_id}` survives session teardown and is shared across replicas, so only the first caller gets `CLAIMED`; everyone else gets `RECLAIMED`/`TAKEN` and must resume the existing output via `Stream` + `from_seq` instead of re-executing.
+
+Classes:
+
+- **`RedisIdempotency`** – Atomic idem:{task_id} claim guarding at-most-once execution.
+
+###### RedisIdempotency
+
+```python
+RedisIdempotency(redis_client: RedisClient)
+```
+
+Atomic `idem:{task_id}` claim guarding at-most-once execution.
+
+Parameters:
+
+- ###### **`redis_client`**
+
+  (`RedisClient`) – Redis used for the atomic claim.
+
+Methods:
+
+- **`claim`** – Atomically claim execution of task_id.
+- **`release`** – Drop the claim so the task can be retried immediately.
+
+###### claim
+
+```python
+claim(task_id: str, instance_id: str) -> ClaimResult
+```
+
+Atomically claim execution of `task_id`.
+
+`CLAIMED` on the first claim; `RECLAIMED` if `instance_id` already owns it (same replica retrying); `TAKEN` if another replica owns it. The GET/SET is a single Lua eval so concurrent callers can never both win. The script returns the `ClaimResult` integer value (0/1/2) — a Redis integer reply.
+
+Parameters:
+
+- ###### **`task_id`**
+
+  (`str`) – Task whose execution is being claimed.
+
+- ###### **`instance_id`**
+
+  (`str`) – Stable per-process identifier of the claimer.
+
+Returns:
+
+- `ClaimResult` – The claim outcome.
+
+###### release
+
+```python
+release(task_id: str) -> None
+```
+
+Drop the claim so the task can be retried immediately.
+
+Used when a claim was acquired but execution could not start (e.g. the session was rejected at capacity), so the TTL doesn't block a legitimate retry.
+
+Parameters:
+
+- ###### **`task_id`**
+
+  (`str`) – Task whose claim is released.
+
+##### redis_signal
+
+Redis signal transport: SharedRedisListener (pub/sub receive) + RedisSendBuffer (batched publish).
+
+Classes:
+
+- **`SharedRedisListener`** – One PubSub connection per Redis URL; direct-dispatches signals to tasks.
+
+###### SharedRedisListener
+
+```python
+SharedRedisListener(redis_client: RedisClient)
+```
+
+One PubSub connection per Redis URL; direct-dispatches signals to tasks.
+
+Methods:
+
+- **`close`** – Stop the listener and close the PubSub connection.
+- **`dispatch_signal`** – Route a signal: cancel/stop → side channel + task.cancel(); other actions → audit-only.
+- **`get_or_create`** – Reuse the listener for this Redis URL or create one; bumps refcount.
+- **`register`** – Store session + task refs; sub-millisecond, never awaits.
+- **`release`** – Drop one refcount; close + drop the instance at zero.
+- **`set_cache_invalidator`** – Register the (action_name, setup_id) handler invoked for invalidate\_\* signals.
+- **`singleton_or_none`** – Return the single active listener; None if absent.
+- **`start`** – Open PubSub, PSUBSCRIBE signal_ch:\*, and start the listen loop. Idempotent under concurrent callers.
+- **`unregister`** – Drop the task_id. Loop lifetime is process-wide; close() is the only stop site.
+
+Attributes:
+
+- **`PROCESS_ID`** (`str`) – Per-process UUID generated at class definition; identifies this listener on
+
+###### PROCESS_ID
+
+```python
+PROCESS_ID: str = uuid.uuid4().hex
+```
+
+Per-process UUID generated at class definition; identifies this listener on `signal_ch:_global_` broadcasts. `os.getpid()` collides in Docker (always 1).
+
+###### close
+
+```python
+close() -> None
+```
+
+Stop the listener and close the PubSub connection.
+
+###### dispatch_signal
+
+```python
+dispatch_signal(task_id: str, data: dict[str, Any], raw_json: str) -> bool
+```
+
+Route a signal: `cancel`/`stop` → side channel + `task.cancel()`; other actions → audit-only.
+
+Returns:
+
+- `bool` – True if dispatched, False on dedup or already-done task.
+
+###### get_or_create
+
+```python
+get_or_create(key: str, redis_client: RedisClient) -> SharedRedisListener
+```
+
+Reuse the listener for this Redis URL or create one; bumps refcount.
+
+Returns:
+
+- `SharedRedisListener` – The listener for key.
+
+###### register
+
+```python
+register(task_id: str, session: TaskSession, task: Task[None]) -> None
+```
+
+Store session + task refs; sub-millisecond, never awaits.
+
+Raises:
+
+- `RuntimeError` – If max registered tasks is exceeded or start() was never called.
+
+###### release
+
+```python
+release(key: str) -> None
+```
+
+Drop one refcount; close + drop the instance at zero.
+
+###### set_cache_invalidator
+
+```python
+set_cache_invalidator(handler: CacheInvalidator) -> None
+```
+
+Register the `(action_name, setup_id)` handler invoked for `invalidate_*` signals.
+
+###### singleton_or_none
+
+```python
+singleton_or_none() -> SharedRedisListener | None
+```
+
+Return the single active listener; `None` if absent.
+
+Returns:
+
+- `SharedRedisListener | None` – The lone instance, or None when \_instances is empty.
+
+Raises:
+
+- `RuntimeError` – If more than one instance exists.
+
+###### start
+
+```python
+start() -> None
+```
+
+Open PubSub, PSUBSCRIBE `signal_ch:*`, and start the listen loop. Idempotent under concurrent callers.
+
+###### unregister
+
+```python
+unregister(task_id: str) -> None
+```
+
+Drop the task_id. Loop lifetime is process-wide; `close()` is the only stop site.
+
+##### redis_state
+
+Redis-backed lifecycle state manager.
+
+Writes task status transitions to Redis before updating in-memory state, enforcing the P1 invariant: if the process is killed after the Redis write but before the memory update, the system is consistent.
+
+Classes:
+
+- **`RedisStateManager`** – Persists task lifecycle state to Redis hashes.
+
+###### RedisStateManager
+
+```python
+RedisStateManager(redis_client: RedisClient)
+```
+
+Persists task lifecycle state to Redis hashes.
+
+Each task's state is stored at `task:{task_id}` with fields: status, created_at, started_at, completed_at, cancellation_reason, error_message, exception_traceback.
+
+TTL comes from `RedisSettings.task_ttl` (env `DIGITALKIN_REDIS_TASK_TTL`).
+
+Parameters:
+
+- ###### **`redis_client`**
+
+  (`RedisClient`) – Shared Redis connection.
+
+Methods:
+
+- **`get_status`** – Read current task state from Redis.
+- **`record_exception`** – Persist exception info alongside task state.
+- **`register_task`** – Register a new task with initial pending status.
+- **`set_status`** – Write a status transition to Redis.
+
+###### get_status
+
+```python
+get_status(task_id: str) -> dict[str, str]
+```
+
+Read current task state from Redis.
+
+Parameters:
+
+- ###### **`task_id`**
+
+  (`str`) – Unique task identifier.
+
+Returns:
+
+- `dict[str, str]` – Dict of field-value pairs, empty if task not found.
+
+###### record_exception
+
+```python
+record_exception(
+    task_id: str, error_message: str, exception_traceback: str | None = None
+) -> None
+```
+
+Persist exception info alongside task state.
+
+Parameters:
+
+- ###### **`task_id`**
+
+  (`str`) – Unique task identifier.
+
+- ###### **`error_message`**
+
+  (`str`) – Error message.
+
+- ###### **`exception_traceback`**
+
+  (`str | None`, default: `None` ) – Optional traceback string.
+
+###### register_task
+
+```python
+register_task(
+    task_id: str, mission_id: str, setup_id: str = "", setup_version_id: str = ""
+) -> None
+```
+
+Register a new task with initial pending status.
+
+Parameters:
+
+- ###### **`task_id`**
+
+  (`str`) – Unique task identifier.
+
+- ###### **`mission_id`**
+
+  (`str`) – Mission this task belongs to.
+
+- ###### **`setup_id`**
+
+  (`str`, default: `''` ) – Setup configuration ID.
+
+- ###### **`setup_version_id`**
+
+  (`str`, default: `''` ) – Setup version ID.
+
+###### set_status
+
+```python
+set_status(task_id: str, status: str, **fields: Any) -> None
+```
+
+Write a status transition to Redis.
+
+Writes atomically via HSET before the caller updates in-memory state.
+
+Parameters:
+
+- ###### **`task_id`**
+
+  (`str`) – Unique task identifier.
+
+- ###### **`status`**
+
+  (`str`) – New status value.
+
+- ###### **`**fields`**
+
+  (`Any`, default: `{}` ) – Additional fields to write (started_at, completed_at, etc.).
+
 #### remote_task_manager
 
 Remote task manager for distributed execution.
@@ -5938,13 +7656,13 @@ RemoteTaskManager(default_timeout: float = 300.0)
 
 Task manager for distributed/remote execution.
 
-Only manages task metadata and signals - actual execution happens in remote workers. Suitable for horizontally scaled deployments with Taskiq/Celery workers.
+Only manages task metadata and signals - actual execution happens in remote workers. Suitable for horizontally scaled deployments with remote workers.
 
 Parameters:
 
 - ###### **`default_timeout`**
 
-  (`float`, default: `300.0` ) – Default timeout for task operations in seconds
+  (`float`, default: `300.0` ) – Default timeout for task operations in seconds.
 
 Methods:
 
@@ -5959,8 +7677,8 @@ Methods:
 
 Attributes:
 
-- **`max_concurrent_tasks`** (`int`) – Maximum number of concurrent tasks.
-- **`running_tasks`** (`set[str]`) – Get IDs of currently running tasks.
+- **`max_concurrent_tasks`** (`int`) – Maximum number of concurrent tasks (from TaskManagerSettings).
+- **`running_tasks`** (`set[str]`) – IDs of currently running tasks.
 - **`task_count`** (`int`) – Number of active tasks (pending or running).
 
 ###### max_concurrent_tasks
@@ -5969,7 +7687,7 @@ Attributes:
 max_concurrent_tasks: int
 ```
 
-Maximum number of concurrent tasks.
+Maximum number of concurrent tasks (from `TaskManagerSettings`).
 
 ###### running_tasks
 
@@ -5977,7 +7695,7 @@ Maximum number of concurrent tasks.
 running_tasks: set[str]
 ```
 
-Get IDs of currently running tasks.
+IDs of currently running tasks.
 
 ###### task_count
 
@@ -6182,80 +7900,93 @@ Parameters:
 
 #### task_executor
 
-Task executor for running tasks with full lifecycle management.
+Task executor — runs module as a single asyncio task.
+
+Signal cancellation: `SharedRedisListener.dispatch_signal` writes the side channel (`pending_signal_action` + `last_signal_published_ns`) on the `TaskSession` and calls `task.cancel()`. The `except asyncio.CancelledError` block below reads `pending_signal_action` and invokes `_handle_stop` / `_handle_cancel` so ACK + audit fire on the live path.
 
 Classes:
 
-- **`TaskExecutor`** – Executes tasks with the supervisor pattern (main + signal listener).
+- **`TaskExecutor`** – Runs module coroutine as a single asyncio task.
 
 ##### TaskExecutor
 
-Executes tasks with the supervisor pattern (main + signal listener).
+Runs module coroutine as a single asyncio task.
 
-Pure execution logic - no task registry or orchestration. Used by workers to run distributed tasks or by TaskManager for local execution.
+Signal cancellation: SharedRedisListener calls task.cancel() directly when a cancel/stop signal arrives via Redis pub/sub. No supervisor, no signal listener task — just the module coroutine.
 
 Methods:
 
-- **`execute_task`** – Execute a task using the supervisor pattern.
+- **`execute_task`** – Execute a task as a single asyncio task.
 
 ###### execute_task
 
 ```python
 execute_task(
-    task_id: str, mission_id: str, coro: Coroutine[Any, Any, None], session: TaskSession
+    task_id: str,
+    mission_id: str,
+    coro: Coroutine[Any, Any, None],
+    session: TaskSession,
+    *,
+    on_finalize: Callable[[], Awaitable[None]] | None = None,
+    stream_drain_timeout: float = 2.0,
 ) -> Task[None]
 ```
 
-Execute a task using the supervisor pattern.
+Execute a task as a single asyncio task.
 
-Runs two concurrent sub-tasks:
-
-- Main coroutine (the actual work)
-- Signal listener (watches for stop/cancel signals)
-
-The first task to complete determines the outcome.
+Cleanup is folded into the supervisor's `finally` so no separate fire-and-forget cleanup task is spawned (one fewer task per message).
 
 Parameters:
 
 - ###### **`task_id`**
 
-  (`str`) – Unique identifier for the task
+  (`str`) – Unique identifier for the task.
 
 - ###### **`mission_id`**
 
-  (`str`) – Mission identifier for the task
+  (`str`) – Mission identifier for the task.
 
 - ###### **`coro`**
 
-  (`Coroutine[Any, Any, None]`) – The coroutine to execute (module.start(...))
+  (`Coroutine[Any, Any, None]`) – The coroutine to execute (module.start(...)).
 
 - ###### **`session`**
 
-  (`TaskSession`) – TaskSession for state management
+  (`TaskSession`) – TaskSession for state management.
+
+- ###### **`on_finalize`**
+
+  (`Callable[[], Awaitable[None]] | None`, default: `None` ) – Optional async callable invoked at the end of the supervisor's finally after stream drain — typically manager.\_cleanup_task(task_id, mission_id).
+
+- ###### **`stream_drain_timeout`**
+
+  (`float`, default: `2.0` ) – Max seconds to wait for session.stream_closed_event before forcing finalize.
 
 Returns:
 
-- `Task[None]` – asyncio.Task: The supervisor task managing the lifecycle
+- `Task[None]` – The module task.
 
 #### task_session
 
-Task session easing task lifecycle management.
+Task session lifecycle: status, cancellation, cleanup.
 
 Classes:
 
-- **`TaskSession`** – Task Session with lifecycle management.
+- **`TaskSession`** – Ephemeral lifecycle context for one task, optionally persisted to Redis.
 
 ##### TaskSession
 
 ```python
 TaskSession(
-    task_id: str, mission_id: str, module: BaseModule, queue_maxsize: int = 1000
+    task_id: str,
+    mission_id: str,
+    module: BaseModule,
+    queue_maxsize: int = 1000,
+    state_manager: RedisStateManager | None = None,
 )
 ```
 
-Task Session with lifecycle management.
-
-The Session defines the whole lifecycle of a task as an ephemeral context.
+Ephemeral lifecycle context for one task, optionally persisted to Redis.
 
 Parameters:
 
@@ -6275,19 +8006,24 @@ Parameters:
 
   (`int`, default: `1000` ) – Maximum size for the queue (0 = unlimited)
 
+- ###### **`state_manager`**
+
+  (`RedisStateManager | None`, default: `None` ) – Optional Redis state manager for persistent status tracking
+
 Methods:
 
-- **`cleanup`** – Clean up task session resources.
+- **`cleanup`** – Drain queue, release services, stop the module. Idempotent.
 - **`close_stream`** – Signal that the stream should terminate.
-- **`listen_signals`** – Signal listener for cancel signals via TaskManagerStrategy.
 - **`record_exception`** – Record exception details for logging.
+- **`set_status`** – Set status; persist to Redis if a state_manager is configured.
 
 Attributes:
 
 - **`cancelled`** (`bool`) – Task cancellation status.
-- **`session_ids`** (`dict[str, str]`) – Get all session IDs from module context for structured logging.
-- **`setup_id`** (`str`) – Get setup_id from module context.
-- **`setup_version_id`** (`str`) – Get setup_version_id from module context.
+- **`session_ids`** (`dict[str, str]`) – All session IDs from the module context for structured logging.
+- **`setup_id`** (`str`) – The setup_id from the module context.
+- **`setup_version_id`** (`str`) – The setup_version_id from the module context.
+- **`status`** (`str`) – Current task status. Use set_status() to update.
 - **`stream_closed`** (`bool`) – Check if stream termination was signaled.
 
 ###### cancelled
@@ -6304,7 +8040,7 @@ Task cancellation status.
 session_ids: dict[str, str]
 ```
 
-Get all session IDs from module context for structured logging.
+All session IDs from the module context for structured logging.
 
 ###### setup_id
 
@@ -6312,7 +8048,7 @@ Get all session IDs from module context for structured logging.
 setup_id: str
 ```
 
-Get setup_id from module context.
+The setup_id from the module context.
 
 ###### setup_version_id
 
@@ -6320,7 +8056,15 @@ Get setup_id from module context.
 setup_version_id: str
 ```
 
-Get setup_version_id from module context.
+The setup_version_id from the module context.
+
+###### status
+
+```python
+status: str
+```
+
+Current task status. Use `set_status()` to update.
 
 ###### stream_closed
 
@@ -6336,16 +8080,7 @@ Check if stream termination was signaled.
 cleanup() -> None
 ```
 
-Clean up task session resources.
-
-This method is idempotent - safe to call multiple times. Second and subsequent calls are no-ops.
-
-This includes:
-
-- Clearing queue to free memory
-- Cleaning up module context services
-- Stopping module
-- Clearing module reference
+Drain queue, release services, stop the module. Idempotent.
 
 ###### close_stream
 
@@ -6354,20 +8089,6 @@ close_stream() -> None
 ```
 
 Signal that the stream should terminate.
-
-###### listen_signals
-
-```python
-listen_signals() -> None
-```
-
-Signal listener for cancel signals via TaskManagerStrategy.
-
-Subscribes to signal updates for this task_id and processes cancel signals.
-
-Raises:
-
-- `CancelledError` – If task is cancelled during signal listening.
 
 ###### record_exception
 
@@ -6383,15 +8104,906 @@ Parameters:
 
   (`Exception`) – The exception that caused the task to fail.
 
+###### set_status
+
+```python
+set_status(value: str) -> None
+```
+
+Set status; persist to Redis if a state_manager is configured.
+
+Parameters:
+
+- ###### **`value`**
+
+  (`str`) – New status (e.g., "running", "completed", "cancelled").
+
+## exceptions
+
+Root exception for the DigitalKin SDK.
+
+Classes:
+
+- **`DigitalKinError`** – Base exception for all DigitalKin errors.
+
+### DigitalKinError
+
+```
+              flowchart TD
+              digitalkin.exceptions.DigitalKinError[DigitalKinError]
+
+              
+
+              click digitalkin.exceptions.DigitalKinError href "" "digitalkin.exceptions.DigitalKinError"
+```
+
+Base exception for all DigitalKin errors.
+
 ## grpc_servers
 
 This package contains the gRPC server and client implementations.
 
 Modules:
 
+- **`exceptions`** – Exceptions for the DigitalKin gRPC server package.
+- **`gateway_servicer`** – GatewayService gRPC servicer: StartStream, Stream, SendSignal.
+- **`interceptors`** – gRPC server interceptors for performance and resilience.
+- **`m2m_call_registry`** – Process-singleton state for in-flight M2M outbound calls.
 - **`module_server`** – Module gRPC server implementation for DigitalKin.
 - **`module_servicer`** – Module servicer implementation for DigitalKin.
+- **`stream_registry`** – Stream registry: per-instance session tracking + dial-back asyncio task supervision.
+- **`stream_session`** – Per-task session descriptor for Gateway inter-module brokering.
 - **`utils`** – gRPC servers utilities package.
+
+### exceptions
+
+Exceptions for the DigitalKin gRPC server package.
+
+Classes:
+
+- **`CircuitOpenError`** – Raised when a call is attempted on an open circuit.
+- **`ConfigurationError`** – Error related to server configuration.
+- **`M2MAtCapacityError`** – Concurrency slot couldn't be acquired before timeout.
+- **`PermissionDeniedError`** – Remote service rejected the call with gRPC PERMISSION_DENIED.
+- **`ReflectionError`** – Error related to gRPC reflection service.
+- **`SecurityError`** – Error related to security configuration.
+- **`ServerError`** – Base class for server-related errors.
+- **`ServerStateError`** – Error related to server state (e.g., already started, not started).
+- **`ServicerError`** – Error related to servicer operations.
+
+#### CircuitOpenError
+
+```
+              flowchart TD
+              digitalkin.grpc_servers.exceptions.CircuitOpenError[CircuitOpenError]
+
+              
+
+              click digitalkin.grpc_servers.exceptions.CircuitOpenError href "" "digitalkin.grpc_servers.exceptions.CircuitOpenError"
+```
+
+Raised when a call is attempted on an open circuit.
+
+#### ConfigurationError
+
+```
+              flowchart TD
+              digitalkin.grpc_servers.exceptions.ConfigurationError[ConfigurationError]
+              digitalkin.grpc_servers.exceptions.ServerError[ServerError]
+              digitalkin.exceptions.DigitalKinError[DigitalKinError]
+
+                              digitalkin.grpc_servers.exceptions.ServerError --> digitalkin.grpc_servers.exceptions.ConfigurationError
+                                digitalkin.exceptions.DigitalKinError --> digitalkin.grpc_servers.exceptions.ServerError
+                
+
+
+
+              click digitalkin.grpc_servers.exceptions.ConfigurationError href "" "digitalkin.grpc_servers.exceptions.ConfigurationError"
+              click digitalkin.grpc_servers.exceptions.ServerError href "" "digitalkin.grpc_servers.exceptions.ServerError"
+              click digitalkin.exceptions.DigitalKinError href "" "digitalkin.exceptions.DigitalKinError"
+```
+
+Error related to server configuration.
+
+#### M2MAtCapacityError
+
+```
+              flowchart TD
+              digitalkin.grpc_servers.exceptions.M2MAtCapacityError[M2MAtCapacityError]
+
+              
+
+              click digitalkin.grpc_servers.exceptions.M2MAtCapacityError href "" "digitalkin.grpc_servers.exceptions.M2MAtCapacityError"
+```
+
+Concurrency slot couldn't be acquired before timeout.
+
+#### PermissionDeniedError
+
+```
+              flowchart TD
+              digitalkin.grpc_servers.exceptions.PermissionDeniedError[PermissionDeniedError]
+              digitalkin.grpc_servers.exceptions.ServerError[ServerError]
+              digitalkin.exceptions.DigitalKinError[DigitalKinError]
+
+                              digitalkin.grpc_servers.exceptions.ServerError --> digitalkin.grpc_servers.exceptions.PermissionDeniedError
+                                digitalkin.exceptions.DigitalKinError --> digitalkin.grpc_servers.exceptions.ServerError
+                
+
+
+
+              click digitalkin.grpc_servers.exceptions.PermissionDeniedError href "" "digitalkin.grpc_servers.exceptions.PermissionDeniedError"
+              click digitalkin.grpc_servers.exceptions.ServerError href "" "digitalkin.grpc_servers.exceptions.ServerError"
+              click digitalkin.exceptions.DigitalKinError href "" "digitalkin.exceptions.DigitalKinError"
+```
+
+Remote service rejected the call with gRPC PERMISSION_DENIED.
+
+#### ReflectionError
+
+```
+              flowchart TD
+              digitalkin.grpc_servers.exceptions.ReflectionError[ReflectionError]
+              digitalkin.grpc_servers.exceptions.ServerError[ServerError]
+              digitalkin.exceptions.DigitalKinError[DigitalKinError]
+
+                              digitalkin.grpc_servers.exceptions.ServerError --> digitalkin.grpc_servers.exceptions.ReflectionError
+                                digitalkin.exceptions.DigitalKinError --> digitalkin.grpc_servers.exceptions.ServerError
+                
+
+
+
+              click digitalkin.grpc_servers.exceptions.ReflectionError href "" "digitalkin.grpc_servers.exceptions.ReflectionError"
+              click digitalkin.grpc_servers.exceptions.ServerError href "" "digitalkin.grpc_servers.exceptions.ServerError"
+              click digitalkin.exceptions.DigitalKinError href "" "digitalkin.exceptions.DigitalKinError"
+```
+
+Error related to gRPC reflection service.
+
+#### SecurityError
+
+```
+              flowchart TD
+              digitalkin.grpc_servers.exceptions.SecurityError[SecurityError]
+              digitalkin.grpc_servers.exceptions.ServerError[ServerError]
+              digitalkin.exceptions.DigitalKinError[DigitalKinError]
+
+                              digitalkin.grpc_servers.exceptions.ServerError --> digitalkin.grpc_servers.exceptions.SecurityError
+                                digitalkin.exceptions.DigitalKinError --> digitalkin.grpc_servers.exceptions.ServerError
+                
+
+
+
+              click digitalkin.grpc_servers.exceptions.SecurityError href "" "digitalkin.grpc_servers.exceptions.SecurityError"
+              click digitalkin.grpc_servers.exceptions.ServerError href "" "digitalkin.grpc_servers.exceptions.ServerError"
+              click digitalkin.exceptions.DigitalKinError href "" "digitalkin.exceptions.DigitalKinError"
+```
+
+Error related to security configuration.
+
+#### ServerError
+
+```
+              flowchart TD
+              digitalkin.grpc_servers.exceptions.ServerError[ServerError]
+              digitalkin.exceptions.DigitalKinError[DigitalKinError]
+
+                              digitalkin.exceptions.DigitalKinError --> digitalkin.grpc_servers.exceptions.ServerError
+                
+
+
+              click digitalkin.grpc_servers.exceptions.ServerError href "" "digitalkin.grpc_servers.exceptions.ServerError"
+              click digitalkin.exceptions.DigitalKinError href "" "digitalkin.exceptions.DigitalKinError"
+```
+
+Base class for server-related errors.
+
+#### ServerStateError
+
+```
+              flowchart TD
+              digitalkin.grpc_servers.exceptions.ServerStateError[ServerStateError]
+              digitalkin.grpc_servers.exceptions.ServerError[ServerError]
+              digitalkin.exceptions.DigitalKinError[DigitalKinError]
+
+                              digitalkin.grpc_servers.exceptions.ServerError --> digitalkin.grpc_servers.exceptions.ServerStateError
+                                digitalkin.exceptions.DigitalKinError --> digitalkin.grpc_servers.exceptions.ServerError
+                
+
+
+
+              click digitalkin.grpc_servers.exceptions.ServerStateError href "" "digitalkin.grpc_servers.exceptions.ServerStateError"
+              click digitalkin.grpc_servers.exceptions.ServerError href "" "digitalkin.grpc_servers.exceptions.ServerError"
+              click digitalkin.exceptions.DigitalKinError href "" "digitalkin.exceptions.DigitalKinError"
+```
+
+Error related to server state (e.g., already started, not started).
+
+#### ServicerError
+
+```
+              flowchart TD
+              digitalkin.grpc_servers.exceptions.ServicerError[ServicerError]
+              digitalkin.grpc_servers.exceptions.ServerError[ServerError]
+              digitalkin.exceptions.DigitalKinError[DigitalKinError]
+
+                              digitalkin.grpc_servers.exceptions.ServerError --> digitalkin.grpc_servers.exceptions.ServicerError
+                                digitalkin.exceptions.DigitalKinError --> digitalkin.grpc_servers.exceptions.ServerError
+                
+
+
+
+              click digitalkin.grpc_servers.exceptions.ServicerError href "" "digitalkin.grpc_servers.exceptions.ServicerError"
+              click digitalkin.grpc_servers.exceptions.ServerError href "" "digitalkin.grpc_servers.exceptions.ServerError"
+              click digitalkin.exceptions.DigitalKinError href "" "digitalkin.exceptions.DigitalKinError"
+```
+
+Error related to servicer operations.
+
+### gateway_servicer
+
+GatewayService gRPC servicer: StartStream, Stream, SendSignal.
+
+Classes:
+
+- **`GatewayServicer`** – Inter-module broker. All data flows through Redis Streams.
+
+#### GatewayServicer
+
+```python
+GatewayServicer(
+    redis_client: RedisClient,
+    cache_handler: Any = None,
+    client_config: Any = None,
+    module_runner: ModuleRunner | None = None,
+)
+```
+
+Inter-module broker. All data flows through Redis Streams.
+
+Parameters:
+
+- ##### **`redis_client`**
+
+  (`RedisClient`) – Redis for stream persistence and signals.
+
+- ##### **`cache_handler`**
+
+  (`Any`, default: `None` ) – Async callback for cache invalidation signals.
+
+- ##### **`client_config`**
+
+  (`Any`, default: `None` ) – ClientConfig for outbound dial-back.
+
+- ##### **`module_runner`**
+
+  (`ModuleRunner | None`, default: `None` ) – Orchestrator invoked once the consumer's first reply lands. Required in embedded mode.
+
+Methods:
+
+- **`AssociateTask`** – Not served by the SDK — the backend mints sub-tasks.
+- **`SendSignal`** – Forward control signal via Redis pub/sub or dispatch cache invalidation.
+- **`StartStream`** – Register a task session and schedule the dial-back.
+- **`Stream`** – BiDi: receive StreamServer from client, yield StreamClient back.
+- **`start`** – Start the M2M call-registry TTL sweeper and PSUBSCRIBE the signal listener.
+- **`stop`** – Shut down registries and cancel the M2M sweeper. Does not close the borrowed RedisClient.
+
+Attributes:
+
+- **`m2m`** (`M2MCallRegistry`) – M2M call registry shared with GrpcCommunication.
+
+##### m2m
+
+```python
+m2m: M2MCallRegistry
+```
+
+M2M call registry shared with `GrpcCommunication`.
+
+##### AssociateTask
+
+```python
+AssociateTask(request: Any, context: ServicerContext) -> Any
+```
+
+Not served by the SDK — the backend mints sub-tasks.
+
+Present only so the generated `add_GatewayServiceServicer_to_server` finds all four RPCs; nothing dials the module for it. Callers use the backend endpoint.
+
+##### SendSignal
+
+```python
+SendSignal(request: Any, context: ServicerContext) -> Any
+```
+
+Forward control signal via Redis pub/sub or dispatch cache invalidation.
+
+Parameters:
+
+- ###### **`request`**
+
+  (`Any`) – ClientSignalRequest proto.
+
+- ###### **`context`**
+
+  (`ServicerContext`) – gRPC service context.
+
+Returns:
+
+- `Any` – ClientSignalResponse proto.
+
+##### StartStream
+
+```python
+StartStream(request: Any, context: ServicerContext) -> Any
+```
+
+Register a task session and schedule the dial-back.
+
+Parameters:
+
+- ###### **`request`**
+
+  (`Any`) – StartStreamRequest proto.
+
+- ###### **`context`**
+
+  (`ServicerContext`) – gRPC service context.
+
+Returns:
+
+- `Any` – StartStreamResponse(accepted, task_id).
+
+##### Stream
+
+```python
+Stream(
+    request_iterator: AsyncIterator[Any], context: ServicerContext
+) -> AsyncGenerator[Any, None]
+```
+
+BiDi: receive StreamServer from client, yield StreamClient back.
+
+First StreamServer carries `task_id`, resume cursor in `seq`, and the query in `data`. Errors flow as `stream.error` + `stream.end` sentinels — never via `context.abort`.
+
+Parameters:
+
+- ###### **`request_iterator`**
+
+  (`AsyncIterator[Any]`) – BiDi stream of StreamServer from the client.
+
+- ###### **`context`**
+
+  (`ServicerContext`) – gRPC service context.
+
+Yields:
+
+- `AsyncGenerator[Any, None]` – StreamClient — sentinels and module output.
+
+##### start
+
+```python
+start() -> None
+```
+
+Start the M2M call-registry TTL sweeper and PSUBSCRIBE the signal listener.
+
+Pre-warms both Redis pools so the first XADD and first XREAD don't pay DNS+TCP+AUTH on cold connections.
+
+Raises:
+
+- `RedisUnreachableError` – Redis ping failed; gateway cannot serve traffic.
+
+##### stop
+
+```python
+stop() -> None
+```
+
+Shut down registries and cancel the M2M sweeper. Does not close the borrowed RedisClient.
+
+### interceptors
+
+gRPC server interceptors for performance and resilience.
+
+Modules:
+
+- **`permission`** – Client-side permission middleware for gRPC service-data access.
+- **`request_ids`** – Request-ID propagation across gRPC via ambient context + interceptors.
+
+#### permission
+
+Client-side permission middleware for gRPC service-data access.
+
+A single cross-cutting interceptor: any unary call a backend rejects with `PERMISSION_DENIED` surfaces as :class:`PermissionDeniedError`, so callers never handle permission per service. Attached on every channel, it covers all data services and module-to-module calls uniformly.
+
+The interceptor *returns* a terminal denied call rather than raising: raising a non-`AioRpcError` from an aio interceptor leaks into the intercepted call's `__del__` (grpc only swallows `AioRpcError`/`CancelledError` there), so we mirror grpc's own `UnaryUnaryCallResponse` pattern and raise from `__await__`.
+
+Classes:
+
+- **`PermissionClientInterceptor`** – Map a PERMISSION_DENIED unary reply to PermissionDeniedError.
+
+##### PermissionClientInterceptor
+
+```
+              flowchart TD
+              digitalkin.grpc_servers.interceptors.permission.PermissionClientInterceptor[PermissionClientInterceptor]
+
+              
+
+              click digitalkin.grpc_servers.interceptors.permission.PermissionClientInterceptor href "" "digitalkin.grpc_servers.interceptors.permission.PermissionClientInterceptor"
+```
+
+Map a `PERMISSION_DENIED` unary reply to `PermissionDeniedError`.
+
+Methods:
+
+- **`intercept_unary_unary`** – Return a denied call on PERMISSION_DENIED, else pass the real call through.
+
+###### intercept_unary_unary
+
+```python
+intercept_unary_unary(
+    continuation: Callable[[ClientCallDetails, Any], Awaitable[Any]],
+    client_call_details: ClientCallDetails,
+    request: Any,
+) -> Any
+```
+
+Return a denied call on PERMISSION_DENIED, else pass the real call through.
+
+Parameters:
+
+- ###### **`continuation`**
+
+  (`Callable[[ClientCallDetails, Any], Awaitable[Any]]`) – Downstream call continuation.
+
+- ###### **`client_call_details`**
+
+  (`ClientCallDetails`) – Original call details.
+
+- ###### **`request`**
+
+  (`Any`) – Request message.
+
+Returns:
+
+- `Any` – The downstream call, or a terminal call raising PermissionDeniedError on await.
+
+#### request_ids
+
+Request-ID propagation across gRPC via ambient context + interceptors.
+
+Carries `task_id`/`setup_id`/`mission_id` as `x-*` metadata on every outbound call (client interceptor) and reads them back into the ambient context server-side (server interceptor), so the log filter surfaces them on every record without threading them through call sites.
+
+Classes:
+
+- **`RequestContext`** – Ambient task/setup/mission IDs for the current async context.
+- **`RequestIdClientInterceptor`** – Append ambient request IDs as x-\* metadata on every outbound call.
+- **`RequestIdServerInterceptor`** – Bind inbound x-\* request IDs into the ambient context per call.
+
+##### RequestContext
+
+Ambient task/setup/mission IDs for the current async context.
+
+Methods:
+
+- **`as_metadata`** – Return the ambient IDs as gRPC metadata pairs.
+- **`bind`** – Set the ambient IDs (non-empty only) and return a reset token.
+- **`current`** – Return the current ambient IDs.
+- **`reset`** – Restore the previous ambient IDs.
+
+###### as_metadata
+
+```python
+as_metadata() -> list[tuple[str, str]]
+```
+
+Return the ambient IDs as gRPC metadata pairs.
+
+Returns:
+
+- `list[tuple[str, str]]` – x-task-id/x-setup-id/x-mission-id pairs for non-empty IDs.
+
+###### bind
+
+```python
+bind(
+    task_id: str = "", setup_id: str = "", mission_id: str = ""
+) -> Token[dict[str, str]]
+```
+
+Set the ambient IDs (non-empty only) and return a reset token.
+
+Parameters:
+
+- ###### **`task_id`**
+
+  (`str`, default: `''` ) – Task ID.
+
+- ###### **`setup_id`**
+
+  (`str`, default: `''` ) – Setup ID.
+
+- ###### **`mission_id`**
+
+  (`str`, default: `''` ) – Mission ID.
+
+Returns:
+
+- `Token[dict[str, str]]` – Token to pass to reset in a finally block.
+
+###### current
+
+```python
+current() -> dict[str, str]
+```
+
+Return the current ambient IDs.
+
+Returns:
+
+- `dict[str, str]` – Mapping of the non-empty IDs (empty if unset).
+
+###### reset
+
+```python
+reset(token: Token[dict[str, str]]) -> None
+```
+
+Restore the previous ambient IDs.
+
+Parameters:
+
+- ###### **`token`**
+
+  (`Token[dict[str, str]]`) – Token returned by bind.
+
+##### RequestIdClientInterceptor
+
+```
+              flowchart TD
+              digitalkin.grpc_servers.interceptors.request_ids.RequestIdClientInterceptor[RequestIdClientInterceptor]
+
+              
+
+              click digitalkin.grpc_servers.interceptors.request_ids.RequestIdClientInterceptor href "" "digitalkin.grpc_servers.interceptors.request_ids.RequestIdClientInterceptor"
+```
+
+Append ambient request IDs as `x-*` metadata on every outbound call.
+
+Methods:
+
+- **`intercept_stream_stream`** – Inject IDs on a stream-stream call.
+- **`intercept_stream_unary`** – Inject IDs on a stream-unary call.
+- **`intercept_unary_stream`** – Inject IDs on a unary-stream call.
+- **`intercept_unary_unary`** – Inject IDs on a unary-unary call.
+
+###### intercept_stream_stream
+
+```python
+intercept_stream_stream(
+    continuation: Callable[[ClientCallDetails, Any], Awaitable[Any]],
+    client_call_details: ClientCallDetails,
+    request_iterator: Any,
+) -> Any
+```
+
+Inject IDs on a stream-stream call.
+
+Parameters:
+
+- ###### **`continuation`**
+
+  (`Callable[[ClientCallDetails, Any], Awaitable[Any]]`) – Downstream call continuation.
+
+- ###### **`client_call_details`**
+
+  (`ClientCallDetails`) – Original call details.
+
+- ###### **`request_iterator`**
+
+  (`Any`) – Request message iterator.
+
+Returns:
+
+- `Any` – The downstream call.
+
+###### intercept_stream_unary
+
+```python
+intercept_stream_unary(
+    continuation: Callable[[ClientCallDetails, Any], Awaitable[Any]],
+    client_call_details: ClientCallDetails,
+    request_iterator: Any,
+) -> Any
+```
+
+Inject IDs on a stream-unary call.
+
+Parameters:
+
+- ###### **`continuation`**
+
+  (`Callable[[ClientCallDetails, Any], Awaitable[Any]]`) – Downstream call continuation.
+
+- ###### **`client_call_details`**
+
+  (`ClientCallDetails`) – Original call details.
+
+- ###### **`request_iterator`**
+
+  (`Any`) – Request message iterator.
+
+Returns:
+
+- `Any` – The downstream call.
+
+###### intercept_unary_stream
+
+```python
+intercept_unary_stream(
+    continuation: Callable[[ClientCallDetails, Any], Awaitable[Any]],
+    client_call_details: ClientCallDetails,
+    request: Any,
+) -> Any
+```
+
+Inject IDs on a unary-stream call.
+
+Parameters:
+
+- ###### **`continuation`**
+
+  (`Callable[[ClientCallDetails, Any], Awaitable[Any]]`) – Downstream call continuation.
+
+- ###### **`client_call_details`**
+
+  (`ClientCallDetails`) – Original call details.
+
+- ###### **`request`**
+
+  (`Any`) – Request message.
+
+Returns:
+
+- `Any` – The downstream call.
+
+###### intercept_unary_unary
+
+```python
+intercept_unary_unary(
+    continuation: Callable[[ClientCallDetails, Any], Awaitable[Any]],
+    client_call_details: ClientCallDetails,
+    request: Any,
+) -> Any
+```
+
+Inject IDs on a unary-unary call.
+
+Parameters:
+
+- ###### **`continuation`**
+
+  (`Callable[[ClientCallDetails, Any], Awaitable[Any]]`) – Downstream call continuation.
+
+- ###### **`client_call_details`**
+
+  (`ClientCallDetails`) – Original call details.
+
+- ###### **`request`**
+
+  (`Any`) – Request message.
+
+Returns:
+
+- `Any` – The downstream call.
+
+##### RequestIdServerInterceptor
+
+```
+              flowchart TD
+              digitalkin.grpc_servers.interceptors.request_ids.RequestIdServerInterceptor[RequestIdServerInterceptor]
+
+              
+
+              click digitalkin.grpc_servers.interceptors.request_ids.RequestIdServerInterceptor href "" "digitalkin.grpc_servers.interceptors.request_ids.RequestIdServerInterceptor"
+```
+
+Bind inbound `x-*` request IDs into the ambient context per call.
+
+Methods:
+
+- **`intercept_service`** – Wrap the resolved handler so it runs with the caller's IDs bound.
+
+###### intercept_service
+
+```python
+intercept_service(
+    continuation: Callable[
+        [HandlerCallDetails], Awaitable[RpcMethodHandler[Any, Any] | None]
+    ],
+    handler_call_details: HandlerCallDetails,
+) -> RpcMethodHandler[Any, Any] | None
+```
+
+Wrap the resolved handler so it runs with the caller's IDs bound.
+
+Parameters:
+
+- ###### **`continuation`**
+
+  (`Callable[[HandlerCallDetails], Awaitable[RpcMethodHandler[Any, Any] | None]]`) – Resolves the next handler.
+
+- ###### **`handler_call_details`**
+
+  (`HandlerCallDetails`) – Inbound call details (carries metadata).
+
+Returns:
+
+- `RpcMethodHandler[Any, Any] | None` – The handler, wrapped to bind/reset the ambient IDs when IDs are present.
+
+### m2m_call_registry
+
+Process-singleton state for in-flight M2M outbound calls.
+
+Classes:
+
+- **`M2MCallRegistry`** – In-flight outbound-call state and dial-back-receive driver.
+
+#### M2MCallRegistry
+
+```python
+M2MCallRegistry()
+```
+
+In-flight outbound-call state and dial-back-receive driver.
+
+Methods:
+
+- **`acquire_slot`** – Acquire one concurrency slot.
+- **`breaker_for`** – Lazy-create the per-target circuit breaker.
+- **`effective_advertise_address`** – host:port the local gateway advertises as its dial-back target.
+- **`get`** – Look up an in-flight call.
+- **`handle_dial_back_receive`** – Serve a dial-back BiDi initiated by a remote gateway.
+- **`has`** – Whether task_id has an in-flight entry.
+- **`register`** – Register a fresh outbound call (caller must hold a slot).
+- **`release_slot`** – Release one outbound concurrency slot.
+- **`start`** – Spawn the TTL sweeper task.
+- **`stop`** – Cancel the TTL sweeper task.
+- **`unregister`** – Remove the call entry.
+
+Attributes:
+
+- **`entries`** (`dict[str, _M2MCallEntry]`) – The live entries dict.
+
+##### entries
+
+```python
+entries: dict[str, _M2MCallEntry]
+```
+
+The live entries dict.
+
+##### acquire_slot
+
+```python
+acquire_slot() -> None
+```
+
+Acquire one concurrency slot.
+
+Raises:
+
+- `M2MAtCapacityError` – When the semaphore times out.
+
+##### breaker_for
+
+```python
+breaker_for(target_key: str) -> CircuitBreaker
+```
+
+Lazy-create the per-target circuit breaker.
+
+Returns:
+
+- `CircuitBreaker` – The circuit breaker.
+
+##### effective_advertise_address
+
+```python
+effective_advertise_address() -> str
+```
+
+`host:port` the local gateway advertises as its dial-back target.
+
+Returns:
+
+- `str` – host:port string from channel settings (advertise_host falls back to host).
+
+##### get
+
+```python
+get(task_id: str) -> _M2MCallEntry | None
+```
+
+Look up an in-flight call.
+
+Returns:
+
+- `_M2MCallEntry | None` – The entry, or None.
+
+##### handle_dial_back_receive
+
+```python
+handle_dial_back_receive(
+    task_id: str, request_iterator: AsyncIterator[Any]
+) -> AsyncGenerator[Any, None]
+```
+
+Serve a dial-back BiDi initiated by a remote gateway.
+
+Yields the cached query first, then pushes inbound Structs onto the registered `output_queue` until `stream.end` or fatal `stream.error`.
+
+Yields:
+
+- `AsyncGenerator[Any, None]` – StreamClient (the cached query).
+
+##### has
+
+```python
+has(task_id: str) -> bool
+```
+
+Whether `task_id` has an in-flight entry.
+
+Returns:
+
+- `bool` – True if present.
+
+##### register
+
+```python
+register(entry: _M2MCallEntry) -> None
+```
+
+Register a fresh outbound call (caller must hold a slot).
+
+##### release_slot
+
+```python
+release_slot() -> None
+```
+
+Release one outbound concurrency slot.
+
+##### start
+
+```python
+start() -> None
+```
+
+Spawn the TTL sweeper task.
+
+##### stop
+
+```python
+stop() -> None
+```
+
+Cancel the TTL sweeper task.
+
+##### unregister
+
+```python
+unregister(task_id: str) -> _M2MCallEntry | None
+```
+
+Remove the call entry.
+
+Returns:
+
+- `_M2MCallEntry | None` – The removed entry, or None if absent.
 
 ### module_server
 
@@ -6426,38 +9038,35 @@ ModuleServer(
 
 gRPC server for a DigitalKin module.
 
-This server exposes the module's functionality through the ModuleService gRPC interface. It can optionally register itself with a Registry server.
-
 Attributes:
 
-- **`module`** – The module instance being served.
-- **`server_config`** – Server configuration.
-- **`client_config`** – Setup client configuration.
+- **`module_class`** – The module class being served.
+- **`client_config`** – Client configuration for services and registry.
 - **`module_servicer`** (`ModuleServicer | None`) – The gRPC servicer handling module requests.
 
 Parameters:
 
 - ##### **`module_class`**
 
-  (`type[BaseModule]`) – The module instance to be served.
+  (`type[BaseModule]`) – The module class to serve.
 
 - ##### **`client_config`**
 
-  (`ClientConfig | None`, default: `None` ) – Client configuration used by services and registry connection.
+  (`ClientConfig | None`, default: `None` ) – Client configuration for services and registry.
 
 - ##### **`interceptors`**
 
-  (`Sequence[Any] | None`, default: `None` ) – Optional sequence of gRPC server interceptors.
+  (`Sequence[Any] | None`, default: `None` ) – Optional gRPC server interceptors.
 
 Methods:
 
-- **`await_termination`** – Wait for the async server to terminate.
-- **`register_servicer`** – Register a servicer with the gRPC server and track it for reflection.
-- **`start`** – Start the module server and register with the registry if configured.
-- **`start_async`** – Start the module server and register with the registry if configured.
-- **`stop`** – Stop the gRPC server and close all cached gRPC client channels.
+- **`await_termination`** – Await termination of the async server; warn on sync mode.
+- **`register_servicer`** – Register a servicer and track its names for reflection.
+- **`start`** – Start the gRPC server (sync or async per settings).
+- **`start_async`** – Start the module server.
+- **`stop`** – Stop the gRPC server and close cached client channels.
 - **`stop_async`** – Stop the module server with async cleanup.
-- **`wait_for_termination`** – Wait for the server to terminate.
+- **`wait_for_termination`** – Block until the sync server terminates; warn on async mode.
 
 ##### await_termination
 
@@ -6465,9 +9074,7 @@ Methods:
 await_termination() -> None
 ```
 
-Wait for the async server to terminate.
-
-This method should only be used with async servers.
+Await termination of the async server; warn on sync mode.
 
 ##### register_servicer
 
@@ -6480,29 +9087,29 @@ register_servicer(
 ) -> None
 ```
 
-Register a servicer with the gRPC server and track it for reflection.
+Register a servicer and track its names for reflection.
 
 Parameters:
 
 - ###### **`servicer`**
 
-  (`T`) – The servicer implementation instance
+  (`T`) – The servicer instance.
 
 - ###### **`add_to_server_fn`**
 
-  (`Callable[[T, GrpcServer], None]`) – The function to add the servicer to the server
+  (`Callable[[T, GrpcServer], None]`) – Function adding the servicer to the server.
 
 - ###### **`service_descriptor`**
 
-  (`ServiceDescriptor | None`, default: `None` ) – Optional service descriptor (pb2 DESCRIPTOR)
+  (`ServiceDescriptor | None`, default: `None` ) – Optional pb2 DESCRIPTOR.
 
 - ###### **`service_names`**
 
-  (`list[str] | None`, default: `None` ) – Optional explicit list of service full names
+  (`list[str] | None`, default: `None` ) – Optional explicit list of service full names.
 
 Raises:
 
-- `ServicerError` – If the server is not created before calling
+- `ServicerError` – If the server is not created.
 
 ##### start
 
@@ -6510,7 +9117,11 @@ Raises:
 start() -> None
 ```
 
-Start the module server and register with the registry if configured.
+Start the gRPC server (sync or async per settings).
+
+Raises:
+
+- `ServerStateError` – If the server fails to start.
 
 ##### start_async
 
@@ -6518,7 +9129,11 @@ Start the module server and register with the registry if configured.
 start_async() -> None
 ```
 
-Start the module server and register with the registry if configured.
+Start the module server.
+
+Raises:
+
+- `RuntimeError` – If module_servicer failed to initialize.
 
 ##### stop
 
@@ -6526,13 +9141,13 @@ Start the module server and register with the registry if configured.
 stop(grace: float | None = None) -> None
 ```
 
-Stop the gRPC server and close all cached gRPC client channels.
+Stop the gRPC server and close cached client channels.
 
 Parameters:
 
 - ###### **`grace`**
 
-  (`float | None`, default: `None` ) – Optional grace period in seconds for existing RPCs to complete.
+  (`float | None`, default: `None` ) – Optional grace period in seconds.
 
 ##### stop_async
 
@@ -6542,17 +9157,13 @@ stop_async(grace: float | None = None) -> None
 
 Stop the module server with async cleanup.
 
-Deregisters from registry and stops the server. Modules also become inactive when they stop sending heartbeats as a fallback.
-
 ##### wait_for_termination
 
 ```python
 wait_for_termination() -> None
 ```
 
-Wait for the server to terminate.
-
-In synchronous mode, this blocks until the server is terminated. In asynchronous mode, a warning is logged suggesting to use `await_termination`.
+Block until the sync server terminates; warn on async mode.
 
 ### module_servicer
 
@@ -6560,7 +9171,7 @@ Module servicer implementation for DigitalKin.
 
 Classes:
 
-- **`ModuleServicer`** – Implementation of the ModuleService.
+- **`ModuleServicer`** – gRPC ModuleService implementation.
 
 #### ModuleServicer
 
@@ -6581,20 +9192,17 @@ ModuleServicer(module_class: type[BaseModule])
               click digitalkin.utils.arg_parser.ArgParser href "" "digitalkin.utils.arg_parser.ArgParser"
 ```
 
-Implementation of the ModuleService.
-
-This servicer handles interactions with a DigitalKin module.
-
-Attributes:
-
-- **`module`** – The module instance being served.
-- **`active_jobs`** – Dictionary tracking active module jobs.
+gRPC ModuleService implementation.
 
 Parameters:
 
 - ##### **`module_class`**
 
   (`type[BaseModule]`) – The module type to serve.
+
+Raises:
+
+- `RuntimeError` – If DIGITALKIN_REDIS_URL is not set.
 
 Classes:
 
@@ -6610,9 +9218,13 @@ Methods:
 - **`GetModuleSecret`** – Get information about the module's secrets.
 - **`GetModuleSelectInput`** – Get the trigger selection schema for the module.
 - **`GetModuleSetup`** – Get information about the module's setup and configuration.
-- **`StartModule`** – Start a module execution.
-- **`StopModule`** – Stop a running module execution.
-- **`shutdown`** – Release servicer-level resources (GrpcSetup channel, registry cache).
+- **`get_or_build_tool_cache`** – Singleflight TTL'd lookup; builder() runs at most once per miss.
+- **`get_tool_cache`** – TTL'd lookup; None on miss or expiry.
+- **`invalidate_setup_cache`** – Clear setup cache. Next request re-fetches from services-provider.
+- **`invalidate_tool_cache`** – Clear tool cache. Next request re-resolves tool definitions.
+- **`resolve_setup`** – Return setup version data from cache or remote service.
+- **`set_tool_cache`** – Insert value with TTL GatewayQueueSettings.toolkit_cache_ttl_s.
+- **`shutdown`** – Release servicer-level resources (GrpcSetup channel, registry cache, Redis pools).
 
 ##### HelpAction
 
@@ -6840,55 +9452,106 @@ Returns:
 
 - `GetModuleSetupResponse` – A response with the module's setup information.
 
-##### StartModule
+##### get_or_build_tool_cache
 
 ```python
-StartModule(
-    request: StartModuleRequest, context: ServicerContext
-) -> AsyncGenerator[StartModuleResponse, Any]
+get_or_build_tool_cache(setup_id: str, builder: Callable[[], Awaitable[Any]]) -> Any
 ```
 
-Start a module execution.
+Singleflight TTL'd lookup; `builder()` runs at most once per miss.
 
 Parameters:
 
-- ###### **`request`**
+- ###### **`setup_id`**
 
-  (`StartModuleRequest`) – Iterator of start module requests.
+  (`str`) – Setup identifier.
 
-- ###### **`context`**
+- ###### **`builder`**
 
-  (`ServicerContext`) – The gRPC context.
-
-Yields:
-
-- `AsyncGenerator[StartModuleResponse, Any]` – Responses during module execution.
-
-Raises:
-
-- `ServicerError` – the necessary query didn't work.
-
-##### StopModule
-
-```python
-StopModule(request: StopModuleRequest, context: ServicerContext) -> StopModuleResponse
-```
-
-Stop a running module execution.
-
-Parameters:
-
-- ###### **`request`**
-
-  (`StopModuleRequest`) – The stop module request.
-
-- ###### **`context`**
-
-  (`ServicerContext`) – The gRPC context.
+  (`Callable[[], Awaitable[Any]]`) – Zero-arg coroutine factory; called only on miss.
 
 Returns:
 
-- `StopModuleResponse` – A response indicating success or failure.
+- `Any` – Cached or freshly-built tool cache value.
+
+##### get_tool_cache
+
+```python
+get_tool_cache(setup_id: str) -> Any | None
+```
+
+TTL'd lookup; `None` on miss or expiry.
+
+Parameters:
+
+- ###### **`setup_id`**
+
+  (`str`) – Setup identifier.
+
+Returns:
+
+- `Any | None` – Cached tool definition, or None.
+
+##### invalidate_setup_cache
+
+```python
+invalidate_setup_cache() -> None
+```
+
+Clear setup cache. Next request re-fetches from services-provider.
+
+##### invalidate_tool_cache
+
+```python
+invalidate_tool_cache() -> None
+```
+
+Clear tool cache. Next request re-resolves tool definitions.
+
+##### resolve_setup
+
+```python
+resolve_setup(setup_id: str, mission_id: str) -> SetupVersionData
+```
+
+Return setup version data from cache or remote service.
+
+Parameters:
+
+- ###### **`setup_id`**
+
+  (`str`) – The setup identifier.
+
+- ###### **`mission_id`**
+
+  (`str`) – The mission identifier (used only on cache miss).
+
+Returns:
+
+- `SetupVersionData` – SetupVersionData with at least id, setup_id, and content populated.
+
+Raises:
+
+- `LookupError` – No setup data found for setup_id.
+- `PermissionDeniedError` – If the caller may not access this setup.
+
+##### set_tool_cache
+
+```python
+set_tool_cache(setup_id: str, value: Any) -> None
+```
+
+Insert `value` with TTL `GatewayQueueSettings.toolkit_cache_ttl_s`.
+
+Parameters:
+
+- ###### **`setup_id`**
+
+  (`str`) – Setup identifier.
+
+- ###### **`value`**
+
+  (`Any`) – Tool definition object to cache.
 
 ##### shutdown
 
@@ -6896,7 +9559,203 @@ Returns:
 shutdown() -> None
 ```
 
-Release servicer-level resources (GrpcSetup channel, registry cache).
+Release servicer-level resources (GrpcSetup channel, registry cache, Redis pools).
+
+### stream_registry
+
+Stream registry: per-instance session tracking + dial-back asyncio task supervision.
+
+Sessions are tracked in a local bounded LRU cache. Session lifecycle is bound to the dial-back asyncio task: the task's `finally` calls `unregister` on normal completion; if it doesn't run (process killed, `BaseException` propagated past finally), the task done-callback force-unregisters as a backstop.
+
+No Redis I/O on register/unregister — the gateway is fully local for session lifecycle. The previous Redis session-state mirror had no readers once the heartbeat reaper was retired.
+
+Classes:
+
+- **`StreamRegistry`** – Tracks active stream sessions per-instance + supervises spawned tasks.
+
+#### StreamRegistry
+
+```python
+StreamRegistry(redis_client: RedisClient | None = None)
+```
+
+Tracks active stream sessions per-instance + supervises spawned tasks.
+
+Local dict is a bounded LRU cache of sessions with active BiDi connections on this gateway instance. Capacity is enforced process-locally against `max_streams`.
+
+Capacity comes from `GatewaySettings` (env `DIGITALKIN_GATEWAY_MAX_STREAMS`).
+
+Parameters:
+
+- ##### **`redis_client`**
+
+  (`RedisClient | None`, default: `None` ) – Unused (kept for back-compat); the registry no longer touches Redis on register/unregister.
+
+Methods:
+
+- **`get`** – Get a session from local cache.
+- **`monitor_task`** – Track a fire-and-forget asyncio task for the reaper to supervise.
+- **`register`** – Register a new session. Capacity is enforced process-locally.
+- **`shutdown`** – Cancel monitored tasks then tear down any remaining sessions.
+- **`unregister`** – Unregister a session from the local cache.
+
+Attributes:
+
+- **`active_count`** (`int`) – Number of locally cached sessions.
+
+##### active_count
+
+```python
+active_count: int
+```
+
+Number of locally cached sessions.
+
+##### get
+
+```python
+get(task_id: str) -> StreamSession | None
+```
+
+Get a session from local cache.
+
+Parameters:
+
+- ###### **`task_id`**
+
+  (`str`) – Session identifier.
+
+Returns:
+
+- `StreamSession | None` – The session, or None if not cached locally.
+
+##### monitor_task
+
+```python
+monitor_task(task: Task[Any]) -> None
+```
+
+Track a fire-and-forget asyncio task for the reaper to supervise.
+
+The reaper has one job: monitor tasks and clean them. Calling `monitor_task` enrolls `task` in that watch:
+
+- The registry holds a strong reference, so the task can't be garbage-collected mid-flight.
+- When the task finishes, the done-callback runs: cancellation and clean exits are silent; an unhandled exception is logged at error level. This replaces asyncio's opaque `Task exception was never retrieved` warning with a real, actionable log line tagged with the task name.
+- On `shutdown()`, every still-running monitored task is cancelled and awaited.
+
+Parameters:
+
+- ###### **`task`**
+
+  (`Task[Any]`) – An asyncio.Task to supervise.
+
+##### register
+
+```python
+register(session: StreamSession, setup_id: str = '', mission_id: str = '') -> bool
+```
+
+Register a new session. Capacity is enforced process-locally.
+
+Parameters:
+
+- ###### **`session`**
+
+  (`StreamSession`) – The stream session to register.
+
+- ###### **`setup_id`**
+
+  (`str`, default: `''` ) – Accepted for back-compat; no longer persisted to Redis.
+
+- ###### **`mission_id`**
+
+  (`str`, default: `''` ) – Accepted for back-compat; no longer persisted to Redis.
+
+Returns:
+
+- `bool` – True if registered, False if at capacity (this instance).
+
+##### shutdown
+
+```python
+shutdown() -> None
+```
+
+Cancel monitored tasks then tear down any remaining sessions.
+
+Order matters:
+
+1. Cancel every monitored asyncio task. Their `finally` blocks run — including `_dial_consumer.finally`, which calls `unregister(task_id)` — so most sessions clean themselves up.
+1. Sweep any sessions left in `_local_cache` defensively.
+
+##### unregister
+
+```python
+unregister(task_id: str) -> StreamSession | None
+```
+
+Unregister a session from the local cache.
+
+Parameters:
+
+- ###### **`task_id`**
+
+  (`str`) – Session to remove.
+
+Returns:
+
+- `StreamSession | None` – The removed session, or None if not found locally.
+
+### stream_session
+
+Per-task session descriptor for Gateway inter-module brokering.
+
+The session is a thin descriptor: all stream data (consumer→module input, module→consumer output) flows through Redis Streams. The session only carries identity and a stop event for graceful cancellation.
+
+Classes:
+
+- **`StreamSession`** – Per-task session descriptor in the Gateway.
+
+#### StreamSession
+
+```python
+StreamSession(task_id: str)
+```
+
+Per-task session descriptor in the Gateway.
+
+No queues. Input and output both flow through Redis Streams (`task:{task_id}:input` and `task:{task_id}:stream`).
+
+Attributes:
+
+- **`task_id`** (`str`) – Client-provided reference ID (universal key).
+
+Parameters:
+
+- ##### **`task_id`**
+
+  (`str`) – Client-provided task reference ID.
+
+Methods:
+
+- **`stop`** – Signal graceful stop to readers.
+- **`teardown`** – Signal stop to readers (the dial-back task is reaped by the registry).
+
+##### stop
+
+```python
+stop() -> None
+```
+
+Signal graceful stop to readers.
+
+##### teardown
+
+```python
+teardown() -> None
+```
+
+Signal stop to readers (the dial-back task is reaped by the registry).
 
 ### utils
 
@@ -6904,163 +9763,178 @@ gRPC servers utilities package.
 
 Modules:
 
-- **`exceptions`** – Exceptions for the DigitalKin gRPC package.
+- **`circuit_breaker`** – Per-service circuit breaker: CLOSED -> OPEN -> HALF_OPEN -> CLOSED.
 - **`grpc_client_wrapper`** – Client wrapper to ease channel creation with specific ServerConfig.
 - **`grpc_error_handler`** – Shared error handling utilities for gRPC services.
 - **`utility_schema_extender`** – Utility schema extender for gRPC API responses.
+- **`validators`** – Gateway-input validators bundled as classmethods on a single class.
 
-#### exceptions
+#### circuit_breaker
 
-Exceptions for the DigitalKin gRPC package.
+Per-service circuit breaker: CLOSED -> OPEN -> HALF_OPEN -> CLOSED.
+
+Protects outbound gRPC calls from cascade failure. When a service fails repeatedly, the circuit opens and all calls fail fast with `CircuitOpenError` instead of waiting for the full timeout.
+
+Integrates into `GrpcClientWrapper.exec_grpc_query()` as a pre/post hook.
 
 Classes:
 
-- **`ConfigurationError`** – Error related to server configuration.
-- **`DigitalKinError`** – Base exception for all DigitalKin errors.
-- **`ReflectionError`** – Error related to gRPC reflection service.
-- **`SecurityError`** – Error related to security configuration.
-- **`ServerError`** – Base class for server-related errors.
-- **`ServerStateError`** – Error related to server state (e.g., already started, not started).
-- **`ServicerError`** – Error related to servicer operations.
+- **`CircuitBreaker`** – Per-service circuit breaker with local state.
 
-##### ConfigurationError
+##### CircuitBreaker
 
-```
-              flowchart TD
-              digitalkin.grpc_servers.utils.exceptions.ConfigurationError[ConfigurationError]
-              digitalkin.grpc_servers.utils.exceptions.ServerError[ServerError]
-              digitalkin.grpc_servers.utils.exceptions.DigitalKinError[DigitalKinError]
-
-                              digitalkin.grpc_servers.utils.exceptions.ServerError --> digitalkin.grpc_servers.utils.exceptions.ConfigurationError
-                                digitalkin.grpc_servers.utils.exceptions.DigitalKinError --> digitalkin.grpc_servers.utils.exceptions.ServerError
-                
-
-
-
-              click digitalkin.grpc_servers.utils.exceptions.ConfigurationError href "" "digitalkin.grpc_servers.utils.exceptions.ConfigurationError"
-              click digitalkin.grpc_servers.utils.exceptions.ServerError href "" "digitalkin.grpc_servers.utils.exceptions.ServerError"
-              click digitalkin.grpc_servers.utils.exceptions.DigitalKinError href "" "digitalkin.grpc_servers.utils.exceptions.DigitalKinError"
+```python
+CircuitBreaker(service_id: str, fail_max: int, reset_timeout: float)
 ```
 
-Error related to server configuration.
+Per-service circuit breaker with local state.
 
-##### DigitalKinError
+State machine:
 
-```
-              flowchart TD
-              digitalkin.grpc_servers.utils.exceptions.DigitalKinError[DigitalKinError]
+- CLOSED: all calls pass. Failure counter increments on error, resets on success.
+- OPEN (after fail_max consecutive failures): all calls fail with CircuitOpenError.
+- HALF_OPEN (after reset_timeout): one probe call allowed. Success -> CLOSED, failure -> OPEN.
 
-              
+Attributes:
 
-              click digitalkin.grpc_servers.utils.exceptions.DigitalKinError href "" "digitalkin.grpc_servers.utils.exceptions.DigitalKinError"
-```
+- **`service_id`** (`str`) – Identifier for the protected service.
 
-Base exception for all DigitalKin errors.
+Parameters:
 
-##### ReflectionError
+- ###### **`service_id`**
 
-```
-              flowchart TD
-              digitalkin.grpc_servers.utils.exceptions.ReflectionError[ReflectionError]
-              digitalkin.grpc_servers.utils.exceptions.ServerError[ServerError]
-              digitalkin.grpc_servers.utils.exceptions.DigitalKinError[DigitalKinError]
+  (`str`) – Identifier for the protected service.
 
-                              digitalkin.grpc_servers.utils.exceptions.ServerError --> digitalkin.grpc_servers.utils.exceptions.ReflectionError
-                                digitalkin.grpc_servers.utils.exceptions.DigitalKinError --> digitalkin.grpc_servers.utils.exceptions.ServerError
-                
+- ###### **`fail_max`**
 
+  (`int`) – Consecutive failures before opening.
 
+- ###### **`reset_timeout`**
 
-              click digitalkin.grpc_servers.utils.exceptions.ReflectionError href "" "digitalkin.grpc_servers.utils.exceptions.ReflectionError"
-              click digitalkin.grpc_servers.utils.exceptions.ServerError href "" "digitalkin.grpc_servers.utils.exceptions.ServerError"
-              click digitalkin.grpc_servers.utils.exceptions.DigitalKinError href "" "digitalkin.grpc_servers.utils.exceptions.DigitalKinError"
-```
+  (`float`) – Seconds before half-open probe.
 
-Error related to gRPC reflection service.
+Raises:
 
-##### SecurityError
+- `ValueError` – If fail_max or reset_timeout are not positive.
 
-```
-              flowchart TD
-              digitalkin.grpc_servers.utils.exceptions.SecurityError[SecurityError]
-              digitalkin.grpc_servers.utils.exceptions.ServerError[ServerError]
-              digitalkin.grpc_servers.utils.exceptions.DigitalKinError[DigitalKinError]
+Methods:
 
-                              digitalkin.grpc_servers.utils.exceptions.ServerError --> digitalkin.grpc_servers.utils.exceptions.SecurityError
-                                digitalkin.grpc_servers.utils.exceptions.DigitalKinError --> digitalkin.grpc_servers.utils.exceptions.ServerError
-                
+- **`check`** – Check if a call is allowed. Must be called before each outbound call.
+- **`clear_all`** – Remove all circuit breaker instances. For shutdown and testing.
+- **`get_or_create`** – Get existing circuit breaker for a service or create one.
+- **`record_failure`** – Record a failed call. Increments counter and may open circuit.
+- **`record_success`** – Record a successful call. Resets failure counter and closes circuit.
+- **`release_probe`** – Release a half-open probe slot without recording an outcome.
+- **`remove`** – Remove a circuit breaker for a service. Prevents singleton leak.
+- **`reset`** – Force reset to CLOSED state.
 
+###### state
 
-
-              click digitalkin.grpc_servers.utils.exceptions.SecurityError href "" "digitalkin.grpc_servers.utils.exceptions.SecurityError"
-              click digitalkin.grpc_servers.utils.exceptions.ServerError href "" "digitalkin.grpc_servers.utils.exceptions.ServerError"
-              click digitalkin.grpc_servers.utils.exceptions.DigitalKinError href "" "digitalkin.grpc_servers.utils.exceptions.DigitalKinError"
+```python
+state: CBState
 ```
 
-Error related to security configuration.
+Current circuit state, auto-transitioning OPEN -> HALF_OPEN on timeout.
 
-##### ServerError
+###### check
 
-```
-              flowchart TD
-              digitalkin.grpc_servers.utils.exceptions.ServerError[ServerError]
-              digitalkin.grpc_servers.utils.exceptions.DigitalKinError[DigitalKinError]
-
-                              digitalkin.grpc_servers.utils.exceptions.DigitalKinError --> digitalkin.grpc_servers.utils.exceptions.ServerError
-                
-
-
-              click digitalkin.grpc_servers.utils.exceptions.ServerError href "" "digitalkin.grpc_servers.utils.exceptions.ServerError"
-              click digitalkin.grpc_servers.utils.exceptions.DigitalKinError href "" "digitalkin.grpc_servers.utils.exceptions.DigitalKinError"
+```python
+check() -> None
 ```
 
-Base class for server-related errors.
+Check if a call is allowed. Must be called before each outbound call.
 
-##### ServerStateError
+Raises:
 
-```
-              flowchart TD
-              digitalkin.grpc_servers.utils.exceptions.ServerStateError[ServerStateError]
-              digitalkin.grpc_servers.utils.exceptions.ServerError[ServerError]
-              digitalkin.grpc_servers.utils.exceptions.DigitalKinError[DigitalKinError]
+- `CircuitOpenError` – If the circuit is open and not yet eligible for probe.
 
-                              digitalkin.grpc_servers.utils.exceptions.ServerError --> digitalkin.grpc_servers.utils.exceptions.ServerStateError
-                                digitalkin.grpc_servers.utils.exceptions.DigitalKinError --> digitalkin.grpc_servers.utils.exceptions.ServerError
-                
+###### clear_all
 
-
-
-              click digitalkin.grpc_servers.utils.exceptions.ServerStateError href "" "digitalkin.grpc_servers.utils.exceptions.ServerStateError"
-              click digitalkin.grpc_servers.utils.exceptions.ServerError href "" "digitalkin.grpc_servers.utils.exceptions.ServerError"
-              click digitalkin.grpc_servers.utils.exceptions.DigitalKinError href "" "digitalkin.grpc_servers.utils.exceptions.DigitalKinError"
+```python
+clear_all() -> None
 ```
 
-Error related to server state (e.g., already started, not started).
+Remove all circuit breaker instances. For shutdown and testing.
 
-##### ServicerError
+###### get_or_create
 
-```
-              flowchart TD
-              digitalkin.grpc_servers.utils.exceptions.ServicerError[ServicerError]
-              digitalkin.grpc_servers.utils.exceptions.ServerError[ServerError]
-              digitalkin.grpc_servers.utils.exceptions.DigitalKinError[DigitalKinError]
-
-                              digitalkin.grpc_servers.utils.exceptions.ServerError --> digitalkin.grpc_servers.utils.exceptions.ServicerError
-                                digitalkin.grpc_servers.utils.exceptions.DigitalKinError --> digitalkin.grpc_servers.utils.exceptions.ServerError
-                
-
-
-
-              click digitalkin.grpc_servers.utils.exceptions.ServicerError href "" "digitalkin.grpc_servers.utils.exceptions.ServicerError"
-              click digitalkin.grpc_servers.utils.exceptions.ServerError href "" "digitalkin.grpc_servers.utils.exceptions.ServerError"
-              click digitalkin.grpc_servers.utils.exceptions.DigitalKinError href "" "digitalkin.grpc_servers.utils.exceptions.DigitalKinError"
+```python
+get_or_create(service_id: str) -> CircuitBreaker
 ```
 
-Error related to servicer operations.
+Get existing circuit breaker for a service or create one.
+
+Thresholds come from `CircuitBreakerSettings` (env `DIGITALKIN_CB_FAIL_MAX`, `DIGITALKIN_CB_RESET_TIMEOUT`).
+
+Parameters:
+
+- ###### **`service_id`**
+
+  (`str`) – Service identifier.
+
+Returns:
+
+- `CircuitBreaker` – Circuit breaker for this service.
+
+###### record_failure
+
+```python
+record_failure() -> None
+```
+
+Record a failed call. Increments counter and may open circuit.
+
+###### record_success
+
+```python
+record_success() -> None
+```
+
+Record a successful call. Resets failure counter and closes circuit.
+
+###### release_probe
+
+```python
+release_probe() -> bool
+```
+
+Release a half-open probe slot without recording an outcome.
+
+Called when an in-flight probe is abandoned (e.g. the caller was cancelled) so the breaker cannot wedge with the lock held. A cancelled probe is neither success nor failure — the slot simply frees for the next caller. No-op unless a probe lock is currently held.
+
+Returns:
+
+- `bool` – True if a held probe lock was released; False if none was held.
+
+###### remove
+
+```python
+remove(service_id: str) -> None
+```
+
+Remove a circuit breaker for a service. Prevents singleton leak.
+
+Called when the last channel for a service is closed.
+
+Parameters:
+
+- ###### **`service_id`**
+
+  (`str`) – Service identifier to remove.
+
+###### reset
+
+```python
+reset() -> None
+```
+
+Force reset to CLOSED state.
 
 #### grpc_client_wrapper
 
 Client wrapper to ease channel creation with specific ServerConfig.
+
+Includes per-service circuit breaker protection: when a downstream service fails repeatedly, subsequent calls fail fast with `CircuitOpenError` instead of waiting for the full timeout. This prevents cascade failure amplification across the mesh.
 
 Classes:
 
@@ -7077,12 +9951,11 @@ Channels are cached at the class level and ref-counted. gRPC HTTP/2 channels nat
 Methods:
 
 - **`close`** – Release this instance's gRPC channel ref. Subclasses override to release extra resources.
-- **`close_all_cached_channels`** – Close all cached channels and reset the cache.
+- **`close_all_cached_channels`** – Close all cached channels, reset cache, and clear circuit breakers.
 - **`close_channel`** – Release this instance's ref on the cached channel.
-- **`exec_grpc_query`** – Execute a gRPC query with from the query's rpc endpoint name.
-- **`poll_grpc`** – Execute a single polling RPC. Returns None on DEADLINE_EXCEEDED (expected empty poll).
+- **`evict_cached_channel`** – Force-close and remove a cached channel regardless of refcount.
+- **`exec_grpc_query`** – Execute a gRPC query with circuit breaker protection and retry.
 - **`release_cached_channel`** – Decrement refcount for a cache key and close channel when last ref is released.
-- **`wait_for_ready`** – Check if the gRPC channel can connect within timeout.
 
 ###### close
 
@@ -7098,9 +9971,9 @@ Release this instance's gRPC channel ref. Subclasses override to release extra r
 close_all_cached_channels() -> None
 ```
 
-Close all cached channels and reset the cache.
+Close all cached channels, reset cache, and clear circuit breakers.
 
-Intended for server shutdown to ensure clean resource release.
+Intended for server shutdown to ensure clean resource release. Clears circuit breaker singletons to prevent unbounded growth from dynamically discovered services.
 
 ###### close_channel
 
@@ -7110,15 +9983,38 @@ close_channel() -> None
 
 Release this instance's ref on the cached channel.
 
-The underlying channel is only closed when the last ref is released.
+The underlying channel is only closed when the last ref is released. When the last ref is released, the corresponding circuit breaker singleton is also removed to prevent unbounded accumulation.
+
+###### evict_cached_channel
+
+```python
+evict_cached_channel(key: str) -> None
+```
+
+Force-close and remove a cached channel regardless of refcount.
+
+Guarantees a fresh connection on re-dial: a channel left cached after a peer died can be wedged mid-reconnect, so a resume must not reuse it. A missing key is a no-op.
+
+Parameters:
+
+- ###### **`key`**
+
+  (`str`) – Channel cache key to evict.
 
 ###### exec_grpc_query
 
 ```python
-exec_grpc_query(query_endpoint: str, request: Any, timeout: float | None = None) -> Any
+exec_grpc_query(
+    query_endpoint: str,
+    request: Any,
+    timeout: float | None = None,
+    metadata: tuple[tuple[str, str], ...] | None = None,
+) -> Any
 ```
 
-Execute a gRPC query with from the query's rpc endpoint name.
+Execute a gRPC query with circuit breaker protection and retry.
+
+The circuit breaker is per-service (keyed on `service_name`). When the circuit is OPEN, calls fail immediately with `CircuitOpenError` wrapped in `ServerError` — no network round-trip, no timeout wait.
 
 Retries on transient errors (UNAVAILABLE, INTERNAL, DEADLINE_EXCEEDED) with exponential backoff. Retry count and backoff base are configurable via DIGITALKIN_GRPC_QUERY_MAX_RETRIES and DIGITALKIN_GRPC_QUERY_BACKOFF_BASE_MS.
 
@@ -7134,7 +10030,11 @@ Parameters:
 
 - ###### **`timeout`**
 
-  (`float | None`, default: `None` ) – Per-call timeout in seconds. Falls back to \_QUERY_DEFAULT_TIMEOUT (env DIGITALKIN_GRPC_QUERY_TIMEOUT, default 30s) when None.
+  (`float | None`, default: `None` ) – Per-call timeout in seconds. None applies no client-side deadline.
+
+- ###### **`metadata`**
+
+  (`tuple[tuple[str, str], ...] | None`, default: `None` ) – Optional gRPC metadata pairs (e.g. an idempotency key); the same metadata is sent on every retry attempt.
 
 Returns:
 
@@ -7143,38 +10043,6 @@ Returns:
 Raises:
 
 - `ServerError` – gRPC error with status code and details for caller to handle.
-
-###### poll_grpc
-
-```python
-poll_grpc(endpoint: str, request: Any, *, timeout: float) -> Any | None
-```
-
-Execute a single polling RPC. Returns None on DEADLINE_EXCEEDED (expected empty poll).
-
-Unlike exec_grpc_query, DEADLINE_EXCEEDED is not an error for polling-style RPCs where the server holds the connection until a result is available or timeout occurs. No retry is performed — the caller is responsible for the retry loop.
-
-Parameters:
-
-- ###### **`endpoint`**
-
-  (`str`) – RPC method name on self.stub.
-
-- ###### **`request`**
-
-  (`Any`) – gRPC request protobuf.
-
-- ###### **`timeout`**
-
-  (`float`) – Seconds before treating as 'no result available'.
-
-Returns:
-
-- `Any | None` – gRPC response, or None if DEADLINE_EXCEEDED.
-
-Raises:
-
-- `ServerError` – For any non-DEADLINE_EXCEEDED gRPC error.
 
 ###### release_cached_channel
 
@@ -7189,26 +10057,6 @@ Parameters:
 - ###### **`key`**
 
   (`str`) – Channel cache key to release.
-
-###### wait_for_ready
-
-```python
-wait_for_ready(timeout: float = 1.0) -> bool
-```
-
-Check if the gRPC channel can connect within timeout.
-
-Uses channel_ready() which resolves when the HTTP/2 connection is established and the server is accepting RPCs.
-
-Parameters:
-
-- ###### **`timeout`**
-
-  (`float`, default: `1.0` ) – Max seconds to wait for connectivity.
-
-Returns:
-
-- `bool` – True if channel reached READY state, False if timeout or no channel.
 
 #### grpc_error_handler
 
@@ -7252,6 +10100,7 @@ Yields:
 
 Raises:
 
+- `PermissionDeniedError` – Re-raised as-is so the authz status is never masked.
 - `ServerError` – For gRPC-related errors.
 - `service_error_class` – For service-specific errors if provided.
 
@@ -7313,6 +10162,93 @@ Returns:
 
 - `type[DataModel]` – A new DataModel subclass with root typed as Union[original_types, utility_types].
 
+#### validators
+
+Gateway-input validators bundled as classmethods on a single class.
+
+Classes:
+
+- **`GatewayValidator`** – Validation + sanitization helpers used by the gateway surface.
+
+##### GatewayValidator
+
+Validation + sanitization helpers used by the gateway surface.
+
+All methods are stateless classmethods; the class is the namespace. Compiled regexes and the wildcard-host frozen set live as `ClassVar` so they're shared across all calls without a module-level binding.
+
+Methods:
+
+- **`mask_redis_url`** – Mask the password in a Redis URL for safe logging.
+- **`validate_address`** – Validate a host:port address used for dial-back.
+- **`validate_id`** – Validate a user-supplied ID against the safe character pattern.
+
+###### mask_redis_url
+
+```python
+mask_redis_url(url: str) -> str
+```
+
+Mask the password in a Redis URL for safe logging.
+
+Parameters:
+
+- ###### **`url`**
+
+  (`str`) – Redis connection URL of the form redis://user:pwd@host:port/db.
+
+Returns:
+
+- `str` – URL with the password segment replaced by \*\*\*\*.
+
+###### validate_address
+
+```python
+validate_address(value: str, field_name: str) -> str | None
+```
+
+Validate a `host:port` address used for dial-back.
+
+Rejects empty, malformed, out-of-range, and wildcard bind addresses. Wildcards (`[::]`, `0.0.0.0`, `::`) are bind addresses, not routable destinations — accepting them as `x-client-address` is a debugging trap because the gateway cannot dial back to them.
+
+Parameters:
+
+- ###### **`value`**
+
+  (`str`) – The address to validate.
+
+- ###### **`field_name`**
+
+  (`str`) – Field name, used in the returned error message.
+
+Returns:
+
+- `str | None` – None if valid; an error string describing the failure.
+
+###### validate_id
+
+```python
+validate_id(value: str, field_name: str) -> str | None
+```
+
+Validate a user-supplied ID against the safe character pattern.
+
+Allows alphanumeric, underscore, colon, dot, hyphen. Max 256 chars. Colons are needed for IDs like `setups:my_setup` and `modules:01kjcsma75vee1m0rdny90tvqg`.
+
+Parameters:
+
+- ###### **`value`**
+
+  (`str`) – The ID to validate.
+
+- ###### **`field_name`**
+
+  (`str`) – Field name, used in the returned error message.
+
+Returns:
+
+- `str | None` – None if valid; an error string if the value is missing or
+- `str | None` – contains invalid characters.
+
 ## logger
 
 This module sets up a logger.
@@ -7320,12 +10256,9 @@ This module sets up a logger.
 Classes:
 
 - **`ColorJSONFormatter`** – Color JSON formatter for development (pretty-printed with colors).
+- **`LoggerFactory`** – Build configured loggers with JSON formatters and optional file output.
 - **`PlainJSONFormatter`** – Plain JSON formatter for log files (no ANSI colors, compact JSON).
-
-Functions:
-
-- **`add_file_handler`** – Add a rotating file handler to a logger if DIGITALKIN_LOG_DIR is set.
-- **`setup_logger`** – Set up a logger with the ColorJSONFormatter.
+- **`RequestIdLogFilter`** – Inject ambient request IDs (task/setup/mission) onto every log record.
 
 ### ColorJSONFormatter
 
@@ -7372,6 +10305,72 @@ Returns:
 
 - **`str`** ( `str` ) – The colored JSON formatted log record.
 
+### LoggerFactory
+
+Build configured loggers with JSON formatters and optional file output.
+
+Methods:
+
+- **`add_file_handler`** – Add a rotating file handler to a logger if DIGITALKIN_LOG_DIR is set.
+- **`setup_logger`** – Set up a logger with the ColorJSONFormatter.
+
+#### add_file_handler
+
+```python
+add_file_handler(logger: Logger) -> None
+```
+
+Add a rotating file handler to a logger if `DIGITALKIN_LOG_DIR` is set.
+
+Only creates log files when the environment variable is explicitly set and points to an existing directory. Attaches a :class:`RotatingFileHandler` (10 MB, 5 backups) with :class:`PlainJSONFormatter` at DEBUG level.
+
+Parameters:
+
+- ##### **`logger`**
+
+  (`Logger`) – The logger to attach the file handler to.
+
+#### setup_logger
+
+```python
+setup_logger(
+    name: str,
+    level: int = INFO,
+    additional_loggers: dict[str, int] | None = None,
+    *,
+    is_production: bool | None = None,
+    configure_root: bool = True,
+) -> Logger
+```
+
+Set up a logger with the ColorJSONFormatter.
+
+Parameters:
+
+- ##### **`name`**
+
+  (`str`) – Name of the logger to create
+
+- ##### **`level`**
+
+  (`int`, default: `INFO` ) – Logging level (default: logging.INFO)
+
+- ##### **`is_production`**
+
+  (`bool | None`, default: `None` ) – Whether running in production. If None, checks RAILWAY_SERVICE_NAME env var
+
+- ##### **`configure_root`**
+
+  (`bool`, default: `True` ) – Whether to configure root logger (default: True)
+
+- ##### **`additional_loggers`**
+
+  (`dict[str, int] | None`, default: `None` ) – Dict of additional logger names and their levels to configure
+
+Returns:
+
+- `Logger` – logging.Logger: Configured logger instance
+
 ### PlainJSONFormatter
 
 ```
@@ -7407,62 +10406,42 @@ Returns:
 
 - **`str`** ( `str` ) – The compact JSON formatted log record.
 
-### add_file_handler
+### RequestIdLogFilter
 
-```python
-add_file_handler(logger: Logger) -> None
+```
+              flowchart TD
+              digitalkin.logger.RequestIdLogFilter[RequestIdLogFilter]
+
+              
+
+              click digitalkin.logger.RequestIdLogFilter href "" "digitalkin.logger.RequestIdLogFilter"
 ```
 
-Add a rotating file handler to a logger if `DIGITALKIN_LOG_DIR` is set.
+Inject ambient request IDs (task/setup/mission) onto every log record.
 
-Only creates log files when the environment variable is explicitly set and points to an existing directory. Attaches a :class:`RotatingFileHandler` (10 MB, 5 backups) with :class:`PlainJSONFormatter` at DEBUG level.
+Methods:
+
+- **`filter`** – Add ambient IDs to the record if present.
+
+#### filter
+
+```python
+filter(record: LogRecord) -> bool
+```
+
+Add ambient IDs to the record if present.
+
+Uses `setdefault` so an explicit `extra=` at the call site wins.
 
 Parameters:
 
-- #### **`logger`**
+- ##### **`record`**
 
-  (`Logger`) – The logger to attach the file handler to.
-
-### setup_logger
-
-```python
-setup_logger(
-    name: str,
-    level: int = INFO,
-    additional_loggers: dict[str, int] | None = None,
-    *,
-    is_production: bool | None = None,
-    configure_root: bool = True,
-) -> Logger
-```
-
-Set up a logger with the ColorJSONFormatter.
-
-Parameters:
-
-- #### **`name`**
-
-  (`str`) – Name of the logger to create
-
-- #### **`level`**
-
-  (`int`, default: `INFO` ) – Logging level (default: logging.INFO)
-
-- #### **`is_production`**
-
-  (`bool | None`, default: `None` ) – Whether running in production. If None, checks RAILWAY_SERVICE_NAME env var
-
-- #### **`configure_root`**
-
-  (`bool`, default: `True` ) – Whether to configure root logger (default: True)
-
-- #### **`additional_loggers`**
-
-  (`dict[str, int] | None`, default: `None` ) – Dict of additional logger names and their levels to configure
+  (`LogRecord`) – The log record to enrich.
 
 Returns:
 
-- `Logger` – logging.Logger: Configured logger instance
+- `bool` – True — never drops records.
 
 ## mixins
 
@@ -7472,8 +10451,6 @@ Modules:
 
 - **`agui_mixin`** – AG-UI event streaming mixin for DigitalKin modules.
 - **`base_mixin`** – Simple toolkit class with basic and simple API access in the Triggers.
-- **`callback_mixin`** – User callback to send a message from the Trigger.
-- **`chat_history_mixin`** – Context mixins providing ergonomic access to service strategies.
 - **`cost_mixin`** – Cost Mixin to ease trigger deveolpment.
 - **`file_history_mixin`** – Context mixins providing ergonomic access to service strategies.
 - **`filesystem_mixin`** – Filesystem Mixin to ease filesystem use.
@@ -7510,7 +10487,16 @@ class MyTrigger(BaseTrigger, AgUiMixin):
 
 Methods:
 
+- **`__init_subclass__`** – Build dispatch table from unbound method references.
 - **`send_message`** – Convert agent event to AG-UI protocol and send via context callbacks.
+
+#### __init_subclass__
+
+```python
+__init_subclass__(**kwargs: Any) -> None
+```
+
+Build dispatch table from unbound method references.
 
 #### send_message
 
@@ -7571,6 +10557,7 @@ Base Mixin to access to minimum Module Context functionnalities in the Triggers.
 
 Methods:
 
+- **`__init_subclass__`** – Build dispatch table from unbound method references.
 - **`add_cost`** – Add a cost entry using the cost strategy.
 - **`append_files_history`** – Append files to file history.
 - **`clear_fh_mission_cache`** – Remove a mission's entries from in-memory caches after flush.
@@ -7587,6 +10574,14 @@ Methods:
 - **`store_storage`** – Store data using the storage strategy.
 - **`update_storage`** – Update existing data in storage.
 - **`upsert_storage`** – Insert or update data in storage atomically.
+
+#### __init_subclass__
+
+```python
+__init_subclass__(**kwargs: Any) -> None
+```
+
+Build dispatch table from unbound method references.
 
 #### add_cost
 
@@ -7624,7 +10619,7 @@ append_files_history(context: ModuleContext, files: list[FileModel]) -> None
 
 Append files to file history.
 
-Files are added to the in-memory cache immediately. A storage write is deferred until the batch threshold is reached (default 10, env: DIGITALKIN_FILE_HISTORY_FLUSH_THRESHOLD) or flush_file_history().
+Files are added to the in-memory cache immediately. A storage write is deferred until the batch threshold is reached (default 10, env: DIGITALKIN_MODULE_FILE_HISTORY_FLUSH_THRESHOLD) or flush_file_history().
 
 Parameters:
 
@@ -8466,7 +11461,16 @@ class MyTrigger(BaseTrigger, AgUiMixin):
 
 Methods:
 
+- **`__init_subclass__`** – Build dispatch table from unbound method references.
 - **`send_message`** – Convert agent event to AG-UI protocol and send via context callbacks.
+
+##### __init_subclass__
+
+```python
+__init_subclass__(**kwargs: Any) -> None
+```
+
+Build dispatch table from unbound method references.
 
 ##### send_message
 
@@ -8535,6 +11539,7 @@ Base Mixin to access to minimum Module Context functionnalities in the Triggers.
 
 Methods:
 
+- **`__init_subclass__`** – Build dispatch table from unbound method references.
 - **`add_cost`** – Add a cost entry using the cost strategy.
 - **`append_files_history`** – Append files to file history.
 - **`clear_fh_mission_cache`** – Remove a mission's entries from in-memory caches after flush.
@@ -8551,6 +11556,14 @@ Methods:
 - **`store_storage`** – Store data using the storage strategy.
 - **`update_storage`** – Update existing data in storage.
 - **`upsert_storage`** – Insert or update data in storage atomically.
+
+##### __init_subclass__
+
+```python
+__init_subclass__(**kwargs: Any) -> None
+```
+
+Build dispatch table from unbound method references.
 
 ##### add_cost
 
@@ -8588,7 +11601,7 @@ append_files_history(context: ModuleContext, files: list[FileModel]) -> None
 
 Append files to file history.
 
-Files are added to the in-memory cache immediately. A storage write is deferred until the batch threshold is reached (default 10, env: DIGITALKIN_FILE_HISTORY_FLUSH_THRESHOLD) or flush_file_history().
+Files are added to the in-memory cache immediately. A storage write is deferred until the batch threshold is reached (default 10, env: DIGITALKIN_MODULE_FILE_HISTORY_FLUSH_THRESHOLD) or flush_file_history().
 
 Parameters:
 
@@ -8967,487 +11980,6 @@ Raises:
 
 - `StorageServiceError` – If upsert operation fails
 
-### callback_mixin
-
-User callback to send a message from the Trigger.
-
-.. deprecated:: Use :class:`digitalkin.mixins.agui_mixin.AgUiMixin` instead.
-
-Classes:
-
-- **`UserMessageMixin`** – Mixin providing callback operations through the callbacks.
-
-#### UserMessageMixin
-
-```
-              flowchart TD
-              digitalkin.mixins.callback_mixin.UserMessageMixin[UserMessageMixin]
-
-              
-
-              click digitalkin.mixins.callback_mixin.UserMessageMixin href "" "digitalkin.mixins.callback_mixin.UserMessageMixin"
-```
-
-Mixin providing callback operations through the callbacks.
-
-.. deprecated:: Use :class:`digitalkin.mixins.agui_mixin.AgUiMixin` instead.
-
-Methods:
-
-- **`__init_subclass__`** – Deprecated warning.
-- **`send_message`** – Send a message using the callbacks strategy.
-
-##### __init_subclass__
-
-```python
-__init_subclass__(**kwargs: Any) -> None
-```
-
-Deprecated warning.
-
-##### send_message
-
-```python
-send_message(context: ModuleContext, output: OutputModelT) -> None
-```
-
-Send a message using the callbacks strategy.
-
-Parameters:
-
-- ###### **`context`**
-
-  (`ModuleContext`) – Module context containing the callbacks strategy.
-
-- ###### **`output`**
-
-  (`OutputModelT`) – Message to send with the Module defined output Type.
-
-### chat_history_mixin
-
-Context mixins providing ergonomic access to service strategies.
-
-.. deprecated:: Use :class:`digitalkin.mixins.agui_mixin.AgUiMixin` instead.
-
-Classes:
-
-- **`ChatHistoryMixin`** – Mixin providing chat history operations through storage strategy.
-
-#### ChatHistoryMixin
-
-```python
-ChatHistoryMixin()
-```
-
-```
-              flowchart TD
-              digitalkin.mixins.chat_history_mixin.ChatHistoryMixin[ChatHistoryMixin]
-              digitalkin.mixins.callback_mixin.UserMessageMixin[UserMessageMixin]
-              digitalkin.mixins.storage_mixin.StorageMixin[StorageMixin]
-              digitalkin.mixins.logger_mixin.LoggerMixin[LoggerMixin]
-
-                              digitalkin.mixins.callback_mixin.UserMessageMixin --> digitalkin.mixins.chat_history_mixin.ChatHistoryMixin
-                
-                digitalkin.mixins.storage_mixin.StorageMixin --> digitalkin.mixins.chat_history_mixin.ChatHistoryMixin
-                
-                digitalkin.mixins.logger_mixin.LoggerMixin --> digitalkin.mixins.chat_history_mixin.ChatHistoryMixin
-                
-
-
-              click digitalkin.mixins.chat_history_mixin.ChatHistoryMixin href "" "digitalkin.mixins.chat_history_mixin.ChatHistoryMixin"
-              click digitalkin.mixins.callback_mixin.UserMessageMixin href "" "digitalkin.mixins.callback_mixin.UserMessageMixin"
-              click digitalkin.mixins.storage_mixin.StorageMixin href "" "digitalkin.mixins.storage_mixin.StorageMixin"
-              click digitalkin.mixins.logger_mixin.LoggerMixin href "" "digitalkin.mixins.logger_mixin.LoggerMixin"
-```
-
-Mixin providing chat history operations through storage strategy.
-
-.. deprecated:: Use :class:`digitalkin.mixins.agui_mixin.AgUiMixin` instead.
-
-Methods:
-
-- **`__init_subclass__`** – Deprecated warning.
-- **`append_chat_history_message`** – Append a message to chat history.
-- **`clear_ch_mission_cache`** – Remove a mission's entries from in-memory caches after flush.
-- **`flush_chat_history`** – Flush the current mission's dirty chat history to storage.
-- **`load_chat_history`** – Load chat history for the current session.
-- **`log_debug`** – Log debug message using the callbacks strategy.
-- **`log_error`** – Log error message using the callbacks strategy.
-- **`log_info`** – Log info message using the callbacks strategy.
-- **`log_warning`** – Log warning message using the callbacks strategy.
-- **`read_storage`** – Read data from storage.
-- **`save_send_message`** – Save output to chat history and send response to the module request.
-- **`send_message`** – Send a message using the callbacks strategy.
-- **`store_storage`** – Store data using the storage strategy.
-- **`update_storage`** – Update existing data in storage.
-- **`upsert_storage`** – Insert or update data in storage atomically.
-
-##### __init_subclass__
-
-```python
-__init_subclass__(**kwargs: Any) -> None
-```
-
-Deprecated warning.
-
-##### append_chat_history_message
-
-```python
-append_chat_history_message(context: ModuleContext, role: Role, content: Any) -> None
-```
-
-Append a message to chat history.
-
-The message is added to the in-memory cache immediately. A storage write is deferred until the batch threshold is reached (default 10, env: DIGITALKIN_CHAT_HISTORY_FLUSH_THRESHOLD) or flush_chat_history().
-
-Parameters:
-
-- ###### **`context`**
-
-  (`ModuleContext`) – Module context containing storage strategy.
-
-- ###### **`role`**
-
-  (`Role`) – Message role (user, assistant, system).
-
-- ###### **`content`**
-
-  (`Any`) – Message content.
-
-##### clear_ch_mission_cache
-
-```python
-clear_ch_mission_cache(context: ModuleContext) -> None
-```
-
-Remove a mission's entries from in-memory caches after flush.
-
-Parameters:
-
-- ###### **`context`**
-
-  (`ModuleContext`) – Module context identifying the mission to clear.
-
-##### flush_chat_history
-
-```python
-flush_chat_history(context: ModuleContext) -> None
-```
-
-Flush the current mission's dirty chat history to storage.
-
-Only flushes the key belonging to context's mission_id, preventing cross-mission contamination when handlers are shared.
-
-Parameters:
-
-- ###### **`context`**
-
-  (`ModuleContext`) – Module context containing storage strategy.
-
-##### load_chat_history
-
-```python
-load_chat_history(context: ModuleContext) -> ChatHistory
-```
-
-Load chat history for the current session.
-
-Returns cached history on subsequent calls to avoid gRPC reads.
-
-Parameters:
-
-- ###### **`context`**
-
-  (`ModuleContext`) – Module context containing storage strategy.
-
-Returns:
-
-- `ChatHistory` – Chat history object, empty if none exists or loading fails.
-
-##### log_debug
-
-```python
-log_debug(context: ModuleContext, message: str, *args: Any) -> None
-```
-
-Log debug message using the callbacks strategy.
-
-Parameters:
-
-- ###### **`context`**
-
-  (`ModuleContext`) – Module context containing the callbacks strategy
-
-- ###### **`message`**
-
-  (`str`) – Debug message to log (supports %s lazy formatting)
-
-- ###### **`*args`**
-
-  (`Any`, default: `()` ) – Format arguments for lazy string interpolation
-
-##### log_error
-
-```python
-log_error(context: ModuleContext, message: str, *args: Any) -> None
-```
-
-Log error message using the callbacks strategy.
-
-Parameters:
-
-- ###### **`context`**
-
-  (`ModuleContext`) – Module context containing the callbacks strategy
-
-- ###### **`message`**
-
-  (`str`) – Error message to log (supports %s lazy formatting)
-
-- ###### **`*args`**
-
-  (`Any`, default: `()` ) – Format arguments for lazy string interpolation
-
-##### log_info
-
-```python
-log_info(context: ModuleContext, message: str, *args: Any) -> None
-```
-
-Log info message using the callbacks strategy.
-
-Parameters:
-
-- ###### **`context`**
-
-  (`ModuleContext`) – Module context containing the callbacks strategy
-
-- ###### **`message`**
-
-  (`str`) – Info message to log (supports %s lazy formatting)
-
-- ###### **`*args`**
-
-  (`Any`, default: `()` ) – Format arguments for lazy string interpolation
-
-##### log_warning
-
-```python
-log_warning(context: ModuleContext, message: str, *args: Any) -> None
-```
-
-Log warning message using the callbacks strategy.
-
-Parameters:
-
-- ###### **`context`**
-
-  (`ModuleContext`) – Module context containing the callbacks strategy
-
-- ###### **`message`**
-
-  (`str`) – Warning message to log (supports %s lazy formatting)
-
-- ###### **`*args`**
-
-  (`Any`, default: `()` ) – Format arguments for lazy string interpolation
-
-##### read_storage
-
-```python
-read_storage(
-    context: ModuleContext, collection: str, record_id: str
-) -> StorageRecord | None
-```
-
-Read data from storage.
-
-Parameters:
-
-- ###### **`context`**
-
-  (`ModuleContext`) – Module context containing the storage strategy
-
-- ###### **`collection`**
-
-  (`str`) – Collection name
-
-- ###### **`record_id`**
-
-  (`str`) – Record identifier
-
-Returns:
-
-- `StorageRecord | None` – Retrieved data
-
-Raises:
-
-- `StorageServiceError` – If read operation fails
-
-##### save_send_message
-
-```python
-save_send_message(context: ModuleContext, output: OutputModelT, role: Role) -> None
-```
-
-Save output to chat history and send response to the module request.
-
-Parameters:
-
-- ###### **`context`**
-
-  (`ModuleContext`) – Module context containing storage strategy.
-
-- ###### **`role`**
-
-  (`Role`) – Message role (user, assistant, system).
-
-- ###### **`output`**
-
-  (`OutputModelT`) – Message content as Pydantic Class.
-
-##### send_message
-
-```python
-send_message(context: ModuleContext, output: OutputModelT) -> None
-```
-
-Send a message using the callbacks strategy.
-
-Parameters:
-
-- ###### **`context`**
-
-  (`ModuleContext`) – Module context containing the callbacks strategy.
-
-- ###### **`output`**
-
-  (`OutputModelT`) – Message to send with the Module defined output Type.
-
-##### store_storage
-
-```python
-store_storage(
-    context: ModuleContext,
-    collection: str,
-    record_id: str | None,
-    data: dict[str, Any],
-    data_type: Literal["OUTPUT", "VIEW", "LOGS", "OTHER"] = "OUTPUT",
-) -> StorageRecord
-```
-
-Store data using the storage strategy.
-
-Parameters:
-
-- ###### **`context`**
-
-  (`ModuleContext`) – Module context containing the storage strategy
-
-- ###### **`collection`**
-
-  (`str`) – Collection name for the data
-
-- ###### **`record_id`**
-
-  (`str | None`) – Optional record identifier
-
-- ###### **`data`**
-
-  (`dict[str, Any]`) – Data to store
-
-- ###### **`data_type`**
-
-  (`Literal['OUTPUT', 'VIEW', 'LOGS', 'OTHER']`, default: `'OUTPUT'` ) – Type of data being stored
-
-Returns:
-
-- `StorageRecord` – Result from the storage strategy
-
-Raises:
-
-- `StorageServiceError` – If storage operation fails
-
-##### update_storage
-
-```python
-update_storage(
-    context: ModuleContext, collection: str, record_id: str, data: dict[str, Any]
-) -> StorageRecord | None
-```
-
-Update existing data in storage.
-
-Parameters:
-
-- ###### **`context`**
-
-  (`ModuleContext`) – Module context containing the storage strategy
-
-- ###### **`collection`**
-
-  (`str`) – Collection name
-
-- ###### **`record_id`**
-
-  (`str`) – Record identifier
-
-- ###### **`data`**
-
-  (`dict[str, Any]`) – Updated data
-
-Returns:
-
-- `StorageRecord | None` – Result from the storage strategy
-
-Raises:
-
-- `StorageServiceError` – If update operation fails
-
-##### upsert_storage
-
-```python
-upsert_storage(
-    context: ModuleContext,
-    collection: str,
-    record_id: str,
-    data: dict[str, Any],
-    data_type: Literal["OUTPUT", "VIEW", "LOGS", "OTHER"] = "OUTPUT",
-) -> StorageRecord
-```
-
-Insert or update data in storage atomically.
-
-Parameters:
-
-- ###### **`context`**
-
-  (`ModuleContext`) – Module context containing the storage strategy
-
-- ###### **`collection`**
-
-  (`str`) – Collection name
-
-- ###### **`record_id`**
-
-  (`str`) – Record identifier
-
-- ###### **`data`**
-
-  (`dict[str, Any]`) – Data to store or update
-
-- ###### **`data_type`**
-
-  (`Literal['OUTPUT', 'VIEW', 'LOGS', 'OTHER']`, default: `'OUTPUT'` ) – Type of data being stored
-
-Returns:
-
-- `StorageRecord` – The created or updated storage record
-
-Raises:
-
-- `StorageServiceError` – If upsert operation fails
-
 ### cost_mixin
 
 Cost Mixin to ease trigger deveolpment.
@@ -9613,7 +12145,7 @@ append_files_history(context: ModuleContext, files: list[FileModel]) -> None
 
 Append files to file history.
 
-Files are added to the in-memory cache immediately. A storage write is deferred until the batch threshold is reached (default 10, env: DIGITALKIN_FILE_HISTORY_FLUSH_THRESHOLD) or flush_file_history().
+Files are added to the in-memory cache immediately. A storage write is deferred until the batch threshold is reached (default 10, env: DIGITALKIN_MODULE_FILE_HISTORY_FLUSH_THRESHOLD) or flush_file_history().
 
 Parameters:
 
@@ -10287,9 +12819,10 @@ Modules:
 - **`core`** – Core models.
 - **`events`** – Agent run event models for DigitalKin.
 - **`grpc_servers`** – Base gRPC server and client models.
-- **`module`** – This module contains the models for the modules.
+- **`module`** – Module model exports. Import ag_ui types from digitalkin.models.module.ag_ui.
 - **`services`** – This module contains the models for the services.
 - **`settings`** – This package contain settings of sdk.
+- **`utils`** – Models for the digitalkin.utils package.
 
 Classes:
 
@@ -10665,6 +13198,7 @@ Core models.
 Modules:
 
 - **`job_manager_models`** – Job manager models.
+- **`redis`** – Core models for Redis task-manager primitives.
 - **`task_monitor`** – Task monitoring models for signaling messages.
 
 #### job_manager_models
@@ -10674,7 +13208,6 @@ Job manager models.
 Classes:
 
 - **`BackpressureStrategy`** – Backpressure strategy for module output queue writes.
-- **`JobManagerMode`** – Job manager mode.
 
 ##### BackpressureStrategy
 
@@ -10689,47 +13222,26 @@ Classes:
 
 Backpressure strategy for module output queue writes.
 
-##### JobManagerMode
+#### redis
+
+Core models for Redis task-manager primitives.
+
+Classes:
+
+- **`ClaimResult`** – Result of an idempotency claim attempt.
+
+##### ClaimResult
 
 ```
               flowchart TD
-              digitalkin.models.core.job_manager_models.JobManagerMode[JobManagerMode]
+              digitalkin.models.core.redis.ClaimResult[ClaimResult]
 
               
 
-              click digitalkin.models.core.job_manager_models.JobManagerMode href "" "digitalkin.models.core.job_manager_models.JobManagerMode"
+              click digitalkin.models.core.redis.ClaimResult href "" "digitalkin.models.core.redis.ClaimResult"
 ```
 
-Job manager mode.
-
-Methods:
-
-- **`__str__`** – Get the string representation of the job manager mode.
-- **`get_manager_class`** – Get the job manager class based on the mode.
-
-###### __str__
-
-```python
-__str__() -> str
-```
-
-Get the string representation of the job manager mode.
-
-Returns:
-
-- **`str`** ( `str` ) – job manager mode name.
-
-###### get_manager_class
-
-```python
-get_manager_class() -> type[BaseJobManager]
-```
-
-Get the job manager class based on the mode.
-
-Returns:
-
-- **`type`** ( `type[BaseJobManager]` ) – The job manager class.
+Result of an idempotency claim attempt.
 
 #### task_monitor
 
@@ -11640,8 +14152,36 @@ Base gRPC server and client models.
 
 Modules:
 
+- **`circuit_breaker`** – Circuit-breaker state model.
+- **`m2m`** – Models for module-to-module (M2M) call state.
 - **`models`** – Data models for gRPC server configurations.
+- **`stream_error_codes`** – Stable codes for in-band stream.error sentinels.
 - **`types`** – Type definitions for gRPC utilities.
+
+#### circuit_breaker
+
+Circuit-breaker state model.
+
+Classes:
+
+- **`CBState`** – Circuit breaker states.
+
+##### CBState
+
+```
+              flowchart TD
+              digitalkin.models.grpc_servers.circuit_breaker.CBState[CBState]
+
+              
+
+              click digitalkin.models.grpc_servers.circuit_breaker.CBState href "" "digitalkin.models.grpc_servers.circuit_breaker.CBState"
+```
+
+Circuit breaker states.
+
+#### m2m
+
+Models for module-to-module (M2M) call state.
 
 #### models
 
@@ -11686,7 +14226,7 @@ Methods:
 address: str
 ```
 
-Get the server address.
+The server address.
 
 Returns:
 
@@ -11753,7 +14293,7 @@ Methods:
 address: str
 ```
 
-Get the server address.
+The server address.
 
 Returns:
 
@@ -11765,7 +14305,7 @@ Returns:
 grpc_options: list[tuple[str, Any]]
 ```
 
-Get channel options with retry policy service config.
+Channel options with retry policy service config.
 
 Returns:
 
@@ -11924,7 +14464,20 @@ Attributes:
 
 Methods:
 
+- **`from_settings`** – Build a retry policy with backoff values sourced from the environment.
 - **`to_service_config_json`** – Serialize to gRPC service config JSON string.
+
+###### from_settings
+
+```python
+from_settings() -> RetryPolicy
+```
+
+Build a retry policy with backoff values sourced from the environment.
+
+Returns:
+
+- `RetryPolicy` – Retry policy populated from GrpcRetrySettings.
 
 ###### to_service_config_json
 
@@ -11937,6 +14490,29 @@ Serialize to gRPC service config JSON string.
 Returns:
 
 - `str` – JSON string for grpc.service_config channel option.
+
+#### stream_error_codes
+
+Stable codes for in-band `stream.error` sentinels.
+
+Every code identifies a distinct failure point in the dial-back protocol. Consumers can switch on the code without parsing the free-form `message` field; bench/observability tools aggregate by code.
+
+Classes:
+
+- **`StreamErrorCode`** – Codes carried in stream.error.code for the dial-back path.
+
+##### StreamErrorCode
+
+```
+              flowchart TD
+              digitalkin.models.grpc_servers.stream_error_codes.StreamErrorCode[StreamErrorCode]
+
+              
+
+              click digitalkin.models.grpc_servers.stream_error_codes.StreamErrorCode href "" "digitalkin.models.grpc_servers.stream_error_codes.StreamErrorCode"
+```
+
+Codes carried in `stream.error.code` for the dial-back path.
 
 #### types
 
@@ -11975,7 +14551,7 @@ Protocol for individual services in a gRPC descriptor.
 
 ### module
 
-This module contains the models for the modules.
+Module model exports. Import ag_ui types from `digitalkin.models.module.ag_ui`.
 
 Modules:
 
@@ -11997,7 +14573,6 @@ Classes:
 - **`DataTrigger`** – Defines the root input/output model exposing the protocol.
 - **`EndOfStreamOutput`** – Signal that the stream has ended.
 - **`ModuleContext`** – ModuleContext provides a container for strategies and resources used by a module.
-- **`ModuleStartInfoOutput`** – Output sent when module starts with execution context.
 - **`RequestMetadata`** – Immutable container for gRPC request metadata (headers).
 - **`SelectSchema`** – Base class for generating trigger selection schema.
 - **`SetupModel`** – Base setup model with dynamic schema and tool cache support.
@@ -12080,15 +14655,13 @@ Signal that the stream has ended.
 
 ```python
 ModuleContext(
-    agent: AgentStrategy,
     communication: CommunicationStrategy,
     cost: CostStrategy,
     filesystem: FilesystemStrategy,
     identity: IdentityStrategy,
     registry: RegistryStrategy,
-    snapshot: SnapshotStrategy,
+    secret: SecretStrategy,
     storage: StorageStrategy,
-    task_manager: TaskManagerStrategy,
     user_profile: UserProfileStrategy,
     session: dict[str, Any],
     metadata: dict[str, Any] | None = None,
@@ -12096,6 +14669,9 @@ ModuleContext(
     callbacks: dict[str, Any] | None = None,
     tool_cache: ToolCache | None = None,
     request_metadata: dict[str, str] | None = None,
+    borrowed: frozenset[str] | None = None,
+    shared: dict[str, Any] | None = None,
+    task_manager: TaskManagerStrategy | None = None,
 )
 ```
 
@@ -12104,10 +14680,6 @@ ModuleContext provides a container for strategies and resources used by a module
 This context object is designed to be passed to module components, providing them with access to shared strategies and resources. Additional attributes may be set dynamically.
 
 Parameters:
-
-- ##### **`agent`**
-
-  (`AgentStrategy`) – AgentStrategy.
 
 - ##### **`communication`**
 
@@ -12129,21 +14701,21 @@ Parameters:
 
   (`RegistryStrategy`) – RegistryStrategy.
 
-- ##### **`snapshot`**
+- ##### **`secret`**
 
-  (`SnapshotStrategy`) – SnapshotStrategy.
+  (`SecretStrategy`) – SecretStrategy.
 
 - ##### **`storage`**
 
   (`StorageStrategy`) – StorageStrategy.
 
-- ##### **`task_manager`**
-
-  (`TaskManagerStrategy`) – TaskManagerStrategy.
-
 - ##### **`user_profile`**
 
   (`UserProfileStrategy`) – UserProfileStrategy.
+
+- ##### **`task_manager`**
+
+  (`TaskManagerStrategy | None`, default: `None` ) – Optional, injected by SingleJobManager (RedisTaskManager).
 
 - ##### **`metadata`**
 
@@ -12169,9 +14741,17 @@ Parameters:
 
   (`dict[str, str] | None`, default: `None` ) – gRPC request metadata (headers) from the incoming request.
 
+- ##### **`borrowed`**
+
+  (`frozenset[str] | None`, default: `None` ) – Strategy names that are shared singletons — skip .close() on cleanup.
+
+- ##### **`shared`**
+
+  (`dict[str, Any] | None`, default: `None` ) – Server-lifetime cache shared across all module instances.
+
 Methods:
 
-- **`cleanup`** – Close all service strategies and release their resources.
+- **`cleanup`** – Close owned service strategies and release their resources.
 - **`create_openai_style_tools`** – Create OpenAI-style function calling schemas for a tool module.
 - **`create_tool_functions`** – Create tool functions for all protocols in a tool setup.
 - **`get_module_schemas_by_id`** – Get module schemas by ID, discovering address/port from registry.
@@ -12182,7 +14762,9 @@ Methods:
 cleanup() -> None
 ```
 
-Close all service strategies and release their resources.
+Close owned service strategies and release their resources.
+
+Borrowed strategies (shared singletons) are skipped — they are closed at server shutdown, not per-request.
 
 ##### create_openai_style_tools
 
@@ -12252,29 +14834,6 @@ Returns:
 
 - `dict[str, dict]` – Dictionary containing schemas: {"input": ..., "output": ..., "setup": ..., "secret": ...}
 
-#### ModuleStartInfoOutput
-
-```
-              flowchart TD
-              digitalkin.models.module.ModuleStartInfoOutput[ModuleStartInfoOutput]
-              digitalkin.models.module.utility.UtilityProtocol[UtilityProtocol]
-              digitalkin.models.module.base_types.DataTrigger[DataTrigger]
-
-                              digitalkin.models.module.utility.UtilityProtocol --> digitalkin.models.module.ModuleStartInfoOutput
-                                digitalkin.models.module.base_types.DataTrigger --> digitalkin.models.module.utility.UtilityProtocol
-                
-
-
-
-              click digitalkin.models.module.ModuleStartInfoOutput href "" "digitalkin.models.module.ModuleStartInfoOutput"
-              click digitalkin.models.module.utility.UtilityProtocol href "" "digitalkin.models.module.utility.UtilityProtocol"
-              click digitalkin.models.module.base_types.DataTrigger href "" "digitalkin.models.module.base_types.DataTrigger"
-```
-
-Output sent when module starts with execution context.
-
-This protocol is sent as the first message when a module starts, providing the client with essential execution context information.
-
 #### RequestMetadata
 
 ```python
@@ -12311,8 +14870,8 @@ Methods:
 
 Attributes:
 
-- **`api_key`** (`str | None`) – Get the x-api-key header value.
-- **`authorization`** (`str | None`) – Get the Authorization header value (e.g., Bearer <token>).
+- **`api_key`** (`str | None`) – The x-api-key header value.
+- **`authorization`** (`str | None`) – The Authorization header value (e.g., Bearer <token>).
 - **`bearer_token`** (`str | None`) – Extract the bearer token from the Authorization header.
 
 ##### api_key
@@ -12321,7 +14880,7 @@ Attributes:
 api_key: str | None
 ```
 
-Get the `x-api-key` header value.
+The `x-api-key` header value.
 
 ##### authorization
 
@@ -12329,7 +14888,7 @@ Get the `x-api-key` header value.
 authorization: str | None
 ```
 
-Get the Authorization header value (e.g., `Bearer <token>`).
+The Authorization header value (e.g., `Bearer <token>`).
 
 ##### bearer_token
 
@@ -12493,7 +15052,8 @@ Base setup model with dynamic schema and tool cache support.
 
 Methods:
 
-- **`build_tool_cache`** – Build tool cache, resolving uncached tools via registry.
+- **`build_tool_cache`** – Build tool cache, resolving tools via registry.
+- **`clear_clean_model_cache`** – Clear the filtered model cache. Called by cache invalidation.
 - **`get_clean_model`** – Build filtered model based on json_schema_extra metadata.
 
 ##### build_tool_cache
@@ -12505,9 +15065,9 @@ build_tool_cache(
 ) -> ToolCache
 ```
 
-Build tool cache, resolving uncached tools via registry.
+Build tool cache, resolving tools via registry.
 
-Walks ToolReference fields recursively. For each selected tool, checks resolved_tools first (cache). If missing and registry is available, resolves via gRPC and populates the cache.
+`resolved_tools` is a within-build dedup cache, not a cross-request store: when a registry is available it is cleared first so a stale or empty entry can never be served — every build re-resolves. Without a registry the existing entries are kept (degraded/embedded path).
 
 Parameters:
 
@@ -12522,6 +15082,14 @@ Parameters:
 Returns:
 
 - `ToolCache` – ToolCache with resolved tool entries.
+
+##### clear_clean_model_cache
+
+```python
+clear_clean_model_cache() -> None
+```
+
+Clear the filtered model cache. Called by cache invalidation.
 
 ##### get_clean_model
 
@@ -12648,7 +15216,7 @@ Attributes:
 parameter_count: int
 ```
 
-Return the number of parameters in the schema.
+The number of parameters in the schema.
 
 ##### parameter_names
 
@@ -12656,7 +15224,7 @@ Return the number of parameters in the schema.
 parameter_names: set[str]
 ```
 
-Return the set of parameter names from the schema.
+The set of parameter names from the schema.
 
 #### ToolModuleInfo
 
@@ -12675,6 +15243,10 @@ Return the set of parameter names from the schema.
 
 Module info for tool modules.
 
+Methods:
+
+- **`from_module_info`** – Convert ModuleInfo to ToolModuleInfo by fetching schemas via gRPC.
+
 Attributes:
 
 - **`slug`** (`str`) – Slugified tool name for cache keys and function naming.
@@ -12686,6 +15258,47 @@ slug: str
 ```
 
 Slugified tool name for cache keys and function naming.
+
+##### from_module_info
+
+```python
+from_module_info(
+    module_info: ModuleInfo,
+    setup_id: str,
+    tool_name: str,
+    communication: CommunicationStrategy,
+    *,
+    llm_format: bool = True,
+) -> ToolModuleInfo
+```
+
+Convert ModuleInfo to ToolModuleInfo by fetching schemas via gRPC.
+
+Parameters:
+
+- ###### **`module_info`**
+
+  (`ModuleInfo`) – Module info from registry.
+
+- ###### **`setup_id`**
+
+  (`str`) – Setup ID of the selected tool.
+
+- ###### **`tool_name`**
+
+  (`str`) – Name of the tool.
+
+- ###### **`communication`**
+
+  (`CommunicationStrategy`) – Communication strategy for gRPC calls.
+
+- ###### **`llm_format`**
+
+  (`bool`, default: `True` ) – Use LLM-friendly schema format.
+
+Returns:
+
+- `ToolModuleInfo` – ToolModuleInfo with tools extracted from input schema.
 
 #### ToolReference
 
@@ -12708,13 +15321,16 @@ Methods:
 
 ```python
 resolve(
-    registry: RegistryStrategy, communication: CommunicationStrategy
+    registry: RegistryStrategy,
+    communication: CommunicationStrategy,
+    *,
+    trim: bool = True,
 ) -> list[ToolModuleInfo]
 ```
 
 Resolve selected tools using the registry.
 
-Each tool resolution is bounded by DIGITALKIN_TOOL_RESOLVE_TIMEOUT (default 10s).
+Each tool resolution is bounded by `DIGITALKIN_MODULE_TOOL_RESOLVE_TIMEOUT` (default 10s). Inputs that fail to resolve are logged as WARNING with the `setup_id` and a `reason=...` field; the returned list contains only successful `ToolModuleInfo`s. The caller can correlate against `self.selected_tools` by `setup_id`.
 
 Parameters:
 
@@ -12726,9 +15342,13 @@ Parameters:
 
   (`CommunicationStrategy`) – Communication service for module schemas.
 
+- ###### **`trim`**
+
+  (`bool`, default: `True` ) – When True, each result is trimmed (on a copy) to the entry's enabled triggers. When False, the full module catalog is returned — used to populate the shared per-setup_id cache so agents sharing a setup_id with disjoint triggers keep the full catalog; per-agent filtering then happens at the consumer.
+
 Returns:
 
-- `list[ToolModuleInfo]` – List of ToolModuleInfo for resolved tools, filtered by enabled triggers.
+- `list[ToolModuleInfo]` – List of resolved ToolModuleInfo. Failed resolutions are logged and omitted.
 
 #### ToolSelection
 
@@ -13737,15 +16357,13 @@ Classes:
 
 ```python
 ModuleContext(
-    agent: AgentStrategy,
     communication: CommunicationStrategy,
     cost: CostStrategy,
     filesystem: FilesystemStrategy,
     identity: IdentityStrategy,
     registry: RegistryStrategy,
-    snapshot: SnapshotStrategy,
+    secret: SecretStrategy,
     storage: StorageStrategy,
-    task_manager: TaskManagerStrategy,
     user_profile: UserProfileStrategy,
     session: dict[str, Any],
     metadata: dict[str, Any] | None = None,
@@ -13753,6 +16371,9 @@ ModuleContext(
     callbacks: dict[str, Any] | None = None,
     tool_cache: ToolCache | None = None,
     request_metadata: dict[str, str] | None = None,
+    borrowed: frozenset[str] | None = None,
+    shared: dict[str, Any] | None = None,
+    task_manager: TaskManagerStrategy | None = None,
 )
 ```
 
@@ -13761,10 +16382,6 @@ ModuleContext provides a container for strategies and resources used by a module
 This context object is designed to be passed to module components, providing them with access to shared strategies and resources. Additional attributes may be set dynamically.
 
 Parameters:
-
-- ###### **`agent`**
-
-  (`AgentStrategy`) – AgentStrategy.
 
 - ###### **`communication`**
 
@@ -13786,21 +16403,21 @@ Parameters:
 
   (`RegistryStrategy`) – RegistryStrategy.
 
-- ###### **`snapshot`**
+- ###### **`secret`**
 
-  (`SnapshotStrategy`) – SnapshotStrategy.
+  (`SecretStrategy`) – SecretStrategy.
 
 - ###### **`storage`**
 
   (`StorageStrategy`) – StorageStrategy.
 
-- ###### **`task_manager`**
-
-  (`TaskManagerStrategy`) – TaskManagerStrategy.
-
 - ###### **`user_profile`**
 
   (`UserProfileStrategy`) – UserProfileStrategy.
+
+- ###### **`task_manager`**
+
+  (`TaskManagerStrategy | None`, default: `None` ) – Optional, injected by SingleJobManager (RedisTaskManager).
 
 - ###### **`metadata`**
 
@@ -13826,9 +16443,17 @@ Parameters:
 
   (`dict[str, str] | None`, default: `None` ) – gRPC request metadata (headers) from the incoming request.
 
+- ###### **`borrowed`**
+
+  (`frozenset[str] | None`, default: `None` ) – Strategy names that are shared singletons — skip .close() on cleanup.
+
+- ###### **`shared`**
+
+  (`dict[str, Any] | None`, default: `None` ) – Server-lifetime cache shared across all module instances.
+
 Methods:
 
-- **`cleanup`** – Close all service strategies and release their resources.
+- **`cleanup`** – Close owned service strategies and release their resources.
 - **`create_openai_style_tools`** – Create OpenAI-style function calling schemas for a tool module.
 - **`create_tool_functions`** – Create tool functions for all protocols in a tool setup.
 - **`get_module_schemas_by_id`** – Get module schemas by ID, discovering address/port from registry.
@@ -13839,7 +16464,9 @@ Methods:
 cleanup() -> None
 ```
 
-Close all service strategies and release their resources.
+Close owned service strategies and release their resources.
+
+Borrowed strategies (shared singletons) are skipped — they are closed at server shutdown, not per-request.
 
 ###### create_openai_style_tools
 
@@ -13917,7 +16544,6 @@ Session(
     mission_id: str,
     setup_id: str,
     setup_version_id: str,
-    timezone: tzinfo | None = None,
     **kwargs: dict[str, Any],
 )
 ```
@@ -13932,6 +16558,8 @@ Session(
 ```
 
 Session data container with mandatory setup_id and mission_id.
+
+Timezone comes from `ModuleSettings.timezone` (env `DIGITALKIN_MODULE_TIMEZONE`).
 
 Raises:
 
@@ -14025,7 +16653,8 @@ Base setup model with dynamic schema and tool cache support.
 
 Methods:
 
-- **`build_tool_cache`** – Build tool cache, resolving uncached tools via registry.
+- **`build_tool_cache`** – Build tool cache, resolving tools via registry.
+- **`clear_clean_model_cache`** – Clear the filtered model cache. Called by cache invalidation.
 - **`get_clean_model`** – Build filtered model based on json_schema_extra metadata.
 
 ###### build_tool_cache
@@ -14037,9 +16666,9 @@ build_tool_cache(
 ) -> ToolCache
 ```
 
-Build tool cache, resolving uncached tools via registry.
+Build tool cache, resolving tools via registry.
 
-Walks ToolReference fields recursively. For each selected tool, checks resolved_tools first (cache). If missing and registry is available, resolves via gRPC and populates the cache.
+`resolved_tools` is a within-build dedup cache, not a cross-request store: when a registry is available it is cleared first so a stale or empty entry can never be served — every build re-resolves. Without a registry the existing entries are kept (degraded/embedded path).
 
 Parameters:
 
@@ -14054,6 +16683,14 @@ Parameters:
 Returns:
 
 - `ToolCache` – ToolCache with resolved tool entries.
+
+###### clear_clean_model_cache
+
+```python
+clear_clean_model_cache() -> None
+```
+
+Clear the filtered model cache. Called by cache invalidation.
 
 ###### get_clean_model
 
@@ -14127,8 +16764,8 @@ Methods:
 
 Attributes:
 
-- **`api_key`** (`str | None`) – Get the x-api-key header value.
-- **`authorization`** (`str | None`) – Get the Authorization header value (e.g., Bearer <token>).
+- **`api_key`** (`str | None`) – The x-api-key header value.
+- **`authorization`** (`str | None`) – The Authorization header value (e.g., Bearer <token>).
 - **`bearer_token`** (`str | None`) – Extract the bearer token from the Authorization header.
 
 ###### api_key
@@ -14137,7 +16774,7 @@ Attributes:
 api_key: str | None
 ```
 
-Get the `x-api-key` header value.
+The `x-api-key` header value.
 
 ###### authorization
 
@@ -14145,7 +16782,7 @@ Get the `x-api-key` header value.
 authorization: str | None
 ```
 
-Get the Authorization header value (e.g., `Bearer <token>`).
+The Authorization header value (e.g., `Bearer <token>`).
 
 ###### bearer_token
 
@@ -14325,7 +16962,8 @@ Base setup model with dynamic schema and tool cache support.
 
 Methods:
 
-- **`build_tool_cache`** – Build tool cache, resolving uncached tools via registry.
+- **`build_tool_cache`** – Build tool cache, resolving tools via registry.
+- **`clear_clean_model_cache`** – Clear the filtered model cache. Called by cache invalidation.
 - **`get_clean_model`** – Build filtered model based on json_schema_extra metadata.
 
 ###### build_tool_cache
@@ -14337,9 +16975,9 @@ build_tool_cache(
 ) -> ToolCache
 ```
 
-Build tool cache, resolving uncached tools via registry.
+Build tool cache, resolving tools via registry.
 
-Walks ToolReference fields recursively. For each selected tool, checks resolved_tools first (cache). If missing and registry is available, resolves via gRPC and populates the cache.
+`resolved_tools` is a within-build dedup cache, not a cross-request store: when a registry is available it is cleared first so a stale or empty entry can never be served — every build re-resolves. Without a registry the existing entries are kept (degraded/embedded path).
 
 Parameters:
 
@@ -14354,6 +16992,14 @@ Parameters:
 Returns:
 
 - `ToolCache` – ToolCache with resolved tool entries.
+
+###### clear_clean_model_cache
+
+```python
+clear_clean_model_cache() -> None
+```
+
+Clear the filtered model cache. Called by cache invalidation.
 
 ###### get_clean_model
 
@@ -14393,10 +17039,6 @@ Classes:
 - **`ToolCache`** – Registry cache storing resolved tool references by setup field name.
 - **`ToolDefinition`** – Complete definition of an LLM tool with resolved JSON Schema parameters.
 - **`ToolModuleInfo`** – Module info for tool modules.
-
-Functions:
-
-- **`module_info_to_tool_module_info`** – Convert ModuleInfo to ToolModuleInfo by fetching schemas via gRPC.
 
 ##### SelectedTool
 
@@ -14508,7 +17150,7 @@ Attributes:
 parameter_count: int
 ```
 
-Return the number of parameters in the schema.
+The number of parameters in the schema.
 
 ###### parameter_names
 
@@ -14516,7 +17158,7 @@ Return the number of parameters in the schema.
 parameter_names: set[str]
 ```
 
-Return the set of parameter names from the schema.
+The set of parameter names from the schema.
 
 ##### ToolModuleInfo
 
@@ -14535,6 +17177,10 @@ Return the set of parameter names from the schema.
 
 Module info for tool modules.
 
+Methods:
+
+- **`from_module_info`** – Convert ModuleInfo to ToolModuleInfo by fetching schemas via gRPC.
+
 Attributes:
 
 - **`slug`** (`str`) – Slugified tool name for cache keys and function naming.
@@ -14547,10 +17193,10 @@ slug: str
 
 Slugified tool name for cache keys and function naming.
 
-##### module_info_to_tool_module_info
+###### from_module_info
 
 ```python
-module_info_to_tool_module_info(
+from_module_info(
     module_info: ModuleInfo,
     setup_id: str,
     tool_name: str,
@@ -14561,8 +17207,6 @@ module_info_to_tool_module_info(
 ```
 
 Convert ModuleInfo to ToolModuleInfo by fetching schemas via gRPC.
-
-Fetches the module's input schema and extracts tool definitions from the discriminated union structure.
 
 Parameters:
 
@@ -14624,13 +17268,16 @@ Methods:
 
 ```python
 resolve(
-    registry: RegistryStrategy, communication: CommunicationStrategy
+    registry: RegistryStrategy,
+    communication: CommunicationStrategy,
+    *,
+    trim: bool = True,
 ) -> list[ToolModuleInfo]
 ```
 
 Resolve selected tools using the registry.
 
-Each tool resolution is bounded by DIGITALKIN_TOOL_RESOLVE_TIMEOUT (default 10s).
+Each tool resolution is bounded by `DIGITALKIN_MODULE_TOOL_RESOLVE_TIMEOUT` (default 10s). Inputs that fail to resolve are logged as WARNING with the `setup_id` and a `reason=...` field; the returned list contains only successful `ToolModuleInfo`s. The caller can correlate against `self.selected_tools` by `setup_id`.
 
 Parameters:
 
@@ -14642,9 +17289,13 @@ Parameters:
 
   (`CommunicationStrategy`) – Communication service for module schemas.
 
+- ###### **`trim`**
+
+  (`bool`, default: `True` ) – When True, each result is trimmed (on a copy) to the entry's enabled triggers. When False, the full module catalog is returned — used to populate the shared per-setup_id cache so agents sharing a setup_id with disjoint triggers keep the full catalog; per-agent filtering then happens at the consumer.
+
 Returns:
 
-- `list[ToolModuleInfo]` – List of ToolModuleInfo for resolved tools, filtered by enabled triggers.
+- `list[ToolModuleInfo]` – List of resolved ToolModuleInfo. Failed resolutions are logged and omitted.
 
 ##### ToolSelection
 
@@ -14719,7 +17370,6 @@ Classes:
 - **`HealthcheckServicesOutput`** – Output for healthcheck services response.
 - **`HealthcheckStatusInput`** – Input for healthcheck status request.
 - **`HealthcheckStatusOutput`** – Output for healthcheck status response.
-- **`ModuleStartInfoOutput`** – Output sent when module starts with execution context.
 - **`ServiceHealthStatus`** – Health status of a single service.
 - **`UtilityProtocol`** – Base class for SDK-provided utility protocols.
 - **`UtilityRegistry`** – Registry for SDK-provided built-in triggers.
@@ -14877,29 +17527,6 @@ Output for healthcheck status response.
 
 Comprehensive module status including uptime, active jobs, and metadata.
 
-##### ModuleStartInfoOutput
-
-```
-              flowchart TD
-              digitalkin.models.module.utility.ModuleStartInfoOutput[ModuleStartInfoOutput]
-              digitalkin.models.module.utility.UtilityProtocol[UtilityProtocol]
-              digitalkin.models.module.base_types.DataTrigger[DataTrigger]
-
-                              digitalkin.models.module.utility.UtilityProtocol --> digitalkin.models.module.utility.ModuleStartInfoOutput
-                                digitalkin.models.module.base_types.DataTrigger --> digitalkin.models.module.utility.UtilityProtocol
-                
-
-
-
-              click digitalkin.models.module.utility.ModuleStartInfoOutput href "" "digitalkin.models.module.utility.ModuleStartInfoOutput"
-              click digitalkin.models.module.utility.UtilityProtocol href "" "digitalkin.models.module.utility.UtilityProtocol"
-              click digitalkin.models.module.base_types.DataTrigger href "" "digitalkin.models.module.base_types.DataTrigger"
-```
-
-Output sent when module starts with execution context.
-
-This protocol is sent as the first message when a module starts, providing the client with essential execution context information.
-
 ##### ServiceHealthStatus
 
 ```
@@ -14970,6 +17597,7 @@ Modules:
 
 - **`cost`** – Pydantic models for cost service.
 - **`registry`** – Registry data models.
+- **`services`** – Service-strategy execution-mode model.
 - **`storage`** – Storage model.
 
 Classes:
@@ -15026,6 +17654,7 @@ Classes:
 - **`AmountLimit`** – Cost limit based on cost amount in dollars (e.g., max $1.00).
 - **`CostConfig`** – Pydantic model that defines a cost configuration.
 - **`CostEvent`** – Pydantic model that represents a cost event registered during service execution.
+- **`CostType`** – Enum defining the types of costs that can be registered.
 - **`CostTypeEnum`** – Enumeration of supported cost types.
 - **`QuantityLimit`** – Cost limit based on quantity (e.g., max 10000 tokens).
 
@@ -15073,6 +17702,19 @@ Pydantic model that represents a cost event registered during service execution.
 ###### DEPRECATED
 
 :param cost_name: Identifier for the cost configuration. :param cost_type: The type of cost. :param usage: The amount or units consumed. :param cost_amount: The computed cost amount; if not provided it is computed as usage\*rate. :param timestamp: The time when the cost event was recorded. :param metadata: Additional contextual information about the cost event.
+
+##### CostType
+
+```
+              flowchart TD
+              digitalkin.models.services.cost.CostType[CostType]
+
+              
+
+              click digitalkin.models.services.cost.CostType href "" "digitalkin.models.services.cost.CostType"
+```
+
+Enum defining the types of costs that can be registered.
 
 ##### CostTypeEnum
 
@@ -15191,6 +17833,27 @@ Visibility in the registry.
 
 Setup information from registry.
 
+#### services
+
+Service-strategy execution-mode model.
+
+Classes:
+
+- **`ServicesMode`** – Mode for strategy execution.
+
+##### ServicesMode
+
+```
+              flowchart TD
+              digitalkin.models.services.services.ServicesMode[ServicesMode]
+
+              
+
+              click digitalkin.models.services.services.ServicesMode href "" "digitalkin.models.services.services.ServicesMode"
+```
+
+Mode for strategy execution.
+
 #### storage
 
 Storage model.
@@ -15200,6 +17863,7 @@ Classes:
 - **`BaseMessage`** – Base Model representing a simple message in the chat history.
 - **`BaseRole`** – Officially supported Role Enum for chat messages.
 - **`ChatHistory`** – Storage chat history model for the OpenAI Archetype module.
+- **`DataType`** – Enum defining the types of data that can be stored.
 - **`FileHistory`** – File history model.
 - **`FileModel`** – File model.
 
@@ -15242,6 +17906,19 @@ Officially supported Role Enum for chat messages.
 
 Storage chat history model for the OpenAI Archetype module.
 
+##### DataType
+
+```
+              flowchart TD
+              digitalkin.models.services.storage.DataType[DataType]
+
+              
+
+              click digitalkin.models.services.storage.DataType href "" "digitalkin.models.services.storage.DataType"
+```
+
+Enum defining the types of data that can be stored.
+
 ##### FileHistory
 
 ```
@@ -15274,8 +17951,579 @@ This package contain settings of sdk.
 
 Modules:
 
+- **`gateway`** – Gateway settings — stream management, backpressure, queues, reaper.
+- **`grpc_client`** – gRPC client-side settings — circuit breaker, query retry, channel options.
+- **`log`** – Logging configuration settings.
+- **`module`** – Module-scope runtime settings.
+- **`profiling`** – Profiling settings for task execution and asyncio inspection.
+- **`queue`** – Queue factory settings.
+- **`redis`** – Redis connection and pool settings.
+- **`resilience`** – Resilience subsystem settings — bulkhead.
 - **`server`** – Package for server settings.
+- **`task_manager`** – Task and job manager settings.
 - **`utils`** – This package contain channel base.
+
+#### gateway
+
+Gateway settings — stream management, backpressure, queues, reaper.
+
+Classes:
+
+- **`GatewayDialReconnectSettings`** – Server-side dial-back auto-reconnect window and backoff.
+- **`GatewayM2MSettings`** – Resilience settings for in-module M2M outbound calls.
+- **`GatewayQueueSettings`** – Queue and timeout settings for gateway sessions.
+- **`GatewaySettings`** – Top-level gateway configuration.
+- **`GatewayStreamSettings`** – Redis Stream configuration for gateway data flow.
+
+Functions:
+
+- **`get_gateway_settings`** – Process-wide GatewaySettings singleton.
+
+##### GatewayDialReconnectSettings
+
+```
+              flowchart TD
+              digitalkin.models.settings.gateway.GatewayDialReconnectSettings[GatewayDialReconnectSettings]
+
+              
+
+              click digitalkin.models.settings.gateway.GatewayDialReconnectSettings href "" "digitalkin.models.settings.gateway.GatewayDialReconnectSettings"
+```
+
+Server-side dial-back auto-reconnect window and backoff.
+
+##### GatewayM2MSettings
+
+```
+              flowchart TD
+              digitalkin.models.settings.gateway.GatewayM2MSettings[GatewayM2MSettings]
+
+              
+
+              click digitalkin.models.settings.gateway.GatewayM2MSettings href "" "digitalkin.models.settings.gateway.GatewayM2MSettings"
+```
+
+Resilience settings for in-module M2M outbound calls.
+
+Wraps every `GrpcCommunication.call_module` invocation with a TTL'd registry entry, a per-target circuit breaker, a process-wide concurrency cap, and per-call deadlines. All fields are env-overridable under the `DIGITALKIN_M2M_` prefix.
+
+##### GatewayQueueSettings
+
+```
+              flowchart TD
+              digitalkin.models.settings.gateway.GatewayQueueSettings[GatewayQueueSettings]
+
+              
+
+              click digitalkin.models.settings.gateway.GatewayQueueSettings href "" "digitalkin.models.settings.gateway.GatewayQueueSettings"
+```
+
+Queue and timeout settings for gateway sessions.
+
+##### GatewaySettings
+
+```
+              flowchart TD
+              digitalkin.models.settings.gateway.GatewaySettings[GatewaySettings]
+
+              
+
+              click digitalkin.models.settings.gateway.GatewaySettings href "" "digitalkin.models.settings.gateway.GatewaySettings"
+```
+
+Top-level gateway configuration.
+
+##### GatewayStreamSettings
+
+```
+              flowchart TD
+              digitalkin.models.settings.gateway.GatewayStreamSettings[GatewayStreamSettings]
+
+              
+
+              click digitalkin.models.settings.gateway.GatewayStreamSettings href "" "digitalkin.models.settings.gateway.GatewayStreamSettings"
+```
+
+Redis Stream configuration for gateway data flow.
+
+Attributes:
+
+- **`from_seq_limit`** (`int`) – Hard ceiling on a client-supplied resume cursor.
+
+###### from_seq_limit
+
+```python
+from_seq_limit: int
+```
+
+Hard ceiling on a client-supplied resume cursor.
+
+##### get_gateway_settings
+
+```python
+get_gateway_settings() -> GatewaySettings
+```
+
+Process-wide `GatewaySettings` singleton.
+
+Nested settings accessed via composition: `.stream`, `.queue`, `.m2m`. Tests must call `get_gateway_settings.cache_clear()` after mutating env.
+
+Returns:
+
+- `GatewaySettings` – The shared GatewaySettings instance.
+
+#### grpc_client
+
+gRPC client-side settings — circuit breaker, query retry, channel options.
+
+Classes:
+
+- **`CircuitBreakerSettings`** – Per-service circuit-breaker thresholds.
+- **`GrpcChannelSettings`** – gRPC channel keepalive and reconnect tuning.
+- **`GrpcClientSettings`** – Retry/backoff for unary gRPC queries via GrpcClientWrapper.
+- **`GrpcRetrySettings`** – gRPC service-config retry policy (channel-level).
+
+Functions:
+
+- **`get_circuit_breaker_settings`** – Process-wide CircuitBreakerSettings singleton.
+- **`get_grpc_channel_settings`** – Process-wide GrpcChannelSettings singleton.
+- **`get_grpc_client_settings`** – Process-wide GrpcClientSettings singleton.
+- **`get_grpc_retry_settings`** – Process-wide GrpcRetrySettings singleton.
+
+##### CircuitBreakerSettings
+
+```
+              flowchart TD
+              digitalkin.models.settings.grpc_client.CircuitBreakerSettings[CircuitBreakerSettings]
+
+              
+
+              click digitalkin.models.settings.grpc_client.CircuitBreakerSettings href "" "digitalkin.models.settings.grpc_client.CircuitBreakerSettings"
+```
+
+Per-service circuit-breaker thresholds.
+
+##### GrpcChannelSettings
+
+```
+              flowchart TD
+              digitalkin.models.settings.grpc_client.GrpcChannelSettings[GrpcChannelSettings]
+
+              
+
+              click digitalkin.models.settings.grpc_client.GrpcChannelSettings href "" "digitalkin.models.settings.grpc_client.GrpcChannelSettings"
+```
+
+gRPC channel keepalive and reconnect tuning.
+
+Methods:
+
+- **`to_channel_options`** – Build the resilient gRPC channel-options list.
+
+###### to_channel_options
+
+```python
+to_channel_options() -> list[tuple[str, Any]]
+```
+
+Build the resilient gRPC channel-options list.
+
+Returns:
+
+- `list[tuple[str, Any]]` – Channel options with message-size limits, DNS re-resolution, keepalive, and retries.
+
+##### GrpcClientSettings
+
+```
+              flowchart TD
+              digitalkin.models.settings.grpc_client.GrpcClientSettings[GrpcClientSettings]
+
+              
+
+              click digitalkin.models.settings.grpc_client.GrpcClientSettings href "" "digitalkin.models.settings.grpc_client.GrpcClientSettings"
+```
+
+Retry/backoff for unary gRPC queries via GrpcClientWrapper.
+
+##### GrpcRetrySettings
+
+```
+              flowchart TD
+              digitalkin.models.settings.grpc_client.GrpcRetrySettings[GrpcRetrySettings]
+
+              
+
+              click digitalkin.models.settings.grpc_client.GrpcRetrySettings href "" "digitalkin.models.settings.grpc_client.GrpcRetrySettings"
+```
+
+gRPC service-config retry policy (channel-level).
+
+##### get_circuit_breaker_settings
+
+```python
+get_circuit_breaker_settings() -> CircuitBreakerSettings
+```
+
+Process-wide `CircuitBreakerSettings` singleton.
+
+Tests must call `get_circuit_breaker_settings.cache_clear()` after mutating env.
+
+Returns:
+
+- `CircuitBreakerSettings` – The shared CircuitBreakerSettings instance.
+
+##### get_grpc_channel_settings
+
+```python
+get_grpc_channel_settings() -> GrpcChannelSettings
+```
+
+Process-wide `GrpcChannelSettings` singleton.
+
+Tests must call `get_grpc_channel_settings.cache_clear()` after mutating env.
+
+Returns:
+
+- `GrpcChannelSettings` – The shared GrpcChannelSettings instance.
+
+##### get_grpc_client_settings
+
+```python
+get_grpc_client_settings() -> GrpcClientSettings
+```
+
+Process-wide `GrpcClientSettings` singleton.
+
+Tests must call `get_grpc_client_settings.cache_clear()` after mutating env.
+
+Returns:
+
+- `GrpcClientSettings` – The shared GrpcClientSettings instance.
+
+##### get_grpc_retry_settings
+
+```python
+get_grpc_retry_settings() -> GrpcRetrySettings
+```
+
+Process-wide `GrpcRetrySettings` singleton.
+
+Tests must call `get_grpc_retry_settings.cache_clear()` after mutating env.
+
+Returns:
+
+- `GrpcRetrySettings` – The shared GrpcRetrySettings instance.
+
+#### log
+
+Logging configuration settings.
+
+Classes:
+
+- **`LoggingSettings`** – Logging configuration for the digitalkin logger.
+
+Functions:
+
+- **`get_logging_settings`** – Process-wide LoggingSettings singleton.
+
+##### LoggingSettings
+
+```
+              flowchart TD
+              digitalkin.models.settings.log.LoggingSettings[LoggingSettings]
+
+              
+
+              click digitalkin.models.settings.log.LoggingSettings href "" "digitalkin.models.settings.log.LoggingSettings"
+```
+
+Logging configuration for the digitalkin logger.
+
+Env prefix `DIGITALKIN_LOG_`; `railway_service_name` reads the unprefixed `RAILWAY_SERVICE_NAME` injected by the Railway platform.
+
+##### get_logging_settings
+
+```python
+get_logging_settings() -> LoggingSettings
+```
+
+Process-wide `LoggingSettings` singleton.
+
+Tests must call `get_logging_settings.cache_clear()` after mutating env.
+
+Returns:
+
+- `LoggingSettings` – The shared LoggingSettings instance.
+
+#### module
+
+Module-scope runtime settings.
+
+Classes:
+
+- **`ModuleSettings`** – Per-module runtime configuration.
+
+Functions:
+
+- **`get_module_settings`** – Process-wide ModuleSettings singleton.
+
+##### ModuleSettings
+
+```
+              flowchart TD
+              digitalkin.models.settings.module.ModuleSettings[ModuleSettings]
+
+              
+
+              click digitalkin.models.settings.module.ModuleSettings href "" "digitalkin.models.settings.module.ModuleSettings"
+```
+
+Per-module runtime configuration.
+
+##### get_module_settings
+
+```python
+get_module_settings() -> ModuleSettings
+```
+
+Process-wide `ModuleSettings` singleton.
+
+Tests must call `get_module_settings.cache_clear()` after mutating env.
+
+Returns:
+
+- `ModuleSettings` – The shared ModuleSettings instance.
+
+#### profiling
+
+Profiling settings for task execution and asyncio inspection.
+
+Classes:
+
+- **`ProfilerMode`** – Profiler backend selection.
+- **`ProfilingSettings`** – Profiling and debugging configuration.
+
+Functions:
+
+- **`get_profiling_settings`** – Process-wide ProfilingSettings singleton.
+
+##### ProfilerMode
+
+```
+              flowchart TD
+              digitalkin.models.settings.profiling.ProfilerMode[ProfilerMode]
+
+              
+
+              click digitalkin.models.settings.profiling.ProfilerMode href "" "digitalkin.models.settings.profiling.ProfilerMode"
+```
+
+Profiler backend selection.
+
+##### ProfilingSettings
+
+```
+              flowchart TD
+              digitalkin.models.settings.profiling.ProfilingSettings[ProfilingSettings]
+
+              
+
+              click digitalkin.models.settings.profiling.ProfilingSettings href "" "digitalkin.models.settings.profiling.ProfilingSettings"
+```
+
+Profiling and debugging configuration.
+
+Env vars: DIGITALKIN_PROFILER, DIGITALKIN_PROFILE_OUTPUT_DIR, DIGITALKIN_ASYNCIO_INSPECTOR, DIGITALKIN_ASYNCIO_INSPECTOR_PORT.
+
+##### get_profiling_settings
+
+```python
+get_profiling_settings() -> ProfilingSettings
+```
+
+Process-wide `ProfilingSettings` singleton.
+
+Tests must call `get_profiling_settings.cache_clear()` after mutating env.
+
+Returns:
+
+- `ProfilingSettings` – The shared ProfilingSettings instance.
+
+#### queue
+
+Queue factory settings.
+
+Classes:
+
+- **`QueueSettings`** – Defaults for asyncio queues created via QueueFactory.
+
+Functions:
+
+- **`get_queue_settings`** – Process-wide QueueSettings singleton.
+
+##### QueueSettings
+
+```
+              flowchart TD
+              digitalkin.models.settings.queue.QueueSettings[QueueSettings]
+
+              
+
+              click digitalkin.models.settings.queue.QueueSettings href "" "digitalkin.models.settings.queue.QueueSettings"
+```
+
+Defaults for asyncio queues created via QueueFactory.
+
+##### get_queue_settings
+
+```python
+get_queue_settings() -> QueueSettings
+```
+
+Process-wide `QueueSettings` singleton.
+
+Tests must call `get_queue_settings.cache_clear()` after mutating env.
+
+Returns:
+
+- `QueueSettings` – The shared QueueSettings instance.
+
+#### redis
+
+Redis connection and pool settings.
+
+Classes:
+
+- **`RedisPoolSettings`** – Redis connection pool configuration.
+- **`RedisSettings`** – Top-level Redis configuration.
+- **`RedisSignalSettings`** – Redis signal delivery configuration.
+
+Functions:
+
+- **`get_redis_settings`** – Process-wide RedisSettings singleton.
+
+##### RedisPoolSettings
+
+```
+              flowchart TD
+              digitalkin.models.settings.redis.RedisPoolSettings[RedisPoolSettings]
+
+              
+
+              click digitalkin.models.settings.redis.RedisPoolSettings href "" "digitalkin.models.settings.redis.RedisPoolSettings"
+```
+
+Redis connection pool configuration.
+
+Methods:
+
+- **`get_blocking_pool_size`** – Blocking pool size for XREAD, defaults to half of total.
+- **`get_default_pool_size`** – Non-blocking pool size, defaults to half of total.
+
+###### get_blocking_pool_size
+
+```python
+get_blocking_pool_size() -> int
+```
+
+Blocking pool size for XREAD, defaults to half of total.
+
+Returns:
+
+- `int` – Pool size for blocking commands.
+
+###### get_default_pool_size
+
+```python
+get_default_pool_size() -> int
+```
+
+Non-blocking pool size, defaults to half of total.
+
+Returns:
+
+- `int` – Pool size for non-blocking commands.
+
+##### RedisSettings
+
+```
+              flowchart TD
+              digitalkin.models.settings.redis.RedisSettings[RedisSettings]
+
+              
+
+              click digitalkin.models.settings.redis.RedisSettings href "" "digitalkin.models.settings.redis.RedisSettings"
+```
+
+Top-level Redis configuration.
+
+##### RedisSignalSettings
+
+```
+              flowchart TD
+              digitalkin.models.settings.redis.RedisSignalSettings[RedisSignalSettings]
+
+              
+
+              click digitalkin.models.settings.redis.RedisSignalSettings href "" "digitalkin.models.settings.redis.RedisSignalSettings"
+```
+
+Redis signal delivery configuration.
+
+##### get_redis_settings
+
+```python
+get_redis_settings() -> RedisSettings
+```
+
+Process-wide `RedisSettings` singleton.
+
+Nested settings are accessed via composition: `get_redis_settings().pool` and `.signal`. Tests must call `get_redis_settings.cache_clear()` after mutating env.
+
+Returns:
+
+- `RedisSettings` – The shared RedisSettings instance.
+
+#### resilience
+
+Resilience subsystem settings — bulkhead.
+
+Classes:
+
+- **`BulkheadSettings`** – Per-service concurrency-limiter defaults.
+
+Functions:
+
+- **`get_bulkhead_settings`** – Process-wide BulkheadSettings singleton.
+
+##### BulkheadSettings
+
+```
+              flowchart TD
+              digitalkin.models.settings.resilience.BulkheadSettings[BulkheadSettings]
+
+              
+
+              click digitalkin.models.settings.resilience.BulkheadSettings href "" "digitalkin.models.settings.resilience.BulkheadSettings"
+```
+
+Per-service concurrency-limiter defaults.
+
+The per-service `DIGITALKIN_BULKHEAD_{SERVICE_ID}_MAX` override has a dynamic suffix and is read directly in `Bulkhead.for_service`.
+
+##### get_bulkhead_settings
+
+```python
+get_bulkhead_settings() -> BulkheadSettings
+```
+
+Process-wide `BulkheadSettings` singleton.
+
+Tests must call `get_bulkhead_settings.cache_clear()` after mutating env.
+
+Returns:
+
+- `BulkheadSettings` – The shared BulkheadSettings instance.
 
 #### server
 
@@ -15286,6 +18534,7 @@ Modules:
 - **`channel`** – Server channel settings.
 - **`grpc`** – gRPC server settings for the SDK.
 - **`server`** – Server settings for the DigitalKin application.
+- **`servicer`** – Module servicer settings.
 
 ##### channel
 
@@ -15294,6 +18543,10 @@ Server channel settings.
 Classes:
 
 - **`ServerChannelSettings`** – Settings for a server channel.
+
+Functions:
+
+- **`get_server_channel_settings`** – Process-wide ServerChannelSettings singleton.
 
 ###### ServerChannelSettings
 
@@ -15332,7 +18585,7 @@ Methods:
 address: str
 ```
 
-Get the server address.
+The server address.
 
 Returns:
 
@@ -15376,6 +18629,20 @@ Raises:
 
 - `ConfigurationError` – If port is outside valid range
 
+###### get_server_channel_settings
+
+```python
+get_server_channel_settings() -> ServerChannelSettings
+```
+
+Process-wide `ServerChannelSettings` singleton.
+
+Tests must call `get_server_channel_settings.cache_clear()` after mutating env.
+
+Returns:
+
+- `ServerChannelSettings` – The shared ServerChannelSettings instance.
+
 ##### grpc
 
 gRPC server settings for the SDK.
@@ -15404,12 +18671,12 @@ gRPC tuning settings on the SDK side.
 Attributes:
 
 - **`compression`** (`GrpcCompression`) – gRPC compression algorithm to use for server responses.
-- **`keepalive_time`** (`NonNegativeFloat`) – Interval for server keepalive pings, in milliseconds.
-- **`keepalive_timeout`** (`NonNegativeFloat`) – Timeout for server keepalive pings, in milliseconds.
-- **`min_ping_interval`** (`NonNegativeFloat`) – Minimum interval between HTTP/2 pings on the server side, in milliseconds.
-- **`max_receive_message_lenght`** (`NonNegativeFloat`) – Maximum message size the server can receive, in bytes.
-- **`max_send_message_length`** (`NonNegativeFloat`) – Maximum message size the server can send, in bytes.
-- **`max_pings_without_data`** (`NonNegativeFloat`) – Maximum number of pings the server allows without receiving any data.
+- **`keepalive_time`** (`NonNegativeInt`) – Interval for server keepalive pings, in milliseconds.
+- **`keepalive_timeout`** (`NonNegativeInt`) – Timeout for server keepalive pings, in milliseconds.
+- **`min_ping_interval`** (`NonNegativeInt`) – Minimum interval between HTTP/2 pings on the server side, in milliseconds.
+- **`max_receive_message_lenght`** (`NonNegativeInt`) – Maximum message size the server can receive, in bytes.
+- **`max_send_message_length`** (`NonNegativeInt`) – Maximum message size the server can send, in bytes.
+- **`max_pings_without_data`** (`NonNegativeInt`) – Maximum number of pings the server allows without receiving any data.
 - **`keepalive_permit_without_calls`** (`bool`) – Allow clients to send keepalive pings even when there are no active RPCs.
 
 ###### options
@@ -15432,6 +18699,10 @@ Classes:
 
 - **`ServerSettings`** – Settings for the DigitalKin server.
 
+Functions:
+
+- **`get_server_settings`** – Process-wide ServerSettings singleton.
+
 ###### ServerSettings
 
 ```python
@@ -15453,11 +18724,133 @@ Attributes:
 
 - **`channel`** (`ServerChannelSettings`) – Settings for the server channel.
 - **`grpc`** (`GrpcServerSettings`) – Settings for the gRPC server.
+- **`profiling`** (`ProfilingSettings`) – Profiling and debugging configuration.
 - **`health_check`** (`bool`) – Whether to enable the health check service.
 - **`reflection`** (`bool`) – Whether to enable reflection for the server.
 - **`max_concurrent_rpcs`** (`NonNegativeInt`) – Maximum number of RPCs handled in parallel by the server.
 - **`max_workers`** (`NonNegativeInt`) – Maximum number of workers for sync mode.
 - **`thread_pool_workers`** (`NonNegativeInt`) – Number of workers in the server thread pool.
+
+###### get_server_settings
+
+```python
+get_server_settings() -> ServerSettings
+```
+
+Process-wide `ServerSettings` singleton.
+
+Nested settings accessed via composition: `.channel`, `.grpc`, `.profiling`. Tests must call `get_server_settings.cache_clear()` after mutating env.
+
+Returns:
+
+- `ServerSettings` – The shared ServerSettings instance.
+
+##### servicer
+
+Module servicer settings.
+
+Classes:
+
+- **`ModuleServicerSettings`** – Caching and timeout settings for ModuleServicer.
+
+Functions:
+
+- **`get_module_servicer_settings`** – Process-wide ModuleServicerSettings singleton.
+
+###### ModuleServicerSettings
+
+```
+              flowchart TD
+              digitalkin.models.settings.server.servicer.ModuleServicerSettings[ModuleServicerSettings]
+
+              
+
+              click digitalkin.models.settings.server.servicer.ModuleServicerSettings href "" "digitalkin.models.settings.server.servicer.ModuleServicerSettings"
+```
+
+Caching and timeout settings for ModuleServicer.
+
+###### get_module_servicer_settings
+
+```python
+get_module_servicer_settings() -> ModuleServicerSettings
+```
+
+Process-wide `ModuleServicerSettings` singleton.
+
+Tests must call `get_module_servicer_settings.cache_clear()` after mutating env.
+
+Returns:
+
+- `ModuleServicerSettings` – The shared ModuleServicerSettings instance.
+
+#### task_manager
+
+Task and job manager settings.
+
+Classes:
+
+- **`JobManagerSettings`** – Timeouts and backpressure for SingleJobManager.
+- **`TaskManagerSettings`** – Concurrency and admission limits for BaseTaskManager.
+
+Functions:
+
+- **`get_job_manager_settings`** – Process-wide JobManagerSettings singleton.
+- **`get_task_manager_settings`** – Process-wide TaskManagerSettings singleton.
+
+##### JobManagerSettings
+
+```
+              flowchart TD
+              digitalkin.models.settings.task_manager.JobManagerSettings[JobManagerSettings]
+
+              
+
+              click digitalkin.models.settings.task_manager.JobManagerSettings href "" "digitalkin.models.settings.task_manager.JobManagerSettings"
+```
+
+Timeouts and backpressure for SingleJobManager.
+
+##### TaskManagerSettings
+
+```
+              flowchart TD
+              digitalkin.models.settings.task_manager.TaskManagerSettings[TaskManagerSettings]
+
+              
+
+              click digitalkin.models.settings.task_manager.TaskManagerSettings href "" "digitalkin.models.settings.task_manager.TaskManagerSettings"
+```
+
+Concurrency and admission limits for BaseTaskManager.
+
+##### get_job_manager_settings
+
+```python
+get_job_manager_settings() -> JobManagerSettings
+```
+
+Process-wide `JobManagerSettings` singleton.
+
+Tests must call `get_job_manager_settings.cache_clear()` after mutating env.
+
+Returns:
+
+- `JobManagerSettings` – The shared JobManagerSettings instance.
+
+##### get_task_manager_settings
+
+```python
+get_task_manager_settings() -> TaskManagerSettings
+```
+
+Process-wide `TaskManagerSettings` singleton.
+
+Tests must call `get_task_manager_settings.cache_clear()` after mutating env.
+
+Returns:
+
+- `TaskManagerSettings` – The shared TaskManagerSettings instance.
 
 #### utils
 
@@ -15502,7 +18895,7 @@ Methods:
 
 Attributes:
 
-- **`address`** (`str`) – Get the server address.
+- **`address`** (`str`) – The server address.
 
 ###### address
 
@@ -15510,7 +18903,7 @@ Attributes:
 address: str
 ```
 
-Get the server address.
+The server address.
 
 Returns:
 
@@ -15629,6 +19022,92 @@ Raises:
 
 Enum for server security mode.
 
+### utils
+
+Models for the digitalkin.utils package.
+
+Modules:
+
+- **`dynamic_schema`** – Models for dynamic-schema fetcher resolution.
+
+#### dynamic_schema
+
+Models for dynamic-schema fetcher resolution.
+
+Classes:
+
+- **`ResolveResult`** – Result of resolving dynamic fetchers.
+
+##### ResolveResult
+
+```
+              flowchart TD
+              digitalkin.models.utils.dynamic_schema.ResolveResult[ResolveResult]
+
+              
+
+              click digitalkin.models.utils.dynamic_schema.ResolveResult href "" "digitalkin.models.utils.dynamic_schema.ResolveResult"
+```
+
+Result of resolving dynamic fetchers.
+
+Provides structured access to resolved values and any errors that occurred. This allows callers to handle partial failures gracefully.
+
+Attributes:
+
+- **`values`** (`dict[str, Any]`) – Dict mapping key names to successfully resolved values.
+- **`errors`** (`dict[str, Exception]`) – Dict mapping key names to exceptions that occurred during resolution.
+
+Methods:
+
+- **`get`** – Get a resolved value by key.
+
+###### partial
+
+```python
+partial: bool
+```
+
+Check if some but not all fetchers succeeded.
+
+Returns:
+
+- `bool` – True if there are both values and errors, False otherwise.
+
+###### success
+
+```python
+success: bool
+```
+
+Check if all fetchers resolved successfully.
+
+Returns:
+
+- `bool` – True if no errors occurred, False otherwise.
+
+###### get
+
+```python
+get(key: str, default: T | None = None) -> T | None
+```
+
+Get a resolved value by key.
+
+Parameters:
+
+- ###### **`key`**
+
+  (`str`) – The fetcher key name.
+
+- ###### **`default`**
+
+  (`T | None`, default: `None` ) – Default value if key not found or errored.
+
+Returns:
+
+- `T | None` – The resolved value or default.
+
 ## modules
 
 Module package for DigitalKin.
@@ -15655,6 +19134,7 @@ ArchetypeModule(
     setup_id: str,
     setup_version_id: str,
     request_metadata: dict[str, str] | None = None,
+    tool_cache: ToolCache | None = None,
 )
 ```
 
@@ -15695,10 +19175,15 @@ Parameters:
 
   (`dict[str, str] | None`, default: `None` ) – gRPC request metadata (headers) from the incoming request.
 
+- #### **`tool_cache`**
+
+  (`ToolCache | None`, default: `None` ) – Pre-resolved ToolCache (skips per-request gRPC resolution).
+
 Methods:
 
 - **`__init_subclass__`** – Ensure each subclass has its own copy of mutable class variables.
 - **`cleanup`** – Run the module.
+- **`clear_shared`** – Swap shared cache with a fresh dict.
 - **`create_config_setup_model`** – Create the setup model from the setup data.
 - **`create_input_model`** – Create the input model from the input data.
 - **`create_output_model`** – Create the output model from the output data.
@@ -15708,12 +19193,13 @@ Methods:
 - **`get_config_setup_format`** – Gets the JSON schema of the config setup format model.
 - **`get_cost_format`** – Get the JSON schema of the cost configuration.
 - **`get_input_format`** – Get the JSON schema of the input format model.
-- **`get_module_id`** – Get the module ID from environment variable or metadata.
+- **`get_module_id`** – Get the module ID from settings or metadata.
 - **`get_output_format`** – Get the JSON schema of the output format model.
 - **`get_secret_format`** – Get the JSON schema of the secret format model.
 - **`get_select_input_format`** – Get the JSON schema for trigger selection UI.
 - **`get_setup_format`** – Gets the JSON schema of the setup format model.
 - **`initialize`** – Initialize the module.
+- **`prepare`** – Wire callbacks, build tool cache, run initialize(), discover triggers.
 - **`register`** – Dynamically register the trigger class.
 - **`run`** – Run the module by dispatching to the appropriate trigger handler.
 - **`run_config_setup`** – Run config setup the module.
@@ -15723,7 +19209,7 @@ Methods:
 
 Attributes:
 
-- **`status`** (`ModuleStatus`) – Get the module status.
+- **`status`** (`ModuleStatus`) – The module status.
 
 #### status
 
@@ -15731,7 +19217,7 @@ Attributes:
 status: ModuleStatus
 ```
 
-Get the module status.
+The module status.
 
 Returns:
 
@@ -15752,6 +19238,16 @@ cleanup() -> None
 ```
 
 Run the module.
+
+#### clear_shared
+
+```python
+clear_shared() -> None
+```
+
+Swap shared cache with a fresh dict.
+
+Running tasks keep their existing `context.shared` reference (old dict). New module instances get the fresh empty dict.
 
 #### create_config_setup_model
 
@@ -15940,12 +19436,12 @@ Raises:
 get_module_id() -> str
 ```
 
-Get the module ID from environment variable or metadata.
+Get the module ID from settings or metadata.
 
 Returns:
 
-- `str` – The module_id from DIGITALKIN_MODULE_ID env var, or metadata module_id,
-- `str` – or "unknown" if neither exists.
+- `str` – The module_id from ModuleSettings.id (env DIGITALKIN_MODULE_ID), or
+- `str` – metadata module_id, or "unknown" if neither exists.
 
 #### get_output_format
 
@@ -16037,6 +19533,36 @@ initialize(context: ModuleContext, setup_data: SetupModelT) -> None
 ```
 
 Initialize the module.
+
+#### prepare
+
+```python
+prepare(
+    setup_data: SetupModelT,
+    callback: Callable[
+        [OutputModelT | ModuleCodeModel | DataModel[UtilityProtocol]],
+        Coroutine[Any, Any, None],
+    ],
+) -> None
+```
+
+Wire callbacks, build tool cache, run `initialize()`, discover triggers.
+
+Idempotent — second call is a no-op. Lets the dial-back orchestrator pay the `initialize()` cost off the critical path.
+
+Parameters:
+
+- ##### **`setup_data`**
+
+  (`SetupModelT`) – The setup configuration for the module.
+
+- ##### **`callback`**
+
+  (`Callable[[OutputModelT | ModuleCodeModel | DataModel[UtilityProtocol]], Coroutine[Any, Any, None]]`) – Output callback installed on the module context.
+
+Raises:
+
+- `Exception` – anything raised by build_tool_cache, initialize, or init_handlers propagates so the caller can convert to stream.error.
 
 #### register
 
@@ -16146,6 +19672,7 @@ ToolModule(
     setup_id: str,
     setup_version_id: str,
     request_metadata: dict[str, str] | None = None,
+    tool_cache: ToolCache | None = None,
 )
 ```
 
@@ -16186,10 +19713,15 @@ Parameters:
 
   (`dict[str, str] | None`, default: `None` ) – gRPC request metadata (headers) from the incoming request.
 
+- #### **`tool_cache`**
+
+  (`ToolCache | None`, default: `None` ) – Pre-resolved ToolCache (skips per-request gRPC resolution).
+
 Methods:
 
 - **`__init_subclass__`** – Ensure each subclass has its own copy of mutable class variables.
 - **`cleanup`** – Run the module.
+- **`clear_shared`** – Swap shared cache with a fresh dict.
 - **`create_config_setup_model`** – Create the setup model from the setup data.
 - **`create_input_model`** – Create the input model from the input data.
 - **`create_output_model`** – Create the output model from the output data.
@@ -16199,12 +19731,13 @@ Methods:
 - **`get_config_setup_format`** – Gets the JSON schema of the config setup format model.
 - **`get_cost_format`** – Get the JSON schema of the cost configuration.
 - **`get_input_format`** – Get the JSON schema of the input format model.
-- **`get_module_id`** – Get the module ID from environment variable or metadata.
+- **`get_module_id`** – Get the module ID from settings or metadata.
 - **`get_output_format`** – Get the JSON schema of the output format model.
 - **`get_secret_format`** – Get the JSON schema of the secret format model.
 - **`get_select_input_format`** – Get the JSON schema for trigger selection UI.
 - **`get_setup_format`** – Gets the JSON schema of the setup format model.
 - **`initialize`** – Initialize the module.
+- **`prepare`** – Wire callbacks, build tool cache, run initialize(), discover triggers.
 - **`register`** – Dynamically register the trigger class.
 - **`run`** – Run the module by dispatching to the appropriate trigger handler.
 - **`run_config_setup`** – Run config setup the module.
@@ -16214,7 +19747,7 @@ Methods:
 
 Attributes:
 
-- **`status`** (`ModuleStatus`) – Get the module status.
+- **`status`** (`ModuleStatus`) – The module status.
 
 #### status
 
@@ -16222,7 +19755,7 @@ Attributes:
 status: ModuleStatus
 ```
 
-Get the module status.
+The module status.
 
 Returns:
 
@@ -16243,6 +19776,16 @@ cleanup() -> None
 ```
 
 Run the module.
+
+#### clear_shared
+
+```python
+clear_shared() -> None
+```
+
+Swap shared cache with a fresh dict.
+
+Running tasks keep their existing `context.shared` reference (old dict). New module instances get the fresh empty dict.
 
 #### create_config_setup_model
 
@@ -16431,12 +19974,12 @@ Raises:
 get_module_id() -> str
 ```
 
-Get the module ID from environment variable or metadata.
+Get the module ID from settings or metadata.
 
 Returns:
 
-- `str` – The module_id from DIGITALKIN_MODULE_ID env var, or metadata module_id,
-- `str` – or "unknown" if neither exists.
+- `str` – The module_id from ModuleSettings.id (env DIGITALKIN_MODULE_ID), or
+- `str` – metadata module_id, or "unknown" if neither exists.
 
 #### get_output_format
 
@@ -16528,6 +20071,36 @@ initialize(context: ModuleContext, setup_data: SetupModelT) -> None
 ```
 
 Initialize the module.
+
+#### prepare
+
+```python
+prepare(
+    setup_data: SetupModelT,
+    callback: Callable[
+        [OutputModelT | ModuleCodeModel | DataModel[UtilityProtocol]],
+        Coroutine[Any, Any, None],
+    ],
+) -> None
+```
+
+Wire callbacks, build tool cache, run `initialize()`, discover triggers.
+
+Idempotent — second call is a no-op. Lets the dial-back orchestrator pay the `initialize()` cost off the critical path.
+
+Parameters:
+
+- ##### **`setup_data`**
+
+  (`SetupModelT`) – The setup configuration for the module.
+
+- ##### **`callback`**
+
+  (`Callable[[OutputModelT | ModuleCodeModel | DataModel[UtilityProtocol]], Coroutine[Any, Any, None]]`) – Output callback installed on the module context.
+
+Raises:
+
+- `Exception` – anything raised by build_tool_cache, initialize, or init_handlers propagates so the caller can convert to stream.error.
 
 #### register
 
@@ -16678,6 +20251,7 @@ Each handler declares
 
 Methods:
 
+- **`__init_subclass__`** – Build dispatch table from unbound method references.
 - **`add_cost`** – Add a cost entry using the cost strategy.
 - **`append_files_history`** – Append files to file history.
 - **`clear_fh_mission_cache`** – Remove a mission's entries from in-memory caches after flush.
@@ -16695,6 +20269,14 @@ Methods:
 - **`store_storage`** – Store data using the storage strategy.
 - **`update_storage`** – Update existing data in storage.
 - **`upsert_storage`** – Insert or update data in storage atomically.
+
+#### __init_subclass__
+
+```python
+__init_subclass__(**kwargs: Any) -> None
+```
+
+Build dispatch table from unbound method references.
 
 #### add_cost
 
@@ -16732,7 +20314,7 @@ append_files_history(context: ModuleContext, files: list[FileModel]) -> None
 
 Append files to file history.
 
-Files are added to the in-memory cache immediately. A storage write is deferred until the batch threshold is reached (default 10, env: DIGITALKIN_FILE_HISTORY_FLUSH_THRESHOLD) or flush_file_history().
+Files are added to the in-memory cache immediately. A storage write is deferred until the batch threshold is reached (default 10, env: DIGITALKIN_MODULE_FILE_HISTORY_FLUSH_THRESHOLD) or flush_file_history().
 
 Parameters:
 
@@ -17162,6 +20744,7 @@ ArchetypeModule(
     setup_id: str,
     setup_version_id: str,
     request_metadata: dict[str, str] | None = None,
+    tool_cache: ToolCache | None = None,
 )
 ```
 
@@ -17202,10 +20785,15 @@ Parameters:
 
   (`dict[str, str] | None`, default: `None` ) – gRPC request metadata (headers) from the incoming request.
 
+- ##### **`tool_cache`**
+
+  (`ToolCache | None`, default: `None` ) – Pre-resolved ToolCache (skips per-request gRPC resolution).
+
 Methods:
 
 - **`__init_subclass__`** – Ensure each subclass has its own copy of mutable class variables.
 - **`cleanup`** – Run the module.
+- **`clear_shared`** – Swap shared cache with a fresh dict.
 - **`create_config_setup_model`** – Create the setup model from the setup data.
 - **`create_input_model`** – Create the input model from the input data.
 - **`create_output_model`** – Create the output model from the output data.
@@ -17215,12 +20803,13 @@ Methods:
 - **`get_config_setup_format`** – Gets the JSON schema of the config setup format model.
 - **`get_cost_format`** – Get the JSON schema of the cost configuration.
 - **`get_input_format`** – Get the JSON schema of the input format model.
-- **`get_module_id`** – Get the module ID from environment variable or metadata.
+- **`get_module_id`** – Get the module ID from settings or metadata.
 - **`get_output_format`** – Get the JSON schema of the output format model.
 - **`get_secret_format`** – Get the JSON schema of the secret format model.
 - **`get_select_input_format`** – Get the JSON schema for trigger selection UI.
 - **`get_setup_format`** – Gets the JSON schema of the setup format model.
 - **`initialize`** – Initialize the module.
+- **`prepare`** – Wire callbacks, build tool cache, run initialize(), discover triggers.
 - **`register`** – Dynamically register the trigger class.
 - **`run`** – Run the module by dispatching to the appropriate trigger handler.
 - **`run_config_setup`** – Run config setup the module.
@@ -17230,7 +20819,7 @@ Methods:
 
 Attributes:
 
-- **`status`** (`ModuleStatus`) – Get the module status.
+- **`status`** (`ModuleStatus`) – The module status.
 
 ##### status
 
@@ -17238,7 +20827,7 @@ Attributes:
 status: ModuleStatus
 ```
 
-Get the module status.
+The module status.
 
 Returns:
 
@@ -17259,6 +20848,16 @@ cleanup() -> None
 ```
 
 Run the module.
+
+##### clear_shared
+
+```python
+clear_shared() -> None
+```
+
+Swap shared cache with a fresh dict.
+
+Running tasks keep their existing `context.shared` reference (old dict). New module instances get the fresh empty dict.
 
 ##### create_config_setup_model
 
@@ -17447,12 +21046,12 @@ Raises:
 get_module_id() -> str
 ```
 
-Get the module ID from environment variable or metadata.
+Get the module ID from settings or metadata.
 
 Returns:
 
-- `str` – The module_id from DIGITALKIN_MODULE_ID env var, or metadata module_id,
-- `str` – or "unknown" if neither exists.
+- `str` – The module_id from ModuleSettings.id (env DIGITALKIN_MODULE_ID), or
+- `str` – metadata module_id, or "unknown" if neither exists.
 
 ##### get_output_format
 
@@ -17544,6 +21143,36 @@ initialize(context: ModuleContext, setup_data: SetupModelT) -> None
 ```
 
 Initialize the module.
+
+##### prepare
+
+```python
+prepare(
+    setup_data: SetupModelT,
+    callback: Callable[
+        [OutputModelT | ModuleCodeModel | DataModel[UtilityProtocol]],
+        Coroutine[Any, Any, None],
+    ],
+) -> None
+```
+
+Wire callbacks, build tool cache, run `initialize()`, discover triggers.
+
+Idempotent — second call is a no-op. Lets the dial-back orchestrator pay the `initialize()` cost off the critical path.
+
+Parameters:
+
+- ###### **`setup_data`**
+
+  (`SetupModelT`) – The setup configuration for the module.
+
+- ###### **`callback`**
+
+  (`Callable[[OutputModelT | ModuleCodeModel | DataModel[UtilityProtocol]], Coroutine[Any, Any, None]]`) – Output callback installed on the module context.
+
+Raises:
+
+- `Exception` – anything raised by build_tool_cache, initialize, or init_handlers propagates so the caller can convert to stream.error.
 
 ##### register
 
@@ -17661,6 +21290,7 @@ ToolModule(
     setup_id: str,
     setup_version_id: str,
     request_metadata: dict[str, str] | None = None,
+    tool_cache: ToolCache | None = None,
 )
 ```
 
@@ -17701,10 +21331,15 @@ Parameters:
 
   (`dict[str, str] | None`, default: `None` ) – gRPC request metadata (headers) from the incoming request.
 
+- ##### **`tool_cache`**
+
+  (`ToolCache | None`, default: `None` ) – Pre-resolved ToolCache (skips per-request gRPC resolution).
+
 Methods:
 
 - **`__init_subclass__`** – Ensure each subclass has its own copy of mutable class variables.
 - **`cleanup`** – Run the module.
+- **`clear_shared`** – Swap shared cache with a fresh dict.
 - **`create_config_setup_model`** – Create the setup model from the setup data.
 - **`create_input_model`** – Create the input model from the input data.
 - **`create_output_model`** – Create the output model from the output data.
@@ -17714,12 +21349,13 @@ Methods:
 - **`get_config_setup_format`** – Gets the JSON schema of the config setup format model.
 - **`get_cost_format`** – Get the JSON schema of the cost configuration.
 - **`get_input_format`** – Get the JSON schema of the input format model.
-- **`get_module_id`** – Get the module ID from environment variable or metadata.
+- **`get_module_id`** – Get the module ID from settings or metadata.
 - **`get_output_format`** – Get the JSON schema of the output format model.
 - **`get_secret_format`** – Get the JSON schema of the secret format model.
 - **`get_select_input_format`** – Get the JSON schema for trigger selection UI.
 - **`get_setup_format`** – Gets the JSON schema of the setup format model.
 - **`initialize`** – Initialize the module.
+- **`prepare`** – Wire callbacks, build tool cache, run initialize(), discover triggers.
 - **`register`** – Dynamically register the trigger class.
 - **`run`** – Run the module by dispatching to the appropriate trigger handler.
 - **`run_config_setup`** – Run config setup the module.
@@ -17729,7 +21365,7 @@ Methods:
 
 Attributes:
 
-- **`status`** (`ModuleStatus`) – Get the module status.
+- **`status`** (`ModuleStatus`) – The module status.
 
 ##### status
 
@@ -17737,7 +21373,7 @@ Attributes:
 status: ModuleStatus
 ```
 
-Get the module status.
+The module status.
 
 Returns:
 
@@ -17758,6 +21394,16 @@ cleanup() -> None
 ```
 
 Run the module.
+
+##### clear_shared
+
+```python
+clear_shared() -> None
+```
+
+Swap shared cache with a fresh dict.
+
+Running tasks keep their existing `context.shared` reference (old dict). New module instances get the fresh empty dict.
 
 ##### create_config_setup_model
 
@@ -17946,12 +21592,12 @@ Raises:
 get_module_id() -> str
 ```
 
-Get the module ID from environment variable or metadata.
+Get the module ID from settings or metadata.
 
 Returns:
 
-- `str` – The module_id from DIGITALKIN_MODULE_ID env var, or metadata module_id,
-- `str` – or "unknown" if neither exists.
+- `str` – The module_id from ModuleSettings.id (env DIGITALKIN_MODULE_ID), or
+- `str` – metadata module_id, or "unknown" if neither exists.
 
 ##### get_output_format
 
@@ -18043,6 +21689,36 @@ initialize(context: ModuleContext, setup_data: SetupModelT) -> None
 ```
 
 Initialize the module.
+
+##### prepare
+
+```python
+prepare(
+    setup_data: SetupModelT,
+    callback: Callable[
+        [OutputModelT | ModuleCodeModel | DataModel[UtilityProtocol]],
+        Coroutine[Any, Any, None],
+    ],
+) -> None
+```
+
+Wire callbacks, build tool cache, run `initialize()`, discover triggers.
+
+Idempotent — second call is a no-op. Lets the dial-back orchestrator pay the `initialize()` cost off the critical path.
+
+Parameters:
+
+- ###### **`setup_data`**
+
+  (`SetupModelT`) – The setup configuration for the module.
+
+- ###### **`callback`**
+
+  (`Callable[[OutputModelT | ModuleCodeModel | DataModel[UtilityProtocol]], Coroutine[Any, Any, None]]`) – Output callback installed on the module context.
+
+Raises:
+
+- `Exception` – anything raised by build_tool_cache, initialize, or init_handlers propagates so the caller can convert to stream.error.
 
 ##### register
 
@@ -18201,6 +21877,7 @@ Each handler declares
 
 Methods:
 
+- **`__init_subclass__`** – Build dispatch table from unbound method references.
 - **`add_cost`** – Add a cost entry using the cost strategy.
 - **`append_files_history`** – Append files to file history.
 - **`clear_fh_mission_cache`** – Remove a mission's entries from in-memory caches after flush.
@@ -18218,6 +21895,14 @@ Methods:
 - **`store_storage`** – Store data using the storage strategy.
 - **`update_storage`** – Update existing data in storage.
 - **`upsert_storage`** – Insert or update data in storage atomically.
+
+##### __init_subclass__
+
+```python
+__init_subclass__(**kwargs: Any) -> None
+```
+
+Build dispatch table from unbound method references.
 
 ##### add_cost
 
@@ -18255,7 +21940,7 @@ append_files_history(context: ModuleContext, files: list[FileModel]) -> None
 
 Append files to file history.
 
-Files are added to the in-memory cache immediately. A storage write is deferred until the batch threshold is reached (default 10, env: DIGITALKIN_FILE_HISTORY_FLUSH_THRESHOLD) or flush_file_history().
+Files are added to the in-memory cache immediately. A storage write is deferred until the batch threshold is reached (default 10, env: DIGITALKIN_MODULE_FILE_HISTORY_FLUSH_THRESHOLD) or flush_file_history().
 
 Parameters:
 
@@ -18755,6 +22440,7 @@ Responds immediately with "pong" status to verify the module is responsive.
 
 Methods:
 
+- **`__init_subclass__`** – Build dispatch table from unbound method references.
 - **`add_cost`** – Add a cost entry using the cost strategy.
 - **`append_files_history`** – Append files to file history.
 - **`clear_fh_mission_cache`** – Remove a mission's entries from in-memory caches after flush.
@@ -18772,6 +22458,14 @@ Methods:
 - **`store_storage`** – Store data using the storage strategy.
 - **`update_storage`** – Update existing data in storage.
 - **`upsert_storage`** – Insert or update data in storage atomically.
+
+###### __init_subclass__
+
+```python
+__init_subclass__(**kwargs: Any) -> None
+```
+
+Build dispatch table from unbound method references.
 
 ###### add_cost
 
@@ -18809,7 +22503,7 @@ append_files_history(context: ModuleContext, files: list[FileModel]) -> None
 
 Append files to file history.
 
-Files are added to the in-memory cache immediately. A storage write is deferred until the batch threshold is reached (default 10, env: DIGITALKIN_FILE_HISTORY_FLUSH_THRESHOLD) or flush_file_history().
+Files are added to the in-memory cache immediately. A storage write is deferred until the batch threshold is reached (default 10, env: DIGITALKIN_MODULE_FILE_HISTORY_FLUSH_THRESHOLD) or flush_file_history().
 
 Parameters:
 
@@ -19285,6 +22979,7 @@ Reports the health status of all configured services (storage, cost, filesystem,
 
 Methods:
 
+- **`__init_subclass__`** – Build dispatch table from unbound method references.
 - **`add_cost`** – Add a cost entry using the cost strategy.
 - **`append_files_history`** – Append files to file history.
 - **`clear_fh_mission_cache`** – Remove a mission's entries from in-memory caches after flush.
@@ -19302,6 +22997,14 @@ Methods:
 - **`store_storage`** – Store data using the storage strategy.
 - **`update_storage`** – Update existing data in storage.
 - **`upsert_storage`** – Insert or update data in storage atomically.
+
+###### __init_subclass__
+
+```python
+__init_subclass__(**kwargs: Any) -> None
+```
+
+Build dispatch table from unbound method references.
 
 ###### add_cost
 
@@ -19339,7 +23042,7 @@ append_files_history(context: ModuleContext, files: list[FileModel]) -> None
 
 Append files to file history.
 
-Files are added to the in-memory cache immediately. A storage write is deferred until the batch threshold is reached (default 10, env: DIGITALKIN_FILE_HISTORY_FLUSH_THRESHOLD) or flush_file_history().
+Files are added to the in-memory cache immediately. A storage write is deferred until the batch threshold is reached (default 10, env: DIGITALKIN_MODULE_FILE_HISTORY_FLUSH_THRESHOLD) or flush_file_history().
 
 Parameters:
 
@@ -19815,6 +23518,7 @@ Reports detailed module status including uptime, active jobs, and metadata.
 
 Methods:
 
+- **`__init_subclass__`** – Build dispatch table from unbound method references.
 - **`add_cost`** – Add a cost entry using the cost strategy.
 - **`append_files_history`** – Append files to file history.
 - **`clear_fh_mission_cache`** – Remove a mission's entries from in-memory caches after flush.
@@ -19832,6 +23536,14 @@ Methods:
 - **`store_storage`** – Store data using the storage strategy.
 - **`update_storage`** – Update existing data in storage.
 - **`upsert_storage`** – Insert or update data in storage atomically.
+
+###### __init_subclass__
+
+```python
+__init_subclass__(**kwargs: Any) -> None
+```
+
+Build dispatch table from unbound method references.
 
 ###### add_cost
 
@@ -19869,7 +23581,7 @@ append_files_history(context: ModuleContext, files: list[FileModel]) -> None
 
 Append files to file history.
 
-Files are added to the in-memory cache immediately. A storage write is deferred until the batch threshold is reached (default 10, env: DIGITALKIN_FILE_HISTORY_FLUSH_THRESHOLD) or flush_file_history().
+Files are added to the in-memory cache immediately. A storage write is deferred until the batch threshold is reached (default 10, env: DIGITALKIN_MODULE_FILE_HISTORY_FLUSH_THRESHOLD) or flush_file_history().
 
 Parameters:
 
@@ -20278,105 +23990,35 @@ This package contains the abstract base class for all services.
 
 Modules:
 
-- **`agent`** – This module is responsible for handling the agent services.
-- **`base_strategy`** – This module contains the abstract base class for storage strategies.
-- **`communication`** – Communication service for module-to-module interaction.
+- **`base_strategy`** – This module contains the base class for service strategies.
+- **`communication`** – Communication service for module-to-module and consumer interactions.
 - **`cost`** – This module is responsible for handling the cost services.
 - **`filesystem`** – This module is responsible for handling the filesystem services.
 - **`identity`** – This module is responsible for handling the identity service.
 - **`registry`** – This module is responsible for handling the registry service.
+- **`secret`** – Secret service package.
 - **`services_config`** – Service Provider definitions.
 - **`services_models`** – This module contains the strategy models for the services.
 - **`setup`** – This module is responsible for handling the setup service.
-- **`snapshot`** – This module is responsible for handling the snapshot service.
 - **`storage`** – This module is responsible for handling the storage service.
 - **`task_manager`** – Task manager signal service.
 - **`user_profile`** – UserProfile service package.
 
 Classes:
 
-- **`AgentStrategy`** – Abstract base class for agent strategies.
 - **`CommunicationStrategy`** – Abstract base class for module-to-module communication.
 - **`CostStrategy`** – Abstract base class for cost strategies.
-- **`DefaultAgent`** – Default agent implementation for the agent service.
 - **`DefaultCommunication`** – Default communication strategy (local implementation).
 - **`DefaultCost`** – Default cost strategy.
 - **`DefaultFilesystem`** – Default filesystem implementation.
 - **`DefaultIdentity`** – DefaultIdentity is the default identity strategy.
 - **`DefaultRegistry`** – Default registry strategy using in-memory storage.
-- **`DefaultSnapshot`** – Default snapshot strategy.
 - **`DefaultStorage`** – Persist records in a local JSON file for quick local development.
 - **`FilesystemStrategy`** – Abstract base class for filesystem strategies.
 - **`GrpcCommunication`** – gRPC client for module-to-module communication.
 - **`IdentityStrategy`** – IdentityStrategy is the abstract base class for all identity strategies.
 - **`RegistryStrategy`** – Abstract base class for registry strategies.
-- **`SnapshotStrategy`** – Abstract base class for snapshot strategies.
 - **`StorageStrategy`** – Define CRUD + list/remove-collection against a collection/record store.
-
-### AgentStrategy
-
-```python
-AgentStrategy(mission_id: str, setup_id: str, setup_version_id: str)
-```
-
-```
-              flowchart TD
-              digitalkin.services.AgentStrategy[AgentStrategy]
-              digitalkin.services.base_strategy.BaseStrategy[BaseStrategy]
-
-                              digitalkin.services.base_strategy.BaseStrategy --> digitalkin.services.AgentStrategy
-                
-
-
-              click digitalkin.services.AgentStrategy href "" "digitalkin.services.AgentStrategy"
-              click digitalkin.services.base_strategy.BaseStrategy href "" "digitalkin.services.base_strategy.BaseStrategy"
-```
-
-Abstract base class for agent strategies.
-
-Parameters:
-
-- #### **`mission_id`**
-
-  (`str`) – The ID of the mission this strategy is associated with
-
-- #### **`setup_id`**
-
-  (`str`) – The ID of the setup this strategy is associated with
-
-- #### **`setup_version_id`**
-
-  (`str`) – The ID of the setup version this strategy is associated with
-
-Methods:
-
-- **`close`** – Release resources held by this strategy. No-op by default.
-- **`start`** – Start the agent.
-- **`stop`** – Stop the agent.
-
-#### close
-
-```python
-close() -> None
-```
-
-Release resources held by this strategy. No-op by default.
-
-#### start
-
-```python
-start() -> None
-```
-
-Start the agent.
-
-#### stop
-
-```python
-stop() -> None
-```
-
-Stop the agent.
 
 ### CommunicationStrategy
 
@@ -20424,7 +24066,7 @@ Parameters:
 
 Methods:
 
-- **`call_module`** – Call a module and stream responses.
+- **`call_module`** – Call a remote module via its GatewayService and stream outputs.
 - **`close`** – Release communication resources (channels, connection pools).
 - **`get_module_schemas`** – Get module schemas (input/output/setup/secret/cost).
 
@@ -20434,51 +24076,51 @@ Methods:
 call_module(
     module_address: str,
     module_port: int,
-    input_data: dict,
+    input_data: dict | Any,
     setup_id: str,
     mission_id: str,
-    callback: Callable[[dict], Awaitable[None]] | None = None,
+    callback: Callable[[Any], Awaitable[None]] | None = None,
     metadata: dict[str, str] | None = None,
-) -> AsyncGenerator[dict, None]
+) -> AsyncGenerator[Any, None]
 ```
 
-Call a module and stream responses.
+Call a remote module via its GatewayService and stream outputs.
 
-Uses Module Service StartModule RPC to execute the module. Streams responses as they are generated by the module.
+Opens a dial-back BiDi against the target's gateway (`StartStream` + `Stream`). Filters `stream.start`; stops on `stream.end`.
 
 Parameters:
 
 - ##### **`module_address`**
 
-  (`str`) – Target module address
+  (`str`) – Target module's gateway host.
 
 - ##### **`module_port`**
 
-  (`int`) – Target module port
+  (`int`) – Target module's gateway port.
 
 - ##### **`input_data`**
 
-  (`dict`) – Input data as dictionary
+  (`dict | Any`) – First input delivered to the remote module (typically wrapped in {"root": {...}}).
 
 - ##### **`setup_id`**
 
-  (`str`) – Setup configuration ID
+  (`str`) – Setup configuration ID.
 
 - ##### **`mission_id`**
 
-  (`str`) – Mission context ID
+  (`str`) – Mission context ID.
 
 - ##### **`callback`**
 
-  (`Callable[[dict], Awaitable[None]] | None`, default: `None` ) – Optional callback for each response
+  (`Callable[[Any], Awaitable[None]] | None`, default: `None` ) – Optional async callback invoked with each output Struct.
 
 - ##### **`metadata`**
 
-  (`dict[str, str] | None`, default: `None` ) – Optional gRPC metadata (headers) to send with the request.
+  (`dict[str, str] | None`, default: `None` ) – Optional gRPC metadata forwarded on StartStream (tenant / trace headers).
 
 Yields:
 
-- `AsyncGenerator[dict, None]` – Streaming responses from module as dictionaries
+- `AsyncGenerator[Any, None]` – google.protobuf.Struct per remote module output.
 
 #### close
 
@@ -20668,75 +24310,6 @@ Parameters:
 
   (`list[QuantityLimit | AmountLimit]`) – List of CostLimit objects to enforce.
 
-### DefaultAgent
-
-```python
-DefaultAgent(mission_id: str, setup_id: str, setup_version_id: str)
-```
-
-```
-              flowchart TD
-              digitalkin.services.DefaultAgent[DefaultAgent]
-              digitalkin.services.agent.agent_strategy.AgentStrategy[AgentStrategy]
-              digitalkin.services.base_strategy.BaseStrategy[BaseStrategy]
-
-                              digitalkin.services.agent.agent_strategy.AgentStrategy --> digitalkin.services.DefaultAgent
-                                digitalkin.services.base_strategy.BaseStrategy --> digitalkin.services.agent.agent_strategy.AgentStrategy
-                
-
-
-
-              click digitalkin.services.DefaultAgent href "" "digitalkin.services.DefaultAgent"
-              click digitalkin.services.agent.agent_strategy.AgentStrategy href "" "digitalkin.services.agent.agent_strategy.AgentStrategy"
-              click digitalkin.services.base_strategy.BaseStrategy href "" "digitalkin.services.base_strategy.BaseStrategy"
-```
-
-Default agent implementation for the agent service.
-
-Parameters:
-
-- #### **`mission_id`**
-
-  (`str`) – The ID of the mission this strategy is associated with
-
-- #### **`setup_id`**
-
-  (`str`) – The ID of the setup this strategy is associated with
-
-- #### **`setup_version_id`**
-
-  (`str`) – The ID of the setup version this strategy is associated with
-
-Methods:
-
-- **`close`** – Release resources held by this strategy. No-op by default.
-- **`start`** – Start the agent.
-- **`stop`** – Stop the agent.
-
-#### close
-
-```python
-close() -> None
-```
-
-Release resources held by this strategy. No-op by default.
-
-#### start
-
-```python
-start() -> None
-```
-
-Start the agent.
-
-#### stop
-
-```python
-stop() -> None
-```
-
-Stop the agent.
-
 ### DefaultCommunication
 
 ```python
@@ -20780,7 +24353,7 @@ Parameters:
 
 Methods:
 
-- **`call_module`** – Call module (local implementation yields empty response).
+- **`call_module`** – No-op stub for local-mode tests. Yields nothing.
 - **`close`** – No-op for local communication.
 - **`get_module_schemas`** – Get module schemas (local implementation returns empty schemas).
 
@@ -20790,49 +24363,51 @@ Methods:
 call_module(
     module_address: str,
     module_port: int,
-    input_data: dict,
+    input_data: dict | Any,
     setup_id: str,
     mission_id: str,
-    callback: Callable[[dict], Awaitable[None]] | None = None,
+    callback: Callable[[Any], Awaitable[None]] | None = None,
     metadata: dict[str, str] | None = None,
-) -> AsyncGenerator[dict, None]
+) -> AsyncGenerator[Any, None]
 ```
 
-Call module (local implementation yields empty response).
+No-op stub for local-mode tests. Yields nothing.
+
+Use :class:`GrpcCommunication` for real M2M calls through the target module's GatewayService dial-back BiDi.
 
 Parameters:
 
 - ##### **`module_address`**
 
-  (`str`) – Target module address
+  (`str`) – Ignored.
 
 - ##### **`module_port`**
 
-  (`int`) – Target module port
+  (`int`) – Ignored.
 
 - ##### **`input_data`**
 
-  (`dict`) – Input data
+  (`dict | Any`) – Ignored.
 
 - ##### **`setup_id`**
 
-  (`str`) – Setup ID
+  (`str`) – Ignored.
 
 - ##### **`mission_id`**
 
-  (`str`) – Mission ID
+  (`str`) – Ignored.
 
 - ##### **`callback`**
 
-  (`Callable[[dict], Awaitable[None]] | None`, default: `None` ) – Optional callback
+  (`Callable[[Any], Awaitable[None]] | None`, default: `None` ) – Ignored.
 
 - ##### **`metadata`**
 
-  (`dict[str, str] | None`, default: `None` ) – Optional gRPC metadata (headers).
+  (`dict[str, str] | None`, default: `None` ) – Ignored.
 
 Yields:
 
-- `AsyncGenerator[dict, None]` – Empty response dictionary
+- `AsyncGenerator[Any, None]` – Nothing.
 
 #### close
 
@@ -21453,7 +25028,7 @@ Methods:
 - **`heartbeat`** – Send heartbeat to keep module active.
 - **`register`** – Register a module with the registry.
 - **`search`** – Search for modules by criteria.
-- **`wait_for_ready`** – Check if the registry backend is reachable.
+- **`wait_for_ready`** – Local registry is always ready (in-memory store).
 
 #### close
 
@@ -21629,125 +25204,17 @@ Returns:
 wait_for_ready(timeout: float = 1.0) -> bool
 ```
 
-Check if the registry backend is reachable.
+Local registry is always ready (in-memory store).
 
 Parameters:
 
 - ##### **`timeout`**
 
-  (`float`, default: `1.0` ) – Max seconds to wait for connectivity.
+  (`float`, default: `1.0` ) – Ignored for local registry.
 
 Returns:
 
-- `bool` – True if ready. Default implementation always returns True.
-
-### DefaultSnapshot
-
-```python
-DefaultSnapshot(mission_id: str, setup_id: str, setup_version_id: str)
-```
-
-```
-              flowchart TD
-              digitalkin.services.DefaultSnapshot[DefaultSnapshot]
-              digitalkin.services.snapshot.snapshot_strategy.SnapshotStrategy[SnapshotStrategy]
-              digitalkin.services.base_strategy.BaseStrategy[BaseStrategy]
-
-                              digitalkin.services.snapshot.snapshot_strategy.SnapshotStrategy --> digitalkin.services.DefaultSnapshot
-                                digitalkin.services.base_strategy.BaseStrategy --> digitalkin.services.snapshot.snapshot_strategy.SnapshotStrategy
-                
-
-
-
-              click digitalkin.services.DefaultSnapshot href "" "digitalkin.services.DefaultSnapshot"
-              click digitalkin.services.snapshot.snapshot_strategy.SnapshotStrategy href "" "digitalkin.services.snapshot.snapshot_strategy.SnapshotStrategy"
-              click digitalkin.services.base_strategy.BaseStrategy href "" "digitalkin.services.base_strategy.BaseStrategy"
-```
-
-Default snapshot strategy.
-
-Parameters:
-
-- #### **`mission_id`**
-
-  (`str`) – The ID of the mission this strategy is associated with
-
-- #### **`setup_id`**
-
-  (`str`) – The ID of the setup this strategy is associated with
-
-- #### **`setup_version_id`**
-
-  (`str`) – The ID of the setup version this strategy is associated with
-
-Methods:
-
-- **`close`** – Release resources held by this strategy. No-op by default.
-- **`create`** – Create a new snapshot in the file system.
-- **`delete`** – Delete snapshots from the file system.
-- **`get`** – Get snapshots from the file system.
-- **`get_all`** – Get all snapshots from the file system.
-- **`update`** – Update snapshots in the file system.
-
-#### close
-
-```python
-close() -> None
-```
-
-Release resources held by this strategy. No-op by default.
-
-#### create
-
-```python
-create(data: dict[str, Any]) -> str
-```
-
-Create a new snapshot in the file system.
-
-Returns:
-
-- **`str`** ( `str` ) – The ID of the new snapshot
-
-#### delete
-
-```python
-delete(data: dict[str, Any]) -> int
-```
-
-Delete snapshots from the file system.
-
-Returns:
-
-- **`int`** ( `int` ) – The number of snapshots deleted
-
-#### get
-
-```python
-get(data: dict[str, Any]) -> None
-```
-
-Get snapshots from the file system.
-
-#### get_all
-
-```python
-get_all() -> None
-```
-
-Get all snapshots from the file system.
-
-#### update
-
-```python
-update(data: dict[str, Any]) -> int
-```
-
-Update snapshots in the file system.
-
-Returns:
-
-- **`int`** ( `int` ) – The number of snapshots updated
+- `bool` – Always True — no network dependency.
 
 ### DefaultStorage
 
@@ -22287,7 +25754,12 @@ Returns:
 
 ```python
 GrpcCommunication(
-    mission_id: str, setup_id: str, setup_version_id: str, client_config: ClientConfig
+    mission_id: str,
+    setup_id: str,
+    setup_version_id: str,
+    client_config: ClientConfig,
+    m2m_calls: M2MCallRegistry | None = None,
+    gateway_backend_config: ClientConfig | None = None,
 )
 ```
 
@@ -22314,38 +25786,47 @@ GrpcCommunication(
 
 gRPC client for module-to-module communication.
 
-This class provides methods to communicate with remote modules using the Module Service gRPC protocol.
-
 Parameters:
 
 - #### **`mission_id`**
 
-  (`str`) – Mission identifier
+  (`str`) – Mission identifier.
 
 - #### **`setup_id`**
 
-  (`str`) – Setup identifier
+  (`str`) – Setup identifier.
 
 - #### **`setup_version_id`**
 
-  (`str`) – Setup version identifier
+  (`str`) – Setup version identifier.
 
 - #### **`client_config`**
 
-  (`ClientConfig`) – Client configuration for gRPC connection
+  (`ClientConfig`) – gRPC client config.
+
+- #### **`m2m_calls`**
+
+  (`M2MCallRegistry | None`, default: `None` ) – Optional M2MCallRegistry; falls back to the class-level slot from :meth:set_m2m_call_registry.
+
+- #### **`gateway_backend_config`**
+
+  (`ClientConfig | None`, default: `None` ) – Backend GatewayService config for AssociateTask (same host as user_profile). Required for M2M tool calls.
 
 Methods:
 
-- **`call_module`** – Call a module and stream responses via gRPC.
+- **`call_module`** – Invoke a remote module through its GatewayService and stream output.
 - **`close`** – Release all pooled gRPC channels.
-- **`close_all_cached_channels`** – Close all cached channels and reset the cache.
+- **`close_all_cached_channels`** – Close all cached channels, reset cache, and clear circuit breakers.
 - **`close_all_channels`** – Release refs on all pooled gRPC channels.
 - **`close_channel`** – Release this instance's ref on the cached channel.
-- **`exec_grpc_query`** – Execute a gRPC query with from the query's rpc endpoint name.
+- **`dial_consumer_stream`** – Open (or reuse) a pooled channel to a consumer's GatewayService.
+- **`evict_cached_channel`** – Force-close and remove a cached channel regardless of refcount.
+- **`evict_consumer_channel`** – Force a fresh channel on the next dial to address.
+- **`exec_grpc_query`** – Execute a gRPC query with circuit breaker protection and retry.
 - **`get_module_schemas`** – Get module schemas via gRPC.
-- **`poll_grpc`** – Execute a single polling RPC. Returns None on DEADLINE_EXCEEDED (expected empty poll).
 - **`release_cached_channel`** – Decrement refcount for a cache key and close channel when last ref is released.
-- **`wait_for_ready`** – Check if the gRPC channel can connect within timeout.
+- **`set_m2m_call_registry`** – Register the process-singleton M2MCallRegistry for call_module.
+- **`stream_error`** – Decode a stream.error Struct from :meth:call_module.
 
 #### call_module
 
@@ -22353,49 +25834,60 @@ Methods:
 call_module(
     module_address: str,
     module_port: int,
-    input_data: dict,
+    input_data: dict | Struct,
     setup_id: str,
     mission_id: str,
-    callback: Callable[[dict], Awaitable[None]] | None = None,
+    callback: Callable[[Struct], Awaitable[None]] | None = None,
     metadata: dict[str, str] | None = None,
-) -> AsyncGenerator[dict, None]
+) -> AsyncGenerator[Struct, None]
 ```
 
-Call a module and stream responses via gRPC.
+Invoke a remote module through its GatewayService and stream output.
+
+Resilience belts (concurrency cap, per-target breaker, deadline, TTL, CANCEL propagation) come from :class:`GatewayM2MSettings`.
 
 Parameters:
 
 - ##### **`module_address`**
 
-  (`str`) – Target module address
+  (`str`) – Target module's gateway host.
 
 - ##### **`module_port`**
 
-  (`int`) – Target module port
+  (`int`) – Target module's gateway port.
 
 - ##### **`input_data`**
 
-  (`dict`) – Input data as dictionary
+  (`dict | Struct`) – First input (dict or Struct).
 
 - ##### **`setup_id`**
 
-  (`str`) – Setup configuration ID
+  (`str`) – Setup configuration ID.
 
 - ##### **`mission_id`**
 
-  (`str`) – Mission context ID
+  (`str`) – Mission context ID.
 
 - ##### **`callback`**
 
-  (`Callable[[dict], Awaitable[None]] | None`, default: `None` ) – Optional callback for each response
+  (`Callable[[Struct], Awaitable[None]] | None`, default: `None` ) – Optional async callback per output Struct.
 
 - ##### **`metadata`**
 
-  (`dict[str, str] | None`, default: `None` ) – Optional gRPC metadata (headers) to send with the request.
+  (`dict[str, str] | None`, default: `None` ) – Optional gRPC metadata for StartStream.
 
 Yields:
 
-- `AsyncGenerator[dict, None]` – Streaming responses from module as dictionaries
+- `AsyncGenerator[Struct, None]` – google.protobuf.Struct per remote output.
+
+Raises:
+
+- `CancelledError` – Task cancelled.
+- `AioRpcError` – gRPC errors.
+- `RuntimeError` – No GatewayServicer wired.
+- `M2MAtCapacityError` – Concurrency semaphore timed out.
+- `M2MTargetUnavailable` – Target's breaker is open.
+- `M2MCallTimeout` – Output queue stalled past call_timeout_s.
 
 #### close
 
@@ -22411,9 +25903,9 @@ Release all pooled gRPC channels.
 close_all_cached_channels() -> None
 ```
 
-Close all cached channels and reset the cache.
+Close all cached channels, reset cache, and clear circuit breakers.
 
-Intended for server shutdown to ensure clean resource release.
+Intended for server shutdown to ensure clean resource release. Clears circuit breaker singletons to prevent unbounded growth from dynamically discovered services.
 
 #### close_all_channels
 
@@ -22431,15 +25923,78 @@ close_channel() -> None
 
 Release this instance's ref on the cached channel.
 
-The underlying channel is only closed when the last ref is released.
+The underlying channel is only closed when the last ref is released. When the last ref is released, the corresponding circuit breaker singleton is also removed to prevent unbounded accumulation.
+
+#### dial_consumer_stream
+
+```python
+dial_consumer_stream(
+    address: str,
+) -> tuple[GatewayServiceStub, Callable[[], Awaitable[None]]]
+```
+
+Open (or reuse) a pooled channel to a consumer's GatewayService.
+
+Parameters:
+
+- ##### **`address`**
+
+  (`str`) – host:port of the consumer's GatewayService.
+
+Returns:
+
+- `tuple[GatewayServiceStub, Callable[[], Awaitable[None]]]` – (stub, release_channel) — await release_channel() when done.
+
+Raises:
+
+- `InvalidConsumerAddressError` – If address is not host:port.
+
+#### evict_cached_channel
+
+```python
+evict_cached_channel(key: str) -> None
+```
+
+Force-close and remove a cached channel regardless of refcount.
+
+Guarantees a fresh connection on re-dial: a channel left cached after a peer died can be wedged mid-reconnect, so a resume must not reuse it. A missing key is a no-op.
+
+Parameters:
+
+- ##### **`key`**
+
+  (`str`) – Channel cache key to evict.
+
+#### evict_consumer_channel
+
+```python
+evict_consumer_channel(address: str) -> None
+```
+
+Force a fresh channel on the next dial to `address`.
+
+Removes any cached (possibly wedged) channel so a resume re-dial does not reuse a connection left broken by a peer that died. No-op if the address is malformed or no channel is cached.
+
+Parameters:
+
+- ##### **`address`**
+
+  (`str`) – host:port of the consumer's GatewayService.
 
 #### exec_grpc_query
 
 ```python
-exec_grpc_query(query_endpoint: str, request: Any, timeout: float | None = None) -> Any
+exec_grpc_query(
+    query_endpoint: str,
+    request: Any,
+    timeout: float | None = None,
+    metadata: tuple[tuple[str, str], ...] | None = None,
+) -> Any
 ```
 
-Execute a gRPC query with from the query's rpc endpoint name.
+Execute a gRPC query with circuit breaker protection and retry.
+
+The circuit breaker is per-service (keyed on `service_name`). When the circuit is OPEN, calls fail immediately with `CircuitOpenError` wrapped in `ServerError` — no network round-trip, no timeout wait.
 
 Retries on transient errors (UNAVAILABLE, INTERNAL, DEADLINE_EXCEEDED) with exponential backoff. Retry count and backoff base are configurable via DIGITALKIN_GRPC_QUERY_MAX_RETRIES and DIGITALKIN_GRPC_QUERY_BACKOFF_BASE_MS.
 
@@ -22455,7 +26010,11 @@ Parameters:
 
 - ##### **`timeout`**
 
-  (`float | None`, default: `None` ) – Per-call timeout in seconds. Falls back to \_QUERY_DEFAULT_TIMEOUT (env DIGITALKIN_GRPC_QUERY_TIMEOUT, default 30s) when None.
+  (`float | None`, default: `None` ) – Per-call timeout in seconds. None applies no client-side deadline.
+
+- ##### **`metadata`**
+
+  (`tuple[tuple[str, str], ...] | None`, default: `None` ) – Optional gRPC metadata pairs (e.g. an idempotency key); the same metadata is sent on every retry attempt.
 
 Returns:
 
@@ -22493,38 +26052,6 @@ Returns:
 
 - `dict[str, dict]` – Dictionary containing schemas: input, output, setup, secret, cost
 
-#### poll_grpc
-
-```python
-poll_grpc(endpoint: str, request: Any, *, timeout: float) -> Any | None
-```
-
-Execute a single polling RPC. Returns None on DEADLINE_EXCEEDED (expected empty poll).
-
-Unlike exec_grpc_query, DEADLINE_EXCEEDED is not an error for polling-style RPCs where the server holds the connection until a result is available or timeout occurs. No retry is performed — the caller is responsible for the retry loop.
-
-Parameters:
-
-- ##### **`endpoint`**
-
-  (`str`) – RPC method name on self.stub.
-
-- ##### **`request`**
-
-  (`Any`) – gRPC request protobuf.
-
-- ##### **`timeout`**
-
-  (`float`) – Seconds before treating as 'no result available'.
-
-Returns:
-
-- `Any | None` – gRPC response, or None if DEADLINE_EXCEEDED.
-
-Raises:
-
-- `ServerError` – For any non-DEADLINE_EXCEEDED gRPC error.
-
 #### release_cached_channel
 
 ```python
@@ -22539,25 +26066,31 @@ Parameters:
 
   (`str`) – Channel cache key to release.
 
-#### wait_for_ready
+#### set_m2m_call_registry
 
 ```python
-wait_for_ready(timeout: float = 1.0) -> bool
+set_m2m_call_registry(registry: M2MCallRegistry | None) -> None
 ```
 
-Check if the gRPC channel can connect within timeout.
+Register the process-singleton `M2MCallRegistry` for `call_module`.
 
-Uses channel_ready() which resolves when the HTTP/2 connection is established and the server is accepting RPCs.
+#### stream_error
+
+```python
+stream_error(data: Struct) -> tuple[str, str] | None
+```
+
+Decode a `stream.error` Struct from :meth:`call_module`.
 
 Parameters:
 
-- ##### **`timeout`**
+- ##### **`data`**
 
-  (`float`, default: `1.0` ) – Max seconds to wait for connectivity.
+  (`Struct`) – A Struct yielded by call_module.
 
 Returns:
 
-- `bool` – True if channel reached READY state, False if timeout or no channel.
+- `tuple[str, str] | None` – (code, message) if data is a stream.error, else None.
 
 ### IdentityStrategy
 
@@ -22806,98 +26339,6 @@ Parameters:
 Returns:
 
 - `bool` – True if ready. Default implementation always returns True.
-
-### SnapshotStrategy
-
-```python
-SnapshotStrategy(mission_id: str, setup_id: str, setup_version_id: str)
-```
-
-```
-              flowchart TD
-              digitalkin.services.SnapshotStrategy[SnapshotStrategy]
-              digitalkin.services.base_strategy.BaseStrategy[BaseStrategy]
-
-                              digitalkin.services.base_strategy.BaseStrategy --> digitalkin.services.SnapshotStrategy
-                
-
-
-              click digitalkin.services.SnapshotStrategy href "" "digitalkin.services.SnapshotStrategy"
-              click digitalkin.services.base_strategy.BaseStrategy href "" "digitalkin.services.base_strategy.BaseStrategy"
-```
-
-Abstract base class for snapshot strategies.
-
-Parameters:
-
-- #### **`mission_id`**
-
-  (`str`) – The ID of the mission this strategy is associated with
-
-- #### **`setup_id`**
-
-  (`str`) – The ID of the setup this strategy is associated with
-
-- #### **`setup_version_id`**
-
-  (`str`) – The ID of the setup version this strategy is associated with
-
-Methods:
-
-- **`close`** – Release resources held by this strategy. No-op by default.
-- **`create`** – Create a new snapshot in the file system.
-- **`delete`** – Delete snapshots from the file system.
-- **`get`** – Get snapshots from the file system.
-- **`get_all`** – Get all snapshots from the file system.
-- **`update`** – Update snapshots in the file system.
-
-#### close
-
-```python
-close() -> None
-```
-
-Release resources held by this strategy. No-op by default.
-
-#### create
-
-```python
-create(data: dict[str, Any]) -> str
-```
-
-Create a new snapshot in the file system.
-
-#### delete
-
-```python
-delete(data: dict[str, Any]) -> int
-```
-
-Delete snapshots from the file system.
-
-#### get
-
-```python
-get(data: dict[str, Any]) -> None
-```
-
-Get snapshots from the file system.
-
-#### get_all
-
-```python
-get_all() -> None
-```
-
-Get all snapshots from the file system.
-
-#### update
-
-```python
-update(data: dict[str, Any]) -> int
-```
-
-Update snapshots in the file system.
 
 ### StorageStrategy
 
@@ -23185,311 +26626,13 @@ Raises:
 - `ValueError` – If the data type is invalid or if validation fails
 - `StorageServiceError` – If update of an existing record fails unexpectedly
 
-### agent
-
-This module is responsible for handling the agent services.
-
-Modules:
-
-- **`agent_strategy`** – This module contains the abstract base class for agent strategies.
-- **`default_agent`** – Default agent implementation for the agent service.
-
-Classes:
-
-- **`AgentStrategy`** – Abstract base class for agent strategies.
-- **`DefaultAgent`** – Default agent implementation for the agent service.
-
-#### AgentStrategy
-
-```python
-AgentStrategy(mission_id: str, setup_id: str, setup_version_id: str)
-```
-
-```
-              flowchart TD
-              digitalkin.services.agent.AgentStrategy[AgentStrategy]
-              digitalkin.services.base_strategy.BaseStrategy[BaseStrategy]
-
-                              digitalkin.services.base_strategy.BaseStrategy --> digitalkin.services.agent.AgentStrategy
-                
-
-
-              click digitalkin.services.agent.AgentStrategy href "" "digitalkin.services.agent.AgentStrategy"
-              click digitalkin.services.base_strategy.BaseStrategy href "" "digitalkin.services.base_strategy.BaseStrategy"
-```
-
-Abstract base class for agent strategies.
-
-Parameters:
-
-- ##### **`mission_id`**
-
-  (`str`) – The ID of the mission this strategy is associated with
-
-- ##### **`setup_id`**
-
-  (`str`) – The ID of the setup this strategy is associated with
-
-- ##### **`setup_version_id`**
-
-  (`str`) – The ID of the setup version this strategy is associated with
-
-Methods:
-
-- **`close`** – Release resources held by this strategy. No-op by default.
-- **`start`** – Start the agent.
-- **`stop`** – Stop the agent.
-
-##### close
-
-```python
-close() -> None
-```
-
-Release resources held by this strategy. No-op by default.
-
-##### start
-
-```python
-start() -> None
-```
-
-Start the agent.
-
-##### stop
-
-```python
-stop() -> None
-```
-
-Stop the agent.
-
-#### DefaultAgent
-
-```python
-DefaultAgent(mission_id: str, setup_id: str, setup_version_id: str)
-```
-
-```
-              flowchart TD
-              digitalkin.services.agent.DefaultAgent[DefaultAgent]
-              digitalkin.services.agent.agent_strategy.AgentStrategy[AgentStrategy]
-              digitalkin.services.base_strategy.BaseStrategy[BaseStrategy]
-
-                              digitalkin.services.agent.agent_strategy.AgentStrategy --> digitalkin.services.agent.DefaultAgent
-                                digitalkin.services.base_strategy.BaseStrategy --> digitalkin.services.agent.agent_strategy.AgentStrategy
-                
-
-
-
-              click digitalkin.services.agent.DefaultAgent href "" "digitalkin.services.agent.DefaultAgent"
-              click digitalkin.services.agent.agent_strategy.AgentStrategy href "" "digitalkin.services.agent.agent_strategy.AgentStrategy"
-              click digitalkin.services.base_strategy.BaseStrategy href "" "digitalkin.services.base_strategy.BaseStrategy"
-```
-
-Default agent implementation for the agent service.
-
-Parameters:
-
-- ##### **`mission_id`**
-
-  (`str`) – The ID of the mission this strategy is associated with
-
-- ##### **`setup_id`**
-
-  (`str`) – The ID of the setup this strategy is associated with
-
-- ##### **`setup_version_id`**
-
-  (`str`) – The ID of the setup version this strategy is associated with
-
-Methods:
-
-- **`close`** – Release resources held by this strategy. No-op by default.
-- **`start`** – Start the agent.
-- **`stop`** – Stop the agent.
-
-##### close
-
-```python
-close() -> None
-```
-
-Release resources held by this strategy. No-op by default.
-
-##### start
-
-```python
-start() -> None
-```
-
-Start the agent.
-
-##### stop
-
-```python
-stop() -> None
-```
-
-Stop the agent.
-
-#### agent_strategy
-
-This module contains the abstract base class for agent strategies.
-
-Classes:
-
-- **`AgentStrategy`** – Abstract base class for agent strategies.
-
-##### AgentStrategy
-
-```python
-AgentStrategy(mission_id: str, setup_id: str, setup_version_id: str)
-```
-
-```
-              flowchart TD
-              digitalkin.services.agent.agent_strategy.AgentStrategy[AgentStrategy]
-              digitalkin.services.base_strategy.BaseStrategy[BaseStrategy]
-
-                              digitalkin.services.base_strategy.BaseStrategy --> digitalkin.services.agent.agent_strategy.AgentStrategy
-                
-
-
-              click digitalkin.services.agent.agent_strategy.AgentStrategy href "" "digitalkin.services.agent.agent_strategy.AgentStrategy"
-              click digitalkin.services.base_strategy.BaseStrategy href "" "digitalkin.services.base_strategy.BaseStrategy"
-```
-
-Abstract base class for agent strategies.
-
-Parameters:
-
-- ###### **`mission_id`**
-
-  (`str`) – The ID of the mission this strategy is associated with
-
-- ###### **`setup_id`**
-
-  (`str`) – The ID of the setup this strategy is associated with
-
-- ###### **`setup_version_id`**
-
-  (`str`) – The ID of the setup version this strategy is associated with
-
-Methods:
-
-- **`close`** – Release resources held by this strategy. No-op by default.
-- **`start`** – Start the agent.
-- **`stop`** – Stop the agent.
-
-###### close
-
-```python
-close() -> None
-```
-
-Release resources held by this strategy. No-op by default.
-
-###### start
-
-```python
-start() -> None
-```
-
-Start the agent.
-
-###### stop
-
-```python
-stop() -> None
-```
-
-Stop the agent.
-
-#### default_agent
-
-Default agent implementation for the agent service.
-
-Classes:
-
-- **`DefaultAgent`** – Default agent implementation for the agent service.
-
-##### DefaultAgent
-
-```python
-DefaultAgent(mission_id: str, setup_id: str, setup_version_id: str)
-```
-
-```
-              flowchart TD
-              digitalkin.services.agent.default_agent.DefaultAgent[DefaultAgent]
-              digitalkin.services.agent.agent_strategy.AgentStrategy[AgentStrategy]
-              digitalkin.services.base_strategy.BaseStrategy[BaseStrategy]
-
-                              digitalkin.services.agent.agent_strategy.AgentStrategy --> digitalkin.services.agent.default_agent.DefaultAgent
-                                digitalkin.services.base_strategy.BaseStrategy --> digitalkin.services.agent.agent_strategy.AgentStrategy
-                
-
-
-
-              click digitalkin.services.agent.default_agent.DefaultAgent href "" "digitalkin.services.agent.default_agent.DefaultAgent"
-              click digitalkin.services.agent.agent_strategy.AgentStrategy href "" "digitalkin.services.agent.agent_strategy.AgentStrategy"
-              click digitalkin.services.base_strategy.BaseStrategy href "" "digitalkin.services.base_strategy.BaseStrategy"
-```
-
-Default agent implementation for the agent service.
-
-Parameters:
-
-- ###### **`mission_id`**
-
-  (`str`) – The ID of the mission this strategy is associated with
-
-- ###### **`setup_id`**
-
-  (`str`) – The ID of the setup this strategy is associated with
-
-- ###### **`setup_version_id`**
-
-  (`str`) – The ID of the setup version this strategy is associated with
-
-Methods:
-
-- **`close`** – Release resources held by this strategy. No-op by default.
-- **`start`** – Start the agent.
-- **`stop`** – Stop the agent.
-
-###### close
-
-```python
-close() -> None
-```
-
-Release resources held by this strategy. No-op by default.
-
-###### start
-
-```python
-start() -> None
-```
-
-Start the agent.
-
-###### stop
-
-```python
-stop() -> None
-```
-
-Stop the agent.
-
 ### base_strategy
 
-This module contains the abstract base class for storage strategies.
+This module contains the base class for service strategies.
 
 Classes:
 
-- **`BaseStrategy`** – Abstract base class for all strategies.
+- **`BaseStrategy`** – Base class for all strategies.
 
 #### BaseStrategy
 
@@ -23497,18 +26640,9 @@ Classes:
 BaseStrategy(mission_id: str, setup_id: str, setup_version_id: str)
 ```
 
-```
-              flowchart TD
-              digitalkin.services.base_strategy.BaseStrategy[BaseStrategy]
+Base class for all strategies.
 
-              
-
-              click digitalkin.services.base_strategy.BaseStrategy href "" "digitalkin.services.base_strategy.BaseStrategy"
-```
-
-Abstract base class for all strategies.
-
-This class defines the interface for all strategies.
+Provides the shared id fields and a no-op `close()` default. It has no abstract members, so it is a plain base (not an `ABC`); concrete strategies subclass it and override as needed.
 
 Parameters:
 
@@ -23538,12 +26672,13 @@ Release resources held by this strategy. No-op by default.
 
 ### communication
 
-Communication service for module-to-module interaction.
+Communication service for module-to-module and consumer interactions.
 
 Modules:
 
 - **`communication_strategy`** – Abstract base class for communication strategies.
 - **`default_communication`** – Default communication implementation (local, for testing).
+- **`exceptions`** – Exceptions for the communication service.
 - **`grpc_communication`** – gRPC client implementation for Communication service.
 
 Classes:
@@ -23551,6 +26686,10 @@ Classes:
 - **`CommunicationStrategy`** – Abstract base class for module-to-module communication.
 - **`DefaultCommunication`** – Default communication strategy (local implementation).
 - **`GrpcCommunication`** – gRPC client for module-to-module communication.
+- **`InvalidConsumerAddressError`** – address is not a valid host:port for dial-back.
+- **`M2MAtCapacityError`** – Concurrency slot couldn't be acquired before timeout.
+- **`M2MCallTimeout`** – output_queue.get() exceeded call_timeout_s waiting for a target output.
+- **`M2MTargetUnavailable`** – The per-target circuit breaker is open; fast-fail without hitting the wire.
 
 #### CommunicationStrategy
 
@@ -23598,7 +26737,7 @@ Parameters:
 
 Methods:
 
-- **`call_module`** – Call a module and stream responses.
+- **`call_module`** – Call a remote module via its GatewayService and stream outputs.
 - **`close`** – Release communication resources (channels, connection pools).
 - **`get_module_schemas`** – Get module schemas (input/output/setup/secret/cost).
 
@@ -23608,51 +26747,51 @@ Methods:
 call_module(
     module_address: str,
     module_port: int,
-    input_data: dict,
+    input_data: dict | Any,
     setup_id: str,
     mission_id: str,
-    callback: Callable[[dict], Awaitable[None]] | None = None,
+    callback: Callable[[Any], Awaitable[None]] | None = None,
     metadata: dict[str, str] | None = None,
-) -> AsyncGenerator[dict, None]
+) -> AsyncGenerator[Any, None]
 ```
 
-Call a module and stream responses.
+Call a remote module via its GatewayService and stream outputs.
 
-Uses Module Service StartModule RPC to execute the module. Streams responses as they are generated by the module.
+Opens a dial-back BiDi against the target's gateway (`StartStream` + `Stream`). Filters `stream.start`; stops on `stream.end`.
 
 Parameters:
 
 - ###### **`module_address`**
 
-  (`str`) – Target module address
+  (`str`) – Target module's gateway host.
 
 - ###### **`module_port`**
 
-  (`int`) – Target module port
+  (`int`) – Target module's gateway port.
 
 - ###### **`input_data`**
 
-  (`dict`) – Input data as dictionary
+  (`dict | Any`) – First input delivered to the remote module (typically wrapped in {"root": {...}}).
 
 - ###### **`setup_id`**
 
-  (`str`) – Setup configuration ID
+  (`str`) – Setup configuration ID.
 
 - ###### **`mission_id`**
 
-  (`str`) – Mission context ID
+  (`str`) – Mission context ID.
 
 - ###### **`callback`**
 
-  (`Callable[[dict], Awaitable[None]] | None`, default: `None` ) – Optional callback for each response
+  (`Callable[[Any], Awaitable[None]] | None`, default: `None` ) – Optional async callback invoked with each output Struct.
 
 - ###### **`metadata`**
 
-  (`dict[str, str] | None`, default: `None` ) – Optional gRPC metadata (headers) to send with the request.
+  (`dict[str, str] | None`, default: `None` ) – Optional gRPC metadata forwarded on StartStream (tenant / trace headers).
 
 Yields:
 
-- `AsyncGenerator[dict, None]` – Streaming responses from module as dictionaries
+- `AsyncGenerator[Any, None]` – google.protobuf.Struct per remote module output.
 
 ##### close
 
@@ -23735,7 +26874,7 @@ Parameters:
 
 Methods:
 
-- **`call_module`** – Call module (local implementation yields empty response).
+- **`call_module`** – No-op stub for local-mode tests. Yields nothing.
 - **`close`** – No-op for local communication.
 - **`get_module_schemas`** – Get module schemas (local implementation returns empty schemas).
 
@@ -23745,49 +26884,51 @@ Methods:
 call_module(
     module_address: str,
     module_port: int,
-    input_data: dict,
+    input_data: dict | Any,
     setup_id: str,
     mission_id: str,
-    callback: Callable[[dict], Awaitable[None]] | None = None,
+    callback: Callable[[Any], Awaitable[None]] | None = None,
     metadata: dict[str, str] | None = None,
-) -> AsyncGenerator[dict, None]
+) -> AsyncGenerator[Any, None]
 ```
 
-Call module (local implementation yields empty response).
+No-op stub for local-mode tests. Yields nothing.
+
+Use :class:`GrpcCommunication` for real M2M calls through the target module's GatewayService dial-back BiDi.
 
 Parameters:
 
 - ###### **`module_address`**
 
-  (`str`) – Target module address
+  (`str`) – Ignored.
 
 - ###### **`module_port`**
 
-  (`int`) – Target module port
+  (`int`) – Ignored.
 
 - ###### **`input_data`**
 
-  (`dict`) – Input data
+  (`dict | Any`) – Ignored.
 
 - ###### **`setup_id`**
 
-  (`str`) – Setup ID
+  (`str`) – Ignored.
 
 - ###### **`mission_id`**
 
-  (`str`) – Mission ID
+  (`str`) – Ignored.
 
 - ###### **`callback`**
 
-  (`Callable[[dict], Awaitable[None]] | None`, default: `None` ) – Optional callback
+  (`Callable[[Any], Awaitable[None]] | None`, default: `None` ) – Ignored.
 
 - ###### **`metadata`**
 
-  (`dict[str, str] | None`, default: `None` ) – Optional gRPC metadata (headers).
+  (`dict[str, str] | None`, default: `None` ) – Ignored.
 
 Yields:
 
-- `AsyncGenerator[dict, None]` – Empty response dictionary
+- `AsyncGenerator[Any, None]` – Nothing.
 
 ##### close
 
@@ -23829,7 +26970,12 @@ Returns:
 
 ```python
 GrpcCommunication(
-    mission_id: str, setup_id: str, setup_version_id: str, client_config: ClientConfig
+    mission_id: str,
+    setup_id: str,
+    setup_version_id: str,
+    client_config: ClientConfig,
+    m2m_calls: M2MCallRegistry | None = None,
+    gateway_backend_config: ClientConfig | None = None,
 )
 ```
 
@@ -23856,38 +27002,47 @@ GrpcCommunication(
 
 gRPC client for module-to-module communication.
 
-This class provides methods to communicate with remote modules using the Module Service gRPC protocol.
-
 Parameters:
 
 - ##### **`mission_id`**
 
-  (`str`) – Mission identifier
+  (`str`) – Mission identifier.
 
 - ##### **`setup_id`**
 
-  (`str`) – Setup identifier
+  (`str`) – Setup identifier.
 
 - ##### **`setup_version_id`**
 
-  (`str`) – Setup version identifier
+  (`str`) – Setup version identifier.
 
 - ##### **`client_config`**
 
-  (`ClientConfig`) – Client configuration for gRPC connection
+  (`ClientConfig`) – gRPC client config.
+
+- ##### **`m2m_calls`**
+
+  (`M2MCallRegistry | None`, default: `None` ) – Optional M2MCallRegistry; falls back to the class-level slot from :meth:set_m2m_call_registry.
+
+- ##### **`gateway_backend_config`**
+
+  (`ClientConfig | None`, default: `None` ) – Backend GatewayService config for AssociateTask (same host as user_profile). Required for M2M tool calls.
 
 Methods:
 
-- **`call_module`** – Call a module and stream responses via gRPC.
+- **`call_module`** – Invoke a remote module through its GatewayService and stream output.
 - **`close`** – Release all pooled gRPC channels.
-- **`close_all_cached_channels`** – Close all cached channels and reset the cache.
+- **`close_all_cached_channels`** – Close all cached channels, reset cache, and clear circuit breakers.
 - **`close_all_channels`** – Release refs on all pooled gRPC channels.
 - **`close_channel`** – Release this instance's ref on the cached channel.
-- **`exec_grpc_query`** – Execute a gRPC query with from the query's rpc endpoint name.
+- **`dial_consumer_stream`** – Open (or reuse) a pooled channel to a consumer's GatewayService.
+- **`evict_cached_channel`** – Force-close and remove a cached channel regardless of refcount.
+- **`evict_consumer_channel`** – Force a fresh channel on the next dial to address.
+- **`exec_grpc_query`** – Execute a gRPC query with circuit breaker protection and retry.
 - **`get_module_schemas`** – Get module schemas via gRPC.
-- **`poll_grpc`** – Execute a single polling RPC. Returns None on DEADLINE_EXCEEDED (expected empty poll).
 - **`release_cached_channel`** – Decrement refcount for a cache key and close channel when last ref is released.
-- **`wait_for_ready`** – Check if the gRPC channel can connect within timeout.
+- **`set_m2m_call_registry`** – Register the process-singleton M2MCallRegistry for call_module.
+- **`stream_error`** – Decode a stream.error Struct from :meth:call_module.
 
 ##### call_module
 
@@ -23895,49 +27050,60 @@ Methods:
 call_module(
     module_address: str,
     module_port: int,
-    input_data: dict,
+    input_data: dict | Struct,
     setup_id: str,
     mission_id: str,
-    callback: Callable[[dict], Awaitable[None]] | None = None,
+    callback: Callable[[Struct], Awaitable[None]] | None = None,
     metadata: dict[str, str] | None = None,
-) -> AsyncGenerator[dict, None]
+) -> AsyncGenerator[Struct, None]
 ```
 
-Call a module and stream responses via gRPC.
+Invoke a remote module through its GatewayService and stream output.
+
+Resilience belts (concurrency cap, per-target breaker, deadline, TTL, CANCEL propagation) come from :class:`GatewayM2MSettings`.
 
 Parameters:
 
 - ###### **`module_address`**
 
-  (`str`) – Target module address
+  (`str`) – Target module's gateway host.
 
 - ###### **`module_port`**
 
-  (`int`) – Target module port
+  (`int`) – Target module's gateway port.
 
 - ###### **`input_data`**
 
-  (`dict`) – Input data as dictionary
+  (`dict | Struct`) – First input (dict or Struct).
 
 - ###### **`setup_id`**
 
-  (`str`) – Setup configuration ID
+  (`str`) – Setup configuration ID.
 
 - ###### **`mission_id`**
 
-  (`str`) – Mission context ID
+  (`str`) – Mission context ID.
 
 - ###### **`callback`**
 
-  (`Callable[[dict], Awaitable[None]] | None`, default: `None` ) – Optional callback for each response
+  (`Callable[[Struct], Awaitable[None]] | None`, default: `None` ) – Optional async callback per output Struct.
 
 - ###### **`metadata`**
 
-  (`dict[str, str] | None`, default: `None` ) – Optional gRPC metadata (headers) to send with the request.
+  (`dict[str, str] | None`, default: `None` ) – Optional gRPC metadata for StartStream.
 
 Yields:
 
-- `AsyncGenerator[dict, None]` – Streaming responses from module as dictionaries
+- `AsyncGenerator[Struct, None]` – google.protobuf.Struct per remote output.
+
+Raises:
+
+- `CancelledError` – Task cancelled.
+- `AioRpcError` – gRPC errors.
+- `RuntimeError` – No GatewayServicer wired.
+- `M2MAtCapacityError` – Concurrency semaphore timed out.
+- `M2MTargetUnavailable` – Target's breaker is open.
+- `M2MCallTimeout` – Output queue stalled past call_timeout_s.
 
 ##### close
 
@@ -23953,9 +27119,9 @@ Release all pooled gRPC channels.
 close_all_cached_channels() -> None
 ```
 
-Close all cached channels and reset the cache.
+Close all cached channels, reset cache, and clear circuit breakers.
 
-Intended for server shutdown to ensure clean resource release.
+Intended for server shutdown to ensure clean resource release. Clears circuit breaker singletons to prevent unbounded growth from dynamically discovered services.
 
 ##### close_all_channels
 
@@ -23973,15 +27139,78 @@ close_channel() -> None
 
 Release this instance's ref on the cached channel.
 
-The underlying channel is only closed when the last ref is released.
+The underlying channel is only closed when the last ref is released. When the last ref is released, the corresponding circuit breaker singleton is also removed to prevent unbounded accumulation.
+
+##### dial_consumer_stream
+
+```python
+dial_consumer_stream(
+    address: str,
+) -> tuple[GatewayServiceStub, Callable[[], Awaitable[None]]]
+```
+
+Open (or reuse) a pooled channel to a consumer's GatewayService.
+
+Parameters:
+
+- ###### **`address`**
+
+  (`str`) – host:port of the consumer's GatewayService.
+
+Returns:
+
+- `tuple[GatewayServiceStub, Callable[[], Awaitable[None]]]` – (stub, release_channel) — await release_channel() when done.
+
+Raises:
+
+- `InvalidConsumerAddressError` – If address is not host:port.
+
+##### evict_cached_channel
+
+```python
+evict_cached_channel(key: str) -> None
+```
+
+Force-close and remove a cached channel regardless of refcount.
+
+Guarantees a fresh connection on re-dial: a channel left cached after a peer died can be wedged mid-reconnect, so a resume must not reuse it. A missing key is a no-op.
+
+Parameters:
+
+- ###### **`key`**
+
+  (`str`) – Channel cache key to evict.
+
+##### evict_consumer_channel
+
+```python
+evict_consumer_channel(address: str) -> None
+```
+
+Force a fresh channel on the next dial to `address`.
+
+Removes any cached (possibly wedged) channel so a resume re-dial does not reuse a connection left broken by a peer that died. No-op if the address is malformed or no channel is cached.
+
+Parameters:
+
+- ###### **`address`**
+
+  (`str`) – host:port of the consumer's GatewayService.
 
 ##### exec_grpc_query
 
 ```python
-exec_grpc_query(query_endpoint: str, request: Any, timeout: float | None = None) -> Any
+exec_grpc_query(
+    query_endpoint: str,
+    request: Any,
+    timeout: float | None = None,
+    metadata: tuple[tuple[str, str], ...] | None = None,
+) -> Any
 ```
 
-Execute a gRPC query with from the query's rpc endpoint name.
+Execute a gRPC query with circuit breaker protection and retry.
+
+The circuit breaker is per-service (keyed on `service_name`). When the circuit is OPEN, calls fail immediately with `CircuitOpenError` wrapped in `ServerError` — no network round-trip, no timeout wait.
 
 Retries on transient errors (UNAVAILABLE, INTERNAL, DEADLINE_EXCEEDED) with exponential backoff. Retry count and backoff base are configurable via DIGITALKIN_GRPC_QUERY_MAX_RETRIES and DIGITALKIN_GRPC_QUERY_BACKOFF_BASE_MS.
 
@@ -23997,7 +27226,11 @@ Parameters:
 
 - ###### **`timeout`**
 
-  (`float | None`, default: `None` ) – Per-call timeout in seconds. Falls back to \_QUERY_DEFAULT_TIMEOUT (env DIGITALKIN_GRPC_QUERY_TIMEOUT, default 30s) when None.
+  (`float | None`, default: `None` ) – Per-call timeout in seconds. None applies no client-side deadline.
+
+- ###### **`metadata`**
+
+  (`tuple[tuple[str, str], ...] | None`, default: `None` ) – Optional gRPC metadata pairs (e.g. an idempotency key); the same metadata is sent on every retry attempt.
 
 Returns:
 
@@ -24035,38 +27268,6 @@ Returns:
 
 - `dict[str, dict]` – Dictionary containing schemas: input, output, setup, secret, cost
 
-##### poll_grpc
-
-```python
-poll_grpc(endpoint: str, request: Any, *, timeout: float) -> Any | None
-```
-
-Execute a single polling RPC. Returns None on DEADLINE_EXCEEDED (expected empty poll).
-
-Unlike exec_grpc_query, DEADLINE_EXCEEDED is not an error for polling-style RPCs where the server holds the connection until a result is available or timeout occurs. No retry is performed — the caller is responsible for the retry loop.
-
-Parameters:
-
-- ###### **`endpoint`**
-
-  (`str`) – RPC method name on self.stub.
-
-- ###### **`request`**
-
-  (`Any`) – gRPC request protobuf.
-
-- ###### **`timeout`**
-
-  (`float`) – Seconds before treating as 'no result available'.
-
-Returns:
-
-- `Any | None` – gRPC response, or None if DEADLINE_EXCEEDED.
-
-Raises:
-
-- `ServerError` – For any non-DEADLINE_EXCEEDED gRPC error.
-
 ##### release_cached_channel
 
 ```python
@@ -24081,25 +27282,83 @@ Parameters:
 
   (`str`) – Channel cache key to release.
 
-##### wait_for_ready
+##### set_m2m_call_registry
 
 ```python
-wait_for_ready(timeout: float = 1.0) -> bool
+set_m2m_call_registry(registry: M2MCallRegistry | None) -> None
 ```
 
-Check if the gRPC channel can connect within timeout.
+Register the process-singleton `M2MCallRegistry` for `call_module`.
 
-Uses channel_ready() which resolves when the HTTP/2 connection is established and the server is accepting RPCs.
+##### stream_error
+
+```python
+stream_error(data: Struct) -> tuple[str, str] | None
+```
+
+Decode a `stream.error` Struct from :meth:`call_module`.
 
 Parameters:
 
-- ###### **`timeout`**
+- ###### **`data`**
 
-  (`float`, default: `1.0` ) – Max seconds to wait for connectivity.
+  (`Struct`) – A Struct yielded by call_module.
 
 Returns:
 
-- `bool` – True if channel reached READY state, False if timeout or no channel.
+- `tuple[str, str] | None` – (code, message) if data is a stream.error, else None.
+
+#### InvalidConsumerAddressError
+
+```
+              flowchart TD
+              digitalkin.services.communication.InvalidConsumerAddressError[InvalidConsumerAddressError]
+
+              
+
+              click digitalkin.services.communication.InvalidConsumerAddressError href "" "digitalkin.services.communication.InvalidConsumerAddressError"
+```
+
+`address` is not a valid `host:port` for dial-back.
+
+#### M2MAtCapacityError
+
+```
+              flowchart TD
+              digitalkin.services.communication.M2MAtCapacityError[M2MAtCapacityError]
+
+              
+
+              click digitalkin.services.communication.M2MAtCapacityError href "" "digitalkin.services.communication.M2MAtCapacityError"
+```
+
+Concurrency slot couldn't be acquired before timeout.
+
+#### M2MCallTimeout
+
+```
+              flowchart TD
+              digitalkin.services.communication.M2MCallTimeout[M2MCallTimeout]
+
+              
+
+              click digitalkin.services.communication.M2MCallTimeout href "" "digitalkin.services.communication.M2MCallTimeout"
+```
+
+`output_queue.get()` exceeded `call_timeout_s` waiting for a target output.
+
+#### M2MTargetUnavailable
+
+```
+              flowchart TD
+              digitalkin.services.communication.M2MTargetUnavailable[M2MTargetUnavailable]
+
+              
+
+              click digitalkin.services.communication.M2MTargetUnavailable href "" "digitalkin.services.communication.M2MTargetUnavailable"
+```
+
+The per-target circuit breaker is open; fast-fail without hitting the wire.
 
 #### communication_strategy
 
@@ -24155,7 +27414,7 @@ Parameters:
 
 Methods:
 
-- **`call_module`** – Call a module and stream responses.
+- **`call_module`** – Call a remote module via its GatewayService and stream outputs.
 - **`close`** – Release communication resources (channels, connection pools).
 - **`get_module_schemas`** – Get module schemas (input/output/setup/secret/cost).
 
@@ -24165,51 +27424,51 @@ Methods:
 call_module(
     module_address: str,
     module_port: int,
-    input_data: dict,
+    input_data: dict | Any,
     setup_id: str,
     mission_id: str,
-    callback: Callable[[dict], Awaitable[None]] | None = None,
+    callback: Callable[[Any], Awaitable[None]] | None = None,
     metadata: dict[str, str] | None = None,
-) -> AsyncGenerator[dict, None]
+) -> AsyncGenerator[Any, None]
 ```
 
-Call a module and stream responses.
+Call a remote module via its GatewayService and stream outputs.
 
-Uses Module Service StartModule RPC to execute the module. Streams responses as they are generated by the module.
+Opens a dial-back BiDi against the target's gateway (`StartStream` + `Stream`). Filters `stream.start`; stops on `stream.end`.
 
 Parameters:
 
 - ###### **`module_address`**
 
-  (`str`) – Target module address
+  (`str`) – Target module's gateway host.
 
 - ###### **`module_port`**
 
-  (`int`) – Target module port
+  (`int`) – Target module's gateway port.
 
 - ###### **`input_data`**
 
-  (`dict`) – Input data as dictionary
+  (`dict | Any`) – First input delivered to the remote module (typically wrapped in {"root": {...}}).
 
 - ###### **`setup_id`**
 
-  (`str`) – Setup configuration ID
+  (`str`) – Setup configuration ID.
 
 - ###### **`mission_id`**
 
-  (`str`) – Mission context ID
+  (`str`) – Mission context ID.
 
 - ###### **`callback`**
 
-  (`Callable[[dict], Awaitable[None]] | None`, default: `None` ) – Optional callback for each response
+  (`Callable[[Any], Awaitable[None]] | None`, default: `None` ) – Optional async callback invoked with each output Struct.
 
 - ###### **`metadata`**
 
-  (`dict[str, str] | None`, default: `None` ) – Optional gRPC metadata (headers) to send with the request.
+  (`dict[str, str] | None`, default: `None` ) – Optional gRPC metadata forwarded on StartStream (tenant / trace headers).
 
 Yields:
 
-- `AsyncGenerator[dict, None]` – Streaming responses from module as dictionaries
+- `AsyncGenerator[Any, None]` – google.protobuf.Struct per remote module output.
 
 ###### close
 
@@ -24300,7 +27559,7 @@ Parameters:
 
 Methods:
 
-- **`call_module`** – Call module (local implementation yields empty response).
+- **`call_module`** – No-op stub for local-mode tests. Yields nothing.
 - **`close`** – No-op for local communication.
 - **`get_module_schemas`** – Get module schemas (local implementation returns empty schemas).
 
@@ -24310,49 +27569,51 @@ Methods:
 call_module(
     module_address: str,
     module_port: int,
-    input_data: dict,
+    input_data: dict | Any,
     setup_id: str,
     mission_id: str,
-    callback: Callable[[dict], Awaitable[None]] | None = None,
+    callback: Callable[[Any], Awaitable[None]] | None = None,
     metadata: dict[str, str] | None = None,
-) -> AsyncGenerator[dict, None]
+) -> AsyncGenerator[Any, None]
 ```
 
-Call module (local implementation yields empty response).
+No-op stub for local-mode tests. Yields nothing.
+
+Use :class:`GrpcCommunication` for real M2M calls through the target module's GatewayService dial-back BiDi.
 
 Parameters:
 
 - ###### **`module_address`**
 
-  (`str`) – Target module address
+  (`str`) – Ignored.
 
 - ###### **`module_port`**
 
-  (`int`) – Target module port
+  (`int`) – Ignored.
 
 - ###### **`input_data`**
 
-  (`dict`) – Input data
+  (`dict | Any`) – Ignored.
 
 - ###### **`setup_id`**
 
-  (`str`) – Setup ID
+  (`str`) – Ignored.
 
 - ###### **`mission_id`**
 
-  (`str`) – Mission ID
+  (`str`) – Ignored.
 
 - ###### **`callback`**
 
-  (`Callable[[dict], Awaitable[None]] | None`, default: `None` ) – Optional callback
+  (`Callable[[Any], Awaitable[None]] | None`, default: `None` ) – Ignored.
 
 - ###### **`metadata`**
 
-  (`dict[str, str] | None`, default: `None` ) – Optional gRPC metadata (headers).
+  (`dict[str, str] | None`, default: `None` ) – Ignored.
 
 Yields:
 
-- `AsyncGenerator[dict, None]` – Empty response dictionary
+- `AsyncGenerator[Any, None]` – Nothing.
 
 ###### close
 
@@ -24390,6 +27651,55 @@ Returns:
 
 - `dict[str, dict]` – Empty schemas dictionary
 
+#### exceptions
+
+Exceptions for the communication service.
+
+Classes:
+
+- **`InvalidConsumerAddressError`** – address is not a valid host:port for dial-back.
+- **`M2MCallTimeout`** – output_queue.get() exceeded call_timeout_s waiting for a target output.
+- **`M2MTargetUnavailable`** – The per-target circuit breaker is open; fast-fail without hitting the wire.
+
+##### InvalidConsumerAddressError
+
+```
+              flowchart TD
+              digitalkin.services.communication.exceptions.InvalidConsumerAddressError[InvalidConsumerAddressError]
+
+              
+
+              click digitalkin.services.communication.exceptions.InvalidConsumerAddressError href "" "digitalkin.services.communication.exceptions.InvalidConsumerAddressError"
+```
+
+`address` is not a valid `host:port` for dial-back.
+
+##### M2MCallTimeout
+
+```
+              flowchart TD
+              digitalkin.services.communication.exceptions.M2MCallTimeout[M2MCallTimeout]
+
+              
+
+              click digitalkin.services.communication.exceptions.M2MCallTimeout href "" "digitalkin.services.communication.exceptions.M2MCallTimeout"
+```
+
+`output_queue.get()` exceeded `call_timeout_s` waiting for a target output.
+
+##### M2MTargetUnavailable
+
+```
+              flowchart TD
+              digitalkin.services.communication.exceptions.M2MTargetUnavailable[M2MTargetUnavailable]
+
+              
+
+              click digitalkin.services.communication.exceptions.M2MTargetUnavailable href "" "digitalkin.services.communication.exceptions.M2MTargetUnavailable"
+```
+
+The per-target circuit breaker is open; fast-fail without hitting the wire.
+
 #### grpc_communication
 
 gRPC client implementation for Communication service.
@@ -24402,7 +27712,12 @@ Classes:
 
 ```python
 GrpcCommunication(
-    mission_id: str, setup_id: str, setup_version_id: str, client_config: ClientConfig
+    mission_id: str,
+    setup_id: str,
+    setup_version_id: str,
+    client_config: ClientConfig,
+    m2m_calls: M2MCallRegistry | None = None,
+    gateway_backend_config: ClientConfig | None = None,
 )
 ```
 
@@ -24429,38 +27744,47 @@ GrpcCommunication(
 
 gRPC client for module-to-module communication.
 
-This class provides methods to communicate with remote modules using the Module Service gRPC protocol.
-
 Parameters:
 
 - ###### **`mission_id`**
 
-  (`str`) – Mission identifier
+  (`str`) – Mission identifier.
 
 - ###### **`setup_id`**
 
-  (`str`) – Setup identifier
+  (`str`) – Setup identifier.
 
 - ###### **`setup_version_id`**
 
-  (`str`) – Setup version identifier
+  (`str`) – Setup version identifier.
 
 - ###### **`client_config`**
 
-  (`ClientConfig`) – Client configuration for gRPC connection
+  (`ClientConfig`) – gRPC client config.
+
+- ###### **`m2m_calls`**
+
+  (`M2MCallRegistry | None`, default: `None` ) – Optional M2MCallRegistry; falls back to the class-level slot from :meth:set_m2m_call_registry.
+
+- ###### **`gateway_backend_config`**
+
+  (`ClientConfig | None`, default: `None` ) – Backend GatewayService config for AssociateTask (same host as user_profile). Required for M2M tool calls.
 
 Methods:
 
-- **`call_module`** – Call a module and stream responses via gRPC.
+- **`call_module`** – Invoke a remote module through its GatewayService and stream output.
 - **`close`** – Release all pooled gRPC channels.
-- **`close_all_cached_channels`** – Close all cached channels and reset the cache.
+- **`close_all_cached_channels`** – Close all cached channels, reset cache, and clear circuit breakers.
 - **`close_all_channels`** – Release refs on all pooled gRPC channels.
 - **`close_channel`** – Release this instance's ref on the cached channel.
-- **`exec_grpc_query`** – Execute a gRPC query with from the query's rpc endpoint name.
+- **`dial_consumer_stream`** – Open (or reuse) a pooled channel to a consumer's GatewayService.
+- **`evict_cached_channel`** – Force-close and remove a cached channel regardless of refcount.
+- **`evict_consumer_channel`** – Force a fresh channel on the next dial to address.
+- **`exec_grpc_query`** – Execute a gRPC query with circuit breaker protection and retry.
 - **`get_module_schemas`** – Get module schemas via gRPC.
-- **`poll_grpc`** – Execute a single polling RPC. Returns None on DEADLINE_EXCEEDED (expected empty poll).
 - **`release_cached_channel`** – Decrement refcount for a cache key and close channel when last ref is released.
-- **`wait_for_ready`** – Check if the gRPC channel can connect within timeout.
+- **`set_m2m_call_registry`** – Register the process-singleton M2MCallRegistry for call_module.
+- **`stream_error`** – Decode a stream.error Struct from :meth:call_module.
 
 ###### call_module
 
@@ -24468,49 +27792,60 @@ Methods:
 call_module(
     module_address: str,
     module_port: int,
-    input_data: dict,
+    input_data: dict | Struct,
     setup_id: str,
     mission_id: str,
-    callback: Callable[[dict], Awaitable[None]] | None = None,
+    callback: Callable[[Struct], Awaitable[None]] | None = None,
     metadata: dict[str, str] | None = None,
-) -> AsyncGenerator[dict, None]
+) -> AsyncGenerator[Struct, None]
 ```
 
-Call a module and stream responses via gRPC.
+Invoke a remote module through its GatewayService and stream output.
+
+Resilience belts (concurrency cap, per-target breaker, deadline, TTL, CANCEL propagation) come from :class:`GatewayM2MSettings`.
 
 Parameters:
 
 - ###### **`module_address`**
 
-  (`str`) – Target module address
+  (`str`) – Target module's gateway host.
 
 - ###### **`module_port`**
 
-  (`int`) – Target module port
+  (`int`) – Target module's gateway port.
 
 - ###### **`input_data`**
 
-  (`dict`) – Input data as dictionary
+  (`dict | Struct`) – First input (dict or Struct).
 
 - ###### **`setup_id`**
 
-  (`str`) – Setup configuration ID
+  (`str`) – Setup configuration ID.
 
 - ###### **`mission_id`**
 
-  (`str`) – Mission context ID
+  (`str`) – Mission context ID.
 
 - ###### **`callback`**
 
-  (`Callable[[dict], Awaitable[None]] | None`, default: `None` ) – Optional callback for each response
+  (`Callable[[Struct], Awaitable[None]] | None`, default: `None` ) – Optional async callback per output Struct.
 
 - ###### **`metadata`**
 
-  (`dict[str, str] | None`, default: `None` ) – Optional gRPC metadata (headers) to send with the request.
+  (`dict[str, str] | None`, default: `None` ) – Optional gRPC metadata for StartStream.
 
 Yields:
 
-- `AsyncGenerator[dict, None]` – Streaming responses from module as dictionaries
+- `AsyncGenerator[Struct, None]` – google.protobuf.Struct per remote output.
+
+Raises:
+
+- `CancelledError` – Task cancelled.
+- `AioRpcError` – gRPC errors.
+- `RuntimeError` – No GatewayServicer wired.
+- `M2MAtCapacityError` – Concurrency semaphore timed out.
+- `M2MTargetUnavailable` – Target's breaker is open.
+- `M2MCallTimeout` – Output queue stalled past call_timeout_s.
 
 ###### close
 
@@ -24526,9 +27861,9 @@ Release all pooled gRPC channels.
 close_all_cached_channels() -> None
 ```
 
-Close all cached channels and reset the cache.
+Close all cached channels, reset cache, and clear circuit breakers.
 
-Intended for server shutdown to ensure clean resource release.
+Intended for server shutdown to ensure clean resource release. Clears circuit breaker singletons to prevent unbounded growth from dynamically discovered services.
 
 ###### close_all_channels
 
@@ -24546,15 +27881,78 @@ close_channel() -> None
 
 Release this instance's ref on the cached channel.
 
-The underlying channel is only closed when the last ref is released.
+The underlying channel is only closed when the last ref is released. When the last ref is released, the corresponding circuit breaker singleton is also removed to prevent unbounded accumulation.
+
+###### dial_consumer_stream
+
+```python
+dial_consumer_stream(
+    address: str,
+) -> tuple[GatewayServiceStub, Callable[[], Awaitable[None]]]
+```
+
+Open (or reuse) a pooled channel to a consumer's GatewayService.
+
+Parameters:
+
+- ###### **`address`**
+
+  (`str`) – host:port of the consumer's GatewayService.
+
+Returns:
+
+- `tuple[GatewayServiceStub, Callable[[], Awaitable[None]]]` – (stub, release_channel) — await release_channel() when done.
+
+Raises:
+
+- `InvalidConsumerAddressError` – If address is not host:port.
+
+###### evict_cached_channel
+
+```python
+evict_cached_channel(key: str) -> None
+```
+
+Force-close and remove a cached channel regardless of refcount.
+
+Guarantees a fresh connection on re-dial: a channel left cached after a peer died can be wedged mid-reconnect, so a resume must not reuse it. A missing key is a no-op.
+
+Parameters:
+
+- ###### **`key`**
+
+  (`str`) – Channel cache key to evict.
+
+###### evict_consumer_channel
+
+```python
+evict_consumer_channel(address: str) -> None
+```
+
+Force a fresh channel on the next dial to `address`.
+
+Removes any cached (possibly wedged) channel so a resume re-dial does not reuse a connection left broken by a peer that died. No-op if the address is malformed or no channel is cached.
+
+Parameters:
+
+- ###### **`address`**
+
+  (`str`) – host:port of the consumer's GatewayService.
 
 ###### exec_grpc_query
 
 ```python
-exec_grpc_query(query_endpoint: str, request: Any, timeout: float | None = None) -> Any
+exec_grpc_query(
+    query_endpoint: str,
+    request: Any,
+    timeout: float | None = None,
+    metadata: tuple[tuple[str, str], ...] | None = None,
+) -> Any
 ```
 
-Execute a gRPC query with from the query's rpc endpoint name.
+Execute a gRPC query with circuit breaker protection and retry.
+
+The circuit breaker is per-service (keyed on `service_name`). When the circuit is OPEN, calls fail immediately with `CircuitOpenError` wrapped in `ServerError` — no network round-trip, no timeout wait.
 
 Retries on transient errors (UNAVAILABLE, INTERNAL, DEADLINE_EXCEEDED) with exponential backoff. Retry count and backoff base are configurable via DIGITALKIN_GRPC_QUERY_MAX_RETRIES and DIGITALKIN_GRPC_QUERY_BACKOFF_BASE_MS.
 
@@ -24570,7 +27968,11 @@ Parameters:
 
 - ###### **`timeout`**
 
-  (`float | None`, default: `None` ) – Per-call timeout in seconds. Falls back to \_QUERY_DEFAULT_TIMEOUT (env DIGITALKIN_GRPC_QUERY_TIMEOUT, default 30s) when None.
+  (`float | None`, default: `None` ) – Per-call timeout in seconds. None applies no client-side deadline.
+
+- ###### **`metadata`**
+
+  (`tuple[tuple[str, str], ...] | None`, default: `None` ) – Optional gRPC metadata pairs (e.g. an idempotency key); the same metadata is sent on every retry attempt.
 
 Returns:
 
@@ -24608,38 +28010,6 @@ Returns:
 
 - `dict[str, dict]` – Dictionary containing schemas: input, output, setup, secret, cost
 
-###### poll_grpc
-
-```python
-poll_grpc(endpoint: str, request: Any, *, timeout: float) -> Any | None
-```
-
-Execute a single polling RPC. Returns None on DEADLINE_EXCEEDED (expected empty poll).
-
-Unlike exec_grpc_query, DEADLINE_EXCEEDED is not an error for polling-style RPCs where the server holds the connection until a result is available or timeout occurs. No retry is performed — the caller is responsible for the retry loop.
-
-Parameters:
-
-- ###### **`endpoint`**
-
-  (`str`) – RPC method name on self.stub.
-
-- ###### **`request`**
-
-  (`Any`) – gRPC request protobuf.
-
-- ###### **`timeout`**
-
-  (`float`) – Seconds before treating as 'no result available'.
-
-Returns:
-
-- `Any | None` – gRPC response, or None if DEADLINE_EXCEEDED.
-
-Raises:
-
-- `ServerError` – For any non-DEADLINE_EXCEEDED gRPC error.
-
 ###### release_cached_channel
 
 ```python
@@ -24654,25 +28024,31 @@ Parameters:
 
   (`str`) – Channel cache key to release.
 
-###### wait_for_ready
+###### set_m2m_call_registry
 
 ```python
-wait_for_ready(timeout: float = 1.0) -> bool
+set_m2m_call_registry(registry: M2MCallRegistry | None) -> None
 ```
 
-Check if the gRPC channel can connect within timeout.
+Register the process-singleton `M2MCallRegistry` for `call_module`.
 
-Uses channel_ready() which resolves when the HTTP/2 connection is established and the server is accepting RPCs.
+###### stream_error
+
+```python
+stream_error(data: Struct) -> tuple[str, str] | None
+```
+
+Decode a `stream.error` Struct from :meth:`call_module`.
 
 Parameters:
 
-- ###### **`timeout`**
+- ###### **`data`**
 
-  (`float`, default: `1.0` ) – Max seconds to wait for connectivity.
+  (`Struct`) – A Struct yielded by call_module.
 
 Returns:
 
-- `bool` – True if channel reached READY state, False if timeout or no channel.
+- `tuple[str, str] | None` – (code, message) if data is a stream.error, else None.
 
 ### cost
 
@@ -24682,6 +28058,7 @@ Modules:
 
 - **`cost_strategy`** – This module contains the abstract base class for cost strategies.
 - **`default_cost`** – Default cost.
+- **`exceptions`** – Exceptions for the cost service.
 - **`grpc_cost`** – This module implements the gRPC Cost strategy.
 
 Classes:
@@ -25137,19 +28514,18 @@ Methods:
 
 - **`add`** – Create a new record in the cost database.
 - **`check_limit`** – Check if adding this cost would exceed any limits.
-- **`close`** – Release resources held by this strategy. No-op by default.
-- **`close_all_cached_channels`** – Close all cached channels and reset the cache.
+- **`close`** – Release this instance's pooled gRPC channel ref.
+- **`close_all_cached_channels`** – Close all cached channels, reset cache, and clear circuit breakers.
 - **`close_channel`** – Release this instance's ref on the cached channel.
-- **`exec_grpc_query`** – Execute a gRPC query with from the query's rpc endpoint name.
+- **`evict_cached_channel`** – Force-close and remove a cached channel regardless of refcount.
+- **`exec_grpc_query`** – Execute a gRPC query with circuit breaker protection and retry.
 - **`get`** – Get a record from the database.
 - **`get_cost_config`** – Get cost configuration from the database.
 - **`get_filtered`** – Get a list of records from the database.
 - **`handle_grpc_errors`** – Handle gRPC errors for the given operation.
-- **`poll_grpc`** – Execute a single polling RPC. Returns None on DEADLINE_EXCEEDED (expected empty poll).
 - **`release_cached_channel`** – Decrement refcount for a cache key and close channel when last ref is released.
 - **`set_cost_config`** – Store cost configuration in the database.
 - **`set_limits`** – Set cost limits for this session.
-- **`wait_for_ready`** – Check if the gRPC channel can connect within timeout.
 
 ##### add
 
@@ -25205,7 +28581,7 @@ Returns:
 close() -> None
 ```
 
-Release resources held by this strategy. No-op by default.
+Release this instance's pooled gRPC channel ref.
 
 ##### close_all_cached_channels
 
@@ -25213,9 +28589,9 @@ Release resources held by this strategy. No-op by default.
 close_all_cached_channels() -> None
 ```
 
-Close all cached channels and reset the cache.
+Close all cached channels, reset cache, and clear circuit breakers.
 
-Intended for server shutdown to ensure clean resource release.
+Intended for server shutdown to ensure clean resource release. Clears circuit breaker singletons to prevent unbounded growth from dynamically discovered services.
 
 ##### close_channel
 
@@ -25225,15 +28601,38 @@ close_channel() -> None
 
 Release this instance's ref on the cached channel.
 
-The underlying channel is only closed when the last ref is released.
+The underlying channel is only closed when the last ref is released. When the last ref is released, the corresponding circuit breaker singleton is also removed to prevent unbounded accumulation.
+
+##### evict_cached_channel
+
+```python
+evict_cached_channel(key: str) -> None
+```
+
+Force-close and remove a cached channel regardless of refcount.
+
+Guarantees a fresh connection on re-dial: a channel left cached after a peer died can be wedged mid-reconnect, so a resume must not reuse it. A missing key is a no-op.
+
+Parameters:
+
+- ###### **`key`**
+
+  (`str`) – Channel cache key to evict.
 
 ##### exec_grpc_query
 
 ```python
-exec_grpc_query(query_endpoint: str, request: Any, timeout: float | None = None) -> Any
+exec_grpc_query(
+    query_endpoint: str,
+    request: Any,
+    timeout: float | None = None,
+    metadata: tuple[tuple[str, str], ...] | None = None,
+) -> Any
 ```
 
-Execute a gRPC query with from the query's rpc endpoint name.
+Execute a gRPC query with circuit breaker protection and retry.
+
+The circuit breaker is per-service (keyed on `service_name`). When the circuit is OPEN, calls fail immediately with `CircuitOpenError` wrapped in `ServerError` — no network round-trip, no timeout wait.
 
 Retries on transient errors (UNAVAILABLE, INTERNAL, DEADLINE_EXCEEDED) with exponential backoff. Retry count and backoff base are configurable via DIGITALKIN_GRPC_QUERY_MAX_RETRIES and DIGITALKIN_GRPC_QUERY_BACKOFF_BASE_MS.
 
@@ -25249,7 +28648,11 @@ Parameters:
 
 - ###### **`timeout`**
 
-  (`float | None`, default: `None` ) – Per-call timeout in seconds. Falls back to \_QUERY_DEFAULT_TIMEOUT (env DIGITALKIN_GRPC_QUERY_TIMEOUT, default 30s) when None.
+  (`float | None`, default: `None` ) – Per-call timeout in seconds. None applies no client-side deadline.
+
+- ###### **`metadata`**
+
+  (`tuple[tuple[str, str], ...] | None`, default: `None` ) – Optional gRPC metadata pairs (e.g. an idempotency key); the same metadata is sent on every retry attempt.
 
 Returns:
 
@@ -25343,40 +28746,9 @@ Yields:
 
 Raises:
 
+- `PermissionDeniedError` – Re-raised as-is so the authz status is never masked.
 - `ServerError` – For gRPC-related errors.
 - `service_error_class` – For service-specific errors if provided.
-
-##### poll_grpc
-
-```python
-poll_grpc(endpoint: str, request: Any, *, timeout: float) -> Any | None
-```
-
-Execute a single polling RPC. Returns None on DEADLINE_EXCEEDED (expected empty poll).
-
-Unlike exec_grpc_query, DEADLINE_EXCEEDED is not an error for polling-style RPCs where the server holds the connection until a result is available or timeout occurs. No retry is performed — the caller is responsible for the retry loop.
-
-Parameters:
-
-- ###### **`endpoint`**
-
-  (`str`) – RPC method name on self.stub.
-
-- ###### **`request`**
-
-  (`Any`) – gRPC request protobuf.
-
-- ###### **`timeout`**
-
-  (`float`) – Seconds before treating as 'no result available'.
-
-Returns:
-
-- `Any | None` – gRPC response, or None if DEADLINE_EXCEEDED.
-
-Raises:
-
-- `ServerError` – For any non-DEADLINE_EXCEEDED gRPC error.
 
 ##### release_cached_channel
 
@@ -25424,26 +28796,6 @@ Parameters:
 
   (`list[QuantityLimit | AmountLimit]`) – List of CostLimit objects to enforce.
 
-##### wait_for_ready
-
-```python
-wait_for_ready(timeout: float = 1.0) -> bool
-```
-
-Check if the gRPC channel can connect within timeout.
-
-Uses channel_ready() which resolves when the HTTP/2 connection is established and the server is accepting RPCs.
-
-Parameters:
-
-- ###### **`timeout`**
-
-  (`float`, default: `1.0` ) – Max seconds to wait for connectivity.
-
-Returns:
-
-- `bool` – True if channel reached READY state, False if timeout or no channel.
-
 #### cost_strategy
 
 This module contains the abstract base class for cost strategies.
@@ -25452,9 +28804,7 @@ Classes:
 
 - **`CostConfig`** – Pydantic model that defines a cost configuration.
 - **`CostData`** – Data model for cost operations.
-- **`CostServiceError`** – Custom exception for CostService errors.
 - **`CostStrategy`** – Abstract base class for cost strategies.
-- **`CostType`** – Enum defining the types of costs that can be registered.
 
 ##### CostConfig
 
@@ -25483,19 +28833,6 @@ Pydantic model that defines a cost configuration.
 ```
 
 Data model for cost operations.
-
-##### CostServiceError
-
-```
-              flowchart TD
-              digitalkin.services.cost.cost_strategy.CostServiceError[CostServiceError]
-
-              
-
-              click digitalkin.services.cost.cost_strategy.CostServiceError href "" "digitalkin.services.cost.cost_strategy.CostServiceError"
-```
-
-Custom exception for CostService errors.
 
 ##### CostStrategy
 
@@ -25646,19 +28983,6 @@ Parameters:
 - ###### **`limits`**
 
   (`list[QuantityLimit | AmountLimit]`) – List of CostLimit objects to enforce.
-
-##### CostType
-
-```
-              flowchart TD
-              digitalkin.services.cost.cost_strategy.CostType[CostType]
-
-              
-
-              click digitalkin.services.cost.cost_strategy.CostType href "" "digitalkin.services.cost.cost_strategy.CostType"
-```
-
-Enum defining the types of costs that can be registered.
 
 #### default_cost
 
@@ -25878,6 +29202,27 @@ Parameters:
 
   (`list[QuantityLimit | AmountLimit]`) – List of CostLimit objects to enforce.
 
+#### exceptions
+
+Exceptions for the cost service.
+
+Classes:
+
+- **`CostServiceError`** – Custom exception for CostService errors.
+
+##### CostServiceError
+
+```
+              flowchart TD
+              digitalkin.services.cost.exceptions.CostServiceError[CostServiceError]
+
+              
+
+              click digitalkin.services.cost.exceptions.CostServiceError href "" "digitalkin.services.cost.exceptions.CostServiceError"
+```
+
+Custom exception for CostService errors.
+
 #### grpc_cost
 
 This module implements the gRPC Cost strategy.
@@ -25929,19 +29274,18 @@ Methods:
 
 - **`add`** – Create a new record in the cost database.
 - **`check_limit`** – Check if adding this cost would exceed any limits.
-- **`close`** – Release resources held by this strategy. No-op by default.
-- **`close_all_cached_channels`** – Close all cached channels and reset the cache.
+- **`close`** – Release this instance's pooled gRPC channel ref.
+- **`close_all_cached_channels`** – Close all cached channels, reset cache, and clear circuit breakers.
 - **`close_channel`** – Release this instance's ref on the cached channel.
-- **`exec_grpc_query`** – Execute a gRPC query with from the query's rpc endpoint name.
+- **`evict_cached_channel`** – Force-close and remove a cached channel regardless of refcount.
+- **`exec_grpc_query`** – Execute a gRPC query with circuit breaker protection and retry.
 - **`get`** – Get a record from the database.
 - **`get_cost_config`** – Get cost configuration from the database.
 - **`get_filtered`** – Get a list of records from the database.
 - **`handle_grpc_errors`** – Handle gRPC errors for the given operation.
-- **`poll_grpc`** – Execute a single polling RPC. Returns None on DEADLINE_EXCEEDED (expected empty poll).
 - **`release_cached_channel`** – Decrement refcount for a cache key and close channel when last ref is released.
 - **`set_cost_config`** – Store cost configuration in the database.
 - **`set_limits`** – Set cost limits for this session.
-- **`wait_for_ready`** – Check if the gRPC channel can connect within timeout.
 
 ###### add
 
@@ -25997,7 +29341,7 @@ Returns:
 close() -> None
 ```
 
-Release resources held by this strategy. No-op by default.
+Release this instance's pooled gRPC channel ref.
 
 ###### close_all_cached_channels
 
@@ -26005,9 +29349,9 @@ Release resources held by this strategy. No-op by default.
 close_all_cached_channels() -> None
 ```
 
-Close all cached channels and reset the cache.
+Close all cached channels, reset cache, and clear circuit breakers.
 
-Intended for server shutdown to ensure clean resource release.
+Intended for server shutdown to ensure clean resource release. Clears circuit breaker singletons to prevent unbounded growth from dynamically discovered services.
 
 ###### close_channel
 
@@ -26017,15 +29361,38 @@ close_channel() -> None
 
 Release this instance's ref on the cached channel.
 
-The underlying channel is only closed when the last ref is released.
+The underlying channel is only closed when the last ref is released. When the last ref is released, the corresponding circuit breaker singleton is also removed to prevent unbounded accumulation.
+
+###### evict_cached_channel
+
+```python
+evict_cached_channel(key: str) -> None
+```
+
+Force-close and remove a cached channel regardless of refcount.
+
+Guarantees a fresh connection on re-dial: a channel left cached after a peer died can be wedged mid-reconnect, so a resume must not reuse it. A missing key is a no-op.
+
+Parameters:
+
+- ###### **`key`**
+
+  (`str`) – Channel cache key to evict.
 
 ###### exec_grpc_query
 
 ```python
-exec_grpc_query(query_endpoint: str, request: Any, timeout: float | None = None) -> Any
+exec_grpc_query(
+    query_endpoint: str,
+    request: Any,
+    timeout: float | None = None,
+    metadata: tuple[tuple[str, str], ...] | None = None,
+) -> Any
 ```
 
-Execute a gRPC query with from the query's rpc endpoint name.
+Execute a gRPC query with circuit breaker protection and retry.
+
+The circuit breaker is per-service (keyed on `service_name`). When the circuit is OPEN, calls fail immediately with `CircuitOpenError` wrapped in `ServerError` — no network round-trip, no timeout wait.
 
 Retries on transient errors (UNAVAILABLE, INTERNAL, DEADLINE_EXCEEDED) with exponential backoff. Retry count and backoff base are configurable via DIGITALKIN_GRPC_QUERY_MAX_RETRIES and DIGITALKIN_GRPC_QUERY_BACKOFF_BASE_MS.
 
@@ -26041,7 +29408,11 @@ Parameters:
 
 - ###### **`timeout`**
 
-  (`float | None`, default: `None` ) – Per-call timeout in seconds. Falls back to \_QUERY_DEFAULT_TIMEOUT (env DIGITALKIN_GRPC_QUERY_TIMEOUT, default 30s) when None.
+  (`float | None`, default: `None` ) – Per-call timeout in seconds. None applies no client-side deadline.
+
+- ###### **`metadata`**
+
+  (`tuple[tuple[str, str], ...] | None`, default: `None` ) – Optional gRPC metadata pairs (e.g. an idempotency key); the same metadata is sent on every retry attempt.
 
 Returns:
 
@@ -26135,40 +29506,9 @@ Yields:
 
 Raises:
 
+- `PermissionDeniedError` – Re-raised as-is so the authz status is never masked.
 - `ServerError` – For gRPC-related errors.
 - `service_error_class` – For service-specific errors if provided.
-
-###### poll_grpc
-
-```python
-poll_grpc(endpoint: str, request: Any, *, timeout: float) -> Any | None
-```
-
-Execute a single polling RPC. Returns None on DEADLINE_EXCEEDED (expected empty poll).
-
-Unlike exec_grpc_query, DEADLINE_EXCEEDED is not an error for polling-style RPCs where the server holds the connection until a result is available or timeout occurs. No retry is performed — the caller is responsible for the retry loop.
-
-Parameters:
-
-- ###### **`endpoint`**
-
-  (`str`) – RPC method name on self.stub.
-
-- ###### **`request`**
-
-  (`Any`) – gRPC request protobuf.
-
-- ###### **`timeout`**
-
-  (`float`) – Seconds before treating as 'no result available'.
-
-Returns:
-
-- `Any | None` – gRPC response, or None if DEADLINE_EXCEEDED.
-
-Raises:
-
-- `ServerError` – For any non-DEADLINE_EXCEEDED gRPC error.
 
 ###### release_cached_channel
 
@@ -26216,26 +29556,6 @@ Parameters:
 
   (`list[QuantityLimit | AmountLimit]`) – List of CostLimit objects to enforce.
 
-###### wait_for_ready
-
-```python
-wait_for_ready(timeout: float = 1.0) -> bool
-```
-
-Check if the gRPC channel can connect within timeout.
-
-Uses channel_ready() which resolves when the HTTP/2 connection is established and the server is accepting RPCs.
-
-Parameters:
-
-- ###### **`timeout`**
-
-  (`float`, default: `1.0` ) – Max seconds to wait for connectivity.
-
-Returns:
-
-- `bool` – True if channel reached READY state, False if timeout or no channel.
-
 ### filesystem
 
 This module is responsible for handling the filesystem services.
@@ -26243,6 +29563,7 @@ This module is responsible for handling the filesystem services.
 Modules:
 
 - **`default_filesystem`** – Default filesystem implementation.
+- **`exceptions`** – Exceptions for the filesystem service.
 - **`filesystem_strategy`** – This module contains the abstract base class for filesystem strategies.
 - **`grpc_filesystem`** – gRPC filesystem implementation.
 
@@ -26850,19 +30171,18 @@ Parameters:
 
 Methods:
 
-- **`close`** – Release resources held by this strategy. No-op by default.
-- **`close_all_cached_channels`** – Close all cached channels and reset the cache.
+- **`close`** – Release this instance's pooled gRPC channel ref.
+- **`close_all_cached_channels`** – Close all cached channels, reset cache, and clear circuit breakers.
 - **`close_channel`** – Release this instance's ref on the cached channel.
 - **`delete_files`** – Delete multiple files from the filesystem.
-- **`exec_grpc_query`** – Execute a gRPC query with from the query's rpc endpoint name.
+- **`evict_cached_channel`** – Force-close and remove a cached channel regardless of refcount.
+- **`exec_grpc_query`** – Execute a gRPC query with circuit breaker protection and retry.
 - **`get_file`** – Get a file from the filesystem.
 - **`get_files`** – Get multiple files from the filesystem.
 - **`handle_grpc_errors`** – Handle gRPC errors for the given operation.
-- **`poll_grpc`** – Execute a single polling RPC. Returns None on DEADLINE_EXCEEDED (expected empty poll).
 - **`release_cached_channel`** – Decrement refcount for a cache key and close channel when last ref is released.
 - **`update_file`** – Update a file in the filesystem.
 - **`upload_files`** – Upload multiple files to the filesystem.
-- **`wait_for_ready`** – Check if the gRPC channel can connect within timeout.
 
 ##### close
 
@@ -26870,7 +30190,7 @@ Methods:
 close() -> None
 ```
 
-Release resources held by this strategy. No-op by default.
+Release this instance's pooled gRPC channel ref.
 
 ##### close_all_cached_channels
 
@@ -26878,9 +30198,9 @@ Release resources held by this strategy. No-op by default.
 close_all_cached_channels() -> None
 ```
 
-Close all cached channels and reset the cache.
+Close all cached channels, reset cache, and clear circuit breakers.
 
-Intended for server shutdown to ensure clean resource release.
+Intended for server shutdown to ensure clean resource release. Clears circuit breaker singletons to prevent unbounded growth from dynamically discovered services.
 
 ##### close_channel
 
@@ -26890,7 +30210,7 @@ close_channel() -> None
 
 Release this instance's ref on the cached channel.
 
-The underlying channel is only closed when the last ref is released.
+The underlying channel is only closed when the last ref is released. When the last ref is released, the corresponding circuit breaker singleton is also removed to prevent unbounded accumulation.
 
 ##### delete_files
 
@@ -26920,13 +30240,36 @@ Returns:
 
 - `tuple[dict[str, bool], int, int]` – tuple\[dict[str, bool], int, int\]: Results per file, total deleted count, total failed count
 
+##### evict_cached_channel
+
+```python
+evict_cached_channel(key: str) -> None
+```
+
+Force-close and remove a cached channel regardless of refcount.
+
+Guarantees a fresh connection on re-dial: a channel left cached after a peer died can be wedged mid-reconnect, so a resume must not reuse it. A missing key is a no-op.
+
+Parameters:
+
+- ###### **`key`**
+
+  (`str`) – Channel cache key to evict.
+
 ##### exec_grpc_query
 
 ```python
-exec_grpc_query(query_endpoint: str, request: Any, timeout: float | None = None) -> Any
+exec_grpc_query(
+    query_endpoint: str,
+    request: Any,
+    timeout: float | None = None,
+    metadata: tuple[tuple[str, str], ...] | None = None,
+) -> Any
 ```
 
-Execute a gRPC query with from the query's rpc endpoint name.
+Execute a gRPC query with circuit breaker protection and retry.
+
+The circuit breaker is per-service (keyed on `service_name`). When the circuit is OPEN, calls fail immediately with `CircuitOpenError` wrapped in `ServerError` — no network round-trip, no timeout wait.
 
 Retries on transient errors (UNAVAILABLE, INTERNAL, DEADLINE_EXCEEDED) with exponential backoff. Retry count and backoff base are configurable via DIGITALKIN_GRPC_QUERY_MAX_RETRIES and DIGITALKIN_GRPC_QUERY_BACKOFF_BASE_MS.
 
@@ -26942,7 +30285,11 @@ Parameters:
 
 - ###### **`timeout`**
 
-  (`float | None`, default: `None` ) – Per-call timeout in seconds. Falls back to \_QUERY_DEFAULT_TIMEOUT (env DIGITALKIN_GRPC_QUERY_TIMEOUT, default 30s) when None.
+  (`float | None`, default: `None` ) – Per-call timeout in seconds. None applies no client-side deadline.
+
+- ###### **`metadata`**
+
+  (`tuple[tuple[str, str], ...] | None`, default: `None` ) – Optional gRPC metadata pairs (e.g. an idempotency key); the same metadata is sent on every retry attempt.
 
 Returns:
 
@@ -27054,40 +30401,9 @@ Yields:
 
 Raises:
 
+- `PermissionDeniedError` – Re-raised as-is so the authz status is never masked.
 - `ServerError` – For gRPC-related errors.
 - `service_error_class` – For service-specific errors if provided.
-
-##### poll_grpc
-
-```python
-poll_grpc(endpoint: str, request: Any, *, timeout: float) -> Any | None
-```
-
-Execute a single polling RPC. Returns None on DEADLINE_EXCEEDED (expected empty poll).
-
-Unlike exec_grpc_query, DEADLINE_EXCEEDED is not an error for polling-style RPCs where the server holds the connection until a result is available or timeout occurs. No retry is performed — the caller is responsible for the retry loop.
-
-Parameters:
-
-- ###### **`endpoint`**
-
-  (`str`) – RPC method name on self.stub.
-
-- ###### **`request`**
-
-  (`Any`) – gRPC request protobuf.
-
-- ###### **`timeout`**
-
-  (`float`) – Seconds before treating as 'no result available'.
-
-Returns:
-
-- `Any | None` – gRPC response, or None if DEADLINE_EXCEEDED.
-
-Raises:
-
-- `ServerError` – For any non-DEADLINE_EXCEEDED gRPC error.
 
 ##### release_cached_channel
 
@@ -27177,26 +30493,6 @@ Parameters:
 Returns:
 
 - `tuple[list[FilesystemRecord], int, int]` – tuple\[list[FilesystemRecord], int, int\]: List of uploaded files, total uploaded count, total failed count
-
-##### wait_for_ready
-
-```python
-wait_for_ready(timeout: float = 1.0) -> bool
-```
-
-Check if the gRPC channel can connect within timeout.
-
-Uses channel_ready() which resolves when the HTTP/2 connection is established and the server is accepting RPCs.
-
-Parameters:
-
-- ###### **`timeout`**
-
-  (`float`, default: `1.0` ) – Max seconds to wait for connectivity.
-
-Returns:
-
-- `bool` – True if channel reached READY state, False if timeout or no channel.
 
 #### default_filesystem
 
@@ -27480,6 +30776,27 @@ Raises:
 
 - `FilesystemServiceError` – If there is an error uploading the files
 
+#### exceptions
+
+Exceptions for the filesystem service.
+
+Classes:
+
+- **`FilesystemServiceError`** – Base exception for Filesystem service errors.
+
+##### FilesystemServiceError
+
+```
+              flowchart TD
+              digitalkin.services.filesystem.exceptions.FilesystemServiceError[FilesystemServiceError]
+
+              
+
+              click digitalkin.services.filesystem.exceptions.FilesystemServiceError href "" "digitalkin.services.filesystem.exceptions.FilesystemServiceError"
+```
+
+Base exception for Filesystem service errors.
+
 #### filesystem_strategy
 
 This module contains the abstract base class for filesystem strategies.
@@ -27488,7 +30805,6 @@ Classes:
 
 - **`FileFilter`** – Filter criteria for querying files.
 - **`FilesystemRecord`** – Data model for filesystem operations.
-- **`FilesystemServiceError`** – Base exception for Filesystem service errors.
 - **`FilesystemStrategy`** – Abstract base class for filesystem strategies.
 - **`UploadFileData`** – Data model for uploading a file.
 
@@ -27517,19 +30833,6 @@ Filter criteria for querying files.
 ```
 
 Data model for filesystem operations.
-
-##### FilesystemServiceError
-
-```
-              flowchart TD
-              digitalkin.services.filesystem.filesystem_strategy.FilesystemServiceError[FilesystemServiceError]
-
-              
-
-              click digitalkin.services.filesystem.filesystem_strategy.FilesystemServiceError href "" "digitalkin.services.filesystem.filesystem_strategy.FilesystemServiceError"
-```
-
-Base exception for Filesystem service errors.
 
 ##### FilesystemStrategy
 
@@ -27876,19 +31179,18 @@ Parameters:
 
 Methods:
 
-- **`close`** – Release resources held by this strategy. No-op by default.
-- **`close_all_cached_channels`** – Close all cached channels and reset the cache.
+- **`close`** – Release this instance's pooled gRPC channel ref.
+- **`close_all_cached_channels`** – Close all cached channels, reset cache, and clear circuit breakers.
 - **`close_channel`** – Release this instance's ref on the cached channel.
 - **`delete_files`** – Delete multiple files from the filesystem.
-- **`exec_grpc_query`** – Execute a gRPC query with from the query's rpc endpoint name.
+- **`evict_cached_channel`** – Force-close and remove a cached channel regardless of refcount.
+- **`exec_grpc_query`** – Execute a gRPC query with circuit breaker protection and retry.
 - **`get_file`** – Get a file from the filesystem.
 - **`get_files`** – Get multiple files from the filesystem.
 - **`handle_grpc_errors`** – Handle gRPC errors for the given operation.
-- **`poll_grpc`** – Execute a single polling RPC. Returns None on DEADLINE_EXCEEDED (expected empty poll).
 - **`release_cached_channel`** – Decrement refcount for a cache key and close channel when last ref is released.
 - **`update_file`** – Update a file in the filesystem.
 - **`upload_files`** – Upload multiple files to the filesystem.
-- **`wait_for_ready`** – Check if the gRPC channel can connect within timeout.
 
 ###### close
 
@@ -27896,7 +31198,7 @@ Methods:
 close() -> None
 ```
 
-Release resources held by this strategy. No-op by default.
+Release this instance's pooled gRPC channel ref.
 
 ###### close_all_cached_channels
 
@@ -27904,9 +31206,9 @@ Release resources held by this strategy. No-op by default.
 close_all_cached_channels() -> None
 ```
 
-Close all cached channels and reset the cache.
+Close all cached channels, reset cache, and clear circuit breakers.
 
-Intended for server shutdown to ensure clean resource release.
+Intended for server shutdown to ensure clean resource release. Clears circuit breaker singletons to prevent unbounded growth from dynamically discovered services.
 
 ###### close_channel
 
@@ -27916,7 +31218,7 @@ close_channel() -> None
 
 Release this instance's ref on the cached channel.
 
-The underlying channel is only closed when the last ref is released.
+The underlying channel is only closed when the last ref is released. When the last ref is released, the corresponding circuit breaker singleton is also removed to prevent unbounded accumulation.
 
 ###### delete_files
 
@@ -27946,13 +31248,36 @@ Returns:
 
 - `tuple[dict[str, bool], int, int]` – tuple\[dict[str, bool], int, int\]: Results per file, total deleted count, total failed count
 
+###### evict_cached_channel
+
+```python
+evict_cached_channel(key: str) -> None
+```
+
+Force-close and remove a cached channel regardless of refcount.
+
+Guarantees a fresh connection on re-dial: a channel left cached after a peer died can be wedged mid-reconnect, so a resume must not reuse it. A missing key is a no-op.
+
+Parameters:
+
+- ###### **`key`**
+
+  (`str`) – Channel cache key to evict.
+
 ###### exec_grpc_query
 
 ```python
-exec_grpc_query(query_endpoint: str, request: Any, timeout: float | None = None) -> Any
+exec_grpc_query(
+    query_endpoint: str,
+    request: Any,
+    timeout: float | None = None,
+    metadata: tuple[tuple[str, str], ...] | None = None,
+) -> Any
 ```
 
-Execute a gRPC query with from the query's rpc endpoint name.
+Execute a gRPC query with circuit breaker protection and retry.
+
+The circuit breaker is per-service (keyed on `service_name`). When the circuit is OPEN, calls fail immediately with `CircuitOpenError` wrapped in `ServerError` — no network round-trip, no timeout wait.
 
 Retries on transient errors (UNAVAILABLE, INTERNAL, DEADLINE_EXCEEDED) with exponential backoff. Retry count and backoff base are configurable via DIGITALKIN_GRPC_QUERY_MAX_RETRIES and DIGITALKIN_GRPC_QUERY_BACKOFF_BASE_MS.
 
@@ -27968,7 +31293,11 @@ Parameters:
 
 - ###### **`timeout`**
 
-  (`float | None`, default: `None` ) – Per-call timeout in seconds. Falls back to \_QUERY_DEFAULT_TIMEOUT (env DIGITALKIN_GRPC_QUERY_TIMEOUT, default 30s) when None.
+  (`float | None`, default: `None` ) – Per-call timeout in seconds. None applies no client-side deadline.
+
+- ###### **`metadata`**
+
+  (`tuple[tuple[str, str], ...] | None`, default: `None` ) – Optional gRPC metadata pairs (e.g. an idempotency key); the same metadata is sent on every retry attempt.
 
 Returns:
 
@@ -28080,40 +31409,9 @@ Yields:
 
 Raises:
 
+- `PermissionDeniedError` – Re-raised as-is so the authz status is never masked.
 - `ServerError` – For gRPC-related errors.
 - `service_error_class` – For service-specific errors if provided.
-
-###### poll_grpc
-
-```python
-poll_grpc(endpoint: str, request: Any, *, timeout: float) -> Any | None
-```
-
-Execute a single polling RPC. Returns None on DEADLINE_EXCEEDED (expected empty poll).
-
-Unlike exec_grpc_query, DEADLINE_EXCEEDED is not an error for polling-style RPCs where the server holds the connection until a result is available or timeout occurs. No retry is performed — the caller is responsible for the retry loop.
-
-Parameters:
-
-- ###### **`endpoint`**
-
-  (`str`) – RPC method name on self.stub.
-
-- ###### **`request`**
-
-  (`Any`) – gRPC request protobuf.
-
-- ###### **`timeout`**
-
-  (`float`) – Seconds before treating as 'no result available'.
-
-Returns:
-
-- `Any | None` – gRPC response, or None if DEADLINE_EXCEEDED.
-
-Raises:
-
-- `ServerError` – For any non-DEADLINE_EXCEEDED gRPC error.
 
 ###### release_cached_channel
 
@@ -28203,26 +31501,6 @@ Parameters:
 Returns:
 
 - `tuple[list[FilesystemRecord], int, int]` – tuple\[list[FilesystemRecord], int, int\]: List of uploaded files, total uploaded count, total failed count
-
-###### wait_for_ready
-
-```python
-wait_for_ready(timeout: float = 1.0) -> bool
-```
-
-Check if the gRPC channel can connect within timeout.
-
-Uses channel_ready() which resolves when the HTTP/2 connection is established and the server is accepting RPCs.
-
-Parameters:
-
-- ###### **`timeout`**
-
-  (`float`, default: `1.0` ) – Max seconds to wait for connectivity.
-
-Returns:
-
-- `bool` – True if channel reached READY state, False if timeout or no channel.
 
 ### identity
 
@@ -28553,7 +31831,7 @@ Methods:
 - **`heartbeat`** – Send heartbeat to keep module active.
 - **`register`** – Register a module with the registry.
 - **`search`** – Search for modules by criteria.
-- **`wait_for_ready`** – Check if the registry backend is reachable.
+- **`wait_for_ready`** – Local registry is always ready (in-memory store).
 
 ##### close
 
@@ -28729,17 +32007,17 @@ Returns:
 wait_for_ready(timeout: float = 1.0) -> bool
 ```
 
-Check if the registry backend is reachable.
+Local registry is always ready (in-memory store).
 
 Parameters:
 
 - ###### **`timeout`**
 
-  (`float`, default: `1.0` ) – Max seconds to wait for connectivity.
+  (`float`, default: `1.0` ) – Ignored for local registry.
 
 Returns:
 
-- `bool` – True if ready. Default implementation always returns True.
+- `bool` – Always True — no network dependency.
 
 #### GrpcRegistry
 
@@ -28784,21 +32062,21 @@ This client communicates with the Service Provider's Registry service to perform
 
 Methods:
 
-- **`close`** – Release resources held by this strategy. No-op by default.
-- **`close_all_cached_channels`** – Close all cached channels and reset the cache.
+- **`close`** – Release this instance's pooled gRPC channel ref.
+- **`close_all_cached_channels`** – Close all cached channels, reset cache, and clear circuit breakers.
 - **`close_channel`** – Release this instance's ref on the cached channel.
 - **`deregister`** – Deregister a module from the registry.
 - **`discover_by_id`** – Get module info by ID.
-- **`exec_grpc_query`** – Execute a gRPC query with from the query's rpc endpoint name.
+- **`evict_cached_channel`** – Force-close and remove a cached channel regardless of refcount.
+- **`exec_grpc_query`** – Execute a gRPC query with circuit breaker protection and retry.
 - **`get_setup`** – Get setup info.
 - **`get_status`** – Get module status by fetching the module.
 - **`handle_grpc_errors`** – Handle gRPC errors for the given operation.
 - **`heartbeat`** – Send heartbeat to keep module active.
-- **`poll_grpc`** – Execute a single polling RPC. Returns None on DEADLINE_EXCEEDED (expected empty poll).
 - **`register`** – Register a module with the registry.
 - **`release_cached_channel`** – Decrement refcount for a cache key and close channel when last ref is released.
 - **`search`** – Search for modules by criteria.
-- **`wait_for_ready`** – Check if the registry backend is reachable.
+- **`wait_for_ready`** – Probe the registry via the standard gRPC Health Check service.
 
 ##### close
 
@@ -28806,7 +32084,7 @@ Methods:
 close() -> None
 ```
 
-Release resources held by this strategy. No-op by default.
+Release this instance's pooled gRPC channel ref.
 
 ##### close_all_cached_channels
 
@@ -28814,9 +32092,9 @@ Release resources held by this strategy. No-op by default.
 close_all_cached_channels() -> None
 ```
 
-Close all cached channels and reset the cache.
+Close all cached channels, reset cache, and clear circuit breakers.
 
-Intended for server shutdown to ensure clean resource release.
+Intended for server shutdown to ensure clean resource release. Clears circuit breaker singletons to prevent unbounded growth from dynamically discovered services.
 
 ##### close_channel
 
@@ -28826,7 +32104,7 @@ close_channel() -> None
 
 Release this instance's ref on the cached channel.
 
-The underlying channel is only closed when the last ref is released.
+The underlying channel is only closed when the last ref is released. When the last ref is released, the corresponding circuit breaker singleton is also removed to prevent unbounded accumulation.
 
 ##### deregister
 
@@ -28871,13 +32149,36 @@ Raises:
 - `RegistryModuleNotFoundError` – If module not found.
 - `RegistryServiceError` – If gRPC call fails.
 
+##### evict_cached_channel
+
+```python
+evict_cached_channel(key: str) -> None
+```
+
+Force-close and remove a cached channel regardless of refcount.
+
+Guarantees a fresh connection on re-dial: a channel left cached after a peer died can be wedged mid-reconnect, so a resume must not reuse it. A missing key is a no-op.
+
+Parameters:
+
+- ###### **`key`**
+
+  (`str`) – Channel cache key to evict.
+
 ##### exec_grpc_query
 
 ```python
-exec_grpc_query(query_endpoint: str, request: Any, timeout: float | None = None) -> Any
+exec_grpc_query(
+    query_endpoint: str,
+    request: Any,
+    timeout: float | None = None,
+    metadata: tuple[tuple[str, str], ...] | None = None,
+) -> Any
 ```
 
-Execute a gRPC query with from the query's rpc endpoint name.
+Execute a gRPC query with circuit breaker protection and retry.
+
+The circuit breaker is per-service (keyed on `service_name`). When the circuit is OPEN, calls fail immediately with `CircuitOpenError` wrapped in `ServerError` — no network round-trip, no timeout wait.
 
 Retries on transient errors (UNAVAILABLE, INTERNAL, DEADLINE_EXCEEDED) with exponential backoff. Retry count and backoff base are configurable via DIGITALKIN_GRPC_QUERY_MAX_RETRIES and DIGITALKIN_GRPC_QUERY_BACKOFF_BASE_MS.
 
@@ -28893,7 +32194,11 @@ Parameters:
 
 - ###### **`timeout`**
 
-  (`float | None`, default: `None` ) – Per-call timeout in seconds. Falls back to \_QUERY_DEFAULT_TIMEOUT (env DIGITALKIN_GRPC_QUERY_TIMEOUT, default 30s) when None.
+  (`float | None`, default: `None` ) – Per-call timeout in seconds. None applies no client-side deadline.
+
+- ###### **`metadata`**
+
+  (`tuple[tuple[str, str], ...] | None`, default: `None` ) – Optional gRPC metadata pairs (e.g. an idempotency key); the same metadata is sent on every retry attempt.
 
 Returns:
 
@@ -28974,6 +32279,7 @@ Yields:
 
 Raises:
 
+- `PermissionDeniedError` – Re-raised as-is so the authz status is never masked.
 - `ServerError` – For gRPC-related errors.
 - `service_error_class` – For service-specific errors if provided.
 
@@ -28998,38 +32304,6 @@ Returns:
 Raises:
 
 - `RegistryServiceError` – If gRPC call fails.
-
-##### poll_grpc
-
-```python
-poll_grpc(endpoint: str, request: Any, *, timeout: float) -> Any | None
-```
-
-Execute a single polling RPC. Returns None on DEADLINE_EXCEEDED (expected empty poll).
-
-Unlike exec_grpc_query, DEADLINE_EXCEEDED is not an error for polling-style RPCs where the server holds the connection until a result is available or timeout occurs. No retry is performed — the caller is responsible for the retry loop.
-
-Parameters:
-
-- ###### **`endpoint`**
-
-  (`str`) – RPC method name on self.stub.
-
-- ###### **`request`**
-
-  (`Any`) – gRPC request protobuf.
-
-- ###### **`timeout`**
-
-  (`float`) – Seconds before treating as 'no result available'.
-
-Returns:
-
-- `Any | None` – gRPC response, or None if DEADLINE_EXCEEDED.
-
-Raises:
-
-- `ServerError` – For any non-DEADLINE_EXCEEDED gRPC error.
 
 ##### register
 
@@ -29121,17 +32395,17 @@ Raises:
 wait_for_ready(timeout: float = 1.0) -> bool
 ```
 
-Check if the registry backend is reachable.
+Probe the registry via the standard gRPC Health Check service.
 
 Parameters:
 
 - ###### **`timeout`**
 
-  (`float`, default: `1.0` ) – Max seconds to wait for connectivity.
+  (`float`, default: `1.0` ) – Max seconds for the round-trip.
 
 Returns:
 
-- `bool` – True if ready. Default implementation always returns True.
+- `bool` – True if the server responded SERVING, False otherwise.
 
 #### ModuleInfo
 
@@ -29460,7 +32734,7 @@ Methods:
 - **`heartbeat`** – Send heartbeat to keep module active.
 - **`register`** – Register a module with the registry.
 - **`search`** – Search for modules by criteria.
-- **`wait_for_ready`** – Check if the registry backend is reachable.
+- **`wait_for_ready`** – Local registry is always ready (in-memory store).
 
 ###### close
 
@@ -29636,17 +32910,17 @@ Returns:
 wait_for_ready(timeout: float = 1.0) -> bool
 ```
 
-Check if the registry backend is reachable.
+Local registry is always ready (in-memory store).
 
 Parameters:
 
 - ###### **`timeout`**
 
-  (`float`, default: `1.0` ) – Max seconds to wait for connectivity.
+  (`float`, default: `1.0` ) – Ignored for local registry.
 
 Returns:
 
-- `bool` – True if ready. Default implementation always returns True.
+- `bool` – Always True — no network dependency.
 
 #### exceptions
 
@@ -29808,21 +33082,21 @@ This client communicates with the Service Provider's Registry service to perform
 
 Methods:
 
-- **`close`** – Release resources held by this strategy. No-op by default.
-- **`close_all_cached_channels`** – Close all cached channels and reset the cache.
+- **`close`** – Release this instance's pooled gRPC channel ref.
+- **`close_all_cached_channels`** – Close all cached channels, reset cache, and clear circuit breakers.
 - **`close_channel`** – Release this instance's ref on the cached channel.
 - **`deregister`** – Deregister a module from the registry.
 - **`discover_by_id`** – Get module info by ID.
-- **`exec_grpc_query`** – Execute a gRPC query with from the query's rpc endpoint name.
+- **`evict_cached_channel`** – Force-close and remove a cached channel regardless of refcount.
+- **`exec_grpc_query`** – Execute a gRPC query with circuit breaker protection and retry.
 - **`get_setup`** – Get setup info.
 - **`get_status`** – Get module status by fetching the module.
 - **`handle_grpc_errors`** – Handle gRPC errors for the given operation.
 - **`heartbeat`** – Send heartbeat to keep module active.
-- **`poll_grpc`** – Execute a single polling RPC. Returns None on DEADLINE_EXCEEDED (expected empty poll).
 - **`register`** – Register a module with the registry.
 - **`release_cached_channel`** – Decrement refcount for a cache key and close channel when last ref is released.
 - **`search`** – Search for modules by criteria.
-- **`wait_for_ready`** – Check if the registry backend is reachable.
+- **`wait_for_ready`** – Probe the registry via the standard gRPC Health Check service.
 
 ###### close
 
@@ -29830,7 +33104,7 @@ Methods:
 close() -> None
 ```
 
-Release resources held by this strategy. No-op by default.
+Release this instance's pooled gRPC channel ref.
 
 ###### close_all_cached_channels
 
@@ -29838,9 +33112,9 @@ Release resources held by this strategy. No-op by default.
 close_all_cached_channels() -> None
 ```
 
-Close all cached channels and reset the cache.
+Close all cached channels, reset cache, and clear circuit breakers.
 
-Intended for server shutdown to ensure clean resource release.
+Intended for server shutdown to ensure clean resource release. Clears circuit breaker singletons to prevent unbounded growth from dynamically discovered services.
 
 ###### close_channel
 
@@ -29850,7 +33124,7 @@ close_channel() -> None
 
 Release this instance's ref on the cached channel.
 
-The underlying channel is only closed when the last ref is released.
+The underlying channel is only closed when the last ref is released. When the last ref is released, the corresponding circuit breaker singleton is also removed to prevent unbounded accumulation.
 
 ###### deregister
 
@@ -29895,13 +33169,36 @@ Raises:
 - `RegistryModuleNotFoundError` – If module not found.
 - `RegistryServiceError` – If gRPC call fails.
 
+###### evict_cached_channel
+
+```python
+evict_cached_channel(key: str) -> None
+```
+
+Force-close and remove a cached channel regardless of refcount.
+
+Guarantees a fresh connection on re-dial: a channel left cached after a peer died can be wedged mid-reconnect, so a resume must not reuse it. A missing key is a no-op.
+
+Parameters:
+
+- ###### **`key`**
+
+  (`str`) – Channel cache key to evict.
+
 ###### exec_grpc_query
 
 ```python
-exec_grpc_query(query_endpoint: str, request: Any, timeout: float | None = None) -> Any
+exec_grpc_query(
+    query_endpoint: str,
+    request: Any,
+    timeout: float | None = None,
+    metadata: tuple[tuple[str, str], ...] | None = None,
+) -> Any
 ```
 
-Execute a gRPC query with from the query's rpc endpoint name.
+Execute a gRPC query with circuit breaker protection and retry.
+
+The circuit breaker is per-service (keyed on `service_name`). When the circuit is OPEN, calls fail immediately with `CircuitOpenError` wrapped in `ServerError` — no network round-trip, no timeout wait.
 
 Retries on transient errors (UNAVAILABLE, INTERNAL, DEADLINE_EXCEEDED) with exponential backoff. Retry count and backoff base are configurable via DIGITALKIN_GRPC_QUERY_MAX_RETRIES and DIGITALKIN_GRPC_QUERY_BACKOFF_BASE_MS.
 
@@ -29917,7 +33214,11 @@ Parameters:
 
 - ###### **`timeout`**
 
-  (`float | None`, default: `None` ) – Per-call timeout in seconds. Falls back to \_QUERY_DEFAULT_TIMEOUT (env DIGITALKIN_GRPC_QUERY_TIMEOUT, default 30s) when None.
+  (`float | None`, default: `None` ) – Per-call timeout in seconds. None applies no client-side deadline.
+
+- ###### **`metadata`**
+
+  (`tuple[tuple[str, str], ...] | None`, default: `None` ) – Optional gRPC metadata pairs (e.g. an idempotency key); the same metadata is sent on every retry attempt.
 
 Returns:
 
@@ -29998,6 +33299,7 @@ Yields:
 
 Raises:
 
+- `PermissionDeniedError` – Re-raised as-is so the authz status is never masked.
 - `ServerError` – For gRPC-related errors.
 - `service_error_class` – For service-specific errors if provided.
 
@@ -30022,38 +33324,6 @@ Returns:
 Raises:
 
 - `RegistryServiceError` – If gRPC call fails.
-
-###### poll_grpc
-
-```python
-poll_grpc(endpoint: str, request: Any, *, timeout: float) -> Any | None
-```
-
-Execute a single polling RPC. Returns None on DEADLINE_EXCEEDED (expected empty poll).
-
-Unlike exec_grpc_query, DEADLINE_EXCEEDED is not an error for polling-style RPCs where the server holds the connection until a result is available or timeout occurs. No retry is performed — the caller is responsible for the retry loop.
-
-Parameters:
-
-- ###### **`endpoint`**
-
-  (`str`) – RPC method name on self.stub.
-
-- ###### **`request`**
-
-  (`Any`) – gRPC request protobuf.
-
-- ###### **`timeout`**
-
-  (`float`) – Seconds before treating as 'no result available'.
-
-Returns:
-
-- `Any | None` – gRPC response, or None if DEADLINE_EXCEEDED.
-
-Raises:
-
-- `ServerError` – For any non-DEADLINE_EXCEEDED gRPC error.
 
 ###### register
 
@@ -30145,17 +33415,17 @@ Raises:
 wait_for_ready(timeout: float = 1.0) -> bool
 ```
 
-Check if the registry backend is reachable.
+Probe the registry via the standard gRPC Health Check service.
 
 Parameters:
 
 - ###### **`timeout`**
 
-  (`float`, default: `1.0` ) – Max seconds to wait for connectivity.
+  (`float`, default: `1.0` ) – Max seconds for the round-trip.
 
 Returns:
 
-- `bool` – True if ready. Default implementation always returns True.
+- `bool` – True if the server responded SERVING, False otherwise.
 
 #### registry_models
 
@@ -30380,6 +33650,790 @@ Returns:
 
 - `bool` – True if ready. Default implementation always returns True.
 
+### secret
+
+Secret service package.
+
+Modules:
+
+- **`default_secret`** – Default secret implementation.
+- **`exceptions`** – Exceptions for the secret service.
+- **`grpc_secret`** – Digital Kin Secret Service gRPC Client (wraps UserProfileService.GetSetupSecret).
+- **`secret_strategy`** – This module contains the abstract base class for Secret strategies.
+
+Classes:
+
+- **`DefaultSecret`** – Default secret strategy with in-memory storage.
+- **`GrpcSecret`** – gRPC client for setup secrets (backed by the UserProfileService).
+- **`SecretServiceError`** – Base exception for Secret service errors.
+- **`SecretStrategy`** – Abstract base class for Secret strategies.
+
+#### DefaultSecret
+
+```python
+DefaultSecret(mission_id: str, setup_id: str, setup_version_id: str)
+```
+
+```
+              flowchart TD
+              digitalkin.services.secret.DefaultSecret[DefaultSecret]
+              digitalkin.services.secret.secret_strategy.SecretStrategy[SecretStrategy]
+              digitalkin.services.base_strategy.BaseStrategy[BaseStrategy]
+
+                              digitalkin.services.secret.secret_strategy.SecretStrategy --> digitalkin.services.secret.DefaultSecret
+                                digitalkin.services.base_strategy.BaseStrategy --> digitalkin.services.secret.secret_strategy.SecretStrategy
+                
+
+
+
+              click digitalkin.services.secret.DefaultSecret href "" "digitalkin.services.secret.DefaultSecret"
+              click digitalkin.services.secret.secret_strategy.SecretStrategy href "" "digitalkin.services.secret.secret_strategy.SecretStrategy"
+              click digitalkin.services.base_strategy.BaseStrategy href "" "digitalkin.services.base_strategy.BaseStrategy"
+```
+
+Default secret strategy with in-memory storage.
+
+Parameters:
+
+- ##### **`mission_id`**
+
+  (`str`) – The ID of the mission this strategy is associated with
+
+- ##### **`setup_id`**
+
+  (`str`) – The ID of the setup
+
+- ##### **`setup_version_id`**
+
+  (`str`) – The ID of the setup version
+
+Methods:
+
+- **`add_secret`** – Add a secret to the in-memory database (helper for testing).
+- **`close`** – Release resources held by this strategy. No-op by default.
+- **`get_secret`** – Get the secret for this setup from in-memory storage.
+
+##### add_secret
+
+```python
+add_secret(secret_data: dict[str, Any]) -> None
+```
+
+Add a secret to the in-memory database (helper for testing).
+
+Parameters:
+
+- ###### **`secret_data`**
+
+  (`dict[str, Any]`) – Dictionary containing secret values.
+
+##### close
+
+```python
+close() -> None
+```
+
+Release resources held by this strategy. No-op by default.
+
+##### get_secret
+
+```python
+get_secret() -> dict[str, Any] | None
+```
+
+Get the secret for this setup from in-memory storage.
+
+Returns:
+
+- `dict[str, Any] | None` – Secret values, or None if not found.
+
+#### GrpcSecret
+
+```python
+GrpcSecret(
+    mission_id: str, setup_id: str, setup_version_id: str, client_config: ClientConfig
+)
+```
+
+```
+              flowchart TD
+              digitalkin.services.secret.GrpcSecret[GrpcSecret]
+              digitalkin.services.secret.secret_strategy.SecretStrategy[SecretStrategy]
+              digitalkin.services.base_strategy.BaseStrategy[BaseStrategy]
+              digitalkin.grpc_servers.utils.grpc_client_wrapper.GrpcClientWrapper[GrpcClientWrapper]
+              digitalkin.grpc_servers.utils.grpc_error_handler.GrpcErrorHandlerMixin[GrpcErrorHandlerMixin]
+
+                              digitalkin.services.secret.secret_strategy.SecretStrategy --> digitalkin.services.secret.GrpcSecret
+                                digitalkin.services.base_strategy.BaseStrategy --> digitalkin.services.secret.secret_strategy.SecretStrategy
+                
+
+                digitalkin.grpc_servers.utils.grpc_client_wrapper.GrpcClientWrapper --> digitalkin.services.secret.GrpcSecret
+                
+                digitalkin.grpc_servers.utils.grpc_error_handler.GrpcErrorHandlerMixin --> digitalkin.services.secret.GrpcSecret
+                
+
+
+              click digitalkin.services.secret.GrpcSecret href "" "digitalkin.services.secret.GrpcSecret"
+              click digitalkin.services.secret.secret_strategy.SecretStrategy href "" "digitalkin.services.secret.secret_strategy.SecretStrategy"
+              click digitalkin.services.base_strategy.BaseStrategy href "" "digitalkin.services.base_strategy.BaseStrategy"
+              click digitalkin.grpc_servers.utils.grpc_client_wrapper.GrpcClientWrapper href "" "digitalkin.grpc_servers.utils.grpc_client_wrapper.GrpcClientWrapper"
+              click digitalkin.grpc_servers.utils.grpc_error_handler.GrpcErrorHandlerMixin href "" "digitalkin.grpc_servers.utils.grpc_error_handler.GrpcErrorHandlerMixin"
+```
+
+gRPC client for setup secrets (backed by the UserProfileService).
+
+Parameters:
+
+- ##### **`mission_id`**
+
+  (`str`) – The ID of the mission this strategy is associated with
+
+- ##### **`setup_id`**
+
+  (`str`) – The ID of the setup
+
+- ##### **`setup_version_id`**
+
+  (`str`) – The ID of the setup version
+
+- ##### **`client_config`**
+
+  (`ClientConfig`) – Client configuration for gRPC connection
+
+Methods:
+
+- **`close`** – Release this instance's pooled gRPC channel ref.
+- **`close_all_cached_channels`** – Close all cached channels, reset cache, and clear circuit breakers.
+- **`close_channel`** – Release this instance's ref on the cached channel.
+- **`evict_cached_channel`** – Force-close and remove a cached channel regardless of refcount.
+- **`exec_grpc_query`** – Execute a gRPC query with circuit breaker protection and retry.
+- **`get_secret`** – Resolve the secret object attached to this setup.
+- **`handle_grpc_errors`** – Handle gRPC errors for the given operation.
+- **`release_cached_channel`** – Decrement refcount for a cache key and close channel when last ref is released.
+
+##### close
+
+```python
+close() -> None
+```
+
+Release this instance's pooled gRPC channel ref.
+
+##### close_all_cached_channels
+
+```python
+close_all_cached_channels() -> None
+```
+
+Close all cached channels, reset cache, and clear circuit breakers.
+
+Intended for server shutdown to ensure clean resource release. Clears circuit breaker singletons to prevent unbounded growth from dynamically discovered services.
+
+##### close_channel
+
+```python
+close_channel() -> None
+```
+
+Release this instance's ref on the cached channel.
+
+The underlying channel is only closed when the last ref is released. When the last ref is released, the corresponding circuit breaker singleton is also removed to prevent unbounded accumulation.
+
+##### evict_cached_channel
+
+```python
+evict_cached_channel(key: str) -> None
+```
+
+Force-close and remove a cached channel regardless of refcount.
+
+Guarantees a fresh connection on re-dial: a channel left cached after a peer died can be wedged mid-reconnect, so a resume must not reuse it. A missing key is a no-op.
+
+Parameters:
+
+- ###### **`key`**
+
+  (`str`) – Channel cache key to evict.
+
+##### exec_grpc_query
+
+```python
+exec_grpc_query(
+    query_endpoint: str,
+    request: Any,
+    timeout: float | None = None,
+    metadata: tuple[tuple[str, str], ...] | None = None,
+) -> Any
+```
+
+Execute a gRPC query with circuit breaker protection and retry.
+
+The circuit breaker is per-service (keyed on `service_name`). When the circuit is OPEN, calls fail immediately with `CircuitOpenError` wrapped in `ServerError` — no network round-trip, no timeout wait.
+
+Retries on transient errors (UNAVAILABLE, INTERNAL, DEADLINE_EXCEEDED) with exponential backoff. Retry count and backoff base are configurable via DIGITALKIN_GRPC_QUERY_MAX_RETRIES and DIGITALKIN_GRPC_QUERY_BACKOFF_BASE_MS.
+
+Parameters:
+
+- ###### **`query_endpoint`**
+
+  (`str`) – rpc query name (e.g., "GetSetup", "CreateSetupVersion")
+
+- ###### **`request`**
+
+  (`Any`) – gRPC protobuf request object
+
+- ###### **`timeout`**
+
+  (`float | None`, default: `None` ) – Per-call timeout in seconds. None applies no client-side deadline.
+
+- ###### **`metadata`**
+
+  (`tuple[tuple[str, str], ...] | None`, default: `None` ) – Optional gRPC metadata pairs (e.g. an idempotency key); the same metadata is sent on every retry attempt.
+
+Returns:
+
+- `Any` – gRPC protobuf response object.
+
+Raises:
+
+- `ServerError` – gRPC error with status code and details for caller to handle.
+
+##### get_secret
+
+```python
+get_secret() -> dict[str, Any] | None
+```
+
+Resolve the secret object attached to this setup.
+
+Returns:
+
+- `dict[str, Any] | None` – The secret values, or None if not found.
+
+Raises:
+
+- `SecretServiceError` – If the gRPC operation fails.
+
+##### handle_grpc_errors
+
+```python
+handle_grpc_errors(
+    operation: str, service_error_class: type[Exception] | None = None
+) -> AsyncGenerator[Any, Any]
+```
+
+Handle gRPC errors for the given operation.
+
+Parameters:
+
+- ###### **`operation`**
+
+  (`str`) – Name of the operation being performed.
+
+- ###### **`service_error_class`**
+
+  (`type[Exception] | None`, default: `None` ) – Optional specific service exception class to raise. If not provided, uses the generic ServerError.
+
+Yields:
+
+- `AsyncGenerator[Any, Any]` – Context for the operation.
+
+Raises:
+
+- `PermissionDeniedError` – Re-raised as-is so the authz status is never masked.
+- `ServerError` – For gRPC-related errors.
+- `service_error_class` – For service-specific errors if provided.
+
+##### release_cached_channel
+
+```python
+release_cached_channel(key: str) -> None
+```
+
+Decrement refcount for a cache key and close channel when last ref is released.
+
+Parameters:
+
+- ###### **`key`**
+
+  (`str`) – Channel cache key to release.
+
+#### SecretServiceError
+
+```
+              flowchart TD
+              digitalkin.services.secret.SecretServiceError[SecretServiceError]
+
+              
+
+              click digitalkin.services.secret.SecretServiceError href "" "digitalkin.services.secret.SecretServiceError"
+```
+
+Base exception for Secret service errors.
+
+#### SecretStrategy
+
+```python
+SecretStrategy(mission_id: str, setup_id: str, setup_version_id: str)
+```
+
+```
+              flowchart TD
+              digitalkin.services.secret.SecretStrategy[SecretStrategy]
+              digitalkin.services.base_strategy.BaseStrategy[BaseStrategy]
+
+                              digitalkin.services.base_strategy.BaseStrategy --> digitalkin.services.secret.SecretStrategy
+                
+
+
+              click digitalkin.services.secret.SecretStrategy href "" "digitalkin.services.secret.SecretStrategy"
+              click digitalkin.services.base_strategy.BaseStrategy href "" "digitalkin.services.base_strategy.BaseStrategy"
+```
+
+Abstract base class for Secret strategies.
+
+Parameters:
+
+- ##### **`mission_id`**
+
+  (`str`) – The ID of the mission this strategy is associated with
+
+- ##### **`setup_id`**
+
+  (`str`) – The ID of the setup this strategy is associated with
+
+- ##### **`setup_version_id`**
+
+  (`str`) – The ID of the setup version this strategy is associated with
+
+Methods:
+
+- **`close`** – Release resources held by this strategy. No-op by default.
+- **`get_secret`** – Resolve the secret object attached to this setup.
+
+##### close
+
+```python
+close() -> None
+```
+
+Release resources held by this strategy. No-op by default.
+
+##### get_secret
+
+```python
+get_secret() -> dict[str, Any] | None
+```
+
+Resolve the secret object attached to this setup.
+
+Returns:
+
+- `dict[str, Any] | None` – The secret values (matching the module's secret_schema), or None if not found.
+
+Raises:
+
+- `SecretServiceError` – If the service call fails.
+
+#### default_secret
+
+Default secret implementation.
+
+Classes:
+
+- **`DefaultSecret`** – Default secret strategy with in-memory storage.
+
+##### DefaultSecret
+
+```python
+DefaultSecret(mission_id: str, setup_id: str, setup_version_id: str)
+```
+
+```
+              flowchart TD
+              digitalkin.services.secret.default_secret.DefaultSecret[DefaultSecret]
+              digitalkin.services.secret.secret_strategy.SecretStrategy[SecretStrategy]
+              digitalkin.services.base_strategy.BaseStrategy[BaseStrategy]
+
+                              digitalkin.services.secret.secret_strategy.SecretStrategy --> digitalkin.services.secret.default_secret.DefaultSecret
+                                digitalkin.services.base_strategy.BaseStrategy --> digitalkin.services.secret.secret_strategy.SecretStrategy
+                
+
+
+
+              click digitalkin.services.secret.default_secret.DefaultSecret href "" "digitalkin.services.secret.default_secret.DefaultSecret"
+              click digitalkin.services.secret.secret_strategy.SecretStrategy href "" "digitalkin.services.secret.secret_strategy.SecretStrategy"
+              click digitalkin.services.base_strategy.BaseStrategy href "" "digitalkin.services.base_strategy.BaseStrategy"
+```
+
+Default secret strategy with in-memory storage.
+
+Parameters:
+
+- ###### **`mission_id`**
+
+  (`str`) – The ID of the mission this strategy is associated with
+
+- ###### **`setup_id`**
+
+  (`str`) – The ID of the setup
+
+- ###### **`setup_version_id`**
+
+  (`str`) – The ID of the setup version
+
+Methods:
+
+- **`add_secret`** – Add a secret to the in-memory database (helper for testing).
+- **`close`** – Release resources held by this strategy. No-op by default.
+- **`get_secret`** – Get the secret for this setup from in-memory storage.
+
+###### add_secret
+
+```python
+add_secret(secret_data: dict[str, Any]) -> None
+```
+
+Add a secret to the in-memory database (helper for testing).
+
+Parameters:
+
+- ###### **`secret_data`**
+
+  (`dict[str, Any]`) – Dictionary containing secret values.
+
+###### close
+
+```python
+close() -> None
+```
+
+Release resources held by this strategy. No-op by default.
+
+###### get_secret
+
+```python
+get_secret() -> dict[str, Any] | None
+```
+
+Get the secret for this setup from in-memory storage.
+
+Returns:
+
+- `dict[str, Any] | None` – Secret values, or None if not found.
+
+#### exceptions
+
+Exceptions for the secret service.
+
+Classes:
+
+- **`SecretServiceError`** – Base exception for Secret service errors.
+
+##### SecretServiceError
+
+```
+              flowchart TD
+              digitalkin.services.secret.exceptions.SecretServiceError[SecretServiceError]
+
+              
+
+              click digitalkin.services.secret.exceptions.SecretServiceError href "" "digitalkin.services.secret.exceptions.SecretServiceError"
+```
+
+Base exception for Secret service errors.
+
+#### grpc_secret
+
+Digital Kin Secret Service gRPC Client (wraps UserProfileService.GetSetupSecret).
+
+Classes:
+
+- **`GrpcSecret`** – gRPC client for setup secrets (backed by the UserProfileService).
+
+##### GrpcSecret
+
+```python
+GrpcSecret(
+    mission_id: str, setup_id: str, setup_version_id: str, client_config: ClientConfig
+)
+```
+
+```
+              flowchart TD
+              digitalkin.services.secret.grpc_secret.GrpcSecret[GrpcSecret]
+              digitalkin.services.secret.secret_strategy.SecretStrategy[SecretStrategy]
+              digitalkin.services.base_strategy.BaseStrategy[BaseStrategy]
+              digitalkin.grpc_servers.utils.grpc_client_wrapper.GrpcClientWrapper[GrpcClientWrapper]
+              digitalkin.grpc_servers.utils.grpc_error_handler.GrpcErrorHandlerMixin[GrpcErrorHandlerMixin]
+
+                              digitalkin.services.secret.secret_strategy.SecretStrategy --> digitalkin.services.secret.grpc_secret.GrpcSecret
+                                digitalkin.services.base_strategy.BaseStrategy --> digitalkin.services.secret.secret_strategy.SecretStrategy
+                
+
+                digitalkin.grpc_servers.utils.grpc_client_wrapper.GrpcClientWrapper --> digitalkin.services.secret.grpc_secret.GrpcSecret
+                
+                digitalkin.grpc_servers.utils.grpc_error_handler.GrpcErrorHandlerMixin --> digitalkin.services.secret.grpc_secret.GrpcSecret
+                
+
+
+              click digitalkin.services.secret.grpc_secret.GrpcSecret href "" "digitalkin.services.secret.grpc_secret.GrpcSecret"
+              click digitalkin.services.secret.secret_strategy.SecretStrategy href "" "digitalkin.services.secret.secret_strategy.SecretStrategy"
+              click digitalkin.services.base_strategy.BaseStrategy href "" "digitalkin.services.base_strategy.BaseStrategy"
+              click digitalkin.grpc_servers.utils.grpc_client_wrapper.GrpcClientWrapper href "" "digitalkin.grpc_servers.utils.grpc_client_wrapper.GrpcClientWrapper"
+              click digitalkin.grpc_servers.utils.grpc_error_handler.GrpcErrorHandlerMixin href "" "digitalkin.grpc_servers.utils.grpc_error_handler.GrpcErrorHandlerMixin"
+```
+
+gRPC client for setup secrets (backed by the UserProfileService).
+
+Parameters:
+
+- ###### **`mission_id`**
+
+  (`str`) – The ID of the mission this strategy is associated with
+
+- ###### **`setup_id`**
+
+  (`str`) – The ID of the setup
+
+- ###### **`setup_version_id`**
+
+  (`str`) – The ID of the setup version
+
+- ###### **`client_config`**
+
+  (`ClientConfig`) – Client configuration for gRPC connection
+
+Methods:
+
+- **`close`** – Release this instance's pooled gRPC channel ref.
+- **`close_all_cached_channels`** – Close all cached channels, reset cache, and clear circuit breakers.
+- **`close_channel`** – Release this instance's ref on the cached channel.
+- **`evict_cached_channel`** – Force-close and remove a cached channel regardless of refcount.
+- **`exec_grpc_query`** – Execute a gRPC query with circuit breaker protection and retry.
+- **`get_secret`** – Resolve the secret object attached to this setup.
+- **`handle_grpc_errors`** – Handle gRPC errors for the given operation.
+- **`release_cached_channel`** – Decrement refcount for a cache key and close channel when last ref is released.
+
+###### close
+
+```python
+close() -> None
+```
+
+Release this instance's pooled gRPC channel ref.
+
+###### close_all_cached_channels
+
+```python
+close_all_cached_channels() -> None
+```
+
+Close all cached channels, reset cache, and clear circuit breakers.
+
+Intended for server shutdown to ensure clean resource release. Clears circuit breaker singletons to prevent unbounded growth from dynamically discovered services.
+
+###### close_channel
+
+```python
+close_channel() -> None
+```
+
+Release this instance's ref on the cached channel.
+
+The underlying channel is only closed when the last ref is released. When the last ref is released, the corresponding circuit breaker singleton is also removed to prevent unbounded accumulation.
+
+###### evict_cached_channel
+
+```python
+evict_cached_channel(key: str) -> None
+```
+
+Force-close and remove a cached channel regardless of refcount.
+
+Guarantees a fresh connection on re-dial: a channel left cached after a peer died can be wedged mid-reconnect, so a resume must not reuse it. A missing key is a no-op.
+
+Parameters:
+
+- ###### **`key`**
+
+  (`str`) – Channel cache key to evict.
+
+###### exec_grpc_query
+
+```python
+exec_grpc_query(
+    query_endpoint: str,
+    request: Any,
+    timeout: float | None = None,
+    metadata: tuple[tuple[str, str], ...] | None = None,
+) -> Any
+```
+
+Execute a gRPC query with circuit breaker protection and retry.
+
+The circuit breaker is per-service (keyed on `service_name`). When the circuit is OPEN, calls fail immediately with `CircuitOpenError` wrapped in `ServerError` — no network round-trip, no timeout wait.
+
+Retries on transient errors (UNAVAILABLE, INTERNAL, DEADLINE_EXCEEDED) with exponential backoff. Retry count and backoff base are configurable via DIGITALKIN_GRPC_QUERY_MAX_RETRIES and DIGITALKIN_GRPC_QUERY_BACKOFF_BASE_MS.
+
+Parameters:
+
+- ###### **`query_endpoint`**
+
+  (`str`) – rpc query name (e.g., "GetSetup", "CreateSetupVersion")
+
+- ###### **`request`**
+
+  (`Any`) – gRPC protobuf request object
+
+- ###### **`timeout`**
+
+  (`float | None`, default: `None` ) – Per-call timeout in seconds. None applies no client-side deadline.
+
+- ###### **`metadata`**
+
+  (`tuple[tuple[str, str], ...] | None`, default: `None` ) – Optional gRPC metadata pairs (e.g. an idempotency key); the same metadata is sent on every retry attempt.
+
+Returns:
+
+- `Any` – gRPC protobuf response object.
+
+Raises:
+
+- `ServerError` – gRPC error with status code and details for caller to handle.
+
+###### get_secret
+
+```python
+get_secret() -> dict[str, Any] | None
+```
+
+Resolve the secret object attached to this setup.
+
+Returns:
+
+- `dict[str, Any] | None` – The secret values, or None if not found.
+
+Raises:
+
+- `SecretServiceError` – If the gRPC operation fails.
+
+###### handle_grpc_errors
+
+```python
+handle_grpc_errors(
+    operation: str, service_error_class: type[Exception] | None = None
+) -> AsyncGenerator[Any, Any]
+```
+
+Handle gRPC errors for the given operation.
+
+Parameters:
+
+- ###### **`operation`**
+
+  (`str`) – Name of the operation being performed.
+
+- ###### **`service_error_class`**
+
+  (`type[Exception] | None`, default: `None` ) – Optional specific service exception class to raise. If not provided, uses the generic ServerError.
+
+Yields:
+
+- `AsyncGenerator[Any, Any]` – Context for the operation.
+
+Raises:
+
+- `PermissionDeniedError` – Re-raised as-is so the authz status is never masked.
+- `ServerError` – For gRPC-related errors.
+- `service_error_class` – For service-specific errors if provided.
+
+###### release_cached_channel
+
+```python
+release_cached_channel(key: str) -> None
+```
+
+Decrement refcount for a cache key and close channel when last ref is released.
+
+Parameters:
+
+- ###### **`key`**
+
+  (`str`) – Channel cache key to release.
+
+#### secret_strategy
+
+This module contains the abstract base class for Secret strategies.
+
+Classes:
+
+- **`SecretStrategy`** – Abstract base class for Secret strategies.
+
+##### SecretStrategy
+
+```python
+SecretStrategy(mission_id: str, setup_id: str, setup_version_id: str)
+```
+
+```
+              flowchart TD
+              digitalkin.services.secret.secret_strategy.SecretStrategy[SecretStrategy]
+              digitalkin.services.base_strategy.BaseStrategy[BaseStrategy]
+
+                              digitalkin.services.base_strategy.BaseStrategy --> digitalkin.services.secret.secret_strategy.SecretStrategy
+                
+
+
+              click digitalkin.services.secret.secret_strategy.SecretStrategy href "" "digitalkin.services.secret.secret_strategy.SecretStrategy"
+              click digitalkin.services.base_strategy.BaseStrategy href "" "digitalkin.services.base_strategy.BaseStrategy"
+```
+
+Abstract base class for Secret strategies.
+
+Parameters:
+
+- ###### **`mission_id`**
+
+  (`str`) – The ID of the mission this strategy is associated with
+
+- ###### **`setup_id`**
+
+  (`str`) – The ID of the setup this strategy is associated with
+
+- ###### **`setup_version_id`**
+
+  (`str`) – The ID of the setup version this strategy is associated with
+
+Methods:
+
+- **`close`** – Release resources held by this strategy. No-op by default.
+- **`get_secret`** – Resolve the secret object attached to this setup.
+
+###### close
+
+```python
+close() -> None
+```
+
+Release resources held by this strategy. No-op by default.
+
+###### get_secret
+
+```python
+get_secret() -> dict[str, Any] | None
+```
+
+Resolve the secret object attached to this setup.
+
+Returns:
+
+- `dict[str, Any] | None` – The secret values (matching the module's secret_schema), or None if not found.
+
+Raises:
+
+- `SecretServiceError` – If the service call fails.
+
 ### services_config
 
 Service Provider definitions.
@@ -30439,24 +34493,14 @@ Methods:
 
 Attributes:
 
-- **`agent`** (`type[AgentStrategy]`) – Get the agent service strategy class based on the current mode.
-- **`communication`** (`type[CommunicationStrategy]`) – Get the communication service strategy class based on the current mode.
-- **`cost`** (`type[CostStrategy]`) – Get the cost service strategy class based on the current mode.
-- **`filesystem`** (`type[FilesystemStrategy]`) – Get the filesystem service strategy class based on the current mode.
-- **`identity`** (`type[IdentityStrategy]`) – Get the identity service strategy class based on the current mode.
-- **`registry`** (`type[RegistryStrategy]`) – Get the registry service strategy class based on the current mode.
-- **`snapshot`** (`type[SnapshotStrategy]`) – Get the snapshot service strategy class based on the current mode.
-- **`storage`** (`type[StorageStrategy]`) – Get the storage service strategy class based on the current mode.
-- **`task_manager`** (`type[TaskManagerStrategy]`) – Get the task_manager service strategy class based on the current mode.
-- **`user_profile`** (`type[UserProfileStrategy]`) – Get the user_profile service strategy class based on the current mode.
-
-##### agent
-
-```python
-agent: type[AgentStrategy]
-```
-
-Get the agent service strategy class based on the current mode.
+- **`communication`** (`type[CommunicationStrategy]`) – The communication service strategy class for the current mode.
+- **`cost`** (`type[CostStrategy]`) – The cost service strategy class for the current mode.
+- **`filesystem`** (`type[FilesystemStrategy]`) – The filesystem service strategy class for the current mode.
+- **`identity`** (`type[IdentityStrategy]`) – The identity service strategy class for the current mode.
+- **`registry`** (`type[RegistryStrategy]`) – The registry service strategy class for the current mode.
+- **`secret`** (`type[SecretStrategy]`) – The secret service strategy class for the current mode.
+- **`storage`** (`type[StorageStrategy]`) – The storage service strategy class for the current mode.
+- **`user_profile`** (`type[UserProfileStrategy]`) – The user_profile service strategy class for the current mode.
 
 ##### communication
 
@@ -30464,7 +34508,7 @@ Get the agent service strategy class based on the current mode.
 communication: type[CommunicationStrategy]
 ```
 
-Get the communication service strategy class based on the current mode.
+The communication service strategy class for the current mode.
 
 ##### cost
 
@@ -30472,7 +34516,7 @@ Get the communication service strategy class based on the current mode.
 cost: type[CostStrategy]
 ```
 
-Get the cost service strategy class based on the current mode.
+The cost service strategy class for the current mode.
 
 ##### filesystem
 
@@ -30480,7 +34524,7 @@ Get the cost service strategy class based on the current mode.
 filesystem: type[FilesystemStrategy]
 ```
 
-Get the filesystem service strategy class based on the current mode.
+The filesystem service strategy class for the current mode.
 
 ##### identity
 
@@ -30488,7 +34532,7 @@ Get the filesystem service strategy class based on the current mode.
 identity: type[IdentityStrategy]
 ```
 
-Get the identity service strategy class based on the current mode.
+The identity service strategy class for the current mode.
 
 ##### registry
 
@@ -30496,15 +34540,15 @@ Get the identity service strategy class based on the current mode.
 registry: type[RegistryStrategy]
 ```
 
-Get the registry service strategy class based on the current mode.
+The registry service strategy class for the current mode.
 
-##### snapshot
+##### secret
 
 ```python
-snapshot: type[SnapshotStrategy]
+secret: type[SecretStrategy]
 ```
 
-Get the snapshot service strategy class based on the current mode.
+The secret service strategy class for the current mode.
 
 ##### storage
 
@@ -30512,15 +34556,7 @@ Get the snapshot service strategy class based on the current mode.
 storage: type[StorageStrategy]
 ```
 
-Get the storage service strategy class based on the current mode.
-
-##### task_manager
-
-```python
-task_manager: type[TaskManagerStrategy]
-```
-
-Get the task_manager service strategy class based on the current mode.
+The storage service strategy class for the current mode.
 
 ##### user_profile
 
@@ -30528,7 +34564,7 @@ Get the task_manager service strategy class based on the current mode.
 user_profile: type[UserProfileStrategy]
 ```
 
-Get the user_profile service strategy class based on the current mode.
+The user_profile service strategy class for the current mode.
 
 ##### get_strategy_config
 
@@ -30614,21 +34650,7 @@ This module contains the strategy models for the services.
 
 Classes:
 
-- **`ServicesMode`** – Mode for strategy execution.
 - **`ServicesStrategy`** – Service class describing the available services in a Module with local and remote attributes.
-
-#### ServicesMode
-
-```
-              flowchart TD
-              digitalkin.services.services_models.ServicesMode[ServicesMode]
-
-              
-
-              click digitalkin.services.services_models.ServicesMode href "" "digitalkin.services.services_models.ServicesMode"
-```
-
-Mode for strategy execution.
 
 #### ServicesStrategy
 
@@ -30677,6 +34699,7 @@ This module is responsible for handling the setup service.
 Modules:
 
 - **`default_setup`** – This module contains the abstract base class for setup strategies.
+- **`exceptions`** – Exceptions for the setup service.
 - **`grpc_setup`** – Digital Kin Setup Service gRPC Client.
 - **`setup_strategy`** – This module contains the abstract base class for setup strategies.
 
@@ -30936,6 +34959,27 @@ Returns:
 
 - **`bool`** ( `bool` ) – Success status of the update operation.
 
+#### exceptions
+
+Exceptions for the setup service.
+
+Classes:
+
+- **`SetupServiceError`** – Base exception for Setup service errors.
+
+##### SetupServiceError
+
+```
+              flowchart TD
+              digitalkin.services.setup.exceptions.SetupServiceError[SetupServiceError]
+
+              
+
+              click digitalkin.services.setup.exceptions.SetupServiceError href "" "digitalkin.services.setup.exceptions.SetupServiceError"
+```
+
+Base exception for Setup service errors.
+
 #### grpc_setup
 
 Digital Kin Setup Service gRPC Client.
@@ -30974,24 +35018,23 @@ Communicates with the remote SetupService gRPC server to manage setup configurat
 Methods:
 
 - **`__post_init__`** – Init the channel from a config file.
-- **`close`** – Release this instance's gRPC channel ref. Subclasses override to release extra resources.
-- **`close_all_cached_channels`** – Close all cached channels and reset the cache.
+- **`close`** – Release this instance's pooled gRPC channel ref.
+- **`close_all_cached_channels`** – Close all cached channels, reset cache, and clear circuit breakers.
 - **`close_channel`** – Release this instance's ref on the cached channel.
 - **`create_setup`** – Create a new setup with comprehensive validation.
 - **`create_setup_version`** – Create a new setup version.
 - **`delete_setup`** – Delete a setup by its unique identifier.
 - **`delete_setup_version`** – Delete a setup version by its unique identifier.
-- **`exec_grpc_query`** – Execute a gRPC query with from the query's rpc endpoint name.
+- **`evict_cached_channel`** – Force-close and remove a cached channel regardless of refcount.
+- **`exec_grpc_query`** – Execute a gRPC query with circuit breaker protection and retry.
 - **`get_setup`** – Retrieve a setup by its unique identifier.
 - **`get_setup_version`** – Retrieve a setup version by its unique identifier.
 - **`handle_grpc_errors`** – Context manager for consistent gRPC error handling with detailed logging.
 - **`list_setups`** – List setups with optional filtering and pagination.
-- **`poll_grpc`** – Execute a single polling RPC. Returns None on DEADLINE_EXCEEDED (expected empty poll).
 - **`release_cached_channel`** – Decrement refcount for a cache key and close channel when last ref is released.
 - **`search_setup_versions`** – Search for setup versions based on filters.
 - **`update_setup`** – Update an existing setup.
 - **`update_setup_version`** – Update an existing setup version.
-- **`wait_for_ready`** – Check if the gRPC channel can connect within timeout.
 
 ###### __post_init__
 
@@ -31009,7 +35052,7 @@ Need to be call if the user register a gRPC channel.
 close() -> None
 ```
 
-Release this instance's gRPC channel ref. Subclasses override to release extra resources.
+Release this instance's pooled gRPC channel ref.
 
 ###### close_all_cached_channels
 
@@ -31017,9 +35060,9 @@ Release this instance's gRPC channel ref. Subclasses override to release extra r
 close_all_cached_channels() -> None
 ```
 
-Close all cached channels and reset the cache.
+Close all cached channels, reset cache, and clear circuit breakers.
 
-Intended for server shutdown to ensure clean resource release.
+Intended for server shutdown to ensure clean resource release. Clears circuit breaker singletons to prevent unbounded growth from dynamically discovered services.
 
 ###### close_channel
 
@@ -31029,7 +35072,7 @@ close_channel() -> None
 
 Release this instance's ref on the cached channel.
 
-The underlying channel is only closed when the last ref is released.
+The underlying channel is only closed when the last ref is released. When the last ref is released, the corresponding circuit breaker singleton is also removed to prevent unbounded accumulation.
 
 ###### create_setup
 
@@ -31127,13 +35170,36 @@ Raises:
 - `ServerError` – If gRPC operation fails.
 - `SetupServiceError` – For any unexpected internal error.
 
+###### evict_cached_channel
+
+```python
+evict_cached_channel(key: str) -> None
+```
+
+Force-close and remove a cached channel regardless of refcount.
+
+Guarantees a fresh connection on re-dial: a channel left cached after a peer died can be wedged mid-reconnect, so a resume must not reuse it. A missing key is a no-op.
+
+Parameters:
+
+- ###### **`key`**
+
+  (`str`) – Channel cache key to evict.
+
 ###### exec_grpc_query
 
 ```python
-exec_grpc_query(query_endpoint: str, request: Any, timeout: float | None = None) -> Any
+exec_grpc_query(
+    query_endpoint: str,
+    request: Any,
+    timeout: float | None = None,
+    metadata: tuple[tuple[str, str], ...] | None = None,
+) -> Any
 ```
 
-Execute a gRPC query with from the query's rpc endpoint name.
+Execute a gRPC query with circuit breaker protection and retry.
+
+The circuit breaker is per-service (keyed on `service_name`). When the circuit is OPEN, calls fail immediately with `CircuitOpenError` wrapped in `ServerError` — no network round-trip, no timeout wait.
 
 Retries on transient errors (UNAVAILABLE, INTERNAL, DEADLINE_EXCEEDED) with exponential backoff. Retry count and backoff base are configurable via DIGITALKIN_GRPC_QUERY_MAX_RETRIES and DIGITALKIN_GRPC_QUERY_BACKOFF_BASE_MS.
 
@@ -31149,7 +35215,11 @@ Parameters:
 
 - ###### **`timeout`**
 
-  (`float | None`, default: `None` ) – Per-call timeout in seconds. Falls back to \_QUERY_DEFAULT_TIMEOUT (env DIGITALKIN_GRPC_QUERY_TIMEOUT, default 30s) when None.
+  (`float | None`, default: `None` ) – Per-call timeout in seconds. None applies no client-side deadline.
+
+- ###### **`metadata`**
+
+  (`tuple[tuple[str, str], ...] | None`, default: `None` ) – Optional gRPC metadata pairs (e.g. an idempotency key); the same metadata is sent on every retry attempt.
 
 Returns:
 
@@ -31227,6 +35297,7 @@ Yields:
 
 Raises:
 
+- `PermissionDeniedError` – Service rejected the call with PERMISSION_DENIED.
 - `ValueError` – Pydantic model validation failed - input data is malformed.
 - `ServerError` – gRPC communication failed - remote service returned error or is unreachable.
 - `SetupServiceError` – Unexpected error during setup operation - includes connection/timeout issues.
@@ -31258,38 +35329,6 @@ Raises:
 
 - `ServerError` – If gRPC operation fails.
 - `SetupServiceError` – For any unexpected internal error.
-
-###### poll_grpc
-
-```python
-poll_grpc(endpoint: str, request: Any, *, timeout: float) -> Any | None
-```
-
-Execute a single polling RPC. Returns None on DEADLINE_EXCEEDED (expected empty poll).
-
-Unlike exec_grpc_query, DEADLINE_EXCEEDED is not an error for polling-style RPCs where the server holds the connection until a result is available or timeout occurs. No retry is performed — the caller is responsible for the retry loop.
-
-Parameters:
-
-- ###### **`endpoint`**
-
-  (`str`) – RPC method name on self.stub.
-
-- ###### **`request`**
-
-  (`Any`) – gRPC request protobuf.
-
-- ###### **`timeout`**
-
-  (`float`) – Seconds before treating as 'no result available'.
-
-Returns:
-
-- `Any | None` – gRPC response, or None if DEADLINE_EXCEEDED.
-
-Raises:
-
-- `ServerError` – For any non-DEADLINE_EXCEEDED gRPC error.
 
 ###### release_cached_channel
 
@@ -31377,26 +35416,6 @@ Raises:
 - `ServerError` – If gRPC operation fails.
 - `SetupServiceError` – For any unexpected internal error.
 
-###### wait_for_ready
-
-```python
-wait_for_ready(timeout: float = 1.0) -> bool
-```
-
-Check if the gRPC channel can connect within timeout.
-
-Uses channel_ready() which resolves when the HTTP/2 connection is established and the server is accepting RPCs.
-
-Parameters:
-
-- ###### **`timeout`**
-
-  (`float`, default: `1.0` ) – Max seconds to wait for connectivity.
-
-Returns:
-
-- `bool` – True if channel reached READY state, False if timeout or no channel.
-
 #### setup_strategy
 
 This module contains the abstract base class for setup strategies.
@@ -31404,7 +35423,6 @@ This module contains the abstract base class for setup strategies.
 Classes:
 
 - **`SetupData`** – Pydantic model for Setup data validation.
-- **`SetupServiceError`** – Base exception for Setup service errors.
 - **`SetupStrategy`** – Abstract base class for setup strategies.
 - **`SetupVersionData`** – Pydantic model for SetupVersion data validation.
 
@@ -31420,19 +35438,6 @@ Classes:
 ```
 
 Pydantic model for Setup data validation.
-
-##### SetupServiceError
-
-```
-              flowchart TD
-              digitalkin.services.setup.setup_strategy.SetupServiceError[SetupServiceError]
-
-              
-
-              click digitalkin.services.setup.setup_strategy.SetupServiceError href "" "digitalkin.services.setup.setup_strategy.SetupServiceError"
-```
-
-Base exception for Setup service errors.
 
 ##### SetupStrategy
 
@@ -31676,436 +35681,6 @@ Returns:
 
 Pydantic model for SetupVersion data validation.
 
-### snapshot
-
-This module is responsible for handling the snapshot service.
-
-Modules:
-
-- **`default_snapshot`** – Default snapshot.
-- **`snapshot_strategy`** – This module contains the abstract base class for snapshot strategies.
-
-Classes:
-
-- **`DefaultSnapshot`** – Default snapshot strategy.
-- **`SnapshotStrategy`** – Abstract base class for snapshot strategies.
-
-#### DefaultSnapshot
-
-```python
-DefaultSnapshot(mission_id: str, setup_id: str, setup_version_id: str)
-```
-
-```
-              flowchart TD
-              digitalkin.services.snapshot.DefaultSnapshot[DefaultSnapshot]
-              digitalkin.services.snapshot.snapshot_strategy.SnapshotStrategy[SnapshotStrategy]
-              digitalkin.services.base_strategy.BaseStrategy[BaseStrategy]
-
-                              digitalkin.services.snapshot.snapshot_strategy.SnapshotStrategy --> digitalkin.services.snapshot.DefaultSnapshot
-                                digitalkin.services.base_strategy.BaseStrategy --> digitalkin.services.snapshot.snapshot_strategy.SnapshotStrategy
-                
-
-
-
-              click digitalkin.services.snapshot.DefaultSnapshot href "" "digitalkin.services.snapshot.DefaultSnapshot"
-              click digitalkin.services.snapshot.snapshot_strategy.SnapshotStrategy href "" "digitalkin.services.snapshot.snapshot_strategy.SnapshotStrategy"
-              click digitalkin.services.base_strategy.BaseStrategy href "" "digitalkin.services.base_strategy.BaseStrategy"
-```
-
-Default snapshot strategy.
-
-Parameters:
-
-- ##### **`mission_id`**
-
-  (`str`) – The ID of the mission this strategy is associated with
-
-- ##### **`setup_id`**
-
-  (`str`) – The ID of the setup this strategy is associated with
-
-- ##### **`setup_version_id`**
-
-  (`str`) – The ID of the setup version this strategy is associated with
-
-Methods:
-
-- **`close`** – Release resources held by this strategy. No-op by default.
-- **`create`** – Create a new snapshot in the file system.
-- **`delete`** – Delete snapshots from the file system.
-- **`get`** – Get snapshots from the file system.
-- **`get_all`** – Get all snapshots from the file system.
-- **`update`** – Update snapshots in the file system.
-
-##### close
-
-```python
-close() -> None
-```
-
-Release resources held by this strategy. No-op by default.
-
-##### create
-
-```python
-create(data: dict[str, Any]) -> str
-```
-
-Create a new snapshot in the file system.
-
-Returns:
-
-- **`str`** ( `str` ) – The ID of the new snapshot
-
-##### delete
-
-```python
-delete(data: dict[str, Any]) -> int
-```
-
-Delete snapshots from the file system.
-
-Returns:
-
-- **`int`** ( `int` ) – The number of snapshots deleted
-
-##### get
-
-```python
-get(data: dict[str, Any]) -> None
-```
-
-Get snapshots from the file system.
-
-##### get_all
-
-```python
-get_all() -> None
-```
-
-Get all snapshots from the file system.
-
-##### update
-
-```python
-update(data: dict[str, Any]) -> int
-```
-
-Update snapshots in the file system.
-
-Returns:
-
-- **`int`** ( `int` ) – The number of snapshots updated
-
-#### SnapshotStrategy
-
-```python
-SnapshotStrategy(mission_id: str, setup_id: str, setup_version_id: str)
-```
-
-```
-              flowchart TD
-              digitalkin.services.snapshot.SnapshotStrategy[SnapshotStrategy]
-              digitalkin.services.base_strategy.BaseStrategy[BaseStrategy]
-
-                              digitalkin.services.base_strategy.BaseStrategy --> digitalkin.services.snapshot.SnapshotStrategy
-                
-
-
-              click digitalkin.services.snapshot.SnapshotStrategy href "" "digitalkin.services.snapshot.SnapshotStrategy"
-              click digitalkin.services.base_strategy.BaseStrategy href "" "digitalkin.services.base_strategy.BaseStrategy"
-```
-
-Abstract base class for snapshot strategies.
-
-Parameters:
-
-- ##### **`mission_id`**
-
-  (`str`) – The ID of the mission this strategy is associated with
-
-- ##### **`setup_id`**
-
-  (`str`) – The ID of the setup this strategy is associated with
-
-- ##### **`setup_version_id`**
-
-  (`str`) – The ID of the setup version this strategy is associated with
-
-Methods:
-
-- **`close`** – Release resources held by this strategy. No-op by default.
-- **`create`** – Create a new snapshot in the file system.
-- **`delete`** – Delete snapshots from the file system.
-- **`get`** – Get snapshots from the file system.
-- **`get_all`** – Get all snapshots from the file system.
-- **`update`** – Update snapshots in the file system.
-
-##### close
-
-```python
-close() -> None
-```
-
-Release resources held by this strategy. No-op by default.
-
-##### create
-
-```python
-create(data: dict[str, Any]) -> str
-```
-
-Create a new snapshot in the file system.
-
-##### delete
-
-```python
-delete(data: dict[str, Any]) -> int
-```
-
-Delete snapshots from the file system.
-
-##### get
-
-```python
-get(data: dict[str, Any]) -> None
-```
-
-Get snapshots from the file system.
-
-##### get_all
-
-```python
-get_all() -> None
-```
-
-Get all snapshots from the file system.
-
-##### update
-
-```python
-update(data: dict[str, Any]) -> int
-```
-
-Update snapshots in the file system.
-
-#### default_snapshot
-
-Default snapshot.
-
-Classes:
-
-- **`DefaultSnapshot`** – Default snapshot strategy.
-
-##### DefaultSnapshot
-
-```python
-DefaultSnapshot(mission_id: str, setup_id: str, setup_version_id: str)
-```
-
-```
-              flowchart TD
-              digitalkin.services.snapshot.default_snapshot.DefaultSnapshot[DefaultSnapshot]
-              digitalkin.services.snapshot.snapshot_strategy.SnapshotStrategy[SnapshotStrategy]
-              digitalkin.services.base_strategy.BaseStrategy[BaseStrategy]
-
-                              digitalkin.services.snapshot.snapshot_strategy.SnapshotStrategy --> digitalkin.services.snapshot.default_snapshot.DefaultSnapshot
-                                digitalkin.services.base_strategy.BaseStrategy --> digitalkin.services.snapshot.snapshot_strategy.SnapshotStrategy
-                
-
-
-
-              click digitalkin.services.snapshot.default_snapshot.DefaultSnapshot href "" "digitalkin.services.snapshot.default_snapshot.DefaultSnapshot"
-              click digitalkin.services.snapshot.snapshot_strategy.SnapshotStrategy href "" "digitalkin.services.snapshot.snapshot_strategy.SnapshotStrategy"
-              click digitalkin.services.base_strategy.BaseStrategy href "" "digitalkin.services.base_strategy.BaseStrategy"
-```
-
-Default snapshot strategy.
-
-Parameters:
-
-- ###### **`mission_id`**
-
-  (`str`) – The ID of the mission this strategy is associated with
-
-- ###### **`setup_id`**
-
-  (`str`) – The ID of the setup this strategy is associated with
-
-- ###### **`setup_version_id`**
-
-  (`str`) – The ID of the setup version this strategy is associated with
-
-Methods:
-
-- **`close`** – Release resources held by this strategy. No-op by default.
-- **`create`** – Create a new snapshot in the file system.
-- **`delete`** – Delete snapshots from the file system.
-- **`get`** – Get snapshots from the file system.
-- **`get_all`** – Get all snapshots from the file system.
-- **`update`** – Update snapshots in the file system.
-
-###### close
-
-```python
-close() -> None
-```
-
-Release resources held by this strategy. No-op by default.
-
-###### create
-
-```python
-create(data: dict[str, Any]) -> str
-```
-
-Create a new snapshot in the file system.
-
-Returns:
-
-- **`str`** ( `str` ) – The ID of the new snapshot
-
-###### delete
-
-```python
-delete(data: dict[str, Any]) -> int
-```
-
-Delete snapshots from the file system.
-
-Returns:
-
-- **`int`** ( `int` ) – The number of snapshots deleted
-
-###### get
-
-```python
-get(data: dict[str, Any]) -> None
-```
-
-Get snapshots from the file system.
-
-###### get_all
-
-```python
-get_all() -> None
-```
-
-Get all snapshots from the file system.
-
-###### update
-
-```python
-update(data: dict[str, Any]) -> int
-```
-
-Update snapshots in the file system.
-
-Returns:
-
-- **`int`** ( `int` ) – The number of snapshots updated
-
-#### snapshot_strategy
-
-This module contains the abstract base class for snapshot strategies.
-
-Classes:
-
-- **`SnapshotStrategy`** – Abstract base class for snapshot strategies.
-
-##### SnapshotStrategy
-
-```python
-SnapshotStrategy(mission_id: str, setup_id: str, setup_version_id: str)
-```
-
-```
-              flowchart TD
-              digitalkin.services.snapshot.snapshot_strategy.SnapshotStrategy[SnapshotStrategy]
-              digitalkin.services.base_strategy.BaseStrategy[BaseStrategy]
-
-                              digitalkin.services.base_strategy.BaseStrategy --> digitalkin.services.snapshot.snapshot_strategy.SnapshotStrategy
-                
-
-
-              click digitalkin.services.snapshot.snapshot_strategy.SnapshotStrategy href "" "digitalkin.services.snapshot.snapshot_strategy.SnapshotStrategy"
-              click digitalkin.services.base_strategy.BaseStrategy href "" "digitalkin.services.base_strategy.BaseStrategy"
-```
-
-Abstract base class for snapshot strategies.
-
-Parameters:
-
-- ###### **`mission_id`**
-
-  (`str`) – The ID of the mission this strategy is associated with
-
-- ###### **`setup_id`**
-
-  (`str`) – The ID of the setup this strategy is associated with
-
-- ###### **`setup_version_id`**
-
-  (`str`) – The ID of the setup version this strategy is associated with
-
-Methods:
-
-- **`close`** – Release resources held by this strategy. No-op by default.
-- **`create`** – Create a new snapshot in the file system.
-- **`delete`** – Delete snapshots from the file system.
-- **`get`** – Get snapshots from the file system.
-- **`get_all`** – Get all snapshots from the file system.
-- **`update`** – Update snapshots in the file system.
-
-###### close
-
-```python
-close() -> None
-```
-
-Release resources held by this strategy. No-op by default.
-
-###### create
-
-```python
-create(data: dict[str, Any]) -> str
-```
-
-Create a new snapshot in the file system.
-
-###### delete
-
-```python
-delete(data: dict[str, Any]) -> int
-```
-
-Delete snapshots from the file system.
-
-###### get
-
-```python
-get(data: dict[str, Any]) -> None
-```
-
-Get snapshots from the file system.
-
-###### get_all
-
-```python
-get_all() -> None
-```
-
-Get all snapshots from the file system.
-
-###### update
-
-```python
-update(data: dict[str, Any]) -> int
-```
-
-Update snapshots in the file system.
-
 ### storage
 
 This module is responsible for handling the storage service.
@@ -32113,6 +35688,7 @@ This module is responsible for handling the storage service.
 Modules:
 
 - **`default_storage`** – This module implements the default storage strategy.
+- **`exceptions`** – Exceptions for the storage service.
 - **`grpc_storage`** – This module implements the default storage strategy.
 - **`storage_strategy`** – This module contains the abstract base class for storage strategies.
 
@@ -32432,12 +36008,12 @@ gRPC client implementation for the Storage service.
 
 Methods:
 
-- **`close`** – Release resources held by this strategy. No-op by default.
-- **`close_all_cached_channels`** – Close all cached channels and reset the cache.
+- **`close`** – Release this instance's pooled gRPC channel ref.
+- **`close_all_cached_channels`** – Close all cached channels, reset cache, and clear circuit breakers.
 - **`close_channel`** – Release this instance's ref on the cached channel.
-- **`exec_grpc_query`** – Execute a gRPC query with from the query's rpc endpoint name.
+- **`evict_cached_channel`** – Force-close and remove a cached channel regardless of refcount.
+- **`exec_grpc_query`** – Execute a gRPC query with circuit breaker protection and retry.
 - **`list`** – Get all records in a collection under the given scope.
-- **`poll_grpc`** – Execute a single polling RPC. Returns None on DEADLINE_EXCEEDED (expected empty poll).
 - **`read`** – Get a record by key under the given scope.
 - **`release_cached_channel`** – Decrement refcount for a cache key and close channel when last ref is released.
 - **`remove`** – Delete a record from the storage under the given scope.
@@ -32445,7 +36021,6 @@ Methods:
 - **`store`** – Store a new record in the storage.
 - **`update`** – Validate & overwrite an existing record under the given scope.
 - **`upsert`** – Insert or update a record atomically under the given scope.
-- **`wait_for_ready`** – Check if the gRPC channel can connect within timeout.
 
 ##### close
 
@@ -32453,7 +36028,7 @@ Methods:
 close() -> None
 ```
 
-Release resources held by this strategy. No-op by default.
+Release this instance's pooled gRPC channel ref.
 
 ##### close_all_cached_channels
 
@@ -32461,9 +36036,9 @@ Release resources held by this strategy. No-op by default.
 close_all_cached_channels() -> None
 ```
 
-Close all cached channels and reset the cache.
+Close all cached channels, reset cache, and clear circuit breakers.
 
-Intended for server shutdown to ensure clean resource release.
+Intended for server shutdown to ensure clean resource release. Clears circuit breaker singletons to prevent unbounded growth from dynamically discovered services.
 
 ##### close_channel
 
@@ -32473,15 +36048,38 @@ close_channel() -> None
 
 Release this instance's ref on the cached channel.
 
-The underlying channel is only closed when the last ref is released.
+The underlying channel is only closed when the last ref is released. When the last ref is released, the corresponding circuit breaker singleton is also removed to prevent unbounded accumulation.
+
+##### evict_cached_channel
+
+```python
+evict_cached_channel(key: str) -> None
+```
+
+Force-close and remove a cached channel regardless of refcount.
+
+Guarantees a fresh connection on re-dial: a channel left cached after a peer died can be wedged mid-reconnect, so a resume must not reuse it. A missing key is a no-op.
+
+Parameters:
+
+- ###### **`key`**
+
+  (`str`) – Channel cache key to evict.
 
 ##### exec_grpc_query
 
 ```python
-exec_grpc_query(query_endpoint: str, request: Any, timeout: float | None = None) -> Any
+exec_grpc_query(
+    query_endpoint: str,
+    request: Any,
+    timeout: float | None = None,
+    metadata: tuple[tuple[str, str], ...] | None = None,
+) -> Any
 ```
 
-Execute a gRPC query with from the query's rpc endpoint name.
+Execute a gRPC query with circuit breaker protection and retry.
+
+The circuit breaker is per-service (keyed on `service_name`). When the circuit is OPEN, calls fail immediately with `CircuitOpenError` wrapped in `ServerError` — no network round-trip, no timeout wait.
 
 Retries on transient errors (UNAVAILABLE, INTERNAL, DEADLINE_EXCEEDED) with exponential backoff. Retry count and backoff base are configurable via DIGITALKIN_GRPC_QUERY_MAX_RETRIES and DIGITALKIN_GRPC_QUERY_BACKOFF_BASE_MS.
 
@@ -32497,7 +36095,11 @@ Parameters:
 
 - ###### **`timeout`**
 
-  (`float | None`, default: `None` ) – Per-call timeout in seconds. Falls back to \_QUERY_DEFAULT_TIMEOUT (env DIGITALKIN_GRPC_QUERY_TIMEOUT, default 30s) when None.
+  (`float | None`, default: `None` ) – Per-call timeout in seconds. None applies no client-side deadline.
+
+- ###### **`metadata`**
+
+  (`tuple[tuple[str, str], ...] | None`, default: `None` ) – Optional gRPC metadata pairs (e.g. an idempotency key); the same metadata is sent on every retry attempt.
 
 Returns:
 
@@ -32528,38 +36130,6 @@ Parameters:
 Returns:
 
 - `list[StorageRecord]` – A list of storage records under the resolved context.
-
-##### poll_grpc
-
-```python
-poll_grpc(endpoint: str, request: Any, *, timeout: float) -> Any | None
-```
-
-Execute a single polling RPC. Returns None on DEADLINE_EXCEEDED (expected empty poll).
-
-Unlike exec_grpc_query, DEADLINE_EXCEEDED is not an error for polling-style RPCs where the server holds the connection until a result is available or timeout occurs. No retry is performed — the caller is responsible for the retry loop.
-
-Parameters:
-
-- ###### **`endpoint`**
-
-  (`str`) – RPC method name on self.stub.
-
-- ###### **`request`**
-
-  (`Any`) – gRPC request protobuf.
-
-- ###### **`timeout`**
-
-  (`float`) – Seconds before treating as 'no result available'.
-
-Returns:
-
-- `Any | None` – gRPC response, or None if DEADLINE_EXCEEDED.
-
-Raises:
-
-- `ServerError` – For any non-DEADLINE_EXCEEDED gRPC error.
 
 ##### read
 
@@ -32771,26 +36341,6 @@ Raises:
 
 - `ValueError` – If the data type is invalid or if validation fails
 - `StorageServiceError` – If update of an existing record fails unexpectedly
-
-##### wait_for_ready
-
-```python
-wait_for_ready(timeout: float = 1.0) -> bool
-```
-
-Check if the gRPC channel can connect within timeout.
-
-Uses channel_ready() which resolves when the HTTP/2 connection is established and the server is accepting RPCs.
-
-Parameters:
-
-- ###### **`timeout`**
-
-  (`float`, default: `1.0` ) – Max seconds to wait for connectivity.
-
-Returns:
-
-- `bool` – True if channel reached READY state, False if timeout or no channel.
 
 #### StorageStrategy
 
@@ -33359,6 +36909,27 @@ Raises:
 - `ValueError` – If the data type is invalid or if validation fails
 - `StorageServiceError` – If update of an existing record fails unexpectedly
 
+#### exceptions
+
+Exceptions for the storage service.
+
+Classes:
+
+- **`StorageServiceError`** – Base exception for storage service errors.
+
+##### StorageServiceError
+
+```
+              flowchart TD
+              digitalkin.services.storage.exceptions.StorageServiceError[StorageServiceError]
+
+              
+
+              click digitalkin.services.storage.exceptions.StorageServiceError href "" "digitalkin.services.storage.exceptions.StorageServiceError"
+```
+
+Base exception for storage service errors.
+
 #### grpc_storage
 
 This module implements the default storage strategy.
@@ -33404,12 +36975,12 @@ gRPC client implementation for the Storage service.
 
 Methods:
 
-- **`close`** – Release resources held by this strategy. No-op by default.
-- **`close_all_cached_channels`** – Close all cached channels and reset the cache.
+- **`close`** – Release this instance's pooled gRPC channel ref.
+- **`close_all_cached_channels`** – Close all cached channels, reset cache, and clear circuit breakers.
 - **`close_channel`** – Release this instance's ref on the cached channel.
-- **`exec_grpc_query`** – Execute a gRPC query with from the query's rpc endpoint name.
+- **`evict_cached_channel`** – Force-close and remove a cached channel regardless of refcount.
+- **`exec_grpc_query`** – Execute a gRPC query with circuit breaker protection and retry.
 - **`list`** – Get all records in a collection under the given scope.
-- **`poll_grpc`** – Execute a single polling RPC. Returns None on DEADLINE_EXCEEDED (expected empty poll).
 - **`read`** – Get a record by key under the given scope.
 - **`release_cached_channel`** – Decrement refcount for a cache key and close channel when last ref is released.
 - **`remove`** – Delete a record from the storage under the given scope.
@@ -33417,7 +36988,6 @@ Methods:
 - **`store`** – Store a new record in the storage.
 - **`update`** – Validate & overwrite an existing record under the given scope.
 - **`upsert`** – Insert or update a record atomically under the given scope.
-- **`wait_for_ready`** – Check if the gRPC channel can connect within timeout.
 
 ###### close
 
@@ -33425,7 +36995,7 @@ Methods:
 close() -> None
 ```
 
-Release resources held by this strategy. No-op by default.
+Release this instance's pooled gRPC channel ref.
 
 ###### close_all_cached_channels
 
@@ -33433,9 +37003,9 @@ Release resources held by this strategy. No-op by default.
 close_all_cached_channels() -> None
 ```
 
-Close all cached channels and reset the cache.
+Close all cached channels, reset cache, and clear circuit breakers.
 
-Intended for server shutdown to ensure clean resource release.
+Intended for server shutdown to ensure clean resource release. Clears circuit breaker singletons to prevent unbounded growth from dynamically discovered services.
 
 ###### close_channel
 
@@ -33445,15 +37015,38 @@ close_channel() -> None
 
 Release this instance's ref on the cached channel.
 
-The underlying channel is only closed when the last ref is released.
+The underlying channel is only closed when the last ref is released. When the last ref is released, the corresponding circuit breaker singleton is also removed to prevent unbounded accumulation.
+
+###### evict_cached_channel
+
+```python
+evict_cached_channel(key: str) -> None
+```
+
+Force-close and remove a cached channel regardless of refcount.
+
+Guarantees a fresh connection on re-dial: a channel left cached after a peer died can be wedged mid-reconnect, so a resume must not reuse it. A missing key is a no-op.
+
+Parameters:
+
+- ###### **`key`**
+
+  (`str`) – Channel cache key to evict.
 
 ###### exec_grpc_query
 
 ```python
-exec_grpc_query(query_endpoint: str, request: Any, timeout: float | None = None) -> Any
+exec_grpc_query(
+    query_endpoint: str,
+    request: Any,
+    timeout: float | None = None,
+    metadata: tuple[tuple[str, str], ...] | None = None,
+) -> Any
 ```
 
-Execute a gRPC query with from the query's rpc endpoint name.
+Execute a gRPC query with circuit breaker protection and retry.
+
+The circuit breaker is per-service (keyed on `service_name`). When the circuit is OPEN, calls fail immediately with `CircuitOpenError` wrapped in `ServerError` — no network round-trip, no timeout wait.
 
 Retries on transient errors (UNAVAILABLE, INTERNAL, DEADLINE_EXCEEDED) with exponential backoff. Retry count and backoff base are configurable via DIGITALKIN_GRPC_QUERY_MAX_RETRIES and DIGITALKIN_GRPC_QUERY_BACKOFF_BASE_MS.
 
@@ -33469,7 +37062,11 @@ Parameters:
 
 - ###### **`timeout`**
 
-  (`float | None`, default: `None` ) – Per-call timeout in seconds. Falls back to \_QUERY_DEFAULT_TIMEOUT (env DIGITALKIN_GRPC_QUERY_TIMEOUT, default 30s) when None.
+  (`float | None`, default: `None` ) – Per-call timeout in seconds. None applies no client-side deadline.
+
+- ###### **`metadata`**
+
+  (`tuple[tuple[str, str], ...] | None`, default: `None` ) – Optional gRPC metadata pairs (e.g. an idempotency key); the same metadata is sent on every retry attempt.
 
 Returns:
 
@@ -33500,38 +37097,6 @@ Parameters:
 Returns:
 
 - `list[StorageRecord]` – A list of storage records under the resolved context.
-
-###### poll_grpc
-
-```python
-poll_grpc(endpoint: str, request: Any, *, timeout: float) -> Any | None
-```
-
-Execute a single polling RPC. Returns None on DEADLINE_EXCEEDED (expected empty poll).
-
-Unlike exec_grpc_query, DEADLINE_EXCEEDED is not an error for polling-style RPCs where the server holds the connection until a result is available or timeout occurs. No retry is performed — the caller is responsible for the retry loop.
-
-Parameters:
-
-- ###### **`endpoint`**
-
-  (`str`) – RPC method name on self.stub.
-
-- ###### **`request`**
-
-  (`Any`) – gRPC request protobuf.
-
-- ###### **`timeout`**
-
-  (`float`) – Seconds before treating as 'no result available'.
-
-Returns:
-
-- `Any | None` – gRPC response, or None if DEADLINE_EXCEEDED.
-
-Raises:
-
-- `ServerError` – For any non-DEADLINE_EXCEEDED gRPC error.
 
 ###### read
 
@@ -33744,49 +37309,14 @@ Raises:
 - `ValueError` – If the data type is invalid or if validation fails
 - `StorageServiceError` – If update of an existing record fails unexpectedly
 
-###### wait_for_ready
-
-```python
-wait_for_ready(timeout: float = 1.0) -> bool
-```
-
-Check if the gRPC channel can connect within timeout.
-
-Uses channel_ready() which resolves when the HTTP/2 connection is established and the server is accepting RPCs.
-
-Parameters:
-
-- ###### **`timeout`**
-
-  (`float`, default: `1.0` ) – Max seconds to wait for connectivity.
-
-Returns:
-
-- `bool` – True if channel reached READY state, False if timeout or no channel.
-
 #### storage_strategy
 
 This module contains the abstract base class for storage strategies.
 
 Classes:
 
-- **`DataType`** – Enum defining the types of data that can be stored.
 - **`StorageRecord`** – A single record stored in a collection, with metadata.
-- **`StorageServiceError`** – Base exception for Setup service errors.
 - **`StorageStrategy`** – Define CRUD + list/remove-collection against a collection/record store.
-
-##### DataType
-
-```
-              flowchart TD
-              digitalkin.services.storage.storage_strategy.DataType[DataType]
-
-              
-
-              click digitalkin.services.storage.storage_strategy.DataType href "" "digitalkin.services.storage.storage_strategy.DataType"
-```
-
-Enum defining the types of data that can be stored.
 
 ##### StorageRecord
 
@@ -33800,19 +37330,6 @@ Enum defining the types of data that can be stored.
 ```
 
 A single record stored in a collection, with metadata.
-
-##### StorageServiceError
-
-```
-              flowchart TD
-              digitalkin.services.storage.storage_strategy.StorageServiceError[StorageServiceError]
-
-              
-
-              click digitalkin.services.storage.storage_strategy.StorageServiceError href "" "digitalkin.services.storage.storage_strategy.StorageServiceError"
-```
-
-Base exception for Setup service errors.
 
 ##### StorageStrategy
 
@@ -34107,12 +37624,14 @@ Task manager signal service.
 Modules:
 
 - **`default_task_manager`** – In-memory implementation of TaskManagerStrategy.
-- **`grpc_task_manager`** – gRPC implementation of TaskManagerStrategy using TaskManagerService.
+- **`exceptions`** – Exceptions for the task manager service.
+- **`redis_task_manager`** – Redis pub/sub implementation of TaskManagerStrategy.
 - **`task_manager_strategy`** – Abstract interface for task manager signal management.
 
 Classes:
 
 - **`DefaultTaskManager`** – In-memory task signal service for single-process deployments.
+- **`RedisTaskManager`** – Redis pub/sub signal sender for embedded and standalone deployments.
 - **`TaskManagerStrategy`** – Abstract strategy for task manager signal management.
 
 #### DefaultTaskManager
@@ -34154,10 +37673,8 @@ Parameters:
 
 Methods:
 
-- **`close`** – Poison all subscribers and clear state.
-- **`send_signal`** – Create or update a signal record and broadcast to subscribers.
-- **`subscribe_signals`** – Subscribe to signal updates via an in-memory queue.
-- **`unsubscribe_signals`** – Unsubscribe by sending a poison pill and removing the subscriber.
+- **`close`** – Clear in-memory state.
+- **`send_signal`** – Store the latest signal record for a task.
 
 ##### close
 
@@ -34165,7 +37682,7 @@ Methods:
 close() -> None
 ```
 
-Poison all subscribers and clear state.
+Clear in-memory state.
 
 ##### send_signal
 
@@ -34173,7 +37690,7 @@ Poison all subscribers and clear state.
 send_signal(task_id: str, data: dict[str, Any]) -> dict[str, Any]
 ```
 
-Create or update a signal record and broadcast to subscribers.
+Store the latest signal record for a task.
 
 Parameters:
 
@@ -34189,39 +37706,75 @@ Returns:
 
 - `dict[str, Any]` – The upserted record.
 
-##### subscribe_signals
+#### RedisTaskManager
 
 ```python
-subscribe_signals(
-    task_id: str = "",
-) -> tuple[str, AsyncGenerator[dict[str, Any], None]]
+RedisTaskManager(redis_client: RedisClient, redis_url: str = 'default')
 ```
 
-Subscribe to signal updates via an in-memory queue.
+```
+              flowchart TD
+              digitalkin.services.task_manager.RedisTaskManager[RedisTaskManager]
+              digitalkin.services.task_manager.task_manager_strategy.TaskManagerStrategy[TaskManagerStrategy]
+
+                              digitalkin.services.task_manager.task_manager_strategy.TaskManagerStrategy --> digitalkin.services.task_manager.RedisTaskManager
+                
+
+
+              click digitalkin.services.task_manager.RedisTaskManager href "" "digitalkin.services.task_manager.RedisTaskManager"
+              click digitalkin.services.task_manager.task_manager_strategy.TaskManagerStrategy href "" "digitalkin.services.task_manager.task_manager_strategy.TaskManagerStrategy"
+```
+
+Redis pub/sub signal sender for embedded and standalone deployments.
+
+Gateway publishes signals to `signal_ch:{task_id}` via Redis PUBLISH; this class is the sender side. The receiver side is `SharedRedisListener.dispatch_signal` invoked from the listener loop — registration happens in `TaskExecutor.execute_task`.
+
+Singleton-safe: `SharedRedisListener` is keyed by `redis_url`, so multiple `RedisTaskManager` instances sharing the same `RedisClient` reuse one listener.
+
+Parameters:
+
+- ##### **`redis_client`**
+
+  (`RedisClient`) – Shared Redis connection pool.
+
+- ##### **`redis_url`**
+
+  (`str`, default: `'default'` ) – Key for SharedRedisListener singleton lookup.
+
+Methods:
+
+- **`close`** – Release the shared listener reference.
+- **`send_signal`** – Publish a signal to Redis pub/sub.
+
+##### close
+
+```python
+close() -> None
+```
+
+Release the shared listener reference.
+
+##### send_signal
+
+```python
+send_signal(task_id: str, data: dict[str, Any]) -> dict[str, Any]
+```
+
+Publish a signal to Redis pub/sub.
 
 Parameters:
 
 - ###### **`task_id`**
 
-  (`str`, default: `''` ) – Task identifier (unused in local mode, broadcasts all signals).
+  (`str`) – Unique task identifier.
+
+- ###### **`data`**
+
+  (`dict[str, Any]`) – Signal data (action, task_id, etc.).
 
 Returns:
 
-- `tuple[str, AsyncGenerator[dict[str, Any], None]]` – Tuple of (subscription_id, async generator of signal dicts).
-
-##### unsubscribe_signals
-
-```python
-unsubscribe_signals(sub_id: str) -> None
-```
-
-Unsubscribe by sending a poison pill and removing the subscriber.
-
-Parameters:
-
-- ###### **`sub_id`**
-
-  (`str`) – Subscription identifier.
+- `dict[str, Any]` – The signal data as sent.
 
 #### TaskManagerStrategy
 
@@ -34236,14 +37789,12 @@ Parameters:
 
 Abstract strategy for task manager signal management.
 
-Defines the contract for upsert, subscribe, unsubscribe, and close operations used by TaskSession, TaskExecutor, and BaseTaskManager.
+Defines the contract for sending signals and closing the transport. Receiving signals is handled directly by `SharedRedisListener.dispatch_signal` — no per-task subscription consumer is exposed through this interface.
 
 Methods:
 
 - **`close`** – Close the signal service and release resources.
 - **`send_signal`** – Create or update a signal record for a task.
-- **`subscribe_signals`** – Subscribe to signal updates for a specific task.
-- **`unsubscribe_signals`** – Unsubscribe from signal updates.
 
 ##### close
 
@@ -34274,38 +37825,6 @@ Parameters:
 Returns:
 
 - `dict[str, Any]` – The upserted record.
-
-##### subscribe_signals
-
-```python
-subscribe_signals(task_id: str) -> tuple[str, AsyncGenerator[dict[str, Any], None]]
-```
-
-Subscribe to signal updates for a specific task.
-
-Parameters:
-
-- ###### **`task_id`**
-
-  (`str`) – Unique task identifier to subscribe to.
-
-Returns:
-
-- `tuple[str, AsyncGenerator[dict[str, Any], None]]` – Tuple of (subscription_id, async generator of signal dicts).
-
-##### unsubscribe_signals
-
-```python
-unsubscribe_signals(sub_id: str) -> None
-```
-
-Unsubscribe from signal updates.
-
-Parameters:
-
-- ###### **`sub_id`**
-
-  (`str`) – Subscription identifier returned by subscribe_signals.
 
 #### default_task_manager
 
@@ -34354,10 +37873,8 @@ Parameters:
 
 Methods:
 
-- **`close`** – Poison all subscribers and clear state.
-- **`send_signal`** – Create or update a signal record and broadcast to subscribers.
-- **`subscribe_signals`** – Subscribe to signal updates via an in-memory queue.
-- **`unsubscribe_signals`** – Unsubscribe by sending a poison pill and removing the subscriber.
+- **`close`** – Clear in-memory state.
+- **`send_signal`** – Store the latest signal record for a task.
 
 ###### close
 
@@ -34365,7 +37882,7 @@ Methods:
 close() -> None
 ```
 
-Poison all subscribers and clear state.
+Clear in-memory state.
 
 ###### send_signal
 
@@ -34373,7 +37890,7 @@ Poison all subscribers and clear state.
 send_signal(task_id: str, data: dict[str, Any]) -> dict[str, Any]
 ```
 
-Create or update a signal record and broadcast to subscribers.
+Store the latest signal record for a task.
 
 Parameters:
 
@@ -34389,132 +37906,76 @@ Returns:
 
 - `dict[str, Any]` – The upserted record.
 
-###### subscribe_signals
+#### exceptions
 
-```python
-subscribe_signals(
-    task_id: str = "",
-) -> tuple[str, AsyncGenerator[dict[str, Any], None]]
-```
-
-Subscribe to signal updates via an in-memory queue.
-
-Parameters:
-
-- ###### **`task_id`**
-
-  (`str`, default: `''` ) – Task identifier (unused in local mode, broadcasts all signals).
-
-Returns:
-
-- `tuple[str, AsyncGenerator[dict[str, Any], None]]` – Tuple of (subscription_id, async generator of signal dicts).
-
-###### unsubscribe_signals
-
-```python
-unsubscribe_signals(sub_id: str) -> None
-```
-
-Unsubscribe by sending a poison pill and removing the subscriber.
-
-Parameters:
-
-- ###### **`sub_id`**
-
-  (`str`) – Subscription identifier.
-
-#### grpc_task_manager
-
-gRPC implementation of TaskManagerStrategy using TaskManagerService.
+Exceptions for the task manager service.
 
 Classes:
 
-- **`GrpcTaskManager`** – gRPC-backed task signal service using TaskManagerService.
+- **`TaskManagerServiceError`** – Error raised by task manager service operations.
 
-##### GrpcTaskManager
+##### TaskManagerServiceError
+
+```
+              flowchart TD
+              digitalkin.services.task_manager.exceptions.TaskManagerServiceError[TaskManagerServiceError]
+
+              
+
+              click digitalkin.services.task_manager.exceptions.TaskManagerServiceError href "" "digitalkin.services.task_manager.exceptions.TaskManagerServiceError"
+```
+
+Error raised by task manager service operations.
+
+#### redis_task_manager
+
+Redis pub/sub implementation of TaskManagerStrategy.
+
+Uses direct PUBLISH for sending. Receiving is owned by `SharedRedisListener` (registered from `TaskExecutor` per task) — this strategy only holds the listener ref so it's kept alive while the process has at least one active task manager.
+
+Classes:
+
+- **`RedisTaskManager`** – Redis pub/sub signal sender for embedded and standalone deployments.
+
+##### RedisTaskManager
 
 ```python
-GrpcTaskManager(
-    mission_id: str,
-    setup_id: str,
-    setup_version_id: str,
-    client_config: ClientConfig,
-    *,
-    poll_interval: float = float(get("DIGITALKIN_SIGNAL_POLL_INTERVAL", "1.0")),
-    initial_poll_interval: float = float(
-        get("DIGITALKIN_SIGNAL_INITIAL_POLL_INTERVAL", "0.1")
-    ),
-)
+RedisTaskManager(redis_client: RedisClient, redis_url: str = 'default')
 ```
 
 ```
               flowchart TD
-              digitalkin.services.task_manager.grpc_task_manager.GrpcTaskManager[GrpcTaskManager]
+              digitalkin.services.task_manager.redis_task_manager.RedisTaskManager[RedisTaskManager]
               digitalkin.services.task_manager.task_manager_strategy.TaskManagerStrategy[TaskManagerStrategy]
-              digitalkin.grpc_servers.utils.grpc_client_wrapper.GrpcClientWrapper[GrpcClientWrapper]
-              digitalkin.grpc_servers.utils.grpc_error_handler.GrpcErrorHandlerMixin[GrpcErrorHandlerMixin]
 
-                              digitalkin.services.task_manager.task_manager_strategy.TaskManagerStrategy --> digitalkin.services.task_manager.grpc_task_manager.GrpcTaskManager
-                
-                digitalkin.grpc_servers.utils.grpc_client_wrapper.GrpcClientWrapper --> digitalkin.services.task_manager.grpc_task_manager.GrpcTaskManager
-                
-                digitalkin.grpc_servers.utils.grpc_error_handler.GrpcErrorHandlerMixin --> digitalkin.services.task_manager.grpc_task_manager.GrpcTaskManager
+                              digitalkin.services.task_manager.task_manager_strategy.TaskManagerStrategy --> digitalkin.services.task_manager.redis_task_manager.RedisTaskManager
                 
 
 
-              click digitalkin.services.task_manager.grpc_task_manager.GrpcTaskManager href "" "digitalkin.services.task_manager.grpc_task_manager.GrpcTaskManager"
+              click digitalkin.services.task_manager.redis_task_manager.RedisTaskManager href "" "digitalkin.services.task_manager.redis_task_manager.RedisTaskManager"
               click digitalkin.services.task_manager.task_manager_strategy.TaskManagerStrategy href "" "digitalkin.services.task_manager.task_manager_strategy.TaskManagerStrategy"
-              click digitalkin.grpc_servers.utils.grpc_client_wrapper.GrpcClientWrapper href "" "digitalkin.grpc_servers.utils.grpc_client_wrapper.GrpcClientWrapper"
-              click digitalkin.grpc_servers.utils.grpc_error_handler.GrpcErrorHandlerMixin href "" "digitalkin.grpc_servers.utils.grpc_error_handler.GrpcErrorHandlerMixin"
 ```
 
-gRPC-backed task signal service using TaskManagerService.
+Redis pub/sub signal sender for embedded and standalone deployments.
 
-Signal polling is delegated to a shared \_SharedPoller per gRPC address, so N concurrent tasks share one controlled polling loop instead of N independent loops hammering the TaskManagerService.
+Gateway publishes signals to `signal_ch:{task_id}` via Redis PUBLISH; this class is the sender side. The receiver side is `SharedRedisListener.dispatch_signal` invoked from the listener loop — registration happens in `TaskExecutor.execute_task`.
+
+Singleton-safe: `SharedRedisListener` is keyed by `redis_url`, so multiple `RedisTaskManager` instances sharing the same `RedisClient` reuse one listener.
 
 Parameters:
 
-- ###### **`mission_id`**
+- ###### **`redis_client`**
 
-  (`str`) – Mission identifier (unused, required by init_strategy convention).
+  (`RedisClient`) – Shared Redis connection pool.
 
-- ###### **`setup_id`**
+- ###### **`redis_url`**
 
-  (`str`) – Setup identifier (unused, required by init_strategy convention).
-
-- ###### **`setup_version_id`**
-
-  (`str`) – Setup version identifier (unused, required by init_strategy convention).
-
-- ###### **`client_config`**
-
-  (`ClientConfig`) – gRPC client configuration.
-
-- ###### **`poll_interval`**
-
-  (`float`, default: `float(get('DIGITALKIN_SIGNAL_POLL_INTERVAL', '1.0'))` ) – Maximum seconds between GetSignals polls.
-
-- ###### **`initial_poll_interval`**
-
-  (`float`, default: `float(get('DIGITALKIN_SIGNAL_INITIAL_POLL_INTERVAL', '0.1'))` ) – Starting poll interval before exponential ramp-up.
-
-Raises:
-
-- `ImportError` – If agentic_mesh_protocol.task_manager.v1 is not installed.
+  (`str`, default: `'default'` ) – Key for SharedRedisListener singleton lookup.
 
 Methods:
 
-- **`close`** – Stop all subscriptions, flush pending signals, and close the gRPC channel.
-- **`close_all_cached_channels`** – Close all cached channels and reset the cache.
-- **`close_channel`** – Release this instance's ref on the cached channel.
-- **`exec_grpc_query`** – Execute a gRPC query with from the query's rpc endpoint name.
-- **`handle_grpc_errors`** – Handle gRPC errors for the given operation.
-- **`poll_grpc`** – Execute a single polling RPC. Returns None on DEADLINE_EXCEEDED (expected empty poll).
-- **`release_cached_channel`** – Decrement refcount for a cache key and close channel when last ref is released.
-- **`send_signal`** – Enqueue a signal for batched delivery via gRPC SendSignals.
-- **`subscribe_signals`** – Subscribe to signal updates via the shared poller.
-- **`unsubscribe_signals`** – Stop the subscription and wake its consumer via the shared poller.
-- **`wait_for_ready`** – Check if the gRPC channel can connect within timeout.
+- **`close`** – Release the shared listener reference.
+- **`send_signal`** – Publish a signal to Redis pub/sub.
 
 ###### close
 
@@ -34522,134 +37983,7 @@ Methods:
 close() -> None
 ```
 
-Stop all subscriptions, flush pending signals, and close the gRPC channel.
-
-###### close_all_cached_channels
-
-```python
-close_all_cached_channels() -> None
-```
-
-Close all cached channels and reset the cache.
-
-Intended for server shutdown to ensure clean resource release.
-
-###### close_channel
-
-```python
-close_channel() -> None
-```
-
-Release this instance's ref on the cached channel.
-
-The underlying channel is only closed when the last ref is released.
-
-###### exec_grpc_query
-
-```python
-exec_grpc_query(query_endpoint: str, request: Any, timeout: float | None = None) -> Any
-```
-
-Execute a gRPC query with from the query's rpc endpoint name.
-
-Retries on transient errors (UNAVAILABLE, INTERNAL, DEADLINE_EXCEEDED) with exponential backoff. Retry count and backoff base are configurable via DIGITALKIN_GRPC_QUERY_MAX_RETRIES and DIGITALKIN_GRPC_QUERY_BACKOFF_BASE_MS.
-
-Parameters:
-
-- ###### **`query_endpoint`**
-
-  (`str`) – rpc query name (e.g., "GetSetup", "CreateSetupVersion")
-
-- ###### **`request`**
-
-  (`Any`) – gRPC protobuf request object
-
-- ###### **`timeout`**
-
-  (`float | None`, default: `None` ) – Per-call timeout in seconds. Falls back to \_QUERY_DEFAULT_TIMEOUT (env DIGITALKIN_GRPC_QUERY_TIMEOUT, default 30s) when None.
-
-Returns:
-
-- `Any` – gRPC protobuf response object.
-
-Raises:
-
-- `ServerError` – gRPC error with status code and details for caller to handle.
-
-###### handle_grpc_errors
-
-```python
-handle_grpc_errors(
-    operation: str, service_error_class: type[Exception] | None = None
-) -> AsyncGenerator[Any, Any]
-```
-
-Handle gRPC errors for the given operation.
-
-Parameters:
-
-- ###### **`operation`**
-
-  (`str`) – Name of the operation being performed.
-
-- ###### **`service_error_class`**
-
-  (`type[Exception] | None`, default: `None` ) – Optional specific service exception class to raise. If not provided, uses the generic ServerError.
-
-Yields:
-
-- `AsyncGenerator[Any, Any]` – Context for the operation.
-
-Raises:
-
-- `ServerError` – For gRPC-related errors.
-- `service_error_class` – For service-specific errors if provided.
-
-###### poll_grpc
-
-```python
-poll_grpc(endpoint: str, request: Any, *, timeout: float) -> Any | None
-```
-
-Execute a single polling RPC. Returns None on DEADLINE_EXCEEDED (expected empty poll).
-
-Unlike exec_grpc_query, DEADLINE_EXCEEDED is not an error for polling-style RPCs where the server holds the connection until a result is available or timeout occurs. No retry is performed — the caller is responsible for the retry loop.
-
-Parameters:
-
-- ###### **`endpoint`**
-
-  (`str`) – RPC method name on self.stub.
-
-- ###### **`request`**
-
-  (`Any`) – gRPC request protobuf.
-
-- ###### **`timeout`**
-
-  (`float`) – Seconds before treating as 'no result available'.
-
-Returns:
-
-- `Any | None` – gRPC response, or None if DEADLINE_EXCEEDED.
-
-Raises:
-
-- `ServerError` – For any non-DEADLINE_EXCEEDED gRPC error.
-
-###### release_cached_channel
-
-```python
-release_cached_channel(key: str) -> None
-```
-
-Decrement refcount for a cache key and close channel when last ref is released.
-
-Parameters:
-
-- ###### **`key`**
-
-  (`str`) – Channel cache key to release.
+Release the shared listener reference.
 
 ###### send_signal
 
@@ -34657,9 +37991,7 @@ Parameters:
 send_signal(task_id: str, data: dict[str, Any]) -> dict[str, Any]
 ```
 
-Enqueue a signal for batched delivery via gRPC SendSignals.
-
-Signals are accumulated in a shared per-channel send buffer and flushed in a single SendSignalsRequest either when the batch hits 50 items or after 100 ms — whichever comes first.
+Publish a signal to Redis pub/sub.
 
 Parameters:
 
@@ -34669,69 +38001,11 @@ Parameters:
 
 - ###### **`data`**
 
-  (`dict[str, Any]`) – Signal data to upsert.
+  (`dict[str, Any]`) – Signal data (action, task_id, etc.).
 
 Returns:
 
-- `dict[str, Any]` – The upserted record as a dict.
-
-Raises:
-
-- `TaskManagerServiceError` – If the gRPC call fails or the server rejects the request.
-
-###### subscribe_signals
-
-```python
-subscribe_signals(task_id: str) -> tuple[str, AsyncGenerator[dict[str, Any], None]]
-```
-
-Subscribe to signal updates via the shared poller.
-
-Instead of an independent polling loop, this registers the task_id with the shared \_SharedPoller and yields signals from a queue.
-
-Parameters:
-
-- ###### **`task_id`**
-
-  (`str`) – Unique task identifier to poll signals for.
-
-Returns:
-
-- `tuple[str, AsyncGenerator[dict[str, Any], None]]` – Tuple of (subscription_id, async generator of signal dicts).
-
-###### unsubscribe_signals
-
-```python
-unsubscribe_signals(sub_id: str) -> None
-```
-
-Stop the subscription and wake its consumer via the shared poller.
-
-Parameters:
-
-- ###### **`sub_id`**
-
-  (`str`) – Subscription identifier.
-
-###### wait_for_ready
-
-```python
-wait_for_ready(timeout: float = 1.0) -> bool
-```
-
-Check if the gRPC channel can connect within timeout.
-
-Uses channel_ready() which resolves when the HTTP/2 connection is established and the server is accepting RPCs.
-
-Parameters:
-
-- ###### **`timeout`**
-
-  (`float`, default: `1.0` ) – Max seconds to wait for connectivity.
-
-Returns:
-
-- `bool` – True if channel reached READY state, False if timeout or no channel.
+- `dict[str, Any]` – The signal data as sent.
 
 #### task_manager_strategy
 
@@ -34739,21 +38013,7 @@ Abstract interface for task manager signal management.
 
 Classes:
 
-- **`TaskManagerServiceError`** – Error raised by task manager service operations.
 - **`TaskManagerStrategy`** – Abstract strategy for task manager signal management.
-
-##### TaskManagerServiceError
-
-```
-              flowchart TD
-              digitalkin.services.task_manager.task_manager_strategy.TaskManagerServiceError[TaskManagerServiceError]
-
-              
-
-              click digitalkin.services.task_manager.task_manager_strategy.TaskManagerServiceError href "" "digitalkin.services.task_manager.task_manager_strategy.TaskManagerServiceError"
-```
-
-Error raised by task manager service operations.
 
 ##### TaskManagerStrategy
 
@@ -34768,14 +38028,12 @@ Error raised by task manager service operations.
 
 Abstract strategy for task manager signal management.
 
-Defines the contract for upsert, subscribe, unsubscribe, and close operations used by TaskSession, TaskExecutor, and BaseTaskManager.
+Defines the contract for sending signals and closing the transport. Receiving signals is handled directly by `SharedRedisListener.dispatch_signal` — no per-task subscription consumer is exposed through this interface.
 
 Methods:
 
 - **`close`** – Close the signal service and release resources.
 - **`send_signal`** – Create or update a signal record for a task.
-- **`subscribe_signals`** – Subscribe to signal updates for a specific task.
-- **`unsubscribe_signals`** – Unsubscribe from signal updates.
 
 ###### close
 
@@ -34807,38 +38065,6 @@ Returns:
 
 - `dict[str, Any]` – The upserted record.
 
-###### subscribe_signals
-
-```python
-subscribe_signals(task_id: str) -> tuple[str, AsyncGenerator[dict[str, Any], None]]
-```
-
-Subscribe to signal updates for a specific task.
-
-Parameters:
-
-- ###### **`task_id`**
-
-  (`str`) – Unique task identifier to subscribe to.
-
-Returns:
-
-- `tuple[str, AsyncGenerator[dict[str, Any], None]]` – Tuple of (subscription_id, async generator of signal dicts).
-
-###### unsubscribe_signals
-
-```python
-unsubscribe_signals(sub_id: str) -> None
-```
-
-Unsubscribe from signal updates.
-
-Parameters:
-
-- ###### **`sub_id`**
-
-  (`str`) – Subscription identifier returned by subscribe_signals.
-
 ### user_profile
 
 UserProfile service package.
@@ -34846,6 +38072,7 @@ UserProfile service package.
 Modules:
 
 - **`default_user_profile`** – Default user profile implementation.
+- **`exceptions`** – Exceptions for the user profile service.
 - **`grpc_user_profile`** – Digital Kin UserProfile Service gRPC Client.
 - **`user_profile_strategy`** – This module contains the abstract base class for UserProfile strategies.
 
@@ -34898,6 +38125,7 @@ Parameters:
 Methods:
 
 - **`add_user_profile`** – Add a user profile to the in-memory database (helper for testing).
+- **`check_resource_access`** – Local strategy: grant access (no access backend in local mode).
 - **`close`** – Release resources held by this strategy. No-op by default.
 - **`get_user_profile`** – Get user profile from in-memory storage.
 
@@ -34914,6 +38142,28 @@ Parameters:
 - ###### **`user_profile_data`**
 
   (`dict[str, Any]`) – Dictionary containing user profile data
+
+##### check_resource_access
+
+```python
+check_resource_access(resource_type: int, resource_id: str) -> bool
+```
+
+Local strategy: grant access (no access backend in local mode).
+
+Parameters:
+
+- ###### **`resource_type`**
+
+  (`int`) – The ResourceType enum value.
+
+- ###### **`resource_id`**
+
+  (`str`) – The resource identifier.
+
+Returns:
+
+- `bool` – True.
 
 ##### close
 
@@ -34990,15 +38240,41 @@ Parameters:
 
 Methods:
 
-- **`close`** – Release resources held by this strategy. No-op by default.
-- **`close_all_cached_channels`** – Close all cached channels and reset the cache.
+- **`check_resource_access`** – Check whether the caller may access a resource (e.g. a setup).
+- **`close`** – Release this instance's pooled gRPC channel ref.
+- **`close_all_cached_channels`** – Close all cached channels, reset cache, and clear circuit breakers.
 - **`close_channel`** – Release this instance's ref on the cached channel.
-- **`exec_grpc_query`** – Execute a gRPC query with from the query's rpc endpoint name.
+- **`evict_cached_channel`** – Force-close and remove a cached channel regardless of refcount.
+- **`exec_grpc_query`** – Execute a gRPC query with circuit breaker protection and retry.
 - **`get_user_profile`** – Get user profile by mission_id (which maps to user_id).
 - **`handle_grpc_errors`** – Handle gRPC errors for the given operation.
-- **`poll_grpc`** – Execute a single polling RPC. Returns None on DEADLINE_EXCEEDED (expected empty poll).
 - **`release_cached_channel`** – Decrement refcount for a cache key and close channel when last ref is released.
-- **`wait_for_ready`** – Check if the gRPC channel can connect within timeout.
+
+##### check_resource_access
+
+```python
+check_resource_access(resource_type: int, resource_id: str) -> bool
+```
+
+Check whether the caller may access a resource (e.g. a setup).
+
+Parameters:
+
+- ###### **`resource_type`**
+
+  (`int`) – The ResourceType enum value (e.g. RESOURCE_TYPE_SETUP).
+
+- ###### **`resource_id`**
+
+  (`str`) – The resource identifier (e.g. the setup_id).
+
+Returns:
+
+- `bool` – True if access is granted, False otherwise.
+
+Raises:
+
+- `UserProfileServiceError` – If the gRPC operation fails.
 
 ##### close
 
@@ -35006,7 +38282,7 @@ Methods:
 close() -> None
 ```
 
-Release resources held by this strategy. No-op by default.
+Release this instance's pooled gRPC channel ref.
 
 ##### close_all_cached_channels
 
@@ -35014,9 +38290,9 @@ Release resources held by this strategy. No-op by default.
 close_all_cached_channels() -> None
 ```
 
-Close all cached channels and reset the cache.
+Close all cached channels, reset cache, and clear circuit breakers.
 
-Intended for server shutdown to ensure clean resource release.
+Intended for server shutdown to ensure clean resource release. Clears circuit breaker singletons to prevent unbounded growth from dynamically discovered services.
 
 ##### close_channel
 
@@ -35026,15 +38302,38 @@ close_channel() -> None
 
 Release this instance's ref on the cached channel.
 
-The underlying channel is only closed when the last ref is released.
+The underlying channel is only closed when the last ref is released. When the last ref is released, the corresponding circuit breaker singleton is also removed to prevent unbounded accumulation.
+
+##### evict_cached_channel
+
+```python
+evict_cached_channel(key: str) -> None
+```
+
+Force-close and remove a cached channel regardless of refcount.
+
+Guarantees a fresh connection on re-dial: a channel left cached after a peer died can be wedged mid-reconnect, so a resume must not reuse it. A missing key is a no-op.
+
+Parameters:
+
+- ###### **`key`**
+
+  (`str`) – Channel cache key to evict.
 
 ##### exec_grpc_query
 
 ```python
-exec_grpc_query(query_endpoint: str, request: Any, timeout: float | None = None) -> Any
+exec_grpc_query(
+    query_endpoint: str,
+    request: Any,
+    timeout: float | None = None,
+    metadata: tuple[tuple[str, str], ...] | None = None,
+) -> Any
 ```
 
-Execute a gRPC query with from the query's rpc endpoint name.
+Execute a gRPC query with circuit breaker protection and retry.
+
+The circuit breaker is per-service (keyed on `service_name`). When the circuit is OPEN, calls fail immediately with `CircuitOpenError` wrapped in `ServerError` — no network round-trip, no timeout wait.
 
 Retries on transient errors (UNAVAILABLE, INTERNAL, DEADLINE_EXCEEDED) with exponential backoff. Retry count and backoff base are configurable via DIGITALKIN_GRPC_QUERY_MAX_RETRIES and DIGITALKIN_GRPC_QUERY_BACKOFF_BASE_MS.
 
@@ -35050,7 +38349,11 @@ Parameters:
 
 - ###### **`timeout`**
 
-  (`float | None`, default: `None` ) – Per-call timeout in seconds. Falls back to \_QUERY_DEFAULT_TIMEOUT (env DIGITALKIN_GRPC_QUERY_TIMEOUT, default 30s) when None.
+  (`float | None`, default: `None` ) – Per-call timeout in seconds. None applies no client-side deadline.
+
+- ###### **`metadata`**
+
+  (`tuple[tuple[str, str], ...] | None`, default: `None` ) – Optional gRPC metadata pairs (e.g. an idempotency key); the same metadata is sent on every retry attempt.
 
 Returns:
 
@@ -35102,40 +38405,9 @@ Yields:
 
 Raises:
 
+- `PermissionDeniedError` – Re-raised as-is so the authz status is never masked.
 - `ServerError` – For gRPC-related errors.
 - `service_error_class` – For service-specific errors if provided.
-
-##### poll_grpc
-
-```python
-poll_grpc(endpoint: str, request: Any, *, timeout: float) -> Any | None
-```
-
-Execute a single polling RPC. Returns None on DEADLINE_EXCEEDED (expected empty poll).
-
-Unlike exec_grpc_query, DEADLINE_EXCEEDED is not an error for polling-style RPCs where the server holds the connection until a result is available or timeout occurs. No retry is performed — the caller is responsible for the retry loop.
-
-Parameters:
-
-- ###### **`endpoint`**
-
-  (`str`) – RPC method name on self.stub.
-
-- ###### **`request`**
-
-  (`Any`) – gRPC request protobuf.
-
-- ###### **`timeout`**
-
-  (`float`) – Seconds before treating as 'no result available'.
-
-Returns:
-
-- `Any | None` – gRPC response, or None if DEADLINE_EXCEEDED.
-
-Raises:
-
-- `ServerError` – For any non-DEADLINE_EXCEEDED gRPC error.
 
 ##### release_cached_channel
 
@@ -35150,26 +38422,6 @@ Parameters:
 - ###### **`key`**
 
   (`str`) – Channel cache key to release.
-
-##### wait_for_ready
-
-```python
-wait_for_ready(timeout: float = 1.0) -> bool
-```
-
-Check if the gRPC channel can connect within timeout.
-
-Uses channel_ready() which resolves when the HTTP/2 connection is established and the server is accepting RPCs.
-
-Parameters:
-
-- ###### **`timeout`**
-
-  (`float`, default: `1.0` ) – Max seconds to wait for connectivity.
-
-Returns:
-
-- `bool` – True if channel reached READY state, False if timeout or no channel.
 
 #### UserProfileServiceError
 
@@ -35221,8 +38473,35 @@ Parameters:
 
 Methods:
 
+- **`check_resource_access`** – Check whether the caller may access a resource.
 - **`close`** – Release resources held by this strategy. No-op by default.
 - **`get_user_profile`** – Get user profile data.
+
+##### check_resource_access
+
+```python
+check_resource_access(resource_type: int, resource_id: str) -> bool
+```
+
+Check whether the caller may access a resource.
+
+Parameters:
+
+- ###### **`resource_type`**
+
+  (`int`) – The ResourceType enum value (e.g. RESOURCE_TYPE_SETUP).
+
+- ###### **`resource_id`**
+
+  (`str`) – The resource identifier (e.g. the setup_id).
+
+Returns:
+
+- `bool` – True if access is granted, False otherwise.
+
+Raises:
+
+- `UserProfileServiceError` – If the service call fails.
 
 ##### close
 
@@ -35298,6 +38577,7 @@ Parameters:
 Methods:
 
 - **`add_user_profile`** – Add a user profile to the in-memory database (helper for testing).
+- **`check_resource_access`** – Local strategy: grant access (no access backend in local mode).
 - **`close`** – Release resources held by this strategy. No-op by default.
 - **`get_user_profile`** – Get user profile from in-memory storage.
 
@@ -35314,6 +38594,28 @@ Parameters:
 - ###### **`user_profile_data`**
 
   (`dict[str, Any]`) – Dictionary containing user profile data
+
+###### check_resource_access
+
+```python
+check_resource_access(resource_type: int, resource_id: str) -> bool
+```
+
+Local strategy: grant access (no access backend in local mode).
+
+Parameters:
+
+- ###### **`resource_type`**
+
+  (`int`) – The ResourceType enum value.
+
+- ###### **`resource_id`**
+
+  (`str`) – The resource identifier.
+
+Returns:
+
+- `bool` – True.
 
 ###### close
 
@@ -35334,6 +38636,27 @@ Get user profile from in-memory storage.
 Returns:
 
 - `dict[str, Any] | None` – User profile data, or None if not found.
+
+#### exceptions
+
+Exceptions for the user profile service.
+
+Classes:
+
+- **`UserProfileServiceError`** – Base exception for UserProfile service errors.
+
+##### UserProfileServiceError
+
+```
+              flowchart TD
+              digitalkin.services.user_profile.exceptions.UserProfileServiceError[UserProfileServiceError]
+
+              
+
+              click digitalkin.services.user_profile.exceptions.UserProfileServiceError href "" "digitalkin.services.user_profile.exceptions.UserProfileServiceError"
+```
+
+Base exception for UserProfile service errors.
 
 #### grpc_user_profile
 
@@ -35398,15 +38721,41 @@ Parameters:
 
 Methods:
 
-- **`close`** – Release resources held by this strategy. No-op by default.
-- **`close_all_cached_channels`** – Close all cached channels and reset the cache.
+- **`check_resource_access`** – Check whether the caller may access a resource (e.g. a setup).
+- **`close`** – Release this instance's pooled gRPC channel ref.
+- **`close_all_cached_channels`** – Close all cached channels, reset cache, and clear circuit breakers.
 - **`close_channel`** – Release this instance's ref on the cached channel.
-- **`exec_grpc_query`** – Execute a gRPC query with from the query's rpc endpoint name.
+- **`evict_cached_channel`** – Force-close and remove a cached channel regardless of refcount.
+- **`exec_grpc_query`** – Execute a gRPC query with circuit breaker protection and retry.
 - **`get_user_profile`** – Get user profile by mission_id (which maps to user_id).
 - **`handle_grpc_errors`** – Handle gRPC errors for the given operation.
-- **`poll_grpc`** – Execute a single polling RPC. Returns None on DEADLINE_EXCEEDED (expected empty poll).
 - **`release_cached_channel`** – Decrement refcount for a cache key and close channel when last ref is released.
-- **`wait_for_ready`** – Check if the gRPC channel can connect within timeout.
+
+###### check_resource_access
+
+```python
+check_resource_access(resource_type: int, resource_id: str) -> bool
+```
+
+Check whether the caller may access a resource (e.g. a setup).
+
+Parameters:
+
+- ###### **`resource_type`**
+
+  (`int`) – The ResourceType enum value (e.g. RESOURCE_TYPE_SETUP).
+
+- ###### **`resource_id`**
+
+  (`str`) – The resource identifier (e.g. the setup_id).
+
+Returns:
+
+- `bool` – True if access is granted, False otherwise.
+
+Raises:
+
+- `UserProfileServiceError` – If the gRPC operation fails.
 
 ###### close
 
@@ -35414,7 +38763,7 @@ Methods:
 close() -> None
 ```
 
-Release resources held by this strategy. No-op by default.
+Release this instance's pooled gRPC channel ref.
 
 ###### close_all_cached_channels
 
@@ -35422,9 +38771,9 @@ Release resources held by this strategy. No-op by default.
 close_all_cached_channels() -> None
 ```
 
-Close all cached channels and reset the cache.
+Close all cached channels, reset cache, and clear circuit breakers.
 
-Intended for server shutdown to ensure clean resource release.
+Intended for server shutdown to ensure clean resource release. Clears circuit breaker singletons to prevent unbounded growth from dynamically discovered services.
 
 ###### close_channel
 
@@ -35434,15 +38783,38 @@ close_channel() -> None
 
 Release this instance's ref on the cached channel.
 
-The underlying channel is only closed when the last ref is released.
+The underlying channel is only closed when the last ref is released. When the last ref is released, the corresponding circuit breaker singleton is also removed to prevent unbounded accumulation.
+
+###### evict_cached_channel
+
+```python
+evict_cached_channel(key: str) -> None
+```
+
+Force-close and remove a cached channel regardless of refcount.
+
+Guarantees a fresh connection on re-dial: a channel left cached after a peer died can be wedged mid-reconnect, so a resume must not reuse it. A missing key is a no-op.
+
+Parameters:
+
+- ###### **`key`**
+
+  (`str`) – Channel cache key to evict.
 
 ###### exec_grpc_query
 
 ```python
-exec_grpc_query(query_endpoint: str, request: Any, timeout: float | None = None) -> Any
+exec_grpc_query(
+    query_endpoint: str,
+    request: Any,
+    timeout: float | None = None,
+    metadata: tuple[tuple[str, str], ...] | None = None,
+) -> Any
 ```
 
-Execute a gRPC query with from the query's rpc endpoint name.
+Execute a gRPC query with circuit breaker protection and retry.
+
+The circuit breaker is per-service (keyed on `service_name`). When the circuit is OPEN, calls fail immediately with `CircuitOpenError` wrapped in `ServerError` — no network round-trip, no timeout wait.
 
 Retries on transient errors (UNAVAILABLE, INTERNAL, DEADLINE_EXCEEDED) with exponential backoff. Retry count and backoff base are configurable via DIGITALKIN_GRPC_QUERY_MAX_RETRIES and DIGITALKIN_GRPC_QUERY_BACKOFF_BASE_MS.
 
@@ -35458,7 +38830,11 @@ Parameters:
 
 - ###### **`timeout`**
 
-  (`float | None`, default: `None` ) – Per-call timeout in seconds. Falls back to \_QUERY_DEFAULT_TIMEOUT (env DIGITALKIN_GRPC_QUERY_TIMEOUT, default 30s) when None.
+  (`float | None`, default: `None` ) – Per-call timeout in seconds. None applies no client-side deadline.
+
+- ###### **`metadata`**
+
+  (`tuple[tuple[str, str], ...] | None`, default: `None` ) – Optional gRPC metadata pairs (e.g. an idempotency key); the same metadata is sent on every retry attempt.
 
 Returns:
 
@@ -35510,40 +38886,9 @@ Yields:
 
 Raises:
 
+- `PermissionDeniedError` – Re-raised as-is so the authz status is never masked.
 - `ServerError` – For gRPC-related errors.
 - `service_error_class` – For service-specific errors if provided.
-
-###### poll_grpc
-
-```python
-poll_grpc(endpoint: str, request: Any, *, timeout: float) -> Any | None
-```
-
-Execute a single polling RPC. Returns None on DEADLINE_EXCEEDED (expected empty poll).
-
-Unlike exec_grpc_query, DEADLINE_EXCEEDED is not an error for polling-style RPCs where the server holds the connection until a result is available or timeout occurs. No retry is performed — the caller is responsible for the retry loop.
-
-Parameters:
-
-- ###### **`endpoint`**
-
-  (`str`) – RPC method name on self.stub.
-
-- ###### **`request`**
-
-  (`Any`) – gRPC request protobuf.
-
-- ###### **`timeout`**
-
-  (`float`) – Seconds before treating as 'no result available'.
-
-Returns:
-
-- `Any | None` – gRPC response, or None if DEADLINE_EXCEEDED.
-
-Raises:
-
-- `ServerError` – For any non-DEADLINE_EXCEEDED gRPC error.
 
 ###### release_cached_channel
 
@@ -35559,47 +38904,13 @@ Parameters:
 
   (`str`) – Channel cache key to release.
 
-###### wait_for_ready
-
-```python
-wait_for_ready(timeout: float = 1.0) -> bool
-```
-
-Check if the gRPC channel can connect within timeout.
-
-Uses channel_ready() which resolves when the HTTP/2 connection is established and the server is accepting RPCs.
-
-Parameters:
-
-- ###### **`timeout`**
-
-  (`float`, default: `1.0` ) – Max seconds to wait for connectivity.
-
-Returns:
-
-- `bool` – True if channel reached READY state, False if timeout or no channel.
-
 #### user_profile_strategy
 
 This module contains the abstract base class for UserProfile strategies.
 
 Classes:
 
-- **`UserProfileServiceError`** – Base exception for UserProfile service errors.
 - **`UserProfileStrategy`** – Abstract base class for UserProfile strategies.
-
-##### UserProfileServiceError
-
-```
-              flowchart TD
-              digitalkin.services.user_profile.user_profile_strategy.UserProfileServiceError[UserProfileServiceError]
-
-              
-
-              click digitalkin.services.user_profile.user_profile_strategy.UserProfileServiceError href "" "digitalkin.services.user_profile.user_profile_strategy.UserProfileServiceError"
-```
-
-Base exception for UserProfile service errors.
 
 ##### UserProfileStrategy
 
@@ -35638,8 +38949,35 @@ Parameters:
 
 Methods:
 
+- **`check_resource_access`** – Check whether the caller may access a resource.
 - **`close`** – Release resources held by this strategy. No-op by default.
 - **`get_user_profile`** – Get user profile data.
+
+###### check_resource_access
+
+```python
+check_resource_access(resource_type: int, resource_id: str) -> bool
+```
+
+Check whether the caller may access a resource.
+
+Parameters:
+
+- ###### **`resource_type`**
+
+  (`int`) – The ResourceType enum value (e.g. RESOURCE_TYPE_SETUP).
+
+- ###### **`resource_id`**
+
+  (`str`) – The resource identifier (e.g. the setup_id).
+
+Returns:
+
+- `bool` – True if access is granted, False otherwise.
+
+Raises:
+
+- `UserProfileServiceError` – If the service call fails.
 
 ###### close
 
@@ -35675,7 +39013,8 @@ Modules:
 - **`conditional_schema`** – Conditional field visibility for react-jsonschema-form.
 - **`development_mode_action`** – ArgParser and Action classes to ease command lines arguments settings.
 - **`dynamic_schema`** – Dynamic schema utilities for runtime value refresh in Pydantic models.
-- **`llm_ready_schema`** – LLM format schema for Pydantic models.
+- **`exceptions`** – Exceptions for the DigitalKin utils package.
+- **`llm_ready_schema`** – LLM-ready JSON schema generation for Pydantic models.
 - **`package_discover`** – Secure module discovery and import utility for trigger handlers.
 - **`proto_utils`** – Protobuf conversion utilities.
 - **`schema_splitter`** – Schema splitter for react-jsonschema-form.
@@ -35683,19 +39022,22 @@ Modules:
 Classes:
 
 - **`ConditionalField`** – Metadata for conditional field visibility.
-- **`ConditionalSchemaMixin`** – Mixin for automatic conditional field processing in JSON schema.
+- **`ConditionalSchemaMixin`** – Mixin that rewrites JSON Schema with if/then clauses for Conditional fields.
 - **`DynamicField`** – Metadata class for Annotated fields with dynamic fetchers.
+- **`DynamicSchemaResolver`** – Extract and resolve DynamicField fetchers from Pydantic fields.
 - **`ResolveResult`** – Result of resolving dynamic fetchers.
 
-Functions:
+Attributes:
 
-- **`get_conditional_metadata`** – Extract ConditionalField from field metadata.
-- **`get_dynamic_metadata`** – Extract DynamicField metadata from a FieldInfo's metadata list.
-- **`get_fetchers`** – Extract fetchers from a field's DynamicField metadata.
-- **`has_conditional`** – Check if field has ConditionalField metadata.
-- **`has_dynamic`** – Check if a field has DynamicField metadata.
-- **`resolve`** – Resolve all dynamic fetchers to their actual values in parallel.
-- **`resolve_safe`** – Resolve fetchers with structured error handling.
+- **`Fetcher`** – Zero-arg sync or async fetcher.
+
+### Fetcher
+
+```python
+Fetcher = Callable[[], T | Awaitable[T]]
+```
+
+Zero-arg sync or async fetcher.
 
 ### ConditionalField
 
@@ -35717,25 +39059,11 @@ Parameters:
 
 - #### **`show_when`**
 
-  (`bool | str | list[str]`) – Value(s) that trigger field must have to show this field. Can be a boolean, string, or list of strings for multiple values.
+  (`bool | str | list[str]`) – Value(s) the trigger field must have. Bool, str, or list.
 
 - #### **`required_when_shown`**
 
-  (`bool`, default: `True` ) – Whether field is required when visible. Defaults to True.
-
-Example
-
-#### Boolean condition
-
-web_search_engine: Annotated[ str, Conditional(trigger="web_search_enabled", show_when=True), ] = Field(...)
-
-#### Enum condition
-
-advanced_option: Annotated[ str, Conditional(trigger="mode", show_when="advanced"), ] = Field(...)
-
-#### Multiple values condition
-
-shared_feature: Annotated\[ bool, Conditional(trigger="mode", show_when=["standard", "advanced"]), \] = Field(...)
+  (`bool`, default: `True` ) – Whether field is required when visible.
 
 Methods:
 
@@ -35760,46 +39088,13 @@ Normalize single-item lists to scalar values.
               click digitalkin.utils.ConditionalSchemaMixin href "" "digitalkin.utils.ConditionalSchemaMixin"
 ```
 
-Mixin for automatic conditional field processing in JSON schema.
-
-Inherit from this mixin to automatically generate JSON Schema with if/then clauses for fields marked with ConditionalField metadata.
-
-The mixin processes Annotated fields with Conditional metadata and:
-
-1. Removes conditional fields from main properties
-1. Adds them to allOf with if/then clauses
-1. Groups multiple fields with the same condition together
-
-Example
-
-class Config(ConditionalSchemaMixin, BaseModel): mode: Literal["basic", "advanced"] = Field(...)
-
-```text
-advanced_option: Annotated[
-    str,
-    Conditional(trigger="mode", show_when="advanced"),
-] = Field(...)
-```
-
-#### Generates schema with:
-
-#### {
-
-#### "properties": {"mode": {...}},
-
-#### "allOf": \[{
-
-#### "if": {"properties": {"mode": {"const": "advanced"}}},
-
-#### "then": {"properties": {"advanced_option": {...}}}
-
-#### }\]
-
-#### }
+Mixin that rewrites JSON Schema with if/then clauses for Conditional fields.
 
 Methods:
 
 - **`__get_pydantic_json_schema__`** – Generate JSON schema with conditional field handling.
+- **`get_conditional_metadata`** – Extract ConditionalField from field metadata.
+- **`has_conditional`** – Check if field has ConditionalField metadata.
 
 #### __get_pydantic_json_schema__
 
@@ -35825,6 +39120,42 @@ Returns:
 
 - `JsonSchemaValue` – The JSON schema with if/then clauses for conditional fields.
 
+#### get_conditional_metadata
+
+```python
+get_conditional_metadata(field_info: FieldInfo) -> ConditionalField | None
+```
+
+Extract ConditionalField from field metadata.
+
+Parameters:
+
+- ##### **`field_info`**
+
+  (`FieldInfo`) – The Pydantic FieldInfo object to inspect.
+
+Returns:
+
+- `ConditionalField | None` – The ConditionalField metadata instance if found, None otherwise.
+
+#### has_conditional
+
+```python
+has_conditional(field_info: FieldInfo) -> bool
+```
+
+Check if field has ConditionalField metadata.
+
+Parameters:
+
+- ##### **`field_info`**
+
+  (`FieldInfo`) – The Pydantic FieldInfo object to check.
+
+Returns:
+
+- `bool` – True if the field has ConditionalField metadata, False otherwise.
+
 ### DynamicField
 
 ```python
@@ -35839,15 +39170,7 @@ Parameters:
 
 - #### **`**fetchers`**
 
-  (`Fetcher[Any]`, default: `{}` ) – Mapping of key names to fetcher callables. Each fetcher is a function (sync or async) that takes no arguments and returns the value for that key (e.g., enum values, defaults).
-
-Example
-
-from typing import Annotated
-
-async def fetch_models() -> list\[str\]: return await api.get_models()
-
-class Setup(SetupModel): model: Annotated[str, DynamicField(enum=fetch_models)] = Field(default="gpt-4")
+  (`Fetcher[Any]`, default: `{}` ) – Mapping of key names to fetcher callables. Each fetcher takes no arguments and returns the value for that key.
 
 Methods:
 
@@ -35887,10 +39210,136 @@ __repr__() -> str
 
 Return string representation.
 
-### ResolveResult
+### DynamicSchemaResolver
+
+Extract and resolve `DynamicField` fetchers from Pydantic fields.
+
+Methods:
+
+- **`get_dynamic_metadata`** – Extract DynamicField metadata from a FieldInfo's metadata list.
+- **`get_fetchers`** – Extract fetchers from a field's DynamicField metadata.
+- **`has_dynamic`** – Check if a field has DynamicField metadata.
+- **`resolve`** – Resolve all dynamic fetchers to their actual values in parallel.
+- **`resolve_safe`** – Resolve fetchers with structured error handling.
+
+#### get_dynamic_metadata
 
 ```python
-ResolveResult(values: dict[str, Any] = dict(), errors: dict[str, Exception] = dict())
+get_dynamic_metadata(field_info: FieldInfo) -> DynamicField | None
+```
+
+Extract DynamicField metadata from a FieldInfo's metadata list.
+
+Parameters:
+
+- ##### **`field_info`**
+
+  (`FieldInfo`) – The Pydantic FieldInfo object to inspect.
+
+Returns:
+
+- `DynamicField | None` – The DynamicField metadata instance if found, None otherwise.
+
+#### get_fetchers
+
+```python
+get_fetchers(field_info: FieldInfo) -> dict[str, Fetcher[Any]]
+```
+
+Extract fetchers from a field's DynamicField metadata.
+
+Parameters:
+
+- ##### **`field_info`**
+
+  (`FieldInfo`) – The Pydantic FieldInfo object to extract from.
+
+Returns:
+
+- `dict[str, Fetcher[Any]]` – Dict mapping key names to fetcher callables, empty if no DynamicField metadata.
+
+#### has_dynamic
+
+```python
+has_dynamic(field_info: FieldInfo) -> bool
+```
+
+Check if a field has DynamicField metadata.
+
+Parameters:
+
+- ##### **`field_info`**
+
+  (`FieldInfo`) – The Pydantic FieldInfo object to check.
+
+Returns:
+
+- `bool` – True if the field has DynamicField metadata, False otherwise.
+
+#### resolve
+
+```python
+resolve(
+    fetchers: dict[str, Fetcher[Any]], *, timeout: float | None = None
+) -> dict[str, Any]
+```
+
+Resolve all dynamic fetchers to their actual values in parallel.
+
+Parameters:
+
+- ##### **`fetchers`**
+
+  (`dict[str, Fetcher[Any]]`) – Dict mapping key names to fetcher callables.
+
+- ##### **`timeout`**
+
+  (`float | None`, default: `None` ) – Optional timeout in seconds for all fetchers combined. If None (default), no timeout is applied.
+
+Returns:
+
+- `dict[str, Any]` – Dict mapping key names to resolved values.
+
+Raises:
+
+- `TimeoutError` – If timeout is exceeded.
+- `Exception` – If any fetcher raises an exception, it is propagated.
+
+#### resolve_safe
+
+```python
+resolve_safe(
+    fetchers: dict[str, Fetcher[Any]], *, timeout: float | None = None
+) -> ResolveResult
+```
+
+Resolve fetchers with structured error handling.
+
+Unlike `resolve()`, this catches individual fetcher errors and returns them in a structured result, allowing partial success.
+
+Parameters:
+
+- ##### **`fetchers`**
+
+  (`dict[str, Fetcher[Any]]`) – Dict mapping key names to fetcher callables.
+
+- ##### **`timeout`**
+
+  (`float | None`, default: `None` ) – Optional timeout in seconds for the whole operation. If None (default), no timeout is applied.
+
+Returns:
+
+- `ResolveResult` – ResolveResult with values and any errors that occurred.
+
+### ResolveResult
+
+```
+              flowchart TD
+              digitalkin.utils.ResolveResult[ResolveResult]
+
+              
+
+              click digitalkin.utils.ResolveResult href "" "digitalkin.utils.ResolveResult"
 ```
 
 Result of resolving dynamic fetchers.
@@ -35951,163 +39400,6 @@ Parameters:
 Returns:
 
 - `T | None` – The resolved value or default.
-
-### get_conditional_metadata
-
-```python
-get_conditional_metadata(field_info: FieldInfo) -> ConditionalField | None
-```
-
-Extract ConditionalField from field metadata.
-
-Parameters:
-
-- #### **`field_info`**
-
-  (`FieldInfo`) – The Pydantic FieldInfo object to inspect.
-
-Returns:
-
-- `ConditionalField | None` – The ConditionalField metadata instance if found, None otherwise.
-
-### get_dynamic_metadata
-
-```python
-get_dynamic_metadata(field_info: FieldInfo) -> DynamicField | None
-```
-
-Extract DynamicField metadata from a FieldInfo's metadata list.
-
-Parameters:
-
-- #### **`field_info`**
-
-  (`FieldInfo`) – The Pydantic FieldInfo object to inspect.
-
-Returns:
-
-- `DynamicField | None` – The DynamicField metadata instance if found, None otherwise.
-
-### get_fetchers
-
-```python
-get_fetchers(field_info: FieldInfo) -> dict[str, Fetcher[Any]]
-```
-
-Extract fetchers from a field's DynamicField metadata.
-
-Parameters:
-
-- #### **`field_info`**
-
-  (`FieldInfo`) – The Pydantic FieldInfo object to extract from.
-
-Returns:
-
-- `dict[str, Fetcher[Any]]` – Dict mapping key names to fetcher callables, empty if no DynamicField metadata.
-
-### has_conditional
-
-```python
-has_conditional(field_info: FieldInfo) -> bool
-```
-
-Check if field has ConditionalField metadata.
-
-Parameters:
-
-- #### **`field_info`**
-
-  (`FieldInfo`) – The Pydantic FieldInfo object to check.
-
-Returns:
-
-- `bool` – True if the field has ConditionalField metadata, False otherwise.
-
-### has_dynamic
-
-```python
-has_dynamic(field_info: FieldInfo) -> bool
-```
-
-Check if a field has DynamicField metadata.
-
-Parameters:
-
-- #### **`field_info`**
-
-  (`FieldInfo`) – The Pydantic FieldInfo object to check.
-
-Returns:
-
-- `bool` – True if the field has DynamicField metadata, False otherwise.
-
-### resolve
-
-```python
-resolve(
-    fetchers: dict[str, Fetcher[Any]], *, timeout: float | None = DEFAULT_TIMEOUT
-) -> dict[str, Any]
-```
-
-Resolve all dynamic fetchers to their actual values in parallel.
-
-Fetchers are executed concurrently using asyncio.gather() for better performance when multiple async fetchers are involved.
-
-Parameters:
-
-- #### **`fetchers`**
-
-  (`dict[str, Fetcher[Any]]`) – Dict mapping key names to fetcher callables.
-
-- #### **`timeout`**
-
-  (`float | None`, default: `DEFAULT_TIMEOUT` ) – Optional timeout in seconds for all fetchers combined. If None (default), no timeout is applied.
-
-Returns:
-
-- `dict[str, Any]` – Dict mapping key names to resolved values.
-
-Raises:
-
-- `TimeoutError` – If timeout is exceeded.
-- `Exception` – If any fetcher raises an exception, it is propagated.
-
-Example
-
-fetchers = {"enum": fetch_models, "default": get_default} resolved = await resolve(fetchers, timeout=5.0)
-
-#### resolved =
-
-### resolve_safe
-
-```python
-resolve_safe(
-    fetchers: dict[str, Fetcher[Any]], *, timeout: float | None = DEFAULT_TIMEOUT
-) -> ResolveResult
-```
-
-Resolve fetchers with structured error handling.
-
-Unlike `resolve()`, this function catches individual fetcher errors and returns them in a structured result, allowing partial success.
-
-Parameters:
-
-- #### **`fetchers`**
-
-  (`dict[str, Fetcher[Any]]`) – Dict mapping key names to fetcher callables.
-
-- #### **`timeout`**
-
-  (`float | None`, default: `DEFAULT_TIMEOUT` ) – Optional timeout in seconds for all fetchers combined. If None (default), no timeout is applied. Note: timeout applies to the entire operation, not individual fetchers.
-
-Returns:
-
-- `ResolveResult` – ResolveResult with values and any errors that occurred.
-
-Example
-
-result = await resolve_safe(fetchers, timeout=5.0) if result.success: print("All resolved:", result.values) elif result.partial: print("Partial success:", result.values) print("Errors:", result.errors) else: print("All failed:", result.errors)
 
 ### arg_parser
 
@@ -36210,35 +39502,14 @@ Override the HelpActions as it doesn't handle subparser well.
 
 Conditional field visibility for react-jsonschema-form.
 
-This module provides a clean way to mark fields as conditional using Annotated metadata, generating JSON Schema with if/then clauses for react-jsonschema-form.
+Mark fields as conditional with `Annotated` metadata to generate JSON Schema with if/then clauses for react-jsonschema-form.
 
-Example
-
-from typing import Annotated, Literal from pydantic import BaseModel, Field from digitalkin.utils import Conditional, ConditionalSchemaMixin
-
-class Tools(ConditionalSchemaMixin, BaseModel): web_search_enabled: bool = Field(...)
-
-```text
-web_search_engine: Annotated[
-    Literal["duckduckgo", "tavily"],
-    Conditional(trigger="web_search_enabled", show_when=True),
-] = Field(...)
-```
-
-See Also
-
-- Documentation: docs/api/conditional_schema.md
-- Tests: tests/utils/test_conditional_schema.py
+See `docs/api/conditional_schema.md` and `tests/utils/test_conditional_schema.py`.
 
 Classes:
 
 - **`ConditionalField`** – Metadata for conditional field visibility.
-- **`ConditionalSchemaMixin`** – Mixin for automatic conditional field processing in JSON schema.
-
-Functions:
-
-- **`get_conditional_metadata`** – Extract ConditionalField from field metadata.
-- **`has_conditional`** – Check if field has ConditionalField metadata.
+- **`ConditionalSchemaMixin`** – Mixin that rewrites JSON Schema with if/then clauses for Conditional fields.
 
 #### ConditionalField
 
@@ -36260,25 +39531,11 @@ Parameters:
 
 - ##### **`show_when`**
 
-  (`bool | str | list[str]`) – Value(s) that trigger field must have to show this field. Can be a boolean, string, or list of strings for multiple values.
+  (`bool | str | list[str]`) – Value(s) the trigger field must have. Bool, str, or list.
 
 - ##### **`required_when_shown`**
 
-  (`bool`, default: `True` ) – Whether field is required when visible. Defaults to True.
-
-Example
-
-##### Boolean condition
-
-web_search_engine: Annotated[ str, Conditional(trigger="web_search_enabled", show_when=True), ] = Field(...)
-
-##### Enum condition
-
-advanced_option: Annotated[ str, Conditional(trigger="mode", show_when="advanced"), ] = Field(...)
-
-##### Multiple values condition
-
-shared_feature: Annotated\[ bool, Conditional(trigger="mode", show_when=["standard", "advanced"]), \] = Field(...)
+  (`bool`, default: `True` ) – Whether field is required when visible.
 
 Methods:
 
@@ -36303,46 +39560,13 @@ Normalize single-item lists to scalar values.
               click digitalkin.utils.conditional_schema.ConditionalSchemaMixin href "" "digitalkin.utils.conditional_schema.ConditionalSchemaMixin"
 ```
 
-Mixin for automatic conditional field processing in JSON schema.
-
-Inherit from this mixin to automatically generate JSON Schema with if/then clauses for fields marked with ConditionalField metadata.
-
-The mixin processes Annotated fields with Conditional metadata and:
-
-1. Removes conditional fields from main properties
-1. Adds them to allOf with if/then clauses
-1. Groups multiple fields with the same condition together
-
-Example
-
-class Config(ConditionalSchemaMixin, BaseModel): mode: Literal["basic", "advanced"] = Field(...)
-
-```text
-advanced_option: Annotated[
-    str,
-    Conditional(trigger="mode", show_when="advanced"),
-] = Field(...)
-```
-
-##### Generates schema with:
-
-##### {
-
-##### "properties": {"mode": {...}},
-
-##### "allOf": \[{
-
-##### "if": {"properties": {"mode": {"const": "advanced"}}},
-
-##### "then": {"properties": {"advanced_option": {...}}}
-
-##### }\]
-
-##### }
+Mixin that rewrites JSON Schema with if/then clauses for Conditional fields.
 
 Methods:
 
 - **`__get_pydantic_json_schema__`** – Generate JSON schema with conditional field handling.
+- **`get_conditional_metadata`** – Extract ConditionalField from field metadata.
+- **`has_conditional`** – Check if field has ConditionalField metadata.
 
 ##### __get_pydantic_json_schema__
 
@@ -36368,7 +39592,7 @@ Returns:
 
 - `JsonSchemaValue` – The JSON schema with if/then clauses for conditional fields.
 
-#### get_conditional_metadata
+##### get_conditional_metadata
 
 ```python
 get_conditional_metadata(field_info: FieldInfo) -> ConditionalField | None
@@ -36378,7 +39602,7 @@ Extract ConditionalField from field metadata.
 
 Parameters:
 
-- ##### **`field_info`**
+- ###### **`field_info`**
 
   (`FieldInfo`) – The Pydantic FieldInfo object to inspect.
 
@@ -36386,7 +39610,7 @@ Returns:
 
 - `ConditionalField | None` – The ConditionalField metadata instance if found, None otherwise.
 
-#### has_conditional
+##### has_conditional
 
 ```python
 has_conditional(field_info: FieldInfo) -> bool
@@ -36396,7 +39620,7 @@ Check if field has ConditionalField metadata.
 
 Parameters:
 
-- ##### **`field_info`**
+- ###### **`field_info`**
 
   (`FieldInfo`) – The Pydantic FieldInfo object to check.
 
@@ -36456,31 +39680,26 @@ Raises:
 
 Dynamic schema utilities for runtime value refresh in Pydantic models.
 
-This module provides a clean way to mark fields as dynamic using Annotated metadata, allowing their schema values to be refreshed at runtime via sync or async fetchers.
+Mark fields as dynamic with `Annotated` metadata so their schema values can be refreshed at runtime via sync or async fetchers.
 
-Example
-
-from typing import Annotated from digitalkin.utils import DynamicField
-
-class AgentSetup(SetupModel): model_name: Annotated[str, DynamicField(enum=fetch_models)] = Field(default="gpt-4")
-
-See Also
-
-- Documentation: docs/api/dynamic_schema.md
-- Tests: tests/utils/test_dynamic_schema.py
+See `docs/api/dynamic_schema.md` and `tests/utils/test_dynamic_schema.py`.
 
 Classes:
 
 - **`DynamicField`** – Metadata class for Annotated fields with dynamic fetchers.
-- **`ResolveResult`** – Result of resolving dynamic fetchers.
+- **`DynamicSchemaResolver`** – Extract and resolve DynamicField fetchers from Pydantic fields.
 
-Functions:
+Attributes:
 
-- **`get_dynamic_metadata`** – Extract DynamicField metadata from a FieldInfo's metadata list.
-- **`get_fetchers`** – Extract fetchers from a field's DynamicField metadata.
-- **`has_dynamic`** – Check if a field has DynamicField metadata.
-- **`resolve`** – Resolve all dynamic fetchers to their actual values in parallel.
-- **`resolve_safe`** – Resolve fetchers with structured error handling.
+- **`Fetcher`** – Zero-arg sync or async fetcher.
+
+#### Fetcher
+
+```python
+Fetcher = Callable[[], T | Awaitable[T]]
+```
+
+Zero-arg sync or async fetcher.
 
 #### DynamicField
 
@@ -36496,15 +39715,7 @@ Parameters:
 
 - ##### **`**fetchers`**
 
-  (`Fetcher[Any]`, default: `{}` ) – Mapping of key names to fetcher callables. Each fetcher is a function (sync or async) that takes no arguments and returns the value for that key (e.g., enum values, defaults).
-
-Example
-
-from typing import Annotated
-
-async def fetch_models() -> list\[str\]: return await api.get_models()
-
-class Setup(SetupModel): model: Annotated[str, DynamicField(enum=fetch_models)] = Field(default="gpt-4")
+  (`Fetcher[Any]`, default: `{}` ) – Mapping of key names to fetcher callables. Each fetcher takes no arguments and returns the value for that key.
 
 Methods:
 
@@ -36544,72 +39755,19 @@ __repr__() -> str
 
 Return string representation.
 
-#### ResolveResult
+#### DynamicSchemaResolver
 
-```python
-ResolveResult(values: dict[str, Any] = dict(), errors: dict[str, Exception] = dict())
-```
-
-Result of resolving dynamic fetchers.
-
-Provides structured access to resolved values and any errors that occurred. This allows callers to handle partial failures gracefully.
-
-Attributes:
-
-- **`values`** (`dict[str, Any]`) – Dict mapping key names to successfully resolved values.
-- **`errors`** (`dict[str, Exception]`) – Dict mapping key names to exceptions that occurred during resolution.
+Extract and resolve `DynamicField` fetchers from Pydantic fields.
 
 Methods:
 
-- **`get`** – Get a resolved value by key.
+- **`get_dynamic_metadata`** – Extract DynamicField metadata from a FieldInfo's metadata list.
+- **`get_fetchers`** – Extract fetchers from a field's DynamicField metadata.
+- **`has_dynamic`** – Check if a field has DynamicField metadata.
+- **`resolve`** – Resolve all dynamic fetchers to their actual values in parallel.
+- **`resolve_safe`** – Resolve fetchers with structured error handling.
 
-##### partial
-
-```python
-partial: bool
-```
-
-Check if some but not all fetchers succeeded.
-
-Returns:
-
-- `bool` – True if there are both values and errors, False otherwise.
-
-##### success
-
-```python
-success: bool
-```
-
-Check if all fetchers resolved successfully.
-
-Returns:
-
-- `bool` – True if no errors occurred, False otherwise.
-
-##### get
-
-```python
-get(key: str, default: T | None = None) -> T | None
-```
-
-Get a resolved value by key.
-
-Parameters:
-
-- ###### **`key`**
-
-  (`str`) – The fetcher key name.
-
-- ###### **`default`**
-
-  (`T | None`, default: `None` ) – Default value if key not found or errored.
-
-Returns:
-
-- `T | None` – The resolved value or default.
-
-#### get_dynamic_metadata
+##### get_dynamic_metadata
 
 ```python
 get_dynamic_metadata(field_info: FieldInfo) -> DynamicField | None
@@ -36619,7 +39777,7 @@ Extract DynamicField metadata from a FieldInfo's metadata list.
 
 Parameters:
 
-- ##### **`field_info`**
+- ###### **`field_info`**
 
   (`FieldInfo`) – The Pydantic FieldInfo object to inspect.
 
@@ -36627,7 +39785,7 @@ Returns:
 
 - `DynamicField | None` – The DynamicField metadata instance if found, None otherwise.
 
-#### get_fetchers
+##### get_fetchers
 
 ```python
 get_fetchers(field_info: FieldInfo) -> dict[str, Fetcher[Any]]
@@ -36637,7 +39795,7 @@ Extract fetchers from a field's DynamicField metadata.
 
 Parameters:
 
-- ##### **`field_info`**
+- ###### **`field_info`**
 
   (`FieldInfo`) – The Pydantic FieldInfo object to extract from.
 
@@ -36645,7 +39803,7 @@ Returns:
 
 - `dict[str, Fetcher[Any]]` – Dict mapping key names to fetcher callables, empty if no DynamicField metadata.
 
-#### has_dynamic
+##### has_dynamic
 
 ```python
 has_dynamic(field_info: FieldInfo) -> bool
@@ -36655,7 +39813,7 @@ Check if a field has DynamicField metadata.
 
 Parameters:
 
-- ##### **`field_info`**
+- ###### **`field_info`**
 
   (`FieldInfo`) – The Pydantic FieldInfo object to check.
 
@@ -36663,27 +39821,25 @@ Returns:
 
 - `bool` – True if the field has DynamicField metadata, False otherwise.
 
-#### resolve
+##### resolve
 
 ```python
 resolve(
-    fetchers: dict[str, Fetcher[Any]], *, timeout: float | None = DEFAULT_TIMEOUT
+    fetchers: dict[str, Fetcher[Any]], *, timeout: float | None = None
 ) -> dict[str, Any]
 ```
 
 Resolve all dynamic fetchers to their actual values in parallel.
 
-Fetchers are executed concurrently using asyncio.gather() for better performance when multiple async fetchers are involved.
-
 Parameters:
 
-- ##### **`fetchers`**
+- ###### **`fetchers`**
 
   (`dict[str, Fetcher[Any]]`) – Dict mapping key names to fetcher callables.
 
-- ##### **`timeout`**
+- ###### **`timeout`**
 
-  (`float | None`, default: `DEFAULT_TIMEOUT` ) – Optional timeout in seconds for all fetchers combined. If None (default), no timeout is applied.
+  (`float | None`, default: `None` ) – Optional timeout in seconds for all fetchers combined. If None (default), no timeout is applied.
 
 Returns:
 
@@ -36694,56 +39850,75 @@ Raises:
 - `TimeoutError` – If timeout is exceeded.
 - `Exception` – If any fetcher raises an exception, it is propagated.
 
-Example
-
-fetchers = {"enum": fetch_models, "default": get_default} resolved = await resolve(fetchers, timeout=5.0)
-
-##### resolved =
-
-#### resolve_safe
+##### resolve_safe
 
 ```python
 resolve_safe(
-    fetchers: dict[str, Fetcher[Any]], *, timeout: float | None = DEFAULT_TIMEOUT
+    fetchers: dict[str, Fetcher[Any]], *, timeout: float | None = None
 ) -> ResolveResult
 ```
 
 Resolve fetchers with structured error handling.
 
-Unlike `resolve()`, this function catches individual fetcher errors and returns them in a structured result, allowing partial success.
+Unlike `resolve()`, this catches individual fetcher errors and returns them in a structured result, allowing partial success.
 
 Parameters:
 
-- ##### **`fetchers`**
+- ###### **`fetchers`**
 
   (`dict[str, Fetcher[Any]]`) – Dict mapping key names to fetcher callables.
 
-- ##### **`timeout`**
+- ###### **`timeout`**
 
-  (`float | None`, default: `DEFAULT_TIMEOUT` ) – Optional timeout in seconds for all fetchers combined. If None (default), no timeout is applied. Note: timeout applies to the entire operation, not individual fetchers.
+  (`float | None`, default: `None` ) – Optional timeout in seconds for the whole operation. If None (default), no timeout is applied.
 
 Returns:
 
 - `ResolveResult` – ResolveResult with values and any errors that occurred.
 
-Example
+### exceptions
 
-result = await resolve_safe(fetchers, timeout=5.0) if result.success: print("All resolved:", result.values) elif result.partial: print("Partial success:", result.values) print("Errors:", result.errors) else: print("All failed:", result.errors)
+Exceptions for the DigitalKin utils package.
+
+Classes:
+
+- **`DiscoveryError`** – Raised when discovery fails due to invalid inputs.
+- **`UnsafePackageError`** – Raised when security constraints are violated during package discovery.
+
+#### DiscoveryError
+
+```
+              flowchart TD
+              digitalkin.utils.exceptions.DiscoveryError[DiscoveryError]
+
+              
+
+              click digitalkin.utils.exceptions.DiscoveryError href "" "digitalkin.utils.exceptions.DiscoveryError"
+```
+
+Raised when discovery fails due to invalid inputs.
+
+#### UnsafePackageError
+
+```
+              flowchart TD
+              digitalkin.utils.exceptions.UnsafePackageError[UnsafePackageError]
+
+              
+
+              click digitalkin.utils.exceptions.UnsafePackageError href "" "digitalkin.utils.exceptions.UnsafePackageError"
+```
+
+Raised when security constraints are violated during package discovery.
 
 ### llm_ready_schema
 
-LLM format schema for Pydantic models.
-
-This module provides functionality to generate JSON schemas for Pydantic models ready for LLMs.
+LLM-ready JSON schema generation for Pydantic models.
 
 Classes:
 
 - **`CustomOrderSchema`** – Custom schema generator to sort keys in a specific order.
-
-Functions:
-
-- **`inline_refs`** – Recursively resolve and inline all $ref in the schema.
-- **`llm_ready_schema`** – Convert a Pydantic model to a JSON schema ready for LLMs.
+- **`LlmReadySchema`** – Generate and inline JSON schemas for LLM consumption.
 
 #### CustomOrderSchema
 
@@ -36784,7 +39959,16 @@ Returns:
 
 - `JsonSchemaValue` – The sorted schema value.
 
-#### inline_refs
+#### LlmReadySchema
+
+Generate and inline JSON schemas for LLM consumption.
+
+Methods:
+
+- **`inline_refs`** – Recursively resolve and inline all $ref in the schema.
+- **`llm_ready_schema`** – Convert a Pydantic model to a JSON schema ready for LLMs.
+
+##### inline_refs
 
 ```python
 inline_refs(schema: dict) -> dict
@@ -36794,7 +39978,7 @@ Recursively resolve and inline all $ref in the schema.
 
 Parameters:
 
-- ##### **`schema`**
+- ###### **`schema`**
 
   (`dict`) – The JSON schema to inline.
 
@@ -36802,7 +39986,7 @@ Returns:
 
 - `dict` – The inlined JSON schema.
 
-#### llm_ready_schema
+##### llm_ready_schema
 
 ```python
 llm_ready_schema(model: type[BaseModel]) -> dict
@@ -36812,7 +39996,7 @@ Convert a Pydantic model to a JSON schema ready for LLMs.
 
 Parameters:
 
-- ##### **`model`**
+- ###### **`model`**
 
   (`type[BaseModel]`) – The Pydantic model to convert.
 
@@ -36826,22 +40010,7 @@ Secure module discovery and import utility for trigger handlers.
 
 Classes:
 
-- **`DiscoveryError`** – Raised when discovery fails due to invalid inputs.
 - **`ModuleDiscoverer`** – Encapsulates secure, structured discovery and import of trigger modules.
-- **`SecurityError`** – Raised when security constraints are violated.
-
-#### DiscoveryError
-
-```
-              flowchart TD
-              digitalkin.utils.package_discover.DiscoveryError[DiscoveryError]
-
-              
-
-              click digitalkin.utils.package_discover.DiscoveryError href "" "digitalkin.utils.package_discover.DiscoveryError"
-```
-
-Raised when discovery fails due to invalid inputs.
 
 #### ModuleDiscoverer
 
@@ -37001,28 +40170,23 @@ Raises:
 
 - `ValueError` – If a handler for the protocol is already registered.
 
-#### SecurityError
-
-```
-              flowchart TD
-              digitalkin.utils.package_discover.SecurityError[SecurityError]
-
-              
-
-              click digitalkin.utils.package_discover.SecurityError href "" "digitalkin.utils.package_discover.SecurityError"
-```
-
-Raised when security constraints are violated.
-
 ### proto_utils
 
 Protobuf conversion utilities.
 
-Functions:
+Classes:
+
+- **`ProtoUtils`** – Protobuf message conversion helpers.
+
+#### ProtoUtils
+
+Protobuf message conversion helpers.
+
+Methods:
 
 - **`proto_to_dict`** – Convert a protobuf message to a dict preserving snake_case field names.
 
-#### proto_to_dict
+##### proto_to_dict
 
 ```python
 proto_to_dict(msg: Message, *, with_defaults: bool = False) -> dict
@@ -37032,11 +40196,11 @@ Convert a protobuf message to a dict preserving snake_case field names.
 
 Parameters:
 
-- ##### **`msg`**
+- ###### **`msg`**
 
   (`Message`) – Protobuf message to convert.
 
-- ##### **`with_defaults`**
+- ###### **`with_defaults`**
 
   (`bool`, default: `False` ) – If True, include fields with default/zero values.
 
