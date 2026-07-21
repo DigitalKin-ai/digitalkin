@@ -1,0 +1,10 @@
+stateDiagram-v2
+    [*] --> CLOSED
+    CLOSED --> OPEN: fail_max (5) consecutive failures
+    OPEN --> HALF_OPEN: after reset_timeout (30s)
+    HALF_OPEN --> CLOSED: probe succeeds
+    HALF_OPEN --> OPEN: probe fails
+    CLOSED --> CLOSED: success resets counter
+
+    note right of OPEN: All calls fail with\nCircuitOpenError\n(no timeout wait)
+    note right of HALF_OPEN: One probe allowed\nothers blocked

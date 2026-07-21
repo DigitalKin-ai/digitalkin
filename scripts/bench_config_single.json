@@ -1,0 +1,88 @@
+{
+    "output_dir": "bench_results/single",
+    "scenarios": [
+        {
+            "label": "single_ping",
+            "module_name": "ADA_UNSTABLE SINGLE",
+            "target": "centerbeam.proxy.rlwy.net:56726",
+            "registry": "centerbeam.proxy.rlwy.net:56726",
+            "setup_id": "setups:01kghg87hd6y9q96t0nzd55bpx",
+            "input": {
+                "root": {
+                    "protocol": "healthcheck_ping"
+                }
+            },
+            "sequential": 1000,
+            "concurrency": [
+                10,
+                20,
+                50,
+                100
+            ],
+            "requests": 100,
+            "burst_size": [
+                10,
+                20,
+                50,
+                100
+            ],
+            "burst_repeats": 10
+        },
+        {
+            "label": "single_services",
+            "module_name": "ADA_UNSTABLE SINGLE",
+            "target": "centerbeam.proxy.rlwy.net:56726",
+            "registry": "centerbeam.proxy.rlwy.net:56726",
+            "setup_id": "setups:01kghg87hd6y9q96t0nzd55bpx",
+            "input": {
+                "root": {
+                    "protocol": "healthcheck_services"
+                }
+            },
+            "sequential": 1000,
+            "concurrency": [
+                10,
+                20,
+                50,
+                100
+            ],
+            "requests": 100,
+            "burst_size": [
+                10,
+                20,
+                50,
+                100
+            ],
+            "burst_repeats": 10
+        },
+        {
+            "label": "single_message",
+            "module_name": "ADA_UNSTABLE SINGLE",
+            "target": "centerbeam.proxy.rlwy.net:56726",
+            "registry": "centerbeam.proxy.rlwy.net:56726",
+            "setup_id": "setups:01kghg87hd6y9q96t0nzd55bpx",
+            "input": {
+                "root": {
+                    "protocol": "message",
+                    "file_ids": [],
+                    "user_prompt": "hello"
+                }
+            },
+            "sequential": 1000,
+            "concurrency": [
+                10,
+                20,
+                50,
+                100
+            ],
+            "requests": 100,
+            "burst_size": [
+                10,
+                20,
+                50,
+                100
+            ],
+            "burst_repeats": 10
+        }
+    ]
+}

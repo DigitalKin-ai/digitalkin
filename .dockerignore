@@ -51,6 +51,7 @@ LICENSE
 .bumpversion.toml
 .report.json
 examples
+!examples/bench_module
 scripts
 certs
 *.md

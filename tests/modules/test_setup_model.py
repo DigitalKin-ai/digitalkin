@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from digitalkin.models.module.module_types import SetupModel
 from digitalkin.models.module.tool_reference import tool_reference_input
 from digitalkin.utils import Dynamic
-from digitalkin.utils.dynamic_schema import has_dynamic
+from digitalkin.utils.dynamic_schema import DynamicSchemaResolver
 
 
 class TestSetupModelGetCleanModel:
@@ -94,7 +94,7 @@ class TestSetupModelGetCleanModel:
         assert extra["enum"] == ["model1", "model2", "model3"]
 
         # Dynamic metadata should be removed after resolution
-        assert not has_dynamic(field_info)
+        assert not DynamicSchemaResolver.has_dynamic(field_info)
 
     @pytest.mark.asyncio
     async def test_get_clean_model_with_force_async_fetcher(self) -> None:
@@ -112,7 +112,7 @@ class TestSetupModelGetCleanModel:
         extra = field_info.json_schema_extra
 
         assert extra["enum"] == ["async_opt1", "async_opt2"]
-        assert not has_dynamic(field_info)
+        assert not DynamicSchemaResolver.has_dynamic(field_info)
 
     @pytest.mark.asyncio
     async def test_get_clean_model_force_false_preserves_fetchers(self) -> None:
@@ -200,7 +200,7 @@ class TestSetupModelGetCleanModel:
         # Dynamic value should be resolved
         assert extra["enum"] == ["opt1", "opt2"]
         # Dynamic metadata should be removed
-        assert not has_dynamic(field_info)
+        assert not DynamicSchemaResolver.has_dynamic(field_info)
 
     @pytest.mark.asyncio
     async def test_get_clean_model_preserves_other_field_attributes(self) -> None:
@@ -263,7 +263,7 @@ class TestSetupModelSchema:
 
         # The field should still have Dynamic metadata (not resolved)
         field_info = model.model_fields["model_name"]
-        assert has_dynamic(field_info)
+        assert DynamicSchemaResolver.has_dynamic(field_info)
 
 
 class TestNestedSetupModels:
@@ -294,7 +294,7 @@ class TestNestedSetupModels:
         if hasattr(nested_annotation, "model_fields"):
             nested_field = nested_annotation.model_fields.get("nested_option")
             if nested_field:
-                assert not has_dynamic(nested_field), "Nested dynamic field should be resolved"
+                assert not DynamicSchemaResolver.has_dynamic(nested_field), "Nested dynamic field should be resolved"
 
     @pytest.mark.asyncio
     async def test_nested_model_refreshed_with_force(self) -> None:
@@ -322,7 +322,7 @@ class TestNestedSetupModels:
         nested_model = config_field.annotation
         nested_field = nested_model.model_fields["nested_option"]
         assert nested_field.json_schema_extra["enum"] == ["nested_a", "nested_b"]
-        assert not has_dynamic(nested_field)
+        assert not DynamicSchemaResolver.has_dynamic(nested_field)
 
 
 class TestGenericTypeDetection:

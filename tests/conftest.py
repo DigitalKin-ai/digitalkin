@@ -6,8 +6,23 @@ import grpc_testing
 import pytest
 from _pytest.fixtures import SubRequest
 
-from digitalkin.grpc_servers._base_server import BaseServer
-from digitalkin.models.settings.server.server import ServerSettings
+from digitalkin.models.settings.gateway import get_gateway_settings
+from digitalkin.models.settings.grpc_client import (
+    get_circuit_breaker_settings,
+    get_grpc_channel_settings,
+    get_grpc_client_settings,
+    get_grpc_retry_settings,
+)
+from digitalkin.models.settings.log import get_logging_settings
+from digitalkin.models.settings.module import get_module_settings
+from digitalkin.models.settings.profiling import get_profiling_settings
+from digitalkin.models.settings.queue import get_queue_settings
+from digitalkin.models.settings.redis import get_redis_settings
+from digitalkin.models.settings.resilience import get_bulkhead_settings
+from digitalkin.models.settings.server.channel import get_server_channel_settings
+from digitalkin.models.settings.server.server import get_server_settings
+from digitalkin.models.settings.server.servicer import get_module_servicer_settings
+from digitalkin.models.settings.task_manager import get_job_manager_settings, get_task_manager_settings
 
 # Register fixture plugins
 pytest_plugins = [
@@ -21,6 +36,38 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(level
 logging.getLogger("grpc").setLevel(logging.WARNING)
 
 
+_SETTINGS_FACTORIES = (
+    get_bulkhead_settings,
+    get_circuit_breaker_settings,
+    get_gateway_settings,
+    get_grpc_channel_settings,
+    get_grpc_client_settings,
+    get_grpc_retry_settings,
+    get_job_manager_settings,
+    get_logging_settings,
+    get_module_servicer_settings,
+    get_module_settings,
+    get_profiling_settings,
+    get_queue_settings,
+    get_redis_settings,
+    get_server_channel_settings,
+    get_server_settings,
+    get_task_manager_settings,
+)
+
+
+@pytest.fixture(autouse=True)
+def _clear_settings_cache() -> None:
+    """Clear every ``@lru_cache get_*_settings()`` factory before each test.
+
+    Settings are process-wide singletons; without this, env vars set via
+    ``monkeypatch.setenv`` in one test would leak into the next via the cached
+    factory instance.
+    """
+    for factory in _SETTINGS_FACTORIES:
+        factory.cache_clear()
+
+
 @pytest.fixture
 def server_config_sync_insecure(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SERVER_CHANNEL_HOST", "localhost")
@@ -28,7 +75,7 @@ def server_config_sync_insecure(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SERVER_CHANNEL_COMMUNICATION_MODE", "sync")
     monkeypatch.setenv("SERVER_CHANNEL_SECURITY", "insecure")
 
-    BaseServer._server_settings = ServerSettings()
+    get_server_settings.cache_clear()
 
 @pytest.fixture
 def server_config_async_insecure(monkeypatch: pytest.MonkeyPatch):
@@ -38,7 +85,7 @@ def server_config_async_insecure(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("SERVER_CHANNEL_COMMUNICATION_MODE", "async")
     monkeypatch.setenv("SERVER_CHANNEL_SECURITY", "insecure")
 
-    BaseServer._server_settings = ServerSettings()
+    get_server_settings.cache_clear()
 
 @pytest.fixture
 def dummy_certs(tmp_path, monkeypatch: pytest.MonkeyPatch):
@@ -68,7 +115,7 @@ def server_config_sync_secure(dummy_certs, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("SERVER_CHANNEL_COMMUNICATION_MODE", "sync")
     monkeypatch.setenv("SERVER_CHANNEL_SECURITY", "secure")
 
-    BaseServer._server_settings = ServerSettings()
+    get_server_settings.cache_clear()
 
 
 @pytest.fixture
@@ -79,7 +126,7 @@ def server_config_async_secure(dummy_certs, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("SERVER_CHANNEL_COMMUNICATION_MODE", "async")
     monkeypatch.setenv("SERVER_CHANNEL_SECURITY", "secure")
 
-    BaseServer._server_settings = ServerSettings()
+    get_server_settings.cache_clear()
 
 
 @pytest.fixture(scope="module")

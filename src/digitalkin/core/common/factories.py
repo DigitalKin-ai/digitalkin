@@ -1,9 +1,16 @@
 """Common factory functions for reducing code duplication in core module."""
 
+from __future__ import annotations
+
 import asyncio
+from typing import TYPE_CHECKING
 
 from digitalkin.logger import logger
-from digitalkin.modules._base_module import BaseModule
+from digitalkin.models.settings.queue import get_queue_settings
+
+if TYPE_CHECKING:
+    from digitalkin.models.module.tool_cache import ToolCache
+    from digitalkin.modules._base_module import BaseModule
 
 
 class ModuleFactory:
@@ -17,6 +24,7 @@ class ModuleFactory:
         setup_id: str,
         setup_version_id: str,
         request_metadata: dict[str, str] | None = None,
+        tool_cache: ToolCache | None = None,
     ) -> BaseModule:
         """Create a module instance with standard parameters.
 
@@ -30,6 +38,7 @@ class ModuleFactory:
             setup_id: Setup identifier
             setup_version_id: Setup version identifier
             request_metadata: gRPC request metadata (headers) to forward to the module.
+            tool_cache: Pre-resolved ToolCache to inject on the module instance.
 
         Returns:
             Instantiated module
@@ -55,16 +64,10 @@ class ModuleFactory:
             raise ValueError(msg)
 
         logger.debug(
-            "Creating module instance: %s for job: %s",
+            "Creating module instance: %s (setup_version_id=%s)",
             module_class.__name__,
-            job_id,
-            extra={
-                "module_class": module_class.__name__,
-                "job_id": job_id,
-                "mission_id": mission_id,
-                "setup_id": setup_id,
-                "setup_version_id": setup_version_id,
-            },
+            setup_version_id,
+            extra={"job_id": job_id, "mission_id": mission_id, "setup_id": setup_id},
         )
 
         return module_class(
@@ -73,21 +76,20 @@ class ModuleFactory:
             setup_id=setup_id,
             setup_version_id=setup_version_id,
             request_metadata=request_metadata,
+            tool_cache=tool_cache,
         )
 
 
 class QueueFactory:
     """Factory for creating asyncio queues with consistent configuration."""
 
-    # Default max queue size to prevent unbounded memory growth
-    DEFAULT_MAX_QUEUE_SIZE = 1000
-
     @staticmethod
-    def create_bounded_queue(maxsize: int = DEFAULT_MAX_QUEUE_SIZE) -> asyncio.Queue:
+    def create_bounded_queue(maxsize: int | None = None) -> asyncio.Queue:
         """Create a bounded asyncio queue with standard configuration.
 
         Args:
-            maxsize: Maximum queue size (default 1000, 0 means unlimited)
+            maxsize: Maximum queue size. ``None`` uses QueueSettings.max_size
+                (default 1000); 0 means unlimited.
 
         Returns:
             Bounded asyncio.Queue instance
@@ -102,9 +104,11 @@ class QueueFactory:
             # unlimited queue
             queue = QueueFactory.create_bounded_queue(maxsize=0)
         """
+        if maxsize is None:
+            maxsize = get_queue_settings().max_size
         if maxsize < 0:
             msg = "maxsize must be >= 0"
             raise ValueError(msg)
 
-        logger.debug("Creating bounded queue with maxsize: %d", maxsize, extra={"maxsize": maxsize})
+        logger.debug("Creating bounded queue with maxsize: %d", maxsize)
         return asyncio.Queue(maxsize=maxsize)

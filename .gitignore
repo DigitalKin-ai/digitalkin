@@ -192,3 +192,6 @@ certs/
 docker-compose.override.yml
 
 CLAUDE.md
+
+# Claude Code (share .claude/agents + .claude/skills; keep local settings out)
+.claude/settings.local.json

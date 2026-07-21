@@ -9,12 +9,13 @@ import pytest
 from grpc import aio as grpc_aio
 
 from digitalkin.grpc_servers._base_server import BaseServer
-from digitalkin.grpc_servers.utils.exceptions import (
+from digitalkin.grpc_servers.exceptions import (
     SecurityError,
     ServerStateError,
     ServicerError,
 )
 from digitalkin.models.settings.utils.channel import ControlFlow, SecurityMode
+from digitalkin.models.settings.server.server import get_server_settings
 
 
 # Create a concrete implementation of BaseServer for testing
@@ -40,10 +41,10 @@ class TestBaseServerInitialization:
         """Test initialization of BaseServer."""
         server = MockServer()
 
-        assert server._server_settings.channel.host == 'localhost'
-        assert server._server_settings.channel.port == 50051
-        assert server._server_settings.channel.communication_mode is ControlFlow.SYNC
-        assert server._server_settings.channel.security is SecurityMode.INSECURE
+        assert get_server_settings().channel.host == 'localhost'
+        assert get_server_settings().channel.port == 50051
+        assert get_server_settings().channel.communication_mode is ControlFlow.SYNC
+        assert get_server_settings().channel.security is SecurityMode.INSECURE
         assert server.server is None
         assert server._servicers == []
         assert server._service_names == []
@@ -237,11 +238,18 @@ class TestReflection:
             # Call add_reflection
             server._add_reflection()
 
-            # Verify the function was called
+            # v1alpha registered via the helper; service list also advertises
+            # the v1 name so v1-first clients (Postman 10.x+) can discover it.
             mock_reflection.enable_server_reflection.assert_called_once_with(
-                ["my.test.Service", "grpc.reflection.v1alpha.ServerReflection"],
+                [
+                    "my.test.Service",
+                    "grpc.reflection.v1alpha.ServerReflection",
+                    "grpc.reflection.v1.ServerReflection",
+                ],
                 mock_grpc_server,
             )
+            # v1 registered manually via add_generic_rpc_handlers
+            mock_grpc_server.add_generic_rpc_handlers.assert_called_once()
 
     def test_add_reflection_import_error(self, server_config_sync_insecure) -> None:
         """Test handling of import error for reflection."""
@@ -279,7 +287,7 @@ class TestServerCreation:
             result = server._create_server()
 
             # Verify server was created with correct parameters
-            mock_executor.assert_called_once_with(max_workers=server._server_settings.max_workers)
+            mock_executor.assert_called_once_with(max_workers=get_server_settings().max_workers)
             mock_server.assert_called_once()
 
             # Verify result is the mock server
@@ -295,12 +303,18 @@ class TestServerCreation:
 
             # Verify server was created with correct parameters
             mock_server.assert_called_once_with(
-                options=server._server_settings.grpc.options,
+                options=get_server_settings().grpc.options,
                 compression=grpc.Compression.Gzip,
-                interceptors=None,
+                interceptors=mock.ANY,
                 maximum_concurrent_rpcs=mock.ANY,
                 migration_thread_pool=mock.ANY,
             )
+            # The async server always installs the request-ID server interceptor.
+            from digitalkin.grpc_servers.interceptors.request_ids import RequestIdServerInterceptor
+
+            interceptors = mock_server.call_args.kwargs["interceptors"]
+            if not any(isinstance(i, RequestIdServerInterceptor) for i in interceptors):
+                pytest.fail(f"RequestIdServerInterceptor missing from {interceptors}")
 
             # Verify result is the mock server
             if result != mock_server.return_value:
@@ -319,7 +333,7 @@ class TestPortConfiguration:
         server._add_insecure_port(mock_grpc_server)
 
         # Verify add_insecure_port was called
-        mock_grpc_server.add_insecure_port.assert_called_once_with(server._server_settings.channel.address)
+        mock_grpc_server.add_insecure_port.assert_called_once_with(get_server_settings().channel.address)
 
     def test_add_insecure_port_async(self, server_config_async_insecure) -> None:
         """Test adding an insecure port to an async server."""
@@ -329,7 +343,7 @@ class TestPortConfiguration:
         server._add_insecure_port(mock_grpc_server)
 
         # Verify add_insecure_port was called
-        mock_grpc_server.add_insecure_port.assert_called_once_with(server._server_settings.channel.address)
+        mock_grpc_server.add_insecure_port.assert_called_once_with(get_server_settings().channel.address)
 
     @mock.patch("digitalkin.grpc_servers._base_server.grpc.ssl_server_credentials")
     def test_add_secure_port_sync(self, mock_ssl_creds, server_config_sync_secure) -> None:
@@ -345,7 +359,7 @@ class TestPortConfiguration:
             server._add_secure_port(mock_grpc_server)
 
         # Verify add_secure_port was called
-        mock_grpc_server.add_secure_port.assert_called_once_with(server._server_settings.channel.address, "mock_credentials")
+        mock_grpc_server.add_secure_port.assert_called_once_with(get_server_settings().channel.address, "mock_credentials")
 
     def test_add_secure_port_no_credentials(self, server_config_sync_insecure) -> None:
         """Test error when adding secure port with no credentials."""

@@ -1,12 +1,12 @@
-"""This module contains the abstract base class for storage strategies."""
-
-from abc import ABC
+"""This module contains the base class for service strategies."""
 
 
-class BaseStrategy(ABC):
-    """Abstract base class for all strategies.
+class BaseStrategy:
+    """Base class for all strategies.
 
-    This class defines the interface for all strategies.
+    Provides the shared id fields and a no-op ``close()`` default. It has no
+    abstract members, so it is a plain base (not an ``ABC``); concrete
+    strategies subclass it and override as needed.
     """
 
     def __init__(self, mission_id: str, setup_id: str, setup_version_id: str) -> None:

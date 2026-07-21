@@ -6,14 +6,16 @@ the Service Provider's Registry service.
 
 from typing import Any
 
+import grpc
 from agentic_mesh_protocol.registry.v1 import (
     registry_enums_pb2,
     registry_models_pb2,
     registry_requests_pb2,
     registry_service_pb2_grpc,
 )
+from grpc_health.v1 import health_pb2, health_pb2_grpc
 
-from digitalkin.grpc_servers.utils.exceptions import ServerError
+from digitalkin.grpc_servers.exceptions import ServerError
 from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
 from digitalkin.grpc_servers.utils.grpc_error_handler import GrpcErrorHandlerMixin
 from digitalkin.logger import logger
@@ -54,8 +56,32 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
         """Initialize the gRPC registry client."""
         RegistryStrategy.__init__(self, mission_id, setup_id, setup_version_id, config)
         self.service_name = "RegistryService"
-        self.stub = registry_service_pb2_grpc.RegistryServiceStub(self._init_channel(client_config))
+        self._init_channel(client_config)
+        self.stub = self._get_or_create_stub(registry_service_pb2_grpc.RegistryServiceStub)
         logger.debug("Channel client 'Registry' initialized successfully")
+
+    async def close(self) -> None:
+        """Release this instance's pooled gRPC channel ref."""
+        await self.close_channel()
+
+    async def wait_for_ready(self, timeout: float = 1.0) -> bool:
+        """Probe the registry via the standard gRPC Health Check service.
+
+        Args:
+            timeout: Max seconds for the round-trip.
+
+        Returns:
+            True if the server responded SERVING, False otherwise.
+        """
+        health_stub = health_pb2_grpc.HealthStub(self._channel)
+        try:
+            response = await health_stub.Check(  # type: ignore[attr-defined]  # grpc_health generated stub lacks typed Check
+                health_pb2.HealthCheckRequest(service=""),
+                timeout=timeout,
+            )
+        except grpc.aio.AioRpcError:
+            return False
+        return response.status == health_pb2.HealthCheckResponse.SERVING
 
     @staticmethod
     def _proto_to_module_info(
@@ -122,7 +148,7 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
             RegistryModuleNotFoundError: If module not found.
             RegistryServiceError: If gRPC call fails.
         """
-        logger.debug("Discovering module by ID", extra={"module_id": module_id})
+        logger.debug("Discovering module by ID: %s", module_id)
 
         async with self.handle_grpc_errors("GetModule", RegistryServiceError):
             try:
@@ -136,17 +162,10 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
                 raise RegistryServiceError(msg) from e
 
             if not response.id:
-                logger.warning("Module not found in registry", extra={"module_id": module_id})
+                logger.warning("Module not found in registry: %s", module_id)
                 raise RegistryModuleNotFoundError(module_id)
 
-            logger.debug(
-                "Module discovered",
-                extra={
-                    "module_id": response.id,
-                    "address": response.address,
-                    "port": response.port,
-                },
-            )
+            logger.debug("Module discovered: module_id=%s at %s:%d", response.id, response.address, response.port)
             return self._proto_to_module_info(response)
 
     async def search(
@@ -168,14 +187,7 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
         Raises:
             RegistryServiceError: If gRPC call fails.
         """
-        logger.debug(
-            "Searching modules",
-            extra={
-                "name": name,
-                "module_type": module_type,
-                "organization_id": organization_id,
-            },
-        )
+        logger.debug("Searching modules: name=%s type=%s org=%s", name, module_type, organization_id)
 
         async with self.handle_grpc_errors("DiscoverModules", RegistryServiceError):
             module_types: list[str] = []
@@ -213,7 +225,7 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
             RegistryModuleNotFoundError: If module not found.
             RegistryServiceError: If gRPC call fails.
         """
-        logger.debug("Getting module status", extra={"module_id": module_id})
+        logger.debug("Getting module status: %s", module_id)
 
         async with self.handle_grpc_errors("GetModule", RegistryServiceError):
             try:
@@ -227,14 +239,11 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
                 raise RegistryServiceError(msg) from e
 
             if not response.id:
-                logger.warning("Module not found in registry", extra={"module_id": module_id})
+                logger.warning("Module not found in registry: %s", module_id)
                 raise RegistryModuleNotFoundError(module_id)
 
             status_name = registry_enums_pb2.ModuleStatus.Name(response.status).removeprefix("MODULE_STATUS_")
-            logger.debug(
-                "Module status retrieved",
-                extra={"module_id": response.id, "status": status_name},
-            )
+            logger.debug("Module status retrieved: module_id=%s status=%s", response.id, status_name)
             return ModuleStatusInfo(
                 module_id=response.id,
                 status=RegistryModuleStatus[status_name],
@@ -265,13 +274,11 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
             RegistryServiceError: If gRPC call fails.
         """
         logger.info(
-            "Registering module with registry",
-            extra={
-                "module_id": module_id,
-                "address": address,
-                "port": port,
-                "version": version,
-            },
+            "Registering module with registry: module_id=%s at %s:%d version=%s",
+            module_id,
+            address,
+            port,
+            version,
         )
 
         async with self.handle_grpc_errors("RegisterModule", RegistryServiceError):
@@ -291,19 +298,14 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
                 raise RegistryServiceError(msg) from e
 
             if not response.module or not response.module.id:
-                logger.warning(
-                    "Registry returned empty response for module registration",
-                    extra={"module_id": module_id},
-                )
+                logger.warning("Registry returned empty response for module registration: module_id=%s", module_id)
                 return None
 
             logger.info(
-                "Module registered successfully",
-                extra={
-                    "module_id": response.module.id,
-                    "address": response.module.address,
-                    "port": response.module.port,
-                },
+                "Module registered successfully: module_id=%s at %s:%d",
+                response.module.id,
+                response.module.address,
+                response.module.port,
             )
             return self._proto_to_module_info(response.module)
 
@@ -319,7 +321,7 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
         Raises:
             RegistryServiceError: If gRPC call fails.
         """
-        logger.debug("Sending heartbeat", extra={"module_id": module_id})
+        logger.debug("Sending heartbeat: %s", module_id)
 
         async with self.handle_grpc_errors("Heartbeat", RegistryServiceError):
             try:
@@ -333,10 +335,7 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
                 raise RegistryServiceError(msg) from e
 
             status_name = registry_enums_pb2.ModuleStatus.Name(response.status).removeprefix("MODULE_STATUS_")
-            logger.debug(
-                "Heartbeat response",
-                extra={"module_id": module_id, "status": status_name},
-            )
+            logger.debug("Heartbeat response: module_id=%s status=%s", module_id, status_name)
             return RegistryModuleStatus[status_name]
 
     async def get_setup(self, setup_id: str) -> SetupInfo | None:
@@ -380,7 +379,7 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
             True always (heartbeat expiration handles actual deregistration).
         """
         logger.info(
-            "Module deregistration initiated (will become inactive via heartbeat expiration)",
-            extra={"module_id": module_id},
+            "Module deregistration initiated for module_id=%s (will become inactive via heartbeat expiration)",
+            module_id,
         )
         return True

@@ -9,10 +9,10 @@ from typing import Any, Literal
 from anyio import Path as AsyncPath
 
 from digitalkin.logger import logger
+from digitalkin.services.filesystem.exceptions import FilesystemServiceError
 from digitalkin.services.filesystem.filesystem_strategy import (
     FileFilter,
     FilesystemRecord,
-    FilesystemServiceError,
     FilesystemStrategy,
     UploadFileData,
 )
@@ -49,7 +49,6 @@ class DefaultFilesystem(FilesystemStrategy):
         Returns:
             str: Path to the context's temporary directory
         """
-        # Create a context-specific directory to organize files
         context_dir = os.path.join(self.temp_root, context.replace(":", "_"))
         os.makedirs(context_dir, exist_ok=True)
         return context_dir
@@ -117,8 +116,7 @@ class DefaultFilesystem(FilesystemStrategy):
         total_failed = 0
 
         for file in files:
-            try:
-                # Check if file with same name exists in the context
+            try:  # noqa: PLW0717
                 context_dir = self._get_context_temp_dir(self.setup_id)
                 file_path = os.path.join(context_dir, file.name)
                 if await AsyncPath(file_path).exists() and not file.replace_if_exists:
@@ -149,7 +147,6 @@ class DefaultFilesystem(FilesystemStrategy):
             except Exception as e:  # Exception in loop: per-file error isolation in batch upload # noqa: PERF203
                 logger.exception("Error uploading file %s: %s", file.name, e)
                 total_failed += 1
-                # If only one file and it failed, propagate the error for pytest.raises
                 if len(files) == 1:
                     raise
 
@@ -185,15 +182,12 @@ class DefaultFilesystem(FilesystemStrategy):
         Raises:
             FilesystemServiceError: If there is an error listing the files
         """
-        try:
+        try:  # noqa: PLW0717
             logger.debug("Listing files with filters: %s", filters)
-            # Filter files based on provided criteria
             filtered_files = self._filter_db(filters)
             if not filtered_files:
                 return [], 0
-            # Sorting not implemented for local filesystem (only used in development)
 
-            # Apply pagination
             start_idx = offset
             end_idx = start_idx + list_size
             paginated_files = filtered_files[start_idx:end_idx]
@@ -205,7 +199,7 @@ class DefaultFilesystem(FilesystemStrategy):
         except Exception as e:
             msg = f"Error listing files: {e!s}"
             logger.exception(msg)
-            raise FilesystemServiceError(msg)
+            raise FilesystemServiceError(msg) from e
         else:
             return paginated_files, len(filtered_files)
 
@@ -233,7 +227,7 @@ class DefaultFilesystem(FilesystemStrategy):
         Raises:
             FilesystemServiceError: If there is an error retrieving the file
         """
-        try:
+        try:  # noqa: PLW0717
             logger.debug("Getting file with id: %s", file_id)
             file_data: FilesystemRecord | None = None
             if file_id:
@@ -252,7 +246,7 @@ class DefaultFilesystem(FilesystemStrategy):
         except Exception as e:
             msg = f"Error getting file: {e!s}"
             logger.exception(msg)
-            raise FilesystemServiceError(msg)
+            raise FilesystemServiceError(msg) from e
         else:
             return file_data
 
@@ -305,7 +299,7 @@ class DefaultFilesystem(FilesystemStrategy):
             logger.error(msg)
             raise FilesystemServiceError(msg)
 
-        try:
+        try:  # noqa: PLW0717
             context_dir = self._get_context_temp_dir(self.setup_id)
             file_path = os.path.join(context_dir, file_id)
             existing_file = self.db[file_id]
@@ -338,7 +332,7 @@ class DefaultFilesystem(FilesystemStrategy):
         except Exception as e:
             msg = f"Error updating file {file_id}: {e!s}"
             logger.exception(msg)
-            raise FilesystemServiceError(msg)
+            raise FilesystemServiceError(msg) from e
         else:
             return existing_file
 
@@ -373,8 +367,7 @@ class DefaultFilesystem(FilesystemStrategy):
         total_deleted = 0
         total_failed = 0
 
-        try:
-            # Determine which files to delete
+        try:  # noqa: PLW0717
             files_to_delete = [f.id for f in self._filter_db(filters)]
 
             if not files_to_delete:
@@ -388,7 +381,7 @@ class DefaultFilesystem(FilesystemStrategy):
                     total_failed += 1
                     continue
 
-                try:
+                try:  # noqa: PLW0717
                     file_path = file_data.storage_uri
                     if await AsyncPath(file_path).exists():
                         if permanent:
@@ -410,7 +403,7 @@ class DefaultFilesystem(FilesystemStrategy):
         except Exception as e:
             msg = f"Error in delete_files: {e!s}"
             logger.exception(msg)
-            raise FilesystemServiceError(msg)
+            raise FilesystemServiceError(msg) from e
 
         else:
             return results, total_deleted, total_failed

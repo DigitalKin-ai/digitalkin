@@ -9,8 +9,8 @@ from typing import Any
 from pydantic import BaseModel
 
 from digitalkin.logger import logger
+from digitalkin.models.services.storage import DataType
 from digitalkin.services.storage.storage_strategy import (
-    DataType,
     StorageRecord,
     StorageStrategy,
 )
@@ -50,7 +50,7 @@ class DefaultStorage(StorageStrategy):
         if not self.storage_file.exists():
             return {}
 
-        try:
+        try:  # noqa: PLW0717
             raw = json.loads(self.storage_file.read_text(encoding="utf-8"))
             out: dict[str, StorageRecord] = {}
 

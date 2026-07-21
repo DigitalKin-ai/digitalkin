@@ -7,7 +7,8 @@ from typing import Any
 from pydantic import ValidationError
 
 from digitalkin.logger import logger
-from digitalkin.services.setup.setup_strategy import SetupData, SetupServiceError, SetupStrategy, SetupVersionData
+from digitalkin.services.setup.exceptions import SetupServiceError
+from digitalkin.services.setup.setup_strategy import SetupData, SetupStrategy, SetupVersionData
 
 
 class DefaultSetup(SetupStrategy):
@@ -122,10 +123,10 @@ class DefaultSetup(SetupStrategy):
         """
         try:
             valid_data = SetupVersionData.model_validate(setup_version_dict["data"])  # Revalidates instance
-        except ValidationError:
+        except ValidationError as e:
             msg = "Validation failed for model SetupVersionData"
             logger.exception(msg)
-            raise SetupServiceError(msg)
+            raise SetupServiceError(msg) from e
 
         if setup_version_dict["setup_id"] not in self.setup_versions:
             self.setup_versions[setup_version_dict["setup_id"]] = {}

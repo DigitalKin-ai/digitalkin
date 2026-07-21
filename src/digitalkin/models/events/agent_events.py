@@ -39,8 +39,8 @@ class BaseAgentRunEvent(BaseModel):
     """Base class for all agent run events."""
 
     event: AgentRunEvent = Field(..., description="Type of the event")
-    timestamp: float | None = Field(None, description="Event timestamp (Unix time)")
-    metadata: dict[str, Any] | None = Field(None, description="Additional event metadata")
+    timestamp: float | None = Field(default=None, description="Event timestamp (Unix time)")
+    metadata: dict[str, Any] | None = Field(default=None, description="Additional event metadata")
 
     class Config:
         """Pydantic configuration."""
@@ -52,8 +52,8 @@ class RunStartedEvent(BaseAgentRunEvent):
     """Event emitted when an agent run starts."""
 
     event: AgentRunEvent = Field(AgentRunEvent.RUN_STARTED, description="Event type")
-    run_id: str | None = Field(None, description="Unique identifier for this run")
-    thread_id: str | None = Field(None, description="Thread/conversation identifier")
+    run_id: str | None = Field(default=None, description="Unique identifier for this run")
+    thread_id: str | None = Field(default=None, description="Thread/conversation identifier")
 
 
 class TextMessageStartedEvent(BaseAgentRunEvent):
@@ -74,36 +74,36 @@ class RunContentEvent(BaseAgentRunEvent):
     """Event emitted when the agent produces content (text, reasoning, etc.)."""
 
     event: AgentRunEvent = Field(AgentRunEvent.RUN_CONTENT, description="Event type")
-    content: str | None = Field(None, description="Text content produced by the agent")
-    reasoning_content: str | None = Field(None, description="Reasoning content (if extended thinking is enabled)")
-    content_type: str | None = Field(None, description="Type of content (text, json, etc.)")
-    message_id: str | None = Field(None, description="ID of the parent text message")
+    content: str | None = Field(default=None, description="Text content produced by the agent")
+    reasoning_content: str | None = Field(default=None, description="Reasoning content (if extended thinking on)")
+    content_type: str | None = Field(default=None, description="Type of content (text, json, etc.)")
+    message_id: str | None = Field(default=None, description="ID of the parent text message")
 
 
 class RunCompletedEvent(BaseAgentRunEvent):
     """Event emitted when an agent run completes successfully."""
 
     event: AgentRunEvent = Field(AgentRunEvent.RUN_COMPLETED, description="Event type")
-    run_id: str | None = Field(None, description="Unique identifier for this run")
-    final_content: str | None = Field(None, description="Final accumulated content")
-    usage: dict[str, Any] | None = Field(None, description="Token usage statistics")
-    message_id: str | None = Field(None, description="ID of the text message to close, if any")
+    run_id: str | None = Field(default=None, description="Unique identifier for this run")
+    final_content: str | None = Field(default=None, description="Final accumulated content")
+    usage: dict[str, Any] | None = Field(default=None, description="Token usage statistics")
+    message_id: str | None = Field(default=None, description="ID of the text message to close, if any")
 
 
 class RunErrorEvent(BaseAgentRunEvent):
     """Event emitted when an agent run encounters an error."""
 
     event: AgentRunEvent = Field(AgentRunEvent.RUN_ERROR, description="Event type")
-    error_type: str | None = Field(None, description="Type/category of error")
-    content: str | None = Field(None, description="Error message")
-    error_details: dict[str, Any] | None = Field(None, description="Additional error details")
+    error_type: str | None = Field(default=None, description="Type/category of error")
+    content: str | None = Field(default=None, description="Error message")
+    error_details: dict[str, Any] | None = Field(default=None, description="Additional error details")
 
 
 class ReasoningStartedEvent(BaseAgentRunEvent):
     """Event emitted when a reasoning phase starts."""
 
     event: AgentRunEvent = Field(AgentRunEvent.REASONING_STARTED, description="Event type")
-    reasoning_id: str | None = Field(None, description="Unique ID for this reasoning phase")
+    reasoning_id: str | None = Field(default=None, description="Unique ID for this reasoning phase")
 
 
 class ReasoningContentDeltaEvent(BaseAgentRunEvent):
@@ -111,7 +111,7 @@ class ReasoningContentDeltaEvent(BaseAgentRunEvent):
 
     event: AgentRunEvent = Field(AgentRunEvent.REASONING_CONTENT_DELTA, description="Event type")
     delta: str = Field(..., description="Delta of reasoning content")
-    reasoning_id: str | None = Field(None, description="ID of the parent reasoning phase")
+    reasoning_id: str | None = Field(default=None, description="ID of the parent reasoning phase")
 
 
 class ReasoningStepEvent(BaseAgentRunEvent):
@@ -119,38 +119,38 @@ class ReasoningStepEvent(BaseAgentRunEvent):
 
     event: AgentRunEvent = Field(AgentRunEvent.REASONING_STEP, description="Event type")
     delta: str = Field(..., description="Reasoning step content")
-    reasoning_id: str | None = Field(None, description="ID of the parent reasoning phase")
+    reasoning_id: str | None = Field(default=None, description="ID of the parent reasoning phase")
 
 
 class ReasoningCompletedEvent(BaseAgentRunEvent):
     """Event emitted when a reasoning phase completes."""
 
     event: AgentRunEvent = Field(AgentRunEvent.REASONING_COMPLETED, description="Event type")
-    reasoning_id: str | None = Field(None, description="ID of the reasoning phase being closed")
+    reasoning_id: str | None = Field(default=None, description="ID of the reasoning phase being closed")
 
 
 class ToolInfo(BaseModel):
     """Information about a tool call."""
 
-    tool_call_id: str | None = Field(None, description="Unique identifier for this tool call")
-    tool_name: str | None = Field(None, description="Name of the tool being called")
-    tool_args: dict[str, Any] | str | None = Field(None, description="Arguments passed to the tool")
-    result: str | None = Field(None, description="Result returned by the tool")
+    tool_call_id: str | None = Field(default=None, description="Unique identifier for this tool call")
+    tool_name: str | None = Field(default=None, description="Name of the tool being called")
+    tool_args: dict[str, Any] | str | None = Field(default=None, description="Arguments passed to the tool")
+    result: str | None = Field(default=None, description="Result returned by the tool")
 
 
 class ToolCallStartedEvent(BaseAgentRunEvent):
     """Event emitted when a tool call starts."""
 
     event: AgentRunEvent = Field(AgentRunEvent.TOOL_CALL_STARTED, description="Event type")
-    tool: ToolInfo | None = Field(None, description="Tool information")
+    tool: ToolInfo | None = Field(default=None, description="Tool information")
 
 
 class ToolCallCompletedEvent(BaseAgentRunEvent):
     """Event emitted when a tool call completes successfully."""
 
     event: AgentRunEvent = Field(AgentRunEvent.TOOL_CALL_COMPLETED, description="Event type")
-    tool: ToolInfo | None = Field(None, description="Tool information including result")
-    content: str | None = Field(None, description="Tool execution result content")
+    tool: ToolInfo | None = Field(default=None, description="Tool information including result")
+    content: str | None = Field(default=None, description="Tool execution result content")
 
 
 class ToolCallErrorEvent(BaseAgentRunEvent):

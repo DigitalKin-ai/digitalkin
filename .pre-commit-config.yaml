@@ -15,26 +15,45 @@ repos:
 
       - id: check-toml
 
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.15.11
+  # ruff as local hooks so they run the project's LOCKED ruff over the whole repo,
+  # matching CI (`uv run ruff check .`). The pinned mirrors-ruff rev drifted from the
+  # lock's ruff, so preview rules (e.g. D421) fired in CI but not in pre-commit.
+  - repo: local
     hooks:
       - id: ruff-check
-        args: [--fix]
+        name: ruff-check
+        entry: uv run ruff check --fix .
+        language: system
+        pass_filenames: false
+        types: [python]
       - id: ruff-format
+        name: ruff-format
+        entry: uv run ruff format .
+        language: system
+        pass_filenames: false
+        types: [python]
 
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.20.2
+  # mypy as a local hook so it runs in the project env (real, typed deps),
+  # matching `uv run mypy`. The isolated mirrors-mypy env lacked redis/grpc,
+  # which made their required `# type: ignore` comments look unused.
+  - repo: local
     hooks:
       - id: mypy
-        additional_dependencies: [types-protobuf]
-        exclude: "^(tests/|examples/)"
+        name: mypy
+        entry: uv run mypy src/digitalkin
+        language: system
+        pass_filenames: false
+        types: [python]
+        files: ^src/digitalkin/.*\.py$
 
   # Add pytest as a local hook
   - repo: local
     hooks:
       - id: pytest
         name: pytest
-        entry: docker compose run --rm -T tests pytest tests/ -m 'not integration'
+        # --build avoids stale images; TEST_MARKER env is honored by entrypoint-test.sh
+        # (CLI args after the service name are ignored), so set the marker via env.
+        entry: docker compose run --rm -T --build -e "TEST_MARKER=not integration" tests
         language: system
         pass_filenames: false
         types: [python]

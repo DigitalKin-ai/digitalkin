@@ -1,6 +1,7 @@
 """This module is responsible for handling the cost services."""
 
-from digitalkin.services.cost.cost_strategy import CostConfig, CostData, CostStrategy, CostType
+from digitalkin.models.services.cost import CostType
+from digitalkin.services.cost.cost_strategy import CostConfig, CostData, CostStrategy
 from digitalkin.services.cost.default_cost import DefaultCost
 from digitalkin.services.cost.grpc_cost import GrpcCost
 

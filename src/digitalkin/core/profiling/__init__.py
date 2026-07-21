@@ -1,6 +1,6 @@
 """Profiling and monitoring tools for DigitalKin tasks and servers."""
 
-from digitalkin.core.profiling.asyncio_monitor import AsyncioMonitor
-from digitalkin.core.profiling.task_profiler import ProfilerMode, TaskProfiler
+from digitalkin.core.profiling.task_profiler import TaskProfiler
+from digitalkin.models.settings.profiling import ProfilerMode
 
-__all__ = ["AsyncioMonitor", "ProfilerMode", "TaskProfiler"]
+__all__ = ["ProfilerMode", "TaskProfiler"]

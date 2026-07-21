@@ -6,15 +6,8 @@ from typing import Annotated
 import pytest
 from pydantic import BaseModel, Field
 
-from digitalkin.utils.dynamic_schema import (
-    DynamicField,
-    ResolveResult,
-    get_dynamic_metadata,
-    get_fetchers,
-    has_dynamic,
-    resolve,
-    resolve_safe,
-)
+from digitalkin.models.utils.dynamic_schema import ResolveResult
+from digitalkin.utils.dynamic_schema import DynamicField, DynamicSchemaResolver
 
 # Import alias for cleaner test code
 Dynamic = DynamicField
@@ -85,7 +78,7 @@ class TestGetDynamicMetadata:
         class Model(BaseModel):
             field: Annotated[str, dynamic_meta] = "a"
 
-        result = get_dynamic_metadata(Model.model_fields["field"])
+        result = DynamicSchemaResolver.get_dynamic_metadata(Model.model_fields["field"])
         assert result is dynamic_meta
 
     def test_returns_none_without_dynamic(self) -> None:
@@ -94,7 +87,7 @@ class TestGetDynamicMetadata:
         class Model(BaseModel):
             field: str = "a"
 
-        result = get_dynamic_metadata(Model.model_fields["field"])
+        result = DynamicSchemaResolver.get_dynamic_metadata(Model.model_fields["field"])
         assert result is None
 
     def test_returns_none_with_other_metadata(self) -> None:
@@ -103,7 +96,7 @@ class TestGetDynamicMetadata:
         class Model(BaseModel):
             field: Annotated[str, "some_other_metadata"] = "a"
 
-        result = get_dynamic_metadata(Model.model_fields["field"])
+        result = DynamicSchemaResolver.get_dynamic_metadata(Model.model_fields["field"])
         assert result is None
 
 
@@ -116,7 +109,7 @@ class TestHasDynamic:
         class Model(BaseModel):
             field: Annotated[str, DynamicField(enum=lambda: ["a"])] = "a"
 
-        assert has_dynamic(Model.model_fields["field"]) is True
+        assert DynamicSchemaResolver.has_dynamic(Model.model_fields["field"]) is True
 
     def test_returns_false_without_dynamic(self) -> None:
         """Test returns False when no DynamicField."""
@@ -124,7 +117,7 @@ class TestHasDynamic:
         class Model(BaseModel):
             field: str = "a"
 
-        assert has_dynamic(Model.model_fields["field"]) is False
+        assert DynamicSchemaResolver.has_dynamic(Model.model_fields["field"]) is False
 
     def test_returns_false_with_field_info_only(self) -> None:
         """Test returns False with Field but no DynamicField."""
@@ -132,7 +125,7 @@ class TestHasDynamic:
         class Model(BaseModel):
             field: str = Field(default="a", description="A field")
 
-        assert has_dynamic(Model.model_fields["field"]) is False
+        assert DynamicSchemaResolver.has_dynamic(Model.model_fields["field"]) is False
 
 
 class TestGetFetchers:
@@ -146,7 +139,7 @@ class TestGetFetchers:
         class Model(BaseModel):
             field: Annotated[str, Dynamic(enum=fetcher)] = "a"
 
-        fetchers = get_fetchers(Model.model_fields["field"])
+        fetchers = DynamicSchemaResolver.get_fetchers(Model.model_fields["field"])
 
         assert "enum" in fetchers
         assert fetchers["enum"] is fetcher
@@ -157,7 +150,7 @@ class TestGetFetchers:
         class Model(BaseModel):
             field: str = "a"
 
-        assert get_fetchers(Model.model_fields["field"]) == {}
+        assert DynamicSchemaResolver.get_fetchers(Model.model_fields["field"]) == {}
 
     def test_multiple_fetchers(self) -> None:
         """Test extraction of multiple fetchers."""
@@ -170,7 +163,7 @@ class TestGetFetchers:
         class Model(BaseModel):
             field: Annotated[str, Dynamic(enum=enum_fetcher, default=default_fetcher)] = "a"
 
-        fetchers = get_fetchers(Model.model_fields["field"])
+        fetchers = DynamicSchemaResolver.get_fetchers(Model.model_fields["field"])
 
         assert fetchers["enum"] is enum_fetcher
         assert fetchers["default"] is default_fetcher
@@ -184,7 +177,7 @@ class TestResolve:
         """Test resolution of sync fetcher."""
         fetchers = {"enum": lambda: ["a", "b", "c"]}
 
-        resolved = await resolve(fetchers)
+        resolved = await DynamicSchemaResolver.resolve(fetchers)
 
         assert resolved == {"enum": ["a", "b", "c"]}
 
@@ -197,7 +190,7 @@ class TestResolve:
 
         fetchers = {"enum": async_enum}
 
-        resolved = await resolve(fetchers)
+        resolved = await DynamicSchemaResolver.resolve(fetchers)
 
         assert resolved == {"enum": ["x", "y", "z"]}
 
@@ -213,14 +206,14 @@ class TestResolve:
             "default": async_default,
         }
 
-        resolved = await resolve(fetchers)
+        resolved = await DynamicSchemaResolver.resolve(fetchers)
 
         assert resolved == {"enum": ["a", "b"], "default": "default_value"}
 
     @pytest.mark.asyncio
     async def test_resolves_empty_fetchers(self) -> None:
         """Test resolution of empty fetchers."""
-        resolved = await resolve({})
+        resolved = await DynamicSchemaResolver.resolve({})
         assert resolved == {}
 
     @pytest.mark.asyncio
@@ -234,7 +227,7 @@ class TestResolve:
         fetchers = {"enum": failing_fetcher}
 
         with pytest.raises(ValueError, match="Fetcher failed"):
-            await resolve(fetchers)
+            await DynamicSchemaResolver.resolve(fetchers)
 
 
 class TestIntegrationWithPydantic:
@@ -248,8 +241,8 @@ class TestIntegrationWithPydantic:
 
         field_info = TestModel.model_fields["name"]
 
-        assert has_dynamic(field_info)
-        fetchers = get_fetchers(field_info)
+        assert DynamicSchemaResolver.has_dynamic(field_info)
+        fetchers = DynamicSchemaResolver.get_fetchers(field_info)
         assert "enum" in fetchers
 
     def test_dynamic_with_field_and_json_schema_extra(self) -> None:
@@ -264,7 +257,7 @@ class TestIntegrationWithPydantic:
         field_info = TestModel.model_fields["name"]
 
         # Dynamic should be detected
-        assert has_dynamic(field_info)
+        assert DynamicSchemaResolver.has_dynamic(field_info)
 
         # Static json_schema_extra should still be present
         assert field_info.json_schema_extra == {"config": True}
@@ -278,7 +271,7 @@ class TestIntegrationWithPydantic:
         field_info = TestModel.model_fields["name"]
 
         # Dynamic should still be found
-        assert has_dynamic(field_info)
+        assert DynamicSchemaResolver.has_dynamic(field_info)
 
     @pytest.mark.asyncio
     async def test_end_to_end_resolution(self) -> None:
@@ -291,8 +284,8 @@ class TestIntegrationWithPydantic:
             choice: Annotated[str, Dynamic(enum=fetch_options)] = "option1"
 
         field_info = TestModel.model_fields["choice"]
-        fetchers = get_fetchers(field_info)
-        resolved = await resolve(fetchers)
+        fetchers = DynamicSchemaResolver.get_fetchers(field_info)
+        resolved = await DynamicSchemaResolver.resolve(fetchers)
 
         assert resolved["enum"] == ["option1", "option2", "option3"]
 
@@ -363,7 +356,7 @@ class TestResolveSafe:
             "default": lambda: "a",
         }
 
-        result = await resolve_safe(fetchers)
+        result = await DynamicSchemaResolver.resolve_safe(fetchers)
 
         assert result.success is True
         assert result.values == {"enum": ["a", "b"], "default": "a"}
@@ -382,7 +375,7 @@ class TestResolveSafe:
             "bad": failing_fetcher,
         }
 
-        result = await resolve_safe(fetchers)
+        result = await DynamicSchemaResolver.resolve_safe(fetchers)
 
         assert result.partial is True
         assert result.values == {"good": ["a", "b"]}
@@ -403,7 +396,7 @@ class TestResolveSafe:
 
         fetchers = {"a": failing1, "b": failing2}
 
-        result = await resolve_safe(fetchers)
+        result = await DynamicSchemaResolver.resolve_safe(fetchers)
 
         assert result.success is False
         assert result.partial is False
@@ -413,7 +406,7 @@ class TestResolveSafe:
     @pytest.mark.asyncio
     async def test_empty_fetchers(self) -> None:
         """Test resolve_safe with empty fetchers."""
-        result = await resolve_safe({})
+        result = await DynamicSchemaResolver.resolve_safe({})
         assert result.success is True
         assert result.values == {}
         assert result.errors == {}
@@ -426,7 +419,7 @@ class TestResolveSafe:
             msg = "Async failure"
             raise ValueError(msg)
 
-        result = await resolve_safe({"async_key": async_failing})
+        result = await DynamicSchemaResolver.resolve_safe({"async_key": async_failing})
 
         assert result.success is False
         assert "async_key" in result.errors
@@ -463,7 +456,7 @@ class TestResolveParallel:
         }
 
         before = asyncio.get_event_loop().time()
-        result = await resolve(fetchers)
+        result = await DynamicSchemaResolver.resolve(fetchers)
         elapsed = asyncio.get_event_loop().time() - before
 
         # If parallel, should complete in ~0.1s. If sequential, ~0.3s
@@ -486,7 +479,7 @@ class TestResolveParallel:
         fetchers = {f"key{i}": slow_fetcher for i in range(3)}
 
         before = asyncio.get_event_loop().time()
-        result = await resolve_safe(fetchers)
+        result = await DynamicSchemaResolver.resolve_safe(fetchers)
         elapsed = asyncio.get_event_loop().time() - before
 
         assert elapsed < 0.25, f"Expected parallel execution, but took {elapsed:.2f}s"
@@ -505,7 +498,7 @@ class TestResolveTimeout:
             await asyncio.sleep(0.01)
             return "fast"
 
-        result = await resolve({"key": fast_fetcher}, timeout=1.0)
+        result = await DynamicSchemaResolver.resolve({"key": fast_fetcher}, timeout=1.0)
         assert result == {"key": "fast"}
 
     @pytest.mark.asyncio
@@ -517,7 +510,7 @@ class TestResolveTimeout:
             return "slow"
 
         with pytest.raises(asyncio.TimeoutError):
-            await resolve({"key": slow_fetcher}, timeout=0.05)
+            await DynamicSchemaResolver.resolve({"key": slow_fetcher}, timeout=0.05)
 
     @pytest.mark.asyncio
     async def test_resolve_safe_timeout_records_error(self) -> None:
@@ -527,7 +520,7 @@ class TestResolveTimeout:
             await asyncio.sleep(10)
             return "slow"
 
-        result = await resolve_safe({"slow": slow_fetcher}, timeout=0.05)
+        result = await DynamicSchemaResolver.resolve_safe({"slow": slow_fetcher}, timeout=0.05)
 
         # Timeout should be recorded as error
         assert result.success is False
@@ -547,7 +540,7 @@ class TestResolveTimeout:
             return "slow"
 
         fetchers = {"fast": fast_fetcher, "slow": slow_fetcher}
-        result = await resolve_safe(fetchers, timeout=0.1)
+        result = await DynamicSchemaResolver.resolve_safe(fetchers, timeout=0.1)
 
         # Fast one should succeed, slow one should timeout
         assert result.partial is True
@@ -563,5 +556,5 @@ class TestResolveTimeout:
             return "done"
 
         # Should not timeout with timeout=None
-        result = await resolve({"key": fetcher}, timeout=None)
+        result = await DynamicSchemaResolver.resolve({"key": fetcher}, timeout=None)
         assert result == {"key": "done"}
