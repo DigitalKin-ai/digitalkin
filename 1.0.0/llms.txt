@@ -1,0 +1,12 @@
+# DigitalKin
+
+> A modular framework for building AI agents with gRPC servers and flexible service strategies
+
+## Usage
+
+- [DigitalKin Python SDK](https://digitalkin.com/1.0.0/index.md)
+
+## API
+
+- [Api](https://digitalkin.com/1.0.0/api/api/index.md)
+
