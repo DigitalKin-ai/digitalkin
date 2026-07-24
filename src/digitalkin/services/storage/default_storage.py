@@ -9,7 +9,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from digitalkin.logger import logger
-from digitalkin.models.services.storage import DataType
+from digitalkin.models.services.storage import DataType, Visibility
 from digitalkin.services.storage.storage_strategy import (
     StorageRecord,
     StorageStrategy,
@@ -67,6 +67,7 @@ class DefaultStorage(StorageStrategy):
                     record_id=rd["record_id"],
                     data=data_model,
                     data_type=DataType[rd["data_type"]],
+                    visibility=Visibility[rd["visibility"]] if rd.get("visibility") else Visibility.UNSPECIFIED,
                     creation_date=datetime.datetime.fromisoformat(rd["creation_date"])
                     if rd.get("creation_date")
                     else None,
@@ -97,6 +98,7 @@ class DefaultStorage(StorageStrategy):
                         "collection": record.collection,
                         "record_id": record.record_id,
                         "data_type": record.data_type.name,
+                        "visibility": record.visibility.name,
                         "data": record.data.model_dump(),
                         "creation_date": record.creation_date.isoformat() if record.creation_date else None,
                         "update_date": record.update_date.isoformat() if record.update_date else None,
@@ -148,7 +150,14 @@ class DefaultStorage(StorageStrategy):
         """
         return self.storage.get(self._key(context, collection, record_id))
 
-    async def _update(self, collection: str, record_id: str, data: BaseModel, context: str) -> StorageRecord | None:
+    async def _update(
+        self,
+        collection: str,
+        record_id: str,
+        data: BaseModel,
+        context: str,
+        visibility: Visibility = Visibility.UNSPECIFIED,
+    ) -> StorageRecord | None:
         """Update a record in the database scoped to a specific context.
 
         Args:
@@ -156,6 +165,7 @@ class DefaultStorage(StorageStrategy):
             record_id: The unique ID of the record
             data: The data to modify
             context: Owner context scoping the update.
+            visibility: New read-access scope; UNSPECIFIED leaves it unchanged.
 
         Returns:
             StorageRecord: The modified record
@@ -165,6 +175,8 @@ class DefaultStorage(StorageStrategy):
         if not rec:
             return None
         rec.data = data
+        if visibility is not Visibility.UNSPECIFIED:
+            rec.visibility = visibility
         rec.update_date = datetime.datetime.now(datetime.timezone.utc)
         self._save_to_file()
         logger.debug("Modified %s", key)
@@ -189,18 +201,25 @@ class DefaultStorage(StorageStrategy):
         logger.debug("Removed %s", key)
         return True
 
-    async def _list(self, collection: str, context: str) -> list[StorageRecord]:
+    async def _list(
+        self, collection: str, context: str, visibilities: list[Visibility] | None = None
+    ) -> list[StorageRecord]:
         """List records in a collection scoped to a specific context.
 
         Args:
             collection: The unique name to retrieve data for
             context: Owner context scoping the listing.
+            visibilities: Optional read-access scopes to filter by (None = no filter).
 
         Returns:
             A list of storage records
         """
         prefix = f"{context}|{collection}:"
-        return [r for k, r in self.storage.items() if k.startswith(prefix)]
+        records = [r for k, r in self.storage.items() if k.startswith(prefix)]
+        if visibilities:
+            allowed = set(visibilities)
+            records = [r for r in records if r.visibility in allowed]
+        return records
 
     async def _remove_collection(self, collection: str, context: str) -> bool:
         """Wipe a collection scoped to a specific context.

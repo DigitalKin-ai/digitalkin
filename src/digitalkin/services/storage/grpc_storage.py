@@ -8,7 +8,7 @@ from digitalkin.grpc_servers.exceptions import CircuitOpenError, PermissionDenie
 from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
 from digitalkin.logger import logger
 from digitalkin.models.grpc_servers.models import ClientConfig
-from digitalkin.models.services.storage import DataType
+from digitalkin.models.services.storage import DataType, Visibility
 from digitalkin.services.storage.exceptions import StorageServiceError
 from digitalkin.services.storage.storage_strategy import (
     StorageRecord,
@@ -55,6 +55,7 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
         coll = proto.collection
         rid = proto.record_id
         dtype = DataType[data_pb2.DataType.Name(proto.data_type)]
+        visibility = Visibility(proto.visibility)
 
         # Selective deserialization: only the nested Struct payload
         payload = ProtoUtils.proto_to_dict(proto.data) if proto.HasField("data") else {}
@@ -70,6 +71,7 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
             record_id=rid,
             data=validated,
             data_type=dtype,
+            visibility=visibility,
             creation_date=creation_date,
             update_date=update_date,
         )
@@ -108,16 +110,18 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
             StorageServiceError: If there is an error while storing the record
         """
         logger.debug("debug:_store collection=%s id=%s", record.collection, record.record_id)
+        data_struct = Struct()
+        data_struct.update(record.data.model_dump())
+        req = data_pb2.StoreRecordRequest(
+            data=data_struct,
+            context=record.context,
+            collection=record.collection,
+            record_id=record.record_id,
+            data_type=record.data_type.name,
+        )
+        if record.visibility is not Visibility.UNSPECIFIED:
+            req.visibility = record.visibility.value
         try:
-            data_struct = Struct()
-            data_struct.update(record.data.model_dump())
-            req = data_pb2.StoreRecordRequest(
-                data=data_struct,
-                context=record.context,
-                collection=record.collection,
-                record_id=record.record_id,
-                data_type=record.data_type.name,
-            )
             resp = await self.exec_grpc_query("StoreRecord", req)
             return self._build_record_from_proto(resp.stored_data)
         except PermissionDeniedError:
@@ -172,6 +176,7 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
         record_id: str,
         data: BaseModel,
         context: str,
+        visibility: Visibility = Visibility.UNSPECIFIED,
     ) -> StorageRecord | None:
         """Overwrite a document via gRPC scoped to a specific context.
 
@@ -182,15 +187,17 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
             PermissionDeniedError: If the service rejects the call with PERMISSION_DENIED.
         """
         logger.debug("debug:_update context=%s collection=%s id=%s", context, collection, record_id)
+        struct = Struct()
+        struct.update(data.model_dump())
+        req = data_pb2.UpdateRecordRequest(
+            data=struct,
+            context=context,
+            collection=collection,
+            record_id=record_id,
+        )
+        if visibility is not Visibility.UNSPECIFIED:
+            req.visibility = visibility.value
         try:
-            struct = Struct()
-            struct.update(data.model_dump())
-            req = data_pb2.UpdateRecordRequest(
-                data=struct,
-                context=context,
-                collection=collection,
-                record_id=record_id,
-            )
             resp = await self.exec_grpc_query("UpdateRecord", req)
             return self._build_record_from_proto(resp.stored_data)
         except PermissionDeniedError:
@@ -233,7 +240,9 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
             return False
         return True
 
-    async def _list(self, collection: str, context: str) -> list[StorageRecord]:
+    async def _list(
+        self, collection: str, context: str, visibilities: list[Visibility] | None = None
+    ) -> list[StorageRecord]:
         """List all documents in a collection via gRPC scoped to a specific context.
 
         Returns:
@@ -248,6 +257,8 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
                 context=context,
                 collection=collection,
             )
+            if visibilities:
+                req.visibilities.extend(v.value for v in visibilities)
             resp = await self.exec_grpc_query("ListRecords", req)
         except PermissionDeniedError:
             # TODO(validate): remove after prod validation

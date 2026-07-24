@@ -16,11 +16,16 @@ class RegistryModuleStatus(str, Enum):
 
 
 class RegistryModuleType(str, Enum):
-    """Module type in the registry."""
+    """Module type in the registry.
+
+    Member names mirror the proto ``ModuleType`` enum (minus the ``MODULE_TYPE_``
+    prefix): they are looked up by name from the wire value, so they must match.
+    """
 
     UNSPECIFIED = "unspecified"
     ARCHETYPE = "archetype"
     TOOL_MODULE = "tool_module"
+    SERVICE = "service"
 
 
 class ModuleInfo(BaseModel):
