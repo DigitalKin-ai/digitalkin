@@ -1,5 +1,5 @@
 [build-system]
-    build-backend = "setuptools.build_meta"
+    build-backend = "setuptools==83.0.0"
     requires      = [ "setuptools == 82.0.0", "wheel==0.46.3" ]
 
 [project]
@@ -63,7 +63,7 @@
     dev = [
         "build==1.4.2",
         "bump-my-version==1.2.7",
-        "cryptography==46.0.6",
+        "cryptography==50.0.0",
         "mypy==1.20.2",
         "pre-commit==4.5.1",
         "ruff==0.15.11",
@@ -108,7 +108,7 @@
         "pytest-html==4.2.0",
         "pytest-json-report==1.5.0",
         "pytest-timeout==2.4.0",
-        "pytest==9.0.2",
+        "pytest==9.0.3",
     ]
 [tool.setuptools]
     package-dir = { "" = "src" }
