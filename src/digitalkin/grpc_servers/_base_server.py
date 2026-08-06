@@ -3,6 +3,7 @@
 import abc
 import asyncio
 import os
+import sys
 
 from digitalkin.models.settings.profiling import get_profiling_settings
 
@@ -196,10 +197,16 @@ class BaseServer(abc.ABC):
         try:  # noqa: PLW0717
             grpc_compression = get_server_settings().grpc.compression.to_grpc()
 
-            try:
-                cpu_count = len(os.sched_getaffinity(0))
-                logger.info("vCPU count: %d", cpu_count)
-            except (AttributeError, OSError):
+            # sched_getaffinity is Linux-only; the sys.platform guard lets mypy skip
+            # it as unreachable on other platforms without a type: ignore.
+            if sys.platform == "linux":
+                try:
+                    cpu_count = len(os.sched_getaffinity(0))
+                    logger.info("vCPU count: %d", cpu_count)
+                except OSError:
+                    cpu_count = os.cpu_count() or 1
+                    logger.info("CPU count: %d", cpu_count)
+            else:
                 cpu_count = os.cpu_count() or 1
                 logger.info("CPU count: %d", cpu_count)
 

@@ -37,7 +37,7 @@
         "pydantic>=2.12.4",
         "redis[hiredis]>=7.4.0,<9",
     ]
-version = "1.0.2.dev4"
+version = "1.0.2.dev5"
 
     [project.optional-dependencies]
         agno = [ "agno>=2.6" ]

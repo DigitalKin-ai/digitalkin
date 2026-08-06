@@ -1,5 +1,7 @@
 """This module implements the default storage strategy."""
 
+from typing import cast
+
 from agentic_mesh_protocol.storage.v1 import data_pb2, storage_service_pb2_grpc
 from google.protobuf.struct_pb2 import Struct
 from pydantic import BaseModel
@@ -137,9 +139,8 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
             collection=record.collection,
             record_id=record.record_id,
             data_type=record.data_type.name,
+            visibility=cast("data_pb2.Visibility", record.visibility.value),
         )
-        if record.visibility is not Visibility.UNSPECIFIED:
-            req.visibility = record.visibility.value
         try:
             resp = await self.exec_grpc_query("StoreRecord", req)
             return self._build_record_from_proto(resp.stored_data)
@@ -219,9 +220,8 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
             context=self._context_enum(context),
             collection=collection,
             record_id=record_id,
+            visibility=cast("data_pb2.Visibility", visibility.value),
         )
-        if visibility is not Visibility.UNSPECIFIED:
-            req.visibility = visibility.value
         try:
             resp = await self.exec_grpc_query("UpdateRecord", req)
             return self._build_record_from_proto(resp.stored_data)
@@ -283,7 +283,7 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
                 collection=collection,
             )
             if visibilities:
-                req.visibilities.extend(v.value for v in visibilities)
+                req.visibilities.extend(cast("data_pb2.Visibility", v.value) for v in visibilities)
             resp = await self.exec_grpc_query("ListRecords", req)
         except PermissionDeniedError:
             # TODO(validate): remove after prod validation
