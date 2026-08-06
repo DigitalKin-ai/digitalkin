@@ -350,18 +350,43 @@ class ModuleContext:
         """
         setup = await self.registry.get_setup(setup_id)
         if setup is None or not setup.module_id:
+            logger.warning(
+                "resolve_tool: setup '%s' not found or has no module", setup_id, extra=self.session.current_ids()
+            )
             return None
         cached = self.tool_cache.entries.get(setup_id)
         if cached is not None:
+            logger.debug(
+                "resolve_tool: cache hit for setup '%s' (authz re-checked)", setup_id, extra=self.session.current_ids()
+            )
             return cached
         try:
             info = await self.registry.discover_by_id(setup.module_id)
         except RegistryModuleNotFoundError:
+            logger.warning(
+                "resolve_tool: module '%s' for setup '%s' not found in registry",
+                setup.module_id,
+                setup_id,
+                extra=self.session.current_ids(),
+            )
             return None
         if info is None:
+            logger.warning(
+                "resolve_tool: module '%s' for setup '%s' not found in registry",
+                setup.module_id,
+                setup_id,
+                extra=self.session.current_ids(),
+            )
             return None
         tool_info = await ToolModuleInfo.from_module_info(info, setup_id, setup.name, self.communication)
         self.tool_cache.add(tool_info)
+        logger.info(
+            "resolve_tool: resolved setup '%s' -> module '%s' (%d tools), cached",
+            setup_id,
+            setup.module_id,
+            len(tool_info.tools),
+            extra=self.session.current_ids(),
+        )
         return tool_info
 
     @staticmethod

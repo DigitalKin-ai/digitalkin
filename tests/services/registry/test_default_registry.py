@@ -1,8 +1,10 @@
 """Tests for DefaultRegistry module_type handling and module class registry markers."""
 
 import pytest
+from pydantic import ValidationError
 
 from digitalkin.models.services.registry import (
+    ModuleInfo,
     RegistryModuleType,
     RegistrySetupStatus,
     SetupInfo,
@@ -53,10 +55,11 @@ class TestDefaultRegistryModuleType:
         [
             ("search_tools", RegistryModuleType.TOOL_MODULE),
             ("search_kins", RegistryModuleType.ARCHETYPE),
+            ("search_services", RegistryModuleType.SERVICE),
         ],
     )
     async def test_typed_views_filter_by_type(self, view: str, expected_type: RegistryModuleType) -> None:
-        """search_tools/search_kins return only modules of the matching type."""
+        """search_tools/search_kins/search_services return only modules of the matching type."""
         registry = DefaultRegistry("", "", "")
         await registry.register(
             module_id="modules:tool1",
@@ -72,8 +75,19 @@ class TestDefaultRegistryModuleType:
             version="1.0.0",
             module_type=RegistryModuleType.ARCHETYPE,
         )
-        search_view = registry.search_tools if view == "search_tools" else registry.search_kins
-        results = await search_view()
+        await registry.register(
+            module_id="modules:svc1",
+            address="localhost",
+            port=50053,
+            version="1.0.0",
+            module_type=RegistryModuleType.SERVICE,
+        )
+        views = {
+            "search_tools": registry.search_tools,
+            "search_kins": registry.search_kins,
+            "search_services": registry.search_services,
+        }
+        results = await views[view]()
         assert len(results) == 1
         assert results[0].module_type == expected_type
 
@@ -155,6 +169,51 @@ class TestDefaultRegistrySetups:
         results = await registry.search_setups()
         assert results
         assert all("config" not in type(s).model_fields for s in results)
+
+
+class TestLegacyModuleTypeAliases:
+    """Legacy 'tool'/'kin' vocabulary from older SDK releases parses into the proto-aligned enum."""
+
+    def test_tool_normalized(self) -> None:
+        assert ModuleInfo(module_type="tool").module_type == RegistryModuleType.TOOL_MODULE
+
+    def test_kin_normalized(self) -> None:
+        assert ModuleInfo(module_type="kin").module_type == RegistryModuleType.ARCHETYPE
+
+    def test_canonical_values_untouched(self) -> None:
+        assert ModuleInfo(module_type="tool_module").module_type == RegistryModuleType.TOOL_MODULE
+        assert ModuleInfo(module_type=RegistryModuleType.SERVICE).module_type == RegistryModuleType.SERVICE
+
+    def test_unknown_value_still_fails(self) -> None:
+        with pytest.raises(ValidationError):
+            ModuleInfo(module_type="bogus")
+
+
+class TestGetServiceSetup:
+    """Tests for RegistryStrategy.get_service_setup (chat-discovered service setup)."""
+
+    async def test_returns_setup_version_content(self) -> None:
+        """The setup's config JSON is returned as-is for a discovered id."""
+        registry = DefaultRegistry("", "", "")
+        registry.add_setup(
+            SetupInfo(
+                setup_id="setups:service",
+                name="Nikita Branding Service",
+                status=RegistrySetupStatus.READY,
+                config={"llm": {"provider": "litellm"}, "flags": ["a"]},
+            )
+        )
+        assert await registry.get_service_setup("setups:service") == {"llm": {"provider": "litellm"}, "flags": ["a"]}
+
+    async def test_missing_setup_returns_none(self) -> None:
+        """An unknown setup id resolves to None, not an exception."""
+        assert await DefaultRegistry("", "", "").get_service_setup("setups:absent") is None
+
+    async def test_setup_without_content_returns_none(self) -> None:
+        """A setup with no config JSON resolves to None."""
+        registry = DefaultRegistry("", "", "")
+        registry.add_setup(SetupInfo(setup_id="setups:empty", name="Empty", status=RegistrySetupStatus.READY))
+        assert await registry.get_service_setup("setups:empty") is None
 
 
 class TestRegistryTypeMarkers:

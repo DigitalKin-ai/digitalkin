@@ -51,7 +51,7 @@ class RegistryStrategy(BaseStrategy, ABC):
 
         Args:
             name: Case-insensitive free text matched against module name AND documentation.
-            module_type: Filter by type (archetype, tool_module).
+            module_type: Filter by type (archetype, tool_module, service).
             limit: Max results (1-100).
             offset: Pagination offset.
 
@@ -107,6 +107,29 @@ class RegistryStrategy(BaseStrategy, ABC):
             offset=offset,
         )
 
+    async def search_services(
+        self,
+        name: str | None = None,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> list[ModuleInfo]:
+        """Service registry view: modules of type SERVICE.
+
+        Args:
+            name: Case-insensitive free text matched against module name AND documentation.
+            limit: Max results (1-100).
+            offset: Pagination offset.
+
+        Returns:
+            List of matching service modules.
+        """
+        return await self.search(
+            name=name,
+            module_type=RegistryModuleType.SERVICE.value,
+            limit=limit,
+            offset=offset,
+        )
+
     @abstractmethod
     async def search_setups(
         self,
@@ -125,7 +148,7 @@ class RegistryStrategy(BaseStrategy, ABC):
             query: Case-insensitive free text matched against setup name AND documentation.
             setup_ids: Restrict to these setup ids.
             module_ids: Restrict to setups backed by these modules.
-            module_types: Filter by backing module type (tool_module, archetype).
+            module_types: Filter by backing module type (tool_module, archetype, service).
             statuses: Filter by setup status. None = no filter; agent-facing callers
                 should pass READY/CONFIGURATION_SUCCEEDED for invocable setups.
             visibilities: Filter by visibility.
@@ -189,6 +212,23 @@ class RegistryStrategy(BaseStrategy, ABC):
     async def get_setup(self, setup_id: str) -> SetupInfo | None:
         """Get setup info."""
         ...
+
+    async def get_service_setup(self, setup_id: str) -> dict[str, Any] | None:
+        """Fetch a service setup's setup_version content JSON.
+
+        The id comes from chat-driven discovery (``search_setups`` + user acceptance),
+        not from configuration. Goes through ``get_setup`` on every call — the registry
+        stays the permission gate; nothing cached. Content always reflects the latest
+        setup version.
+
+        Args:
+            setup_id: The discovered service setup id.
+
+        Returns:
+            The setup_version content, or None when the setup is missing or has no content.
+        """
+        setup = await self.get_setup(setup_id)
+        return setup.config if setup else None
 
     async def wait_for_ready(self, timeout: float = 1.0) -> bool:  # noqa: PLR6301
         """Check if the registry backend is reachable.

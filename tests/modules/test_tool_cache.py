@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from digitalkin.grpc_servers.exceptions import PermissionDeniedError
-from digitalkin.models.module.module_context import ModuleContext
+from digitalkin.models.module.module_context import ModuleContext, Session
 from digitalkin.models.module.setup_types import SetupModel
 from digitalkin.models.module.tool_cache import ToolCache, ToolDefinition, ToolModuleInfo
 from digitalkin.models.module.tool_reference import ToolReference, ToolSelection
@@ -120,6 +120,20 @@ class TestToolCache:
 
 class TestSetupModelToolCache:
     """Tests for SetupModel tool cache integration."""
+
+    def test_legacy_resolved_tools_vocabulary_parses(self) -> None:
+        """Setup content persisted by older SDKs (module_type 'tool') still validates.
+
+        Prod repro: stored setups carry resolved_tools entries with the legacy
+        'tool' label; the alias validator normalizes them instead of killing the run.
+        """
+        setup = SetupModel(
+            resolved_tools={
+                "setups:legacy": {"module_type": "tool", "setup_id": "setups:legacy", "tool_name": "Legacy"},
+            }
+        )
+        assert setup.resolved_tools["setups:legacy"].module_type == RegistryModuleType.TOOL_MODULE
+        assert "resolved_tools" not in setup.model_dump()  # exclude=True: never re-serialized
 
     @pytest.mark.asyncio
     async def test_build_tool_cache_from_resolved_tools(self, sample_tool_module_info: ToolModuleInfo) -> None:
@@ -543,6 +557,7 @@ def _context_with(registry: AsyncMock, communication: AsyncMock) -> ModuleContex
     ctx.tool_cache = ToolCache()
     ctx.registry = registry
     ctx.communication = communication
+    ctx.session = Session(job_id="job-1", mission_id="mission-1", setup_id="setup-1", setup_version_id="sv-1")
     return ctx
 
 

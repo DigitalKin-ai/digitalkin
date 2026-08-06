@@ -3,7 +3,9 @@
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
+
+from digitalkin.logger import logger
 
 
 class RegistryModuleStatus(str, Enum):
@@ -39,6 +41,32 @@ class ModuleInfo(BaseModel):
     module_name: str = ""
     documentation: str | None = None
     status: RegistryModuleStatus | None = None
+
+    @field_validator("module_type", mode="before")
+    @classmethod
+    def _coerce_legacy_module_type(cls, value: object) -> object:
+        """Normalize the legacy 'tool'/'kin' vocabulary written by older SDK releases.
+
+        Setup contents persisted before the enum aligned on the proto names carry
+        ``resolved_tools`` entries with ``module_type: "tool"``; the config-setup flow
+        strips and rebuilds the field, so tolerated payloads self-heal on the next
+        reconfiguration.
+
+        Args:
+            value: The raw module_type value.
+
+        Returns:
+            The normalized enum member, or the value unchanged.
+        """
+        if value == "tool":
+            # TODO(validate): remove marker once legacy setups are purged in prod
+            logger.warning("[VALIDATE MTYPE] legacy module_type 'tool' normalized to 'tool_module'")
+            return RegistryModuleType.TOOL_MODULE
+        if value == "kin":
+            # TODO(validate): remove marker once legacy setups are purged in prod
+            logger.warning("[VALIDATE MTYPE] legacy module_type 'kin' normalized to 'archetype'")
+            return RegistryModuleType.ARCHETYPE
+        return value
 
 
 class RegistrySetupStatus(str, Enum):

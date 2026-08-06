@@ -59,6 +59,21 @@ class SetupStrategy(ABC):
             The setup with its current version populated.
         """
 
+    async def create_service_setup(self, name: str, content: dict[str, Any]) -> SetupData:
+        """Create a service setup — a shareable configuration document.
+
+        Only a name and the content JSON are needed; everything else (owner,
+        organisation, backing module, kind) is derived server-side.
+
+        Args:
+            name: Human-readable service name.
+            content: The service configuration JSON.
+
+        Returns:
+            The created setup with its initial version.
+        """
+        return await self.create_setup({"name": name, "content": content})
+
     @abstractmethod
     async def create_setup(self, setup_dict: dict[str, Any]) -> SetupData:
         """Create a new setup; owner/organisation/module derive from the request context.

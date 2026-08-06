@@ -37,7 +37,7 @@ class RegistryTools(DkToolkit):
         self._registry = registry
         super().__init__(
             name="registry_tools",
-            tools=[self.search_setups, self.search_modules],
+            tools=[self.search_setups, self.search_modules, self.get_service_setup],
             context=context,
         )
 
@@ -49,10 +49,10 @@ class RegistryTools(DkToolkit):
             kind: The requested kind filter.
 
         Returns:
-            Error message when ``kind`` is neither 'tool' nor 'kin', else None.
+            Error message when ``kind`` is not 'tool', 'kin' or 'service', else None.
         """
-        if kind is not None and kind not in {"tool", "kin"}:
-            return f"invalid kind '{kind}'; use 'tool' or 'kin'"
+        if kind is not None and kind not in {"tool", "kin", "service"}:
+            return f"invalid kind '{kind}'; use 'tool', 'kin' or 'service'"
         return None
 
     def _clamp(self, limit: int) -> int:
@@ -67,16 +67,16 @@ class RegistryTools(DkToolkit):
         return min(max(limit, 1), self._MAX_RESULTS)
 
     async def search_setups(
-        self, query: str | None = None, kind: Literal["tool", "kin"] | None = None, limit: int = 10
+        self, query: str | None = None, kind: Literal["tool", "kin", "service"] | None = None, limit: int = 10
     ) -> str:
-        """Search ready-to-use setups (configured agent/tool instances you can actually invoke).
+        """Search ready-to-use setups (configured agent/tool/service instances you can actually invoke).
 
         A setup is an installed, configured instance of a module — the thing you can
-        call. Use this to discover which tools or agents (kins) are available.
+        call. Use this to discover which tools, agents (kins) or services are available.
 
         Args:
             query: Free text matched against setup name and documentation. Omit to list all.
-            kind: Optional filter: "tool" (invocable tools) or "kin" (agents).
+            kind: Optional filter: "tool" (invocable tools), "kin" (agents) or "service".
             limit: Max results (default 10, max 25).
 
         Returns:
@@ -90,7 +90,13 @@ class RegistryTools(DkToolkit):
         try:
             setups = await self._registry.search_setups(
                 query=query,
-                module_types=[RegistryModuleType.ARCHETYPE if kind == "kin" else RegistryModuleType.TOOL_MODULE]
+                module_types=[
+                    {
+                        "tool": RegistryModuleType.TOOL_MODULE,
+                        "kin": RegistryModuleType.ARCHETYPE,
+                        "service": RegistryModuleType.SERVICE,
+                    }[kind]
+                ]
                 if kind
                 else None,
                 statuses=[RegistrySetupStatus.READY, RegistrySetupStatus.CONFIGURATION_SUCCEEDED],
@@ -122,8 +128,33 @@ class RegistryTools(DkToolkit):
             tool="search_setups",
         )
 
+    async def get_service_setup(self, setup_id: str) -> str:
+        """Fetch a service's configuration content (a JSON document) by setup id.
+
+        Use after discovering a service via ``search_setups`` and the user accepted it:
+        pass the proposed setup's ``setup_id`` to read the service content. Always
+        returns the latest version.
+
+        Args:
+            setup_id: The service setup id (from a ``search_setups`` result).
+
+        Returns:
+            The canonical envelope; ``output`` = the service configuration JSON object.
+        """
+        try:
+            content = await self._registry.get_service_setup(setup_id)
+        except PermissionDeniedError:
+            return self._fail("permission denied: get_service_setup", tool="get_service_setup")
+        except RegistryServiceError as error:
+            logger.warning("RegistryTools: service setup fetch failed: %s", error)
+            return self._fail(self._UNAVAILABLE, tool="get_service_setup")
+
+        if content is None:
+            return self._fail(f"service setup '{setup_id}' not found or has no content", tool="get_service_setup")
+        return self._ok(content, tool="get_service_setup")
+
     async def search_modules(
-        self, query: str | None = None, kind: Literal["tool", "kin"] | None = None, limit: int = 10
+        self, query: str | None = None, kind: Literal["tool", "kin", "service"] | None = None, limit: int = 10
     ) -> str:
         """Search the module catalog (module TYPES, not configured instances).
 
@@ -133,7 +164,7 @@ class RegistryTools(DkToolkit):
 
         Args:
             query: Free text matched against module names. Omit to list all.
-            kind: Optional filter: "tool" or "kin" (agents/archetypes).
+            kind: Optional filter: "tool", "kin" (agents/archetypes) or "service".
             limit: Max results (default 10, max 25).
 
         Returns:
@@ -148,6 +179,8 @@ class RegistryTools(DkToolkit):
             pending = self._registry.search_tools(name=query, limit=cap)
         elif kind == "kin":
             pending = self._registry.search_kins(name=query, limit=cap)
+        elif kind == "service":
+            pending = self._registry.search_services(name=query, limit=cap)
         else:
             pending = self._registry.search(name=query, limit=cap)
         try:

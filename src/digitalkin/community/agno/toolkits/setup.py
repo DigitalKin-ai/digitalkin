@@ -51,6 +51,7 @@ class SetupTools(DkToolkit):
             tools=[
                 self.get_setup,
                 self.create_setup,
+                self.create_service,
                 self.update_setup,
                 self.delete_setup,
                 self.change_visibility,
@@ -147,6 +148,26 @@ class SetupTools(DkToolkit):
             return result
         await self._invalidate()
         return self._ok(self._jsonable(result), tool="create_setup")
+
+    async def create_service(self, name: str, content: dict[str, Any]) -> str:
+        """Create a new service (a shareable configuration document other kins can discover).
+
+        Only a name and the configuration JSON are needed — the platform handles the
+        rest. Once created it is discoverable via ``search_setups`` and readable via
+        ``get_service_setup``.
+
+        Args:
+            name: Human-readable service name.
+            content: The service configuration JSON.
+
+        Returns:
+            The canonical envelope; ``output`` = the created service setup.
+        """
+        ok, result = await self._guard("create_service", self._setup.create_service_setup(name, content))
+        if not ok:
+            return result
+        await self._invalidate()
+        return self._ok(self._jsonable(result), tool="create_service")
 
     async def update_setup(self, setup_id: str, name: str, content: dict[str, Any]) -> str:
         """Update an existing setup's name and current version content.

@@ -137,6 +137,8 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
 
     def invalidate_tool_cache(self) -> None:
         """Clear tool cache. Next request re-resolves tool definitions."""
+        if self._tool_cache_by_setup:
+            logger.info("tool cache invalidated, dropped setups: %s", list(self._tool_cache_by_setup))
         self._tool_cache_by_setup.clear()
 
     def get_tool_cache(self, setup_id: str) -> Any | None:
@@ -154,6 +156,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         value, expires_at = entry
         if time.monotonic() >= expires_at:
             self._tool_cache_by_setup.pop(setup_id, None)
+            logger.debug("tool cache expired for setup '%s'", setup_id)
             return None
         return value
 
@@ -167,10 +170,14 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         if len(self._tool_cache_by_setup) >= get_module_servicer_settings().setup_cache_max:
             oldest_key = next(iter(self._tool_cache_by_setup))
             del self._tool_cache_by_setup[oldest_key]
-        self._tool_cache_by_setup[setup_id] = (
-            value,
-            time.monotonic() + get_gateway_settings().queue.toolkit_cache_ttl_s,
-        )
+            logger.warning(
+                "tool cache full (%d), evicting setup '%s'",
+                get_module_servicer_settings().setup_cache_max,
+                oldest_key,
+            )
+        ttl_s = get_gateway_settings().queue.toolkit_cache_ttl_s
+        self._tool_cache_by_setup[setup_id] = (value, time.monotonic() + ttl_s)
+        logger.debug("tool cache set for setup '%s' (ttl %.0fs)", setup_id, ttl_s)
 
     async def get_or_build_tool_cache(
         self,
@@ -188,9 +195,11 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         """
         cached = self.get_tool_cache(setup_id)
         if cached is not None:
+            logger.debug("tool cache hit for setup '%s'", setup_id)
             return cached
         inflight = self._tool_cache_inflight.get(setup_id)
         if inflight is not None:
+            logger.debug("tool cache build in flight for setup '%s', awaiting", setup_id)
             return await inflight
         loop = asyncio.get_event_loop()
         fut: asyncio.Future[Any] = loop.create_future()
@@ -205,6 +214,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             # ``module_servicer.py:367``) clears the entry.
             if value is not None:
                 self.set_tool_cache(setup_id, value)
+                logger.info("tool cache built for setup '%s'", setup_id)
             fut.set_result(value)
         except Exception as exc:
             fut.set_exception(exc)

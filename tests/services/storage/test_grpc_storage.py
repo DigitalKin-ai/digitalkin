@@ -201,12 +201,9 @@ class TestStoreData:
         _, request, rpc = test_channel.take_unary_unary(method_desc)
 
         # Verify request
-        assert request.context == MISSION_ID
+        assert request.context == data_pb2.CONTEXT_MISSIONS
         assert request.collection == collection
         assert request.record_id == record_id
-        # data_type is now a protobuf enum integer value
-        from agentic_mesh_protocol.storage.v1 import data_pb2
-
         assert request.data_type == data_pb2.OUTPUT
 
         # Mock servicer processes the request
@@ -532,7 +529,7 @@ class TestRetrieveData:
         read_future = thread_pool.submit(asyncio.run, client.read(collection, record_id))
         _, read_request, read_rpc = test_channel.take_unary_unary(read_method_desc)
 
-        assert read_request.context == MISSION_ID
+        assert read_request.context == data_pb2.CONTEXT_MISSIONS
         assert read_request.collection == collection
         assert read_request.record_id == record_id
 
@@ -700,7 +697,7 @@ class TestUpdateData:
         update_future = thread_pool.submit(asyncio.run, client.update(collection, record_id, updated_data))
         _, update_request, update_rpc = test_channel.take_unary_unary(update_method_desc)
 
-        assert update_request.context == MISSION_ID
+        assert update_request.context == data_pb2.CONTEXT_MISSIONS
         assert update_request.collection == collection
         assert update_request.record_id == record_id
 
@@ -826,7 +823,7 @@ class TestDeleteData:
         remove_future = thread_pool.submit(asyncio.run, client.remove(collection, record_id))
         _, remove_request, remove_rpc = test_channel.take_unary_unary(remove_method_desc)
 
-        assert remove_request.context == MISSION_ID
+        assert remove_request.context == data_pb2.CONTEXT_MISSIONS
         assert remove_request.collection == collection
         assert remove_request.record_id == record_id
 
@@ -990,7 +987,7 @@ class TestDeleteData:
         remove_future = thread_pool.submit(asyncio.run, client.remove_collection(collection))
         _, remove_request, remove_rpc = test_channel.take_unary_unary(remove_coll_method_desc)
 
-        assert remove_request.context == MISSION_ID
+        assert remove_request.context == data_pb2.CONTEXT_MISSIONS
         assert remove_request.collection == collection
 
         remove_context = FakeContext()
@@ -1166,7 +1163,7 @@ class TestListData:
         list_future = thread_pool.submit(asyncio.run, client.list(collection))
         _, list_request, list_rpc = test_channel.take_unary_unary(list_method_desc)
 
-        assert list_request.context == MISSION_ID
+        assert list_request.context == data_pb2.CONTEXT_MISSIONS
         assert list_request.collection == collection
 
         list_context = FakeContext()
@@ -1391,7 +1388,7 @@ class TestStorageEdgeCases:
     @pytest.mark.grpc
     @pytest.mark.integration
     @pytest.mark.edge_case
-    def test_mission_isolation(
+    def test_mission_context_kind_only(
         self,
         test_channel: grpc_testing.Channel,
         storage_config: dict[str, type[BaseModel]],
@@ -1399,13 +1396,12 @@ class TestStorageEdgeCases:
         dummy_client_config: ClientConfig,
         thread_pool: futures.ThreadPoolExecutor,
     ) -> None:
-        """Test that records from different missions are isolated.
+        """Requests carry only the context KIND — never the concrete mission id.
 
-        Verifies:
-        - Records are isolated by mission_id
-        - One mission cannot access another mission's records
+        Since dev4 the concrete id travels via x-mission-id task metadata and
+        isolation is enforced server-side; two clients with different mission ids
+        must emit byte-identical context fields.
         """
-        # Create two clients with different mission IDs
         mission1_id = "missions:mission_1"
         mission2_id = "missions:mission_2"
 
@@ -1416,58 +1412,31 @@ class TestStorageEdgeCases:
         client2.stub = AsyncStubWrapper(storage_service_pb2_grpc.StorageServiceStub(test_channel))
 
         collection = "test_collection"
-        record_id = "shared_record_id"
 
         store_method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name[
             "StoreRecord"
         ]
-        read_method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name[
-            "ReadRecord"
-        ]
 
-        # Store with client1
         data1 = {"mission_id": mission1_id, "name": "Mission 1 Data", "value": 100}
-        store_future1 = thread_pool.submit(asyncio.run, client1.store(collection, record_id, data1))
+        store_future1 = thread_pool.submit(asyncio.run, client1.store(collection, "record_1", data1))
         _, store_request1, store_rpc1 = test_channel.take_unary_unary(store_method_desc)
-        store_context1 = FakeContext()
-        store_response1 = mock_servicer.StoreRecord(store_request1, store_context1)
+        store_response1 = mock_servicer.StoreRecord(store_request1, FakeContext())
         store_rpc1.send_initial_metadata(())
         store_rpc1.terminate(store_response1, (), grpc.StatusCode.OK, "")
         result1 = store_future1.result(timeout=1.0)
 
-        # Store with client2
         data2 = {"mission_id": mission2_id, "name": "Mission 2 Data", "value": 200}
-        store_future2 = thread_pool.submit(asyncio.run, client2.store(collection, record_id, data2))
+        store_future2 = thread_pool.submit(asyncio.run, client2.store(collection, "record_2", data2))
         _, store_request2, store_rpc2 = test_channel.take_unary_unary(store_method_desc)
-        store_context2 = FakeContext()
-        store_response2 = mock_servicer.StoreRecord(store_request2, store_context2)
+        store_response2 = mock_servicer.StoreRecord(store_request2, FakeContext())
         store_rpc2.send_initial_metadata(())
         store_rpc2.terminate(store_response2, (), grpc.StatusCode.OK, "")
         result2 = store_future2.result(timeout=1.0)
 
-        # Read with client1
-        read_future1 = thread_pool.submit(asyncio.run, client1.read(collection, record_id))
-        _, read_request1, read_rpc1 = test_channel.take_unary_unary(read_method_desc)
-        read_context1 = FakeContext()
-        read_response1 = mock_servicer.ReadRecord(read_request1, read_context1)
-        read_rpc1.send_initial_metadata(())
-        read_rpc1.terminate(read_response1, (), grpc.StatusCode.OK, "")
-        read_result1 = read_future1.result(timeout=1.0)
-
-        # Read with client2
-        read_future2 = thread_pool.submit(asyncio.run, client2.read(collection, record_id))
-        _, read_request2, read_rpc2 = test_channel.take_unary_unary(read_method_desc)
-        read_context2 = FakeContext()
-        read_response2 = mock_servicer.ReadRecord(read_request2, read_context2)
-        read_rpc2.send_initial_metadata(())
-        read_rpc2.terminate(read_response2, (), grpc.StatusCode.OK, "")
-        read_result2 = read_future2.result(timeout=1.0)
-
-        # Verify isolation
+        assert store_request1.context == data_pb2.CONTEXT_MISSIONS
+        assert store_request2.context == data_pb2.CONTEXT_MISSIONS
         assert result1.data.value == 100
         assert result2.data.value == 200
-        assert read_result1.data.name == "Mission 1 Data"
-        assert read_result2.data.name == "Mission 2 Data"
 
     @pytest.mark.grpc
     @pytest.mark.integration

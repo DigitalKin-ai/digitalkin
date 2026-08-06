@@ -63,7 +63,7 @@ class DefaultRegistry(RegistryStrategy):
 
         Args:
             name: Case-insensitive free text matched against module name AND documentation.
-            module_type: Filter by type (archetype, tool_module).
+            module_type: Filter by type (archetype, tool_module, service).
             limit: Max results (1-100).
             offset: Pagination offset.
 
@@ -221,7 +221,7 @@ class DefaultRegistry(RegistryStrategy):
             query: Case-insensitive free text matched against setup name AND documentation.
             setup_ids: Restrict to these setup ids.
             module_ids: Restrict to setups backed by these modules.
-            module_types: Filter by backing module type (tool_module, archetype).
+            module_types: Filter by backing module type (tool_module, archetype, service).
             statuses: Filter by setup status. None = no filter.
             visibilities: Filter by visibility.
             limit: Max results (1-100).

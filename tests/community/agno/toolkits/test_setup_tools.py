@@ -91,11 +91,12 @@ class TestSetupToolsHappyPath:
     """Each tool builds the expected dict and returns the success envelope."""
 
     def test_exposed_surface(self) -> None:
-        """The agent sees exactly the 5 setup-level tools — no version RPCs, no list."""
+        """The agent sees exactly the 6 setup-level tools — no version RPCs, no list."""
         toolkit = SetupTools(_RecordingSetup())
         assert {fn.__name__ for fn in toolkit.tools} == {
             "get_setup",
             "create_setup",
+            "create_service",
             "update_setup",
             "delete_setup",
             "change_visibility",
@@ -239,3 +240,15 @@ class TestSetupToolsWithDefaultSetup:
         tools = SetupTools(DefaultSetup())
         env = _envelope(await tools.get_setup("nope"))
         assert env["metadata"]["success"] is False
+
+
+class TestCreateService:
+    """create_service tool: name + content only, always registered."""
+
+    @pytest.mark.asyncio
+    async def test_creates_service(self) -> None:
+        tools = SetupTools(DefaultSetup())
+        assert any(tool.__name__ == "create_service" for tool in tools.tools)
+        env = _envelope(await tools.create_service("Nikita", {"branding": True}))
+        assert env["output"]["name"] == "Nikita"
+        assert env["output"]["current_setup_version"]["content"] == {"branding": True}

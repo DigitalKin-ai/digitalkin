@@ -150,6 +150,79 @@ async def test_search_modules_permission_denied_is_distinct() -> None:
     assert result["error"] == "permission denied: search_modules"
 
 
+def _service_registry() -> DefaultRegistry:
+    registry = _registry()
+    registry.add_setup(
+        SetupInfo(
+            setup_id="setups:nikita",
+            name="Nikita",
+            documentation="Branding service",
+            status=RegistrySetupStatus.READY,
+            module_id="modules:nikita",
+            module_name="service-nikita",
+            module_type=RegistryModuleType.SERVICE,
+            setup_version="1.0.0",
+        )
+    )
+    return registry
+
+
+async def test_search_setups_service_kind() -> None:
+    tools = RegistryTools(_service_registry())
+    result = json.loads(await tools.search_setups(kind="service"))
+    assert [s["setup_id"] for s in result["output"]["setups"]] == ["setups:nikita"]
+    tool_result = json.loads(await tools.search_setups(kind="tool"))
+    assert "setups:nikita" not in [s["setup_id"] for s in tool_result["output"]["setups"]]
+
+
+async def test_search_modules_service_kind() -> None:
+    registry = _registry()
+    await registry.register("modules:nikita", "localhost", 50053, "1.0.0", RegistryModuleType.SERVICE)
+    await registry.register("modules:duda", "localhost", 50051, "1.0.0", RegistryModuleType.TOOL_MODULE)
+    result = json.loads(await RegistryTools(registry).search_modules(kind="service"))
+    assert [m["module_id"] for m in result["output"]["modules"]] == ["modules:nikita"]
+    assert result["output"]["modules"][0]["kind"] == "service"
+
+
+async def test_get_service_setup_returns_content_by_id() -> None:
+    """The discovery flow: search surfaces a setup_id, the tool reads its content."""
+    toolkit = RegistryTools(_registry())
+    assert any(tool.__name__ == "get_service_setup" for tool in toolkit.tools)
+    result = json.loads(await toolkit.get_service_setup("setups:duda"))
+    assert result["output"] == {"secret": "MUST-NOT-LEAK"}
+
+
+async def test_get_service_setup_unknown_id_fails_cleanly() -> None:
+    result = json.loads(await RegistryTools(_registry()).get_service_setup("setups:absent"))
+    assert result["error"] == "service setup 'setups:absent' not found or has no content"
+
+
+class _DeniedGetSetupRegistry(DefaultRegistry):
+    """Registry refusing get_setup — exercises the permission surface."""
+
+    async def get_setup(self, setup_id: str) -> SetupInfo | None:
+        msg = "denied"
+        raise PermissionDeniedError(msg)
+
+
+async def test_get_service_setup_permission_denied_is_distinct() -> None:
+    result = json.loads(await RegistryTools(_DeniedGetSetupRegistry("", "", "")).get_service_setup("setups:duda"))
+    assert result["error"] == "permission denied: get_service_setup"
+
+
+class _FailingGetSetupRegistry(DefaultRegistry):
+    """Registry whose get_setup always fails — exercises graceful degradation."""
+
+    async def get_setup(self, setup_id: str) -> SetupInfo | None:
+        msg = "boom"
+        raise RegistryServiceError(msg)
+
+
+async def test_get_service_setup_degrades_without_raising() -> None:
+    result = json.loads(await RegistryTools(_FailingGetSetupRegistry("", "", "")).get_service_setup("setups:duda"))
+    assert result["error"]
+
+
 class _EnumDriftRegistry(DefaultRegistry):
     """Registry rejecting a filter enum (fail-closed encode) — a permanent condition."""
 
