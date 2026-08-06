@@ -8,8 +8,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
-from digitalkin.logger import logger
-from digitalkin.models.services.storage import DataType, Visibility
+from digitalkin.models.services.storage import ContextStorage, DataType, Visibility
 from digitalkin.services.base_strategy import BaseStrategy
 from digitalkin.services.storage.exceptions import StorageServiceError
 
@@ -30,9 +29,6 @@ class StorageRecord(BaseModel):
     update_date: datetime.datetime | None = Field(default=None, description="When this record was last modified")
 
 
-Scope = Literal["mission", "setup", "user", "organization"]
-
-
 class StorageStrategy(BaseStrategy, ABC):
     """Define CRUD + list/remove-collection against a collection/record store.
 
@@ -47,7 +43,7 @@ class StorageStrategy(BaseStrategy, ABC):
     `user`/`organization` are read-only cross-owner scopes usable only for listing.
     """
 
-    def _resolve_context(self, scope: Scope, owner_id: str | None = None) -> str:
+    def _resolve_context(self, context: ContextStorage) -> str:
         """Resolve a scope to its storage context string.
 
         `mission`/`setup` map to the owner contexts this strategy was built with.
@@ -56,8 +52,7 @@ class StorageStrategy(BaseStrategy, ABC):
         service) since the storage strategy holds no user/org identity.
 
         Args:
-            scope: The scope to resolve.
-            owner_id: The user or organization id, required for `user`/`organization`.
+            context: The scope to resolve.
 
         Returns:
             The context string (`missions:<id>`, `setup_versions:<id>`,
@@ -66,14 +61,13 @@ class StorageStrategy(BaseStrategy, ABC):
         Raises:
             ValueError: If `owner_id` is missing for a `user`/`organization` scope.
         """
-        if scope == "mission":
-            return self.mission_id
-        if scope == "setup":
-            return self.setup_version_id
-        if owner_id is None:
-            msg = f"owner_id is required for '{scope}' scope"
-            raise ValueError(msg)
-        return f"users:{owner_id}" if scope == "user" else f"organizations:{owner_id}"
+        match context:
+            case ContextStorage.MISSIONS:
+                return self.mission_id
+            case ContextStorage.SETUP_VERSIONS:
+                return self.setup_version_id
+            case _:
+                return self.setup_version_id
 
     def _validate_data(self, collection: str, data: dict[str, Any]) -> BaseModel:
         """Validate data against the model schema for the given key.
@@ -146,7 +140,7 @@ class StorageStrategy(BaseStrategy, ABC):
         """
 
     @abstractmethod
-    async def _read(self, collection: str, record_id: str, context: str) -> StorageRecord | None:
+    async def _read(self, collection: str, record_id: str, context: ContextStorage) -> StorageRecord | None:
         """Get records from storage scoped to a specific context.
 
         Args:
@@ -164,7 +158,7 @@ class StorageStrategy(BaseStrategy, ABC):
         collection: str,
         record_id: str,
         data: BaseModel,
-        context: str,
+        context: ContextStorage,
         visibility: Visibility = Visibility.UNSPECIFIED,
     ) -> StorageRecord | None:
         """Overwrite an existing record's payload scoped to a specific context.
@@ -181,7 +175,7 @@ class StorageStrategy(BaseStrategy, ABC):
         """
 
     @abstractmethod
-    async def _remove(self, collection: str, record_id: str, context: str) -> bool:
+    async def _remove(self, collection: str, record_id: str, context: ContextStorage) -> bool:
         """Delete a record from the storage scoped to a specific context.
 
         Args:
@@ -195,7 +189,7 @@ class StorageStrategy(BaseStrategy, ABC):
 
     @abstractmethod
     async def _list(
-        self, collection: str, context: str, visibilities: list[Visibility] | None = None
+        self, collection: str, context: ContextStorage, visibilities: list[Visibility] | None = None
     ) -> list[StorageRecord]:
         """List all records in a collection scoped to a specific context.
 
@@ -209,7 +203,7 @@ class StorageStrategy(BaseStrategy, ABC):
         """
 
     @abstractmethod
-    async def _remove_collection(self, collection: str, context: str) -> bool:
+    async def _remove_collection(self, collection: str, context: ContextStorage) -> bool:
         """Delete all records in a collection scoped to a specific context.
 
         Args:
@@ -240,7 +234,7 @@ class StorageStrategy(BaseStrategy, ABC):
         self.config: dict[str, type[BaseModel]] = config
         self._record_locks: dict[str, asyncio.Lock] = {}
 
-    def _record_lock(self, context: str, collection: str, record_id: str) -> asyncio.Lock:
+    def _record_lock(self, context: ContextStorage, collection: str, record_id: str) -> asyncio.Lock:
         """Get or create an asyncio.Lock for a specific record under a given context.
 
         Args:
@@ -258,8 +252,8 @@ class StorageStrategy(BaseStrategy, ABC):
         collection: str,
         record_id: str | None,
         data: dict[str, Any],
-        data_type: Literal["OUTPUT", "VIEW", "LOGS", "OTHER"] = "OUTPUT",
-        scope: Scope = "mission",
+        data_type: DataType = DataType.OUTPUT,
+        context: ContextStorage = ContextStorage.MISSIONS,
         visibility: Visibility = Visibility.UNSPECIFIED,
     ) -> StorageRecord:
         """Store a new record in the storage.
@@ -269,7 +263,7 @@ class StorageStrategy(BaseStrategy, ABC):
             record_id: The unique ID for the record (optional)
             data: The data to store
             data_type: The type of data being stored (default: OUTPUT)
-            scope: "mission" (default) writes under the current mission context;
+            context: "mission" (default) writes under the current mission context;
                 "setup" writes under the setup-version context.
             visibility: Read-access scope for the record (UNSPECIFIED = server default).
 
@@ -279,29 +273,30 @@ class StorageStrategy(BaseStrategy, ABC):
         Raises:
             ValueError: If the data type is invalid or if validation fails
         """
-        if not self._is_valid_data_type_name(data_type):
+        if not self._is_valid_data_type_name(data_type.value):
             msg = f"Invalid data type '{data_type}'. Must be one of {list(DataType.__members__.keys())}"
             raise ValueError(msg)
         record_id = record_id or uuid4().hex
-        data_type_enum = DataType[data_type]
-        context = self._resolve_context(scope)
         validated_data = self._validate_data(collection, data)
-        record = self._create_storage_record(collection, record_id, validated_data, data_type_enum, context, visibility)
+        record = self._create_storage_record(
+            collection, record_id, validated_data, data_type, self._resolve_context(context), visibility
+        )
         async with self._record_lock(context, collection, record_id):
             return await self._store(record)
 
-    async def read(self, collection: str, record_id: str, scope: Scope = "mission") -> StorageRecord | None:
+    async def read(
+        self, collection: str, record_id: str, context: ContextStorage = ContextStorage.MISSIONS
+    ) -> StorageRecord | None:
         """Get a record by key under the given scope.
 
         Args:
             collection: The unique name to retrieve data for
             record_id: The unique ID of the record
-            scope: Which context to read from (default: "mission").
+            context: Which context to read from (default: "mission").
 
         Returns:
             The matching record if it exists, otherwise None.
         """
-        context = self._resolve_context(scope)
         async with self._record_lock(context, collection, record_id):
             return await self._read(collection, record_id, context)
 
@@ -310,7 +305,7 @@ class StorageStrategy(BaseStrategy, ABC):
         collection: str,
         record_id: str,
         data: dict[str, Any],
-        scope: Scope = "mission",
+        context: ContextStorage = ContextStorage.MISSIONS,
         visibility: Visibility = Visibility.UNSPECIFIED,
     ) -> StorageRecord | None:
         """Validate & overwrite an existing record under the given scope.
@@ -319,29 +314,27 @@ class StorageStrategy(BaseStrategy, ABC):
             collection: The unique name for the record type
             record_id: The unique ID of the record
             data: The new data to store
-            scope: Which context the record lives under (default: "mission").
+            context: Which context the record lives under (default: "mission").
             visibility: New read-access scope; UNSPECIFIED leaves it unchanged.
 
         Returns:
             StorageRecord: The modified record
         """
         validated_data = self._validate_data(collection, data)
-        context = self._resolve_context(scope)
         async with self._record_lock(context, collection, record_id):
             return await self._update(collection, record_id, validated_data, context, visibility)
 
-    async def remove(self, collection: str, record_id: str, scope: Scope = "mission") -> bool:
+    async def remove(self, collection: str, record_id: str, context: ContextStorage = ContextStorage.MISSIONS) -> bool:
         """Delete a record from the storage under the given scope.
 
         Args:
             collection: The unique name for the record type
             record_id: The unique ID of the record
-            scope: Which context the record lives under (default: "mission").
+            context: Which context the record lives under (default: "mission").
 
         Returns:
             True if the deletion was successful, False otherwise
         """
-        context = self._resolve_context(scope)
         async with self._record_lock(context, collection, record_id):
             result = await self._remove(collection, record_id, context)
         if result:
@@ -351,35 +344,32 @@ class StorageStrategy(BaseStrategy, ABC):
     async def list(
         self,
         collection: str,
-        scope: Scope = "mission",
+        context: ContextStorage = ContextStorage.MISSIONS,
         visibilities: list[Visibility] | None = None,
-        owner_id: str | None = None,
     ) -> list[StorageRecord]:
         """Get all records in a collection under the given scope.
 
         Args:
             collection: The unique name for the record type
-            scope: Which context to list (default: "mission"). "user"/"organization"
+            context: Which context to list (default: "mission"). "user"/"organization"
                 list across an owner and require `owner_id`.
             visibilities: Optional read-access scopes to filter by (None = no filter).
-            owner_id: User or organization id, required for "user"/"organization" scope.
 
         Returns:
             A list of storage records under the resolved context.
         """
-        return await self._list(collection, self._resolve_context(scope, owner_id), visibilities)
+        return await self._list(collection, context, visibilities)
 
-    async def remove_collection(self, collection: str, scope: Scope = "mission") -> bool:
+    async def remove_collection(self, collection: str, context: ContextStorage = ContextStorage.MISSIONS) -> bool:
         """Wipe a collection clean under the given scope.
 
         Args:
             collection: The unique name for the record type
-            scope: Which context the records live under (default: "mission").
+            context: Which context the records live under (default: "mission").
 
         Returns:
             True if the deletion was successful, False otherwise
         """
-        context = self._resolve_context(scope)
         result = await self._remove_collection(collection, context)
         if result:
             prefix = f"{context}|{collection}:"
@@ -392,8 +382,8 @@ class StorageStrategy(BaseStrategy, ABC):
         collection: str,
         record_id: str,
         data: dict[str, Any],
-        data_type: Literal["OUTPUT", "VIEW", "LOGS", "OTHER"] = "OUTPUT",
-        scope: Scope = "mission",
+        data_type: DataType = DataType.OUTPUT,
+        context: ContextStorage = ContextStorage.MISSIONS,
         visibility: Visibility = Visibility.UNSPECIFIED,
     ) -> StorageRecord:
         """Insert or update a record atomically under the given scope.
@@ -407,7 +397,7 @@ class StorageStrategy(BaseStrategy, ABC):
             record_id: The unique ID for the record
             data: The data to store
             data_type: The type of data being stored (default: OUTPUT)
-            scope: Which context to upsert under (default: "mission").
+            context: Which context to upsert under (default: "mission").
             visibility: Read-access scope for the record (UNSPECIFIED = server default).
 
         Returns:
@@ -417,11 +407,9 @@ class StorageStrategy(BaseStrategy, ABC):
             ValueError: If the data type is invalid or if validation fails
             StorageServiceError: If update of an existing record fails unexpectedly
         """
-        if not self._is_valid_data_type_name(data_type):
+        if not self._is_valid_data_type_name(data_type.value):
             msg = f"Invalid data type '{data_type}'. Must be one of {list(DataType.__members__.keys())}"
             raise ValueError(msg)
-        data_type_enum = DataType[data_type]
-        context = self._resolve_context(scope)
         validated_data = self._validate_data(collection, data)
         async with self._record_lock(context, collection, record_id):
             if await self._read(collection, record_id, context):
@@ -431,6 +419,6 @@ class StorageStrategy(BaseStrategy, ABC):
                     raise StorageServiceError(msg)
                 return updated
             record = self._create_storage_record(
-                collection, record_id, validated_data, data_type_enum, context, visibility
+                collection, record_id, validated_data, data_type, self._resolve_context(context), visibility
             )
             return await self._store(record)

@@ -53,6 +53,16 @@ class DataType(Enum):
     OTHER = "OTHER"
 
 
+class ContextStorage(Enum):
+    """Enum defining the context of data in storage."""
+
+    UNSPECIFIED = "unspecified"
+    MISSIONS = "missions"
+    SETUP_VERSIONS = "setup_versions"
+    USERS = "users"
+    ORGANIZATIONS = "organizations"
+
+
 class Visibility(Enum):
     """Read-access scope of a record, mirroring the storage proto by integer value.
 
