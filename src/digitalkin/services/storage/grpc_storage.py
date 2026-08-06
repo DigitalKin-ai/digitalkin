@@ -11,7 +11,6 @@ from digitalkin.models.grpc_servers.models import ClientConfig
 from digitalkin.models.services.storage import DataType, Visibility
 from digitalkin.services.storage.exceptions import StorageServiceError
 from digitalkin.services.storage.storage_strategy import (
-    ContextStorage,
     StorageRecord,
     StorageStrategy,
 )
@@ -155,7 +154,7 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
                 logger.exception("gRPC StoreRecord failed for %s:%s", record.collection, record.record_id)
             raise StorageServiceError(str(e)) from e
 
-    async def _read(self, collection: str, record_id: str, context: ContextStorage) -> StorageRecord | None:
+    async def _read(self, collection: str, record_id: str, context: str) -> StorageRecord | None:
         """Fetch a single document scoped to a specific context.
 
         Returns:
@@ -201,7 +200,7 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
         collection: str,
         record_id: str,
         data: BaseModel,
-        context: ContextStorage,
+        context: str,
         visibility: Visibility = Visibility.UNSPECIFIED,
     ) -> StorageRecord | None:
         """Overwrite a document via gRPC scoped to a specific context.
@@ -237,7 +236,7 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
                 logger.warning("gRPC UpdateRecord failed for %s:%s: %s", collection, record_id, e)
             return None
 
-    async def _remove(self, collection: str, record_id: str, context: ContextStorage) -> bool:
+    async def _remove(self, collection: str, record_id: str, context: str) -> bool:
         """Delete a document via gRPC scoped to a specific context.
 
         Returns:
@@ -267,7 +266,7 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
         return True
 
     async def _list(
-        self, collection: str, context: ContextStorage, visibilities: list[Visibility] | None = None
+        self, collection: str, context: str, visibilities: list[Visibility] | None = None
     ) -> list[StorageRecord]:
         """List all documents in a collection via gRPC scoped to a specific context.
 
@@ -299,7 +298,7 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
 
         return [record for r in resp.records if (record := self._build_record_or_skip(r)) is not None]
 
-    async def _remove_collection(self, collection: str, context: ContextStorage) -> bool:
+    async def _remove_collection(self, collection: str, context: str) -> bool:
         """Delete an entire collection via gRPC scoped to a specific context.
 
         Returns:

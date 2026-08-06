@@ -316,7 +316,7 @@ class TestStoreData:
 
         method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name["StoreRecord"]
 
-        future = thread_pool.submit(asyncio.run, client.store(collection, record_id, data, data_type="OUTPUT"))
+        future = thread_pool.submit(asyncio.run, client.store(collection, record_id, data, data_type=DataType.OUTPUT))
 
         _, request, rpc = test_channel.take_unary_unary(method_desc)
 
@@ -357,7 +357,7 @@ class TestStoreData:
 
         method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name["StoreRecord"]
 
-        future = thread_pool.submit(asyncio.run, client.store(collection, record_id, data, data_type="LOGS"))
+        future = thread_pool.submit(asyncio.run, client.store(collection, record_id, data, data_type=DataType.LOGS))
 
         _, request, rpc = test_channel.take_unary_unary(method_desc)
 
@@ -393,7 +393,7 @@ class TestStoreData:
 
         method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name["StoreRecord"]
 
-        future = thread_pool.submit(asyncio.run, client.store(collection, record_id, data, data_type="VIEW"))
+        future = thread_pool.submit(asyncio.run, client.store(collection, record_id, data, data_type=DataType.VIEW))
 
         _, request, rpc = test_channel.take_unary_unary(method_desc)
 
@@ -429,7 +429,7 @@ class TestStoreData:
 
         method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name["StoreRecord"]
 
-        future = thread_pool.submit(asyncio.run, client.store(collection, record_id, data, data_type="OTHER"))
+        future = thread_pool.submit(asyncio.run, client.store(collection, record_id, data, data_type=DataType.OTHER))
 
         _, request, rpc = test_channel.take_unary_unary(method_desc)
 

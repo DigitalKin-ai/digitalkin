@@ -9,7 +9,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from digitalkin.logger import logger
-from digitalkin.models.services.storage import ContextStorage, DataType, Visibility
+from digitalkin.models.services.storage import DataType, Visibility
 from digitalkin.services.storage.storage_strategy import (
     StorageRecord,
     StorageStrategy,
@@ -137,25 +137,25 @@ class DefaultStorage(StorageStrategy):
     def _key(context: str, collection: str, record_id: str) -> str:
         return f"{context}|{collection}:{record_id}"
 
-    async def _read(self, collection: str, record_id: str, context: ContextStorage) -> StorageRecord | None:
+    async def _read(self, collection: str, record_id: str, context: str) -> StorageRecord | None:
         """Get a record from the database scoped to a specific context.
 
         Args:
             collection: The unique name to retrieve data for
             record_id: The unique ID of the record
-            context: Owner context scoping the lookup.
+            context: Resolved owner context scoping the lookup.
 
         Returns:
             StorageRecord: The corresponding record
         """
-        return self.storage.get(self._key(self._resolve_context(context), collection, record_id))
+        return self.storage.get(self._key(context, collection, record_id))
 
     async def _update(
         self,
         collection: str,
         record_id: str,
         data: BaseModel,
-        context: ContextStorage,
+        context: str,
         visibility: Visibility = Visibility.UNSPECIFIED,
     ) -> StorageRecord | None:
         """Update a record in the database scoped to a specific context.
@@ -164,13 +164,13 @@ class DefaultStorage(StorageStrategy):
             collection: The unique name to retrieve data for
             record_id: The unique ID of the record
             data: The data to modify
-            context: Owner context scoping the update.
+            context: Resolved owner context scoping the update.
             visibility: New read-access scope; UNSPECIFIED leaves it unchanged.
 
         Returns:
             StorageRecord: The modified record
         """
-        key = self._key(self._resolve_context(context), collection, record_id)
+        key = self._key(context, collection, record_id)
         rec = self.storage.get(key)
         if not rec:
             return None
@@ -182,18 +182,18 @@ class DefaultStorage(StorageStrategy):
         logger.debug("Modified %s", key)
         return rec
 
-    async def _remove(self, collection: str, record_id: str, context: ContextStorage) -> bool:
+    async def _remove(self, collection: str, record_id: str, context: str) -> bool:
         """Delete a record from the database scoped to a specific context.
 
         Args:
             collection: The unique name to retrieve data for
             record_id: The unique ID of the record
-            context: Owner context scoping the deletion.
+            context: Resolved owner context scoping the deletion.
 
         Returns:
             bool: True if the record was removed, False otherwise
         """
-        key = self._key(self._resolve_context(context), collection, record_id)
+        key = self._key(context, collection, record_id)
         if key not in self.storage:
             return False
         del self.storage[key]
@@ -202,13 +202,13 @@ class DefaultStorage(StorageStrategy):
         return True
 
     async def _list(
-        self, collection: str, context: ContextStorage, visibilities: list[Visibility] | None = None
+        self, collection: str, context: str, visibilities: list[Visibility] | None = None
     ) -> list[StorageRecord]:
         """List records in a collection scoped to a specific context.
 
         Args:
             collection: The unique name to retrieve data for
-            context: Owner context scoping the listing.
+            context: Resolved owner context scoping the listing.
             visibilities: Optional read-access scopes to filter by (None = no filter).
 
         Returns:
@@ -221,12 +221,12 @@ class DefaultStorage(StorageStrategy):
             records = [r for r in records if r.visibility in allowed]
         return records
 
-    async def _remove_collection(self, collection: str, context: ContextStorage) -> bool:
+    async def _remove_collection(self, collection: str, context: str) -> bool:
         """Wipe a collection scoped to a specific context.
 
         Args:
             collection: The unique name to retrieve data for
-            context: Owner context scoping the wipe.
+            context: Resolved owner context scoping the wipe.
 
         Returns:
             bool: True if the collection was removed, False otherwise

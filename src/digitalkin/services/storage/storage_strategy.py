@@ -140,13 +140,13 @@ class StorageStrategy(BaseStrategy, ABC):
         """
 
     @abstractmethod
-    async def _read(self, collection: str, record_id: str, context: ContextStorage) -> StorageRecord | None:
+    async def _read(self, collection: str, record_id: str, context: str) -> StorageRecord | None:
         """Get records from storage scoped to a specific context.
 
         Args:
             collection: The unique name to retrieve data for
             record_id: The unique ID of the record
-            context: Owner context (e.g. `missions:<mission_id>` or `setup_versions:<setup_version_id>`).
+            context: Resolved owner context (e.g. `missions:<mission_id>` or `setup_versions:<setup_version_id>`).
 
         Returns:
             A storage record with validated data
@@ -158,7 +158,7 @@ class StorageStrategy(BaseStrategy, ABC):
         collection: str,
         record_id: str,
         data: BaseModel,
-        context: ContextStorage,
+        context: str,
         visibility: Visibility = Visibility.UNSPECIFIED,
     ) -> StorageRecord | None:
         """Overwrite an existing record's payload scoped to a specific context.
@@ -175,7 +175,7 @@ class StorageStrategy(BaseStrategy, ABC):
         """
 
     @abstractmethod
-    async def _remove(self, collection: str, record_id: str, context: ContextStorage) -> bool:
+    async def _remove(self, collection: str, record_id: str, context: str) -> bool:
         """Delete a record from the storage scoped to a specific context.
 
         Args:
@@ -189,7 +189,7 @@ class StorageStrategy(BaseStrategy, ABC):
 
     @abstractmethod
     async def _list(
-        self, collection: str, context: ContextStorage, visibilities: list[Visibility] | None = None
+        self, collection: str, context: str, visibilities: list[Visibility] | None = None
     ) -> list[StorageRecord]:
         """List all records in a collection scoped to a specific context.
 
@@ -203,7 +203,7 @@ class StorageStrategy(BaseStrategy, ABC):
         """
 
     @abstractmethod
-    async def _remove_collection(self, collection: str, context: ContextStorage) -> bool:
+    async def _remove_collection(self, collection: str, context: str) -> bool:
         """Delete all records in a collection scoped to a specific context.
 
         Args:
@@ -234,11 +234,11 @@ class StorageStrategy(BaseStrategy, ABC):
         self.config: dict[str, type[BaseModel]] = config
         self._record_locks: dict[str, asyncio.Lock] = {}
 
-    def _record_lock(self, context: ContextStorage, collection: str, record_id: str) -> asyncio.Lock:
+    def _record_lock(self, context: str, collection: str, record_id: str) -> asyncio.Lock:
         """Get or create an asyncio.Lock for a specific record under a given context.
 
         Args:
-            context: Owner context the record lives under
+            context: Resolved owner context string the record lives under.
             collection: The collection name
             record_id: The record ID
 
@@ -281,7 +281,7 @@ class StorageStrategy(BaseStrategy, ABC):
         record = self._create_storage_record(
             collection, record_id, validated_data, data_type, self._resolve_context(context), visibility
         )
-        async with self._record_lock(context, collection, record_id):
+        async with self._record_lock(record.context, collection, record_id):
             return await self._store(record)
 
     async def read(
@@ -297,8 +297,9 @@ class StorageStrategy(BaseStrategy, ABC):
         Returns:
             The matching record if it exists, otherwise None.
         """
-        async with self._record_lock(context, collection, record_id):
-            return await self._read(collection, record_id, context)
+        ctx = self._resolve_context(context)
+        async with self._record_lock(ctx, collection, record_id):
+            return await self._read(collection, record_id, ctx)
 
     async def update(
         self,
@@ -321,8 +322,9 @@ class StorageStrategy(BaseStrategy, ABC):
             StorageRecord: The modified record
         """
         validated_data = self._validate_data(collection, data)
-        async with self._record_lock(context, collection, record_id):
-            return await self._update(collection, record_id, validated_data, context, visibility)
+        ctx = self._resolve_context(context)
+        async with self._record_lock(ctx, collection, record_id):
+            return await self._update(collection, record_id, validated_data, ctx, visibility)
 
     async def remove(self, collection: str, record_id: str, context: ContextStorage = ContextStorage.MISSIONS) -> bool:
         """Delete a record from the storage under the given scope.
@@ -335,10 +337,11 @@ class StorageStrategy(BaseStrategy, ABC):
         Returns:
             True if the deletion was successful, False otherwise
         """
-        async with self._record_lock(context, collection, record_id):
-            result = await self._remove(collection, record_id, context)
+        ctx = self._resolve_context(context)
+        async with self._record_lock(ctx, collection, record_id):
+            result = await self._remove(collection, record_id, ctx)
         if result:
-            self._record_locks.pop(f"{context}|{collection}:{record_id}", None)
+            self._record_locks.pop(f"{ctx}|{collection}:{record_id}", None)
         return result
 
     async def list(
@@ -358,7 +361,7 @@ class StorageStrategy(BaseStrategy, ABC):
         Returns:
             A list of storage records under the resolved context.
         """
-        return await self._list(collection, context, visibilities)
+        return await self._list(collection, self._resolve_context(context), visibilities)
 
     async def remove_collection(self, collection: str, context: ContextStorage = ContextStorage.MISSIONS) -> bool:
         """Wipe a collection clean under the given scope.
@@ -370,9 +373,10 @@ class StorageStrategy(BaseStrategy, ABC):
         Returns:
             True if the deletion was successful, False otherwise
         """
-        result = await self._remove_collection(collection, context)
+        ctx = self._resolve_context(context)
+        result = await self._remove_collection(collection, ctx)
         if result:
-            prefix = f"{context}|{collection}:"
+            prefix = f"{ctx}|{collection}:"
             for key in [k for k in self._record_locks if k.startswith(prefix)]:
                 self._record_locks.pop(key, None)
         return result
@@ -411,14 +415,13 @@ class StorageStrategy(BaseStrategy, ABC):
             msg = f"Invalid data type '{data_type}'. Must be one of {list(DataType.__members__.keys())}"
             raise ValueError(msg)
         validated_data = self._validate_data(collection, data)
-        async with self._record_lock(context, collection, record_id):
-            if await self._read(collection, record_id, context):
-                updated = await self._update(collection, record_id, validated_data, context, visibility)
+        ctx = self._resolve_context(context)
+        async with self._record_lock(ctx, collection, record_id):
+            if await self._read(collection, record_id, ctx):
+                updated = await self._update(collection, record_id, validated_data, ctx, visibility)
                 if updated is None:
                     msg = f"Update failed for existing record '{collection}:{record_id}'"
                     raise StorageServiceError(msg)
                 return updated
-            record = self._create_storage_record(
-                collection, record_id, validated_data, data_type, self._resolve_context(context), visibility
-            )
+            record = self._create_storage_record(collection, record_id, validated_data, data_type, ctx, visibility)
             return await self._store(record)
