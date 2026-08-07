@@ -189,18 +189,6 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
                 logger.info("gRPC ReadRecord failed for %s:%s: %s", collection, record_id, e)
             return None
 
-        try:
-            return self._build_record_from_proto(resp.stored_data)
-        except Exception:
-            logger.warning("Invalid record data for %s:%s in ReadRecord", collection, record_id, exc_info=True)
-            return None
-
-        try:
-            return self._build_record_from_proto(resp.stored_data)
-        except Exception:
-            logger.warning("Invalid record data for %s:%s in ReadRecord", collection, record_id, exc_info=True)
-            return None
-
     async def _update(
         self,
         collection: str,
