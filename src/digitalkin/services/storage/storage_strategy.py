@@ -44,30 +44,30 @@ class StorageStrategy(BaseStrategy, ABC):
     """
 
     def _resolve_context(self, context: ContextStorage) -> str:
-        """Resolve a scope to its storage context string.
+        """Resolve a context kind to its storage context string.
 
-        `mission`/`setup` map to the owner contexts this strategy was built with.
-        `user`/`organization` are read-only cross-owner scopes (list only) and
-        require `owner_id` — the caller resolves it (e.g. via the user_profile
-        service) since the storage strategy holds no user/org identity.
+        MISSIONS/SETUP_VERSIONS map to the owner contexts this strategy was built
+        with. USERS/ORGANIZATIONS are read-only cross-owner scopes (list only); the
+        strategy holds no user/org id, so it returns a kind-only marker
+        (`users:` / `organizations:`). The storage service resolves the concrete id
+        server-side from the request metadata stamped by the client interceptor.
 
         Args:
-            context: The scope to resolve.
+            context: The context kind to resolve.
 
         Returns:
-            The context string (`missions:<id>`, `setup_versions:<id>`,
-            `users:<id>` or `organizations:<id>`).
-
-        Raises:
-            ValueError: If `owner_id` is missing for a `user`/`organization` scope.
+            The context string: `missions:<id>`, `setup_versions:<id>`, or the
+            kind marker `users:` / `organizations:`.
         """
         match context:
             case ContextStorage.MISSIONS:
                 return self.mission_id
             case ContextStorage.SETUP_VERSIONS:
                 return self.setup_version_id
+            case ContextStorage.USERS | ContextStorage.ORGANIZATIONS:
+                return f"{context.value}:"
             case _:
-                return self.setup_version_id
+                return self.mission_id
 
     def _validate_data(self, collection: str, data: dict[str, Any]) -> BaseModel:
         """Validate data against the model schema for the given key.

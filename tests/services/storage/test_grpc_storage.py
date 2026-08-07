@@ -25,7 +25,7 @@ from digitalkin.grpc_servers.exceptions import CircuitOpenError, PermissionDenie
 from digitalkin.grpc_servers.utils.circuit_breaker import CircuitBreaker
 from digitalkin.models.grpc_servers.circuit_breaker import CBState
 from digitalkin.models.grpc_servers.models import ClientConfig
-from digitalkin.models.services.storage import DataType
+from digitalkin.models.services.storage import ContextStorage, DataType, Visibility
 from digitalkin.models.settings.grpc_client import get_circuit_breaker_settings, get_grpc_client_settings
 from digitalkin.services.storage.exceptions import StorageServiceError
 from digitalkin.services.storage.grpc_storage import GrpcStorage
@@ -1176,6 +1176,47 @@ class TestListData:
         assert all(r.collection == collection for r in results)
         values = sorted([r.data.value for r in results])
         assert values == [100, 200, 300]
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    @pytest.mark.smoke
+    def test_list_cross_owner_context_and_visibilities(
+        self,
+        client: GrpcStorage,
+        test_channel: grpc_testing.Channel,
+        mock_servicer: MockStorageServicer,
+        thread_pool: futures.ThreadPoolExecutor,
+    ) -> None:
+        """List under USERS/ORGANIZATIONS maps to the cross-owner wire enum.
+
+        Verifies:
+        - context=USERS -> CONTEXT_USERS, context=ORGANIZATIONS -> CONTEXT_ORGANIZATIONS
+        - the visibilities filter is forwarded on the wire
+        """
+        collection = "test_collection"
+        list_method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name[
+            "ListRecords"
+        ]
+
+        for scope_context, wire in (
+            (ContextStorage.USERS, data_pb2.CONTEXT_USERS),
+            (ContextStorage.ORGANIZATIONS, data_pb2.CONTEXT_ORGANIZATIONS),
+        ):
+            list_future = thread_pool.submit(
+                asyncio.run,
+                client.list(collection, context=scope_context, visibilities=[Visibility.PUBLIC, Visibility.INTERNAL]),
+            )
+            _, list_request, list_rpc = test_channel.take_unary_unary(list_method_desc)
+
+            assert list_request.context == wire
+            assert list_request.collection == collection
+            assert list(list_request.visibilities) == [data_pb2.VISIBILITY_PUBLIC, data_pb2.VISIBILITY_INTERNAL]
+
+            list_context = FakeContext()
+            list_response = mock_servicer.ListRecords(list_request, list_context)
+            list_rpc.send_initial_metadata(())
+            list_rpc.terminate(list_response, (), grpc.StatusCode.OK, "")
+            assert isinstance(list_future.result(timeout=1.0), list)
 
     @pytest.mark.grpc
     @pytest.mark.integration

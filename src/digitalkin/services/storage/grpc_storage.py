@@ -41,22 +41,27 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
         return isinstance(error.__cause__, CircuitOpenError)
 
     def _context_enum(self, context: str) -> data_pb2.ContextStorage:
-        """Map a resolved context id-string to the wire's context-kind enum.
+        """Map a resolved context string to the wire's context-kind enum.
 
         Since dev4 the request carries only the kind; the concrete id is resolved
-        server-side from the x-mission-id / x-setup-id task metadata stamped by
-        ``RequestIdClientInterceptor``.
+        server-side from the request metadata stamped by ``RequestIdClientInterceptor``.
+        USERS/ORGANIZATIONS are read-only cross-owner scopes whose id is resolved
+        server-side from the x-user-id / x-organization-id metadata.
 
         Args:
-            context: The resolved context id (``self.mission_id`` or ``self.setup_version_id``).
+            context: The resolved context string from ``_resolve_context``.
 
         Returns:
-            ``CONTEXT_SETUP_VERSIONS`` for the setup-version scope, else ``CONTEXT_MISSIONS``.
+            The matching ``CONTEXT_*`` wire enum.
         """
         # TODO(validate): remove after prod validation
         # [VALIDATE CTXENUM] server resolves the concrete id (incl. setup->current version) from metadata
         if context == self.setup_version_id or context.startswith("setup_versions:"):
             return data_pb2.CONTEXT_SETUP_VERSIONS
+        if context.startswith("users:"):
+            return data_pb2.CONTEXT_USERS
+        if context.startswith("organizations:"):
+            return data_pb2.CONTEXT_ORGANIZATIONS
         return data_pb2.CONTEXT_MISSIONS
 
     def _build_record_from_proto(self, proto: data_pb2.StorageRecord) -> StorageRecord:
