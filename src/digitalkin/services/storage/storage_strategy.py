@@ -47,27 +47,25 @@ class StorageStrategy(BaseStrategy, ABC):
         """Resolve a context kind to its storage context string.
 
         MISSIONS/SETUP_VERSIONS map to the owner contexts this strategy was built
-        with. USERS/ORGANIZATIONS are read-only cross-owner scopes (list only); the
-        strategy holds no user/org id, so it returns a kind-only marker
-        (`users:` / `organizations:`). The storage service resolves the concrete id
-        server-side from the request metadata stamped by the client interceptor.
+        with. USERS/ORGANIZATIONS (read-only cross-owner) and UNSPECIFIED hold no
+        concrete id here, so they return a kind-only marker (`users:`,
+        `organizations:`, `unspecified:`); the storage service resolves the id — or
+        applies its default for UNSPECIFIED — server-side from the request metadata.
 
         Args:
             context: The context kind to resolve.
 
         Returns:
             The context string: `missions:<id>`, `setup_versions:<id>`, or the
-            kind marker `users:` / `organizations:`.
+            kind marker `users:` / `organizations:` / `unspecified:`.
         """
         match context:
             case ContextStorage.MISSIONS:
                 return self.mission_id
             case ContextStorage.SETUP_VERSIONS:
                 return self.setup_version_id
-            case ContextStorage.USERS | ContextStorage.ORGANIZATIONS:
-                return f"{context.value}:"
             case _:
-                return self.mission_id
+                return f"{context.value}:"
 
     def _validate_data(self, collection: str, data: dict[str, Any]) -> BaseModel:
         """Validate data against the model schema for the given key.

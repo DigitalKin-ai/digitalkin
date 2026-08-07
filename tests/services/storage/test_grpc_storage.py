@@ -1201,6 +1201,7 @@ class TestListData:
         for scope_context, wire in (
             (ContextStorage.USERS, data_pb2.CONTEXT_USERS),
             (ContextStorage.ORGANIZATIONS, data_pb2.CONTEXT_ORGANIZATIONS),
+            (ContextStorage.UNSPECIFIED, data_pb2.CONTEXT_UNSPECIFIED),
         ):
             list_future = thread_pool.submit(
                 asyncio.run,

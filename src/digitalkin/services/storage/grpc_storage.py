@@ -45,8 +45,9 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
 
         Since dev4 the request carries only the kind; the concrete id is resolved
         server-side from the request metadata stamped by ``RequestIdClientInterceptor``.
-        USERS/ORGANIZATIONS are read-only cross-owner scopes whose id is resolved
-        server-side from the x-user-id / x-organization-id metadata.
+        USERS/ORGANIZATIONS are read-only cross-owner scopes — only the kind is sent;
+        the server derives the owning user/organization from the request context (no id
+        is transmitted by the client).
 
         Args:
             context: The resolved context string from ``_resolve_context``.
@@ -62,6 +63,8 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
             return data_pb2.CONTEXT_USERS
         if context.startswith("organizations:"):
             return data_pb2.CONTEXT_ORGANIZATIONS
+        if context.startswith("unspecified:"):
+            return data_pb2.CONTEXT_UNSPECIFIED
         return data_pb2.CONTEXT_MISSIONS
 
     def _build_record_from_proto(self, proto: data_pb2.StorageRecord) -> StorageRecord:
