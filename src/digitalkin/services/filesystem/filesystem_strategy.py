@@ -6,6 +6,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from digitalkin.models.services.filesystem import ContextFile
 from digitalkin.services.base_strategy import BaseStrategy
 
 
@@ -29,8 +30,9 @@ class FilesystemRecord(BaseModel):
 class FileFilter(BaseModel):
     """Filter criteria for querying files."""
 
-    context: Literal["mission", "setup"] = Field(
-        default="mission", description="The context of the files (mission or setup)"
+    context: ContextFile = Field(
+        default=ContextFile.MISSIONS,
+        description="The context of the files: mission/setup (owner) or user/organization (read-only cross-owner)",
     )
     names: list[str] | None = Field(default=None, description="Filter by file names (exact matches)")
     file_ids: list[str] | None = Field(default=None, description="Filter by file IDs")
@@ -129,7 +131,7 @@ class FilesystemStrategy(BaseStrategy, ABC):
     async def get_file(
         self,
         file_id: str,
-        context: Literal["mission", "setup"] = "mission",
+        context: ContextFile = ContextFile.MISSIONS,
         *,
         include_content: bool = False,
     ) -> FilesystemRecord:
@@ -141,7 +143,7 @@ class FilesystemStrategy(BaseStrategy, ABC):
 
         Args:
             file_id: The ID of the file to be retrieved
-            context: The context of the files (mission or setup)
+            context: The context of the file (mission/setup, or user/organization for cross-owner reads)
             include_content: Whether to include file content in response
 
         Returns:

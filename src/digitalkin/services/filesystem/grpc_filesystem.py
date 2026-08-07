@@ -10,6 +10,7 @@ from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
 from digitalkin.grpc_servers.utils.grpc_error_handler import GrpcErrorHandlerMixin
 from digitalkin.logger import logger
 from digitalkin.models.grpc_servers.models import ClientConfig
+from digitalkin.models.services.filesystem import ContextFile
 from digitalkin.services.filesystem.exceptions import FilesystemServiceError
 from digitalkin.services.filesystem.filesystem_strategy import (
     FileFilter,
@@ -80,26 +81,32 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper, GrpcErrorHandlerMixi
         )
 
     @staticmethod
-    def _context_enum(context: str) -> filesystem_pb2.ContextFile:
-        """Map a scope literal to the wire's context-kind enum.
+    def _context_enum(context: ContextFile) -> filesystem_pb2.ContextFile:
+        """Map a context kind to the wire's context-kind enum.
 
         Since dev4 the request carries only the kind; the concrete id is resolved
-        server-side from the x-mission-id / x-setup-id task metadata stamped by
-        ``RequestIdClientInterceptor``.
+        server-side from the request metadata stamped by ``RequestIdClientInterceptor``.
+        USERS/ORGANIZATIONS are read-only cross-owner scopes — only the kind is sent;
+        the server derives the owning user/organization from the request context (no id
+        is transmitted by the client).
 
         Args:
-            context: The scope literal ("mission" or "setup").
+            context: The context kind.
 
         Returns:
-            The matching ``ContextFile`` enum value, ``CONTEXT_UNSPECIFIED`` otherwise.
+            The matching ``ContextFile`` wire enum, ``CONTEXT_UNSPECIFIED`` otherwise.
         """
         # TODO(validate): remove after prod validation
         # [VALIDATE CTXENUM] server resolves the concrete id from metadata
         match context:
-            case "setup":
+            case ContextFile.SETUP:
                 return filesystem_pb2.CONTEXT_SETUP
-            case "mission":
+            case ContextFile.MISSIONS:
                 return filesystem_pb2.CONTEXT_MISSIONS
+            case ContextFile.USERS:
+                return filesystem_pb2.CONTEXT_USERS
+            case ContextFile.ORGANIZATIONS:
+                return filesystem_pb2.CONTEXT_ORGANIZATIONS
         return filesystem_pb2.CONTEXT_UNSPECIFIED
 
     def _filter_to_proto(self, filters: FileFilter) -> filesystem_pb2.FileFilter:
@@ -188,7 +195,7 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper, GrpcErrorHandlerMixi
     async def get_file(
         self,
         file_id: str,
-        context: Literal["mission", "setup"] = "mission",
+        context: ContextFile = ContextFile.MISSIONS,
         *,
         include_content: bool = False,
     ) -> FilesystemRecord:
@@ -196,7 +203,7 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper, GrpcErrorHandlerMixi
 
         Args:
             file_id: The ID of the file to be retrieved
-            context: The context of the files (mission or setup)
+            context: The context of the file (mission/setup, or user/organization for cross-owner reads)
             include_content: Whether to include file content in response
 
         Returns:

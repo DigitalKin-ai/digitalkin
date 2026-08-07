@@ -18,6 +18,7 @@ from google.protobuf import struct_pb2
 from grpc.framework.foundation import logging_pool
 
 from digitalkin.models.grpc_servers.models import ClientConfig
+from digitalkin.models.services.filesystem import ContextFile
 from digitalkin.models.settings.utils.channel import ControlFlow, SecurityMode
 from digitalkin.services.filesystem.exceptions import FilesystemServiceError
 from digitalkin.services.filesystem.filesystem_strategy import (
@@ -1066,3 +1067,68 @@ class TestFilesystemEdgeCases:
 #     """
 #
 # Add regression tests below as bugs are discovered and fixed.
+
+
+class TestContextScopes:
+    """Tests that the ContextFile kind maps to the right wire enum."""
+
+    @pytest.mark.parametrize(
+        ("context", "wire"),
+        [
+            (ContextFile.MISSIONS, filesystem_pb2.CONTEXT_MISSIONS),
+            (ContextFile.SETUP, filesystem_pb2.CONTEXT_SETUP),
+            (ContextFile.USERS, filesystem_pb2.CONTEXT_USERS),
+            (ContextFile.ORGANIZATIONS, filesystem_pb2.CONTEXT_ORGANIZATIONS),
+            (ContextFile.UNSPECIFIED, filesystem_pb2.CONTEXT_UNSPECIFIED),
+        ],
+    )
+    def test_get_files_forwards_context_kind(
+        self,
+        context: ContextFile,
+        wire: "filesystem_pb2.ContextFile",
+        client: GrpcFilesystem,
+        test_channel: grpc_testing.Channel,
+        mock_servicer: MockFilesystemServicer,
+    ) -> None:
+        """get_files emits the matching context kind on the request and its filter.
+
+        Covers the cross-owner scopes USERS / ORGANIZATIONS added alongside the
+        existing MISSIONS / SETUP; the concrete owner id is resolved server-side.
+        """
+        future = client_execution_thread_pool.submit(
+            asyncio.run,
+            client.get_files(FileFilter(context=context)),
+        )
+
+        method_desc = service_name.methods_by_name["GetFiles"]
+        _, request, rpc = test_channel.take_unary_unary(method_desc)
+
+        assert request.context == wire
+        assert request.filters.context == wire
+
+        rpc.send_initial_metadata(())
+        rpc.terminate(mock_servicer.GetFiles(request, FakeContext()), (), grpc.StatusCode.OK, "")
+
+        files, _total = future.result(timeout=5.0)
+        assert isinstance(files, list)
+
+    def test_get_file_forwards_cross_owner_context(
+        self,
+        client: GrpcFilesystem,
+        test_channel: grpc_testing.Channel,
+        mock_servicer: MockFilesystemServicer,
+    ) -> None:
+        """get_file under USERS emits CONTEXT_USERS on the wire."""
+        future = client_execution_thread_pool.submit(
+            asyncio.run,
+            client.get_file("file_x", context=ContextFile.USERS),
+        )
+
+        method_desc = service_name.methods_by_name["GetFile"]
+        _, request, rpc = test_channel.take_unary_unary(method_desc)
+
+        assert request.context == filesystem_pb2.CONTEXT_USERS
+
+        rpc.send_initial_metadata(())
+        rpc.terminate(mock_servicer.GetFile(request, FakeContext()), (), grpc.StatusCode.OK, "")
+        assert isinstance(future.result(timeout=5.0), FilesystemRecord)
