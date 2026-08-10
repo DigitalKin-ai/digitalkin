@@ -17,6 +17,9 @@ import grpc
 import grpc_testing
 import pytest
 from agentic_mesh_protocol.storage.v1 import data_pb2, storage_service_pb2, storage_service_pb2_grpc
+from google.protobuf.struct_pb2 import Struct
+from hypothesis import given
+from hypothesis import strategies as st
 from pydantic import BaseModel, Field
 from tests.fixtures.grpc_fixtures import AsyncStubWrapper, FakeContext
 from tests.services.storage.mock_storage_servicer import MockStorageServicer
@@ -25,7 +28,8 @@ from digitalkin.grpc_servers.exceptions import CircuitOpenError, PermissionDenie
 from digitalkin.grpc_servers.utils.circuit_breaker import CircuitBreaker
 from digitalkin.models.grpc_servers.circuit_breaker import CBState
 from digitalkin.models.grpc_servers.models import ClientConfig
-from digitalkin.models.services.storage import DataType
+from digitalkin.models.services.services import Context
+from digitalkin.models.services.storage import DataType, Visibility
 from digitalkin.models.settings.grpc_client import get_circuit_breaker_settings, get_grpc_client_settings
 from digitalkin.services.storage.exceptions import StorageServiceError
 from digitalkin.services.storage.grpc_storage import GrpcStorage
@@ -71,7 +75,7 @@ class LogDataModel(BaseModel):
 def thread_pool():
     """Create thread pool and ensure cleanup.
 
-    Returns:
+    Yields:
         ThreadPoolExecutor instance
     """
     pool = futures.ThreadPoolExecutor(max_workers=1)
@@ -316,7 +320,7 @@ class TestStoreData:
 
         method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name["StoreRecord"]
 
-        future = thread_pool.submit(asyncio.run, client.store(collection, record_id, data, data_type="OUTPUT"))
+        future = thread_pool.submit(asyncio.run, client.store(collection, record_id, data, data_type=DataType.OUTPUT))
 
         _, request, rpc = test_channel.take_unary_unary(method_desc)
 
@@ -357,7 +361,7 @@ class TestStoreData:
 
         method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name["StoreRecord"]
 
-        future = thread_pool.submit(asyncio.run, client.store(collection, record_id, data, data_type="LOGS"))
+        future = thread_pool.submit(asyncio.run, client.store(collection, record_id, data, data_type=DataType.LOGS))
 
         _, request, rpc = test_channel.take_unary_unary(method_desc)
 
@@ -393,7 +397,7 @@ class TestStoreData:
 
         method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name["StoreRecord"]
 
-        future = thread_pool.submit(asyncio.run, client.store(collection, record_id, data, data_type="VIEW"))
+        future = thread_pool.submit(asyncio.run, client.store(collection, record_id, data, data_type=DataType.VIEW))
 
         _, request, rpc = test_channel.take_unary_unary(method_desc)
 
@@ -429,7 +433,7 @@ class TestStoreData:
 
         method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name["StoreRecord"]
 
-        future = thread_pool.submit(asyncio.run, client.store(collection, record_id, data, data_type="OTHER"))
+        future = thread_pool.submit(asyncio.run, client.store(collection, record_id, data, data_type=DataType.OTHER))
 
         _, request, rpc = test_channel.take_unary_unary(method_desc)
 
@@ -1179,6 +1183,48 @@ class TestListData:
 
     @pytest.mark.grpc
     @pytest.mark.integration
+    @pytest.mark.smoke
+    def test_list_cross_owner_context_and_visibilities(
+        self,
+        client: GrpcStorage,
+        test_channel: grpc_testing.Channel,
+        mock_servicer: MockStorageServicer,
+        thread_pool: futures.ThreadPoolExecutor,
+    ) -> None:
+        """List under USERS/ORGANIZATIONS maps to the cross-owner wire enum.
+
+        Verifies:
+        - context=USERS -> CONTEXT_USERS, context=ORGANIZATIONS -> CONTEXT_ORGANIZATIONS
+        - the visibilities filter is forwarded on the wire
+        """
+        collection = "test_collection"
+        list_method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name[
+            "ListRecords"
+        ]
+
+        for scope_context, wire in (
+            (Context.USERS, data_pb2.CONTEXT_USERS),
+            (Context.ORGANIZATIONS, data_pb2.CONTEXT_ORGANIZATIONS),
+            (Context.UNSPECIFIED, data_pb2.CONTEXT_UNSPECIFIED),
+        ):
+            list_future = thread_pool.submit(
+                asyncio.run,
+                client.list(collection, context=scope_context, visibilities=[Visibility.PUBLIC, Visibility.INTERNAL]),
+            )
+            _, list_request, list_rpc = test_channel.take_unary_unary(list_method_desc)
+
+            assert list_request.context == wire
+            assert list_request.collection == collection
+            assert list(list_request.visibilities) == [data_pb2.VISIBILITY_PUBLIC, data_pb2.VISIBILITY_INTERNAL]
+
+            list_context = FakeContext()
+            list_response = mock_servicer.ListRecords(list_request, list_context)
+            list_rpc.send_initial_metadata(())
+            list_rpc.terminate(list_response, (), grpc.StatusCode.OK, "")
+            assert isinstance(list_future.result(timeout=1.0), list)
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
     @pytest.mark.edge_case
     def test_list_records_empty_collection(
         self,
@@ -1520,7 +1566,10 @@ class TestCircuitBreakerInteraction:
     @pytest.mark.grpc
     @pytest.mark.unit
     async def test_store_logs_quietly_when_circuit_open(
-        self, client: GrpcStorage, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+        self,
+        client: GrpcStorage,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         """Open-circuit StoreRecord raises but logs at DEBUG (no stack trace)."""
         self._open_storage_breaker(monkeypatch)
@@ -1543,7 +1592,10 @@ class TestCircuitBreakerInteraction:
     @pytest.mark.grpc
     @pytest.mark.unit
     async def test_read_logs_quietly_when_circuit_open(
-        self, client: GrpcStorage, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+        self,
+        client: GrpcStorage,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         """Open-circuit ReadRecord returns None and logs at DEBUG only."""
         self._open_storage_breaker(monkeypatch)
@@ -1623,3 +1675,183 @@ class TestCircuitBreakerInteraction:
 
         assert result is None
         assert CircuitBreaker.get_or_create("StorageService").state == CBState.OPEN
+
+
+# ============================================================================
+# Enum coverage: Visibility & Context (new SDK enums used by the storage service)
+# ============================================================================
+
+
+class TestVisibilityEnumMapping:
+    """SDK ``Visibility`` <-> storage-proto wire enum, both directions."""
+
+    _WIRE = (
+        (Visibility.UNSPECIFIED, data_pb2.VISIBILITY_UNSPECIFIED),
+        (Visibility.PUBLIC, data_pb2.VISIBILITY_PUBLIC),
+        (Visibility.PRIVATE, data_pb2.VISIBILITY_PRIVATE),
+        (Visibility.INTERNAL, data_pb2.VISIBILITY_INTERNAL),
+    )
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize(("vis", "wire"), _WIRE)
+    def test_visibility_enum_maps_to_wire(self, vis: Visibility, wire: int) -> None:
+        """Each SDK visibility maps to its proto ``VISIBILITY_*`` constant."""
+        assert GrpcStorage._visibility_enum(vis) == wire
+
+    @pytest.mark.contract
+    def test_sdk_visibility_names_mirror_proto(self) -> None:
+        """Every SDK Visibility has a matching ``VISIBILITY_<NAME>`` in the proto."""
+        proto_names = {v.name for v in data_pb2.Visibility.DESCRIPTOR.values}
+        assert {f"VISIBILITY_{v.name}" for v in Visibility} <= proto_names
+
+    @pytest.mark.contract
+    def test_visibility_values_are_lowercase_string_names(self) -> None:
+        """Visibility values are intentionally strings mirroring the member name."""
+        for v in Visibility:
+            assert isinstance(v.value, str)
+            assert v.value == v.name.lower()
+
+    @pytest.mark.regression
+    def test_visibility_enum_avoids_uncallable_proto_wrapper(self) -> None:
+        """``data_pb2.Visibility(...)`` is not callable at runtime; the mapper must not rely on it."""
+        with pytest.raises(TypeError):
+            data_pb2.Visibility(1)
+        assert GrpcStorage._visibility_enum(Visibility.PUBLIC) == data_pb2.VISIBILITY_PUBLIC
+
+    @pytest.mark.property
+    @given(vis=st.sampled_from(list(Visibility)))
+    def test_visibility_round_trips_through_wire(self, vis: Visibility) -> None:
+        """Write mapping -> proto -> read mapping recovers the same member."""
+        wire = GrpcStorage._visibility_enum(vis)
+        name = data_pb2.Visibility.Name(wire).removeprefix("VISIBILITY_")
+        assert Visibility[name] is vis
+
+    @pytest.mark.validation
+    def test_unknown_visibility_name_is_rejected(self) -> None:
+        """Name-based lookup (used by the tools) rejects unknown levels."""
+        with pytest.raises(KeyError):
+            _ = Visibility["BOGUS"]
+
+
+class TestVisibilityWire:
+    """Visibility on the wire: sent on store, reconstructed on read."""
+
+    @pytest.mark.grpc
+    @pytest.mark.smoke
+    @pytest.mark.parametrize(
+        "vis", [Visibility.PUBLIC, Visibility.PRIVATE, Visibility.INTERNAL, Visibility.UNSPECIFIED]
+    )
+    def test_store_puts_visibility_on_request(
+        self,
+        vis: Visibility,
+        client: GrpcStorage,
+        test_channel: grpc_testing.Channel,
+        mock_servicer: MockStorageServicer,
+        thread_pool: futures.ThreadPoolExecutor,
+    ) -> None:
+        """A store carries the chosen visibility as the proto wire enum."""
+        data = {"mission_id": MISSION_ID, "name": "vis", "value": 1}
+        method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name["StoreRecord"]
+
+        future = thread_pool.submit(asyncio.run, client.store("test_collection", "vis_rec", data, visibility=vis))
+        _, request, rpc = test_channel.take_unary_unary(method_desc)
+
+        assert request.visibility == GrpcStorage._visibility_enum(vis)
+
+        rpc.send_initial_metadata(())
+        rpc.terminate(mock_servicer.StoreRecord(request, FakeContext()), (), grpc.StatusCode.OK, "")
+        assert future.result(timeout=1.0) is not None
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize("vis", list(Visibility))
+    def test_build_record_reads_visibility_from_wire(self, client: GrpcStorage, vis: Visibility) -> None:
+        """Reading a record reconstructs the SDK visibility from the proto int (string-valued enum)."""
+        struct = Struct()
+        struct.update({"mission_id": MISSION_ID, "name": "vis", "value": 1})
+        proto = data_pb2.StorageRecord(
+            context=MISSION_ID,
+            collection="test_collection",
+            record_id="r",
+            data=struct,
+            data_type=data_pb2.OUTPUT,
+            visibility=GrpcStorage._visibility_enum(vis),
+        )
+        assert client._build_record_from_proto(proto).visibility is vis
+
+    @pytest.mark.edge_case
+    def test_unknown_wire_visibility_is_skipped(self, client: GrpcStorage) -> None:
+        """An out-of-range wire visibility makes the record skipped rather than crash a whole list."""
+        struct = Struct()
+        struct.update({"mission_id": MISSION_ID, "name": "vis", "value": 1})
+        proto = data_pb2.StorageRecord(
+            context=MISSION_ID,
+            collection="test_collection",
+            record_id="r",
+            data=struct,
+            data_type=data_pb2.OUTPUT,
+            visibility=99,
+        )
+        assert client._build_record_or_skip(proto) is None
+
+
+class TestContextWireMapping:
+    """SDK ``Context`` kind -> storage wire enum (via ``_resolve_context`` + ``_context_enum``)."""
+
+    @pytest.mark.contract
+    @pytest.mark.parametrize(
+        ("ctx", "wire"),
+        [
+            (Context.MISSIONS, data_pb2.CONTEXT_MISSIONS),
+            (Context.SETUP, data_pb2.CONTEXT_SETUP_VERSIONS),
+            (Context.USERS, data_pb2.CONTEXT_USERS),
+            (Context.ORGANIZATIONS, data_pb2.CONTEXT_ORGANIZATIONS),
+            (Context.UNSPECIFIED, data_pb2.CONTEXT_UNSPECIFIED),
+        ],
+    )
+    def test_context_resolves_to_wire(self, client: GrpcStorage, ctx: Context, wire: int) -> None:
+        """Each Context kind resolves + maps to the expected wire enum."""
+        assert client._context_enum(client._resolve_context(ctx)) == wire
+
+    @pytest.mark.regression
+    def test_cross_owner_markers_are_singular(self, client: GrpcStorage) -> None:
+        """Unified Context values are singular; kind-only markers must match them."""
+        assert client._resolve_context(Context.USERS) == "user:"
+        assert client._resolve_context(Context.ORGANIZATIONS) == "organization:"
+        assert client._resolve_context(Context.UNSPECIFIED) == "unspecified:"
+
+
+class TestStorageRefusalAndFailures:
+    """Refusals (PERMISSION_DENIED) propagate; other gRPC failures degrade gracefully."""
+
+    @pytest.mark.grpc
+    @pytest.mark.regression
+    async def test_permission_denied_propagates_on_all_ops(self, client: GrpcStorage) -> None:
+        """Authz refusals are never swallowed — every op re-raises PermissionDeniedError."""
+        client.exec_grpc_query = AsyncMock(side_effect=PermissionDeniedError("denied"))  # type: ignore[method-assign]
+        data = {"mission_id": MISSION_ID, "name": "x", "value": 1}
+        with pytest.raises(PermissionDeniedError):
+            await client.store("test_collection", "r", data)
+        with pytest.raises(PermissionDeniedError):
+            await client.read("test_collection", "r")
+        with pytest.raises(PermissionDeniedError):
+            await client.update("test_collection", "r", data)
+        with pytest.raises(PermissionDeniedError):
+            await client.remove("test_collection", "r")
+        with pytest.raises(PermissionDeniedError):
+            await client.list("test_collection")
+        with pytest.raises(PermissionDeniedError):
+            await client.remove_collection("test_collection")
+
+    @pytest.mark.grpc
+    @pytest.mark.chaos
+    async def test_grpc_failure_degrades_gracefully(self, client: GrpcStorage) -> None:
+        """A generic gRPC failure raises on writes-that-must-confirm and returns empty/false on best-effort reads."""
+        client.exec_grpc_query = AsyncMock(side_effect=RuntimeError("boom"))  # type: ignore[method-assign]
+        data = {"mission_id": MISSION_ID, "name": "x", "value": 1}
+        with pytest.raises(StorageServiceError):
+            await client.store("test_collection", "r", data)
+        assert await client.read("test_collection", "r") is None
+        assert await client.update("test_collection", "r", data) is None
+        assert await client.remove("test_collection", "r") is False
+        assert await client.list("test_collection") == []
+        assert await client.remove_collection("test_collection") is False

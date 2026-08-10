@@ -5,6 +5,8 @@ import logging
 import secrets
 import string
 import types
+from typing import TYPE_CHECKING
+from unittest.mock import AsyncMock
 
 import grpc
 import grpc_testing
@@ -16,8 +18,14 @@ from agentic_mesh_protocol.filesystem.v1 import (
 )
 from google.protobuf import struct_pb2
 from grpc.framework.foundation import logging_pool
+from hypothesis import given
+from hypothesis import strategies as st
+from mock_filesystem_servicer import MockFilesystemServicer
+from tests.fixtures.grpc_fixtures import FakeContext
 
+from digitalkin.grpc_servers.exceptions import PermissionDeniedError
 from digitalkin.models.grpc_servers.models import ClientConfig
+from digitalkin.models.services.services import Context
 from digitalkin.models.settings.utils.channel import ControlFlow, SecurityMode
 from digitalkin.services.filesystem.exceptions import FilesystemServiceError
 from digitalkin.services.filesystem.filesystem_strategy import (
@@ -26,8 +34,9 @@ from digitalkin.services.filesystem.filesystem_strategy import (
     UploadFileData,
 )
 from digitalkin.services.filesystem.grpc_filesystem import GrpcFilesystem
-from mock_filesystem_servicer import MockFilesystemServicer
-from tests.fixtures.grpc_fixtures import FakeContext
+
+if TYPE_CHECKING:
+    from digitalkin.models.services import services
 
 service_instance = MockFilesystemServicer()
 service_name = filesystem_service_pb2.DESCRIPTOR.services_by_name["FilesystemService"]
@@ -91,7 +100,7 @@ def client(test_channel: grpc_testing.Channel) -> GrpcFilesystem:
     # Override the channel and stub to use our test channel
     client.stub = filesystem_service_pb2_grpc.FilesystemServiceStub(test_channel)
 
-    async def _test_exec_grpc_query(self, query_endpoint, request):
+    async def _test_exec_grpc_query(self, query_endpoint, request) -> object:
         response = getattr(self.stub, query_endpoint)(request)
         return await response if asyncio.iscoroutine(response) else response
 
@@ -1066,3 +1075,117 @@ class TestFilesystemEdgeCases:
 #     """
 #
 # Add regression tests below as bugs are discovered and fixed.
+
+
+class TestContextScopes:
+    """Tests that the ContextFile kind maps to the right wire enum."""
+
+    @pytest.mark.parametrize(
+        ("context", "wire"),
+        [
+            (Context.MISSIONS, filesystem_pb2.CONTEXT_MISSIONS),
+            (Context.SETUP, filesystem_pb2.CONTEXT_SETUP),
+            (Context.USERS, filesystem_pb2.CONTEXT_USERS),
+            (Context.ORGANIZATIONS, filesystem_pb2.CONTEXT_ORGANIZATIONS),
+            (Context.UNSPECIFIED, filesystem_pb2.CONTEXT_UNSPECIFIED),
+        ],
+    )
+    def test_get_files_forwards_context_kind(
+        self,
+        context: Context,
+        wire: "services.Context",
+        client: GrpcFilesystem,
+        test_channel: grpc_testing.Channel,
+        mock_servicer: MockFilesystemServicer,
+    ) -> None:
+        """get_files emits the matching context kind on the request and its filter.
+
+        Covers the cross-owner scopes USERS / ORGANIZATIONS added alongside the
+        existing MISSIONS / SETUP; the concrete owner id is resolved server-side.
+        """
+        future = client_execution_thread_pool.submit(
+            asyncio.run,
+            client.get_files(FileFilter(context=context)),
+        )
+
+        method_desc = service_name.methods_by_name["GetFiles"]
+        _, request, rpc = test_channel.take_unary_unary(method_desc)
+
+        assert request.context == wire
+        assert request.filters.context == wire
+
+        rpc.send_initial_metadata(())
+        rpc.terminate(mock_servicer.GetFiles(request, FakeContext()), (), grpc.StatusCode.OK, "")
+
+        files, _total = future.result(timeout=5.0)
+        assert isinstance(files, list)
+
+    def test_get_file_forwards_cross_owner_context(
+        self,
+        client: GrpcFilesystem,
+        test_channel: grpc_testing.Channel,
+        mock_servicer: MockFilesystemServicer,
+    ) -> None:
+        """get_file under USERS emits CONTEXT_USERS on the wire."""
+        future = client_execution_thread_pool.submit(
+            asyncio.run,
+            client.get_file("file_x", context=Context.USERS),
+        )
+
+        method_desc = service_name.methods_by_name["GetFile"]
+        _, request, rpc = test_channel.take_unary_unary(method_desc)
+
+        assert request.context == filesystem_pb2.CONTEXT_USERS
+
+        rpc.send_initial_metadata(())
+        rpc.terminate(mock_servicer.GetFile(request, FakeContext()), (), grpc.StatusCode.OK, "")
+        assert isinstance(future.result(timeout=5.0), FilesystemRecord)
+
+
+class TestContextEnumContract:
+    """SDK ``Context`` kind -> filesystem wire enum (``_context_enum``)."""
+
+    _WIRE = (
+        (Context.MISSIONS, filesystem_pb2.CONTEXT_MISSIONS),
+        (Context.SETUP, filesystem_pb2.CONTEXT_SETUP),
+        (Context.USERS, filesystem_pb2.CONTEXT_USERS),
+        (Context.ORGANIZATIONS, filesystem_pb2.CONTEXT_ORGANIZATIONS),
+        (Context.UNSPECIFIED, filesystem_pb2.CONTEXT_UNSPECIFIED),
+    )
+
+    @pytest.mark.unit
+    @pytest.mark.contract
+    @pytest.mark.parametrize(("ctx", "wire"), _WIRE)
+    def test_context_enum_maps_to_wire(self, ctx: "Context", wire: int) -> None:
+        """Each Context kind maps to its filesystem proto ``CONTEXT_*`` constant."""
+        assert GrpcFilesystem._context_enum(ctx) == wire
+
+    @pytest.mark.property
+    @given(ctx=st.sampled_from(list(Context)))
+    def test_context_enum_is_total(self, ctx: "Context") -> None:
+        """Every Context kind maps to a defined filesystem wire enum (never crashes)."""
+        assert GrpcFilesystem._context_enum(ctx) in {wire for _, wire in self._WIRE}
+
+
+class TestFilesystemRefusalAndFailures:
+    """Refusals (PERMISSION_DENIED) propagate; other gRPC failures wrap as FilesystemServiceError."""
+
+    @pytest.mark.grpc
+    @pytest.mark.regression
+    async def test_permission_denied_propagates(self, client: GrpcFilesystem) -> None:
+        """Authz refusals are re-raised as-is, never masked as a service error."""
+        client.exec_grpc_query = AsyncMock(side_effect=PermissionDeniedError("denied"))  # type: ignore[method-assign]
+        with pytest.raises(PermissionDeniedError):
+            await client.get_file("f")
+        with pytest.raises(PermissionDeniedError):
+            await client.get_files(FileFilter())
+
+    @pytest.mark.grpc
+    @pytest.mark.chaos
+    async def test_grpc_failure_wrapped(self, client: GrpcFilesystem) -> None:
+        """A generic gRPC failure surfaces as FilesystemServiceError on reads."""
+        client.exec_grpc_query = AsyncMock(side_effect=RuntimeError("boom"))  # type: ignore[method-assign]
+        with pytest.raises(FilesystemServiceError):
+            await client.get_file("f")
+        with pytest.raises(FilesystemServiceError):
+            await client.get_files(FileFilter())
