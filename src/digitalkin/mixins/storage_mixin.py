@@ -3,6 +3,7 @@
 from typing import Any, Literal
 
 from digitalkin.models.module.module_context import ModuleContext
+from digitalkin.models.services.storage import DataType
 from digitalkin.services.storage.storage_strategy import StorageRecord
 
 
@@ -36,7 +37,7 @@ class StorageMixin:
         Raises:
             StorageServiceError: If storage operation fails
         """
-        return await context.storage.store(collection, record_id, data, data_type=data_type)
+        return await context.storage.store(collection, record_id, data, data_type=DataType[data_type])
 
     @staticmethod
     async def read_storage(context: ModuleContext, collection: str, record_id: str) -> StorageRecord | None:
@@ -101,4 +102,4 @@ class StorageMixin:
         Raises:
             StorageServiceError: If upsert operation fails
         """
-        return await context.storage.upsert(collection, record_id, data, data_type=data_type)
+        return await context.storage.upsert(collection, record_id, data, data_type=DataType[data_type])

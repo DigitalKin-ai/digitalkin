@@ -23,6 +23,7 @@ if TYPE_CHECKING:
     from agno.agent import Agent
     from agno.run.agent import RunOutput
 
+    from digitalkin.community.agno.toolkits.registry.loader.kit import LoadManager
     from digitalkin.models.events import BaseAgentRunEvent
     from digitalkin.models.module import ModuleContext
     from digitalkin.services.storage import StorageStrategy
@@ -78,8 +79,10 @@ class PausedRunStore:
         seen: set[str] = set()
         pending: list[str] = []
         for tool in run_output.tools or []:
-            tid = getattr(tool, "tool_call_id", None)
-            if tid and tid not in seen and getattr(tool, "external_execution_required", False):
+            tid = tool.tool_call_id
+            # Skip tools already resolved in-process (e.g. a load_manager call handled by the
+            # runner): only genuinely unresolved external tools go to the front.
+            if tid and tid not in seen and tool.external_execution_required and tool.result is None:
                 seen.add(tid)
                 pending.append(tid)
         record = PausedRunRecord(
@@ -303,6 +306,7 @@ class AgnoHitlRunner:
         storage: StorageStrategy | None = None,
         store: PausedRunStore | None = None,
         dependency_key: str = "agui_tools",
+        tool_loader: LoadManager | None = None,
     ) -> None:
         """Initialize the runner.
 
@@ -314,6 +318,12 @@ class AgnoHitlRunner:
             store: Pre-built paused-run store; wins over ``storage``.
             dependency_key: Agno dependencies key carrying the AG-UI tool
                 list (must match :func:`make_tools_factory`).
+            tool_loader: The :class:`LoadManager` bound to the agent's tool list.
+                When present, a ``load_manager`` pause is resolved and the run
+                auto-continues instead of surfacing to the front. When omitted, the
+                runner locates it in ``agent.tools`` itself — otherwise a
+                ``load_manager`` pause would surface to the front as a frontend tool no
+                client implements, wedging the thread.
 
         Raises:
             ValueError: If neither ``storage`` nor ``store`` is provided.
@@ -323,9 +333,37 @@ class AgnoHitlRunner:
                 msg = "AgnoHitlRunner requires either `storage` or `store`."
                 raise ValueError(msg)
             store = PausedRunStore(storage)
+        if tool_loader is None:
+            # vars(): test fakes may not carry a tools attribute at all.
+            tool_loader = self._find_loader(vars(agent).get("tools"))
         self._agent = agent
         self._store = store
         self._dependency_key = dependency_key
+        self._tool_loader = tool_loader
+
+    @staticmethod
+    def _find_loader(tools: Any) -> LoadManager | None:
+        """Locate the LoadManager in the agent's tool list so its pauses auto-resolve.
+
+        Args:
+            tools: ``agent.tools`` — the tools list, or a ``make_tools_factory`` callable.
+
+        Returns:
+            The first LoadManager found, or ``None`` when no loader is wired.
+        """
+        # Lazy import: LoadManager pulls the optional agno dependency at import time,
+        # while this module must stay importable without it (same convention as the
+        # rest of community.agno).
+        from digitalkin.community.agno.toolkits.registry.loader.kit import LoadManager
+
+        if callable(tools) and not isinstance(tools, list):
+            tools = tools(None)
+        if not isinstance(tools, list):
+            return None
+        for tool in tools:
+            if isinstance(tool, LoadManager):
+                return tool
+        return None
 
     async def run(
         self,
@@ -360,7 +398,9 @@ class AgnoHitlRunner:
             yield_run_output=True,
             dependencies={self._dependency_key: agui_tools or []},
         )
-        return await self._drive(stream=stream, send=send, thread_id=thread_id, run_output_cls=RunOutput)
+        return await self._drive(
+            stream=stream, send=send, thread_id=thread_id, run_output_cls=RunOutput, agui_tools=agui_tools
+        )
 
     async def continue_paused_run(
         self,
@@ -437,7 +477,9 @@ class AgnoHitlRunner:
             yield_run_output=True,
             dependencies={self._dependency_key: agui_tools or []},
         )
-        pause_info = await self._drive(stream=stream, send=send, thread_id=thread_id, run_output_cls=RunOutput)
+        pause_info = await self._drive(
+            stream=stream, send=send, thread_id=thread_id, run_output_cls=RunOutput, agui_tools=agui_tools
+        )
 
         if pause_info is None:
             await self._store.delete(thread_id)
@@ -612,31 +654,116 @@ class AgnoHitlRunner:
         send: Callable[[BaseAgentRunEvent], Coroutine[Any, Any, None]],
         thread_id: str,
         run_output_cls: type[RunOutput],
+        agui_tools: list[AgUiTool] | None = None,
     ) -> PauseInfo | None:
-        """Drain an Agno stream, forward events, persist on pause.
+        """Drain an Agno stream, forward events, and persist or auto-continue on pause.
+
+        A ``load_manager`` pause (dynamic tool load) is resolved in-process and the run
+        auto-continues with the enlarged tool list; a frontend-tool pause is persisted and
+        surfaced. The loop is bounded so a model that keeps calling ``load_manager`` cannot spin
+        forever.
+
+        Args:
+            stream: The Agno event stream to drain.
+            send: Digitalkin-event callback for each forwarded event.
+            thread_id: AG-UI thread identifier (storage key on a frontend pause).
+            run_output_cls: The ``RunOutput`` class used to spot the terminal run object.
+            agui_tools: Frontend tools to re-pass to Agno on an auto-continue.
 
         Returns:
-            :class:`PauseInfo` on pause, ``None`` otherwise.
+            :class:`PauseInfo` on a frontend pause, ``None`` on completion.
         """
         from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
 
-        adapter = AgnoStreamAdapter()
-        final_run_output: RunOutput | None = None
+        for _ in range(20):
+            adapter = AgnoStreamAdapter()
+            final_run_output: RunOutput | None = None
 
-        async for raw_event in stream:
-            if isinstance(raw_event, run_output_cls):
-                final_run_output = raw_event
-                continue
-            for event in adapter.to_digitalkin_events(raw_event):
+            async for raw_event in stream:
+                if isinstance(raw_event, run_output_cls):
+                    final_run_output = raw_event
+                    continue
+                for event in adapter.to_digitalkin_events(raw_event):
+                    await send(event)
+
+            for event in adapter.flush():
                 await send(event)
 
-        for event in adapter.flush():
-            await send(event)
+            if not (adapter.is_paused and final_run_output is not None and final_run_output.is_paused):
+                return None
 
-        if adapter.is_paused and final_run_output is not None and getattr(final_run_output, "is_paused", False):
+            # Resolve any load_manager calls in-process; if the pause has nothing left for the
+            # front, auto-continue so discover -> load -> use reads as a single turn.
+            if await self._load_paused_tools(final_run_output) and not self._pending_external(final_run_output):
+                # A load appended a ModuleToolkit to the live base_tools list. Agno caches the
+                # tools-factory output per run (``cache_callables`` defaults to True), so
+                # ``acontinue_run`` would re-resolve from the stale pre-load cache and the new tool
+                # would be missing from the model's function map — the LLM then gets "the requested
+                # tool does not exist" when it calls the just-loaded function. Invalidate the
+                # tools cache so the continue re-invokes the factory and registers the loaded tool.
+                from agno.utils.callables import aclear_callable_cache  # pyright: ignore[reportMissingImports]
+
+                await aclear_callable_cache(self._agent, kind="tools")
+                stream = self._agent.acontinue_run(
+                    run_response=final_run_output,
+                    stream=True,
+                    stream_events=True,
+                    yield_run_output=True,
+                    dependencies={self._dependency_key: agui_tools or []},
+                )
+                continue
+
             pause_info = await self._store.save(run_output=final_run_output, thread_id=thread_id)
             # Attach AG-UI-shaped messages so the front can materialise the tool_call.
             pause_info.new_messages = HitlEvents.agno_messages_to_agui(final_run_output.messages or [])
             return pause_info
 
+        logger.warning("AgnoHitlRunner: auto-continue limit reached for thread_id=%s", thread_id)
+        from digitalkin.models.events import AgentRunEvent, RunErrorEvent
+
+        await send(
+            RunErrorEvent(
+                event=AgentRunEvent.RUN_ERROR,
+                error_type="auto_continue_limit",
+                content=(
+                    "The run was stopped after too many consecutive in-process tool "
+                    "loads (load_manager). Send a new message to continue."
+                ),
+                error_details=None,
+                timestamp=None,
+                metadata=None,
+            )
+        )
         return None
+
+    async def _load_paused_tools(self, run_output: RunOutput) -> bool:
+        """Resolve ``load_manager`` calls in a paused run, writing each tool result in place.
+
+        Args:
+            run_output: The paused Agno run.
+
+        Returns:
+            ``True`` if at least one ``load_manager`` call was handled, else ``False`` (no
+            loader wired, or the pause carries only frontend tools).
+        """
+        if self._tool_loader is None:
+            return False
+        handled = False
+        loader_tool = self._tool_loader.tool_name
+        for tool in run_output.tools or []:
+            if tool.external_execution_required and tool.result is None and tool.tool_name == loader_tool:
+                tool.result = await self._tool_loader.run_paused(tool.tool_args or {})
+                handled = True
+        return handled
+
+    @staticmethod
+    def _pending_external(run_output: RunOutput) -> bool:
+        """Report whether any external tool in the paused run still needs a result.
+
+        Args:
+            run_output: The paused Agno run (after :meth:`_load_paused_tools`).
+
+        Returns:
+            ``True`` if a frontend tool call remains unresolved (must go to the front).
+        """
+        return any(tool.external_execution_required and tool.result is None for tool in run_output.tools or [])

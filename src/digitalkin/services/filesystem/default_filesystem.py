@@ -9,6 +9,7 @@ from typing import Any, Literal
 from anyio import Path as AsyncPath
 
 from digitalkin.logger import logger
+from digitalkin.models.services.services import Context
 from digitalkin.services.filesystem.exceptions import FilesystemServiceError
 from digitalkin.services.filesystem.filesystem_strategy import (
     FileFilter,
@@ -206,7 +207,7 @@ class DefaultFilesystem(FilesystemStrategy):
     async def get_file(
         self,
         file_id: str,
-        context: Literal["mission", "setup"] = "mission",  # noqa: ARG002
+        context: Context = Context.MISSIONS,  # noqa: ARG002
         *,
         include_content: bool = False,
     ) -> FilesystemRecord:

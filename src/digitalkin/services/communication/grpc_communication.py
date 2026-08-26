@@ -280,6 +280,27 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
             "cost": json_format.MessageToDict(cost_response.cost_schema),
         }
 
+    async def get_module_config_schema(
+        self,
+        module_address: str,
+        module_port: int,
+        *,
+        llm_format: bool = False,
+    ) -> dict[str, Any]:
+        """Get the module's config-setup JSON schema via gRPC (``GetConfigSetupModule``).
+
+        Args:
+            module_address: Target module address.
+            module_port: Target module port.
+            llm_format: Return the LLM-friendly schema format.
+
+        Returns:
+            The config-setup JSON schema (the fields a caller fills at setup/update).
+        """
+        stub = self._create_stub(module_address, module_port)
+        response = await stub.GetConfigSetupModule(information_pb2.GetConfigSetupModuleRequest(llm_format=llm_format))
+        return json_format.MessageToDict(response.config_setup_schema)
+
     async def call_module(  # noqa: C901, PLR0912, PLR0914, PLR0915
         self,
         module_address: str,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from typing import TYPE_CHECKING, Any, TypeAlias
@@ -480,6 +481,40 @@ class AgnoStreamAdapter:
 
     # ── Tool Call Handlers ──────────────────────────────────────────────
 
+    @staticmethod
+    def _display_tool_name(tool: Any) -> str | None:
+        """Display name for a tool call, suffixed with the action for a manager tool.
+
+        The registry managers each expose a single tool (``services_manager`` …) whose
+        one argument is a discriminated ``action`` union, so a raw tool-call event only
+        ever shows the manager's name. Read the discriminator from the call arguments and
+        surface which action ran — ``services_manager`` → ``services_manager_create`` —
+        so the front distinguishes the operations. Purely cosmetic (the LLM function name
+        and HITL matching are unaffected); any other tool keeps its name unchanged.
+
+        Args:
+            tool: The Agno tool execution carrying ``tool_name`` and ``tool_args``.
+
+        Returns:
+            ``"<manager>_<action>"`` for a manager call whose action resolves, else the
+            unchanged tool name.
+        """
+        name = tool.tool_name
+        if not name or not name.endswith("_manager"):
+            return name
+        action = tool.tool_args.get("action") if isinstance(tool.tool_args, dict) else None
+        # The nested action arrives as a dict ({"action": "create", ...}) or, from some models, as a
+        # JSON string of that dict — parse the string so we surface the discriminator, not the blob.
+        if isinstance(action, str) and action.startswith("{"):
+            try:
+                action = json.loads(action)
+            except ValueError:
+                action = None
+        if isinstance(action, dict):
+            action = action.get("action")
+        # Only ever append a clean discriminator ("search", "change_visibility"); never a raw payload.
+        return f"{name}_{action}" if isinstance(action, str) and action.isidentifier() else name
+
     def _handle_tool_call_started(
         self, agno_event: AgnoToolCallStartedEvent, timestamp: Any
     ) -> list[BaseAgentRunEvent]:
@@ -501,7 +536,7 @@ class AgnoStreamAdapter:
         if tool:
             tool_info = ToolInfo(
                 tool_call_id=tool.tool_call_id,
-                tool_name=tool.tool_name,
+                tool_name=self._display_tool_name(tool),
                 tool_args=tool.tool_args,
                 result=None,
             )
@@ -530,7 +565,7 @@ class AgnoStreamAdapter:
             tool_call_id = tool.tool_call_id
             tool_info = ToolInfo(
                 tool_call_id=tool_call_id,
-                tool_name=tool.tool_name,
+                tool_name=self._display_tool_name(tool),
                 tool_args=tool.tool_args,
                 result=tool.result,
             )
@@ -584,7 +619,9 @@ class AgnoStreamAdapter:
             seen_ids.add(tool_call_id)
             tool_info = ToolInfo(
                 tool_call_id=tool_call_id,
-                tool_name=getattr(tool_exec, "tool_name", None),
+                # Same action-suffix as the in-process managers: an external-execution
+                # manager (load_manager) surfaces as load_manager_load_tool, not just load_manager.
+                tool_name=self._display_tool_name(tool_exec),
                 tool_args=getattr(tool_exec, "tool_args", None),
                 result=None,
             )
@@ -629,7 +666,7 @@ class AgnoStreamAdapter:
         if tool:
             tool_info = ToolInfo(
                 tool_call_id=tool_call_id,
-                tool_name=tool.tool_name,
+                tool_name=self._display_tool_name(tool),
                 tool_args=None,
                 result=None,
             )

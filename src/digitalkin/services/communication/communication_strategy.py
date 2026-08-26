@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from typing import Any
 
+from digitalkin.logger import logger
 from digitalkin.services.base_strategy import BaseStrategy
 
 
@@ -51,6 +52,34 @@ class CommunicationStrategy(BaseStrategy, ABC):
             }
         """
         ...
+
+    async def get_module_config_schema(  # noqa: PLR6301
+        self,
+        module_address: str,
+        module_port: int,
+        *,
+        llm_format: bool = False,
+    ) -> dict[str, Any]:
+        """Get the module's config-setup JSON schema (the fields a caller fills at setup/update).
+
+        Concrete implementations that can reach the module override this. The default returns an
+        empty schema so callers treat "no schema" as "skip validation".
+
+        Args:
+            module_address: Target module address.
+            module_port: Target module port.
+            llm_format: Return the LLM-friendly schema format.
+
+        Returns:
+            The config-setup JSON schema, or ``{}`` when unavailable.
+        """
+        logger.debug(
+            "get_module_config_schema not implemented for %s:%d (llm_format=%s); content validation skipped",
+            module_address,
+            module_port,
+            llm_format,
+        )
+        return {}
 
     @abstractmethod
     def call_module(

@@ -12,6 +12,19 @@ on top of the Agno agent framework. Exports:
   paused Agno run via the module's
   :class:`~digitalkin.services.storage.StorageStrategy` and resumes it
   when the front replies with a ``ToolMessage``.
+- :class:`ToolCallMetadata`, :class:`ToolOutputMetadata` — metadata models
+  for module tool calls made through the toolkit.
+
+``ModuleToolkit`` (Agno Toolkit wrapping a module's remote tools) requires the
+optional ``agno`` dependency at import time and is therefore NOT exported here;
+import it directly::
+
+    from digitalkin.community.agno.module_toolkit import ModuleToolkit
+
+Default agent toolkits (``ChatHistoryTools``, ``UserProfileTools``, the registry
+managers, ``DefaultToolkits``) live in
+:mod:`digitalkin.community.agno.toolkits` — imported separately because they
+require the optional ``agno`` dependency at import time.
 """
 
 from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
@@ -23,7 +36,7 @@ from digitalkin.community.agno.hitl import (
     PausedRunRecord,
     PausedRunStore,
 )
-from digitalkin.community.agno.models import PauseInfo
+from digitalkin.community.agno.models import PauseInfo, ToolCallMetadata, ToolOutputMetadata
 
 __all__ = [
     "HITL_STORAGE_CONFIG",
@@ -34,4 +47,6 @@ __all__ = [
     "PauseInfo",
     "PausedRunRecord",
     "PausedRunStore",
+    "ToolCallMetadata",
+    "ToolOutputMetadata",
 ]

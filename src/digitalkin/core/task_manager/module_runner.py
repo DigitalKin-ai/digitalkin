@@ -78,26 +78,49 @@ class ModuleRunner:
         )
         profiler = TaskProfiler(task_id=task_id, mode=profiler_mode, output_dir=profiling.profile_output_dir)
 
+        top_level_keys: list[str] = []
+        query_byte_size = 0
         try:  # noqa: PLW0717
             timer.mark("entry")
             profiler.start()
 
-            setup_version = await self._servicer.resolve_setup(setup_id, mission_id)
-            timer.mark("setup_resolve")
+            try:  # noqa: PLW0717
+                setup_version = await self._servicer.resolve_setup(setup_id, mission_id)
+                timer.mark("setup_resolve")
 
-            setup_data = await self._servicer.module_class.create_setup_model(setup_version.content)
-            timer.mark("setup_model")
+                setup_data = await self._servicer.module_class.create_setup_model(setup_version.content)
+                timer.mark("setup_model")
 
-            tool_cache = self._servicer.get_tool_cache(setup_version.setup_id)
-            if tool_cache is None:
-                registry = self._servicer._get_registry()  # noqa: SLF001
-                communication = self._servicer._get_communication()  # noqa: SLF001
-                if registry is not None and communication is not None:
-                    tool_cache = await self._servicer.get_or_build_tool_cache(
-                        setup_version.setup_id,
-                        lambda: setup_data.build_tool_cache(registry, communication),
-                    )
-            timer.mark("tool_cache_lookup")
+                tool_cache = self._servicer.get_tool_cache(setup_version.setup_id)
+                if tool_cache is None:
+                    registry = self._servicer._get_registry()  # noqa: SLF001
+                    communication = self._servicer._get_communication()  # noqa: SLF001
+                    if registry is not None and communication is not None:
+                        tool_cache = await self._servicer.get_or_build_tool_cache(
+                            setup_version.setup_id,
+                            lambda: setup_data.build_tool_cache(registry, communication),
+                        )
+                timer.mark("tool_cache_lookup")
+            except ValidationError as exc:
+                try:
+                    errors_json = json.dumps(exc.errors(include_url=False), default=str)
+                except (TypeError, ValueError):
+                    errors_json = repr(exc.errors())
+                missing_paths = [".".join(str(p) for p in e["loc"]) for e in exc.errors() if e["type"] == "missing"]
+                # TODO(validate): remove marker once setup-phase reporting is validated in prod
+                logger.error(
+                    "[VALIDATE SETUPVAL] ValidationError on setup model: module_class=%s missing=%s errors=%s",
+                    self._servicer.module_class.__name__,
+                    missing_paths,
+                    errors_json,
+                    extra=log_extra,
+                )
+                missing_summary = f" missing_fields={missing_paths}" if missing_paths else ""
+                await on_fatal(
+                    StreamErrorCode.SETUP_VALIDATION_ERROR.value,
+                    f"setup validation failed for {setup_id}:{missing_summary or ' see logs'}",
+                )
+                return
 
             runner_start_ns = time.perf_counter_ns()
             first_logged = False
@@ -154,6 +177,9 @@ class ModuleRunner:
             input_data = self._servicer.module_class.create_input_model(input_dict)
             timer.mark("pydantic_input")
 
+            # Share the servicer's setup service (same instance + channel) so setup-CRUD
+            # toolkits can reach it; borrowed, so context cleanup never closes it. Wired
+            # inside preload_instance, before prepare()/initialize() builds the toolkits.
             module, job_id, callback = await self._servicer.job_manager.preload_instance(
                 setup_data,
                 mission_id=mission_id,
@@ -163,6 +189,8 @@ class ModuleRunner:
                 job_id=task_id,
                 tool_cache=tool_cache,
                 callback=_on_output,
+                setup=self._servicer.setup,
+                invalidate_setup=self._servicer.invalidate_setup_cache,
             )
             timer.mark("preload_join")
 

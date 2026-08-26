@@ -17,6 +17,8 @@ from digitalkin.models.services.registry import (
     ModuleInfo,
     RegistryModuleStatus,
     RegistryModuleType,
+    RegistrySetupStatus,
+    RegistryVisibility,
     SetupInfo,
 )
 from digitalkin.services.registry import RegistryStrategy
@@ -53,7 +55,8 @@ class FakeRegistry(RegistryStrategy):
         self,
         name: str | None = None,
         module_type: str | None = None,
-        organization_id: str | None = None,
+        limit: int = 20,
+        offset: int = 0,
     ) -> list[ModuleInfo]:
         if name and name in self._search_results:
             return self._search_results[name]
@@ -62,12 +65,26 @@ class FakeRegistry(RegistryStrategy):
     async def get_status(self, module_id: str) -> None:
         return None
 
+    async def search_setups(  # noqa: PLR0913
+        self,
+        query: str | None = None,
+        setup_ids: list[str] | None = None,
+        module_ids: list[str] | None = None,
+        module_types: list[RegistryModuleType] | None = None,
+        statuses: list[RegistrySetupStatus] | None = None,
+        visibilities: list[RegistryVisibility] | None = None,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> list[SetupInfo]:
+        return []
+
     async def register(
         self,
         module_id: str,
         address: str,
         port: int,
         version: str,
+        module_type: RegistryModuleType = RegistryModuleType.UNSPECIFIED,
     ) -> ModuleInfo | None:
         return None
 
@@ -110,7 +127,7 @@ def create_tool_module_info(
     """Create a ToolModuleInfo for testing."""
     return ToolModuleInfo(
         module_id=module_id,
-        module_type=RegistryModuleType.TOOL,
+        module_type=RegistryModuleType.TOOL_MODULE,
         address="localhost",
         port=port,
         version="1.0.0",
@@ -135,7 +152,7 @@ def create_tool_module_info(
 def search_tool_info() -> ModuleInfo:
     return ModuleInfo(
         module_id="tool-search-001",
-        module_type=RegistryModuleType.TOOL,
+        module_type=RegistryModuleType.TOOL_MODULE,
         address="localhost",
         port=50051,
         version="1.0.0",
@@ -147,7 +164,7 @@ def search_tool_info() -> ModuleInfo:
 def analyzer_tool_info() -> ModuleInfo:
     return ModuleInfo(
         module_id="tool-analyzer-002",
-        module_type=RegistryModuleType.TOOL,
+        module_type=RegistryModuleType.TOOL_MODULE,
         address="localhost",
         port=50052,
         version="2.0.0",
@@ -159,7 +176,7 @@ def analyzer_tool_info() -> ModuleInfo:
 def writer_tool_info() -> ModuleInfo:
     return ModuleInfo(
         module_id="tool-writer-003",
-        module_type=RegistryModuleType.TOOL,
+        module_type=RegistryModuleType.TOOL_MODULE,
         address="localhost",
         port=50053,
         version="1.5.0",
@@ -1001,9 +1018,8 @@ class TestResolveSingleLogs:
         with patch("digitalkin.models.module.tool_reference.logger") as mock_logger:
             result = await ref.resolve(registry, communication)
 
-        # Resolve succeeded structurally (returned ToolModuleInfo with empty tools list).
-        assert len(result) == 1
-        assert result[0].tools == []
+        # Zero-function resolutions are dropped (fail closed), not returned.
+        assert result == []
         warnings = _warnings(mock_logger)
         zero_warns = [w for w in warnings if "Tool resolved with 0 functions" in w]
         assert len(zero_warns) == 1, warnings
@@ -1022,14 +1038,62 @@ class TestResolveSingleLogs:
         with patch("digitalkin.models.module.tool_reference.logger") as mock_logger:
             result = await ref.resolve(registry, communication)
 
-        assert result[0].tools == []
+        # No enabled trigger matches the module's surface → entry dropped (fail closed).
+        assert result == []
         warnings = _warnings(mock_logger)
         # Two warnings expected: the existing "enables triggers the module does not expose"
-        # and the new "Tool resolved with 0 functions" with the reason.
+        # and the "Tool resolved with 0 functions" drop with the reason.
         assert any("does not expose" in w for w in warnings), warnings
         zero_warns = [w for w in warnings if "Tool resolved with 0 functions" in w]
         assert len(zero_warns) == 1
         assert "reason=all_user_triggers_unknown" in zero_warns[0]
+
+    @pytest.mark.asyncio
+    async def test_misregistered_module_never_reaches_tool_cache(self, registry: FakeRegistry) -> None:
+        """Staging incident regression: a module answering with the wrong trigger surface is dropped.
+
+        Setup enables ``text_search`` but the dialed module (a misregistered address
+        answering as the archetype itself) advertises only ``agui_stream`` — the entry
+        must be dropped from resolution and never become a tool-cache entry.
+        """
+        communication = AsyncMock()
+        communication.get_module_schemas.return_value = {
+            "input": {
+                "json_schema": {
+                    "$defs": {
+                        "AguiStreamInput": {
+                            "properties": {
+                                "protocol": {"const": "agui_stream"},
+                                "payload": {"type": "string"},
+                            },
+                            "required": ["protocol", "payload"],
+                        },
+                    },
+                },
+            },
+        }
+
+        class ArchetypeSetup(SetupModel):
+            rag_tool: ToolReference = Field(
+                default_factory=lambda: ToolReference(
+                    selected_tools=[ToolSelection(setup_id="setup-search-001", triggers={"text_search": True})],
+                ),
+            )
+
+        setup = ArchetypeSetup()
+        with (
+            patch("digitalkin.models.module.tool_reference.logger") as mock_ref_logger,
+            patch("digitalkin.models.module.setup_types.logger") as mock_setup_logger,
+        ):
+            cache = await setup.build_tool_cache(registry, communication)
+
+        assert cache.entries == {}
+        assert setup.resolved_tools == {}
+        ref_warnings = _warnings(mock_ref_logger)
+        assert any("does not expose" in w for w in ref_warnings), ref_warnings
+        assert any("reason=all_user_triggers_unknown" in w for w in ref_warnings), ref_warnings
+        setup_warnings = _warnings(mock_setup_logger)
+        assert any("unresolved setup_id" in w and "setup-search-001" in w for w in setup_warnings), setup_warnings
 
     @pytest.mark.asyncio
     async def test_partial_match_emits_no_zero_warning(self, registry: FakeRegistry) -> None:

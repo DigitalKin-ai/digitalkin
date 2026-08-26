@@ -137,7 +137,9 @@ class ToolReference(BaseModel):
         emit ``[perf] tool_resolve`` at DEBUG with input/output counts.
         Post-filter results of zero functions emit a second ``WARNING`` naming
         the structural cause (``module_exposes_no_triggers``,
-        ``all_user_triggers_unknown``, or ``post_filter_empty``).
+        ``all_user_triggers_unknown``, or ``post_filter_empty``) and the
+        selection is dropped — a module whose advertised triggers share nothing
+        with the setup's enabled triggers must never reach the tool cache.
 
         Args:
             entry: Tool selection to resolve.
@@ -145,7 +147,8 @@ class ToolReference(BaseModel):
             communication: Communication service for module schemas.
 
         Returns:
-            ToolModuleInfo on success (possibly with empty ``tools``); ``None`` on registry miss.
+            ToolModuleInfo on success; ``None`` on registry miss or when no
+            enabled trigger matches the module's advertised triggers.
         """
         setup = await registry.get_setup(entry.setup_id)
         if not setup or not setup.module_id:
@@ -217,14 +220,17 @@ class ToolReference(BaseModel):
                 reason = "all_user_triggers_unknown"
             else:
                 reason = "post_filter_empty"
+            # TODO(validate): remove marker once drop-on-zero is validated in prod
             logger.warning(
-                "Tool resolved with 0 functions: setup_id=%s slug=%s reason=%s user_enabled=%d module_available=%d",
+                "[VALIDATE DROP0] Tool resolved with 0 functions, dropped: "
+                "setup_id=%s slug=%s reason=%s user_enabled=%d module_available=%d",
                 entry.setup_id,
                 tool_info.slug,
                 reason,
                 len(enabled_triggers),
                 len(available),
             )
+            return None
 
         return tool_info
 
