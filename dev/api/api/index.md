@@ -88,6 +88,7 @@ Parameters:
 Methods:
 
 - **`__init_subclass__`** – Ensure each subclass has its own copy of mutable class variables.
+- **`build_registry_documentation`** – Assemble the registry documentation: author description + LLM-readable trigger table.
 - **`cleanup`** – Run the module.
 - **`clear_shared`** – Swap shared cache with a fresh dict.
 - **`create_config_setup_model`** – Create the setup model from the setup data.
@@ -136,6 +137,24 @@ __init_subclass__(**kwargs: Any) -> None
 ```
 
 Ensure each subclass has its own copy of mutable class variables.
+
+### build_registry_documentation
+
+```python
+build_registry_documentation() -> str
+```
+
+Assemble the registry documentation: author description + LLM-readable trigger table.
+
+Enforces an author-written description of the archetype/tool specificity (`cls.description`, falling back to `metadata['description']`), then appends a markdown table of the module's non-utility triggers for registry index search.
+
+Returns:
+
+- `str` – Markdown documentation string sent as the registration documentation.
+
+Raises:
+
+- `ValueError` – If the module declares no description.
 
 ### cleanup
 
@@ -642,6 +661,7 @@ Methods:
 - **`evict_cached_channel`** – Force-close and remove a cached channel regardless of refcount.
 - **`evict_consumer_channel`** – Force a fresh channel on the next dial to address.
 - **`exec_grpc_query`** – Execute a gRPC query with circuit breaker protection and retry.
+- **`get_module_config_schema`** – Get the module's config-setup JSON schema via gRPC (GetConfigSetupModule).
 - **`get_module_schemas`** – Get module schemas via gRPC.
 - **`release_cached_channel`** – Decrement refcount for a cache key and close channel when last ref is released.
 - **`set_m2m_call_registry`** – Register the process-singleton M2MCallRegistry for call_module.
@@ -843,6 +863,34 @@ Raises:
 
 - `ServerError` – gRPC error with status code and details for caller to handle.
 
+### get_module_config_schema
+
+```python
+get_module_config_schema(
+    module_address: str, module_port: int, *, llm_format: bool = False
+) -> dict[str, Any]
+```
+
+Get the module's config-setup JSON schema via gRPC (`GetConfigSetupModule`).
+
+Parameters:
+
+- #### **`module_address`**
+
+  (`str`) – Target module address.
+
+- #### **`module_port`**
+
+  (`int`) – Target module port.
+
+- #### **`llm_format`**
+
+  (`bool`, default: `False` ) – Return the LLM-friendly schema format.
+
+Returns:
+
+- `dict[str, Any]` – The config-setup JSON schema (the fields a caller fills at setup/update).
+
 ### get_module_schemas
 
 ```python
@@ -971,6 +1019,7 @@ ModuleContext(
     borrowed: frozenset[str] | None = None,
     shared: dict[str, Any] | None = None,
     task_manager: TaskManagerStrategy | None = None,
+    setup: SetupStrategy | None = None,
 )
 ```
 
@@ -1016,6 +1065,10 @@ Parameters:
 
   (`TaskManagerStrategy | None`, default: `None` ) – Optional, injected by SingleJobManager (RedisTaskManager).
 
+- ### **`setup`**
+
+  (`SetupStrategy | None`, default: `None` ) – Optional setup service, borrowed from the servicer (shared channel).
+
 - ### **`metadata`**
 
   (`dict[str, Any] | None`, default: `None` ) – dict defining differents Module metadata.
@@ -1053,7 +1106,9 @@ Methods:
 - **`cleanup`** – Close owned service strategies and release their resources.
 - **`create_openai_style_tools`** – Create OpenAI-style function calling schemas for a tool module.
 - **`create_tool_functions`** – Create tool functions for all protocols in a tool setup.
+- **`get_module_config_schema`** – Get a module's config-setup JSON schema by id (discovers address/port, then queries it).
 - **`get_module_schemas_by_id`** – Get module schemas by ID, discovering address/port from registry.
+- **`resolve_tool`** – Resolve a registry setup_id into a ToolModuleInfo and cache it.
 
 ### cleanup
 
@@ -1109,6 +1164,30 @@ Returns:
 
 - `list[tuple[ToolDefinition, Callable[..., AsyncGenerator[dict, None]]]]` – List of (ToolDefinition, async_generator_function) tuples. Empty if not found.
 
+### get_module_config_schema
+
+```python
+get_module_config_schema(module_id: str, *, llm_format: bool = False) -> dict[str, Any]
+```
+
+Get a module's config-setup JSON schema by id (discovers address/port, then queries it).
+
+This is the schema a caller fills as a setup's `content`; use it to validate `content` before a create/update.
+
+Parameters:
+
+- #### **`module_id`**
+
+  (`str`) – Module identifier to look up in the registry.
+
+- #### **`llm_format`**
+
+  (`bool`, default: `False` ) – Return the LLM-friendly schema format.
+
+Returns:
+
+- `dict[str, Any]` – The config-setup JSON schema, or {} when the module can't be reached.
+
 ### get_module_schemas_by_id
 
 ```python
@@ -1132,6 +1211,31 @@ Parameters:
 Returns:
 
 - `dict[str, dict]` – Dictionary containing schemas: {"input": ..., "output": ..., "setup": ..., "secret": ...}
+
+### resolve_tool
+
+```python
+resolve_tool(setup_id: str) -> ToolModuleInfo | None
+```
+
+Resolve a registry `setup_id` into a `ToolModuleInfo` and cache it.
+
+On-demand loader for a discovered tool. `registry.get_setup` always runs first — it is the permission gate, and the tool cache is shared across missions of the same agent setup, so a cache hit must never skip authz. The cache only short-circuits the module discovery + schema fetch. Permission denials propagate so callers can surface them distinctly.
+
+Parameters:
+
+- #### **`setup_id`**
+
+  (`str`) – The registry setup id to load as an invocable tool.
+
+Returns:
+
+- `ToolModuleInfo | None` – The resolved ToolModuleInfo (also added to the tool cache), or None
+- `ToolModuleInfo | None` – if the setup or its module could not be found.
+
+Raises:
+
+- `PermissionDeniedError` – If the registry/communication call is not permitted.
 
 ## ModuleStatus
 
@@ -1405,6 +1509,7 @@ Parameters:
 Methods:
 
 - **`__init_subclass__`** – Ensure each subclass has its own copy of mutable class variables.
+- **`build_registry_documentation`** – Assemble the registry documentation: author description + LLM-readable trigger table.
 - **`cleanup`** – Run the module.
 - **`clear_shared`** – Swap shared cache with a fresh dict.
 - **`create_config_setup_model`** – Create the setup model from the setup data.
@@ -1453,6 +1558,24 @@ __init_subclass__(**kwargs: Any) -> None
 ```
 
 Ensure each subclass has its own copy of mutable class variables.
+
+### build_registry_documentation
+
+```python
+build_registry_documentation() -> str
+```
+
+Assemble the registry documentation: author description + LLM-readable trigger table.
+
+Enforces an author-written description of the archetype/tool specificity (`cls.description`, falling back to `metadata['description']`), then appends a markdown table of the module's non-utility triggers for registry index search.
+
+Returns:
+
+- `str` – Markdown documentation string sent as the registration documentation.
+
+Raises:
+
+- `ValueError` – If the module declares no description.
 
 ### cleanup
 
@@ -2435,6 +2558,15 @@ Adapters, converters, and HITL helpers for building DigitalKin modules on top of
 - :class:`AgnoStreamAdapter` — Agno streaming events → DigitalKin events.
 - :class:`AguiTools` — register AG-UI client-side (frontend) tools as Agno external Functions.
 - :class:`AgnoHitlRunner`, :class:`PausedRunStore`, :class:`PauseInfo`, :class:`PausedRunRecord`, :data:`HITL_STORAGE_CONFIG`, :class:`HitlEvents` — human-in-the-loop (HITL) runner that persists a paused Agno run via the module's :class:`~digitalkin.services.storage.StorageStrategy` and resumes it when the front replies with a `ToolMessage`.
+- :class:`ToolCallMetadata`, :class:`ToolOutputMetadata` — metadata models for module tool calls made through the toolkit.
+
+`ModuleToolkit` (Agno Toolkit wrapping a module's remote tools) requires the optional `agno` dependency at import time and is therefore NOT exported here; import it directly::
+
+```text
+from digitalkin.community.agno.module_toolkit import ModuleToolkit
+```
+
+Default agent toolkits (`ChatHistoryTools`, `UserProfileTools`, the registry managers, `DefaultToolkits`) live in :mod:`digitalkin.community.agno.toolkits` — imported separately because they require the optional `agno` dependency at import time.
 
 Modules:
 
@@ -2442,6 +2574,8 @@ Modules:
 - **`agui_tools`** – AG-UI frontend tools → Agno external Functions.
 - **`hitl`** – HITL runner for Agno agents with AG-UI frontend tools.
 - **`models`** – Models for the Agno community integration.
+- **`module_toolkit`** – Agno Toolkit wrapper for SDK module tools.
+- **`toolkits`** – Default Agno toolkits for DigitalKin modules.
 
 Classes:
 
@@ -2452,6 +2586,8 @@ Classes:
 - **`PauseInfo`** – Summary of a paused Agno run.
 - **`PausedRunRecord`** – Snapshot of an Agno run paused on external tool execution.
 - **`PausedRunStore`** – Storage wrapper for the paused_runs collection.
+- **`ToolCallMetadata`** – Metadata from a module tool call including cost and timing information.
+- **`ToolOutputMetadata`** – Cost and execution metadata reported by a tool module itself.
 
 Attributes:
 
@@ -2476,6 +2612,7 @@ AgnoHitlRunner(
     storage: StorageStrategy | None = None,
     store: PausedRunStore | None = None,
     dependency_key: str = "agui_tools",
+    tool_loader: LoadManager | None = None,
 )
 ```
 
@@ -2498,6 +2635,10 @@ Parameters:
 - ##### **`dependency_key`**
 
   (`str`, default: `'agui_tools'` ) – Agno dependencies key carrying the AG-UI tool list (must match :func:make_tools_factory).
+
+- ##### **`tool_loader`**
+
+  (`LoadManager | None`, default: `None` ) – The :class:LoadManager bound to the agent's tool list. When present, a load_manager pause is resolved and the run auto-continues instead of surfacing to the front. When omitted, the runner locates it in agent.tools itself — otherwise a load_manager pause would surface to the front as a frontend tool no client implements, wedging the thread.
 
 Raises:
 
@@ -2969,6 +3110,118 @@ Returns:
 
 - **`A`** ( `PauseInfo` ) – class:PauseInfo describing what was persisted.
 
+#### ToolCallMetadata
+
+```
+              flowchart TD
+              digitalkin.community.agno.ToolCallMetadata[ToolCallMetadata]
+
+              
+
+              click digitalkin.community.agno.ToolCallMetadata href "" "digitalkin.community.agno.ToolCallMetadata"
+```
+
+Metadata from a module tool call including cost and timing information.
+
+Attributes:
+
+- **`module_id`** (`str`) – The SDK module ID that was called (e.g., "modules:tool_websearch").
+- **`success`** (`bool`) – Whether the tool call completed successfully.
+- **`duration_ms`** (`float`) – Execution time in milliseconds.
+- **`cost_tracked`** (`bool`) – Whether cost metadata is available from the tool.
+- **`error`** (`str | None`) – Error message if the call failed, None otherwise.
+- **`input_kwargs`** (`dict[str, Any] | None`) – The kwargs passed to the tool (for debugging).
+- **`output_summary`** (`str | None`) – Brief summary of the output (truncated for logs).
+- **`tool_metadata`** (`ToolOutputMetadata | None`) – Metadata returned by the tool itself (cost, API calls, etc.).
+
+Methods:
+
+- **`extract_tool_metadata`** – Extract tool metadata from a tool's output if present.
+- **`to_error_dict`** – Convert metadata to dict for error responses.
+- **`to_log_dict`** – Convert metadata to dict for logging.
+- **`to_success_dict`** – Convert metadata to dict for successful responses.
+
+##### extract_tool_metadata
+
+```python
+extract_tool_metadata(output: dict[str, Any]) -> ToolOutputMetadata | None
+```
+
+Extract tool metadata from a tool's output if present.
+
+Parameters:
+
+- ###### **`output`**
+
+  (`dict[str, Any]`) – The tool output dictionary.
+
+Returns:
+
+- `ToolOutputMetadata | None` – ToolOutputMetadata if metadata is present, None otherwise.
+
+##### to_error_dict
+
+```python
+to_error_dict() -> dict[str, Any]
+```
+
+Convert metadata to dict for error responses.
+
+Returns:
+
+- `dict[str, Any]` – Dictionary with error-relevant fields.
+
+##### to_log_dict
+
+```python
+to_log_dict() -> dict[str, Any]
+```
+
+Convert metadata to dict for logging.
+
+Returns:
+
+- `dict[str, Any]` – Dictionary suitable for log extra data, large kwargs truncated.
+
+##### to_success_dict
+
+```python
+to_success_dict() -> dict[str, Any]
+```
+
+Convert metadata to dict for successful responses.
+
+Returns:
+
+- `dict[str, Any]` – Dictionary with success-relevant fields (error excluded).
+
+#### ToolOutputMetadata
+
+```
+              flowchart TD
+              digitalkin.community.agno.ToolOutputMetadata[ToolOutputMetadata]
+
+              
+
+              click digitalkin.community.agno.ToolOutputMetadata href "" "digitalkin.community.agno.ToolOutputMetadata"
+```
+
+Cost and execution metadata reported by a tool module itself.
+
+Enables accurate cost aggregation across modules.
+
+Attributes:
+
+- **`response_time_ms`** (`float | None`) – Time taken for the API call(s) in milliseconds.
+- **`api_calls_made`** (`int`) – Number of API calls made by the tool.
+- **`cost_estimate_usd`** (`float | None`) – Estimated cost in USD.
+- **`tavily_credits_used`** (`int | None`) – Tavily API credits consumed (if applicable).
+- **`search_depth`** (`str | None`) – Search depth used (basic, advanced, etc.).
+- **`include_raw_content`** (`bool`) – Whether raw content was requested.
+- **`queries_count`** (`int`) – Number of queries executed.
+- **`results_returned`** (`int`) – Number of results returned.
+- **`urls_processed`** (`int`) – Number of URLs processed (for extract operations).
+
 #### agno_adapter
 
 Convert Agno streaming events into framework-agnostic DigitalKin events.
@@ -3160,6 +3413,7 @@ AgnoHitlRunner(
     storage: StorageStrategy | None = None,
     store: PausedRunStore | None = None,
     dependency_key: str = "agui_tools",
+    tool_loader: LoadManager | None = None,
 )
 ```
 
@@ -3182,6 +3436,10 @@ Parameters:
 - ###### **`dependency_key`**
 
   (`str`, default: `'agui_tools'` ) – Agno dependencies key carrying the AG-UI tool list (must match :func:make_tools_factory).
+
+- ###### **`tool_loader`**
+
+  (`LoadManager | None`, default: `None` ) – The :class:LoadManager bound to the agent's tool list. When present, a load_manager pause is resolved and the run auto-continues instead of surfacing to the front. When omitted, the runner locates it in agent.tools itself — otherwise a load_manager pause would surface to the front as a frontend tool no client implements, wedging the thread.
 
 Raises:
 
@@ -3508,6 +3766,8 @@ Models for the Agno community integration.
 Classes:
 
 - **`PauseInfo`** – Summary of a paused Agno run.
+- **`ToolCallMetadata`** – Metadata from a module tool call including cost and timing information.
+- **`ToolOutputMetadata`** – Cost and execution metadata reported by a tool module itself.
 
 ##### PauseInfo
 
@@ -3525,6 +3785,2243 @@ Summary of a paused Agno run.
 Returned by :meth:`AgnoHitlRunner.run` and related methods whenever the run paused on one or more external tool calls. Callers typically use it to emit the AG-UI awaiting-tool-result event to the front.
 
 `new_messages` carries the AG-UI messages generated by Agno during the paused run (user echoes, the assistant message with `tool_calls`, and any tool results emitted before the pause). It's provided because Agno does not emit stream events from which the front can reconstruct the assistant-with-tool-calls message — in particular, when the LLM goes straight from reasoning to a frontend tool call without emitting any text. Consumers typically push these messages to the front via a :class:`~ag_ui.core.events.MessagesSnapshotEvent` so the client has an authoritative view of the conversation.
+
+##### ToolCallMetadata
+
+```
+              flowchart TD
+              digitalkin.community.agno.models.ToolCallMetadata[ToolCallMetadata]
+
+              
+
+              click digitalkin.community.agno.models.ToolCallMetadata href "" "digitalkin.community.agno.models.ToolCallMetadata"
+```
+
+Metadata from a module tool call including cost and timing information.
+
+Attributes:
+
+- **`module_id`** (`str`) – The SDK module ID that was called (e.g., "modules:tool_websearch").
+- **`success`** (`bool`) – Whether the tool call completed successfully.
+- **`duration_ms`** (`float`) – Execution time in milliseconds.
+- **`cost_tracked`** (`bool`) – Whether cost metadata is available from the tool.
+- **`error`** (`str | None`) – Error message if the call failed, None otherwise.
+- **`input_kwargs`** (`dict[str, Any] | None`) – The kwargs passed to the tool (for debugging).
+- **`output_summary`** (`str | None`) – Brief summary of the output (truncated for logs).
+- **`tool_metadata`** (`ToolOutputMetadata | None`) – Metadata returned by the tool itself (cost, API calls, etc.).
+
+Methods:
+
+- **`extract_tool_metadata`** – Extract tool metadata from a tool's output if present.
+- **`to_error_dict`** – Convert metadata to dict for error responses.
+- **`to_log_dict`** – Convert metadata to dict for logging.
+- **`to_success_dict`** – Convert metadata to dict for successful responses.
+
+###### extract_tool_metadata
+
+```python
+extract_tool_metadata(output: dict[str, Any]) -> ToolOutputMetadata | None
+```
+
+Extract tool metadata from a tool's output if present.
+
+Parameters:
+
+- ###### **`output`**
+
+  (`dict[str, Any]`) – The tool output dictionary.
+
+Returns:
+
+- `ToolOutputMetadata | None` – ToolOutputMetadata if metadata is present, None otherwise.
+
+###### to_error_dict
+
+```python
+to_error_dict() -> dict[str, Any]
+```
+
+Convert metadata to dict for error responses.
+
+Returns:
+
+- `dict[str, Any]` – Dictionary with error-relevant fields.
+
+###### to_log_dict
+
+```python
+to_log_dict() -> dict[str, Any]
+```
+
+Convert metadata to dict for logging.
+
+Returns:
+
+- `dict[str, Any]` – Dictionary suitable for log extra data, large kwargs truncated.
+
+###### to_success_dict
+
+```python
+to_success_dict() -> dict[str, Any]
+```
+
+Convert metadata to dict for successful responses.
+
+Returns:
+
+- `dict[str, Any]` – Dictionary with success-relevant fields (error excluded).
+
+##### ToolOutputMetadata
+
+```
+              flowchart TD
+              digitalkin.community.agno.models.ToolOutputMetadata[ToolOutputMetadata]
+
+              
+
+              click digitalkin.community.agno.models.ToolOutputMetadata href "" "digitalkin.community.agno.models.ToolOutputMetadata"
+```
+
+Cost and execution metadata reported by a tool module itself.
+
+Enables accurate cost aggregation across modules.
+
+Attributes:
+
+- **`response_time_ms`** (`float | None`) – Time taken for the API call(s) in milliseconds.
+- **`api_calls_made`** (`int`) – Number of API calls made by the tool.
+- **`cost_estimate_usd`** (`float | None`) – Estimated cost in USD.
+- **`tavily_credits_used`** (`int | None`) – Tavily API credits consumed (if applicable).
+- **`search_depth`** (`str | None`) – Search depth used (basic, advanced, etc.).
+- **`include_raw_content`** (`bool`) – Whether raw content was requested.
+- **`queries_count`** (`int`) – Number of queries executed.
+- **`results_returned`** (`int`) – Number of results returned.
+- **`urls_processed`** (`int`) – Number of URLs processed (for extract operations).
+
+#### module_toolkit
+
+Agno Toolkit wrapper for SDK module tools.
+
+Wraps a :class:`ToolModuleInfo` into Agno-compatible tool functions that call the remote tool module via gRPC and parse the SDK's in-band sentinel protocol (`{"root": {"protocol": ...}}` frames, `stream.error` carrying `code`/`message`).
+
+Requires the optional `agno` dependency (`pip install digitalkin[agno]`).
+
+Classes:
+
+- **`ModuleToolkit`** – Agno Toolkit wrapper for SDK module tools.
+
+##### ModuleToolkit
+
+```python
+ModuleToolkit(
+    context: ModuleContext,
+    tool_module_info: ToolModuleInfo,
+    timeout_seconds: float = DEFAULT_TOOL_TIMEOUT_SECONDS,
+    allowed_tools: set[str] | None = None,
+)
+```
+
+```
+              flowchart TD
+              digitalkin.community.agno.module_toolkit.ModuleToolkit[ModuleToolkit]
+              digitalkin.community.agno.toolkits.base.DkToolkit[DkToolkit]
+
+                              digitalkin.community.agno.toolkits.base.DkToolkit --> digitalkin.community.agno.module_toolkit.ModuleToolkit
+                
+
+
+              click digitalkin.community.agno.module_toolkit.ModuleToolkit href "" "digitalkin.community.agno.module_toolkit.ModuleToolkit"
+              click digitalkin.community.agno.toolkits.base.DkToolkit href "" "digitalkin.community.agno.toolkits.base.DkToolkit"
+```
+
+Agno Toolkit wrapper for SDK module tools.
+
+Wraps a ToolModuleInfo containing multiple ToolDefinitions into Agno-compatible tool functions with:
+
+- Parameter-based docstring generation for LLM understanding
+- Cost metadata exposed in responses for LLM context
+- Structured JSON responses with metadata
+
+Each ToolDefinition in the ToolModuleInfo becomes a separate tool in this toolkit. The toolkit name is derived from the module name.
+
+Note
+
+Cost metadata is exposed in tool responses and logged via events, but NOT actively tracked via CostStrategy.add(). The LLM can use the cost_budget field in tool inputs to specify cost constraints, and the tool itself will enforce limits before executing.
+
+Attributes:
+
+- **`context`** – ModuleContext providing SDK access.
+- **`tool_module_info`** (`ToolModuleInfo`) – The SDK ToolModuleInfo being wrapped.
+
+Example
+
+tool_module_info = context.tool_cache.entries.get("my_tool") toolkit = ModuleToolkit( context=context, tool_module_info=tool_module_info, ) agent = Agent(tools=[toolkit])
+
+Parameters:
+
+- ###### **`context`**
+
+  (`ModuleContext`) – ModuleContext providing create_tool_functions.
+
+- ###### **`tool_module_info`**
+
+  (`ToolModuleInfo`) – The SDK ToolModuleInfo with tools list.
+
+- ###### **`timeout_seconds`**
+
+  (`float`, default: `DEFAULT_TOOL_TIMEOUT_SECONDS` ) – Timeout for tool calls in seconds. Default 300s.
+
+- ###### **`allowed_tools`**
+
+  (`set[str] | None`, default: `None` ) – If provided, only include tools whose name is in this set. When None, all tools from the module are included (backwards-compatible).
+
+###### module_id
+
+```python
+module_id: str
+```
+
+The SDK module ID being wrapped.
+
+###### tool_module_info
+
+```python
+tool_module_info: ToolModuleInfo
+```
+
+The ToolModuleInfo being wrapped.
+
+#### toolkits
+
+Default Agno toolkits for DigitalKin modules.
+
+Requires the optional `agno` dependency — importing this subpackage without `agno` installed raises ModuleNotFoundError. The parent `digitalkin.community.agno` package stays importable without agno.
+
+Modules:
+
+- **`base`** – Shared base for DigitalKin agno toolkits.
+- **`chat_history`** – Toolkit for progressive chat-history access (outline first, then read by id).
+- **`defaults`** – One-call assembler for the default DigitalKin toolkits.
+- **`registry`** – Registry Toolkit: three agent-facing managers (Tools / Services / Kins).
+- **`user_profile`** – Toolkit exposing the current user's profile to the agent.
+
+Classes:
+
+- **`ChatHistoryTools`** – Two-tool chat-history surface bound to a constructed Agent or Team.
+- **`DefaultToolkits`** – Assemble the default DigitalKin toolkits (chat history, user profile, registry).
+- **`DkToolkit`** – Base class for DigitalKin agno toolkits.
+- **`KinsManager`** – Manage Kin setups (ARCHETYPE): search, update, delete, change visibility.
+- **`LoadManager`** – Expose load_manager — an external-execution tool that loads objects into the agent.
+- **`ServicesManager`** – Manage Service setups (SERVICE): create, search, load, update, delete, change visibility.
+- **`ToolsManager`** – Manage Tool setups (TOOL_MODULE): search, get, update, delete, change visibility.
+- **`UserProfileTools`** – Toolkit that gives the agent access to the current user's profile.
+
+##### ChatHistoryTools
+
+```python
+ChatHistoryTools(session_id: str | None = None, context: ModuleContext | None = None)
+```
+
+```
+              flowchart TD
+              digitalkin.community.agno.toolkits.ChatHistoryTools[ChatHistoryTools]
+              digitalkin.community.agno.toolkits.base.DkToolkit[DkToolkit]
+
+                              digitalkin.community.agno.toolkits.base.DkToolkit --> digitalkin.community.agno.toolkits.ChatHistoryTools
+                
+
+
+              click digitalkin.community.agno.toolkits.ChatHistoryTools href "" "digitalkin.community.agno.toolkits.ChatHistoryTools"
+              click digitalkin.community.agno.toolkits.base.DkToolkit href "" "digitalkin.community.agno.toolkits.base.DkToolkit"
+```
+
+Two-tool chat-history surface bound to a constructed Agent or Team.
+
+`host` is late-bound after the agent/team is created (the same pattern Agno uses for its own history tools, which close over the agent + session). Until bound, the tools report that history is unavailable rather than raising.
+
+Parameters:
+
+- ###### **`session_id`**
+
+  (`str | None`, default: `None` ) – The session whose history to read. Captured here (it is known at agent-construction time) so the tools need no run_context parameter.
+
+- ###### **`context`**
+
+  (`ModuleContext | None`, default: `None` ) – Module context; enables AG-UI notifications via the base toolkit.
+
+Methods:
+
+- **`bind_host`** – Late-bind the runtime Agent/Team into the ChatHistoryTools instance, if present.
+- **`outline_chat_history`** – List the conversation as a cheap metadata index — call this FIRST.
+- **`read_chat_messages`** – Fetch the full content of specific messages by id (from outline_chat_history).
+
+###### bind_host
+
+```python
+bind_host(tools: list[Any] | Callable[..., list[Any]] | None, host: Any) -> None
+```
+
+Late-bind the runtime Agent/Team into the ChatHistoryTools instance, if present.
+
+The toolkit needs a handle to call `aget_session_messages`, which only exists once the agent/team is constructed. In team mode call this again with the `Team` so history reads target the team session rather than the bare head agent.
+
+Parameters:
+
+- ###### **`tools`**
+
+  (`list[Any] | Callable[..., list[Any]] | None`) – The head tools — either the raw list or an :meth:AguiTools.make_tools_factory callable (calling it without a RunContext returns the base list). Binds the first ChatHistoryTools found; no-op if absent.
+
+- ###### **`host`**
+
+  (`Any`) – The constructed Agent or Team to bind as the history source.
+
+###### outline_chat_history
+
+```python
+outline_chat_history(
+    role: str | None = None,
+    first: int | None = None,
+    last: int | None = None,
+    offset: int = 0,
+) -> str
+```
+
+List the conversation as a cheap metadata index — call this FIRST.
+
+Returns one lightweight row per message (role, who, timestamp, size and a short preview) WITHOUT the full content, so it is safe to scan a long thread. Once you know which messages you need, call `read_chat_messages` with their ids to get full content. Prefer this over loading everything.
+
+Parameters:
+
+- ###### **`role`**
+
+  (`str | None`, default: `None` ) – Filter by message type: "human", "ai", "tool", or "system". Omit to get all messages except the system prompt.
+
+- ###### **`first`**
+
+  (`int | None`, default: `None` ) – Return only the first N messages (oldest). Use this to reach the start of the conversation, e.g. the user's first request.
+
+- ###### **`last`**
+
+  (`int | None`, default: `None` ) – Return only the last N messages (most recent). Mutually exclusive with first.
+
+- ###### **`offset`**
+
+  (`int`, default: `0` ) – Skip this many messages from the relevant end (for pagination).
+
+Returns:
+
+- `str` – JSON string: {"total", "returned", "offset", "messages": \[{"ord", "id", "role",
+- `str` – "ts", "chars", "preview", ...}\]}. "total" is the full count after filtering, so
+- `str` – an empty "messages" with "total": 0 means the thread is genuinely empty.
+
+###### read_chat_messages
+
+```python
+read_chat_messages(ids: list[str], max_content_chars: int = 4000) -> str
+```
+
+Fetch the full content of specific messages by id (from `outline_chat_history`).
+
+Use the "id" values returned by `outline_chat_history` — they are stable even as the conversation grows (unlike the "ord" position). Long bodies are truncated to `max_content_chars`; attached media is returned as a reference, never inlined.
+
+Parameters:
+
+- ###### **`ids`**
+
+  (`list[str]`) – The message ids to read, taken from an earlier outline_chat_history call.
+
+- ###### **`max_content_chars`**
+
+  (`int`, default: `4000` ) – Truncate each message body to this many characters (default 4000).
+
+Returns:
+
+- `str` – JSON string: {"messages": [{"id", "role", "ts", "content", ...}], "missing": [...]}.
+- `str` – Any requested id that no longer exists is listed under "missing".
+
+##### DefaultToolkits
+
+Assemble the default DigitalKin toolkits (chat history, user profile, registry).
+
+Two-phase usage — ChatHistoryTools needs the constructed Agent/Team::
+
+```text
+tools = DefaultToolkits.build(context, session_id=sid)
+agent = Agent(tools=AguiTools.make_tools_factory(tools), cache_callables=False, ...)
+DefaultToolkits.bind_host(tools, agent)
+```
+
+In team mode call :meth:`bind_host` again with the `Team` so history reads target the team session rather than the bare head agent.
+
+Methods:
+
+- **`bind_host`** – Late-bind the constructed Agent/Team into ChatHistoryTools (delegates).
+- **`build`** – Build the default toolkits from a module context.
+
+###### bind_host
+
+```python
+bind_host(tools: list[Any] | Callable[..., list[Any]] | None, host: Any) -> None
+```
+
+Late-bind the constructed Agent/Team into ChatHistoryTools (delegates).
+
+Parameters:
+
+- ###### **`tools`**
+
+  (`list[Any] | Callable[..., list[Any]] | None`) – The tools list (or a make_tools_factory callable) containing the toolkits.
+
+- ###### **`host`**
+
+  (`Any`) – The constructed Agent or Team to bind as the history source.
+
+###### build
+
+```python
+build(context: ModuleContext, session_id: str | None = None) -> list[Toolkit]
+```
+
+Build the default toolkits from a module context.
+
+Includes the three registry managers (Tools / Services / Kins) only when `context.setup` is wired (they combine setup CRUD with registry search). LoadManager is always added and bound to the returned list so dynamically-loaded tools land in the exact list the agent's factory splats.
+
+Parameters:
+
+- ###### **`context`**
+
+  (`ModuleContext`) – The module context carrying the services and (optional) setup service.
+
+- ###### **`session_id`**
+
+  (`str | None`, default: `None` ) – The Agno session whose chat history should be readable.
+
+Returns:
+
+- `list[Toolkit]` – [ChatHistoryTools, UserProfileTools, (ToolsManager, ServicesManager, KinsManager)?, LoadManager].
+
+##### DkToolkit
+
+```python
+DkToolkit(
+    name: str,
+    tools: list[Any],
+    context: ModuleContext | None = None,
+    external_execution_required_tools: list[str] | None = None,
+)
+```
+
+```
+              flowchart TD
+              digitalkin.community.agno.toolkits.DkToolkit[DkToolkit]
+
+              
+
+              click digitalkin.community.agno.toolkits.DkToolkit href "" "digitalkin.community.agno.toolkits.DkToolkit"
+```
+
+Base class for DigitalKin agno toolkits.
+
+Subclasses register bound async tool methods and return via :meth:`_ok`/ :meth:`_fail` so the agent always receives the same envelope and the tool never raises. Passing a :class:`ModuleContext` enables :meth:`_notify`, which pushes AG-UI custom events onto the caller's gRPC stream.
+
+Parameters:
+
+- ###### **`name`**
+
+  (`str`) – Toolkit name registered with Agno.
+
+- ###### **`tools`**
+
+  (`list[Any]`) – Bound tool callables to expose to the agent.
+
+- ###### **`context`**
+
+  (`ModuleContext | None`, default: `None` ) – Module context; when present, :meth:\_notify can emit AG-UI events.
+
+- ###### **`external_execution_required_tools`**
+
+  (`list[str] | None`, default: `None` ) – Tool names Agno must pause on (executed outside the agent loop) instead of running their entrypoint.
+
+##### KinsManager
+
+```python
+KinsManager(
+    setup: SetupStrategy,
+    registry: RegistryStrategy,
+    context: ModuleContext | None = None,
+)
+```
+
+```
+              flowchart TD
+              digitalkin.community.agno.toolkits.KinsManager[KinsManager]
+              digitalkin.community.agno.toolkits.registry.base.RegistryObjectToolKit[RegistryObjectToolKit]
+              digitalkin.community.agno.toolkits.base.DkToolkit[DkToolkit]
+
+                              digitalkin.community.agno.toolkits.registry.base.RegistryObjectToolKit --> digitalkin.community.agno.toolkits.KinsManager
+                                digitalkin.community.agno.toolkits.base.DkToolkit --> digitalkin.community.agno.toolkits.registry.base.RegistryObjectToolKit
+                
+
+
+
+              click digitalkin.community.agno.toolkits.KinsManager href "" "digitalkin.community.agno.toolkits.KinsManager"
+              click digitalkin.community.agno.toolkits.registry.base.RegistryObjectToolKit href "" "digitalkin.community.agno.toolkits.registry.base.RegistryObjectToolKit"
+              click digitalkin.community.agno.toolkits.base.DkToolkit href "" "digitalkin.community.agno.toolkits.base.DkToolkit"
+```
+
+Manage Kin setups (ARCHETYPE): search, update, delete, change visibility.
+
+Parameters:
+
+- ###### **`setup`**
+
+  (`SetupStrategy`) – The setup service strategy.
+
+- ###### **`registry`**
+
+  (`RegistryStrategy`) – The registry service strategy.
+
+- ###### **`context`**
+
+  (`ModuleContext | None`, default: `None` ) – Module context; enables AG-UI notifications via the base toolkit.
+
+Methods:
+
+- **`kins_manager`** – Dispatch a Kin operation (search / update / delete / change_visibility).
+
+###### kins_manager
+
+```python
+kins_manager(action: KinActions) -> str
+```
+
+Dispatch a Kin operation (search / update / delete / change_visibility).
+
+Parameters:
+
+- ###### **`action`**
+
+  (`KinActions`) – A discriminated Kin action; its type selects the operation.
+
+Returns:
+
+- `str` – The canonical success envelope, or a fail envelope on rejection/invalid input.
+
+##### LoadManager
+
+```python
+LoadManager(context: ModuleContext | None = None)
+```
+
+```
+              flowchart TD
+              digitalkin.community.agno.toolkits.LoadManager[LoadManager]
+              digitalkin.community.agno.toolkits.base.DkToolkit[DkToolkit]
+
+                              digitalkin.community.agno.toolkits.base.DkToolkit --> digitalkin.community.agno.toolkits.LoadManager
+                
+
+
+              click digitalkin.community.agno.toolkits.LoadManager href "" "digitalkin.community.agno.toolkits.LoadManager"
+              click digitalkin.community.agno.toolkits.base.DkToolkit href "" "digitalkin.community.agno.toolkits.base.DkToolkit"
+```
+
+Expose `load_manager` — an external-execution tool that loads objects into the agent.
+
+The tool itself never executes: it is registered as external-execution so the run pauses when the model calls it. The bound :class:`AgnoHitlRunner` then invokes :meth:`run_paused`, which validates the paused action and runs its :meth:`LoadAction.execute`.
+
+Parameters:
+
+- ###### **`context`**
+
+  (`ModuleContext | None`, default: `None` ) – Module context; supplies resolve_tool and AG-UI notifications.
+
+Methods:
+
+- **`bind_tools`** – Bind the live tool list that a load appends newly-loaded tools to.
+- **`load_manager`** – Load a discovered object into the agent so it becomes usable right now.
+- **`run_paused`** – Validate a paused load_manager call and run the load (runner entry point).
+
+Attributes:
+
+- **`tool_name`** (`str`) – The external tool name the runner pauses on and routes to :meth:run_paused.
+
+###### tool_name
+
+```python
+tool_name: str
+```
+
+The external tool name the runner pauses on and routes to :meth:`run_paused`.
+
+###### bind_tools
+
+```python
+bind_tools(base_tools: list[Any]) -> None
+```
+
+Bind the live tool list that a load appends newly-loaded tools to.
+
+Parameters:
+
+- ###### **`base_tools`**
+
+  (`list[Any]`) – The exact list the agent's make_tools_factory closes over, so an appended toolkit is visible on the next run.
+
+###### load_manager
+
+```python
+load_manager(action: LoadActions) -> str
+```
+
+Load a discovered object into the agent so it becomes usable right now.
+
+Loading is a two-step flow, and this is step two: first DISCOVER the object with its manager (e.g. use `tools_manager` to `search`/`get` a tool and obtain its `setup_id`), THEN call `load_manager` with that id to load it. For a tool, use the `tool` action — this is the ONLY way to make a discovered tool actually callable; the managers merely administer setups, they never run them. You do NOT need to ask the user, and you can call the loaded tool in your very next step.
+
+Parameters:
+
+- ###### **`action`**
+
+  (`LoadActions`) – The load action — currently tool with a setup_id taken from a tools_manager search or get result.
+
+Returns:
+
+- `str` – The canonical envelope; on success output names the now-callable functions, on
+- `str` – failure error carries a distinct message. Check metadata.success.
+
+###### run_paused
+
+```python
+run_paused(tool_args: dict[str, Any]) -> str
+```
+
+Validate a paused `load_manager` call and run the load (runner entry point).
+
+Generic over the action union: it validates the payload into a concrete :class:`LoadAction`, runs its :meth:`~LoadAction.execute`, and wraps the resulting :class:`LoadOutcome` in the canonical envelope — so a new loader is just a new action, no change here.
+
+Parameters:
+
+- ###### **`tool_args`**
+
+  (`dict[str, Any]`) – The raw tool arguments from the paused call ({"action": {...}}).
+
+Returns:
+
+- `str` – The canonical {output|error, metadata} envelope the runner writes back as the
+- `str` – tool result.
+
+##### ServicesManager
+
+```python
+ServicesManager(
+    setup: SetupStrategy,
+    registry: RegistryStrategy,
+    context: ModuleContext | None = None,
+)
+```
+
+```
+              flowchart TD
+              digitalkin.community.agno.toolkits.ServicesManager[ServicesManager]
+              digitalkin.community.agno.toolkits.registry.base.RegistryObjectToolKit[RegistryObjectToolKit]
+              digitalkin.community.agno.toolkits.base.DkToolkit[DkToolkit]
+
+                              digitalkin.community.agno.toolkits.registry.base.RegistryObjectToolKit --> digitalkin.community.agno.toolkits.ServicesManager
+                                digitalkin.community.agno.toolkits.base.DkToolkit --> digitalkin.community.agno.toolkits.registry.base.RegistryObjectToolKit
+                
+
+
+
+              click digitalkin.community.agno.toolkits.ServicesManager href "" "digitalkin.community.agno.toolkits.ServicesManager"
+              click digitalkin.community.agno.toolkits.registry.base.RegistryObjectToolKit href "" "digitalkin.community.agno.toolkits.registry.base.RegistryObjectToolKit"
+              click digitalkin.community.agno.toolkits.base.DkToolkit href "" "digitalkin.community.agno.toolkits.base.DkToolkit"
+```
+
+Manage Service setups (SERVICE): create, search, load, update, delete, change visibility.
+
+Parameters:
+
+- ###### **`setup`**
+
+  (`SetupStrategy`) – The setup service strategy.
+
+- ###### **`registry`**
+
+  (`RegistryStrategy`) – The registry service strategy.
+
+- ###### **`context`**
+
+  (`ModuleContext | None`, default: `None` ) – Module context; enables AG-UI notifications via the base toolkit.
+
+Methods:
+
+- **`services_manager`** – Dispatch a Service operation (create / search / load / update / delete / change_visibility).
+
+###### services_manager
+
+```python
+services_manager(action: ServiceActions) -> str
+```
+
+Dispatch a Service operation (create / search / load / update / delete / change_visibility).
+
+Parameters:
+
+- ###### **`action`**
+
+  (`ServiceActions`) – A discriminated Service action; its type selects the operation.
+
+Returns:
+
+- `str` – The canonical success envelope, or a fail envelope on rejection/invalid input.
+
+##### ToolsManager
+
+```python
+ToolsManager(
+    setup: SetupStrategy,
+    registry: RegistryStrategy,
+    context: ModuleContext | None = None,
+)
+```
+
+```
+              flowchart TD
+              digitalkin.community.agno.toolkits.ToolsManager[ToolsManager]
+              digitalkin.community.agno.toolkits.registry.base.RegistryObjectToolKit[RegistryObjectToolKit]
+              digitalkin.community.agno.toolkits.base.DkToolkit[DkToolkit]
+
+                              digitalkin.community.agno.toolkits.registry.base.RegistryObjectToolKit --> digitalkin.community.agno.toolkits.ToolsManager
+                                digitalkin.community.agno.toolkits.base.DkToolkit --> digitalkin.community.agno.toolkits.registry.base.RegistryObjectToolKit
+                
+
+
+
+              click digitalkin.community.agno.toolkits.ToolsManager href "" "digitalkin.community.agno.toolkits.ToolsManager"
+              click digitalkin.community.agno.toolkits.registry.base.RegistryObjectToolKit href "" "digitalkin.community.agno.toolkits.registry.base.RegistryObjectToolKit"
+              click digitalkin.community.agno.toolkits.base.DkToolkit href "" "digitalkin.community.agno.toolkits.base.DkToolkit"
+```
+
+Manage Tool setups (TOOL_MODULE): search, get, update, delete, change visibility.
+
+Parameters:
+
+- ###### **`setup`**
+
+  (`SetupStrategy`) – The setup service strategy.
+
+- ###### **`registry`**
+
+  (`RegistryStrategy`) – The registry service strategy.
+
+- ###### **`context`**
+
+  (`ModuleContext | None`, default: `None` ) – Module context; enables AG-UI notifications via the base toolkit.
+
+Methods:
+
+- **`tools_manager`** – Administer tool setups (search / get / update / delete / change_visibility).
+
+###### tools_manager
+
+```python
+tools_manager(action: ToolActions) -> str
+```
+
+Administer tool setups (search / get / update / delete / change_visibility).
+
+Parameters:
+
+- ###### **`action`**
+
+  (`ToolActions`) – A discriminated Tool action; its type selects the operation.
+
+Returns:
+
+- `str` – The canonical success envelope, or a fail envelope on rejection/invalid input.
+
+##### UserProfileTools
+
+```python
+UserProfileTools(
+    user_profile: UserProfileStrategy, context: ModuleContext | None = None
+)
+```
+
+```
+              flowchart TD
+              digitalkin.community.agno.toolkits.UserProfileTools[UserProfileTools]
+              digitalkin.community.agno.toolkits.base.DkToolkit[DkToolkit]
+
+                              digitalkin.community.agno.toolkits.base.DkToolkit --> digitalkin.community.agno.toolkits.UserProfileTools
+                
+
+
+              click digitalkin.community.agno.toolkits.UserProfileTools href "" "digitalkin.community.agno.toolkits.UserProfileTools"
+              click digitalkin.community.agno.toolkits.base.DkToolkit href "" "digitalkin.community.agno.toolkits.base.DkToolkit"
+```
+
+Toolkit that gives the agent access to the current user's profile.
+
+The profile is fetched lazily from the module's :class:`~digitalkin.services.user_profile.UserProfileStrategy` on first use and cached for the toolkit's lifetime. A service failure is NOT cached, so a transient error is retried on the next call; a successful `None` (no profile) is.
+
+Parameters:
+
+- ###### **`user_profile`**
+
+  (`UserProfileStrategy`) – The module's user-profile service strategy.
+
+- ###### **`context`**
+
+  (`ModuleContext | None`, default: `None` ) – Module context; enables AG-UI notifications via the base toolkit.
+
+Methods:
+
+- **`get_user_profile`** – Retrieve the current user's profile: name, email, subscription plan, and remaining credits.
+
+###### get_user_profile
+
+```python
+get_user_profile() -> str
+```
+
+Retrieve the current user's profile: name, email, subscription plan, and remaining credits.
+
+Important
+
+You do NOT know what credits represent, how they are consumed, or what they correspond to in terms of usage. Never speculate, explain, or invent information about credits. Simply report the raw values as-is.
+
+Returns:
+
+- `str` – The canonical envelope: {"output": <profile>, ...} or {"error": ...}.
+
+##### base
+
+Shared base for DigitalKin agno toolkits.
+
+Codifies the format/return conventions established by :class:`~digitalkin.community.agno.module_toolkit.ModuleToolkit`: a canonical `{"output"|"error", "metadata"}` JSON envelope (:meth:`_ok`/:meth:`_fail`) and best-effort AG-UI custom-event notifications on the agent's own stream (:meth:`_notify`). Every toolkit returns consistently and never raises into the agent loop.
+
+Classes:
+
+- **`DkToolkit`** – Base class for DigitalKin agno toolkits.
+
+###### DkToolkit
+
+```python
+DkToolkit(
+    name: str,
+    tools: list[Any],
+    context: ModuleContext | None = None,
+    external_execution_required_tools: list[str] | None = None,
+)
+```
+
+```
+              flowchart TD
+              digitalkin.community.agno.toolkits.base.DkToolkit[DkToolkit]
+
+              
+
+              click digitalkin.community.agno.toolkits.base.DkToolkit href "" "digitalkin.community.agno.toolkits.base.DkToolkit"
+```
+
+Base class for DigitalKin agno toolkits.
+
+Subclasses register bound async tool methods and return via :meth:`_ok`/ :meth:`_fail` so the agent always receives the same envelope and the tool never raises. Passing a :class:`ModuleContext` enables :meth:`_notify`, which pushes AG-UI custom events onto the caller's gRPC stream.
+
+Parameters:
+
+- ###### **`name`**
+
+  (`str`) – Toolkit name registered with Agno.
+
+- ###### **`tools`**
+
+  (`list[Any]`) – Bound tool callables to expose to the agent.
+
+- ###### **`context`**
+
+  (`ModuleContext | None`, default: `None` ) – Module context; when present, :meth:\_notify can emit AG-UI events.
+
+- ###### **`external_execution_required_tools`**
+
+  (`list[str] | None`, default: `None` ) – Tool names Agno must pause on (executed outside the agent loop) instead of running their entrypoint.
+
+##### chat_history
+
+Toolkit for progressive chat-history access (outline first, then read by id).
+
+Replaces Agno's built-in `get_chat_history` (which dumps every message in full) with a two-step, token-cheap surface:
+
+1. `outline_chat_history` — a metadata-only index (role, who, size, preview) so the agent can see *what* exists before loading anything.
+1. `read_chat_messages` — fetch full content only for the message ids that matter.
+
+The toolkit is leader-only: it is attached to the head agent / team leader and its underlying `aget_session_messages` call skips team-member sub-conversations.
+
+Note: the tools intentionally take NO `run_context` parameter. The session id is captured at construction and the runtime Agent/Team is late-bound as `host` — so every tool parameter is a plain builtin type, which keeps the LLM-facing JSON schema correct under `from __future__ import annotations`.
+
+Classes:
+
+- **`ChatHistoryTools`** – Two-tool chat-history surface bound to a constructed Agent or Team.
+
+###### ChatHistoryTools
+
+```python
+ChatHistoryTools(session_id: str | None = None, context: ModuleContext | None = None)
+```
+
+```
+              flowchart TD
+              digitalkin.community.agno.toolkits.chat_history.ChatHistoryTools[ChatHistoryTools]
+              digitalkin.community.agno.toolkits.base.DkToolkit[DkToolkit]
+
+                              digitalkin.community.agno.toolkits.base.DkToolkit --> digitalkin.community.agno.toolkits.chat_history.ChatHistoryTools
+                
+
+
+              click digitalkin.community.agno.toolkits.chat_history.ChatHistoryTools href "" "digitalkin.community.agno.toolkits.chat_history.ChatHistoryTools"
+              click digitalkin.community.agno.toolkits.base.DkToolkit href "" "digitalkin.community.agno.toolkits.base.DkToolkit"
+```
+
+Two-tool chat-history surface bound to a constructed Agent or Team.
+
+`host` is late-bound after the agent/team is created (the same pattern Agno uses for its own history tools, which close over the agent + session). Until bound, the tools report that history is unavailable rather than raising.
+
+Parameters:
+
+- ###### **`session_id`**
+
+  (`str | None`, default: `None` ) – The session whose history to read. Captured here (it is known at agent-construction time) so the tools need no run_context parameter.
+
+- ###### **`context`**
+
+  (`ModuleContext | None`, default: `None` ) – Module context; enables AG-UI notifications via the base toolkit.
+
+Methods:
+
+- **`bind_host`** – Late-bind the runtime Agent/Team into the ChatHistoryTools instance, if present.
+- **`outline_chat_history`** – List the conversation as a cheap metadata index — call this FIRST.
+- **`read_chat_messages`** – Fetch the full content of specific messages by id (from outline_chat_history).
+
+###### bind_host
+
+```python
+bind_host(tools: list[Any] | Callable[..., list[Any]] | None, host: Any) -> None
+```
+
+Late-bind the runtime Agent/Team into the ChatHistoryTools instance, if present.
+
+The toolkit needs a handle to call `aget_session_messages`, which only exists once the agent/team is constructed. In team mode call this again with the `Team` so history reads target the team session rather than the bare head agent.
+
+Parameters:
+
+- ###### **`tools`**
+
+  (`list[Any] | Callable[..., list[Any]] | None`) – The head tools — either the raw list or an :meth:AguiTools.make_tools_factory callable (calling it without a RunContext returns the base list). Binds the first ChatHistoryTools found; no-op if absent.
+
+- ###### **`host`**
+
+  (`Any`) – The constructed Agent or Team to bind as the history source.
+
+###### outline_chat_history
+
+```python
+outline_chat_history(
+    role: str | None = None,
+    first: int | None = None,
+    last: int | None = None,
+    offset: int = 0,
+) -> str
+```
+
+List the conversation as a cheap metadata index — call this FIRST.
+
+Returns one lightweight row per message (role, who, timestamp, size and a short preview) WITHOUT the full content, so it is safe to scan a long thread. Once you know which messages you need, call `read_chat_messages` with their ids to get full content. Prefer this over loading everything.
+
+Parameters:
+
+- ###### **`role`**
+
+  (`str | None`, default: `None` ) – Filter by message type: "human", "ai", "tool", or "system". Omit to get all messages except the system prompt.
+
+- ###### **`first`**
+
+  (`int | None`, default: `None` ) – Return only the first N messages (oldest). Use this to reach the start of the conversation, e.g. the user's first request.
+
+- ###### **`last`**
+
+  (`int | None`, default: `None` ) – Return only the last N messages (most recent). Mutually exclusive with first.
+
+- ###### **`offset`**
+
+  (`int`, default: `0` ) – Skip this many messages from the relevant end (for pagination).
+
+Returns:
+
+- `str` – JSON string: {"total", "returned", "offset", "messages": \[{"ord", "id", "role",
+- `str` – "ts", "chars", "preview", ...}\]}. "total" is the full count after filtering, so
+- `str` – an empty "messages" with "total": 0 means the thread is genuinely empty.
+
+###### read_chat_messages
+
+```python
+read_chat_messages(ids: list[str], max_content_chars: int = 4000) -> str
+```
+
+Fetch the full content of specific messages by id (from `outline_chat_history`).
+
+Use the "id" values returned by `outline_chat_history` — they are stable even as the conversation grows (unlike the "ord" position). Long bodies are truncated to `max_content_chars`; attached media is returned as a reference, never inlined.
+
+Parameters:
+
+- ###### **`ids`**
+
+  (`list[str]`) – The message ids to read, taken from an earlier outline_chat_history call.
+
+- ###### **`max_content_chars`**
+
+  (`int`, default: `4000` ) – Truncate each message body to this many characters (default 4000).
+
+Returns:
+
+- `str` – JSON string: {"messages": [{"id", "role", "ts", "content", ...}], "missing": [...]}.
+- `str` – Any requested id that no longer exists is listed under "missing".
+
+##### defaults
+
+One-call assembler for the default DigitalKin toolkits.
+
+Classes:
+
+- **`DefaultToolkits`** – Assemble the default DigitalKin toolkits (chat history, user profile, registry).
+
+###### DefaultToolkits
+
+Assemble the default DigitalKin toolkits (chat history, user profile, registry).
+
+Two-phase usage — ChatHistoryTools needs the constructed Agent/Team::
+
+```text
+tools = DefaultToolkits.build(context, session_id=sid)
+agent = Agent(tools=AguiTools.make_tools_factory(tools), cache_callables=False, ...)
+DefaultToolkits.bind_host(tools, agent)
+```
+
+In team mode call :meth:`bind_host` again with the `Team` so history reads target the team session rather than the bare head agent.
+
+Methods:
+
+- **`bind_host`** – Late-bind the constructed Agent/Team into ChatHistoryTools (delegates).
+- **`build`** – Build the default toolkits from a module context.
+
+###### bind_host
+
+```python
+bind_host(tools: list[Any] | Callable[..., list[Any]] | None, host: Any) -> None
+```
+
+Late-bind the constructed Agent/Team into ChatHistoryTools (delegates).
+
+Parameters:
+
+- ###### **`tools`**
+
+  (`list[Any] | Callable[..., list[Any]] | None`) – The tools list (or a make_tools_factory callable) containing the toolkits.
+
+- ###### **`host`**
+
+  (`Any`) – The constructed Agent or Team to bind as the history source.
+
+###### build
+
+```python
+build(context: ModuleContext, session_id: str | None = None) -> list[Toolkit]
+```
+
+Build the default toolkits from a module context.
+
+Includes the three registry managers (Tools / Services / Kins) only when `context.setup` is wired (they combine setup CRUD with registry search). LoadManager is always added and bound to the returned list so dynamically-loaded tools land in the exact list the agent's factory splats.
+
+Parameters:
+
+- ###### **`context`**
+
+  (`ModuleContext`) – The module context carrying the services and (optional) setup service.
+
+- ###### **`session_id`**
+
+  (`str | None`, default: `None` ) – The Agno session whose chat history should be readable.
+
+Returns:
+
+- `list[Toolkit]` – [ChatHistoryTools, UserProfileTools, (ToolsManager, ServicesManager, KinsManager)?, LoadManager].
+
+##### registry
+
+Registry Toolkit: three agent-facing managers (Tools / Services / Kins).
+
+Each manager exposes a single tool grouping CRUD + search (+ create/load where relevant) as discriminated actions over the setup and registry services. All three are setups of a distinct `module_type` and share the same actions and plumbing (see :mod:`digitalkin.community.agno.toolkits.registry.base`).
+
+Modules:
+
+- **`action`** – CRUD actions shared by the three Registry Toolkit managers (Tools / Services / Kins).
+- **`base`** – Shared foundation for the Registry Toolkit managers (Tools / Services / Kins).
+- **`kins`** – kins_manager: CRUD + search over Kin setups (ARCHETYPE).
+- **`loader`** – load_manager: external-execution actions that load discovered objects into the agent.
+- **`services`** – services_manager: CRUD + search + create + load over Service setups (SERVICE).
+- **`tools`** – tools_manager: CRUD + search over Tool setups (TOOL_MODULE).
+
+###### action
+
+CRUD actions shared by the three Registry Toolkit managers (Tools / Services / Kins).
+
+`SearchAction` reads setups of the manager's `module_type` from the registry; `UpdateAction` / `DeleteAction` / `ChangeVisibilityAction` write through the setup service. Each manager composes its own action union from these (plus type-specific actions such as service create/load).
+
+Classes:
+
+- **`ChangeVisibilityAction`** – Change who can see and use an instance.
+- **`DeleteAction`** – Delete an instance by id (a soft delete: it disappears from search).
+- **`GetAction`** – Fetch one instance by id, with its current version content, status and visibility.
+- **`SearchAction`** – Semantic search over ready-to-use instances of this object type (configured setups).
+- **`UpdateAction`** – Update an existing instance's name and current version content.
+
+###### ChangeVisibilityAction
+
+```
+              flowchart TD
+              digitalkin.community.agno.toolkits.registry.action.ChangeVisibilityAction[ChangeVisibilityAction]
+              digitalkin.community.agno.toolkits.registry.base.RegistryAction[RegistryAction]
+              digitalkin.community.agno.toolkits.registry.base.BaseAction[BaseAction]
+
+                              digitalkin.community.agno.toolkits.registry.base.RegistryAction --> digitalkin.community.agno.toolkits.registry.action.ChangeVisibilityAction
+                                digitalkin.community.agno.toolkits.registry.base.BaseAction --> digitalkin.community.agno.toolkits.registry.base.RegistryAction
+                
+
+
+
+              click digitalkin.community.agno.toolkits.registry.action.ChangeVisibilityAction href "" "digitalkin.community.agno.toolkits.registry.action.ChangeVisibilityAction"
+              click digitalkin.community.agno.toolkits.registry.base.RegistryAction href "" "digitalkin.community.agno.toolkits.registry.base.RegistryAction"
+              click digitalkin.community.agno.toolkits.registry.base.BaseAction href "" "digitalkin.community.agno.toolkits.registry.base.BaseAction"
+```
+
+Change who can see and use an instance.
+
+Methods:
+
+- **`execute`** – Change the setup's visibility scope.
+
+###### execute
+
+```python
+execute(ctx: RegistryActionCtx) -> Any
+```
+
+Change the setup's visibility scope.
+
+Guards the object type first (which also refuses a deleted target), then writes and re-reads the committed state.
+
+Returns:
+
+- `Any` – The setup with its updated visibility.
+
+###### DeleteAction
+
+```
+              flowchart TD
+              digitalkin.community.agno.toolkits.registry.action.DeleteAction[DeleteAction]
+              digitalkin.community.agno.toolkits.registry.base.RegistryAction[RegistryAction]
+              digitalkin.community.agno.toolkits.registry.base.BaseAction[BaseAction]
+
+                              digitalkin.community.agno.toolkits.registry.base.RegistryAction --> digitalkin.community.agno.toolkits.registry.action.DeleteAction
+                                digitalkin.community.agno.toolkits.registry.base.BaseAction --> digitalkin.community.agno.toolkits.registry.base.RegistryAction
+                
+
+
+
+              click digitalkin.community.agno.toolkits.registry.action.DeleteAction href "" "digitalkin.community.agno.toolkits.registry.action.DeleteAction"
+              click digitalkin.community.agno.toolkits.registry.base.RegistryAction href "" "digitalkin.community.agno.toolkits.registry.base.RegistryAction"
+              click digitalkin.community.agno.toolkits.registry.base.BaseAction href "" "digitalkin.community.agno.toolkits.registry.base.BaseAction"
+```
+
+Delete an instance by id (a soft delete: it disappears from `search`).
+
+Only instances of this manager's own object type can be deleted — deleting a setup of another type is refused before any destructive call. Two limits of the current backend to be aware of:
+
+- deleting a **non-existent** or **already-deleted** id returns "not found" (a deleted id is no longer resolvable, so re-deleting is not a silent no-op);
+- once deleted, the id is **no longer retrievable** via `get` or `load`.
+
+Methods:
+
+- **`execute`** – Delete the setup (soft delete via the setup service).
+
+###### execute
+
+```python
+execute(ctx: RegistryActionCtx) -> Any
+```
+
+Delete the setup (soft delete via the setup service).
+
+Guards the object type first — a mutation must not cross the type boundary any more than a read does — then deletes.
+
+Returns:
+
+- `Any` – True on success.
+
+###### GetAction
+
+```
+              flowchart TD
+              digitalkin.community.agno.toolkits.registry.action.GetAction[GetAction]
+              digitalkin.community.agno.toolkits.registry.base.RegistryAction[RegistryAction]
+              digitalkin.community.agno.toolkits.registry.base.BaseAction[BaseAction]
+
+                              digitalkin.community.agno.toolkits.registry.base.RegistryAction --> digitalkin.community.agno.toolkits.registry.action.GetAction
+                                digitalkin.community.agno.toolkits.registry.base.BaseAction --> digitalkin.community.agno.toolkits.registry.base.RegistryAction
+                
+
+
+
+              click digitalkin.community.agno.toolkits.registry.action.GetAction href "" "digitalkin.community.agno.toolkits.registry.action.GetAction"
+              click digitalkin.community.agno.toolkits.registry.base.RegistryAction href "" "digitalkin.community.agno.toolkits.registry.base.RegistryAction"
+              click digitalkin.community.agno.toolkits.registry.base.BaseAction href "" "digitalkin.community.agno.toolkits.registry.base.BaseAction"
+```
+
+Fetch one instance by id, with its current version content, status and visibility.
+
+Methods:
+
+- **`execute`** – Read the setup (always its current version), refusing a foreign object type.
+
+###### execute
+
+```python
+execute(ctx: RegistryActionCtx) -> Any
+```
+
+Read the setup (always its current version), refusing a foreign object type.
+
+Returns:
+
+- `Any` – The setup with its current version, status and visibility.
+
+###### SearchAction
+
+```
+              flowchart TD
+              digitalkin.community.agno.toolkits.registry.action.SearchAction[SearchAction]
+              digitalkin.community.agno.toolkits.registry.base.RegistryAction[RegistryAction]
+              digitalkin.community.agno.toolkits.registry.base.BaseAction[BaseAction]
+
+                              digitalkin.community.agno.toolkits.registry.base.RegistryAction --> digitalkin.community.agno.toolkits.registry.action.SearchAction
+                                digitalkin.community.agno.toolkits.registry.base.BaseAction --> digitalkin.community.agno.toolkits.registry.base.RegistryAction
+                
+
+
+
+              click digitalkin.community.agno.toolkits.registry.action.SearchAction href "" "digitalkin.community.agno.toolkits.registry.action.SearchAction"
+              click digitalkin.community.agno.toolkits.registry.base.RegistryAction href "" "digitalkin.community.agno.toolkits.registry.base.RegistryAction"
+              click digitalkin.community.agno.toolkits.registry.base.BaseAction href "" "digitalkin.community.agno.toolkits.registry.base.BaseAction"
+```
+
+Semantic search over ready-to-use instances of this object type (configured setups).
+
+This is a SEMANTIC (nearest-match) search, never exhaustive: it returns the closest setups regardless of how weak the match is, so a non-empty result does NOT mean anything matched the query, and an empty result only means the whole corpus is empty. Do NOT use it to test whether a specific setup exists — fetch it by id with `get` (which returns a clean not-found instead). The index is also eventually consistent: right after a write (create/update/delete) results may briefly lag, so to read a change you just made use `get` rather than re-searching.
+
+Methods:
+
+- **`execute`** – Search invocable setups of the manager's type and trim each row for the LLM.
+
+###### execute
+
+```python
+execute(ctx: RegistryActionCtx) -> Any
+```
+
+Search invocable setups of the manager's type and trim each row for the LLM.
+
+Returns:
+
+- `Any` – {"total_returned", "truncated", "setups": [...]}.
+
+###### UpdateAction
+
+```
+              flowchart TD
+              digitalkin.community.agno.toolkits.registry.action.UpdateAction[UpdateAction]
+              digitalkin.community.agno.toolkits.registry.base.RegistryAction[RegistryAction]
+              digitalkin.community.agno.toolkits.registry.base.BaseAction[BaseAction]
+
+                              digitalkin.community.agno.toolkits.registry.base.RegistryAction --> digitalkin.community.agno.toolkits.registry.action.UpdateAction
+                                digitalkin.community.agno.toolkits.registry.base.BaseAction --> digitalkin.community.agno.toolkits.registry.base.RegistryAction
+                
+
+
+
+              click digitalkin.community.agno.toolkits.registry.action.UpdateAction href "" "digitalkin.community.agno.toolkits.registry.action.UpdateAction"
+              click digitalkin.community.agno.toolkits.registry.base.RegistryAction href "" "digitalkin.community.agno.toolkits.registry.base.RegistryAction"
+              click digitalkin.community.agno.toolkits.registry.base.BaseAction href "" "digitalkin.community.agno.toolkits.registry.base.BaseAction"
+```
+
+Update an existing instance's name and current version content.
+
+Methods:
+
+- **`execute`** – Update the setup's name and current version content.
+
+###### execute
+
+```python
+execute(ctx: RegistryActionCtx) -> Any
+```
+
+Update the setup's name and current version content.
+
+Guards the object type first (which also refuses a deleted target, since the setup service excludes deleted ids), then validates `content` against the module's config schema so a missing/wrong field is refused with a correctable message before the write.
+
+Returns:
+
+- `Any` – The updated setup.
+
+###### base
+
+Shared foundation for the Registry Toolkit managers (Tools / Services / Kins).
+
+All three managers operate on **setups** of a given `module_type` (Tool = TOOL_MODULE, Service = SERVICE, Kin = ARCHETYPE). They share the same CRUD actions and the same guard/invalidate/normalise plumbing, so this module holds:
+
+- :class:`RegistryActionCtx` — what an action needs to run (setup + registry services and the manager's object type);
+- :class:`RegistryAction` — the abstract, discriminated action base;
+- :class:`RegistryObjectToolKit` — the base toolkit carrying the shared plumbing.
+
+Each manager is then a thin subclass declaring its `module_type` and a single `manage_*` dispatcher over its own action union.
+
+Classes:
+
+- **`BaseAction`** – Base for every manager's discriminated actions.
+- **`BaseActionCtx`** – Base for the per-manager action contexts passed to :meth:BaseAction.execute.
+- **`RegistryAction`** – Base for the discriminated registry actions shared across the three CRUD managers.
+- **`RegistryActionCtx`** – What a registry action needs to run.
+- **`RegistryObjectToolKit`** – Base toolkit for one Registry object type (Tool / Service / Kin).
+
+###### BaseAction
+
+```
+              flowchart TD
+              digitalkin.community.agno.toolkits.registry.base.BaseAction[BaseAction]
+
+              
+
+              click digitalkin.community.agno.toolkits.registry.base.BaseAction href "" "digitalkin.community.agno.toolkits.registry.base.BaseAction"
+```
+
+Base for every manager's discriminated actions.
+
+Each concrete action declares an `action` `Literal` discriminator, carries its parameters as fields, and implements :meth:`execute`, which runs it against its manager's context `CtxT` and returns the raw result. Abstract, so it is never a valid discriminator target and is never instantiated.
+
+Methods:
+
+- **`execute`** – Run this action against its manager's context and return the raw result.
+
+###### execute
+
+```python
+execute(ctx: CtxT) -> Any
+```
+
+Run this action against its manager's context and return the raw result.
+
+Parameters:
+
+- ###### **`ctx`**
+
+  (`CtxT`) – The manager-specific action context.
+
+Returns:
+
+- `Any` – The raw result the manager's dispatcher normalises and wraps in the envelope.
+
+###### BaseActionCtx
+
+Base for the per-manager action contexts passed to :meth:`BaseAction.execute`.
+
+A marker base carrying no shared state — each manager family defines its own context (services + object type for the CRUD managers, live tool list + notifier for the loader).
+
+###### RegistryAction
+
+```
+              flowchart TD
+              digitalkin.community.agno.toolkits.registry.base.RegistryAction[RegistryAction]
+              digitalkin.community.agno.toolkits.registry.base.BaseAction[BaseAction]
+
+                              digitalkin.community.agno.toolkits.registry.base.BaseAction --> digitalkin.community.agno.toolkits.registry.base.RegistryAction
+                
+
+
+              click digitalkin.community.agno.toolkits.registry.base.RegistryAction href "" "digitalkin.community.agno.toolkits.registry.base.RegistryAction"
+              click digitalkin.community.agno.toolkits.registry.base.BaseAction href "" "digitalkin.community.agno.toolkits.registry.base.BaseAction"
+```
+
+Base for the discriminated registry actions shared across the three CRUD managers.
+
+Inherits the abstract :meth:`~BaseAction.execute` and binds it to :class:`RegistryActionCtx` (setup + registry services and the manager's object type). `writes` marks state-mutating operations so the dispatcher invalidates the servicer's setup cache after a successful call. Still abstract, so it is never a valid discriminator target and is never instantiated.
+
+Methods:
+
+- **`execute`** – Run this action against its manager's context and return the raw result.
+
+###### execute
+
+```python
+execute(ctx: CtxT) -> Any
+```
+
+Run this action against its manager's context and return the raw result.
+
+Parameters:
+
+- ###### **`ctx`**
+
+  (`CtxT`) – The manager-specific action context.
+
+Returns:
+
+- `Any` – The raw result the manager's dispatcher normalises and wraps in the envelope.
+
+###### RegistryActionCtx
+
+```python
+RegistryActionCtx(
+    setup: SetupStrategy,
+    registry: RegistryStrategy,
+    module_type: RegistryModuleType,
+    context: ModuleContext | None = None,
+)
+```
+
+```
+              flowchart TD
+              digitalkin.community.agno.toolkits.registry.base.RegistryActionCtx[RegistryActionCtx]
+              digitalkin.community.agno.toolkits.registry.base.BaseActionCtx[BaseActionCtx]
+
+                              digitalkin.community.agno.toolkits.registry.base.BaseActionCtx --> digitalkin.community.agno.toolkits.registry.base.RegistryActionCtx
+                
+
+
+              click digitalkin.community.agno.toolkits.registry.base.RegistryActionCtx href "" "digitalkin.community.agno.toolkits.registry.base.RegistryActionCtx"
+              click digitalkin.community.agno.toolkits.registry.base.BaseActionCtx href "" "digitalkin.community.agno.toolkits.registry.base.BaseActionCtx"
+```
+
+What a registry action needs to run.
+
+Attributes:
+
+- **`setup`** (`SetupStrategy`) – The setup service strategy (CRUD writes + create).
+- **`registry`** (`RegistryStrategy`) – The registry service strategy (search + service load).
+- **`module_type`** (`RegistryModuleType`) – The manager's object type, used to filter searches and tag creates.
+- **`context`** (`ModuleContext | None`) – Module context; enables pre-write content validation against the module's config schema. None outside a running job — validation is then skipped.
+
+Methods:
+
+- **`ensure_kind`** – Resolve a setup by id and assert its backing module is this manager's type.
+- **`validate_content`** – Validate content against the module's config schema before a write (best-effort).
+
+###### ensure_kind
+
+```python
+ensure_kind(setup_id: str) -> SetupData
+```
+
+Resolve a setup by id and assert its backing module is this manager's type.
+
+The three managers share one `SetupService` backend, so an id resolves whatever its kind — a raw `get`/`update`/`delete` would let `kins_manager` read a tool or `tools_manager` delete a service. This gate reads the setup (immediately consistent, and the backend excludes deleted ids — so it doubles as the guard that refuses writes on a deleted resource), then resolves the backing module's type and refuses on mismatch. Id-targeting actions call it before acting; read actions reuse the returned setup instead of fetching twice.
+
+Parameters:
+
+- ###### **`setup_id`**
+
+  (`str`) – The setup id the action targets.
+
+Returns:
+
+- `SetupData` – The resolved setup.
+
+Raises:
+
+- `ValueError` – The setup's backing module is not of this manager's type.
+
+###### validate_content
+
+```python
+validate_content(module_id: str, content: dict[str, Any]) -> None
+```
+
+Validate `content` against the module's config schema before a write (best-effort).
+
+No-op when no context is wired or the schema can't be fetched (the module's own `ConfigSetupModule` stays the authoritative backstop). When the schema IS available and the content doesn't match, raises so the dispatcher returns a correctable fail envelope.
+
+Parameters:
+
+- ###### **`module_id`**
+
+  (`str`) – The backing module whose config schema to validate against.
+
+- ###### **`content`**
+
+  (`dict[str, Any]`) – The setup content about to be written.
+
+Raises:
+
+- `ValueError` – The content is missing a required field or has a wrong-typed one.
+
+###### RegistryObjectToolKit
+
+```python
+RegistryObjectToolKit(
+    setup: SetupStrategy,
+    registry: RegistryStrategy,
+    context: ModuleContext | None = None,
+    *,
+    name: str,
+    actions: Any,
+    description: str,
+    entrypoint: Any,
+)
+```
+
+```
+              flowchart TD
+              digitalkin.community.agno.toolkits.registry.base.RegistryObjectToolKit[RegistryObjectToolKit]
+              digitalkin.community.agno.toolkits.base.DkToolkit[DkToolkit]
+
+                              digitalkin.community.agno.toolkits.base.DkToolkit --> digitalkin.community.agno.toolkits.registry.base.RegistryObjectToolKit
+                
+
+
+              click digitalkin.community.agno.toolkits.registry.base.RegistryObjectToolKit href "" "digitalkin.community.agno.toolkits.registry.base.RegistryObjectToolKit"
+              click digitalkin.community.agno.toolkits.base.DkToolkit href "" "digitalkin.community.agno.toolkits.base.DkToolkit"
+```
+
+Base toolkit for one Registry object type (Tool / Service / Kin).
+
+Subclasses set :attr:`module_type` and pass their action union + a single `manage_*` entrypoint. This base owns the action context, the fail-safe guard, the best-effort cache invalidation and the JSON normalisation.
+
+The one tool is registered with `skip_entrypoint_processing` and an explicit schema, so Agno does **not** wrap it in `validate_call`. A malformed LLM argument therefore reaches :meth:`_run` (which validates it into the union and returns a clean fail envelope the model self-corrects from) instead of raising a `ValidationError` Agno logs as an error traceback — a bad tool call is the model's mistake, not an SDK error.
+
+Parameters:
+
+- ###### **`setup`**
+
+  (`SetupStrategy`) – The setup service strategy (shared with the servicer's base flow).
+
+- ###### **`registry`**
+
+  (`RegistryStrategy`) – The registry service strategy.
+
+- ###### **`context`**
+
+  (`ModuleContext | None`, default: `None` ) – Module context; enables AG-UI notifications via the base toolkit.
+
+- ###### **`name`**
+
+  (`str`) – The agno tool name exposed to the model.
+
+- ###### **`actions`**
+
+  (`Any`) – The discriminated action union this manager dispatches.
+
+- ###### **`description`**
+
+  (`str`) – The LLM-facing tool description.
+
+- ###### **`entrypoint`**
+
+  (`Any`) – The bound manage\_\* method Agno calls (delegates to :meth:\_run).
+
+###### kins
+
+`kins_manager`: CRUD + search over Kin setups (ARCHETYPE).
+
+Modules:
+
+- **`action`** – Discriminated action union for the kins_manager dispatcher.
+- **`kit`** – kins_manager — one agent-facing tool grouping Kin CRUD + search as actions.
+
+###### action
+
+Discriminated action union for the `kins_manager` dispatcher.
+
+Kins expose the shared CRUD + search actions (no create/load on this surface).
+
+###### kit
+
+`kins_manager` — one agent-facing tool grouping Kin CRUD + search as actions.
+
+Classes:
+
+- **`KinsManager`** – Manage Kin setups (ARCHETYPE): search, update, delete, change visibility.
+
+###### KinsManager
+
+```python
+KinsManager(
+    setup: SetupStrategy,
+    registry: RegistryStrategy,
+    context: ModuleContext | None = None,
+)
+```
+
+```
+              flowchart TD
+              digitalkin.community.agno.toolkits.registry.kins.kit.KinsManager[KinsManager]
+              digitalkin.community.agno.toolkits.registry.base.RegistryObjectToolKit[RegistryObjectToolKit]
+              digitalkin.community.agno.toolkits.base.DkToolkit[DkToolkit]
+
+                              digitalkin.community.agno.toolkits.registry.base.RegistryObjectToolKit --> digitalkin.community.agno.toolkits.registry.kins.kit.KinsManager
+                                digitalkin.community.agno.toolkits.base.DkToolkit --> digitalkin.community.agno.toolkits.registry.base.RegistryObjectToolKit
+                
+
+
+
+              click digitalkin.community.agno.toolkits.registry.kins.kit.KinsManager href "" "digitalkin.community.agno.toolkits.registry.kins.kit.KinsManager"
+              click digitalkin.community.agno.toolkits.registry.base.RegistryObjectToolKit href "" "digitalkin.community.agno.toolkits.registry.base.RegistryObjectToolKit"
+              click digitalkin.community.agno.toolkits.base.DkToolkit href "" "digitalkin.community.agno.toolkits.base.DkToolkit"
+```
+
+Manage Kin setups (ARCHETYPE): search, update, delete, change visibility.
+
+Parameters:
+
+- ###### **`setup`**
+
+  (`SetupStrategy`) – The setup service strategy.
+
+- ###### **`registry`**
+
+  (`RegistryStrategy`) – The registry service strategy.
+
+- ###### **`context`**
+
+  (`ModuleContext | None`, default: `None` ) – Module context; enables AG-UI notifications via the base toolkit.
+
+Methods:
+
+- **`kins_manager`** – Dispatch a Kin operation (search / update / delete / change_visibility).
+
+###### kins_manager
+
+```python
+kins_manager(action: KinActions) -> str
+```
+
+Dispatch a Kin operation (search / update / delete / change_visibility).
+
+Parameters:
+
+- ###### **`action`**
+
+  (`KinActions`) – A discriminated Kin action; its type selects the operation.
+
+Returns:
+
+- `str` – The canonical success envelope, or a fail envelope on rejection/invalid input.
+
+###### loader
+
+`load_manager`: external-execution actions that load discovered objects into the agent.
+
+Modules:
+
+- **`action`** – Discriminated actions for the load_manager dispatcher.
+- **`kit`** – load_manager — external-execution tool that loads discovered objects into the agent.
+
+###### action
+
+Discriminated actions for the `load_manager` dispatcher.
+
+Each concrete :class:`LoadAction` carries its parameters and implements :meth:`execute`, which performs the actual load against the agent's live tool list (via :class:`LoadActionCtx`) and returns a structured :class:`LoadOutcome` — the manager wraps it in the canonical response envelope, exactly like the CRUD managers. The runner (:meth:`LoadManager.run_paused`) validates a paused call into one of these and calls `execute` — so adding a new loader (service, kin) is just a new action class, no new plumbing. For now the only action is `tool`.
+
+Classes:
+
+- **`LoadAction`** – Base for the discriminated load_manager actions.
+- **`LoadActionCtx`** – What a load action needs to run.
+- **`LoadOutcome`** – Structured result of a load action, enveloped by the manager.
+- **`LoadToolAction`** – Load a discovered tool into the agent so you can call it right away.
+
+###### LoadAction
+
+```
+              flowchart TD
+              digitalkin.community.agno.toolkits.registry.loader.action.LoadAction[LoadAction]
+              digitalkin.community.agno.toolkits.registry.base.BaseAction[BaseAction]
+
+                              digitalkin.community.agno.toolkits.registry.base.BaseAction --> digitalkin.community.agno.toolkits.registry.loader.action.LoadAction
+                
+
+
+              click digitalkin.community.agno.toolkits.registry.loader.action.LoadAction href "" "digitalkin.community.agno.toolkits.registry.loader.action.LoadAction"
+              click digitalkin.community.agno.toolkits.registry.base.BaseAction href "" "digitalkin.community.agno.toolkits.registry.base.BaseAction"
+```
+
+Base for the discriminated `load_manager` actions.
+
+Inherits the abstract :meth:`~BaseAction.execute` and binds it to :class:`LoadActionCtx`; each concrete action carries its parameters as fields and loads its object into the agent, returning a :class:`LoadOutcome` the manager envelopes. Still abstract, so it is never a valid discriminator target and is never instantiated.
+
+Methods:
+
+- **`execute`** – Run this action against its manager's context and return the raw result.
+
+###### execute
+
+```python
+execute(ctx: CtxT) -> Any
+```
+
+Run this action against its manager's context and return the raw result.
+
+Parameters:
+
+- ###### **`ctx`**
+
+  (`CtxT`) – The manager-specific action context.
+
+Returns:
+
+- `Any` – The raw result the manager's dispatcher normalises and wraps in the envelope.
+
+###### LoadActionCtx
+
+```python
+LoadActionCtx(
+    context: ModuleContext,
+    base_tools: list[Any],
+    notify: Callable[[str, dict[str, Any]], Awaitable[None]],
+)
+```
+
+```
+              flowchart TD
+              digitalkin.community.agno.toolkits.registry.loader.action.LoadActionCtx[LoadActionCtx]
+              digitalkin.community.agno.toolkits.registry.base.BaseActionCtx[BaseActionCtx]
+
+                              digitalkin.community.agno.toolkits.registry.base.BaseActionCtx --> digitalkin.community.agno.toolkits.registry.loader.action.LoadActionCtx
+                
+
+
+              click digitalkin.community.agno.toolkits.registry.loader.action.LoadActionCtx href "" "digitalkin.community.agno.toolkits.registry.loader.action.LoadActionCtx"
+              click digitalkin.community.agno.toolkits.registry.base.BaseActionCtx href "" "digitalkin.community.agno.toolkits.registry.base.BaseActionCtx"
+```
+
+What a load action needs to run.
+
+Attributes:
+
+- **`context`** (`ModuleContext`) – The module context — supplies registry/resolve_tool and wraps the ModuleToolkit.
+- **`base_tools`** (`list[Any]`) – The live tool list the agent's factory closes over; loads append to it in place.
+- **`notify`** (`Callable[[str, dict[str, Any]], Awaitable[None]]`) – Best-effort AG-UI notifier (the toolkit's \_notify).
+
+###### LoadOutcome
+
+```python
+LoadOutcome(
+    ok: bool,
+    message: str,
+    status: str = "",
+    tool_name: str | None = None,
+    loaded_functions: list[str] = list(),
+)
+```
+
+Structured result of a load action, enveloped by the manager.
+
+Attributes:
+
+- **`ok`** (`bool`) – Whether the tool is now loaded (True also for an idempotent re-load).
+- **`message`** (`str`) – The LLM-readable status / error line.
+- **`status`** (`str`) – On success, "loaded" or "already_loaded"; empty on failure.
+- **`tool_name`** (`str | None`) – The loaded tool's display name, when known.
+- **`loaded_functions`** (`list[str]`) – The now-callable function names (empty unless a fresh load).
+
+###### LoadToolAction
+
+```
+              flowchart TD
+              digitalkin.community.agno.toolkits.registry.loader.action.LoadToolAction[LoadToolAction]
+              digitalkin.community.agno.toolkits.registry.loader.action.LoadAction[LoadAction]
+              digitalkin.community.agno.toolkits.registry.base.BaseAction[BaseAction]
+
+                              digitalkin.community.agno.toolkits.registry.loader.action.LoadAction --> digitalkin.community.agno.toolkits.registry.loader.action.LoadToolAction
+                                digitalkin.community.agno.toolkits.registry.base.BaseAction --> digitalkin.community.agno.toolkits.registry.loader.action.LoadAction
+                
+
+
+
+              click digitalkin.community.agno.toolkits.registry.loader.action.LoadToolAction href "" "digitalkin.community.agno.toolkits.registry.loader.action.LoadToolAction"
+              click digitalkin.community.agno.toolkits.registry.loader.action.LoadAction href "" "digitalkin.community.agno.toolkits.registry.loader.action.LoadAction"
+              click digitalkin.community.agno.toolkits.registry.base.BaseAction href "" "digitalkin.community.agno.toolkits.registry.base.BaseAction"
+```
+
+Load a discovered tool into the agent so you can call it right away.
+
+Methods:
+
+- **`execute`** – Resolve the setup into a ModuleToolkit and append it to the live tool list.
+
+###### execute
+
+```python
+execute(ctx: LoadActionCtx) -> LoadOutcome
+```
+
+Resolve the setup into a ModuleToolkit and append it to the live tool list.
+
+Idempotent per `setup_id`; never raises. The setup's family is read first so a service/kin setup gets a distinct "not a tool" message instead of the generic resolution error shared with a never-existed id. Every failure returns a distinct message the model can tell apart (bad family, already loaded, not found, …).
+
+Returns:
+
+- **`A`** ( `LoadOutcome` ) – class:LoadOutcome: on success it names the now-callable functions so the load is
+- `LoadOutcome` – verifiable; otherwise a distinct failure message with ok=False.
+
+###### kit
+
+`load_manager` — external-execution tool that loads discovered objects into the agent.
+
+Unlike the CRUD managers (`tools_manager`/`services_manager`/`kins_manager`, which run in-process), `load_manager` is an **external-execution** tool: Agno pauses when the model calls it, and the bound :class:`~digitalkin.community.agno.hitl.AgnoHitlRunner` runs the load (:meth:`LoadManager.run_paused`) and auto-continues — so the loaded object is callable in the same turn. For now the only action is `tool`: the model discovers a tool via `tools_manager` (search / get), then loads it here to make it callable.
+
+Every result — the loaded confirmation, a failure, or the "unavailable"/invalid-payload guards — goes through the same `{output|error, metadata: {success, tool}}` envelope as the CRUD managers, so a caller reads `metadata.success` instead of pattern-matching the message text.
+
+Classes:
+
+- **`LoadManager`** – Expose load_manager — an external-execution tool that loads objects into the agent.
+
+###### LoadManager
+
+```python
+LoadManager(context: ModuleContext | None = None)
+```
+
+```
+              flowchart TD
+              digitalkin.community.agno.toolkits.registry.loader.kit.LoadManager[LoadManager]
+              digitalkin.community.agno.toolkits.base.DkToolkit[DkToolkit]
+
+                              digitalkin.community.agno.toolkits.base.DkToolkit --> digitalkin.community.agno.toolkits.registry.loader.kit.LoadManager
+                
+
+
+              click digitalkin.community.agno.toolkits.registry.loader.kit.LoadManager href "" "digitalkin.community.agno.toolkits.registry.loader.kit.LoadManager"
+              click digitalkin.community.agno.toolkits.base.DkToolkit href "" "digitalkin.community.agno.toolkits.base.DkToolkit"
+```
+
+Expose `load_manager` — an external-execution tool that loads objects into the agent.
+
+The tool itself never executes: it is registered as external-execution so the run pauses when the model calls it. The bound :class:`AgnoHitlRunner` then invokes :meth:`run_paused`, which validates the paused action and runs its :meth:`LoadAction.execute`.
+
+Parameters:
+
+- ###### **`context`**
+
+  (`ModuleContext | None`, default: `None` ) – Module context; supplies resolve_tool and AG-UI notifications.
+
+Methods:
+
+- **`bind_tools`** – Bind the live tool list that a load appends newly-loaded tools to.
+- **`load_manager`** – Load a discovered object into the agent so it becomes usable right now.
+- **`run_paused`** – Validate a paused load_manager call and run the load (runner entry point).
+
+Attributes:
+
+- **`tool_name`** (`str`) – The external tool name the runner pauses on and routes to :meth:run_paused.
+
+###### tool_name
+
+```python
+tool_name: str
+```
+
+The external tool name the runner pauses on and routes to :meth:`run_paused`.
+
+###### bind_tools
+
+```python
+bind_tools(base_tools: list[Any]) -> None
+```
+
+Bind the live tool list that a load appends newly-loaded tools to.
+
+Parameters:
+
+- ###### **`base_tools`**
+
+  (`list[Any]`) – The exact list the agent's make_tools_factory closes over, so an appended toolkit is visible on the next run.
+
+###### load_manager
+
+```python
+load_manager(action: LoadActions) -> str
+```
+
+Load a discovered object into the agent so it becomes usable right now.
+
+Loading is a two-step flow, and this is step two: first DISCOVER the object with its manager (e.g. use `tools_manager` to `search`/`get` a tool and obtain its `setup_id`), THEN call `load_manager` with that id to load it. For a tool, use the `tool` action — this is the ONLY way to make a discovered tool actually callable; the managers merely administer setups, they never run them. You do NOT need to ask the user, and you can call the loaded tool in your very next step.
+
+Parameters:
+
+- ###### **`action`**
+
+  (`LoadActions`) – The load action — currently tool with a setup_id taken from a tools_manager search or get result.
+
+Returns:
+
+- `str` – The canonical envelope; on success output names the now-callable functions, on
+- `str` – failure error carries a distinct message. Check metadata.success.
+
+###### run_paused
+
+```python
+run_paused(tool_args: dict[str, Any]) -> str
+```
+
+Validate a paused `load_manager` call and run the load (runner entry point).
+
+Generic over the action union: it validates the payload into a concrete :class:`LoadAction`, runs its :meth:`~LoadAction.execute`, and wraps the resulting :class:`LoadOutcome` in the canonical envelope — so a new loader is just a new action, no change here.
+
+Parameters:
+
+- ###### **`tool_args`**
+
+  (`dict[str, Any]`) – The raw tool arguments from the paused call ({"action": {...}}).
+
+Returns:
+
+- `str` – The canonical {output|error, metadata} envelope the runner writes back as the
+- `str` – tool result.
+
+###### services
+
+`services_manager`: CRUD + search + create + load over Service setups (SERVICE).
+
+Modules:
+
+- **`action`** – Actions for the services_manager dispatcher.
+- **`kit`** – services_manager — one agent-facing tool grouping Service CRUD + create + load.
+
+###### action
+
+Actions for the `services_manager` dispatcher.
+
+Adds the two service-specific actions to the shared CRUD + search set:
+
+- `create` — create a shareable service from a name + configuration JSON;
+- `load` — return the service's stored JSON configuration content (distinct from Tool.load, which loads a live tool into the agent).
+
+Classes:
+
+- **`CreateServiceAction`** – Create a shareable service other kins can discover.
+- **`LoadServiceAction`** – Load a service: return its stored JSON configuration content.
+
+###### CreateServiceAction
+
+```
+              flowchart TD
+              digitalkin.community.agno.toolkits.registry.services.action.CreateServiceAction[CreateServiceAction]
+              digitalkin.community.agno.toolkits.registry.base.RegistryAction[RegistryAction]
+              digitalkin.community.agno.toolkits.registry.base.BaseAction[BaseAction]
+
+                              digitalkin.community.agno.toolkits.registry.base.RegistryAction --> digitalkin.community.agno.toolkits.registry.services.action.CreateServiceAction
+                                digitalkin.community.agno.toolkits.registry.base.BaseAction --> digitalkin.community.agno.toolkits.registry.base.RegistryAction
+                
+
+
+
+              click digitalkin.community.agno.toolkits.registry.services.action.CreateServiceAction href "" "digitalkin.community.agno.toolkits.registry.services.action.CreateServiceAction"
+              click digitalkin.community.agno.toolkits.registry.base.RegistryAction href "" "digitalkin.community.agno.toolkits.registry.base.RegistryAction"
+              click digitalkin.community.agno.toolkits.registry.base.BaseAction href "" "digitalkin.community.agno.toolkits.registry.base.BaseAction"
+```
+
+Create a shareable service other kins can discover.
+
+Only a name and the configuration JSON are needed — owner, organisation and kind are derived server-side. Once created it is discoverable via `search` and readable via `load`.
+
+Methods:
+
+- **`execute`** – Create the service setup from its name and content.
+
+###### execute
+
+```python
+execute(ctx: RegistryActionCtx) -> Any
+```
+
+Create the service setup from its name and content.
+
+Returns:
+
+- `Any` – The created service setup.
+
+###### LoadServiceAction
+
+```
+              flowchart TD
+              digitalkin.community.agno.toolkits.registry.services.action.LoadServiceAction[LoadServiceAction]
+              digitalkin.community.agno.toolkits.registry.base.RegistryAction[RegistryAction]
+              digitalkin.community.agno.toolkits.registry.base.BaseAction[BaseAction]
+
+                              digitalkin.community.agno.toolkits.registry.base.RegistryAction --> digitalkin.community.agno.toolkits.registry.services.action.LoadServiceAction
+                                digitalkin.community.agno.toolkits.registry.base.BaseAction --> digitalkin.community.agno.toolkits.registry.base.RegistryAction
+                
+
+
+
+              click digitalkin.community.agno.toolkits.registry.services.action.LoadServiceAction href "" "digitalkin.community.agno.toolkits.registry.services.action.LoadServiceAction"
+              click digitalkin.community.agno.toolkits.registry.base.RegistryAction href "" "digitalkin.community.agno.toolkits.registry.base.RegistryAction"
+              click digitalkin.community.agno.toolkits.registry.base.BaseAction href "" "digitalkin.community.agno.toolkits.registry.base.BaseAction"
+```
+
+Load a service: return its stored JSON configuration content.
+
+Methods:
+
+- **`execute`** – Return the service's configuration content (latest version).
+
+###### execute
+
+```python
+execute(ctx: RegistryActionCtx) -> Any
+```
+
+Return the service's configuration content (latest version).
+
+Guards the object type first: without it `load` would happily return a tool's internal configuration — the most dangerous type-confusion, since the response carries no field the caller could use to notice it read the wrong kind.
+
+Returns:
+
+- `Any` – The service configuration JSON object, or None when not found.
+
+###### kit
+
+`services_manager` — one agent-facing tool grouping Service CRUD + create + load.
+
+Classes:
+
+- **`ServicesManager`** – Manage Service setups (SERVICE): create, search, load, update, delete, change visibility.
+
+###### ServicesManager
+
+```python
+ServicesManager(
+    setup: SetupStrategy,
+    registry: RegistryStrategy,
+    context: ModuleContext | None = None,
+)
+```
+
+```
+              flowchart TD
+              digitalkin.community.agno.toolkits.registry.services.kit.ServicesManager[ServicesManager]
+              digitalkin.community.agno.toolkits.registry.base.RegistryObjectToolKit[RegistryObjectToolKit]
+              digitalkin.community.agno.toolkits.base.DkToolkit[DkToolkit]
+
+                              digitalkin.community.agno.toolkits.registry.base.RegistryObjectToolKit --> digitalkin.community.agno.toolkits.registry.services.kit.ServicesManager
+                                digitalkin.community.agno.toolkits.base.DkToolkit --> digitalkin.community.agno.toolkits.registry.base.RegistryObjectToolKit
+                
+
+
+
+              click digitalkin.community.agno.toolkits.registry.services.kit.ServicesManager href "" "digitalkin.community.agno.toolkits.registry.services.kit.ServicesManager"
+              click digitalkin.community.agno.toolkits.registry.base.RegistryObjectToolKit href "" "digitalkin.community.agno.toolkits.registry.base.RegistryObjectToolKit"
+              click digitalkin.community.agno.toolkits.base.DkToolkit href "" "digitalkin.community.agno.toolkits.base.DkToolkit"
+```
+
+Manage Service setups (SERVICE): create, search, load, update, delete, change visibility.
+
+Parameters:
+
+- ###### **`setup`**
+
+  (`SetupStrategy`) – The setup service strategy.
+
+- ###### **`registry`**
+
+  (`RegistryStrategy`) – The registry service strategy.
+
+- ###### **`context`**
+
+  (`ModuleContext | None`, default: `None` ) – Module context; enables AG-UI notifications via the base toolkit.
+
+Methods:
+
+- **`services_manager`** – Dispatch a Service operation (create / search / load / update / delete / change_visibility).
+
+###### services_manager
+
+```python
+services_manager(action: ServiceActions) -> str
+```
+
+Dispatch a Service operation (create / search / load / update / delete / change_visibility).
+
+Parameters:
+
+- ###### **`action`**
+
+  (`ServiceActions`) – A discriminated Service action; its type selects the operation.
+
+Returns:
+
+- `str` – The canonical success envelope, or a fail envelope on rejection/invalid input.
+
+###### tools
+
+`tools_manager`: CRUD + search over Tool setups (TOOL_MODULE).
+
+Modules:
+
+- **`action`** – Discriminated action union for the tools_manager dispatcher.
+- **`kit`** – tools_manager — one agent-facing tool grouping Tool-setup CRUD as actions.
+
+###### action
+
+Discriminated action union for the `tools_manager` dispatcher.
+
+Tools expose the shared CRUD + search actions. `create` is intentionally absent (tools are not created through this surface) and `load` stays a dedicated external-execution tool for now.
+
+###### kit
+
+`tools_manager` — one agent-facing tool grouping Tool-setup CRUD as actions.
+
+This administers tool **setups** (search / get / update / delete / change visibility); it never makes a tool callable. To actually **use** a discovered tool, load it with the separate `load_manager` tool (`load_tool` action).
+
+Classes:
+
+- **`ToolsManager`** – Manage Tool setups (TOOL_MODULE): search, get, update, delete, change visibility.
+
+###### ToolsManager
+
+```python
+ToolsManager(
+    setup: SetupStrategy,
+    registry: RegistryStrategy,
+    context: ModuleContext | None = None,
+)
+```
+
+```
+              flowchart TD
+              digitalkin.community.agno.toolkits.registry.tools.kit.ToolsManager[ToolsManager]
+              digitalkin.community.agno.toolkits.registry.base.RegistryObjectToolKit[RegistryObjectToolKit]
+              digitalkin.community.agno.toolkits.base.DkToolkit[DkToolkit]
+
+                              digitalkin.community.agno.toolkits.registry.base.RegistryObjectToolKit --> digitalkin.community.agno.toolkits.registry.tools.kit.ToolsManager
+                                digitalkin.community.agno.toolkits.base.DkToolkit --> digitalkin.community.agno.toolkits.registry.base.RegistryObjectToolKit
+                
+
+
+
+              click digitalkin.community.agno.toolkits.registry.tools.kit.ToolsManager href "" "digitalkin.community.agno.toolkits.registry.tools.kit.ToolsManager"
+              click digitalkin.community.agno.toolkits.registry.base.RegistryObjectToolKit href "" "digitalkin.community.agno.toolkits.registry.base.RegistryObjectToolKit"
+              click digitalkin.community.agno.toolkits.base.DkToolkit href "" "digitalkin.community.agno.toolkits.base.DkToolkit"
+```
+
+Manage Tool setups (TOOL_MODULE): search, get, update, delete, change visibility.
+
+Parameters:
+
+- ###### **`setup`**
+
+  (`SetupStrategy`) – The setup service strategy.
+
+- ###### **`registry`**
+
+  (`RegistryStrategy`) – The registry service strategy.
+
+- ###### **`context`**
+
+  (`ModuleContext | None`, default: `None` ) – Module context; enables AG-UI notifications via the base toolkit.
+
+Methods:
+
+- **`tools_manager`** – Administer tool setups (search / get / update / delete / change_visibility).
+
+###### tools_manager
+
+```python
+tools_manager(action: ToolActions) -> str
+```
+
+Administer tool setups (search / get / update / delete / change_visibility).
+
+Parameters:
+
+- ###### **`action`**
+
+  (`ToolActions`) – A discriminated Tool action; its type selects the operation.
+
+Returns:
+
+- `str` – The canonical success envelope, or a fail envelope on rejection/invalid input.
+
+##### user_profile
+
+Toolkit exposing the current user's profile to the agent.
+
+Classes:
+
+- **`UserProfileTools`** – Toolkit that gives the agent access to the current user's profile.
+
+###### UserProfileTools
+
+```python
+UserProfileTools(
+    user_profile: UserProfileStrategy, context: ModuleContext | None = None
+)
+```
+
+```
+              flowchart TD
+              digitalkin.community.agno.toolkits.user_profile.UserProfileTools[UserProfileTools]
+              digitalkin.community.agno.toolkits.base.DkToolkit[DkToolkit]
+
+                              digitalkin.community.agno.toolkits.base.DkToolkit --> digitalkin.community.agno.toolkits.user_profile.UserProfileTools
+                
+
+
+              click digitalkin.community.agno.toolkits.user_profile.UserProfileTools href "" "digitalkin.community.agno.toolkits.user_profile.UserProfileTools"
+              click digitalkin.community.agno.toolkits.base.DkToolkit href "" "digitalkin.community.agno.toolkits.base.DkToolkit"
+```
+
+Toolkit that gives the agent access to the current user's profile.
+
+The profile is fetched lazily from the module's :class:`~digitalkin.services.user_profile.UserProfileStrategy` on first use and cached for the toolkit's lifetime. A service failure is NOT cached, so a transient error is retried on the next call; a successful `None` (no profile) is.
+
+Parameters:
+
+- ###### **`user_profile`**
+
+  (`UserProfileStrategy`) – The module's user-profile service strategy.
+
+- ###### **`context`**
+
+  (`ModuleContext | None`, default: `None` ) – Module context; enables AG-UI notifications via the base toolkit.
+
+Methods:
+
+- **`get_user_profile`** – Retrieve the current user's profile: name, email, subscription plan, and remaining credits.
+
+###### get_user_profile
+
+```python
+get_user_profile() -> str
+```
+
+Retrieve the current user's profile: name, email, subscription plan, and remaining credits.
+
+Important
+
+You do NOT know what credits represent, how they are consumed, or what they correspond to in terms of usage. Never speculate, explain, or invent information about credits. Simply report the raw values as-is.
+
+Returns:
+
+- `str` – The canonical envelope: {"output": <profile>, ...} or {"error": ...}.
 
 ## core
 
@@ -4113,6 +6610,8 @@ preload_instance(
     job_id: str | None = None,
     tool_cache: Any = None,
     callback: Callable | None = None,
+    setup: Any = None,
+    invalidate_setup: Callable[[], None] | None = None,
 ) -> tuple[Any, str, Callable]
 ```
 
@@ -4503,6 +7002,8 @@ preload_instance(
     job_id: str | None = None,
     tool_cache: Any = None,
     callback: Callable | None = None,
+    setup: Any = None,
+    invalidate_setup: Callable[[], None] | None = None,
 ) -> tuple[Any, str, Callable]
 ```
 
@@ -4543,6 +7044,14 @@ Parameters:
 - ###### **`callback`**
 
   (`Callable | None`, default: `None` ) – Direct output callback; None wires the in-memory queue.
+
+- ###### **`setup`**
+
+  (`Any`, default: `None` ) – Borrowed SetupStrategy (servicer's shared instance); wired before prepare() so initialize() can build setup toolkits.
+
+- ###### **`invalidate_setup`**
+
+  (`Callable[[], None] | None`, default: `None` ) – Callback clearing the servicer's setup cache after an agent-driven setup edit; installed on context.callbacks.
 
 Returns:
 
@@ -14672,6 +17181,7 @@ ModuleContext(
     borrowed: frozenset[str] | None = None,
     shared: dict[str, Any] | None = None,
     task_manager: TaskManagerStrategy | None = None,
+    setup: SetupStrategy | None = None,
 )
 ```
 
@@ -14717,6 +17227,10 @@ Parameters:
 
   (`TaskManagerStrategy | None`, default: `None` ) – Optional, injected by SingleJobManager (RedisTaskManager).
 
+- ##### **`setup`**
+
+  (`SetupStrategy | None`, default: `None` ) – Optional setup service, borrowed from the servicer (shared channel).
+
 - ##### **`metadata`**
 
   (`dict[str, Any] | None`, default: `None` ) – dict defining differents Module metadata.
@@ -14754,7 +17268,9 @@ Methods:
 - **`cleanup`** – Close owned service strategies and release their resources.
 - **`create_openai_style_tools`** – Create OpenAI-style function calling schemas for a tool module.
 - **`create_tool_functions`** – Create tool functions for all protocols in a tool setup.
+- **`get_module_config_schema`** – Get a module's config-setup JSON schema by id (discovers address/port, then queries it).
 - **`get_module_schemas_by_id`** – Get module schemas by ID, discovering address/port from registry.
+- **`resolve_tool`** – Resolve a registry setup_id into a ToolModuleInfo and cache it.
 
 ##### cleanup
 
@@ -14810,6 +17326,30 @@ Returns:
 
 - `list[tuple[ToolDefinition, Callable[..., AsyncGenerator[dict, None]]]]` – List of (ToolDefinition, async_generator_function) tuples. Empty if not found.
 
+##### get_module_config_schema
+
+```python
+get_module_config_schema(module_id: str, *, llm_format: bool = False) -> dict[str, Any]
+```
+
+Get a module's config-setup JSON schema by id (discovers address/port, then queries it).
+
+This is the schema a caller fills as a setup's `content`; use it to validate `content` before a create/update.
+
+Parameters:
+
+- ###### **`module_id`**
+
+  (`str`) – Module identifier to look up in the registry.
+
+- ###### **`llm_format`**
+
+  (`bool`, default: `False` ) – Return the LLM-friendly schema format.
+
+Returns:
+
+- `dict[str, Any]` – The config-setup JSON schema, or {} when the module can't be reached.
+
 ##### get_module_schemas_by_id
 
 ```python
@@ -14833,6 +17373,31 @@ Parameters:
 Returns:
 
 - `dict[str, dict]` – Dictionary containing schemas: {"input": ..., "output": ..., "setup": ..., "secret": ...}
+
+##### resolve_tool
+
+```python
+resolve_tool(setup_id: str) -> ToolModuleInfo | None
+```
+
+Resolve a registry `setup_id` into a `ToolModuleInfo` and cache it.
+
+On-demand loader for a discovered tool. `registry.get_setup` always runs first — it is the permission gate, and the tool cache is shared across missions of the same agent setup, so a cache hit must never skip authz. The cache only short-circuits the module discovery + schema fetch. Permission denials propagate so callers can surface them distinctly.
+
+Parameters:
+
+- ###### **`setup_id`**
+
+  (`str`) – The registry setup id to load as an invocable tool.
+
+Returns:
+
+- `ToolModuleInfo | None` – The resolved ToolModuleInfo (also added to the tool cache), or None
+- `ToolModuleInfo | None` – if the setup or its module could not be found.
+
+Raises:
+
+- `PermissionDeniedError` – If the registry/communication call is not permitted.
 
 #### RequestMetadata
 
@@ -16374,6 +18939,7 @@ ModuleContext(
     borrowed: frozenset[str] | None = None,
     shared: dict[str, Any] | None = None,
     task_manager: TaskManagerStrategy | None = None,
+    setup: SetupStrategy | None = None,
 )
 ```
 
@@ -16419,6 +18985,10 @@ Parameters:
 
   (`TaskManagerStrategy | None`, default: `None` ) – Optional, injected by SingleJobManager (RedisTaskManager).
 
+- ###### **`setup`**
+
+  (`SetupStrategy | None`, default: `None` ) – Optional setup service, borrowed from the servicer (shared channel).
+
 - ###### **`metadata`**
 
   (`dict[str, Any] | None`, default: `None` ) – dict defining differents Module metadata.
@@ -16456,7 +19026,9 @@ Methods:
 - **`cleanup`** – Close owned service strategies and release their resources.
 - **`create_openai_style_tools`** – Create OpenAI-style function calling schemas for a tool module.
 - **`create_tool_functions`** – Create tool functions for all protocols in a tool setup.
+- **`get_module_config_schema`** – Get a module's config-setup JSON schema by id (discovers address/port, then queries it).
 - **`get_module_schemas_by_id`** – Get module schemas by ID, discovering address/port from registry.
+- **`resolve_tool`** – Resolve a registry setup_id into a ToolModuleInfo and cache it.
 
 ###### cleanup
 
@@ -16512,6 +19084,30 @@ Returns:
 
 - `list[tuple[ToolDefinition, Callable[..., AsyncGenerator[dict, None]]]]` – List of (ToolDefinition, async_generator_function) tuples. Empty if not found.
 
+###### get_module_config_schema
+
+```python
+get_module_config_schema(module_id: str, *, llm_format: bool = False) -> dict[str, Any]
+```
+
+Get a module's config-setup JSON schema by id (discovers address/port, then queries it).
+
+This is the schema a caller fills as a setup's `content`; use it to validate `content` before a create/update.
+
+Parameters:
+
+- ###### **`module_id`**
+
+  (`str`) – Module identifier to look up in the registry.
+
+- ###### **`llm_format`**
+
+  (`bool`, default: `False` ) – Return the LLM-friendly schema format.
+
+Returns:
+
+- `dict[str, Any]` – The config-setup JSON schema, or {} when the module can't be reached.
+
 ###### get_module_schemas_by_id
 
 ```python
@@ -16535,6 +19131,31 @@ Parameters:
 Returns:
 
 - `dict[str, dict]` – Dictionary containing schemas: {"input": ..., "output": ..., "setup": ..., "secret": ...}
+
+###### resolve_tool
+
+```python
+resolve_tool(setup_id: str) -> ToolModuleInfo | None
+```
+
+Resolve a registry `setup_id` into a `ToolModuleInfo` and cache it.
+
+On-demand loader for a discovered tool. `registry.get_setup` always runs first — it is the permission gate, and the tool cache is shared across missions of the same agent setup, so a cache hit must never skip authz. The cache only short-circuits the module discovery + schema fetch. Permission denials propagate so callers can surface them distinctly.
+
+Parameters:
+
+- ###### **`setup_id`**
+
+  (`str`) – The registry setup id to load as an invocable tool.
+
+Returns:
+
+- `ToolModuleInfo | None` – The resolved ToolModuleInfo (also added to the tool cache), or None
+- `ToolModuleInfo | None` – if the setup or its module could not be found.
+
+Raises:
+
+- `PermissionDeniedError` – If the registry/communication call is not permitted.
 
 ##### Session
 
@@ -17754,6 +20375,7 @@ Classes:
 - **`RegistrySetupStatus`** – Setup status in the registry.
 - **`RegistryVisibility`** – Visibility in the registry.
 - **`SetupInfo`** – Setup information from registry.
+- **`SetupSummary`** – Search-safe setup view — the shape returned by search_setups.
 
 ##### ModuleInfo
 
@@ -17794,6 +20416,8 @@ Module status in the registry.
 
 Module type in the registry.
 
+Member names mirror the proto `ModuleType` enum (minus the `MODULE_TYPE_` prefix): they are looked up by name from the wire value, so they must match.
+
 ##### RegistrySetupStatus
 
 ```
@@ -17833,13 +20457,44 @@ Visibility in the registry.
 
 Setup information from registry.
 
+##### SetupSummary
+
+```
+              flowchart TD
+              digitalkin.models.services.registry.SetupSummary[SetupSummary]
+
+              
+
+              click digitalkin.models.services.registry.SetupSummary href "" "digitalkin.models.services.registry.SetupSummary"
+```
+
+Search-safe setup view — the shape returned by `search_setups`.
+
+Deliberately has no `config` field: a setup's secrets can never be serialized from a search result. Use `get_setup` for the full `SetupInfo`.
+
 #### services
 
 Service-strategy execution-mode model.
 
 Classes:
 
+- **`Context`** – Owner/scope of a file in the filesystem service.
 - **`ServicesMode`** – Mode for strategy execution.
+
+##### Context
+
+```
+              flowchart TD
+              digitalkin.models.services.services.Context[Context]
+
+              
+
+              click digitalkin.models.services.services.Context href "" "digitalkin.models.services.services.Context"
+```
+
+Owner/scope of a file in the filesystem service.
+
+Mirrors the filesystem proto context kinds. MISSIONS/SETUP are the read/write owner contexts this strategy operates on; USERS/ORGANIZATIONS are read-only cross-owner scopes whose concrete id is resolved server-side from the request metadata (the client sends only the kind).
 
 ##### ServicesMode
 
@@ -17866,6 +20521,7 @@ Classes:
 - **`DataType`** – Enum defining the types of data that can be stored.
 - **`FileHistory`** – File history model.
 - **`FileModel`** – File model.
+- **`Visibility`** – Read-access scope of a record, mirroring the storage proto kinds by name.
 
 ##### BaseMessage
 
@@ -17945,6 +20601,21 @@ File history model.
 
 File model.
 
+##### Visibility
+
+```
+              flowchart TD
+              digitalkin.models.services.storage.Visibility[Visibility]
+
+              
+
+              click digitalkin.models.services.storage.Visibility href "" "digitalkin.models.services.storage.Visibility"
+```
+
+Read-access scope of a record, mirroring the storage proto kinds by name.
+
+Ownership (who may edit) stays keyed on the record context; this only governs who may read. UNSPECIFIED lets the storage service apply its server-side default.
+
 ### settings
 
 This package contain settings of sdk.
@@ -17958,6 +20629,7 @@ Modules:
 - **`profiling`** – Profiling settings for task execution and asyncio inspection.
 - **`queue`** – Queue factory settings.
 - **`redis`** – Redis connection and pool settings.
+- **`registry`** – Registry-scope runtime settings.
 - **`resilience`** – Resilience subsystem settings — bulkhead.
 - **`server`** – Package for server settings.
 - **`task_manager`** – Task and job manager settings.
@@ -18483,6 +21155,45 @@ Nested settings are accessed via composition: `get_redis_settings().pool` and `.
 Returns:
 
 - `RedisSettings` – The shared RedisSettings instance.
+
+#### registry
+
+Registry-scope runtime settings.
+
+Classes:
+
+- **`RegistrySettings`** – Registry client runtime configuration.
+
+Functions:
+
+- **`get_registry_settings`** – Process-wide RegistrySettings singleton.
+
+##### RegistrySettings
+
+```
+              flowchart TD
+              digitalkin.models.settings.registry.RegistrySettings[RegistrySettings]
+
+              
+
+              click digitalkin.models.settings.registry.RegistrySettings href "" "digitalkin.models.settings.registry.RegistrySettings"
+```
+
+Registry client runtime configuration.
+
+##### get_registry_settings
+
+```python
+get_registry_settings() -> RegistrySettings
+```
+
+Process-wide `RegistrySettings` singleton.
+
+Tests must call `get_registry_settings.cache_clear()` after mutating env.
+
+Returns:
+
+- `RegistrySettings` – The shared RegistrySettings instance.
 
 #### resilience
 
@@ -19182,6 +21893,7 @@ Parameters:
 Methods:
 
 - **`__init_subclass__`** – Ensure each subclass has its own copy of mutable class variables.
+- **`build_registry_documentation`** – Assemble the registry documentation: author description + LLM-readable trigger table.
 - **`cleanup`** – Run the module.
 - **`clear_shared`** – Swap shared cache with a fresh dict.
 - **`create_config_setup_model`** – Create the setup model from the setup data.
@@ -19230,6 +21942,24 @@ __init_subclass__(**kwargs: Any) -> None
 ```
 
 Ensure each subclass has its own copy of mutable class variables.
+
+#### build_registry_documentation
+
+```python
+build_registry_documentation() -> str
+```
+
+Assemble the registry documentation: author description + LLM-readable trigger table.
+
+Enforces an author-written description of the archetype/tool specificity (`cls.description`, falling back to `metadata['description']`), then appends a markdown table of the module's non-utility triggers for registry index search.
+
+Returns:
+
+- `str` – Markdown documentation string sent as the registration documentation.
+
+Raises:
+
+- `ValueError` – If the module declares no description.
 
 #### cleanup
 
@@ -19720,6 +22450,7 @@ Parameters:
 Methods:
 
 - **`__init_subclass__`** – Ensure each subclass has its own copy of mutable class variables.
+- **`build_registry_documentation`** – Assemble the registry documentation: author description + LLM-readable trigger table.
 - **`cleanup`** – Run the module.
 - **`clear_shared`** – Swap shared cache with a fresh dict.
 - **`create_config_setup_model`** – Create the setup model from the setup data.
@@ -19768,6 +22499,24 @@ __init_subclass__(**kwargs: Any) -> None
 ```
 
 Ensure each subclass has its own copy of mutable class variables.
+
+#### build_registry_documentation
+
+```python
+build_registry_documentation() -> str
+```
+
+Assemble the registry documentation: author description + LLM-readable trigger table.
+
+Enforces an author-written description of the archetype/tool specificity (`cls.description`, falling back to `metadata['description']`), then appends a markdown table of the module's non-utility triggers for registry index search.
+
+Returns:
+
+- `str` – Markdown documentation string sent as the registration documentation.
+
+Raises:
+
+- `ValueError` – If the module declares no description.
 
 #### cleanup
 
@@ -20792,6 +23541,7 @@ Parameters:
 Methods:
 
 - **`__init_subclass__`** – Ensure each subclass has its own copy of mutable class variables.
+- **`build_registry_documentation`** – Assemble the registry documentation: author description + LLM-readable trigger table.
 - **`cleanup`** – Run the module.
 - **`clear_shared`** – Swap shared cache with a fresh dict.
 - **`create_config_setup_model`** – Create the setup model from the setup data.
@@ -20840,6 +23590,24 @@ __init_subclass__(**kwargs: Any) -> None
 ```
 
 Ensure each subclass has its own copy of mutable class variables.
+
+##### build_registry_documentation
+
+```python
+build_registry_documentation() -> str
+```
+
+Assemble the registry documentation: author description + LLM-readable trigger table.
+
+Enforces an author-written description of the archetype/tool specificity (`cls.description`, falling back to `metadata['description']`), then appends a markdown table of the module's non-utility triggers for registry index search.
+
+Returns:
+
+- `str` – Markdown documentation string sent as the registration documentation.
+
+Raises:
+
+- `ValueError` – If the module declares no description.
 
 ##### cleanup
 
@@ -21338,6 +24106,7 @@ Parameters:
 Methods:
 
 - **`__init_subclass__`** – Ensure each subclass has its own copy of mutable class variables.
+- **`build_registry_documentation`** – Assemble the registry documentation: author description + LLM-readable trigger table.
 - **`cleanup`** – Run the module.
 - **`clear_shared`** – Swap shared cache with a fresh dict.
 - **`create_config_setup_model`** – Create the setup model from the setup data.
@@ -21386,6 +24155,24 @@ __init_subclass__(**kwargs: Any) -> None
 ```
 
 Ensure each subclass has its own copy of mutable class variables.
+
+##### build_registry_documentation
+
+```python
+build_registry_documentation() -> str
+```
+
+Assemble the registry documentation: author description + LLM-readable trigger table.
+
+Enforces an author-written description of the archetype/tool specificity (`cls.description`, falling back to `metadata['description']`), then appends a markdown table of the module's non-utility triggers for registry index search.
+
+Returns:
+
+- `str` – Markdown documentation string sent as the registration documentation.
+
+Raises:
+
+- `ValueError` – If the module declares no description.
 
 ##### cleanup
 
@@ -24068,6 +26855,7 @@ Methods:
 
 - **`call_module`** – Call a remote module via its GatewayService and stream outputs.
 - **`close`** – Release communication resources (channels, connection pools).
+- **`get_module_config_schema`** – Get the module's config-setup JSON schema (the fields a caller fills at setup/update).
 - **`get_module_schemas`** – Get module schemas (input/output/setup/secret/cost).
 
 #### call_module
@@ -24129,6 +26917,36 @@ close() -> None
 ```
 
 Release communication resources (channels, connection pools).
+
+#### get_module_config_schema
+
+```python
+get_module_config_schema(
+    module_address: str, module_port: int, *, llm_format: bool = False
+) -> dict[str, Any]
+```
+
+Get the module's config-setup JSON schema (the fields a caller fills at setup/update).
+
+Concrete implementations that can reach the module override this. The default returns an empty schema so callers treat "no schema" as "skip validation".
+
+Parameters:
+
+- ##### **`module_address`**
+
+  (`str`) – Target module address.
+
+- ##### **`module_port`**
+
+  (`int`) – Target module port.
+
+- ##### **`llm_format`**
+
+  (`bool`, default: `False` ) – Return the LLM-friendly schema format.
+
+Returns:
+
+- `dict[str, Any]` – The config-setup JSON schema, or {} when unavailable.
 
 #### get_module_schemas
 
@@ -24355,6 +27173,7 @@ Methods:
 
 - **`call_module`** – No-op stub for local-mode tests. Yields nothing.
 - **`close`** – No-op for local communication.
+- **`get_module_config_schema`** – Get the module's config-setup JSON schema (the fields a caller fills at setup/update).
 - **`get_module_schemas`** – Get module schemas (local implementation returns empty schemas).
 
 #### call_module
@@ -24416,6 +27235,36 @@ close() -> None
 ```
 
 No-op for local communication.
+
+#### get_module_config_schema
+
+```python
+get_module_config_schema(
+    module_address: str, module_port: int, *, llm_format: bool = False
+) -> dict[str, Any]
+```
+
+Get the module's config-setup JSON schema (the fields a caller fills at setup/update).
+
+Concrete implementations that can reach the module override this. The default returns an empty schema so callers treat "no schema" as "skip validation".
+
+Parameters:
+
+- ##### **`module_address`**
+
+  (`str`) – Target module address.
+
+- ##### **`module_port`**
+
+  (`int`) – Target module port.
+
+- ##### **`llm_format`**
+
+  (`bool`, default: `False` ) – Return the LLM-friendly schema format.
+
+Returns:
+
+- `dict[str, Any]` – The config-setup JSON schema, or {} when unavailable.
 
 #### get_module_schemas
 
@@ -24756,10 +27605,7 @@ Raises:
 
 ```python
 get_file(
-    file_id: str,
-    context: Literal["mission", "setup"] = "mission",
-    *,
-    include_content: bool = False,
+    file_id: str, context: Context = MISSIONS, *, include_content: bool = False
 ) -> FilesystemRecord
 ```
 
@@ -24775,7 +27621,7 @@ Parameters:
 
 - ##### **`context`**
 
-  (`Literal['mission', 'setup']`, default: `'mission'` ) – The context of the files (mission or setup)
+  (`Context`, default: `MISSIONS` ) – The context of the files (mission or setup)
 
 - ##### **`include_content`**
 
@@ -25020,15 +27866,35 @@ Default registry strategy using in-memory storage.
 
 Methods:
 
+- **`add_setup`** – Add a setup to the in-memory store (helper for testing).
 - **`close`** – Release resources held by this strategy. No-op by default.
 - **`deregister`** – Deregister a module from the registry.
 - **`discover_by_id`** – Get module info by ID.
-- **`get_setup`** – Get setup info (not supported in default registry).
+- **`get_service_setup`** – Fetch a service setup's setup_version content JSON.
+- **`get_setup`** – Get setup info from the in-memory store.
 - **`get_status`** – Get module status.
 - **`heartbeat`** – Send heartbeat to keep module active.
 - **`register`** – Register a module with the registry.
-- **`search`** – Search for modules by criteria.
+- **`search`** – Search the module catalog (module blueprints; needs a setup to be invocable).
+- **`search_kins`** – Kin registry view: modules of type ARCHETYPE.
+- **`search_services`** – Service registry view: modules of type SERVICE.
+- **`search_setups`** – Search the setup catalog (configured, invocable module instances).
+- **`search_tools`** – Tool registry view: modules of type TOOL_MODULE.
 - **`wait_for_ready`** – Local registry is always ready (in-memory store).
+
+#### add_setup
+
+```python
+add_setup(setup: SetupInfo) -> None
+```
+
+Add a setup to the in-memory store (helper for testing).
+
+Parameters:
+
+- ##### **`setup`**
+
+  (`SetupInfo`) – The setup to store, keyed by its setup_id.
 
 #### close
 
@@ -25078,19 +27944,43 @@ Raises:
 
 - `RegistryModuleNotFoundError` – If module not found.
 
+#### get_service_setup
+
+```python
+get_service_setup(setup_id: str) -> dict[str, Any] | None
+```
+
+Fetch a service setup's setup_version content JSON.
+
+The id comes from chat-driven discovery (`search_setups` + user acceptance), not from configuration. Goes through `get_setup` on every call — the registry stays the permission gate; nothing cached. Content always reflects the latest setup version.
+
+Parameters:
+
+- ##### **`setup_id`**
+
+  (`str`) – The discovered service setup id.
+
+Returns:
+
+- `dict[str, Any] | None` – The setup_version content, or None when the setup is missing or has no content.
+
 #### get_setup
 
 ```python
-get_setup(setup_id: str) -> None
+get_setup(setup_id: str) -> SetupInfo | None
 ```
 
-Get setup info (not supported in default registry).
+Get setup info from the in-memory store.
 
 Parameters:
 
 - ##### **`setup_id`**
 
   (`str`) – The setup identifier.
+
+Returns:
+
+- `SetupInfo | None` – SetupInfo if present, None otherwise.
 
 #### get_status
 
@@ -25139,7 +28029,14 @@ Raises:
 #### register
 
 ```python
-register(module_id: str, address: str, port: int, version: str) -> ModuleInfo | None
+register(
+    module_id: str,
+    address: str,
+    port: int,
+    version: str,
+    module_type: RegistryModuleType = UNSPECIFIED,
+    documentation: str = "",
+) -> ModuleInfo | None
 ```
 
 Register a module with the registry.
@@ -25164,6 +28061,14 @@ Parameters:
 
   (`str`) – Module version.
 
+- ##### **`module_type`**
+
+  (`RegistryModuleType`, default: `UNSPECIFIED` ) – Declared module type; UNSPECIFIED preserves the existing record's type.
+
+- ##### **`documentation`**
+
+  (`str`, default: `''` ) – Internal documentation for registry index search.
+
 Returns:
 
 - `ModuleInfo | None` – ModuleInfo if successful, None otherwise.
@@ -25174,29 +28079,173 @@ Returns:
 search(
     name: str | None = None,
     module_type: str | None = None,
-    organization_id: str | None = None,
+    limit: int = 20,
+    offset: int = 0,
 ) -> list[ModuleInfo]
 ```
 
-Search for modules by criteria.
+Search the module catalog (module blueprints; needs a setup to be invocable).
 
 Parameters:
 
 - ##### **`name`**
 
-  (`str | None`, default: `None` ) – Filter by name (partial match).
+  (`str | None`, default: `None` ) – Case-insensitive free text matched against module name AND documentation.
 
 - ##### **`module_type`**
 
-  (`str | None`, default: `None` ) – Filter by type (archetype, tool).
+  (`str | None`, default: `None` ) – Filter by type (archetype, tool_module, service).
 
-- ##### **`organization_id`**
+- ##### **`limit`**
 
-  (`str | None`, default: `None` ) – Filter by organization (not used in local storage).
+  (`int`, default: `20` ) – Max results (1-100).
+
+- ##### **`offset`**
+
+  (`int`, default: `0` ) – Pagination offset.
 
 Returns:
 
 - `list[ModuleInfo]` – List of matching modules.
+
+#### search_kins
+
+```python
+search_kins(
+    name: str | None = None, limit: int = 20, offset: int = 0
+) -> list[ModuleInfo]
+```
+
+Kin registry view: modules of type ARCHETYPE.
+
+Parameters:
+
+- ##### **`name`**
+
+  (`str | None`, default: `None` ) – Case-insensitive free text matched against module name AND documentation.
+
+- ##### **`limit`**
+
+  (`int`, default: `20` ) – Max results (1-100).
+
+- ##### **`offset`**
+
+  (`int`, default: `0` ) – Pagination offset.
+
+Returns:
+
+- `list[ModuleInfo]` – List of matching archetype (kin) modules.
+
+#### search_services
+
+```python
+search_services(
+    name: str | None = None, limit: int = 20, offset: int = 0
+) -> list[ModuleInfo]
+```
+
+Service registry view: modules of type SERVICE.
+
+Parameters:
+
+- ##### **`name`**
+
+  (`str | None`, default: `None` ) – Case-insensitive free text matched against module name AND documentation.
+
+- ##### **`limit`**
+
+  (`int`, default: `20` ) – Max results (1-100).
+
+- ##### **`offset`**
+
+  (`int`, default: `0` ) – Pagination offset.
+
+Returns:
+
+- `list[ModuleInfo]` – List of matching service modules.
+
+#### search_setups
+
+```python
+search_setups(
+    query: str | None = None,
+    setup_ids: list[str] | None = None,
+    module_ids: list[str] | None = None,
+    module_types: list[RegistryModuleType] | None = None,
+    statuses: list[RegistrySetupStatus] | None = None,
+    visibilities: list[RegistryVisibility] | None = None,
+    limit: int = 20,
+    offset: int = 0,
+) -> list[SetupSummary]
+```
+
+Search the setup catalog (configured, invocable module instances).
+
+Parameters:
+
+- ##### **`query`**
+
+  (`str | None`, default: `None` ) – Case-insensitive free text matched against setup name AND documentation.
+
+- ##### **`setup_ids`**
+
+  (`list[str] | None`, default: `None` ) – Restrict to these setup ids.
+
+- ##### **`module_ids`**
+
+  (`list[str] | None`, default: `None` ) – Restrict to setups backed by these modules.
+
+- ##### **`module_types`**
+
+  (`list[RegistryModuleType] | None`, default: `None` ) – Filter by backing module type (tool_module, archetype, service).
+
+- ##### **`statuses`**
+
+  (`list[RegistrySetupStatus] | None`, default: `None` ) – Filter by setup status. None = no filter.
+
+- ##### **`visibilities`**
+
+  (`list[RegistryVisibility] | None`, default: `None` ) – Filter by visibility.
+
+- ##### **`limit`**
+
+  (`int`, default: `20` ) – Max results (1-100).
+
+- ##### **`offset`**
+
+  (`int`, default: `0` ) – Pagination offset.
+
+Returns:
+
+- `list[SetupSummary]` – Matching setups as SetupSummary (no config field by construction).
+
+#### search_tools
+
+```python
+search_tools(
+    name: str | None = None, limit: int = 20, offset: int = 0
+) -> list[ModuleInfo]
+```
+
+Tool registry view: modules of type TOOL_MODULE.
+
+Parameters:
+
+- ##### **`name`**
+
+  (`str | None`, default: `None` ) – Case-insensitive free text matched against module name AND documentation.
+
+- ##### **`limit`**
+
+  (`int`, default: `20` ) – Max results (1-100).
+
+- ##### **`offset`**
+
+  (`int`, default: `0` ) – Pagination offset.
+
+Returns:
+
+- `list[ModuleInfo]` – List of matching tool modules.
 
 #### wait_for_ready
 
@@ -25273,7 +28322,11 @@ Release resources held by this strategy. No-op by default.
 #### list
 
 ```python
-list(collection: str, scope: Scope = 'mission') -> list[StorageRecord]
+list(
+    collection: str,
+    context: Context = MISSIONS,
+    visibilities: list[Visibility] | None = None,
+) -> list[StorageRecord]
 ```
 
 Get all records in a collection under the given scope.
@@ -25284,9 +28337,13 @@ Parameters:
 
   (`str`) – The unique name for the record type
 
-- ##### **`scope`**
+- ##### **`context`**
 
-  (`Scope`, default: `'mission'` ) – Which context to list (default: "mission").
+  (`Context`, default: `MISSIONS` ) – Which context to list (default: "mission"). "user"/"organization" list across an owner and require owner_id.
+
+- ##### **`visibilities`**
+
+  (`list[Visibility] | None`, default: `None` ) – Optional read-access scopes to filter by (None = no filter).
 
 Returns:
 
@@ -25295,7 +28352,9 @@ Returns:
 #### read
 
 ```python
-read(collection: str, record_id: str, scope: Scope = 'mission') -> StorageRecord | None
+read(
+    collection: str, record_id: str, context: Context = MISSIONS
+) -> StorageRecord | None
 ```
 
 Get a record by key under the given scope.
@@ -25310,9 +28369,9 @@ Parameters:
 
   (`str`) – The unique ID of the record
 
-- ##### **`scope`**
+- ##### **`context`**
 
-  (`Scope`, default: `'mission'` ) – Which context to read from (default: "mission").
+  (`Context`, default: `MISSIONS` ) – Which context to read from (default: "mission").
 
 Returns:
 
@@ -25321,7 +28380,7 @@ Returns:
 #### remove
 
 ```python
-remove(collection: str, record_id: str, scope: Scope = 'mission') -> bool
+remove(collection: str, record_id: str, context: Context = MISSIONS) -> bool
 ```
 
 Delete a record from the storage under the given scope.
@@ -25336,9 +28395,9 @@ Parameters:
 
   (`str`) – The unique ID of the record
 
-- ##### **`scope`**
+- ##### **`context`**
 
-  (`Scope`, default: `'mission'` ) – Which context the record lives under (default: "mission").
+  (`Context`, default: `MISSIONS` ) – Which context the record lives under (default: "mission").
 
 Returns:
 
@@ -25347,7 +28406,7 @@ Returns:
 #### remove_collection
 
 ```python
-remove_collection(collection: str, scope: Scope = 'mission') -> bool
+remove_collection(collection: str, context: Context = MISSIONS) -> bool
 ```
 
 Wipe a collection clean under the given scope.
@@ -25358,9 +28417,9 @@ Parameters:
 
   (`str`) – The unique name for the record type
 
-- ##### **`scope`**
+- ##### **`context`**
 
-  (`Scope`, default: `'mission'` ) – Which context the records live under (default: "mission").
+  (`Context`, default: `MISSIONS` ) – Which context the records live under (default: "mission").
 
 Returns:
 
@@ -25373,8 +28432,9 @@ store(
     collection: str,
     record_id: str | None,
     data: dict[str, Any],
-    data_type: Literal["OUTPUT", "VIEW", "LOGS", "OTHER"] = "OUTPUT",
-    scope: Scope = "mission",
+    data_type: DataType = OUTPUT,
+    context: Context = MISSIONS,
+    visibility: Visibility = UNSPECIFIED,
 ) -> StorageRecord
 ```
 
@@ -25396,11 +28456,15 @@ Parameters:
 
 - ##### **`data_type`**
 
-  (`Literal['OUTPUT', 'VIEW', 'LOGS', 'OTHER']`, default: `'OUTPUT'` ) – The type of data being stored (default: OUTPUT)
+  (`DataType`, default: `OUTPUT` ) – The type of data being stored (default: OUTPUT)
 
-- ##### **`scope`**
+- ##### **`context`**
 
-  (`Scope`, default: `'mission'` ) – "mission" (default) writes under the current mission context; "setup" writes under the setup-version context.
+  (`Context`, default: `MISSIONS` ) – "mission" (default) writes under the current mission context; "setup" writes under the setup-version context.
+
+- ##### **`visibility`**
+
+  (`Visibility`, default: `UNSPECIFIED` ) – Read-access scope for the record (UNSPECIFIED = server default).
 
 Returns:
 
@@ -25414,7 +28478,11 @@ Raises:
 
 ```python
 update(
-    collection: str, record_id: str, data: dict[str, Any], scope: Scope = "mission"
+    collection: str,
+    record_id: str,
+    data: dict[str, Any],
+    context: Context = MISSIONS,
+    visibility: Visibility = UNSPECIFIED,
 ) -> StorageRecord | None
 ```
 
@@ -25434,9 +28502,13 @@ Parameters:
 
   (`dict[str, Any]`) – The new data to store
 
-- ##### **`scope`**
+- ##### **`context`**
 
-  (`Scope`, default: `'mission'` ) – Which context the record lives under (default: "mission").
+  (`Context`, default: `MISSIONS` ) – Which context the record lives under (default: "mission").
+
+- ##### **`visibility`**
+
+  (`Visibility`, default: `UNSPECIFIED` ) – New read-access scope; UNSPECIFIED leaves it unchanged.
 
 Returns:
 
@@ -25449,8 +28521,9 @@ upsert(
     collection: str,
     record_id: str,
     data: dict[str, Any],
-    data_type: Literal["OUTPUT", "VIEW", "LOGS", "OTHER"] = "OUTPUT",
-    scope: Scope = "mission",
+    data_type: DataType = OUTPUT,
+    context: Context = MISSIONS,
+    visibility: Visibility = UNSPECIFIED,
 ) -> StorageRecord
 ```
 
@@ -25474,11 +28547,15 @@ Parameters:
 
 - ##### **`data_type`**
 
-  (`Literal['OUTPUT', 'VIEW', 'LOGS', 'OTHER']`, default: `'OUTPUT'` ) – The type of data being stored (default: OUTPUT)
+  (`DataType`, default: `OUTPUT` ) – The type of data being stored (default: OUTPUT)
 
-- ##### **`scope`**
+- ##### **`context`**
 
-  (`Scope`, default: `'mission'` ) – Which context to upsert under (default: "mission").
+  (`Context`, default: `MISSIONS` ) – Which context to upsert under (default: "mission").
+
+- ##### **`visibility`**
+
+  (`Visibility`, default: `UNSPECIFIED` ) – Read-access scope for the record (UNSPECIFIED = server default).
 
 Returns:
 
@@ -25591,10 +28668,7 @@ Returns:
 
 ```python
 get_file(
-    file_id: str,
-    context: Literal["mission", "setup"] = "mission",
-    *,
-    include_content: bool = False,
+    file_id: str, context: Context = MISSIONS, *, include_content: bool = False
 ) -> FilesystemRecord
 ```
 
@@ -25610,7 +28684,7 @@ Parameters:
 
 - ##### **`context`**
 
-  (`Literal['mission', 'setup']`, default: `'mission'` ) – The context of the files (mission or setup)
+  (`Context`, default: `MISSIONS` ) – The context of the file (mission/setup, or user/organization for cross-owner reads)
 
 - ##### **`include_content`**
 
@@ -25823,6 +28897,7 @@ Methods:
 - **`evict_cached_channel`** – Force-close and remove a cached channel regardless of refcount.
 - **`evict_consumer_channel`** – Force a fresh channel on the next dial to address.
 - **`exec_grpc_query`** – Execute a gRPC query with circuit breaker protection and retry.
+- **`get_module_config_schema`** – Get the module's config-setup JSON schema via gRPC (GetConfigSetupModule).
 - **`get_module_schemas`** – Get module schemas via gRPC.
 - **`release_cached_channel`** – Decrement refcount for a cache key and close channel when last ref is released.
 - **`set_m2m_call_registry`** – Register the process-singleton M2MCallRegistry for call_module.
@@ -26024,6 +29099,34 @@ Raises:
 
 - `ServerError` – gRPC error with status code and details for caller to handle.
 
+#### get_module_config_schema
+
+```python
+get_module_config_schema(
+    module_address: str, module_port: int, *, llm_format: bool = False
+) -> dict[str, Any]
+```
+
+Get the module's config-setup JSON schema via gRPC (`GetConfigSetupModule`).
+
+Parameters:
+
+- ##### **`module_address`**
+
+  (`str`) – Target module address.
+
+- ##### **`module_port`**
+
+  (`int`) – Target module port.
+
+- ##### **`llm_format`**
+
+  (`bool`, default: `False` ) – Return the LLM-friendly schema format.
+
+Returns:
+
+- `dict[str, Any]` – The config-setup JSON schema (the fields a caller fills at setup/update).
+
 #### get_module_schemas
 
 ```python
@@ -26181,11 +29284,16 @@ Methods:
 - **`close`** – Release resources held by this strategy. No-op by default.
 - **`deregister`** – Deregister a module from the registry.
 - **`discover_by_id`** – Get module info by ID.
+- **`get_service_setup`** – Fetch a service setup's setup_version content JSON.
 - **`get_setup`** – Get setup info.
 - **`get_status`** – Get module status.
 - **`heartbeat`** – Send heartbeat to keep module active.
 - **`register`** – Register a module with the registry.
-- **`search`** – Search for modules by criteria.
+- **`search`** – Search the module catalog (module blueprints; needs a setup to be invocable).
+- **`search_kins`** – Kin registry view: modules of type ARCHETYPE.
+- **`search_services`** – Service registry view: modules of type SERVICE.
+- **`search_setups`** – Search the setup catalog (configured, invocable module instances).
+- **`search_tools`** – Tool registry view: modules of type TOOL_MODULE.
 - **`wait_for_ready`** – Check if the registry backend is reachable.
 
 #### close
@@ -26221,6 +29329,26 @@ discover_by_id(module_id: str) -> ModuleInfo
 ```
 
 Get module info by ID.
+
+#### get_service_setup
+
+```python
+get_service_setup(setup_id: str) -> dict[str, Any] | None
+```
+
+Fetch a service setup's setup_version content JSON.
+
+The id comes from chat-driven discovery (`search_setups` + user acceptance), not from configuration. Goes through `get_setup` on every call — the registry stays the permission gate; nothing cached. Content always reflects the latest setup version.
+
+Parameters:
+
+- ##### **`setup_id`**
+
+  (`str`) – The discovered service setup id.
+
+Returns:
+
+- `dict[str, Any] | None` – The setup_version content, or None when the setup is missing or has no content.
 
 #### get_setup
 
@@ -26263,12 +29391,19 @@ Raises:
 #### register
 
 ```python
-register(module_id: str, address: str, port: int, version: str) -> ModuleInfo | None
+register(
+    module_id: str,
+    address: str,
+    port: int,
+    version: str,
+    module_type: RegistryModuleType = UNSPECIFIED,
+    documentation: str = "",
+) -> ModuleInfo | None
 ```
 
 Register a module with the registry.
 
-Note: The new proto only updates address/port/version for an existing module. The module must already exist in the registry database.
+Note: The module must already exist in the registry database; registration updates its address/port/version and declares its type.
 
 Parameters:
 
@@ -26288,6 +29423,14 @@ Parameters:
 
   (`str`) – Module version.
 
+- ##### **`module_type`**
+
+  (`RegistryModuleType`, default: `UNSPECIFIED` ) – Declared module type (tool or archetype/kin).
+
+- ##### **`documentation`**
+
+  (`str`, default: `''` ) – Internal documentation for registry index search.
+
 Returns:
 
 - `ModuleInfo | None` – ModuleInfo if successful, None otherwise.
@@ -26298,29 +29441,174 @@ Returns:
 search(
     name: str | None = None,
     module_type: str | None = None,
-    organization_id: str | None = None,
+    limit: int = 20,
+    offset: int = 0,
 ) -> list[ModuleInfo]
 ```
 
-Search for modules by criteria.
+Search the module catalog (module blueprints; needs a setup to be invocable).
 
 Parameters:
 
 - ##### **`name`**
 
-  (`str | None`, default: `None` ) – Filter by name (partial match via query).
+  (`str | None`, default: `None` ) – Case-insensitive free text matched against module name AND documentation.
 
 - ##### **`module_type`**
 
-  (`str | None`, default: `None` ) – Filter by type (archetype, tool).
+  (`str | None`, default: `None` ) – Filter by type (archetype, tool_module, service).
 
-- ##### **`organization_id`**
+- ##### **`limit`**
 
-  (`str | None`, default: `None` ) – Filter by organization.
+  (`int`, default: `20` ) – Max results (1-100).
+
+- ##### **`offset`**
+
+  (`int`, default: `0` ) – Pagination offset.
 
 Returns:
 
-- `list[ModuleInfo]` – List of matching modules.
+- `list[ModuleInfo]` – List of matching modules as trimmed ModuleInfo (address/port are never
+- `list[ModuleInfo]` – populated by search — resolve via discover_by_id when wiring communication).
+
+#### search_kins
+
+```python
+search_kins(
+    name: str | None = None, limit: int = 20, offset: int = 0
+) -> list[ModuleInfo]
+```
+
+Kin registry view: modules of type ARCHETYPE.
+
+Parameters:
+
+- ##### **`name`**
+
+  (`str | None`, default: `None` ) – Case-insensitive free text matched against module name AND documentation.
+
+- ##### **`limit`**
+
+  (`int`, default: `20` ) – Max results (1-100).
+
+- ##### **`offset`**
+
+  (`int`, default: `0` ) – Pagination offset.
+
+Returns:
+
+- `list[ModuleInfo]` – List of matching archetype (kin) modules.
+
+#### search_services
+
+```python
+search_services(
+    name: str | None = None, limit: int = 20, offset: int = 0
+) -> list[ModuleInfo]
+```
+
+Service registry view: modules of type SERVICE.
+
+Parameters:
+
+- ##### **`name`**
+
+  (`str | None`, default: `None` ) – Case-insensitive free text matched against module name AND documentation.
+
+- ##### **`limit`**
+
+  (`int`, default: `20` ) – Max results (1-100).
+
+- ##### **`offset`**
+
+  (`int`, default: `0` ) – Pagination offset.
+
+Returns:
+
+- `list[ModuleInfo]` – List of matching service modules.
+
+#### search_setups
+
+```python
+search_setups(
+    query: str | None = None,
+    setup_ids: list[str] | None = None,
+    module_ids: list[str] | None = None,
+    module_types: list[RegistryModuleType] | None = None,
+    statuses: list[RegistrySetupStatus] | None = None,
+    visibilities: list[RegistryVisibility] | None = None,
+    limit: int = 20,
+    offset: int = 0,
+) -> list[SetupSummary]
+```
+
+Search the setup catalog (configured, invocable module instances).
+
+Parameters:
+
+- ##### **`query`**
+
+  (`str | None`, default: `None` ) – Case-insensitive free text matched against setup name AND documentation.
+
+- ##### **`setup_ids`**
+
+  (`list[str] | None`, default: `None` ) – Restrict to these setup ids.
+
+- ##### **`module_ids`**
+
+  (`list[str] | None`, default: `None` ) – Restrict to setups backed by these modules.
+
+- ##### **`module_types`**
+
+  (`list[RegistryModuleType] | None`, default: `None` ) – Filter by backing module type (tool_module, archetype, service).
+
+- ##### **`statuses`**
+
+  (`list[RegistrySetupStatus] | None`, default: `None` ) – Filter by setup status. None = no filter; agent-facing callers should pass READY/CONFIGURATION_SUCCEEDED for invocable setups.
+
+- ##### **`visibilities`**
+
+  (`list[RegistryVisibility] | None`, default: `None` ) – Filter by visibility.
+
+- ##### **`limit`**
+
+  (`int`, default: `20` ) – Max results (1-100).
+
+- ##### **`offset`**
+
+  (`int`, default: `0` ) – Pagination offset.
+
+Returns:
+
+- `list[SetupSummary]` – Matching setups as SetupSummary (no config field by construction).
+
+#### search_tools
+
+```python
+search_tools(
+    name: str | None = None, limit: int = 20, offset: int = 0
+) -> list[ModuleInfo]
+```
+
+Tool registry view: modules of type TOOL_MODULE.
+
+Parameters:
+
+- ##### **`name`**
+
+  (`str | None`, default: `None` ) – Case-insensitive free text matched against module name AND documentation.
+
+- ##### **`limit`**
+
+  (`int`, default: `20` ) – Max results (1-100).
+
+- ##### **`offset`**
+
+  (`int`, default: `0` ) – Pagination offset.
+
+Returns:
+
+- `list[ModuleInfo]` – List of matching tool modules.
 
 #### wait_for_ready
 
@@ -26368,7 +29656,7 @@ Define CRUD + list/remove-collection against a collection/record store.
 
 Records are scoped by a `context` string (the proto field), which is either `self.mission_id` (mission scope, the default) or `self.setup_version_id` (setup-version scope). Both attributes are expected to already contain the full prefix (`missions:<id>` / `setup_versions:<id>`).
 
-Public methods accept `scope: Literal["mission", "setup"]` (default `"mission"`); internally we resolve it to the matching context string and pass that to the abstract `_store/_read/_update/_remove/_list/_remove_collection`.
+Public methods accept a `context: Context` kind (default `Context.MISSIONS`); internally we resolve it to the matching context string and pass that to the abstract `_store/_read/_update/_remove/_list/_remove_collection`. `Context.USERS`/`Context.ORGANIZATIONS` are read-only cross-owner scopes usable only for listing.
 
 Parameters:
 
@@ -26410,7 +29698,11 @@ Release resources held by this strategy. No-op by default.
 #### list
 
 ```python
-list(collection: str, scope: Scope = 'mission') -> list[StorageRecord]
+list(
+    collection: str,
+    context: Context = MISSIONS,
+    visibilities: list[Visibility] | None = None,
+) -> list[StorageRecord]
 ```
 
 Get all records in a collection under the given scope.
@@ -26421,9 +29713,13 @@ Parameters:
 
   (`str`) – The unique name for the record type
 
-- ##### **`scope`**
+- ##### **`context`**
 
-  (`Scope`, default: `'mission'` ) – Which context to list (default: "mission").
+  (`Context`, default: `MISSIONS` ) – Which context to list (default: "mission"). "user"/"organization" list across an owner and require owner_id.
+
+- ##### **`visibilities`**
+
+  (`list[Visibility] | None`, default: `None` ) – Optional read-access scopes to filter by (None = no filter).
 
 Returns:
 
@@ -26432,7 +29728,9 @@ Returns:
 #### read
 
 ```python
-read(collection: str, record_id: str, scope: Scope = 'mission') -> StorageRecord | None
+read(
+    collection: str, record_id: str, context: Context = MISSIONS
+) -> StorageRecord | None
 ```
 
 Get a record by key under the given scope.
@@ -26447,9 +29745,9 @@ Parameters:
 
   (`str`) – The unique ID of the record
 
-- ##### **`scope`**
+- ##### **`context`**
 
-  (`Scope`, default: `'mission'` ) – Which context to read from (default: "mission").
+  (`Context`, default: `MISSIONS` ) – Which context to read from (default: "mission").
 
 Returns:
 
@@ -26458,7 +29756,7 @@ Returns:
 #### remove
 
 ```python
-remove(collection: str, record_id: str, scope: Scope = 'mission') -> bool
+remove(collection: str, record_id: str, context: Context = MISSIONS) -> bool
 ```
 
 Delete a record from the storage under the given scope.
@@ -26473,9 +29771,9 @@ Parameters:
 
   (`str`) – The unique ID of the record
 
-- ##### **`scope`**
+- ##### **`context`**
 
-  (`Scope`, default: `'mission'` ) – Which context the record lives under (default: "mission").
+  (`Context`, default: `MISSIONS` ) – Which context the record lives under (default: "mission").
 
 Returns:
 
@@ -26484,7 +29782,7 @@ Returns:
 #### remove_collection
 
 ```python
-remove_collection(collection: str, scope: Scope = 'mission') -> bool
+remove_collection(collection: str, context: Context = MISSIONS) -> bool
 ```
 
 Wipe a collection clean under the given scope.
@@ -26495,9 +29793,9 @@ Parameters:
 
   (`str`) – The unique name for the record type
 
-- ##### **`scope`**
+- ##### **`context`**
 
-  (`Scope`, default: `'mission'` ) – Which context the records live under (default: "mission").
+  (`Context`, default: `MISSIONS` ) – Which context the records live under (default: "mission").
 
 Returns:
 
@@ -26510,8 +29808,9 @@ store(
     collection: str,
     record_id: str | None,
     data: dict[str, Any],
-    data_type: Literal["OUTPUT", "VIEW", "LOGS", "OTHER"] = "OUTPUT",
-    scope: Scope = "mission",
+    data_type: DataType = OUTPUT,
+    context: Context = MISSIONS,
+    visibility: Visibility = UNSPECIFIED,
 ) -> StorageRecord
 ```
 
@@ -26533,11 +29832,15 @@ Parameters:
 
 - ##### **`data_type`**
 
-  (`Literal['OUTPUT', 'VIEW', 'LOGS', 'OTHER']`, default: `'OUTPUT'` ) – The type of data being stored (default: OUTPUT)
+  (`DataType`, default: `OUTPUT` ) – The type of data being stored (default: OUTPUT)
 
-- ##### **`scope`**
+- ##### **`context`**
 
-  (`Scope`, default: `'mission'` ) – "mission" (default) writes under the current mission context; "setup" writes under the setup-version context.
+  (`Context`, default: `MISSIONS` ) – "mission" (default) writes under the current mission context; "setup" writes under the setup-version context.
+
+- ##### **`visibility`**
+
+  (`Visibility`, default: `UNSPECIFIED` ) – Read-access scope for the record (UNSPECIFIED = server default).
 
 Returns:
 
@@ -26551,7 +29854,11 @@ Raises:
 
 ```python
 update(
-    collection: str, record_id: str, data: dict[str, Any], scope: Scope = "mission"
+    collection: str,
+    record_id: str,
+    data: dict[str, Any],
+    context: Context = MISSIONS,
+    visibility: Visibility = UNSPECIFIED,
 ) -> StorageRecord | None
 ```
 
@@ -26571,9 +29878,13 @@ Parameters:
 
   (`dict[str, Any]`) – The new data to store
 
-- ##### **`scope`**
+- ##### **`context`**
 
-  (`Scope`, default: `'mission'` ) – Which context the record lives under (default: "mission").
+  (`Context`, default: `MISSIONS` ) – Which context the record lives under (default: "mission").
+
+- ##### **`visibility`**
+
+  (`Visibility`, default: `UNSPECIFIED` ) – New read-access scope; UNSPECIFIED leaves it unchanged.
 
 Returns:
 
@@ -26586,8 +29897,9 @@ upsert(
     collection: str,
     record_id: str,
     data: dict[str, Any],
-    data_type: Literal["OUTPUT", "VIEW", "LOGS", "OTHER"] = "OUTPUT",
-    scope: Scope = "mission",
+    data_type: DataType = OUTPUT,
+    context: Context = MISSIONS,
+    visibility: Visibility = UNSPECIFIED,
 ) -> StorageRecord
 ```
 
@@ -26611,11 +29923,15 @@ Parameters:
 
 - ##### **`data_type`**
 
-  (`Literal['OUTPUT', 'VIEW', 'LOGS', 'OTHER']`, default: `'OUTPUT'` ) – The type of data being stored (default: OUTPUT)
+  (`DataType`, default: `OUTPUT` ) – The type of data being stored (default: OUTPUT)
 
-- ##### **`scope`**
+- ##### **`context`**
 
-  (`Scope`, default: `'mission'` ) – Which context to upsert under (default: "mission").
+  (`Context`, default: `MISSIONS` ) – Which context to upsert under (default: "mission").
+
+- ##### **`visibility`**
+
+  (`Visibility`, default: `UNSPECIFIED` ) – Read-access scope for the record (UNSPECIFIED = server default).
 
 Returns:
 
@@ -26739,6 +30055,7 @@ Methods:
 
 - **`call_module`** – Call a remote module via its GatewayService and stream outputs.
 - **`close`** – Release communication resources (channels, connection pools).
+- **`get_module_config_schema`** – Get the module's config-setup JSON schema (the fields a caller fills at setup/update).
 - **`get_module_schemas`** – Get module schemas (input/output/setup/secret/cost).
 
 ##### call_module
@@ -26800,6 +30117,36 @@ close() -> None
 ```
 
 Release communication resources (channels, connection pools).
+
+##### get_module_config_schema
+
+```python
+get_module_config_schema(
+    module_address: str, module_port: int, *, llm_format: bool = False
+) -> dict[str, Any]
+```
+
+Get the module's config-setup JSON schema (the fields a caller fills at setup/update).
+
+Concrete implementations that can reach the module override this. The default returns an empty schema so callers treat "no schema" as "skip validation".
+
+Parameters:
+
+- ###### **`module_address`**
+
+  (`str`) – Target module address.
+
+- ###### **`module_port`**
+
+  (`int`) – Target module port.
+
+- ###### **`llm_format`**
+
+  (`bool`, default: `False` ) – Return the LLM-friendly schema format.
+
+Returns:
+
+- `dict[str, Any]` – The config-setup JSON schema, or {} when unavailable.
 
 ##### get_module_schemas
 
@@ -26876,6 +30223,7 @@ Methods:
 
 - **`call_module`** – No-op stub for local-mode tests. Yields nothing.
 - **`close`** – No-op for local communication.
+- **`get_module_config_schema`** – Get the module's config-setup JSON schema (the fields a caller fills at setup/update).
 - **`get_module_schemas`** – Get module schemas (local implementation returns empty schemas).
 
 ##### call_module
@@ -26937,6 +30285,36 @@ close() -> None
 ```
 
 No-op for local communication.
+
+##### get_module_config_schema
+
+```python
+get_module_config_schema(
+    module_address: str, module_port: int, *, llm_format: bool = False
+) -> dict[str, Any]
+```
+
+Get the module's config-setup JSON schema (the fields a caller fills at setup/update).
+
+Concrete implementations that can reach the module override this. The default returns an empty schema so callers treat "no schema" as "skip validation".
+
+Parameters:
+
+- ###### **`module_address`**
+
+  (`str`) – Target module address.
+
+- ###### **`module_port`**
+
+  (`int`) – Target module port.
+
+- ###### **`llm_format`**
+
+  (`bool`, default: `False` ) – Return the LLM-friendly schema format.
+
+Returns:
+
+- `dict[str, Any]` – The config-setup JSON schema, or {} when unavailable.
 
 ##### get_module_schemas
 
@@ -27039,6 +30417,7 @@ Methods:
 - **`evict_cached_channel`** – Force-close and remove a cached channel regardless of refcount.
 - **`evict_consumer_channel`** – Force a fresh channel on the next dial to address.
 - **`exec_grpc_query`** – Execute a gRPC query with circuit breaker protection and retry.
+- **`get_module_config_schema`** – Get the module's config-setup JSON schema via gRPC (GetConfigSetupModule).
 - **`get_module_schemas`** – Get module schemas via gRPC.
 - **`release_cached_channel`** – Decrement refcount for a cache key and close channel when last ref is released.
 - **`set_m2m_call_registry`** – Register the process-singleton M2MCallRegistry for call_module.
@@ -27240,6 +30619,34 @@ Raises:
 
 - `ServerError` – gRPC error with status code and details for caller to handle.
 
+##### get_module_config_schema
+
+```python
+get_module_config_schema(
+    module_address: str, module_port: int, *, llm_format: bool = False
+) -> dict[str, Any]
+```
+
+Get the module's config-setup JSON schema via gRPC (`GetConfigSetupModule`).
+
+Parameters:
+
+- ###### **`module_address`**
+
+  (`str`) – Target module address.
+
+- ###### **`module_port`**
+
+  (`int`) – Target module port.
+
+- ###### **`llm_format`**
+
+  (`bool`, default: `False` ) – Return the LLM-friendly schema format.
+
+Returns:
+
+- `dict[str, Any]` – The config-setup JSON schema (the fields a caller fills at setup/update).
+
 ##### get_module_schemas
 
 ```python
@@ -27416,6 +30823,7 @@ Methods:
 
 - **`call_module`** – Call a remote module via its GatewayService and stream outputs.
 - **`close`** – Release communication resources (channels, connection pools).
+- **`get_module_config_schema`** – Get the module's config-setup JSON schema (the fields a caller fills at setup/update).
 - **`get_module_schemas`** – Get module schemas (input/output/setup/secret/cost).
 
 ###### call_module
@@ -27477,6 +30885,36 @@ close() -> None
 ```
 
 Release communication resources (channels, connection pools).
+
+###### get_module_config_schema
+
+```python
+get_module_config_schema(
+    module_address: str, module_port: int, *, llm_format: bool = False
+) -> dict[str, Any]
+```
+
+Get the module's config-setup JSON schema (the fields a caller fills at setup/update).
+
+Concrete implementations that can reach the module override this. The default returns an empty schema so callers treat "no schema" as "skip validation".
+
+Parameters:
+
+- ###### **`module_address`**
+
+  (`str`) – Target module address.
+
+- ###### **`module_port`**
+
+  (`int`) – Target module port.
+
+- ###### **`llm_format`**
+
+  (`bool`, default: `False` ) – Return the LLM-friendly schema format.
+
+Returns:
+
+- `dict[str, Any]` – The config-setup JSON schema, or {} when unavailable.
 
 ###### get_module_schemas
 
@@ -27561,6 +30999,7 @@ Methods:
 
 - **`call_module`** – No-op stub for local-mode tests. Yields nothing.
 - **`close`** – No-op for local communication.
+- **`get_module_config_schema`** – Get the module's config-setup JSON schema (the fields a caller fills at setup/update).
 - **`get_module_schemas`** – Get module schemas (local implementation returns empty schemas).
 
 ###### call_module
@@ -27623,6 +31062,36 @@ close() -> None
 
 No-op for local communication.
 
+###### get_module_config_schema
+
+```python
+get_module_config_schema(
+    module_address: str, module_port: int, *, llm_format: bool = False
+) -> dict[str, Any]
+```
+
+Get the module's config-setup JSON schema (the fields a caller fills at setup/update).
+
+Concrete implementations that can reach the module override this. The default returns an empty schema so callers treat "no schema" as "skip validation".
+
+Parameters:
+
+- ###### **`module_address`**
+
+  (`str`) – Target module address.
+
+- ###### **`module_port`**
+
+  (`int`) – Target module port.
+
+- ###### **`llm_format`**
+
+  (`bool`, default: `False` ) – Return the LLM-friendly schema format.
+
+Returns:
+
+- `dict[str, Any]` – The config-setup JSON schema, or {} when unavailable.
+
 ###### get_module_schemas
 
 ```python
@@ -27660,6 +31129,7 @@ Classes:
 - **`InvalidConsumerAddressError`** – address is not a valid host:port for dial-back.
 - **`M2MCallTimeout`** – output_queue.get() exceeded call_timeout_s waiting for a target output.
 - **`M2MTargetUnavailable`** – The per-target circuit breaker is open; fast-fail without hitting the wire.
+- **`ToolCallError`** – A called tool module returned a fatal stream.error; message carries [CODE] message.
 
 ##### InvalidConsumerAddressError
 
@@ -27699,6 +31169,19 @@ Classes:
 ```
 
 The per-target circuit breaker is open; fast-fail without hitting the wire.
+
+##### ToolCallError
+
+```
+              flowchart TD
+              digitalkin.services.communication.exceptions.ToolCallError[ToolCallError]
+
+              
+
+              click digitalkin.services.communication.exceptions.ToolCallError href "" "digitalkin.services.communication.exceptions.ToolCallError"
+```
+
+A called tool module returned a fatal `stream.error`; message carries `[CODE] message`.
 
 #### grpc_communication
 
@@ -27781,6 +31264,7 @@ Methods:
 - **`evict_cached_channel`** – Force-close and remove a cached channel regardless of refcount.
 - **`evict_consumer_channel`** – Force a fresh channel on the next dial to address.
 - **`exec_grpc_query`** – Execute a gRPC query with circuit breaker protection and retry.
+- **`get_module_config_schema`** – Get the module's config-setup JSON schema via gRPC (GetConfigSetupModule).
 - **`get_module_schemas`** – Get module schemas via gRPC.
 - **`release_cached_channel`** – Decrement refcount for a cache key and close channel when last ref is released.
 - **`set_m2m_call_registry`** – Register the process-singleton M2MCallRegistry for call_module.
@@ -27981,6 +31465,34 @@ Returns:
 Raises:
 
 - `ServerError` – gRPC error with status code and details for caller to handle.
+
+###### get_module_config_schema
+
+```python
+get_module_config_schema(
+    module_address: str, module_port: int, *, llm_format: bool = False
+) -> dict[str, Any]
+```
+
+Get the module's config-setup JSON schema via gRPC (`GetConfigSetupModule`).
+
+Parameters:
+
+- ###### **`module_address`**
+
+  (`str`) – Target module address.
+
+- ###### **`module_port`**
+
+  (`int`) – Target module port.
+
+- ###### **`llm_format`**
+
+  (`bool`, default: `False` ) – Return the LLM-friendly schema format.
+
+Returns:
+
+- `dict[str, Any]` – The config-setup JSON schema (the fields a caller fills at setup/update).
 
 ###### get_module_schemas
 
@@ -29674,10 +33186,7 @@ Raises:
 
 ```python
 get_file(
-    file_id: str,
-    context: Literal["mission", "setup"] = "mission",
-    *,
-    include_content: bool = False,
+    file_id: str, context: Context = MISSIONS, *, include_content: bool = False
 ) -> FilesystemRecord
 ```
 
@@ -29693,7 +33202,7 @@ Parameters:
 
 - ###### **`context`**
 
-  (`Literal['mission', 'setup']`, default: `'mission'` ) – The context of the files (mission or setup)
+  (`Context`, default: `MISSIONS` ) – The context of the files (mission or setup)
 
 - ###### **`include_content`**
 
@@ -29949,10 +33458,7 @@ Returns:
 
 ```python
 get_file(
-    file_id: str,
-    context: Literal["mission", "setup"] = "mission",
-    *,
-    include_content: bool = False,
+    file_id: str, context: Context = MISSIONS, *, include_content: bool = False
 ) -> FilesystemRecord
 ```
 
@@ -29968,7 +33474,7 @@ Parameters:
 
 - ###### **`context`**
 
-  (`Literal['mission', 'setup']`, default: `'mission'` ) – The context of the files (mission or setup)
+  (`Context`, default: `MISSIONS` ) – The context of the file (mission/setup, or user/organization for cross-owner reads)
 
 - ###### **`include_content`**
 
@@ -30303,10 +33809,7 @@ Raises:
 
 ```python
 get_file(
-    file_id: str,
-    context: Literal["mission", "setup"] = "mission",
-    *,
-    include_content: bool = False,
+    file_id: str, context: Context = MISSIONS, *, include_content: bool = False
 ) -> FilesystemRecord
 ```
 
@@ -30320,7 +33823,7 @@ Parameters:
 
 - ###### **`context`**
 
-  (`Literal['mission', 'setup']`, default: `'mission'` ) – The context of the files (mission or setup)
+  (`Context`, default: `MISSIONS` ) – The context of the file (mission/setup, or user/organization for cross-owner reads)
 
 - ###### **`include_content`**
 
@@ -30603,10 +34106,7 @@ Raises:
 
 ```python
 get_file(
-    file_id: str,
-    context: Literal["mission", "setup"] = "mission",
-    *,
-    include_content: bool = False,
+    file_id: str, context: Context = MISSIONS, *, include_content: bool = False
 ) -> FilesystemRecord
 ```
 
@@ -30622,7 +34122,7 @@ Parameters:
 
 - ###### **`context`**
 
-  (`Literal['mission', 'setup']`, default: `'mission'` ) – The context of the files (mission or setup)
+  (`Context`, default: `MISSIONS` ) – The context of the files (mission or setup)
 
 - ###### **`include_content`**
 
@@ -30936,10 +34436,7 @@ Returns:
 
 ```python
 get_file(
-    file_id: str,
-    context: Literal["mission", "setup"] = "mission",
-    *,
-    include_content: bool = False,
+    file_id: str, context: Context = MISSIONS, *, include_content: bool = False
 ) -> FilesystemRecord
 ```
 
@@ -30955,7 +34452,7 @@ Parameters:
 
 - ###### **`context`**
 
-  (`Literal['mission', 'setup']`, default: `'mission'` ) – The context of the files (mission or setup)
+  (`Context`, default: `MISSIONS` ) – The context of the file (mission/setup, or user/organization for cross-owner reads)
 
 - ###### **`include_content`**
 
@@ -31311,10 +34808,7 @@ Raises:
 
 ```python
 get_file(
-    file_id: str,
-    context: Literal["mission", "setup"] = "mission",
-    *,
-    include_content: bool = False,
+    file_id: str, context: Context = MISSIONS, *, include_content: bool = False
 ) -> FilesystemRecord
 ```
 
@@ -31328,7 +34822,7 @@ Parameters:
 
 - ###### **`context`**
 
-  (`Literal['mission', 'setup']`, default: `'mission'` ) – The context of the files (mission or setup)
+  (`Context`, default: `MISSIONS` ) – The context of the file (mission/setup, or user/organization for cross-owner reads)
 
 - ###### **`include_content`**
 
@@ -31823,15 +35317,35 @@ Default registry strategy using in-memory storage.
 
 Methods:
 
+- **`add_setup`** – Add a setup to the in-memory store (helper for testing).
 - **`close`** – Release resources held by this strategy. No-op by default.
 - **`deregister`** – Deregister a module from the registry.
 - **`discover_by_id`** – Get module info by ID.
-- **`get_setup`** – Get setup info (not supported in default registry).
+- **`get_service_setup`** – Fetch a service setup's setup_version content JSON.
+- **`get_setup`** – Get setup info from the in-memory store.
 - **`get_status`** – Get module status.
 - **`heartbeat`** – Send heartbeat to keep module active.
 - **`register`** – Register a module with the registry.
-- **`search`** – Search for modules by criteria.
+- **`search`** – Search the module catalog (module blueprints; needs a setup to be invocable).
+- **`search_kins`** – Kin registry view: modules of type ARCHETYPE.
+- **`search_services`** – Service registry view: modules of type SERVICE.
+- **`search_setups`** – Search the setup catalog (configured, invocable module instances).
+- **`search_tools`** – Tool registry view: modules of type TOOL_MODULE.
 - **`wait_for_ready`** – Local registry is always ready (in-memory store).
+
+##### add_setup
+
+```python
+add_setup(setup: SetupInfo) -> None
+```
+
+Add a setup to the in-memory store (helper for testing).
+
+Parameters:
+
+- ###### **`setup`**
+
+  (`SetupInfo`) – The setup to store, keyed by its setup_id.
 
 ##### close
 
@@ -31881,19 +35395,43 @@ Raises:
 
 - `RegistryModuleNotFoundError` – If module not found.
 
+##### get_service_setup
+
+```python
+get_service_setup(setup_id: str) -> dict[str, Any] | None
+```
+
+Fetch a service setup's setup_version content JSON.
+
+The id comes from chat-driven discovery (`search_setups` + user acceptance), not from configuration. Goes through `get_setup` on every call — the registry stays the permission gate; nothing cached. Content always reflects the latest setup version.
+
+Parameters:
+
+- ###### **`setup_id`**
+
+  (`str`) – The discovered service setup id.
+
+Returns:
+
+- `dict[str, Any] | None` – The setup_version content, or None when the setup is missing or has no content.
+
 ##### get_setup
 
 ```python
-get_setup(setup_id: str) -> None
+get_setup(setup_id: str) -> SetupInfo | None
 ```
 
-Get setup info (not supported in default registry).
+Get setup info from the in-memory store.
 
 Parameters:
 
 - ###### **`setup_id`**
 
   (`str`) – The setup identifier.
+
+Returns:
+
+- `SetupInfo | None` – SetupInfo if present, None otherwise.
 
 ##### get_status
 
@@ -31942,7 +35480,14 @@ Raises:
 ##### register
 
 ```python
-register(module_id: str, address: str, port: int, version: str) -> ModuleInfo | None
+register(
+    module_id: str,
+    address: str,
+    port: int,
+    version: str,
+    module_type: RegistryModuleType = UNSPECIFIED,
+    documentation: str = "",
+) -> ModuleInfo | None
 ```
 
 Register a module with the registry.
@@ -31967,6 +35512,14 @@ Parameters:
 
   (`str`) – Module version.
 
+- ###### **`module_type`**
+
+  (`RegistryModuleType`, default: `UNSPECIFIED` ) – Declared module type; UNSPECIFIED preserves the existing record's type.
+
+- ###### **`documentation`**
+
+  (`str`, default: `''` ) – Internal documentation for registry index search.
+
 Returns:
 
 - `ModuleInfo | None` – ModuleInfo if successful, None otherwise.
@@ -31977,29 +35530,173 @@ Returns:
 search(
     name: str | None = None,
     module_type: str | None = None,
-    organization_id: str | None = None,
+    limit: int = 20,
+    offset: int = 0,
 ) -> list[ModuleInfo]
 ```
 
-Search for modules by criteria.
+Search the module catalog (module blueprints; needs a setup to be invocable).
 
 Parameters:
 
 - ###### **`name`**
 
-  (`str | None`, default: `None` ) – Filter by name (partial match).
+  (`str | None`, default: `None` ) – Case-insensitive free text matched against module name AND documentation.
 
 - ###### **`module_type`**
 
-  (`str | None`, default: `None` ) – Filter by type (archetype, tool).
+  (`str | None`, default: `None` ) – Filter by type (archetype, tool_module, service).
 
-- ###### **`organization_id`**
+- ###### **`limit`**
 
-  (`str | None`, default: `None` ) – Filter by organization (not used in local storage).
+  (`int`, default: `20` ) – Max results (1-100).
+
+- ###### **`offset`**
+
+  (`int`, default: `0` ) – Pagination offset.
 
 Returns:
 
 - `list[ModuleInfo]` – List of matching modules.
+
+##### search_kins
+
+```python
+search_kins(
+    name: str | None = None, limit: int = 20, offset: int = 0
+) -> list[ModuleInfo]
+```
+
+Kin registry view: modules of type ARCHETYPE.
+
+Parameters:
+
+- ###### **`name`**
+
+  (`str | None`, default: `None` ) – Case-insensitive free text matched against module name AND documentation.
+
+- ###### **`limit`**
+
+  (`int`, default: `20` ) – Max results (1-100).
+
+- ###### **`offset`**
+
+  (`int`, default: `0` ) – Pagination offset.
+
+Returns:
+
+- `list[ModuleInfo]` – List of matching archetype (kin) modules.
+
+##### search_services
+
+```python
+search_services(
+    name: str | None = None, limit: int = 20, offset: int = 0
+) -> list[ModuleInfo]
+```
+
+Service registry view: modules of type SERVICE.
+
+Parameters:
+
+- ###### **`name`**
+
+  (`str | None`, default: `None` ) – Case-insensitive free text matched against module name AND documentation.
+
+- ###### **`limit`**
+
+  (`int`, default: `20` ) – Max results (1-100).
+
+- ###### **`offset`**
+
+  (`int`, default: `0` ) – Pagination offset.
+
+Returns:
+
+- `list[ModuleInfo]` – List of matching service modules.
+
+##### search_setups
+
+```python
+search_setups(
+    query: str | None = None,
+    setup_ids: list[str] | None = None,
+    module_ids: list[str] | None = None,
+    module_types: list[RegistryModuleType] | None = None,
+    statuses: list[RegistrySetupStatus] | None = None,
+    visibilities: list[RegistryVisibility] | None = None,
+    limit: int = 20,
+    offset: int = 0,
+) -> list[SetupSummary]
+```
+
+Search the setup catalog (configured, invocable module instances).
+
+Parameters:
+
+- ###### **`query`**
+
+  (`str | None`, default: `None` ) – Case-insensitive free text matched against setup name AND documentation.
+
+- ###### **`setup_ids`**
+
+  (`list[str] | None`, default: `None` ) – Restrict to these setup ids.
+
+- ###### **`module_ids`**
+
+  (`list[str] | None`, default: `None` ) – Restrict to setups backed by these modules.
+
+- ###### **`module_types`**
+
+  (`list[RegistryModuleType] | None`, default: `None` ) – Filter by backing module type (tool_module, archetype, service).
+
+- ###### **`statuses`**
+
+  (`list[RegistrySetupStatus] | None`, default: `None` ) – Filter by setup status. None = no filter.
+
+- ###### **`visibilities`**
+
+  (`list[RegistryVisibility] | None`, default: `None` ) – Filter by visibility.
+
+- ###### **`limit`**
+
+  (`int`, default: `20` ) – Max results (1-100).
+
+- ###### **`offset`**
+
+  (`int`, default: `0` ) – Pagination offset.
+
+Returns:
+
+- `list[SetupSummary]` – Matching setups as SetupSummary (no config field by construction).
+
+##### search_tools
+
+```python
+search_tools(
+    name: str | None = None, limit: int = 20, offset: int = 0
+) -> list[ModuleInfo]
+```
+
+Tool registry view: modules of type TOOL_MODULE.
+
+Parameters:
+
+- ###### **`name`**
+
+  (`str | None`, default: `None` ) – Case-insensitive free text matched against module name AND documentation.
+
+- ###### **`limit`**
+
+  (`int`, default: `20` ) – Max results (1-100).
+
+- ###### **`offset`**
+
+  (`int`, default: `0` ) – Pagination offset.
+
+Returns:
+
+- `list[ModuleInfo]` – List of matching tool modules.
 
 ##### wait_for_ready
 
@@ -32069,13 +35766,18 @@ Methods:
 - **`discover_by_id`** – Get module info by ID.
 - **`evict_cached_channel`** – Force-close and remove a cached channel regardless of refcount.
 - **`exec_grpc_query`** – Execute a gRPC query with circuit breaker protection and retry.
+- **`get_service_setup`** – Fetch a service setup's setup_version content JSON.
 - **`get_setup`** – Get setup info.
 - **`get_status`** – Get module status by fetching the module.
 - **`handle_grpc_errors`** – Handle gRPC errors for the given operation.
 - **`heartbeat`** – Send heartbeat to keep module active.
 - **`register`** – Register a module with the registry.
 - **`release_cached_channel`** – Decrement refcount for a cache key and close channel when last ref is released.
-- **`search`** – Search for modules by criteria.
+- **`search`** – Search the module catalog (module blueprints; needs a setup to be invocable).
+- **`search_kins`** – Kin registry view: modules of type ARCHETYPE.
+- **`search_services`** – Service registry view: modules of type SERVICE.
+- **`search_setups`** – Search the setup catalog (configured, invocable module instances).
+- **`search_tools`** – Tool registry view: modules of type TOOL_MODULE.
 - **`wait_for_ready`** – Probe the registry via the standard gRPC Health Check service.
 
 ##### close
@@ -32147,6 +35849,7 @@ Returns:
 Raises:
 
 - `RegistryModuleNotFoundError` – If module not found.
+- `PermissionDeniedError` – If the caller is not permitted.
 - `RegistryServiceError` – If gRPC call fails.
 
 ##### evict_cached_channel
@@ -32208,6 +35911,26 @@ Raises:
 
 - `ServerError` – gRPC error with status code and details for caller to handle.
 
+##### get_service_setup
+
+```python
+get_service_setup(setup_id: str) -> dict[str, Any] | None
+```
+
+Fetch a service setup's setup_version content JSON.
+
+The id comes from chat-driven discovery (`search_setups` + user acceptance), not from configuration. Goes through `get_setup` on every call — the registry stays the permission gate; nothing cached. Content always reflects the latest setup version.
+
+Parameters:
+
+- ###### **`setup_id`**
+
+  (`str`) – The discovered service setup id.
+
+Returns:
+
+- `dict[str, Any] | None` – The setup_version content, or None when the setup is missing or has no content.
+
 ##### get_setup
 
 ```python
@@ -32228,6 +35951,7 @@ Returns:
 
 Raises:
 
+- `PermissionDeniedError` – If the caller is not permitted.
 - `RegistryServiceError` – If gRPC call fails.
 
 ##### get_status
@@ -32251,6 +35975,7 @@ Returns:
 Raises:
 
 - `RegistryModuleNotFoundError` – If module not found.
+- `PermissionDeniedError` – If the caller is not permitted.
 - `RegistryServiceError` – If gRPC call fails.
 
 ##### handle_grpc_errors
@@ -32303,17 +36028,25 @@ Returns:
 
 Raises:
 
+- `PermissionDeniedError` – If the caller is not permitted.
 - `RegistryServiceError` – If gRPC call fails.
 
 ##### register
 
 ```python
-register(module_id: str, address: str, port: int, version: str) -> ModuleInfo | None
+register(
+    module_id: str,
+    address: str,
+    port: int,
+    version: str,
+    module_type: RegistryModuleType = UNSPECIFIED,
+    documentation: str = "",
+) -> ModuleInfo | None
 ```
 
 Register a module with the registry.
 
-Note: The new proto only updates address/port/version for an existing module. The module must already exist in the registry database.
+Note: The module must already exist in the registry database; registration updates its address/port/version and declares its type.
 
 Parameters:
 
@@ -32333,12 +36066,21 @@ Parameters:
 
   (`str`) – Module version.
 
+- ###### **`module_type`**
+
+  (`RegistryModuleType`, default: `UNSPECIFIED` ) – Declared module type (tool or archetype/kin).
+
+- ###### **`documentation`**
+
+  (`str`, default: `''` ) – Internal documentation for registry index search.
+
 Returns:
 
 - `ModuleInfo | None` – ModuleInfo if successful, None if module not found.
 
 Raises:
 
+- `PermissionDeniedError` – If the caller is not permitted.
 - `RegistryServiceError` – If gRPC call fails.
 
 ##### release_cached_channel
@@ -32361,33 +36103,184 @@ Parameters:
 search(
     name: str | None = None,
     module_type: str | None = None,
-    organization_id: str | None = None,
+    limit: int = 20,
+    offset: int = 0,
 ) -> list[ModuleInfo]
 ```
 
-Search for modules by criteria.
+Search the module catalog (module blueprints; needs a setup to be invocable).
 
 Parameters:
 
 - ###### **`name`**
 
-  (`str | None`, default: `None` ) – Filter by name (partial match via query).
+  (`str | None`, default: `None` ) – Case-insensitive free text matched against module name AND documentation.
 
 - ###### **`module_type`**
 
-  (`str | None`, default: `None` ) – Filter by type (archetype, tool).
+  (`str | None`, default: `None` ) – Filter by type (archetype, tool_module, service).
 
-- ###### **`organization_id`**
+- ###### **`limit`**
 
-  (`str | None`, default: `None` ) – Filter by organization.
+  (`int`, default: `20` ) – Max results (1-100).
+
+- ###### **`offset`**
+
+  (`int`, default: `0` ) – Pagination offset.
 
 Returns:
 
-- `list[ModuleInfo]` – List of matching modules.
+- `list[ModuleInfo]` – List of matching modules as trimmed ModuleInfo (address/port are never
+- `list[ModuleInfo]` – populated by search — resolve via discover_by_id when wiring communication).
 
 Raises:
 
+- `PermissionDeniedError` – If the caller is not permitted.
 - `RegistryServiceError` – If gRPC call fails.
+
+##### search_kins
+
+```python
+search_kins(
+    name: str | None = None, limit: int = 20, offset: int = 0
+) -> list[ModuleInfo]
+```
+
+Kin registry view: modules of type ARCHETYPE.
+
+Parameters:
+
+- ###### **`name`**
+
+  (`str | None`, default: `None` ) – Case-insensitive free text matched against module name AND documentation.
+
+- ###### **`limit`**
+
+  (`int`, default: `20` ) – Max results (1-100).
+
+- ###### **`offset`**
+
+  (`int`, default: `0` ) – Pagination offset.
+
+Returns:
+
+- `list[ModuleInfo]` – List of matching archetype (kin) modules.
+
+##### search_services
+
+```python
+search_services(
+    name: str | None = None, limit: int = 20, offset: int = 0
+) -> list[ModuleInfo]
+```
+
+Service registry view: modules of type SERVICE.
+
+Parameters:
+
+- ###### **`name`**
+
+  (`str | None`, default: `None` ) – Case-insensitive free text matched against module name AND documentation.
+
+- ###### **`limit`**
+
+  (`int`, default: `20` ) – Max results (1-100).
+
+- ###### **`offset`**
+
+  (`int`, default: `0` ) – Pagination offset.
+
+Returns:
+
+- `list[ModuleInfo]` – List of matching service modules.
+
+##### search_setups
+
+```python
+search_setups(
+    query: str | None = None,
+    setup_ids: list[str] | None = None,
+    module_ids: list[str] | None = None,
+    module_types: list[RegistryModuleType] | None = None,
+    statuses: list[RegistrySetupStatus] | None = None,
+    visibilities: list[RegistryVisibility] | None = None,
+    limit: int = 20,
+    offset: int = 0,
+) -> list[SetupSummary]
+```
+
+Search the setup catalog (configured, invocable module instances).
+
+Parameters:
+
+- ###### **`query`**
+
+  (`str | None`, default: `None` ) – Case-insensitive free text matched against setup name AND documentation.
+
+- ###### **`setup_ids`**
+
+  (`list[str] | None`, default: `None` ) – Restrict to these setup ids.
+
+- ###### **`module_ids`**
+
+  (`list[str] | None`, default: `None` ) – Restrict to setups backed by these modules.
+
+- ###### **`module_types`**
+
+  (`list[RegistryModuleType] | None`, default: `None` ) – Filter by backing module type (tool_module, archetype, service).
+
+- ###### **`statuses`**
+
+  (`list[RegistrySetupStatus] | None`, default: `None` ) – Filter by setup status. None = no filter; agent-facing callers should pass READY/CONFIGURATION_SUCCEEDED for invocable setups.
+
+- ###### **`visibilities`**
+
+  (`list[RegistryVisibility] | None`, default: `None` ) – Filter by visibility.
+
+- ###### **`limit`**
+
+  (`int`, default: `20` ) – Max results (1-100).
+
+- ###### **`offset`**
+
+  (`int`, default: `0` ) – Pagination offset.
+
+Returns:
+
+- `list[SetupSummary]` – Matching setups as SetupSummary (no config field by construction).
+
+Raises:
+
+- `PermissionDeniedError` – If the caller is not permitted.
+- `RegistryServiceError` – If gRPC call fails.
+
+##### search_tools
+
+```python
+search_tools(
+    name: str | None = None, limit: int = 20, offset: int = 0
+) -> list[ModuleInfo]
+```
+
+Tool registry view: modules of type TOOL_MODULE.
+
+Parameters:
+
+- ###### **`name`**
+
+  (`str | None`, default: `None` ) – Case-insensitive free text matched against module name AND documentation.
+
+- ###### **`limit`**
+
+  (`int`, default: `20` ) – Max results (1-100).
+
+- ###### **`offset`**
+
+  (`int`, default: `0` ) – Pagination offset.
+
+Returns:
+
+- `list[ModuleInfo]` – List of matching tool modules.
 
 ##### wait_for_ready
 
@@ -32486,6 +36379,8 @@ Module status in the registry.
 
 Module type in the registry.
 
+Member names mirror the proto `ModuleType` enum (minus the `MODULE_TYPE_` prefix): they are looked up by name from the wire value, so they must match.
+
 #### RegistryServiceError
 
 ```
@@ -32532,11 +36427,16 @@ Methods:
 - **`close`** – Release resources held by this strategy. No-op by default.
 - **`deregister`** – Deregister a module from the registry.
 - **`discover_by_id`** – Get module info by ID.
+- **`get_service_setup`** – Fetch a service setup's setup_version content JSON.
 - **`get_setup`** – Get setup info.
 - **`get_status`** – Get module status.
 - **`heartbeat`** – Send heartbeat to keep module active.
 - **`register`** – Register a module with the registry.
-- **`search`** – Search for modules by criteria.
+- **`search`** – Search the module catalog (module blueprints; needs a setup to be invocable).
+- **`search_kins`** – Kin registry view: modules of type ARCHETYPE.
+- **`search_services`** – Service registry view: modules of type SERVICE.
+- **`search_setups`** – Search the setup catalog (configured, invocable module instances).
+- **`search_tools`** – Tool registry view: modules of type TOOL_MODULE.
 - **`wait_for_ready`** – Check if the registry backend is reachable.
 
 ##### close
@@ -32572,6 +36472,26 @@ discover_by_id(module_id: str) -> ModuleInfo
 ```
 
 Get module info by ID.
+
+##### get_service_setup
+
+```python
+get_service_setup(setup_id: str) -> dict[str, Any] | None
+```
+
+Fetch a service setup's setup_version content JSON.
+
+The id comes from chat-driven discovery (`search_setups` + user acceptance), not from configuration. Goes through `get_setup` on every call — the registry stays the permission gate; nothing cached. Content always reflects the latest setup version.
+
+Parameters:
+
+- ###### **`setup_id`**
+
+  (`str`) – The discovered service setup id.
+
+Returns:
+
+- `dict[str, Any] | None` – The setup_version content, or None when the setup is missing or has no content.
 
 ##### get_setup
 
@@ -32614,12 +36534,19 @@ Raises:
 ##### register
 
 ```python
-register(module_id: str, address: str, port: int, version: str) -> ModuleInfo | None
+register(
+    module_id: str,
+    address: str,
+    port: int,
+    version: str,
+    module_type: RegistryModuleType = UNSPECIFIED,
+    documentation: str = "",
+) -> ModuleInfo | None
 ```
 
 Register a module with the registry.
 
-Note: The new proto only updates address/port/version for an existing module. The module must already exist in the registry database.
+Note: The module must already exist in the registry database; registration updates its address/port/version and declares its type.
 
 Parameters:
 
@@ -32639,6 +36566,14 @@ Parameters:
 
   (`str`) – Module version.
 
+- ###### **`module_type`**
+
+  (`RegistryModuleType`, default: `UNSPECIFIED` ) – Declared module type (tool or archetype/kin).
+
+- ###### **`documentation`**
+
+  (`str`, default: `''` ) – Internal documentation for registry index search.
+
 Returns:
 
 - `ModuleInfo | None` – ModuleInfo if successful, None otherwise.
@@ -32649,29 +36584,174 @@ Returns:
 search(
     name: str | None = None,
     module_type: str | None = None,
-    organization_id: str | None = None,
+    limit: int = 20,
+    offset: int = 0,
 ) -> list[ModuleInfo]
 ```
 
-Search for modules by criteria.
+Search the module catalog (module blueprints; needs a setup to be invocable).
 
 Parameters:
 
 - ###### **`name`**
 
-  (`str | None`, default: `None` ) – Filter by name (partial match via query).
+  (`str | None`, default: `None` ) – Case-insensitive free text matched against module name AND documentation.
 
 - ###### **`module_type`**
 
-  (`str | None`, default: `None` ) – Filter by type (archetype, tool).
+  (`str | None`, default: `None` ) – Filter by type (archetype, tool_module, service).
 
-- ###### **`organization_id`**
+- ###### **`limit`**
 
-  (`str | None`, default: `None` ) – Filter by organization.
+  (`int`, default: `20` ) – Max results (1-100).
+
+- ###### **`offset`**
+
+  (`int`, default: `0` ) – Pagination offset.
 
 Returns:
 
-- `list[ModuleInfo]` – List of matching modules.
+- `list[ModuleInfo]` – List of matching modules as trimmed ModuleInfo (address/port are never
+- `list[ModuleInfo]` – populated by search — resolve via discover_by_id when wiring communication).
+
+##### search_kins
+
+```python
+search_kins(
+    name: str | None = None, limit: int = 20, offset: int = 0
+) -> list[ModuleInfo]
+```
+
+Kin registry view: modules of type ARCHETYPE.
+
+Parameters:
+
+- ###### **`name`**
+
+  (`str | None`, default: `None` ) – Case-insensitive free text matched against module name AND documentation.
+
+- ###### **`limit`**
+
+  (`int`, default: `20` ) – Max results (1-100).
+
+- ###### **`offset`**
+
+  (`int`, default: `0` ) – Pagination offset.
+
+Returns:
+
+- `list[ModuleInfo]` – List of matching archetype (kin) modules.
+
+##### search_services
+
+```python
+search_services(
+    name: str | None = None, limit: int = 20, offset: int = 0
+) -> list[ModuleInfo]
+```
+
+Service registry view: modules of type SERVICE.
+
+Parameters:
+
+- ###### **`name`**
+
+  (`str | None`, default: `None` ) – Case-insensitive free text matched against module name AND documentation.
+
+- ###### **`limit`**
+
+  (`int`, default: `20` ) – Max results (1-100).
+
+- ###### **`offset`**
+
+  (`int`, default: `0` ) – Pagination offset.
+
+Returns:
+
+- `list[ModuleInfo]` – List of matching service modules.
+
+##### search_setups
+
+```python
+search_setups(
+    query: str | None = None,
+    setup_ids: list[str] | None = None,
+    module_ids: list[str] | None = None,
+    module_types: list[RegistryModuleType] | None = None,
+    statuses: list[RegistrySetupStatus] | None = None,
+    visibilities: list[RegistryVisibility] | None = None,
+    limit: int = 20,
+    offset: int = 0,
+) -> list[SetupSummary]
+```
+
+Search the setup catalog (configured, invocable module instances).
+
+Parameters:
+
+- ###### **`query`**
+
+  (`str | None`, default: `None` ) – Case-insensitive free text matched against setup name AND documentation.
+
+- ###### **`setup_ids`**
+
+  (`list[str] | None`, default: `None` ) – Restrict to these setup ids.
+
+- ###### **`module_ids`**
+
+  (`list[str] | None`, default: `None` ) – Restrict to setups backed by these modules.
+
+- ###### **`module_types`**
+
+  (`list[RegistryModuleType] | None`, default: `None` ) – Filter by backing module type (tool_module, archetype, service).
+
+- ###### **`statuses`**
+
+  (`list[RegistrySetupStatus] | None`, default: `None` ) – Filter by setup status. None = no filter; agent-facing callers should pass READY/CONFIGURATION_SUCCEEDED for invocable setups.
+
+- ###### **`visibilities`**
+
+  (`list[RegistryVisibility] | None`, default: `None` ) – Filter by visibility.
+
+- ###### **`limit`**
+
+  (`int`, default: `20` ) – Max results (1-100).
+
+- ###### **`offset`**
+
+  (`int`, default: `0` ) – Pagination offset.
+
+Returns:
+
+- `list[SetupSummary]` – Matching setups as SetupSummary (no config field by construction).
+
+##### search_tools
+
+```python
+search_tools(
+    name: str | None = None, limit: int = 20, offset: int = 0
+) -> list[ModuleInfo]
+```
+
+Tool registry view: modules of type TOOL_MODULE.
+
+Parameters:
+
+- ###### **`name`**
+
+  (`str | None`, default: `None` ) – Case-insensitive free text matched against module name AND documentation.
+
+- ###### **`limit`**
+
+  (`int`, default: `20` ) – Max results (1-100).
+
+- ###### **`offset`**
+
+  (`int`, default: `0` ) – Pagination offset.
+
+Returns:
+
+- `list[ModuleInfo]` – List of matching tool modules.
 
 ##### wait_for_ready
 
@@ -32726,15 +36806,35 @@ Default registry strategy using in-memory storage.
 
 Methods:
 
+- **`add_setup`** – Add a setup to the in-memory store (helper for testing).
 - **`close`** – Release resources held by this strategy. No-op by default.
 - **`deregister`** – Deregister a module from the registry.
 - **`discover_by_id`** – Get module info by ID.
-- **`get_setup`** – Get setup info (not supported in default registry).
+- **`get_service_setup`** – Fetch a service setup's setup_version content JSON.
+- **`get_setup`** – Get setup info from the in-memory store.
 - **`get_status`** – Get module status.
 - **`heartbeat`** – Send heartbeat to keep module active.
 - **`register`** – Register a module with the registry.
-- **`search`** – Search for modules by criteria.
+- **`search`** – Search the module catalog (module blueprints; needs a setup to be invocable).
+- **`search_kins`** – Kin registry view: modules of type ARCHETYPE.
+- **`search_services`** – Service registry view: modules of type SERVICE.
+- **`search_setups`** – Search the setup catalog (configured, invocable module instances).
+- **`search_tools`** – Tool registry view: modules of type TOOL_MODULE.
 - **`wait_for_ready`** – Local registry is always ready (in-memory store).
+
+###### add_setup
+
+```python
+add_setup(setup: SetupInfo) -> None
+```
+
+Add a setup to the in-memory store (helper for testing).
+
+Parameters:
+
+- ###### **`setup`**
+
+  (`SetupInfo`) – The setup to store, keyed by its setup_id.
 
 ###### close
 
@@ -32784,19 +36884,43 @@ Raises:
 
 - `RegistryModuleNotFoundError` – If module not found.
 
+###### get_service_setup
+
+```python
+get_service_setup(setup_id: str) -> dict[str, Any] | None
+```
+
+Fetch a service setup's setup_version content JSON.
+
+The id comes from chat-driven discovery (`search_setups` + user acceptance), not from configuration. Goes through `get_setup` on every call — the registry stays the permission gate; nothing cached. Content always reflects the latest setup version.
+
+Parameters:
+
+- ###### **`setup_id`**
+
+  (`str`) – The discovered service setup id.
+
+Returns:
+
+- `dict[str, Any] | None` – The setup_version content, or None when the setup is missing or has no content.
+
 ###### get_setup
 
 ```python
-get_setup(setup_id: str) -> None
+get_setup(setup_id: str) -> SetupInfo | None
 ```
 
-Get setup info (not supported in default registry).
+Get setup info from the in-memory store.
 
 Parameters:
 
 - ###### **`setup_id`**
 
   (`str`) – The setup identifier.
+
+Returns:
+
+- `SetupInfo | None` – SetupInfo if present, None otherwise.
 
 ###### get_status
 
@@ -32845,7 +36969,14 @@ Raises:
 ###### register
 
 ```python
-register(module_id: str, address: str, port: int, version: str) -> ModuleInfo | None
+register(
+    module_id: str,
+    address: str,
+    port: int,
+    version: str,
+    module_type: RegistryModuleType = UNSPECIFIED,
+    documentation: str = "",
+) -> ModuleInfo | None
 ```
 
 Register a module with the registry.
@@ -32870,6 +37001,14 @@ Parameters:
 
   (`str`) – Module version.
 
+- ###### **`module_type`**
+
+  (`RegistryModuleType`, default: `UNSPECIFIED` ) – Declared module type; UNSPECIFIED preserves the existing record's type.
+
+- ###### **`documentation`**
+
+  (`str`, default: `''` ) – Internal documentation for registry index search.
+
 Returns:
 
 - `ModuleInfo | None` – ModuleInfo if successful, None otherwise.
@@ -32880,29 +37019,173 @@ Returns:
 search(
     name: str | None = None,
     module_type: str | None = None,
-    organization_id: str | None = None,
+    limit: int = 20,
+    offset: int = 0,
 ) -> list[ModuleInfo]
 ```
 
-Search for modules by criteria.
+Search the module catalog (module blueprints; needs a setup to be invocable).
 
 Parameters:
 
 - ###### **`name`**
 
-  (`str | None`, default: `None` ) – Filter by name (partial match).
+  (`str | None`, default: `None` ) – Case-insensitive free text matched against module name AND documentation.
 
 - ###### **`module_type`**
 
-  (`str | None`, default: `None` ) – Filter by type (archetype, tool).
+  (`str | None`, default: `None` ) – Filter by type (archetype, tool_module, service).
 
-- ###### **`organization_id`**
+- ###### **`limit`**
 
-  (`str | None`, default: `None` ) – Filter by organization (not used in local storage).
+  (`int`, default: `20` ) – Max results (1-100).
+
+- ###### **`offset`**
+
+  (`int`, default: `0` ) – Pagination offset.
 
 Returns:
 
 - `list[ModuleInfo]` – List of matching modules.
+
+###### search_kins
+
+```python
+search_kins(
+    name: str | None = None, limit: int = 20, offset: int = 0
+) -> list[ModuleInfo]
+```
+
+Kin registry view: modules of type ARCHETYPE.
+
+Parameters:
+
+- ###### **`name`**
+
+  (`str | None`, default: `None` ) – Case-insensitive free text matched against module name AND documentation.
+
+- ###### **`limit`**
+
+  (`int`, default: `20` ) – Max results (1-100).
+
+- ###### **`offset`**
+
+  (`int`, default: `0` ) – Pagination offset.
+
+Returns:
+
+- `list[ModuleInfo]` – List of matching archetype (kin) modules.
+
+###### search_services
+
+```python
+search_services(
+    name: str | None = None, limit: int = 20, offset: int = 0
+) -> list[ModuleInfo]
+```
+
+Service registry view: modules of type SERVICE.
+
+Parameters:
+
+- ###### **`name`**
+
+  (`str | None`, default: `None` ) – Case-insensitive free text matched against module name AND documentation.
+
+- ###### **`limit`**
+
+  (`int`, default: `20` ) – Max results (1-100).
+
+- ###### **`offset`**
+
+  (`int`, default: `0` ) – Pagination offset.
+
+Returns:
+
+- `list[ModuleInfo]` – List of matching service modules.
+
+###### search_setups
+
+```python
+search_setups(
+    query: str | None = None,
+    setup_ids: list[str] | None = None,
+    module_ids: list[str] | None = None,
+    module_types: list[RegistryModuleType] | None = None,
+    statuses: list[RegistrySetupStatus] | None = None,
+    visibilities: list[RegistryVisibility] | None = None,
+    limit: int = 20,
+    offset: int = 0,
+) -> list[SetupSummary]
+```
+
+Search the setup catalog (configured, invocable module instances).
+
+Parameters:
+
+- ###### **`query`**
+
+  (`str | None`, default: `None` ) – Case-insensitive free text matched against setup name AND documentation.
+
+- ###### **`setup_ids`**
+
+  (`list[str] | None`, default: `None` ) – Restrict to these setup ids.
+
+- ###### **`module_ids`**
+
+  (`list[str] | None`, default: `None` ) – Restrict to setups backed by these modules.
+
+- ###### **`module_types`**
+
+  (`list[RegistryModuleType] | None`, default: `None` ) – Filter by backing module type (tool_module, archetype, service).
+
+- ###### **`statuses`**
+
+  (`list[RegistrySetupStatus] | None`, default: `None` ) – Filter by setup status. None = no filter.
+
+- ###### **`visibilities`**
+
+  (`list[RegistryVisibility] | None`, default: `None` ) – Filter by visibility.
+
+- ###### **`limit`**
+
+  (`int`, default: `20` ) – Max results (1-100).
+
+- ###### **`offset`**
+
+  (`int`, default: `0` ) – Pagination offset.
+
+Returns:
+
+- `list[SetupSummary]` – Matching setups as SetupSummary (no config field by construction).
+
+###### search_tools
+
+```python
+search_tools(
+    name: str | None = None, limit: int = 20, offset: int = 0
+) -> list[ModuleInfo]
+```
+
+Tool registry view: modules of type TOOL_MODULE.
+
+Parameters:
+
+- ###### **`name`**
+
+  (`str | None`, default: `None` ) – Case-insensitive free text matched against module name AND documentation.
+
+- ###### **`limit`**
+
+  (`int`, default: `20` ) – Max results (1-100).
+
+- ###### **`offset`**
+
+  (`int`, default: `0` ) – Pagination offset.
+
+Returns:
+
+- `list[ModuleInfo]` – List of matching tool modules.
 
 ###### wait_for_ready
 
@@ -33089,13 +37372,18 @@ Methods:
 - **`discover_by_id`** – Get module info by ID.
 - **`evict_cached_channel`** – Force-close and remove a cached channel regardless of refcount.
 - **`exec_grpc_query`** – Execute a gRPC query with circuit breaker protection and retry.
+- **`get_service_setup`** – Fetch a service setup's setup_version content JSON.
 - **`get_setup`** – Get setup info.
 - **`get_status`** – Get module status by fetching the module.
 - **`handle_grpc_errors`** – Handle gRPC errors for the given operation.
 - **`heartbeat`** – Send heartbeat to keep module active.
 - **`register`** – Register a module with the registry.
 - **`release_cached_channel`** – Decrement refcount for a cache key and close channel when last ref is released.
-- **`search`** – Search for modules by criteria.
+- **`search`** – Search the module catalog (module blueprints; needs a setup to be invocable).
+- **`search_kins`** – Kin registry view: modules of type ARCHETYPE.
+- **`search_services`** – Service registry view: modules of type SERVICE.
+- **`search_setups`** – Search the setup catalog (configured, invocable module instances).
+- **`search_tools`** – Tool registry view: modules of type TOOL_MODULE.
 - **`wait_for_ready`** – Probe the registry via the standard gRPC Health Check service.
 
 ###### close
@@ -33167,6 +37455,7 @@ Returns:
 Raises:
 
 - `RegistryModuleNotFoundError` – If module not found.
+- `PermissionDeniedError` – If the caller is not permitted.
 - `RegistryServiceError` – If gRPC call fails.
 
 ###### evict_cached_channel
@@ -33228,6 +37517,26 @@ Raises:
 
 - `ServerError` – gRPC error with status code and details for caller to handle.
 
+###### get_service_setup
+
+```python
+get_service_setup(setup_id: str) -> dict[str, Any] | None
+```
+
+Fetch a service setup's setup_version content JSON.
+
+The id comes from chat-driven discovery (`search_setups` + user acceptance), not from configuration. Goes through `get_setup` on every call — the registry stays the permission gate; nothing cached. Content always reflects the latest setup version.
+
+Parameters:
+
+- ###### **`setup_id`**
+
+  (`str`) – The discovered service setup id.
+
+Returns:
+
+- `dict[str, Any] | None` – The setup_version content, or None when the setup is missing or has no content.
+
 ###### get_setup
 
 ```python
@@ -33248,6 +37557,7 @@ Returns:
 
 Raises:
 
+- `PermissionDeniedError` – If the caller is not permitted.
 - `RegistryServiceError` – If gRPC call fails.
 
 ###### get_status
@@ -33271,6 +37581,7 @@ Returns:
 Raises:
 
 - `RegistryModuleNotFoundError` – If module not found.
+- `PermissionDeniedError` – If the caller is not permitted.
 - `RegistryServiceError` – If gRPC call fails.
 
 ###### handle_grpc_errors
@@ -33323,17 +37634,25 @@ Returns:
 
 Raises:
 
+- `PermissionDeniedError` – If the caller is not permitted.
 - `RegistryServiceError` – If gRPC call fails.
 
 ###### register
 
 ```python
-register(module_id: str, address: str, port: int, version: str) -> ModuleInfo | None
+register(
+    module_id: str,
+    address: str,
+    port: int,
+    version: str,
+    module_type: RegistryModuleType = UNSPECIFIED,
+    documentation: str = "",
+) -> ModuleInfo | None
 ```
 
 Register a module with the registry.
 
-Note: The new proto only updates address/port/version for an existing module. The module must already exist in the registry database.
+Note: The module must already exist in the registry database; registration updates its address/port/version and declares its type.
 
 Parameters:
 
@@ -33353,12 +37672,21 @@ Parameters:
 
   (`str`) – Module version.
 
+- ###### **`module_type`**
+
+  (`RegistryModuleType`, default: `UNSPECIFIED` ) – Declared module type (tool or archetype/kin).
+
+- ###### **`documentation`**
+
+  (`str`, default: `''` ) – Internal documentation for registry index search.
+
 Returns:
 
 - `ModuleInfo | None` – ModuleInfo if successful, None if module not found.
 
 Raises:
 
+- `PermissionDeniedError` – If the caller is not permitted.
 - `RegistryServiceError` – If gRPC call fails.
 
 ###### release_cached_channel
@@ -33381,33 +37709,184 @@ Parameters:
 search(
     name: str | None = None,
     module_type: str | None = None,
-    organization_id: str | None = None,
+    limit: int = 20,
+    offset: int = 0,
 ) -> list[ModuleInfo]
 ```
 
-Search for modules by criteria.
+Search the module catalog (module blueprints; needs a setup to be invocable).
 
 Parameters:
 
 - ###### **`name`**
 
-  (`str | None`, default: `None` ) – Filter by name (partial match via query).
+  (`str | None`, default: `None` ) – Case-insensitive free text matched against module name AND documentation.
 
 - ###### **`module_type`**
 
-  (`str | None`, default: `None` ) – Filter by type (archetype, tool).
+  (`str | None`, default: `None` ) – Filter by type (archetype, tool_module, service).
 
-- ###### **`organization_id`**
+- ###### **`limit`**
 
-  (`str | None`, default: `None` ) – Filter by organization.
+  (`int`, default: `20` ) – Max results (1-100).
+
+- ###### **`offset`**
+
+  (`int`, default: `0` ) – Pagination offset.
 
 Returns:
 
-- `list[ModuleInfo]` – List of matching modules.
+- `list[ModuleInfo]` – List of matching modules as trimmed ModuleInfo (address/port are never
+- `list[ModuleInfo]` – populated by search — resolve via discover_by_id when wiring communication).
 
 Raises:
 
+- `PermissionDeniedError` – If the caller is not permitted.
 - `RegistryServiceError` – If gRPC call fails.
+
+###### search_kins
+
+```python
+search_kins(
+    name: str | None = None, limit: int = 20, offset: int = 0
+) -> list[ModuleInfo]
+```
+
+Kin registry view: modules of type ARCHETYPE.
+
+Parameters:
+
+- ###### **`name`**
+
+  (`str | None`, default: `None` ) – Case-insensitive free text matched against module name AND documentation.
+
+- ###### **`limit`**
+
+  (`int`, default: `20` ) – Max results (1-100).
+
+- ###### **`offset`**
+
+  (`int`, default: `0` ) – Pagination offset.
+
+Returns:
+
+- `list[ModuleInfo]` – List of matching archetype (kin) modules.
+
+###### search_services
+
+```python
+search_services(
+    name: str | None = None, limit: int = 20, offset: int = 0
+) -> list[ModuleInfo]
+```
+
+Service registry view: modules of type SERVICE.
+
+Parameters:
+
+- ###### **`name`**
+
+  (`str | None`, default: `None` ) – Case-insensitive free text matched against module name AND documentation.
+
+- ###### **`limit`**
+
+  (`int`, default: `20` ) – Max results (1-100).
+
+- ###### **`offset`**
+
+  (`int`, default: `0` ) – Pagination offset.
+
+Returns:
+
+- `list[ModuleInfo]` – List of matching service modules.
+
+###### search_setups
+
+```python
+search_setups(
+    query: str | None = None,
+    setup_ids: list[str] | None = None,
+    module_ids: list[str] | None = None,
+    module_types: list[RegistryModuleType] | None = None,
+    statuses: list[RegistrySetupStatus] | None = None,
+    visibilities: list[RegistryVisibility] | None = None,
+    limit: int = 20,
+    offset: int = 0,
+) -> list[SetupSummary]
+```
+
+Search the setup catalog (configured, invocable module instances).
+
+Parameters:
+
+- ###### **`query`**
+
+  (`str | None`, default: `None` ) – Case-insensitive free text matched against setup name AND documentation.
+
+- ###### **`setup_ids`**
+
+  (`list[str] | None`, default: `None` ) – Restrict to these setup ids.
+
+- ###### **`module_ids`**
+
+  (`list[str] | None`, default: `None` ) – Restrict to setups backed by these modules.
+
+- ###### **`module_types`**
+
+  (`list[RegistryModuleType] | None`, default: `None` ) – Filter by backing module type (tool_module, archetype, service).
+
+- ###### **`statuses`**
+
+  (`list[RegistrySetupStatus] | None`, default: `None` ) – Filter by setup status. None = no filter; agent-facing callers should pass READY/CONFIGURATION_SUCCEEDED for invocable setups.
+
+- ###### **`visibilities`**
+
+  (`list[RegistryVisibility] | None`, default: `None` ) – Filter by visibility.
+
+- ###### **`limit`**
+
+  (`int`, default: `20` ) – Max results (1-100).
+
+- ###### **`offset`**
+
+  (`int`, default: `0` ) – Pagination offset.
+
+Returns:
+
+- `list[SetupSummary]` – Matching setups as SetupSummary (no config field by construction).
+
+Raises:
+
+- `PermissionDeniedError` – If the caller is not permitted.
+- `RegistryServiceError` – If gRPC call fails.
+
+###### search_tools
+
+```python
+search_tools(
+    name: str | None = None, limit: int = 20, offset: int = 0
+) -> list[ModuleInfo]
+```
+
+Tool registry view: modules of type TOOL_MODULE.
+
+Parameters:
+
+- ###### **`name`**
+
+  (`str | None`, default: `None` ) – Case-insensitive free text matched against module name AND documentation.
+
+- ###### **`limit`**
+
+  (`int`, default: `20` ) – Max results (1-100).
+
+- ###### **`offset`**
+
+  (`int`, default: `0` ) – Pagination offset.
+
+Returns:
+
+- `list[ModuleInfo]` – List of matching tool modules.
 
 ###### wait_for_ready
 
@@ -33491,11 +37970,16 @@ Methods:
 - **`close`** – Release resources held by this strategy. No-op by default.
 - **`deregister`** – Deregister a module from the registry.
 - **`discover_by_id`** – Get module info by ID.
+- **`get_service_setup`** – Fetch a service setup's setup_version content JSON.
 - **`get_setup`** – Get setup info.
 - **`get_status`** – Get module status.
 - **`heartbeat`** – Send heartbeat to keep module active.
 - **`register`** – Register a module with the registry.
-- **`search`** – Search for modules by criteria.
+- **`search`** – Search the module catalog (module blueprints; needs a setup to be invocable).
+- **`search_kins`** – Kin registry view: modules of type ARCHETYPE.
+- **`search_services`** – Service registry view: modules of type SERVICE.
+- **`search_setups`** – Search the setup catalog (configured, invocable module instances).
+- **`search_tools`** – Tool registry view: modules of type TOOL_MODULE.
 - **`wait_for_ready`** – Check if the registry backend is reachable.
 
 ###### close
@@ -33531,6 +38015,26 @@ discover_by_id(module_id: str) -> ModuleInfo
 ```
 
 Get module info by ID.
+
+###### get_service_setup
+
+```python
+get_service_setup(setup_id: str) -> dict[str, Any] | None
+```
+
+Fetch a service setup's setup_version content JSON.
+
+The id comes from chat-driven discovery (`search_setups` + user acceptance), not from configuration. Goes through `get_setup` on every call — the registry stays the permission gate; nothing cached. Content always reflects the latest setup version.
+
+Parameters:
+
+- ###### **`setup_id`**
+
+  (`str`) – The discovered service setup id.
+
+Returns:
+
+- `dict[str, Any] | None` – The setup_version content, or None when the setup is missing or has no content.
 
 ###### get_setup
 
@@ -33573,12 +38077,19 @@ Raises:
 ###### register
 
 ```python
-register(module_id: str, address: str, port: int, version: str) -> ModuleInfo | None
+register(
+    module_id: str,
+    address: str,
+    port: int,
+    version: str,
+    module_type: RegistryModuleType = UNSPECIFIED,
+    documentation: str = "",
+) -> ModuleInfo | None
 ```
 
 Register a module with the registry.
 
-Note: The new proto only updates address/port/version for an existing module. The module must already exist in the registry database.
+Note: The module must already exist in the registry database; registration updates its address/port/version and declares its type.
 
 Parameters:
 
@@ -33598,6 +38109,14 @@ Parameters:
 
   (`str`) – Module version.
 
+- ###### **`module_type`**
+
+  (`RegistryModuleType`, default: `UNSPECIFIED` ) – Declared module type (tool or archetype/kin).
+
+- ###### **`documentation`**
+
+  (`str`, default: `''` ) – Internal documentation for registry index search.
+
 Returns:
 
 - `ModuleInfo | None` – ModuleInfo if successful, None otherwise.
@@ -33608,29 +38127,174 @@ Returns:
 search(
     name: str | None = None,
     module_type: str | None = None,
-    organization_id: str | None = None,
+    limit: int = 20,
+    offset: int = 0,
 ) -> list[ModuleInfo]
 ```
 
-Search for modules by criteria.
+Search the module catalog (module blueprints; needs a setup to be invocable).
 
 Parameters:
 
 - ###### **`name`**
 
-  (`str | None`, default: `None` ) – Filter by name (partial match via query).
+  (`str | None`, default: `None` ) – Case-insensitive free text matched against module name AND documentation.
 
 - ###### **`module_type`**
 
-  (`str | None`, default: `None` ) – Filter by type (archetype, tool).
+  (`str | None`, default: `None` ) – Filter by type (archetype, tool_module, service).
 
-- ###### **`organization_id`**
+- ###### **`limit`**
 
-  (`str | None`, default: `None` ) – Filter by organization.
+  (`int`, default: `20` ) – Max results (1-100).
+
+- ###### **`offset`**
+
+  (`int`, default: `0` ) – Pagination offset.
 
 Returns:
 
-- `list[ModuleInfo]` – List of matching modules.
+- `list[ModuleInfo]` – List of matching modules as trimmed ModuleInfo (address/port are never
+- `list[ModuleInfo]` – populated by search — resolve via discover_by_id when wiring communication).
+
+###### search_kins
+
+```python
+search_kins(
+    name: str | None = None, limit: int = 20, offset: int = 0
+) -> list[ModuleInfo]
+```
+
+Kin registry view: modules of type ARCHETYPE.
+
+Parameters:
+
+- ###### **`name`**
+
+  (`str | None`, default: `None` ) – Case-insensitive free text matched against module name AND documentation.
+
+- ###### **`limit`**
+
+  (`int`, default: `20` ) – Max results (1-100).
+
+- ###### **`offset`**
+
+  (`int`, default: `0` ) – Pagination offset.
+
+Returns:
+
+- `list[ModuleInfo]` – List of matching archetype (kin) modules.
+
+###### search_services
+
+```python
+search_services(
+    name: str | None = None, limit: int = 20, offset: int = 0
+) -> list[ModuleInfo]
+```
+
+Service registry view: modules of type SERVICE.
+
+Parameters:
+
+- ###### **`name`**
+
+  (`str | None`, default: `None` ) – Case-insensitive free text matched against module name AND documentation.
+
+- ###### **`limit`**
+
+  (`int`, default: `20` ) – Max results (1-100).
+
+- ###### **`offset`**
+
+  (`int`, default: `0` ) – Pagination offset.
+
+Returns:
+
+- `list[ModuleInfo]` – List of matching service modules.
+
+###### search_setups
+
+```python
+search_setups(
+    query: str | None = None,
+    setup_ids: list[str] | None = None,
+    module_ids: list[str] | None = None,
+    module_types: list[RegistryModuleType] | None = None,
+    statuses: list[RegistrySetupStatus] | None = None,
+    visibilities: list[RegistryVisibility] | None = None,
+    limit: int = 20,
+    offset: int = 0,
+) -> list[SetupSummary]
+```
+
+Search the setup catalog (configured, invocable module instances).
+
+Parameters:
+
+- ###### **`query`**
+
+  (`str | None`, default: `None` ) – Case-insensitive free text matched against setup name AND documentation.
+
+- ###### **`setup_ids`**
+
+  (`list[str] | None`, default: `None` ) – Restrict to these setup ids.
+
+- ###### **`module_ids`**
+
+  (`list[str] | None`, default: `None` ) – Restrict to setups backed by these modules.
+
+- ###### **`module_types`**
+
+  (`list[RegistryModuleType] | None`, default: `None` ) – Filter by backing module type (tool_module, archetype, service).
+
+- ###### **`statuses`**
+
+  (`list[RegistrySetupStatus] | None`, default: `None` ) – Filter by setup status. None = no filter; agent-facing callers should pass READY/CONFIGURATION_SUCCEEDED for invocable setups.
+
+- ###### **`visibilities`**
+
+  (`list[RegistryVisibility] | None`, default: `None` ) – Filter by visibility.
+
+- ###### **`limit`**
+
+  (`int`, default: `20` ) – Max results (1-100).
+
+- ###### **`offset`**
+
+  (`int`, default: `0` ) – Pagination offset.
+
+Returns:
+
+- `list[SetupSummary]` – Matching setups as SetupSummary (no config field by construction).
+
+###### search_tools
+
+```python
+search_tools(
+    name: str | None = None, limit: int = 20, offset: int = 0
+) -> list[ModuleInfo]
+```
+
+Tool registry view: modules of type TOOL_MODULE.
+
+Parameters:
+
+- ###### **`name`**
+
+  (`str | None`, default: `None` ) – Case-insensitive free text matched against module name AND documentation.
+
+- ###### **`limit`**
+
+  (`int`, default: `20` ) – Max results (1-100).
+
+- ###### **`offset`**
+
+  (`int`, default: `0` ) – Pagination offset.
+
+Returns:
+
+- `list[ModuleInfo]` – List of matching tool modules.
 
 ###### wait_for_ready
 
@@ -34698,18 +39362,18 @@ This module is responsible for handling the setup service.
 
 Modules:
 
-- **`default_setup`** – This module contains the abstract base class for setup strategies.
+- **`default_setup`** – In-memory setup strategy mirroring the SetupService protocol.
 - **`exceptions`** – Exceptions for the setup service.
 - **`grpc_setup`** – Digital Kin Setup Service gRPC Client.
 - **`setup_strategy`** – This module contains the abstract base class for setup strategies.
 
 #### default_setup
 
-This module contains the abstract base class for setup strategies.
+In-memory setup strategy mirroring the SetupService protocol.
 
 Classes:
 
-- **`DefaultSetup`** – Abstract base class for setup strategies.
+- **`DefaultSetup`** – In-memory implementation of the setup strategy (same contract as GrpcSetup).
 
 ##### DefaultSetup
 
@@ -34730,21 +39394,17 @@ DefaultSetup()
               click digitalkin.services.setup.setup_strategy.SetupStrategy href "" "digitalkin.services.setup.setup_strategy.SetupStrategy"
 ```
 
-Abstract base class for setup strategies.
+In-memory implementation of the setup strategy (same contract as GrpcSetup).
 
 Methods:
 
 - **`__post_init__`** – Lifecycle hook for post-initialization. Subclasses override with specific params.
-- **`create_setup`** – Create a new setup with comprehensive validation.
-- **`create_setup_version`** – Create a new setup version.
+- **`change_visibility`** – Change a setup's visibility scope.
+- **`create_service_setup`** – Create a service setup — a shareable configuration document.
+- **`create_setup`** – Create a new setup; identifiers are generated locally.
 - **`delete_setup`** – Delete a setup by its unique identifier.
-- **`delete_setup_version`** – Delete a setup version by its unique identifier.
 - **`get_setup`** – Retrieve a setup by its unique identifier.
-- **`get_setup_version`** – Retrieve a setup version by its unique identifier.
-- **`list_setups`** – List setups with optional filtering and pagination.
-- **`search_setup_versions`** – Search for setup versions based on filters.
-- **`update_setup`** – Update an existing setup.
-- **`update_setup_version`** – Update an existing setup version.
+- **`update_setup`** – Update a setup's name and current version content.
 
 ###### __post_init__
 
@@ -34754,50 +39414,74 @@ __post_init__(*args: Any, **kwargs: Any) -> None
 
 Lifecycle hook for post-initialization. Subclasses override with specific params.
 
-###### create_setup
+###### change_visibility
 
 ```python
-create_setup(setup_dict: dict[str, Any]) -> str
+change_visibility(setup_dict: dict[str, Any]) -> SetupData
 ```
 
-Create a new setup with comprehensive validation.
+Change a setup's visibility scope.
 
 Parameters:
 
 - ###### **`setup_dict`**
 
-  (`dict[str, Any]`) – Dictionary containing setup details.
+  (`dict[str, Any]`) – Dictionary with 'setup_id' and 'visibility' (public | private | internal).
 
 Returns:
 
-- **`bool`** ( `str` ) – Success status of setup creation.
+- `SetupData` – The setup with its updated visibility.
 
 Raises:
 
-- `ValidationError` – If setup data is invalid.
-- `GrpcOperationError` – If gRPC operation fails.
+- `SetupServiceError` – setup_id does not exist.
+- `ValueError` – If visibility is not a valid scope.
 
-###### create_setup_version
+###### create_service_setup
 
 ```python
-create_setup_version(setup_version_dict: dict[str, Any]) -> str
+create_service_setup(name: str, content: dict[str, Any]) -> SetupData
 ```
 
-Create a new setup version.
+Create a service setup — a shareable configuration document.
+
+Only a name and the content JSON are needed; everything else (owner, organisation, backing module, kind) is derived server-side.
 
 Parameters:
 
-- ###### **`setup_version_dict`**
+- ###### **`name`**
 
-  (`dict[str, Any]`) – Dictionary with setup version details.
+  (`str`) – Human-readable service name.
+
+- ###### **`content`**
+
+  (`dict[str, Any]`) – The service configuration JSON.
 
 Returns:
 
-- **`str`** ( `str` ) – version of setup version creation.
+- `SetupData` – The created setup with its initial version.
+
+###### create_setup
+
+```python
+create_setup(setup_dict: dict[str, Any]) -> SetupData
+```
+
+Create a new setup; identifiers are generated locally.
+
+Parameters:
+
+- ###### **`setup_dict`**
+
+  (`dict[str, Any]`) – Dictionary with 'name' and 'content'.
+
+Returns:
+
+- `SetupData` – The created setup with its initial version.
 
 Raises:
 
-- `SetupServiceError` – setup object failed validation.
+- `ValueError` – If name or content is invalid.
 
 ###### delete_setup
 
@@ -34811,29 +39495,11 @@ Parameters:
 
 - ###### **`setup_dict`**
 
-  (`dict[str, Any]`) – Dictionary with the setup 'name'.
+  (`dict[str, Any]`) – Dictionary with the 'setup_id'.
 
 Returns:
 
 - **`bool`** ( `bool` ) – Success status of deletion.
-
-###### delete_setup_version
-
-```python
-delete_setup_version(setup_version_dict: dict[str, Any]) -> bool
-```
-
-Delete a setup version by its unique identifier.
-
-Parameters:
-
-- ###### **`setup_version_dict`**
-
-  (`dict[str, Any]`) – Dictionary with the setup version 'name'.
-
-Returns:
-
-- **`bool`** ( `bool` ) – Success status of version deletion.
 
 ###### get_setup
 
@@ -34847,73 +39513,11 @@ Parameters:
 
 - ###### **`setup_dict`**
 
-  (`dict[str, Any]`) – Dictionary with 'name' and optional 'version'.
+  (`dict[str, Any]`) – Dictionary with 'setup_id' and optional 'version'.
 
 Returns:
 
-- `SetupData` – Dict\[str, Any\]: Setup details including optional setup version.
-
-Raises:
-
-- `SetupServiceError` – setup_id does not exist.
-
-###### get_setup_version
-
-```python
-get_setup_version(setup_version_dict: dict[str, Any]) -> SetupVersionData
-```
-
-Retrieve a setup version by its unique identifier.
-
-Parameters:
-
-- ###### **`setup_version_dict`**
-
-  (`dict[str, Any]`) – Dictionary with the setup version 'name'.
-
-Returns:
-
-- `SetupVersionData` – Dict\[str, Any\]: Setup version details.
-
-Raises:
-
-- `SetupServiceError` – setup_id does not exist.
-
-###### list_setups
-
-```python
-list_setups(list_dict: dict[str, Any]) -> dict[str, Any]
-```
-
-List setups with optional filtering and pagination.
-
-Parameters:
-
-- ###### **`list_dict`**
-
-  (`dict[str, Any]`) – Dictionary with optional filters.
-
-Returns:
-
-- `dict[str, Any]` – dict\[str, Any\]: Dictionary with 'setups' list and 'total_count'.
-
-###### search_setup_versions
-
-```python
-search_setup_versions(setup_version_dict: dict[str, Any]) -> list[SetupVersionData]
-```
-
-Search for setup versions based on filters.
-
-Parameters:
-
-- ###### **`setup_version_dict`**
-
-  (`dict[str, Any]`) – Dictionary with optional 'name' or 'query_versions' filters.
-
-Returns:
-
-- `list[SetupVersionData]` – List\[SetupVersionData\]: A list of matching setup version details.
+- `SetupData` – The setup with its current version populated.
 
 Raises:
 
@@ -34922,42 +39526,25 @@ Raises:
 ###### update_setup
 
 ```python
-update_setup(setup_dict: dict[str, Any]) -> bool
+update_setup(setup_dict: dict[str, Any]) -> SetupData
 ```
 
-Update an existing setup.
+Update a setup's name and current version content.
 
 Parameters:
 
 - ###### **`setup_dict`**
 
-  (`dict[str, Any]`) – Dictionary with setup update details.
+  (`dict[str, Any]`) – Dictionary with 'setup_id', 'name' and 'content'.
 
 Returns:
 
-- **`bool`** ( `bool` ) – Success status of the update operation.
+- `SetupData` – The updated setup with its current version.
 
 Raises:
 
-- `ValidationError` – setup object failed validation.
-
-###### update_setup_version
-
-```python
-update_setup_version(setup_version_dict: dict[str, Any]) -> bool
-```
-
-Update an existing setup version.
-
-Parameters:
-
-- ###### **`setup_version_dict`**
-
-  (`dict[str, Any]`) – Dictionary with setup version update details.
-
-Returns:
-
-- **`bool`** ( `bool` ) – Success status of the update operation.
+- `SetupServiceError` – setup_id does not exist.
+- `ValueError` – If the update payload is invalid.
 
 #### exceptions
 
@@ -35013,28 +39600,24 @@ GrpcSetup()
 
 gRPC client implementation for the Setup service.
 
-Communicates with the remote SetupService gRPC server to manage setup configurations and versions.
+Communicates with the remote SetupService gRPC server to manage setup configurations. Owner/organisation/module of a created setup are resolved server-side from the request context metadata.
 
 Methods:
 
 - **`__post_init__`** – Init the channel from a config file.
+- **`change_visibility`** – Change a setup's visibility scope.
 - **`close`** – Release this instance's pooled gRPC channel ref.
 - **`close_all_cached_channels`** – Close all cached channels, reset cache, and clear circuit breakers.
 - **`close_channel`** – Release this instance's ref on the cached channel.
-- **`create_setup`** – Create a new setup with comprehensive validation.
-- **`create_setup_version`** – Create a new setup version.
+- **`create_service_setup`** – Create a service setup — a shareable configuration document.
+- **`create_setup`** – Create a new setup; owner/organisation/module derive from the request context.
 - **`delete_setup`** – Delete a setup by its unique identifier.
-- **`delete_setup_version`** – Delete a setup version by its unique identifier.
 - **`evict_cached_channel`** – Force-close and remove a cached channel regardless of refcount.
 - **`exec_grpc_query`** – Execute a gRPC query with circuit breaker protection and retry.
 - **`get_setup`** – Retrieve a setup by its unique identifier.
-- **`get_setup_version`** – Retrieve a setup version by its unique identifier.
 - **`handle_grpc_errors`** – Context manager for consistent gRPC error handling with detailed logging.
-- **`list_setups`** – List setups with optional filtering and pagination.
 - **`release_cached_channel`** – Decrement refcount for a cache key and close channel when last ref is released.
-- **`search_setup_versions`** – Search for setup versions based on filters.
-- **`update_setup`** – Update an existing setup.
-- **`update_setup_version`** – Update an existing setup version.
+- **`update_setup`** – Update a setup's name and current version content.
 
 ###### __post_init__
 
@@ -35045,6 +39628,30 @@ __post_init__(config: ClientConfig) -> None
 Init the channel from a config file.
 
 Need to be call if the user register a gRPC channel.
+
+###### change_visibility
+
+```python
+change_visibility(setup_dict: dict[str, Any]) -> SetupData
+```
+
+Change a setup's visibility scope.
+
+Parameters:
+
+- ###### **`setup_dict`**
+
+  (`dict[str, Any]`) – Dictionary with 'setup_id' and 'visibility' (public | private | internal).
+
+Returns:
+
+- `SetupData` – The setup with its updated visibility.
+
+Raises:
+
+- `ValueError` – If setup_id is missing or visibility is not a valid scope.
+- `ServerError` – If gRPC operation fails.
+- `SetupServiceError` – If the server reports failure or an unexpected error occurs.
 
 ###### close
 
@@ -35074,53 +39681,53 @@ Release this instance's ref on the cached channel.
 
 The underlying channel is only closed when the last ref is released. When the last ref is released, the corresponding circuit breaker singleton is also removed to prevent unbounded accumulation.
 
+###### create_service_setup
+
+```python
+create_service_setup(name: str, content: dict[str, Any]) -> SetupData
+```
+
+Create a service setup — a shareable configuration document.
+
+Only a name and the content JSON are needed; everything else (owner, organisation, backing module, kind) is derived server-side.
+
+Parameters:
+
+- ###### **`name`**
+
+  (`str`) – Human-readable service name.
+
+- ###### **`content`**
+
+  (`dict[str, Any]`) – The service configuration JSON.
+
+Returns:
+
+- `SetupData` – The created setup with its initial version.
+
 ###### create_setup
 
 ```python
-create_setup(setup_dict: dict[str, Any]) -> str
+create_setup(setup_dict: dict[str, Any]) -> SetupData
 ```
 
-Create a new setup with comprehensive validation.
+Create a new setup; owner/organisation/module derive from the request context.
 
 Parameters:
 
 - ###### **`setup_dict`**
 
-  (`dict[str, Any]`) – Dictionary containing setup details.
+  (`dict[str, Any]`) – Dictionary with 'name' and 'content'.
 
 Returns:
 
-- **`bool`** ( `str` ) – Success status of setup creation.
+- `SetupData` – The created setup with its initial version.
 
 Raises:
 
-- `ValidationError` – If setup data is invalid.
+- `ValueError` – If name or content is missing.
 - `ServerError` – If gRPC operation fails.
-- `SetupServiceError` – For any unexpected internal error.
-
-###### create_setup_version
-
-```python
-create_setup_version(setup_version_dict: dict[str, Any]) -> str
-```
-
-Create a new setup version.
-
-Parameters:
-
-- ###### **`setup_version_dict`**
-
-  (`dict[str, Any]`) – Dictionary with setup version details.
-
-Returns:
-
-- **`str`** ( `str` ) – version of setup version creation.
-
-Raises:
-
-- `ValidationError` – If setup version data is invalid.
-- `ServerError` – If gRPC operation fails.
-- `SetupServiceError` – For any unexpected internal error.
+- `SetupServiceError` – If the server reports failure or an unexpected error occurs.
 
 ###### delete_setup
 
@@ -35134,7 +39741,7 @@ Parameters:
 
 - ###### **`setup_dict`**
 
-  (`dict[str, Any]`) – Dictionary with the setup 'setup_id'.
+  (`dict[str, Any]`) – Dictionary with the 'setup_id'.
 
 Returns:
 
@@ -35142,31 +39749,7 @@ Returns:
 
 Raises:
 
-- `ValidationError` – If the setup setup_id is missing.
-- `ServerError` – If gRPC operation fails.
-- `SetupServiceError` – For any unexpected internal error.
-
-###### delete_setup_version
-
-```python
-delete_setup_version(setup_version_dict: dict[str, Any]) -> bool
-```
-
-Delete a setup version by its unique identifier.
-
-Parameters:
-
-- ###### **`setup_version_dict`**
-
-  (`dict[str, Any]`) – Dictionary with the setup version 'name'.
-
-Returns:
-
-- **`bool`** ( `bool` ) – Success status of version deletion.
-
-Raises:
-
-- `ValidationError` – If the setup version name is missing.
+- `ValueError` – If the setup_id is missing.
 - `ServerError` – If gRPC operation fails.
 - `SetupServiceError` – For any unexpected internal error.
 
@@ -35241,39 +39824,15 @@ Parameters:
 
 - ###### **`setup_dict`**
 
-  (`dict[str, Any]`) – Dictionary with 'name' and optional 'version'.
+  (`dict[str, Any]`) – Dictionary with 'setup_id' and optional 'version'.
 
 Returns:
 
-- `SetupData` – dict\[str, Any\]: Setup details including optional setup version.
+- `SetupData` – The setup with its current version populated.
 
 Raises:
 
-- `ValidationError` – If the setup name is missing.
-- `ServerError` – If gRPC operation fails.
-- `SetupServiceError` – For any unexpected internal error.
-
-###### get_setup_version
-
-```python
-get_setup_version(setup_version_dict: dict[str, Any]) -> SetupVersionData
-```
-
-Retrieve a setup version by its unique identifier.
-
-Parameters:
-
-- ###### **`setup_version_dict`**
-
-  (`dict[str, Any]`) – Dictionary with the setup version 'setup_version_id'.
-
-Returns:
-
-- `SetupVersionData` – dict\[str, Any\]: Setup version details.
-
-Raises:
-
-- `ValidationError` – If the setup version id is missing.
+- `ValueError` – If the setup_id is missing.
 - `ServerError` – If gRPC operation fails.
 - `SetupServiceError` – For any unexpected internal error.
 
@@ -35289,7 +39848,7 @@ Parameters:
 
 - ###### **`operation`**
 
-  (`str`) – Description of the operation being performed (e.g., "Get Setup", "Create Setup Version").
+  (`str`) – Description of the operation being performed (e.g., "Get Setup", "Change Visibility").
 
 Yields:
 
@@ -35298,37 +39857,9 @@ Yields:
 Raises:
 
 - `PermissionDeniedError` – Service rejected the call with PERMISSION_DENIED.
-- `ValueError` – Pydantic model validation failed - input data is malformed.
+- `ValueError` – Pydantic model validation failed - response data is malformed.
 - `ServerError` – gRPC communication failed - remote service returned error or is unreachable.
 - `SetupServiceError` – Unexpected error during setup operation - includes connection/timeout issues.
-
-###### list_setups
-
-```python
-list_setups(list_dict: dict[str, Any]) -> dict[str, Any]
-```
-
-List setups with optional filtering and pagination.
-
-Parameters:
-
-- ###### **`list_dict`**
-
-  (`dict[str, Any]`) – Dictionary with optional filters:
-
-  - organisation_id: Filter by organisation
-  - owner_id: Filter by owner
-  - limit: Maximum number of results
-  - offset: Number of results to skip
-
-Returns:
-
-- `dict[str, Any]` – dict\[str, Any\]: Dictionary with 'setups' list and 'total_count'.
-
-Raises:
-
-- `ServerError` – If gRPC operation fails.
-- `SetupServiceError` – For any unexpected internal error.
 
 ###### release_cached_channel
 
@@ -35344,77 +39875,29 @@ Parameters:
 
   (`str`) – Channel cache key to release.
 
-###### search_setup_versions
-
-```python
-search_setup_versions(setup_version_dict: dict[str, Any]) -> list[SetupVersionData]
-```
-
-Search for setup versions based on filters.
-
-Parameters:
-
-- ###### **`setup_version_dict`**
-
-  (`dict[str, Any]`) – Dictionary with optional 'name' and 'version' filters.
-
-Returns:
-
-- `list[SetupVersionData]` – list\[dict[str, Any]\]: A list of matching setup version details.
-
-Raises:
-
-- `ServerError` – If gRPC operation fails.
-- `SetupServiceError` – For any unexpected internal error.
-- `ValidationError` – If both name and version are not provided.
-
 ###### update_setup
 
 ```python
-update_setup(setup_dict: dict[str, Any]) -> bool
+update_setup(setup_dict: dict[str, Any]) -> SetupData
 ```
 
-Update an existing setup.
+Update a setup's name and current version content.
 
 Parameters:
 
 - ###### **`setup_dict`**
 
-  (`dict[str, Any]`) – Dictionary with setup update details.
+  (`dict[str, Any]`) – Dictionary with 'setup_id', 'name' and 'content'.
 
 Returns:
 
-- **`bool`** ( `bool` ) – Success status of the update operation.
+- `SetupData` – The updated setup with its current version.
 
 Raises:
 
-- `ValidationError` – If setup data is invalid.
+- `ValueError` – If setup_id, name or content is missing.
 - `ServerError` – If gRPC operation fails.
-- `SetupServiceError` – For any unexpected internal error.
-
-###### update_setup_version
-
-```python
-update_setup_version(setup_version_dict: dict[str, Any]) -> bool
-```
-
-Update an existing setup version.
-
-Parameters:
-
-- ###### **`setup_version_dict`**
-
-  (`dict[str, Any]`) – Dictionary with setup version update details.
-
-Returns:
-
-- **`bool`** ( `bool` ) – Success status of the update operation.
-
-Raises:
-
-- `ValidationError` – If setup version data is invalid.
-- `ServerError` – If gRPC operation fails.
-- `SetupServiceError` – For any unexpected internal error.
+- `SetupServiceError` – If the server reports failure or an unexpected error occurs.
 
 #### setup_strategy
 
@@ -35439,6 +39922,8 @@ Classes:
 
 Pydantic model for Setup data validation.
 
+`status`/`visibility` are coerced to their SDK enums: a proto enum name (`READY`, `VISIBILITY_PRIVATE`) or any-case string maps to the matching member, and an empty value (backends that predate the fields) becomes `UNSPECIFIED`.
+
 ##### SetupStrategy
 
 ```python
@@ -35456,19 +39941,17 @@ SetupStrategy()
 
 Abstract base class for setup strategies.
 
+Mirrors the SetupService protocol: setup-level CRUD plus visibility change. The version lifecycle is platform-owned — content flows through the setup's `current_setup_version`, never through standalone version RPCs.
+
 Methods:
 
 - **`__post_init__`** – Lifecycle hook for post-initialization. Subclasses override with specific params.
-- **`create_setup`** – Create a new setup with comprehensive validation.
-- **`create_setup_version`** – Create a new setup version.
+- **`change_visibility`** – Change a setup's visibility scope.
+- **`create_service_setup`** – Create a service setup — a shareable configuration document.
+- **`create_setup`** – Create a new setup; owner/organisation/module derive from the request context.
 - **`delete_setup`** – Delete a setup by its unique identifier.
-- **`delete_setup_version`** – Delete a setup version by its unique identifier.
 - **`get_setup`** – Retrieve a setup by its unique identifier.
-- **`get_setup_version`** – Retrieve a setup version by its unique identifier.
-- **`list_setups`** – List setups with optional filtering and pagination.
-- **`search_setup_versions`** – Search for setup versions based on filters.
-- **`update_setup`** – Update an existing setup.
-- **`update_setup_version`** – Update an existing setup version.
+- **`update_setup`** – Update a setup's name and current version content.
 
 ###### __post_init__
 
@@ -35478,46 +39961,65 @@ __post_init__(*args: Any, **kwargs: Any) -> None
 
 Lifecycle hook for post-initialization. Subclasses override with specific params.
 
-###### create_setup
+###### change_visibility
 
 ```python
-create_setup(setup_dict: dict[str, Any]) -> str
+change_visibility(setup_dict: dict[str, Any]) -> SetupData
 ```
 
-Create a new setup with comprehensive validation.
+Change a setup's visibility scope.
 
 Parameters:
 
 - ###### **`setup_dict`**
 
-  (`dict[str, Any]`) – Dictionary containing setup details.
+  (`dict[str, Any]`) – Dictionary with 'setup_id' and 'visibility' (public | private | internal).
 
 Returns:
 
-- **`bool`** ( `str` ) – Success status of setup creation.
+- `SetupData` – The setup with its updated visibility.
 
-Raises:
-
-- `ValidationError` – If setup data is invalid.
-- `GrpcOperationError` – If gRPC operation fails.
-
-###### create_setup_version
+###### create_service_setup
 
 ```python
-create_setup_version(setup_version_dict: dict[str, Any]) -> str
+create_service_setup(name: str, content: dict[str, Any]) -> SetupData
 ```
 
-Create a new setup version.
+Create a service setup — a shareable configuration document.
+
+Only a name and the content JSON are needed; everything else (owner, organisation, backing module, kind) is derived server-side.
 
 Parameters:
 
-- ###### **`setup_version_dict`**
+- ###### **`name`**
 
-  (`dict[str, Any]`) – Dictionary with setup version details.
+  (`str`) – Human-readable service name.
+
+- ###### **`content`**
+
+  (`dict[str, Any]`) – The service configuration JSON.
 
 Returns:
 
-- **`str`** ( `str` ) – name of setup version creation.
+- `SetupData` – The created setup with its initial version.
+
+###### create_setup
+
+```python
+create_setup(setup_dict: dict[str, Any]) -> SetupData
+```
+
+Create a new setup; owner/organisation/module derive from the request context.
+
+Parameters:
+
+- ###### **`setup_dict`**
+
+  (`dict[str, Any]`) – Dictionary with 'name' and 'content'.
+
+Returns:
+
+- `SetupData` – The created setup with its initial version.
 
 ###### delete_setup
 
@@ -35531,29 +40033,11 @@ Parameters:
 
 - ###### **`setup_dict`**
 
-  (`dict[str, Any]`) – Dictionary with the setup 'name'.
+  (`dict[str, Any]`) – Dictionary with the 'setup_id'.
 
 Returns:
 
 - **`bool`** ( `bool` ) – Success status of deletion.
-
-###### delete_setup_version
-
-```python
-delete_setup_version(setup_version_dict: dict[str, Any]) -> bool
-```
-
-Delete a setup version by its unique identifier.
-
-Parameters:
-
-- ###### **`setup_version_dict`**
-
-  (`dict[str, Any]`) – Dictionary with the setup version 'name'.
-
-Returns:
-
-- **`bool`** ( `bool` ) – Success status of version deletion.
 
 ###### get_setup
 
@@ -35567,106 +40051,29 @@ Parameters:
 
 - ###### **`setup_dict`**
 
-  (`dict[str, Any]`) – Dictionary with 'name' and optional 'version'.
+  (`dict[str, Any]`) – Dictionary with 'setup_id' and optional 'version'.
 
 Returns:
 
-- `SetupData` – Dict\[str, Any\]: Setup details including optional setup version.
-
-###### get_setup_version
-
-```python
-get_setup_version(setup_version_dict: dict[str, Any]) -> SetupVersionData
-```
-
-Retrieve a setup version by its unique identifier.
-
-Parameters:
-
-- ###### **`setup_version_dict`**
-
-  (`dict[str, Any]`) – Dictionary with the setup version 'name'.
-
-Returns:
-
-- `SetupVersionData` – Dict\[str, Any\]: Setup version details.
-
-###### list_setups
-
-```python
-list_setups(list_dict: dict[str, Any]) -> dict[str, Any]
-```
-
-List setups with optional filtering and pagination.
-
-Parameters:
-
-- ###### **`list_dict`**
-
-  (`dict[str, Any]`) – Dictionary with optional filters:
-
-  - organisation_id: Filter by organisation
-  - owner_id: Filter by owner
-  - limit: Maximum number of results
-  - offset: Number of results to skip
-
-Returns:
-
-- `dict[str, Any]` – dict\[str, Any\]: Dictionary with 'setups' list and 'total_count'.
-
-###### search_setup_versions
-
-```python
-search_setup_versions(setup_version_dict: dict[str, Any]) -> list[SetupVersionData]
-```
-
-Search for setup versions based on filters.
-
-Parameters:
-
-- ###### **`setup_version_dict`**
-
-  (`dict[str, Any]`) – Dictionary with optional 'name' and 'version' filters.
-
-Returns:
-
-- `list[SetupVersionData]` – List\[Dict[str, Any]\]: A list of matching setup version details.
+- `SetupData` – The setup with its current version populated.
 
 ###### update_setup
 
 ```python
-update_setup(setup_dict: dict[str, Any]) -> bool
+update_setup(setup_dict: dict[str, Any]) -> SetupData
 ```
 
-Update an existing setup.
+Update a setup's name and current version content.
 
 Parameters:
 
 - ###### **`setup_dict`**
 
-  (`dict[str, Any]`) – Dictionary with setup update details.
+  (`dict[str, Any]`) – Dictionary with 'setup_id', 'name' and 'content'.
 
 Returns:
 
-- **`bool`** ( `bool` ) – Success status of the update operation.
-
-###### update_setup_version
-
-```python
-update_setup_version(setup_version_dict: dict[str, Any]) -> bool
-```
-
-Update an existing setup version.
-
-Parameters:
-
-- ###### **`setup_version_dict`**
-
-  (`dict[str, Any]`) – Dictionary with setup version update details.
-
-Returns:
-
-- **`bool`** ( `bool` ) – Success status of the update operation.
+- `SetupData` – The updated setup with its current version.
 
 ##### SetupVersionData
 
@@ -35755,7 +40162,11 @@ Release resources held by this strategy. No-op by default.
 ##### list
 
 ```python
-list(collection: str, scope: Scope = 'mission') -> list[StorageRecord]
+list(
+    collection: str,
+    context: Context = MISSIONS,
+    visibilities: list[Visibility] | None = None,
+) -> list[StorageRecord]
 ```
 
 Get all records in a collection under the given scope.
@@ -35766,9 +40177,13 @@ Parameters:
 
   (`str`) – The unique name for the record type
 
-- ###### **`scope`**
+- ###### **`context`**
 
-  (`Scope`, default: `'mission'` ) – Which context to list (default: "mission").
+  (`Context`, default: `MISSIONS` ) – Which context to list (default: "mission"). "user"/"organization" list across an owner and require owner_id.
+
+- ###### **`visibilities`**
+
+  (`list[Visibility] | None`, default: `None` ) – Optional read-access scopes to filter by (None = no filter).
 
 Returns:
 
@@ -35777,7 +40192,9 @@ Returns:
 ##### read
 
 ```python
-read(collection: str, record_id: str, scope: Scope = 'mission') -> StorageRecord | None
+read(
+    collection: str, record_id: str, context: Context = MISSIONS
+) -> StorageRecord | None
 ```
 
 Get a record by key under the given scope.
@@ -35792,9 +40209,9 @@ Parameters:
 
   (`str`) – The unique ID of the record
 
-- ###### **`scope`**
+- ###### **`context`**
 
-  (`Scope`, default: `'mission'` ) – Which context to read from (default: "mission").
+  (`Context`, default: `MISSIONS` ) – Which context to read from (default: "mission").
 
 Returns:
 
@@ -35803,7 +40220,7 @@ Returns:
 ##### remove
 
 ```python
-remove(collection: str, record_id: str, scope: Scope = 'mission') -> bool
+remove(collection: str, record_id: str, context: Context = MISSIONS) -> bool
 ```
 
 Delete a record from the storage under the given scope.
@@ -35818,9 +40235,9 @@ Parameters:
 
   (`str`) – The unique ID of the record
 
-- ###### **`scope`**
+- ###### **`context`**
 
-  (`Scope`, default: `'mission'` ) – Which context the record lives under (default: "mission").
+  (`Context`, default: `MISSIONS` ) – Which context the record lives under (default: "mission").
 
 Returns:
 
@@ -35829,7 +40246,7 @@ Returns:
 ##### remove_collection
 
 ```python
-remove_collection(collection: str, scope: Scope = 'mission') -> bool
+remove_collection(collection: str, context: Context = MISSIONS) -> bool
 ```
 
 Wipe a collection clean under the given scope.
@@ -35840,9 +40257,9 @@ Parameters:
 
   (`str`) – The unique name for the record type
 
-- ###### **`scope`**
+- ###### **`context`**
 
-  (`Scope`, default: `'mission'` ) – Which context the records live under (default: "mission").
+  (`Context`, default: `MISSIONS` ) – Which context the records live under (default: "mission").
 
 Returns:
 
@@ -35855,8 +40272,9 @@ store(
     collection: str,
     record_id: str | None,
     data: dict[str, Any],
-    data_type: Literal["OUTPUT", "VIEW", "LOGS", "OTHER"] = "OUTPUT",
-    scope: Scope = "mission",
+    data_type: DataType = OUTPUT,
+    context: Context = MISSIONS,
+    visibility: Visibility = UNSPECIFIED,
 ) -> StorageRecord
 ```
 
@@ -35878,11 +40296,15 @@ Parameters:
 
 - ###### **`data_type`**
 
-  (`Literal['OUTPUT', 'VIEW', 'LOGS', 'OTHER']`, default: `'OUTPUT'` ) – The type of data being stored (default: OUTPUT)
+  (`DataType`, default: `OUTPUT` ) – The type of data being stored (default: OUTPUT)
 
-- ###### **`scope`**
+- ###### **`context`**
 
-  (`Scope`, default: `'mission'` ) – "mission" (default) writes under the current mission context; "setup" writes under the setup-version context.
+  (`Context`, default: `MISSIONS` ) – "mission" (default) writes under the current mission context; "setup" writes under the setup-version context.
+
+- ###### **`visibility`**
+
+  (`Visibility`, default: `UNSPECIFIED` ) – Read-access scope for the record (UNSPECIFIED = server default).
 
 Returns:
 
@@ -35896,7 +40318,11 @@ Raises:
 
 ```python
 update(
-    collection: str, record_id: str, data: dict[str, Any], scope: Scope = "mission"
+    collection: str,
+    record_id: str,
+    data: dict[str, Any],
+    context: Context = MISSIONS,
+    visibility: Visibility = UNSPECIFIED,
 ) -> StorageRecord | None
 ```
 
@@ -35916,9 +40342,13 @@ Parameters:
 
   (`dict[str, Any]`) – The new data to store
 
-- ###### **`scope`**
+- ###### **`context`**
 
-  (`Scope`, default: `'mission'` ) – Which context the record lives under (default: "mission").
+  (`Context`, default: `MISSIONS` ) – Which context the record lives under (default: "mission").
+
+- ###### **`visibility`**
+
+  (`Visibility`, default: `UNSPECIFIED` ) – New read-access scope; UNSPECIFIED leaves it unchanged.
 
 Returns:
 
@@ -35931,8 +40361,9 @@ upsert(
     collection: str,
     record_id: str,
     data: dict[str, Any],
-    data_type: Literal["OUTPUT", "VIEW", "LOGS", "OTHER"] = "OUTPUT",
-    scope: Scope = "mission",
+    data_type: DataType = OUTPUT,
+    context: Context = MISSIONS,
+    visibility: Visibility = UNSPECIFIED,
 ) -> StorageRecord
 ```
 
@@ -35956,11 +40387,15 @@ Parameters:
 
 - ###### **`data_type`**
 
-  (`Literal['OUTPUT', 'VIEW', 'LOGS', 'OTHER']`, default: `'OUTPUT'` ) – The type of data being stored (default: OUTPUT)
+  (`DataType`, default: `OUTPUT` ) – The type of data being stored (default: OUTPUT)
 
-- ###### **`scope`**
+- ###### **`context`**
 
-  (`Scope`, default: `'mission'` ) – Which context to upsert under (default: "mission").
+  (`Context`, default: `MISSIONS` ) – Which context to upsert under (default: "mission").
+
+- ###### **`visibility`**
+
+  (`Visibility`, default: `UNSPECIFIED` ) – Read-access scope for the record (UNSPECIFIED = server default).
 
 Returns:
 
@@ -36112,7 +40547,11 @@ Raises:
 ##### list
 
 ```python
-list(collection: str, scope: Scope = 'mission') -> list[StorageRecord]
+list(
+    collection: str,
+    context: Context = MISSIONS,
+    visibilities: list[Visibility] | None = None,
+) -> list[StorageRecord]
 ```
 
 Get all records in a collection under the given scope.
@@ -36123,9 +40562,13 @@ Parameters:
 
   (`str`) – The unique name for the record type
 
-- ###### **`scope`**
+- ###### **`context`**
 
-  (`Scope`, default: `'mission'` ) – Which context to list (default: "mission").
+  (`Context`, default: `MISSIONS` ) – Which context to list (default: "mission"). "user"/"organization" list across an owner and require owner_id.
+
+- ###### **`visibilities`**
+
+  (`list[Visibility] | None`, default: `None` ) – Optional read-access scopes to filter by (None = no filter).
 
 Returns:
 
@@ -36134,7 +40577,9 @@ Returns:
 ##### read
 
 ```python
-read(collection: str, record_id: str, scope: Scope = 'mission') -> StorageRecord | None
+read(
+    collection: str, record_id: str, context: Context = MISSIONS
+) -> StorageRecord | None
 ```
 
 Get a record by key under the given scope.
@@ -36149,9 +40594,9 @@ Parameters:
 
   (`str`) – The unique ID of the record
 
-- ###### **`scope`**
+- ###### **`context`**
 
-  (`Scope`, default: `'mission'` ) – Which context to read from (default: "mission").
+  (`Context`, default: `MISSIONS` ) – Which context to read from (default: "mission").
 
 Returns:
 
@@ -36174,7 +40619,7 @@ Parameters:
 ##### remove
 
 ```python
-remove(collection: str, record_id: str, scope: Scope = 'mission') -> bool
+remove(collection: str, record_id: str, context: Context = MISSIONS) -> bool
 ```
 
 Delete a record from the storage under the given scope.
@@ -36189,9 +40634,9 @@ Parameters:
 
   (`str`) – The unique ID of the record
 
-- ###### **`scope`**
+- ###### **`context`**
 
-  (`Scope`, default: `'mission'` ) – Which context the record lives under (default: "mission").
+  (`Context`, default: `MISSIONS` ) – Which context the record lives under (default: "mission").
 
 Returns:
 
@@ -36200,7 +40645,7 @@ Returns:
 ##### remove_collection
 
 ```python
-remove_collection(collection: str, scope: Scope = 'mission') -> bool
+remove_collection(collection: str, context: Context = MISSIONS) -> bool
 ```
 
 Wipe a collection clean under the given scope.
@@ -36211,9 +40656,9 @@ Parameters:
 
   (`str`) – The unique name for the record type
 
-- ###### **`scope`**
+- ###### **`context`**
 
-  (`Scope`, default: `'mission'` ) – Which context the records live under (default: "mission").
+  (`Context`, default: `MISSIONS` ) – Which context the records live under (default: "mission").
 
 Returns:
 
@@ -36226,8 +40671,9 @@ store(
     collection: str,
     record_id: str | None,
     data: dict[str, Any],
-    data_type: Literal["OUTPUT", "VIEW", "LOGS", "OTHER"] = "OUTPUT",
-    scope: Scope = "mission",
+    data_type: DataType = OUTPUT,
+    context: Context = MISSIONS,
+    visibility: Visibility = UNSPECIFIED,
 ) -> StorageRecord
 ```
 
@@ -36249,11 +40695,15 @@ Parameters:
 
 - ###### **`data_type`**
 
-  (`Literal['OUTPUT', 'VIEW', 'LOGS', 'OTHER']`, default: `'OUTPUT'` ) – The type of data being stored (default: OUTPUT)
+  (`DataType`, default: `OUTPUT` ) – The type of data being stored (default: OUTPUT)
 
-- ###### **`scope`**
+- ###### **`context`**
 
-  (`Scope`, default: `'mission'` ) – "mission" (default) writes under the current mission context; "setup" writes under the setup-version context.
+  (`Context`, default: `MISSIONS` ) – "mission" (default) writes under the current mission context; "setup" writes under the setup-version context.
+
+- ###### **`visibility`**
+
+  (`Visibility`, default: `UNSPECIFIED` ) – Read-access scope for the record (UNSPECIFIED = server default).
 
 Returns:
 
@@ -36267,7 +40717,11 @@ Raises:
 
 ```python
 update(
-    collection: str, record_id: str, data: dict[str, Any], scope: Scope = "mission"
+    collection: str,
+    record_id: str,
+    data: dict[str, Any],
+    context: Context = MISSIONS,
+    visibility: Visibility = UNSPECIFIED,
 ) -> StorageRecord | None
 ```
 
@@ -36287,9 +40741,13 @@ Parameters:
 
   (`dict[str, Any]`) – The new data to store
 
-- ###### **`scope`**
+- ###### **`context`**
 
-  (`Scope`, default: `'mission'` ) – Which context the record lives under (default: "mission").
+  (`Context`, default: `MISSIONS` ) – Which context the record lives under (default: "mission").
+
+- ###### **`visibility`**
+
+  (`Visibility`, default: `UNSPECIFIED` ) – New read-access scope; UNSPECIFIED leaves it unchanged.
 
 Returns:
 
@@ -36302,8 +40760,9 @@ upsert(
     collection: str,
     record_id: str,
     data: dict[str, Any],
-    data_type: Literal["OUTPUT", "VIEW", "LOGS", "OTHER"] = "OUTPUT",
-    scope: Scope = "mission",
+    data_type: DataType = OUTPUT,
+    context: Context = MISSIONS,
+    visibility: Visibility = UNSPECIFIED,
 ) -> StorageRecord
 ```
 
@@ -36327,11 +40786,15 @@ Parameters:
 
 - ###### **`data_type`**
 
-  (`Literal['OUTPUT', 'VIEW', 'LOGS', 'OTHER']`, default: `'OUTPUT'` ) – The type of data being stored (default: OUTPUT)
+  (`DataType`, default: `OUTPUT` ) – The type of data being stored (default: OUTPUT)
 
-- ###### **`scope`**
+- ###### **`context`**
 
-  (`Scope`, default: `'mission'` ) – Which context to upsert under (default: "mission").
+  (`Context`, default: `MISSIONS` ) – Which context to upsert under (default: "mission").
+
+- ###### **`visibility`**
+
+  (`Visibility`, default: `UNSPECIFIED` ) – Read-access scope for the record (UNSPECIFIED = server default).
 
 Returns:
 
@@ -36370,7 +40833,7 @@ Define CRUD + list/remove-collection against a collection/record store.
 
 Records are scoped by a `context` string (the proto field), which is either `self.mission_id` (mission scope, the default) or `self.setup_version_id` (setup-version scope). Both attributes are expected to already contain the full prefix (`missions:<id>` / `setup_versions:<id>`).
 
-Public methods accept `scope: Literal["mission", "setup"]` (default `"mission"`); internally we resolve it to the matching context string and pass that to the abstract `_store/_read/_update/_remove/_list/_remove_collection`.
+Public methods accept a `context: Context` kind (default `Context.MISSIONS`); internally we resolve it to the matching context string and pass that to the abstract `_store/_read/_update/_remove/_list/_remove_collection`. `Context.USERS`/`Context.ORGANIZATIONS` are read-only cross-owner scopes usable only for listing.
 
 Parameters:
 
@@ -36412,7 +40875,11 @@ Release resources held by this strategy. No-op by default.
 ##### list
 
 ```python
-list(collection: str, scope: Scope = 'mission') -> list[StorageRecord]
+list(
+    collection: str,
+    context: Context = MISSIONS,
+    visibilities: list[Visibility] | None = None,
+) -> list[StorageRecord]
 ```
 
 Get all records in a collection under the given scope.
@@ -36423,9 +40890,13 @@ Parameters:
 
   (`str`) – The unique name for the record type
 
-- ###### **`scope`**
+- ###### **`context`**
 
-  (`Scope`, default: `'mission'` ) – Which context to list (default: "mission").
+  (`Context`, default: `MISSIONS` ) – Which context to list (default: "mission"). "user"/"organization" list across an owner and require owner_id.
+
+- ###### **`visibilities`**
+
+  (`list[Visibility] | None`, default: `None` ) – Optional read-access scopes to filter by (None = no filter).
 
 Returns:
 
@@ -36434,7 +40905,9 @@ Returns:
 ##### read
 
 ```python
-read(collection: str, record_id: str, scope: Scope = 'mission') -> StorageRecord | None
+read(
+    collection: str, record_id: str, context: Context = MISSIONS
+) -> StorageRecord | None
 ```
 
 Get a record by key under the given scope.
@@ -36449,9 +40922,9 @@ Parameters:
 
   (`str`) – The unique ID of the record
 
-- ###### **`scope`**
+- ###### **`context`**
 
-  (`Scope`, default: `'mission'` ) – Which context to read from (default: "mission").
+  (`Context`, default: `MISSIONS` ) – Which context to read from (default: "mission").
 
 Returns:
 
@@ -36460,7 +40933,7 @@ Returns:
 ##### remove
 
 ```python
-remove(collection: str, record_id: str, scope: Scope = 'mission') -> bool
+remove(collection: str, record_id: str, context: Context = MISSIONS) -> bool
 ```
 
 Delete a record from the storage under the given scope.
@@ -36475,9 +40948,9 @@ Parameters:
 
   (`str`) – The unique ID of the record
 
-- ###### **`scope`**
+- ###### **`context`**
 
-  (`Scope`, default: `'mission'` ) – Which context the record lives under (default: "mission").
+  (`Context`, default: `MISSIONS` ) – Which context the record lives under (default: "mission").
 
 Returns:
 
@@ -36486,7 +40959,7 @@ Returns:
 ##### remove_collection
 
 ```python
-remove_collection(collection: str, scope: Scope = 'mission') -> bool
+remove_collection(collection: str, context: Context = MISSIONS) -> bool
 ```
 
 Wipe a collection clean under the given scope.
@@ -36497,9 +40970,9 @@ Parameters:
 
   (`str`) – The unique name for the record type
 
-- ###### **`scope`**
+- ###### **`context`**
 
-  (`Scope`, default: `'mission'` ) – Which context the records live under (default: "mission").
+  (`Context`, default: `MISSIONS` ) – Which context the records live under (default: "mission").
 
 Returns:
 
@@ -36512,8 +40985,9 @@ store(
     collection: str,
     record_id: str | None,
     data: dict[str, Any],
-    data_type: Literal["OUTPUT", "VIEW", "LOGS", "OTHER"] = "OUTPUT",
-    scope: Scope = "mission",
+    data_type: DataType = OUTPUT,
+    context: Context = MISSIONS,
+    visibility: Visibility = UNSPECIFIED,
 ) -> StorageRecord
 ```
 
@@ -36535,11 +41009,15 @@ Parameters:
 
 - ###### **`data_type`**
 
-  (`Literal['OUTPUT', 'VIEW', 'LOGS', 'OTHER']`, default: `'OUTPUT'` ) – The type of data being stored (default: OUTPUT)
+  (`DataType`, default: `OUTPUT` ) – The type of data being stored (default: OUTPUT)
 
-- ###### **`scope`**
+- ###### **`context`**
 
-  (`Scope`, default: `'mission'` ) – "mission" (default) writes under the current mission context; "setup" writes under the setup-version context.
+  (`Context`, default: `MISSIONS` ) – "mission" (default) writes under the current mission context; "setup" writes under the setup-version context.
+
+- ###### **`visibility`**
+
+  (`Visibility`, default: `UNSPECIFIED` ) – Read-access scope for the record (UNSPECIFIED = server default).
 
 Returns:
 
@@ -36553,7 +41031,11 @@ Raises:
 
 ```python
 update(
-    collection: str, record_id: str, data: dict[str, Any], scope: Scope = "mission"
+    collection: str,
+    record_id: str,
+    data: dict[str, Any],
+    context: Context = MISSIONS,
+    visibility: Visibility = UNSPECIFIED,
 ) -> StorageRecord | None
 ```
 
@@ -36573,9 +41055,13 @@ Parameters:
 
   (`dict[str, Any]`) – The new data to store
 
-- ###### **`scope`**
+- ###### **`context`**
 
-  (`Scope`, default: `'mission'` ) – Which context the record lives under (default: "mission").
+  (`Context`, default: `MISSIONS` ) – Which context the record lives under (default: "mission").
+
+- ###### **`visibility`**
+
+  (`Visibility`, default: `UNSPECIFIED` ) – New read-access scope; UNSPECIFIED leaves it unchanged.
 
 Returns:
 
@@ -36588,8 +41074,9 @@ upsert(
     collection: str,
     record_id: str,
     data: dict[str, Any],
-    data_type: Literal["OUTPUT", "VIEW", "LOGS", "OTHER"] = "OUTPUT",
-    scope: Scope = "mission",
+    data_type: DataType = OUTPUT,
+    context: Context = MISSIONS,
+    visibility: Visibility = UNSPECIFIED,
 ) -> StorageRecord
 ```
 
@@ -36613,11 +41100,15 @@ Parameters:
 
 - ###### **`data_type`**
 
-  (`Literal['OUTPUT', 'VIEW', 'LOGS', 'OTHER']`, default: `'OUTPUT'` ) – The type of data being stored (default: OUTPUT)
+  (`DataType`, default: `OUTPUT` ) – The type of data being stored (default: OUTPUT)
 
-- ###### **`scope`**
+- ###### **`context`**
 
-  (`Scope`, default: `'mission'` ) – Which context to upsert under (default: "mission").
+  (`Context`, default: `MISSIONS` ) – Which context to upsert under (default: "mission").
+
+- ###### **`visibility`**
+
+  (`Visibility`, default: `UNSPECIFIED` ) – Read-access scope for the record (UNSPECIFIED = server default).
 
 Returns:
 
@@ -36693,7 +41184,11 @@ Release resources held by this strategy. No-op by default.
 ###### list
 
 ```python
-list(collection: str, scope: Scope = 'mission') -> list[StorageRecord]
+list(
+    collection: str,
+    context: Context = MISSIONS,
+    visibilities: list[Visibility] | None = None,
+) -> list[StorageRecord]
 ```
 
 Get all records in a collection under the given scope.
@@ -36704,9 +41199,13 @@ Parameters:
 
   (`str`) – The unique name for the record type
 
-- ###### **`scope`**
+- ###### **`context`**
 
-  (`Scope`, default: `'mission'` ) – Which context to list (default: "mission").
+  (`Context`, default: `MISSIONS` ) – Which context to list (default: "mission"). "user"/"organization" list across an owner and require owner_id.
+
+- ###### **`visibilities`**
+
+  (`list[Visibility] | None`, default: `None` ) – Optional read-access scopes to filter by (None = no filter).
 
 Returns:
 
@@ -36715,7 +41214,9 @@ Returns:
 ###### read
 
 ```python
-read(collection: str, record_id: str, scope: Scope = 'mission') -> StorageRecord | None
+read(
+    collection: str, record_id: str, context: Context = MISSIONS
+) -> StorageRecord | None
 ```
 
 Get a record by key under the given scope.
@@ -36730,9 +41231,9 @@ Parameters:
 
   (`str`) – The unique ID of the record
 
-- ###### **`scope`**
+- ###### **`context`**
 
-  (`Scope`, default: `'mission'` ) – Which context to read from (default: "mission").
+  (`Context`, default: `MISSIONS` ) – Which context to read from (default: "mission").
 
 Returns:
 
@@ -36741,7 +41242,7 @@ Returns:
 ###### remove
 
 ```python
-remove(collection: str, record_id: str, scope: Scope = 'mission') -> bool
+remove(collection: str, record_id: str, context: Context = MISSIONS) -> bool
 ```
 
 Delete a record from the storage under the given scope.
@@ -36756,9 +41257,9 @@ Parameters:
 
   (`str`) – The unique ID of the record
 
-- ###### **`scope`**
+- ###### **`context`**
 
-  (`Scope`, default: `'mission'` ) – Which context the record lives under (default: "mission").
+  (`Context`, default: `MISSIONS` ) – Which context the record lives under (default: "mission").
 
 Returns:
 
@@ -36767,7 +41268,7 @@ Returns:
 ###### remove_collection
 
 ```python
-remove_collection(collection: str, scope: Scope = 'mission') -> bool
+remove_collection(collection: str, context: Context = MISSIONS) -> bool
 ```
 
 Wipe a collection clean under the given scope.
@@ -36778,9 +41279,9 @@ Parameters:
 
   (`str`) – The unique name for the record type
 
-- ###### **`scope`**
+- ###### **`context`**
 
-  (`Scope`, default: `'mission'` ) – Which context the records live under (default: "mission").
+  (`Context`, default: `MISSIONS` ) – Which context the records live under (default: "mission").
 
 Returns:
 
@@ -36793,8 +41294,9 @@ store(
     collection: str,
     record_id: str | None,
     data: dict[str, Any],
-    data_type: Literal["OUTPUT", "VIEW", "LOGS", "OTHER"] = "OUTPUT",
-    scope: Scope = "mission",
+    data_type: DataType = OUTPUT,
+    context: Context = MISSIONS,
+    visibility: Visibility = UNSPECIFIED,
 ) -> StorageRecord
 ```
 
@@ -36816,11 +41318,15 @@ Parameters:
 
 - ###### **`data_type`**
 
-  (`Literal['OUTPUT', 'VIEW', 'LOGS', 'OTHER']`, default: `'OUTPUT'` ) – The type of data being stored (default: OUTPUT)
+  (`DataType`, default: `OUTPUT` ) – The type of data being stored (default: OUTPUT)
 
-- ###### **`scope`**
+- ###### **`context`**
 
-  (`Scope`, default: `'mission'` ) – "mission" (default) writes under the current mission context; "setup" writes under the setup-version context.
+  (`Context`, default: `MISSIONS` ) – "mission" (default) writes under the current mission context; "setup" writes under the setup-version context.
+
+- ###### **`visibility`**
+
+  (`Visibility`, default: `UNSPECIFIED` ) – Read-access scope for the record (UNSPECIFIED = server default).
 
 Returns:
 
@@ -36834,7 +41340,11 @@ Raises:
 
 ```python
 update(
-    collection: str, record_id: str, data: dict[str, Any], scope: Scope = "mission"
+    collection: str,
+    record_id: str,
+    data: dict[str, Any],
+    context: Context = MISSIONS,
+    visibility: Visibility = UNSPECIFIED,
 ) -> StorageRecord | None
 ```
 
@@ -36854,9 +41364,13 @@ Parameters:
 
   (`dict[str, Any]`) – The new data to store
 
-- ###### **`scope`**
+- ###### **`context`**
 
-  (`Scope`, default: `'mission'` ) – Which context the record lives under (default: "mission").
+  (`Context`, default: `MISSIONS` ) – Which context the record lives under (default: "mission").
+
+- ###### **`visibility`**
+
+  (`Visibility`, default: `UNSPECIFIED` ) – New read-access scope; UNSPECIFIED leaves it unchanged.
 
 Returns:
 
@@ -36869,8 +41383,9 @@ upsert(
     collection: str,
     record_id: str,
     data: dict[str, Any],
-    data_type: Literal["OUTPUT", "VIEW", "LOGS", "OTHER"] = "OUTPUT",
-    scope: Scope = "mission",
+    data_type: DataType = OUTPUT,
+    context: Context = MISSIONS,
+    visibility: Visibility = UNSPECIFIED,
 ) -> StorageRecord
 ```
 
@@ -36894,11 +41409,15 @@ Parameters:
 
 - ###### **`data_type`**
 
-  (`Literal['OUTPUT', 'VIEW', 'LOGS', 'OTHER']`, default: `'OUTPUT'` ) – The type of data being stored (default: OUTPUT)
+  (`DataType`, default: `OUTPUT` ) – The type of data being stored (default: OUTPUT)
 
-- ###### **`scope`**
+- ###### **`context`**
 
-  (`Scope`, default: `'mission'` ) – Which context to upsert under (default: "mission").
+  (`Context`, default: `MISSIONS` ) – Which context to upsert under (default: "mission").
+
+- ###### **`visibility`**
+
+  (`Visibility`, default: `UNSPECIFIED` ) – Read-access scope for the record (UNSPECIFIED = server default).
 
 Returns:
 
@@ -37079,7 +41598,11 @@ Raises:
 ###### list
 
 ```python
-list(collection: str, scope: Scope = 'mission') -> list[StorageRecord]
+list(
+    collection: str,
+    context: Context = MISSIONS,
+    visibilities: list[Visibility] | None = None,
+) -> list[StorageRecord]
 ```
 
 Get all records in a collection under the given scope.
@@ -37090,9 +41613,13 @@ Parameters:
 
   (`str`) – The unique name for the record type
 
-- ###### **`scope`**
+- ###### **`context`**
 
-  (`Scope`, default: `'mission'` ) – Which context to list (default: "mission").
+  (`Context`, default: `MISSIONS` ) – Which context to list (default: "mission"). "user"/"organization" list across an owner and require owner_id.
+
+- ###### **`visibilities`**
+
+  (`list[Visibility] | None`, default: `None` ) – Optional read-access scopes to filter by (None = no filter).
 
 Returns:
 
@@ -37101,7 +41628,9 @@ Returns:
 ###### read
 
 ```python
-read(collection: str, record_id: str, scope: Scope = 'mission') -> StorageRecord | None
+read(
+    collection: str, record_id: str, context: Context = MISSIONS
+) -> StorageRecord | None
 ```
 
 Get a record by key under the given scope.
@@ -37116,9 +41645,9 @@ Parameters:
 
   (`str`) – The unique ID of the record
 
-- ###### **`scope`**
+- ###### **`context`**
 
-  (`Scope`, default: `'mission'` ) – Which context to read from (default: "mission").
+  (`Context`, default: `MISSIONS` ) – Which context to read from (default: "mission").
 
 Returns:
 
@@ -37141,7 +41670,7 @@ Parameters:
 ###### remove
 
 ```python
-remove(collection: str, record_id: str, scope: Scope = 'mission') -> bool
+remove(collection: str, record_id: str, context: Context = MISSIONS) -> bool
 ```
 
 Delete a record from the storage under the given scope.
@@ -37156,9 +41685,9 @@ Parameters:
 
   (`str`) – The unique ID of the record
 
-- ###### **`scope`**
+- ###### **`context`**
 
-  (`Scope`, default: `'mission'` ) – Which context the record lives under (default: "mission").
+  (`Context`, default: `MISSIONS` ) – Which context the record lives under (default: "mission").
 
 Returns:
 
@@ -37167,7 +41696,7 @@ Returns:
 ###### remove_collection
 
 ```python
-remove_collection(collection: str, scope: Scope = 'mission') -> bool
+remove_collection(collection: str, context: Context = MISSIONS) -> bool
 ```
 
 Wipe a collection clean under the given scope.
@@ -37178,9 +41707,9 @@ Parameters:
 
   (`str`) – The unique name for the record type
 
-- ###### **`scope`**
+- ###### **`context`**
 
-  (`Scope`, default: `'mission'` ) – Which context the records live under (default: "mission").
+  (`Context`, default: `MISSIONS` ) – Which context the records live under (default: "mission").
 
 Returns:
 
@@ -37193,8 +41722,9 @@ store(
     collection: str,
     record_id: str | None,
     data: dict[str, Any],
-    data_type: Literal["OUTPUT", "VIEW", "LOGS", "OTHER"] = "OUTPUT",
-    scope: Scope = "mission",
+    data_type: DataType = OUTPUT,
+    context: Context = MISSIONS,
+    visibility: Visibility = UNSPECIFIED,
 ) -> StorageRecord
 ```
 
@@ -37216,11 +41746,15 @@ Parameters:
 
 - ###### **`data_type`**
 
-  (`Literal['OUTPUT', 'VIEW', 'LOGS', 'OTHER']`, default: `'OUTPUT'` ) – The type of data being stored (default: OUTPUT)
+  (`DataType`, default: `OUTPUT` ) – The type of data being stored (default: OUTPUT)
 
-- ###### **`scope`**
+- ###### **`context`**
 
-  (`Scope`, default: `'mission'` ) – "mission" (default) writes under the current mission context; "setup" writes under the setup-version context.
+  (`Context`, default: `MISSIONS` ) – "mission" (default) writes under the current mission context; "setup" writes under the setup-version context.
+
+- ###### **`visibility`**
+
+  (`Visibility`, default: `UNSPECIFIED` ) – Read-access scope for the record (UNSPECIFIED = server default).
 
 Returns:
 
@@ -37234,7 +41768,11 @@ Raises:
 
 ```python
 update(
-    collection: str, record_id: str, data: dict[str, Any], scope: Scope = "mission"
+    collection: str,
+    record_id: str,
+    data: dict[str, Any],
+    context: Context = MISSIONS,
+    visibility: Visibility = UNSPECIFIED,
 ) -> StorageRecord | None
 ```
 
@@ -37254,9 +41792,13 @@ Parameters:
 
   (`dict[str, Any]`) – The new data to store
 
-- ###### **`scope`**
+- ###### **`context`**
 
-  (`Scope`, default: `'mission'` ) – Which context the record lives under (default: "mission").
+  (`Context`, default: `MISSIONS` ) – Which context the record lives under (default: "mission").
+
+- ###### **`visibility`**
+
+  (`Visibility`, default: `UNSPECIFIED` ) – New read-access scope; UNSPECIFIED leaves it unchanged.
 
 Returns:
 
@@ -37269,8 +41811,9 @@ upsert(
     collection: str,
     record_id: str,
     data: dict[str, Any],
-    data_type: Literal["OUTPUT", "VIEW", "LOGS", "OTHER"] = "OUTPUT",
-    scope: Scope = "mission",
+    data_type: DataType = OUTPUT,
+    context: Context = MISSIONS,
+    visibility: Visibility = UNSPECIFIED,
 ) -> StorageRecord
 ```
 
@@ -37294,11 +41837,15 @@ Parameters:
 
 - ###### **`data_type`**
 
-  (`Literal['OUTPUT', 'VIEW', 'LOGS', 'OTHER']`, default: `'OUTPUT'` ) – The type of data being stored (default: OUTPUT)
+  (`DataType`, default: `OUTPUT` ) – The type of data being stored (default: OUTPUT)
 
-- ###### **`scope`**
+- ###### **`context`**
 
-  (`Scope`, default: `'mission'` ) – Which context to upsert under (default: "mission").
+  (`Context`, default: `MISSIONS` ) – Which context to upsert under (default: "mission").
+
+- ###### **`visibility`**
+
+  (`Visibility`, default: `UNSPECIFIED` ) – Read-access scope for the record (UNSPECIFIED = server default).
 
 Returns:
 
@@ -37359,7 +41906,7 @@ Define CRUD + list/remove-collection against a collection/record store.
 
 Records are scoped by a `context` string (the proto field), which is either `self.mission_id` (mission scope, the default) or `self.setup_version_id` (setup-version scope). Both attributes are expected to already contain the full prefix (`missions:<id>` / `setup_versions:<id>`).
 
-Public methods accept `scope: Literal["mission", "setup"]` (default `"mission"`); internally we resolve it to the matching context string and pass that to the abstract `_store/_read/_update/_remove/_list/_remove_collection`.
+Public methods accept a `context: Context` kind (default `Context.MISSIONS`); internally we resolve it to the matching context string and pass that to the abstract `_store/_read/_update/_remove/_list/_remove_collection`. `Context.USERS`/`Context.ORGANIZATIONS` are read-only cross-owner scopes usable only for listing.
 
 Parameters:
 
@@ -37401,7 +41948,11 @@ Release resources held by this strategy. No-op by default.
 ###### list
 
 ```python
-list(collection: str, scope: Scope = 'mission') -> list[StorageRecord]
+list(
+    collection: str,
+    context: Context = MISSIONS,
+    visibilities: list[Visibility] | None = None,
+) -> list[StorageRecord]
 ```
 
 Get all records in a collection under the given scope.
@@ -37412,9 +41963,13 @@ Parameters:
 
   (`str`) – The unique name for the record type
 
-- ###### **`scope`**
+- ###### **`context`**
 
-  (`Scope`, default: `'mission'` ) – Which context to list (default: "mission").
+  (`Context`, default: `MISSIONS` ) – Which context to list (default: "mission"). "user"/"organization" list across an owner and require owner_id.
+
+- ###### **`visibilities`**
+
+  (`list[Visibility] | None`, default: `None` ) – Optional read-access scopes to filter by (None = no filter).
 
 Returns:
 
@@ -37423,7 +41978,9 @@ Returns:
 ###### read
 
 ```python
-read(collection: str, record_id: str, scope: Scope = 'mission') -> StorageRecord | None
+read(
+    collection: str, record_id: str, context: Context = MISSIONS
+) -> StorageRecord | None
 ```
 
 Get a record by key under the given scope.
@@ -37438,9 +41995,9 @@ Parameters:
 
   (`str`) – The unique ID of the record
 
-- ###### **`scope`**
+- ###### **`context`**
 
-  (`Scope`, default: `'mission'` ) – Which context to read from (default: "mission").
+  (`Context`, default: `MISSIONS` ) – Which context to read from (default: "mission").
 
 Returns:
 
@@ -37449,7 +42006,7 @@ Returns:
 ###### remove
 
 ```python
-remove(collection: str, record_id: str, scope: Scope = 'mission') -> bool
+remove(collection: str, record_id: str, context: Context = MISSIONS) -> bool
 ```
 
 Delete a record from the storage under the given scope.
@@ -37464,9 +42021,9 @@ Parameters:
 
   (`str`) – The unique ID of the record
 
-- ###### **`scope`**
+- ###### **`context`**
 
-  (`Scope`, default: `'mission'` ) – Which context the record lives under (default: "mission").
+  (`Context`, default: `MISSIONS` ) – Which context the record lives under (default: "mission").
 
 Returns:
 
@@ -37475,7 +42032,7 @@ Returns:
 ###### remove_collection
 
 ```python
-remove_collection(collection: str, scope: Scope = 'mission') -> bool
+remove_collection(collection: str, context: Context = MISSIONS) -> bool
 ```
 
 Wipe a collection clean under the given scope.
@@ -37486,9 +42043,9 @@ Parameters:
 
   (`str`) – The unique name for the record type
 
-- ###### **`scope`**
+- ###### **`context`**
 
-  (`Scope`, default: `'mission'` ) – Which context the records live under (default: "mission").
+  (`Context`, default: `MISSIONS` ) – Which context the records live under (default: "mission").
 
 Returns:
 
@@ -37501,8 +42058,9 @@ store(
     collection: str,
     record_id: str | None,
     data: dict[str, Any],
-    data_type: Literal["OUTPUT", "VIEW", "LOGS", "OTHER"] = "OUTPUT",
-    scope: Scope = "mission",
+    data_type: DataType = OUTPUT,
+    context: Context = MISSIONS,
+    visibility: Visibility = UNSPECIFIED,
 ) -> StorageRecord
 ```
 
@@ -37524,11 +42082,15 @@ Parameters:
 
 - ###### **`data_type`**
 
-  (`Literal['OUTPUT', 'VIEW', 'LOGS', 'OTHER']`, default: `'OUTPUT'` ) – The type of data being stored (default: OUTPUT)
+  (`DataType`, default: `OUTPUT` ) – The type of data being stored (default: OUTPUT)
 
-- ###### **`scope`**
+- ###### **`context`**
 
-  (`Scope`, default: `'mission'` ) – "mission" (default) writes under the current mission context; "setup" writes under the setup-version context.
+  (`Context`, default: `MISSIONS` ) – "mission" (default) writes under the current mission context; "setup" writes under the setup-version context.
+
+- ###### **`visibility`**
+
+  (`Visibility`, default: `UNSPECIFIED` ) – Read-access scope for the record (UNSPECIFIED = server default).
 
 Returns:
 
@@ -37542,7 +42104,11 @@ Raises:
 
 ```python
 update(
-    collection: str, record_id: str, data: dict[str, Any], scope: Scope = "mission"
+    collection: str,
+    record_id: str,
+    data: dict[str, Any],
+    context: Context = MISSIONS,
+    visibility: Visibility = UNSPECIFIED,
 ) -> StorageRecord | None
 ```
 
@@ -37562,9 +42128,13 @@ Parameters:
 
   (`dict[str, Any]`) – The new data to store
 
-- ###### **`scope`**
+- ###### **`context`**
 
-  (`Scope`, default: `'mission'` ) – Which context the record lives under (default: "mission").
+  (`Context`, default: `MISSIONS` ) – Which context the record lives under (default: "mission").
+
+- ###### **`visibility`**
+
+  (`Visibility`, default: `UNSPECIFIED` ) – New read-access scope; UNSPECIFIED leaves it unchanged.
 
 Returns:
 
@@ -37577,8 +42147,9 @@ upsert(
     collection: str,
     record_id: str,
     data: dict[str, Any],
-    data_type: Literal["OUTPUT", "VIEW", "LOGS", "OTHER"] = "OUTPUT",
-    scope: Scope = "mission",
+    data_type: DataType = OUTPUT,
+    context: Context = MISSIONS,
+    visibility: Visibility = UNSPECIFIED,
 ) -> StorageRecord
 ```
 
@@ -37602,11 +42173,15 @@ Parameters:
 
 - ###### **`data_type`**
 
-  (`Literal['OUTPUT', 'VIEW', 'LOGS', 'OTHER']`, default: `'OUTPUT'` ) – The type of data being stored (default: OUTPUT)
+  (`DataType`, default: `OUTPUT` ) – The type of data being stored (default: OUTPUT)
 
-- ###### **`scope`**
+- ###### **`context`**
 
-  (`Scope`, default: `'mission'` ) – Which context to upsert under (default: "mission").
+  (`Context`, default: `MISSIONS` ) – Which context to upsert under (default: "mission").
+
+- ###### **`visibility`**
+
+  (`Visibility`, default: `UNSPECIFIED` ) – Read-access scope for the record (UNSPECIFIED = server default).
 
 Returns:
 
@@ -39018,6 +43593,7 @@ Modules:
 - **`package_discover`** – Secure module discovery and import utility for trigger handlers.
 - **`proto_utils`** – Protobuf conversion utilities.
 - **`schema_splitter`** – Schema splitter for react-jsonschema-form.
+- **`setup_content_validator`** – Validate a setup's content against a module's config-setup JSON schema.
 
 Classes:
 
@@ -40241,3 +44817,87 @@ Parameters:
 Returns:
 
 - `tuple[dict[str, Any], dict[str, Any]]` – Tuple of (jsonschema, uischema).
+
+### setup_content_validator
+
+Validate a setup's `content` against a module's config-setup JSON schema.
+
+The archetype/module owns the schema (its `SetupModel`); over the wire we only get the JSON schema. This compiles a throwaway Pydantic model from that schema — resolving `$ref`/`$defs`, nesting objects, typing array elements, closing enumerations and honouring nullability/constraints — and validates the content, so a caller (e.g. an LLM driving `kins_manager.update`) that forgets a required field, sends a wrong-typed one, an out-of-enum value, a null on a typed field or an undeclared key gets a correctable error *before* the write instead of breaking the setup.
+
+Classes:
+
+- **`SetupContentValidator`** – Compile a Pydantic model from a config-setup JSON schema and validate content against it.
+
+#### SetupContentValidator
+
+Compile a Pydantic model from a config-setup JSON schema and validate content against it.
+
+Mirrors the schema's own strictness rather than a loose superset: objects reject non-objects, arrays type their elements, `enum`/`const` become closed `Literal` choices, a field is nullable only when the schema says so, undeclared keys are forbidden unless `additionalProperties` is `true`, scalars are validated in strict mode (no `"2"`→number or `true`→number coercion), strings reject control characters, and numeric/array/string constraints are enforced. An empty schema is a no-op; the module's own `ConfigSetupModule` stays the authoritative check.
+
+Methods:
+
+- **`reject_control_chars`** – Refuse C0 control characters (except tab/newline/carriage-return) in a string.
+- **`reject_unsafe_keys`** – Refuse content keys carrying characters persistence silently drops or mangles.
+- **`validate`** – Validate content against schema.
+
+##### reject_control_chars
+
+```python
+reject_control_chars(value: str) -> str
+```
+
+Refuse C0 control characters (except tab/newline/carriage-return) in a string.
+
+Returns:
+
+- `str` – The value unchanged when clean.
+
+Raises:
+
+- `ValueError` – The string carries a control character (e.g. a NUL byte or ANSI escape), which downstream consumers persist verbatim and mis-render.
+
+##### reject_unsafe_keys
+
+```python
+reject_unsafe_keys(content: dict[str, Any]) -> dict[str, Any]
+```
+
+Refuse content keys carrying characters persistence silently drops or mangles.
+
+The schema check validates values, but object KEYS bypass it and reach storage verbatim, where a non-BMP character (astral plane, e.g. the emoji U+1F525) or a C0 control character is stripped — so the key read back differs from the key written, with `success:true` and no diagnostic. Reject up front, naming the offending key, rather than mutate in silence. Recurses through nested objects and arrays.
+
+Parameters:
+
+- ###### **`content`**
+
+  (`dict[str, Any]`) – The setup content about to be written.
+
+Returns:
+
+- `dict[str, Any]` – The content unchanged when every key (at any depth) is safe.
+
+Raises:
+
+- `ValueError` – A key carries a C0 control character or a non-BMP character.
+
+##### validate
+
+```python
+validate(content: dict[str, Any], schema: dict[str, Any]) -> None
+```
+
+Validate `content` against `schema`.
+
+Parameters:
+
+- ###### **`content`**
+
+  (`dict[str, Any]`) – The setup content the caller wants to write.
+
+- ###### **`schema`**
+
+  (`dict[str, Any]`) – The module's config-setup JSON schema ({} / no properties skips).
+
+Raises:
+
+- `ValueError` – The content violates the schema (missing/wrong-typed/out-of-enum/null/extra field), with a concise per-field message the caller can act on.
