@@ -39,6 +39,8 @@ class SetupContentValidator:
     _STRICT_SCALARS: ClassVar[tuple[type, ...]] = (int, float, bool)
     _FIRST_PRINTABLE: ClassVar[int] = 0x20  # code points below this are C0 control characters.
     _LAST_BMP: ClassVar[int] = 0xFFFF  # code points above this are astral (non-BMP, e.g. emoji).
+    _OUTPUT_FORMAT_SPEC_KEY: ClassVar[str] = "output_format_spec"
+    _OUTPUT_FORMAT_SPEC_MAX: ClassVar[int] = 4096  # at or past this the written setup is unusable.
     _NUMERIC_CONSTRAINTS: ClassVar[dict[str, str]] = {
         "minimum": "ge",
         "maximum": "le",
@@ -106,6 +108,45 @@ class SetupContentValidator:
                         msg = (
                             f"content key {where!r} must not contain control or non-BMP characters "
                             "(e.g. emoji): they are silently dropped on write"
+                        )
+                        raise ValueError(msg)
+                    stack.append((where, value))
+            elif isinstance(node, list):
+                stack.extend((path, item) for item in node)
+        return content
+
+    @classmethod
+    def reject_oversized_output_format_spec(cls, content: dict[str, Any]) -> dict[str, Any]:
+        """Refuse an ``output_format_spec`` that reaches the length the setup cannot carry.
+
+        The write itself succeeds, so the breakage surfaces later as an unusable setup with no
+        diagnostic pointing back at the field. Reject up front, naming the path and the actual
+        size. Recurses through nested objects and arrays; a non-string value is left to the
+        schema check, which owns typing.
+
+        Args:
+            content: The setup ``content`` about to be written.
+
+        Returns:
+            The content unchanged when every ``output_format_spec`` fits.
+
+        Raises:
+            ValueError: An ``output_format_spec`` string is at or over the limit.
+        """
+        stack: list[tuple[str, Any]] = [("", content)]
+        while stack:
+            path, node = stack.pop()
+            if isinstance(node, dict):
+                for key, value in node.items():
+                    where = f"{path}.{key}" if path else key
+                    if (
+                        key == cls._OUTPUT_FORMAT_SPEC_KEY
+                        and isinstance(value, str)
+                        and len(value) >= cls._OUTPUT_FORMAT_SPEC_MAX
+                    ):
+                        msg = (
+                            f"content field {where!r} is {len(value)} characters; it must stay under "
+                            f"{cls._OUTPUT_FORMAT_SPEC_MAX} or the setup breaks"
                         )
                         raise ValueError(msg)
                     stack.append((where, value))

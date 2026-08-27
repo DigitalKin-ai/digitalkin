@@ -34,7 +34,7 @@ from digitalkin.utils.schema_splitter import SchemaSplitter
 _EndOfStreamDataModel: type[DataModel] = DataModel[EndOfStreamOutput]
 
 
-class BaseModule(  # Module SDK base class requires many public methods # noqa: PLR0904
+class BaseModule(  # Module SDK base class requires many public methods # ruff: ignore[too-many-public-methods]
     ABC,
     Generic[
         InputModelT,
@@ -155,7 +155,7 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
                 "setup_version_id": setup_version_id,
                 "job_id": job_id,
             },
-            borrowed=self.services_config._stateless_strategies,  # noqa: SLF001
+            borrowed=self.services_config._stateless_strategies,  # ruff: ignore[private-member-access]
             callbacks={"logger": logger},
             request_metadata=request_metadata,
             shared=self._shared,
@@ -537,9 +537,9 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
         """Run the module."""
         ...
 
-    async def run_config_setup(  # Default implementation; subclasses may use self # noqa: PLR6301
+    async def run_config_setup(  # Default implementation; subclasses may use self # ruff: ignore[no-self-use]
         self,
-        context: ModuleContext,  # Available for subclass overrides # noqa: ARG002
+        context: ModuleContext,  # Available for subclass overrides # ruff: ignore[unused-method-argument]
         config_setup_data: SetupModelT,
     ) -> SetupModelT:
         """Run config setup the module.
@@ -648,9 +648,16 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
                 self.context.registry,
                 self.context.communication,
             )
-            if tool_cache.entries:
-                self.context.tool_cache = tool_cache
+            # Installed unconditionally, even when the setup declares no tools: the
+            # mission view owns the ``dynamic`` layer, which is where runtime loads land.
+            # Gating on a non-empty declared layer used to leave the context holding a
+            # throwaway ToolCache, so a setup with no selected tools could never keep one.
+            self.context.tool_cache = tool_cache.mission_view()
             timer.mark("build_tool_cache")
+            # Restore the tools the agent loaded earlier in this mission, before
+            # initialize() builds the toolkits that have to expose them.
+            await self.context.rehydrate_loaded_tools()
+            timer.mark("rehydrate_loaded_tools")
 
         await self.initialize(self.context, setup_data)
         timer.mark("initialize")
@@ -715,10 +722,22 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
         t0 = time.perf_counter_ns()
         if self._status in {ModuleStatus.STOPPED, ModuleStatus.FAILED}:
             return
-        try:  # noqa: PLW0717
+        try:  # ruff: ignore[too-many-statements-in-try-clause]
             self._status = ModuleStatus.STOPPING
             await self.cleanup()
             t1 = time.perf_counter_ns()
+            cleanup_ms = (t1 - t0) / 1e6
+            if cleanup_ms > 1000:  # ruff: ignore[magic-value-comparison] — one-off log threshold, not a tunable
+                # A blocking cleanup hook freezes the loop and the damage lands elsewhere — in-flight
+                # gateway streams fail with a bogus REDIS_UNAVAILABLE. Name the culprit here.
+                logger.warning(
+                    "%s.cleanup() took %.0fms; if it blocks rather than awaits it stalls the event "
+                    "loop and unrelated in-flight operations will fail with spurious timeouts — "
+                    "move blocking calls to asyncio.to_thread",
+                    type(self).__name__,
+                    cleanup_ms,
+                    extra=self.context.session.current_ids(),
+                )
             try:
                 for handlers in self.trigger_handlers.values():
                     for handler in handlers:
@@ -741,7 +760,7 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
             logger.info(
                 "[close-debug] module.stop: cleanup=%.2fms flush=%.2fms eos=%.2fms "
                 "total=%.2fms t_done_ns=%d task_id=%s mission_id=%s",
-                (t1 - t0) / 1e6,
+                cleanup_ms,
                 (t2 - t1) / 1e6,
                 (t3 - t2) / 1e6,
                 (t3 - t0) / 1e6,
@@ -786,7 +805,7 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
             config_setup_data: Initial setup data to configure.
             callback: Callback to send the configured setup model.
         """
-        try:  # noqa: PLW0717
+        try:  # ruff: ignore[too-many-statements-in-try-clause]
             logger.debug("Run Config Setup lifecycle", extra=self.context.session.current_ids())
             self._status = ModuleStatus.RUNNING
             self.context.callbacks.set_config_setup = callback

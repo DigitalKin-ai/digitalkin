@@ -5,7 +5,7 @@ from typing import Any
 from pydantic import Field, NonNegativeInt
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from digitalkin.models.grpc_servers.models import GrpcCompression
+from digitalkin.models.settings.utils.channel import GrpcCompression
 
 
 class GrpcServerSettings(BaseSettings):

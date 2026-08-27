@@ -4,6 +4,8 @@ from pathlib import Path
 
 import pytest
 
+from digitalkin.models.services.filesystem import FileType
+from digitalkin.models.services.storage import Visibility
 from digitalkin.services.filesystem import DefaultFilesystem
 from digitalkin.services.filesystem.exceptions import FilesystemServiceError
 from digitalkin.services.filesystem.filesystem_strategy import (
@@ -34,12 +36,12 @@ def file_metadata() -> dict:
     """Generate file metadata for testing.
 
     Returns:
-        dict: File metadata with context, name, file_type, and url
+        dict: File metadata with context, name, type, and url
     """
     return {
-        "context": "test_setup",
+        "context": "test_mission",
         "name": "test_file.txt",
-        "file_type": "DOCUMENT",
+        "type": FileType.DOCUMENT,
         "content_type": "text/plain",
         "metadata": {"key": "value"},
         "status": "ACTIVE",
@@ -69,7 +71,7 @@ class TestDefaultFilesystem:
         upload_file = UploadFileData(
             content=sample_file_data,
             name=file_metadata["name"],
-            file_type=file_metadata["file_type"],
+            type=file_metadata["type"],
             content_type=file_metadata["content_type"],
             metadata=file_metadata["metadata"],
             replace_if_exists=False,
@@ -86,7 +88,7 @@ class TestDefaultFilesystem:
         assert isinstance(file_data, FilesystemRecord)
         assert file_data.context == file_metadata["context"]
         assert file_data.name == file_metadata["name"]
-        assert file_data.file_type == file_metadata["file_type"]
+        assert file_data.type == file_metadata["type"]
         assert file_data.content_type == file_metadata["content_type"]
         assert file_data.metadata == file_metadata["metadata"]
         assert file_data.status == file_metadata["status"]
@@ -112,7 +114,7 @@ class TestDefaultFilesystem:
         upload_file = UploadFileData(
             content=sample_file_data,
             name=file_metadata["name"],
-            file_type=file_metadata["file_type"],
+            type=file_metadata["type"],
             content_type=file_metadata["content_type"],
             metadata=file_metadata["metadata"],
             replace_if_exists=False,
@@ -126,7 +128,7 @@ class TestDefaultFilesystem:
         assert file_data.id == file_id
         assert file_data.context == file_metadata["context"]
         assert file_data.name == file_metadata["name"]
-        assert file_data.file_type == file_metadata["file_type"]
+        assert file_data.type == file_metadata["type"]
         assert file_data.content_type == file_metadata["content_type"]
         assert file_data.metadata == file_metadata["metadata"]
         assert file_data.status == file_metadata["status"]
@@ -149,7 +151,7 @@ class TestDefaultFilesystem:
             UploadFileData(
                 content=sample_file_data,
                 name=name,
-                file_type=file_metadata["file_type"],
+                type=file_metadata["type"],
                 content_type=file_metadata["content_type"],
                 metadata=file_metadata["metadata"],
                 replace_if_exists=False,
@@ -160,7 +162,7 @@ class TestDefaultFilesystem:
         _files, _, _ = await filesystem.upload_files(upload_files)
 
         # Create filter criteria
-        filters = FileFilter(file_types=[file_metadata["file_type"]])
+        filters = FileFilter(file_types=[file_metadata["type"]])
 
         # Get the files
         result_files, total_count = await filesystem.get_files(
@@ -178,7 +180,7 @@ class TestDefaultFilesystem:
             assert isinstance(file_data, FilesystemRecord)
             assert file_data.context == file_metadata["context"]
             assert file_data.name in file_names
-            assert file_data.file_type == file_metadata["file_type"]
+            assert file_data.type == file_metadata["type"]
             assert file_data.content_type == file_metadata["content_type"]
             assert file_data.metadata == file_metadata["metadata"]
             assert file_data.status == file_metadata["status"]
@@ -199,7 +201,7 @@ class TestDefaultFilesystem:
         upload_file = UploadFileData(
             content=sample_file_data,
             name=file_metadata["name"],
-            file_type=file_metadata["file_type"],
+            type=file_metadata["type"],
             content_type=file_metadata["content_type"],
             metadata=file_metadata["metadata"],
             replace_if_exists=False,
@@ -212,7 +214,7 @@ class TestDefaultFilesystem:
         updated_file = await filesystem.update_file(
             file_id,
             content=updated_content,
-            file_type="DOCUMENT",
+            type=FileType.DOCUMENT,
             content_type="text/plain",
             metadata={"new_key": "new_value"},
             new_name="updated_file.txt",
@@ -223,7 +225,7 @@ class TestDefaultFilesystem:
         assert updated_file.id == file_id
         assert updated_file.context == file_metadata["context"]
         assert updated_file.name == "updated_file.txt"
-        assert updated_file.file_type == "DOCUMENT"
+        assert updated_file.type is FileType.DOCUMENT
         assert updated_file.content_type == "text/plain"
         assert updated_file.metadata == {"new_key": "new_value"}
         assert updated_file.status == "ACTIVE"
@@ -251,7 +253,7 @@ class TestDefaultFilesystem:
             UploadFileData(
                 content=sample_file_data,
                 name=name,
-                file_type=file_metadata["file_type"],
+                type=file_metadata["type"],
                 content_type=file_metadata["content_type"],
                 metadata=file_metadata["metadata"],
                 replace_if_exists=False,
@@ -263,7 +265,7 @@ class TestDefaultFilesystem:
         file_ids = [file_data.id for file_data in files]
 
         # Create filter criteria
-        filters = FileFilter(file_types=[file_metadata["file_type"]])
+        filters = FileFilter(file_types=[file_metadata["type"]])
 
         # Delete the files
         results, total_deleted, total_failed = await filesystem.delete_files(
@@ -306,7 +308,7 @@ class TestDefaultFilesystem:
             await filesystem.update_file(
                 "nonexistent_file_id",
                 content=sample_file_data,
-                file_type="DOCUMENT",
+                type=FileType.DOCUMENT,
                 content_type="text/plain",
                 metadata={"key": "value"},
                 new_name="updated_file.txt",
@@ -321,7 +323,7 @@ class TestDefaultFilesystem:
         """
         # Create filter criteria for non-existent files
         filters = FileFilter(
-            file_types=["DOCUMENT"],
+            file_types=[FileType.DOCUMENT],
             status="ACTIVE",
         )
 
@@ -350,7 +352,7 @@ class TestDefaultFilesystem:
         upload_file = UploadFileData(
             content=sample_file_data,
             name=file_metadata["name"],
-            file_type=file_metadata["file_type"],
+            type=file_metadata["type"],
             content_type=file_metadata["content_type"],
             metadata=file_metadata["metadata"],
             replace_if_exists=False,
@@ -375,7 +377,7 @@ class TestDefaultFilesystem:
         upload_file = UploadFileData(
             content=sample_file_data,
             name=file_metadata["name"],
-            file_type=file_metadata["file_type"],
+            type=file_metadata["type"],
             content_type=file_metadata["content_type"],
             metadata=file_metadata["metadata"],
             replace_if_exists=False,
@@ -387,7 +389,7 @@ class TestDefaultFilesystem:
         upload_file_replace = UploadFileData(
             content=new_content,
             name=file_metadata["name"],
-            file_type=file_metadata["file_type"],
+            type=file_metadata["type"],
             content_type=file_metadata["content_type"],
             metadata=file_metadata["metadata"],
             replace_if_exists=True,
@@ -417,7 +419,7 @@ class TestDefaultFilesystem:
             UploadFileData(
                 content=sample_file_data,
                 name="file1.txt",
-                file_type="DOCUMENT",
+                type=FileType.DOCUMENT,
                 content_type="text/plain",
                 metadata={"key": "value1"},
                 replace_if_exists=False,
@@ -425,7 +427,7 @@ class TestDefaultFilesystem:
             UploadFileData(
                 content=sample_file_data,
                 name="file2.txt",
-                file_type="IMAGE",
+                type=FileType.IMAGE,
                 content_type="image/png",
                 metadata={"key": "value2"},
                 replace_if_exists=False,
@@ -433,7 +435,7 @@ class TestDefaultFilesystem:
             UploadFileData(
                 content=sample_file_data,
                 name="file3.txt",
-                file_type="DOCUMENT",
+                type=FileType.DOCUMENT,
                 content_type="text/plain",
                 metadata={"key": "value3"},
                 replace_if_exists=False,
@@ -445,11 +447,11 @@ class TestDefaultFilesystem:
         await filesystem.update_file(files[1].id, status="ARCHIVED")
 
         # Test filtering by type
-        filters = FileFilter(file_types=["DOCUMENT"])
+        filters = FileFilter(file_types=[FileType.DOCUMENT])
         result_files, total_count = await filesystem.get_files(filters)
         assert len(result_files) == 2
         assert total_count == 2
-        assert all(f.file_type == "DOCUMENT" for f in result_files)
+        assert all(f.type is FileType.DOCUMENT for f in result_files)
 
         # Test filtering by status
         filters = FileFilter(status="ARCHIVED")
@@ -487,7 +489,7 @@ class TestDefaultFilesystem:
             UploadFileData(
                 content=sample_file_data,
                 name=f"file{i}.txt",
-                file_type=file_metadata["file_type"],
+                type=file_metadata["type"],
                 content_type=file_metadata["content_type"],
                 metadata=file_metadata["metadata"],
                 replace_if_exists=False,
@@ -528,7 +530,7 @@ class TestDefaultFilesystem:
         upload_file = UploadFileData(
             content=sample_file_data,
             name=file_metadata["name"],
-            file_type=file_metadata["file_type"],
+            type=file_metadata["type"],
             content_type=file_metadata["content_type"],
             metadata=file_metadata["metadata"],
             replace_if_exists=False,
@@ -549,3 +551,81 @@ class TestDefaultFilesystem:
         assert file_data.status == "DELETED"
         file_path = Path(filesystem._get_context_temp_dir(file_metadata["context"]), file_metadata["name"])
         assert file_path.exists()
+
+
+class TestVisibility:
+    """The local filesystem carries visibility on records and filters on it."""
+
+    async def test_uploaded_visibility_lands_on_the_record(
+        self, filesystem: DefaultFilesystem, sample_file_data: bytes
+    ) -> None:
+        upload = UploadFileData(
+            content=sample_file_data,
+            name="internal.txt",
+            type=FileType.DOCUMENT,
+            visibility=Visibility.INTERNAL,
+        )
+        records, _, _ = await filesystem.upload_files([upload])
+        assert records[0].visibility is Visibility.INTERNAL
+
+    async def test_visibility_defaults_to_unspecified(
+        self, filesystem: DefaultFilesystem, sample_file_data: bytes
+    ) -> None:
+        upload = UploadFileData(content=sample_file_data, name="plain.txt", type=FileType.DOCUMENT)
+        records, _, _ = await filesystem.upload_files([upload])
+        assert records[0].visibility is Visibility.UNSPECIFIED
+
+    async def test_get_files_filters_on_visibility(
+        self, filesystem: DefaultFilesystem, sample_file_data: bytes
+    ) -> None:
+        await filesystem.upload_files([
+            UploadFileData(
+                content=sample_file_data, name="pub.txt", type=FileType.DOCUMENT, visibility=Visibility.PUBLIC
+            ),
+            UploadFileData(
+                content=sample_file_data, name="priv.txt", type=FileType.DOCUMENT, visibility=Visibility.PRIVATE
+            ),
+        ])
+
+        found, total = await filesystem.get_files(FileFilter(visibilities=[Visibility.PUBLIC]))
+
+        assert [f.name for f in found] == ["pub.txt"]
+        assert total == 1
+
+    async def test_empty_visibility_filter_matches_everything(
+        self, filesystem: DefaultFilesystem, sample_file_data: bytes
+    ) -> None:
+        await filesystem.upload_files([
+            UploadFileData(
+                content=sample_file_data, name="pub.txt", type=FileType.DOCUMENT, visibility=Visibility.PUBLIC
+            ),
+            UploadFileData(
+                content=sample_file_data, name="priv.txt", type=FileType.DOCUMENT, visibility=Visibility.PRIVATE
+            ),
+        ])
+
+        _, total = await filesystem.get_files(FileFilter())
+        assert total == 2
+
+    async def test_update_changes_visibility(
+        self, filesystem: DefaultFilesystem, sample_file_data: bytes
+    ) -> None:
+        upload = UploadFileData(
+            content=sample_file_data, name="f.txt", type=FileType.DOCUMENT, visibility=Visibility.PRIVATE
+        )
+        records, _, _ = await filesystem.upload_files([upload])
+
+        updated = await filesystem.update_file(records[0].id, visibility=Visibility.PUBLIC)
+        assert updated.visibility is Visibility.PUBLIC
+
+    async def test_update_without_visibility_leaves_it_alone(
+        self, filesystem: DefaultFilesystem, sample_file_data: bytes
+    ) -> None:
+        """UNSPECIFIED is the "no opinion" default, so it must not blank an existing scope."""
+        upload = UploadFileData(
+            content=sample_file_data, name="f.txt", type=FileType.DOCUMENT, visibility=Visibility.INTERNAL
+        )
+        records, _, _ = await filesystem.upload_files([upload])
+
+        updated = await filesystem.update_file(records[0].id, status="ARCHIVED")
+        assert updated.visibility is Visibility.INTERNAL

@@ -63,7 +63,7 @@ class LoadManager(DkToolkit):
         """
         self._base_tools = base_tools
 
-    async def load_manager(self, action: LoadActions) -> str:  # noqa: ARG002 — schema-only stub, never run
+    async def load_manager(self, action: LoadActions) -> str:  # ruff: ignore[unused-method-argument] — schema-only stub, never run
         """Load a discovered object into the agent so it becomes usable right now.
 
         Loading is a two-step flow, and this is step two: first DISCOVER the object with its
@@ -94,7 +94,8 @@ class LoadManager(DkToolkit):
         action, no change here.
 
         Args:
-            tool_args: The raw tool arguments from the paused call (``{"action": {...}}``).
+            tool_args: The raw tool arguments from the paused call (``{"action": {...}}``, or the
+                flattened ``{"action": "tool", "setup_id": ...}`` some models send instead).
 
         Returns:
             The canonical ``{output|error, metadata}`` envelope the runner writes back as the
@@ -103,7 +104,8 @@ class LoadManager(DkToolkit):
         if self._ctx is None or self._base_tools is None:
             return self._fail("tool loading is unavailable in this context", tool="load")
         try:
-            action = TypeAdapter(LoadActions).validate_python(tool_args.get("action"))
+            payload = self._nest_action(tool_args.get("action"), {k: v for k, v in tool_args.items() if k != "action"})
+            action = TypeAdapter(LoadActions).validate_python(payload)
         except ValidationError:
             # Name the accepted action tags (like the CRUD managers do) so a caller that sent an
             # out-of-union action — e.g. 'service' — can self-correct, instead of getting an opaque

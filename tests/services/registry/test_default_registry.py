@@ -7,6 +7,7 @@ from digitalkin.models.services.registry import (
     ModuleInfo,
     RegistryModuleType,
     RegistrySetupStatus,
+    RegistrySortBy,
     SetupInfo,
 )
 from digitalkin.modules import ArchetypeModule, ToolModule
@@ -224,3 +225,70 @@ class TestRegistryTypeMarkers:
         assert BaseModule.registry_type == RegistryModuleType.UNSPECIFIED
         assert ToolModule.registry_type == RegistryModuleType.TOOL_MODULE
         assert ArchetypeModule.registry_type == RegistryModuleType.ARCHETYPE
+
+
+class TestTagsAndSortingLocally:
+    """The in-memory registry honours the same tag/sort knobs as the gRPC one."""
+
+    async def _seeded(self) -> DefaultRegistry:
+        registry = DefaultRegistry("", "", "")
+        registry._modules = {
+            "b": ModuleInfo(module_id="b", module_name="beta", tags=["RAG", "ocr"]),
+            "a": ModuleInfo(module_id="a", module_name="alpha", tags=["rag"]),
+            "c": ModuleInfo(module_id="c", module_name="gamma", tags=[]),
+        }
+        return registry
+
+    async def test_tags_match_case_insensitively_on_any_tag(self) -> None:
+        registry = await self._seeded()
+        found = await registry.search(tags=["Rag"])
+        assert sorted(m.module_id for m in found) == ["a", "b"]
+
+    async def test_untagged_modules_are_excluded_by_a_tag_filter(self) -> None:
+        registry = await self._seeded()
+        assert all(m.module_id != "c" for m in await registry.search(tags=["rag"]))
+
+    async def test_no_tag_filter_matches_everything(self) -> None:
+        registry = await self._seeded()
+        assert len(await registry.search()) == 3
+
+    async def test_sort_by_name_orders_ascending_by_default(self) -> None:
+        registry = await self._seeded()
+        assert [m.module_name for m in await registry.search(sort_by=RegistrySortBy.NAME)] == [
+            "alpha",
+            "beta",
+            "gamma",
+        ]
+
+    async def test_descending_reverses_the_name_sort(self) -> None:
+        registry = await self._seeded()
+        found = await registry.search(sort_by=RegistrySortBy.NAME, descending=True)
+        assert [m.module_name for m in found] == ["gamma", "beta", "alpha"]
+
+    async def test_unspecified_sort_keeps_insertion_order(self) -> None:
+        """UNSPECIFIED means "registry's choice" — here that is the store's own order."""
+        registry = await self._seeded()
+        assert [m.module_id for m in await registry.search()] == ["b", "a", "c"]
+
+    async def test_heartbeat_preserves_tags_and_documentation(self) -> None:
+        """The heartbeat rebuilds ModuleInfo, so it must not drop the searchable fields."""
+        registry = DefaultRegistry("", "", "")
+        registry._modules = {
+            "m": ModuleInfo(module_id="m", module_name="m", documentation="doc", tags=["rag"])
+        }
+
+        await registry.heartbeat("m")
+
+        assert registry._modules["m"].tags == ["rag"]
+        assert registry._modules["m"].documentation == "doc"
+
+    async def test_setup_search_filters_and_sorts_by_tag(self) -> None:
+        registry = DefaultRegistry("", "", "")
+        registry.add_setup(SetupInfo(setup_id="setups:2", name="zeta", tags=["billing"]))
+        registry.add_setup(SetupInfo(setup_id="setups:1", name="alpha", tags=["Billing"]))
+        registry.add_setup(SetupInfo(setup_id="setups:3", name="other", tags=[]))
+
+        found = await registry.search_setups(tags=["billing"], sort_by=RegistrySortBy.NAME)
+
+        assert [s.name for s in found] == ["alpha", "zeta"]
+        assert found[0].tags == ["Billing"]

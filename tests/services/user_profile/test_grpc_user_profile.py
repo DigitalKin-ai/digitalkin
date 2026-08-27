@@ -711,3 +711,62 @@ class TestCheckResourceAccess:
         _, _request, rpc = test_channel.take_unary_unary(method_desc)
         rpc.terminate(user_profile_pb2.CheckResourceAccessResponse(allowed=False), (), grpc.StatusCode.OK, "")
         assert future.result(timeout=5.0) is False
+
+
+class TestMissionCost:
+    """mission_cost rides on the response, not the profile, and must survive the merge."""
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    def test_mission_cost_is_folded_into_the_profile_dict(
+        self,
+        client: GrpcUserProfile,
+        test_channel: grpc_testing.Channel,
+        thread_pool: futures.ThreadPoolExecutor,
+    ) -> None:
+        method_desc = user_profile_service_pb2.DESCRIPTOR.services_by_name["UserProfileService"].methods_by_name[
+            "GetUserProfile"
+        ]
+        future = thread_pool.submit(asyncio.run, client.get_user_profile())
+        _, _request, rpc = test_channel.take_unary_unary(method_desc)
+
+        rpc.terminate(
+            user_profile_pb2.GetUserProfileResponse(
+                success=True,
+                user_profile=user_profile_pb2.UserProfile(user_id=USER_ID),
+                mission_cost=12.5,
+            ),
+            (),
+            grpc.StatusCode.OK,
+            "",
+        )
+
+        result = future.result(timeout=5.0)
+        assert result["mission_cost"] == 12.5
+        assert result["user_id"] == USER_ID
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    def test_an_unset_mission_cost_reads_as_zero(
+        self,
+        client: GrpcUserProfile,
+        test_channel: grpc_testing.Channel,
+        thread_pool: futures.ThreadPoolExecutor,
+    ) -> None:
+        """A backend that predates the field must not make the key disappear."""
+        method_desc = user_profile_service_pb2.DESCRIPTOR.services_by_name["UserProfileService"].methods_by_name[
+            "GetUserProfile"
+        ]
+        future = thread_pool.submit(asyncio.run, client.get_user_profile())
+        _, _request, rpc = test_channel.take_unary_unary(method_desc)
+
+        rpc.terminate(
+            user_profile_pb2.GetUserProfileResponse(
+                success=True, user_profile=user_profile_pb2.UserProfile(user_id=USER_ID)
+            ),
+            (),
+            grpc.StatusCode.OK,
+            "",
+        )
+
+        assert future.result(timeout=5.0)["mission_cost"] == 0.0

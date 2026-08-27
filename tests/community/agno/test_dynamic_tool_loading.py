@@ -14,15 +14,21 @@ import pytest
 
 pytest.importorskip("agno", reason="optional agno dependency not installed")
 
-from agno.models.response import ToolExecution
+from agno.models.base import Model
+from agno.models.response import ModelResponse, ToolExecution
+from agno.run.requirement import RunRequirement
+from agno.tools.function import Function
 
 from digitalkin.community.agno.hitl import AgnoHitlRunner
 from digitalkin.community.agno.models import PauseInfo
 from digitalkin.community.agno.toolkits import LoadManager
+from digitalkin.models.module.tool_cache import ToolCache
 from digitalkin.models.services.registry import RegistryModuleType
 
 
-def _tool_info(setup_id: str = "s1", module_id: str = "modules:duda", tools: list[Any] | None = None) -> SimpleNamespace:
+def _tool_info(
+    setup_id: str = "s1", module_id: str = "modules:duda", tools: list[Any] | None = None
+) -> SimpleNamespace:
     """A resolved ToolModuleInfo stand-in for a TOOL_MODULE setup."""
     return SimpleNamespace(
         setup_id=setup_id,
@@ -63,7 +69,15 @@ def _load_context(
         discover_by_id=AsyncMock(return_value=SimpleNamespace(module_type=module_type)),
     )
     callbacks = SimpleNamespace() if send_message is None else SimpleNamespace(send_message=send_message)
-    return SimpleNamespace(registry=registry, resolve_tool=AsyncMock(return_value=info), callbacks=callbacks)
+    return SimpleNamespace(
+        registry=registry,
+        resolve_tool=AsyncMock(return_value=info),
+        # A successful load persists its setup_id so it survives into the mission's next turn.
+        persist_loaded_tool=AsyncMock(return_value=True),
+        # The already-loaded path consults ``declared`` to skip persisting a setup-declared tool.
+        tool_cache=ToolCache(),
+        callbacks=callbacks,
+    )
 
 
 def _tool(name: str, args: dict[str, Any], *, result: str | None = None, tid: str = "tc1") -> ToolExecution:
@@ -74,6 +88,11 @@ def _tool(name: str, args: dict[str, Any], *, result: str | None = None, tid: st
         external_execution_required=True,
         result=result,
     )
+
+
+def _requirement(tool: ToolExecution) -> RunRequirement:
+    """The RunRequirement real Agno emits alongside a paused external tool."""
+    return RunRequirement(tool_execution=tool)
 
 
 async def _agen(*items: Any) -> Any:
@@ -184,7 +203,8 @@ class TestPausedToolHandling:
     async def test_load_paused_tools_resolves_load_tool(self) -> None:
         loader = SimpleNamespace(tool_name="load_manager", run_paused=AsyncMock(return_value="loaded"))
         runner = _runner(tool_loader=loader)
-        run_output = SimpleNamespace(tools=[_tool("load_manager", {"action": {"action": "tool", "setup_id": "s1"}})])
+        tool = _tool("load_manager", {"action": {"action": "tool", "setup_id": "s1"}})
+        run_output = SimpleNamespace(tools=[tool], requirements=[_requirement(tool)])
 
         assert await runner._load_paused_tools(run_output) is True
         assert run_output.tools[0].result == "loaded"
@@ -194,7 +214,8 @@ class TestPausedToolHandling:
     async def test_load_paused_tools_ignores_frontend_tools(self) -> None:
         loader = SimpleNamespace(tool_name="load_manager", run_paused=AsyncMock())
         runner = _runner(tool_loader=loader)
-        run_output = SimpleNamespace(tools=[_tool("frontend_tool", {})])
+        tool = _tool("frontend_tool", {})
+        run_output = SimpleNamespace(tools=[tool], requirements=[_requirement(tool)])
 
         assert await runner._load_paused_tools(run_output) is False
         loader.run_paused.assert_not_called()
@@ -202,8 +223,44 @@ class TestPausedToolHandling:
     @pytest.mark.asyncio
     async def test_load_paused_tools_without_loader(self) -> None:
         runner = _runner(tool_loader=None)
-        run_output = SimpleNamespace(tools=[_tool("load_manager", {"action": {"action": "tool", "setup_id": "s1"}})])
+        tool = _tool("load_manager", {"action": {"action": "tool", "setup_id": "s1"}})
+        run_output = SimpleNamespace(tools=[tool], requirements=[_requirement(tool)])
         assert await runner._load_paused_tools(run_output) is False
+
+    @pytest.mark.asyncio
+    async def test_load_paused_tools_resolves_the_runs_requirement(self) -> None:
+        """Writing ``tool.result`` alone leaves the pause unresolved for Agno.
+
+        ``acontinue_run`` gates on ``RunRequirement.is_resolved()``, and
+        ``needs_external_execution`` stays True until ``external_execution_result`` is set —
+        setting ``tool_execution.result`` does not clear it. A requirement left unresolved makes
+        the continue re-pause immediately (no model call), so the loaded tool is never used.
+        """
+        loader = SimpleNamespace(tool_name="load_manager", run_paused=AsyncMock(return_value="loaded"))
+        runner = _runner(tool_loader=loader)
+        tool = _tool("load_manager", {"action": {"action": "tool", "setup_id": "s1"}})
+        requirement = _requirement(tool)
+        run_output = SimpleNamespace(tools=[tool], requirements=[requirement])
+
+        assert await runner._load_paused_tools(run_output) is True
+
+        assert requirement.is_resolved() is True
+        assert requirement.external_execution_result == "loaded"
+
+    @pytest.mark.asyncio
+    async def test_load_paused_tools_leaves_frontend_requirements_unresolved(self) -> None:
+        """Only the loader's own requirement is resolved; a frontend tool still needs the front."""
+        loader = SimpleNamespace(tool_name="load_manager", run_paused=AsyncMock(return_value="loaded"))
+        runner = _runner(tool_loader=loader)
+        load_tool = _tool("load_manager", {"action": {"action": "tool", "setup_id": "s1"}}, tid="tc1")
+        frontend_tool = _tool("frontend_tool", {}, tid="tc2")
+        requirements = [_requirement(load_tool), _requirement(frontend_tool)]
+        run_output = SimpleNamespace(tools=[load_tool, frontend_tool], requirements=requirements)
+
+        assert await runner._load_paused_tools(run_output) is True
+
+        assert requirements[0].is_resolved() is True
+        assert requirements[1].is_resolved() is False
 
     def test_pending_external_reflects_unresolved_tools(self) -> None:
         runner = _runner()
@@ -224,10 +281,16 @@ class _FakeAdapter:
 
 
 class _FakeRunOutput:
-    """Minimal RunOutput: pause state, tools, messages, to_dict."""
+    """Minimal RunOutput: pause state, tools, requirements, messages, to_dict.
 
-    def __init__(self, tools: list[Any], is_paused: bool) -> None:
+    ``requirements`` is not decoration: Agno gates ``acontinue_run`` on
+    ``RunRequirement.is_resolved()``, not on ``tools[].result``, so a fake without them
+    cannot show whether a resolved pause actually continues.
+    """
+
+    def __init__(self, tools: list[Any], is_paused: bool, requirements: list[Any] | None = None) -> None:
         self.tools = tools
+        self.requirements = [_requirement(tool) for tool in tools] if requirements is None else requirements
         self.is_paused = is_paused
         self.messages: list[Any] = []
 
@@ -248,7 +311,9 @@ class TestDriveAutoContinue:
         agent = SimpleNamespace(acontinue_run=lambda **_: _agen(completed))
         store = SimpleNamespace(save=AsyncMock())
         runner = AgnoHitlRunner(agent=agent, store=store, tool_loader=loader)
-        paused = _FakeRunOutput(tools=[_tool("load_manager", {"action": {"action": "tool", "setup_id": "s1"}})], is_paused=True)
+        paused = _FakeRunOutput(
+            tools=[_tool("load_manager", {"action": {"action": "tool", "setup_id": "s1"}})], is_paused=True
+        )
 
         result = await runner._drive(
             stream=_agen(paused), send=AsyncMock(), thread_id="t1", run_output_cls=_FakeRunOutput, agui_tools=[]
@@ -260,7 +325,9 @@ class TestDriveAutoContinue:
         store.save.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_load_tool_pause_invalidates_tools_cache_before_continue(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_load_tool_pause_invalidates_tools_cache_before_continue(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """The freshly-loaded tool must be callable on continue.
 
         Agno caches the tools-factory output (``cache_callables`` defaults to True), so without an
@@ -310,7 +377,6 @@ class TestDriveAutoContinue:
     async def test_auto_continue_limit_emits_run_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A model spinning load_tool forever ends with RUN_ERROR, not a silent stream death."""
         import digitalkin.community.agno.agno_adapter as aa
-
         from digitalkin.models.events import AgentRunEvent
 
         monkeypatch.setattr(aa, "AgnoStreamAdapter", _FakeAdapter)
@@ -318,7 +384,14 @@ class TestDriveAutoContinue:
         counter = iter(range(1000))
 
         def _next_paused(**_: Any) -> Any:
-            return _agen(_FakeRunOutput(tools=[_tool("load_manager", {"action": {"action": "tool", "setup_id": "s"}}, tid=f"tc{next(counter)}")], is_paused=True))
+            return _agen(
+                _FakeRunOutput(
+                    tools=[
+                        _tool("load_manager", {"action": {"action": "tool", "setup_id": "s"}}, tid=f"tc{next(counter)}")
+                    ],
+                    is_paused=True,
+                )
+            )
 
         agent = SimpleNamespace(acontinue_run=_next_paused)
         store = SimpleNamespace(save=AsyncMock())
@@ -360,3 +433,180 @@ class TestRunnerLoaderAutoFind:
         agent = SimpleNamespace(tools=[LoadManager()])
         runner = AgnoHitlRunner(agent=agent, store=SimpleNamespace(), tool_loader=explicit)
         assert runner._tool_loader is explicit
+
+
+class _ScriptedModel(Model):
+    """Emits a preset tool-call sequence and records the function list it was handed.
+
+    The fakes above cannot catch a tools-resolution regression: only a real Agno run
+    builds the model's function map, and that map is what decides whether a tool call
+    resolves or comes back as "the requested tool does not exist".
+    """
+
+    def __init__(self, script: list[dict[str, Any]], seen: list[list[str]], **kwargs: Any) -> None:
+        """Record the call script and the list each model call appends its tool names to."""
+        kwargs.setdefault("id", "scripted")
+        super().__init__(**kwargs)
+        self._script = script
+        self._seen = seen
+        self._turn = 0
+
+    def invoke(self, *args: Any, **kwargs: Any) -> Any:
+        """Unused: only the async streaming path is exercised."""
+        raise NotImplementedError
+
+    async def ainvoke(self, *args: Any, **kwargs: Any) -> Any:
+        """Unused: only the async streaming path is exercised."""
+        raise NotImplementedError
+
+    def invoke_stream(self, *args: Any, **kwargs: Any) -> Any:
+        """Unused: only the async streaming path is exercised."""
+        raise NotImplementedError
+
+    def _parse_provider_response(self, response: Any, **kwargs: Any) -> Any:
+        """Unused: only the async streaming path is exercised."""
+        raise NotImplementedError
+
+    async def ainvoke_stream(self, *args: Any, **kwargs: Any) -> Any:
+        """Yield the next scripted step as a parsed delta.
+
+        Yields:
+            The scripted tool call, or a closing text response once the script is exhausted.
+        """
+        turn = self._turn
+        self._turn = turn + 1
+        yield self._parse_provider_response_delta({
+            "step": self._script[turn] if turn < len(self._script) else None,
+            "turn": turn,
+        })
+
+    def _parse_provider_response_delta(self, response: Any) -> ModelResponse:
+        """Turn a scripted step into a tool-call delta, or finish the run."""
+        step, turn = response["step"], response["turn"]
+        if step is None:
+            return ModelResponse(content="done")
+        return ModelResponse(
+            tool_calls=[
+                {
+                    "id": f"tc{turn}",
+                    "type": "function",
+                    "function": {"name": step["name"], "arguments": json.dumps(step["args"])},
+                }
+            ]
+        )
+
+    async def aresponse_stream(self, messages: Any, tools: Any = None, **kwargs: Any) -> Any:
+        """Record the function map for this call, then delegate to the real implementation.
+
+        Yields:
+            Whatever the real ``aresponse_stream`` yields.
+        """
+        self._seen.append(sorted(tool.name for tool in (tools or []) if isinstance(tool, Function)))
+        async for response in super().aresponse_stream(messages, tools=tools, **kwargs):
+            yield response
+
+
+class TestContinueKeepsResolvedTools:
+    """A load auto-continue must not strip the tools the model already had.
+
+    A Team's async ``acontinue_run`` never resolves a callable ``tools`` factory, so without the
+    runner's own resolution *every* call fails, not just the freshly loaded one.
+    """
+
+    @staticmethod
+    def _toolkits(info: Any) -> tuple[type, type]:
+        """Build the always-present toolkit and the one a load appends."""
+        from agno.tools import Toolkit
+
+        class RagToolkit(Toolkit):
+            def __init__(self, context: Any = None, module_info: Any = None) -> None:
+                super().__init__(name="rag", tools=[self.rag__search_documents])
+                self.tool_module_info = info if module_info is None else module_info
+
+            async def rag__search_documents(self, query: str) -> str:
+                """Search documents.
+
+                Args:
+                    query: The search query.
+
+                Returns:
+                    The results.
+                """
+                return "results"
+
+        class ToolsManager(Toolkit):
+            def __init__(self) -> None:
+                super().__init__(name="tools_manager", tools=[self.tools_manager])
+
+            async def tools_manager(self, action: str) -> str:
+                """Administer tool setups.
+
+                Args:
+                    action: The action to run.
+
+                Returns:
+                    The result.
+                """
+                return "found"
+
+        return RagToolkit, ToolsManager
+
+    @pytest.mark.asyncio
+    async def test_team_keeps_its_tools_across_a_load_auto_continue(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from agno.agent import Agent
+        from agno.run.team import TeamRunOutput
+        from agno.team import Team
+
+        from digitalkin.community.agno import module_toolkit
+        from digitalkin.community.agno.agui_tools import AguiTools
+
+        info = _tool_info(setup_id="setups:rag", module_id="modules:rag")
+        info.slug = "rag"
+        rag_toolkit, tools_manager = self._toolkits(info)
+        monkeypatch.setattr(module_toolkit, "ModuleToolkit", rag_toolkit)
+
+        loader = LoadManager(context=_load_context(info, module_id="modules:rag"))
+        base_tools: list[Any] = [tools_manager(), loader]
+        loader.bind_tools(base_tools)
+
+        seen: list[list[str]] = []
+        model = _ScriptedModel(
+            script=[
+                {"name": "tools_manager", "args": {"action": "search"}},
+                {"name": "load_manager", "args": {"action": "tool", "setup_id": "setups:rag"}},
+                {"name": "rag__search_documents", "args": {"query": "hi"}},
+            ],
+            seen=seen,
+        )
+        factory = AguiTools.make_tools_factory(base_tools)
+        team = Team(
+            name="team",
+            model=model,
+            members=[Agent(name="member", model=_ScriptedModel(script=[], seen=[]), telemetry=False)],
+            tools=factory,
+            cache_callables=False,
+            telemetry=False,
+        )
+        runner = AgnoHitlRunner(
+            agent=team,
+            store=SimpleNamespace(save=AsyncMock(), load=AsyncMock(return_value=None), delete=AsyncMock()),
+            tool_loader=loader,
+        )
+
+        await runner._drive(
+            stream=team.arun(
+                "go", stream=True, stream_events=True, yield_run_output=True, dependencies={"agui_tools": []}
+            ),
+            send=AsyncMock(),
+            thread_id="t1",
+            run_output_cls=TeamRunOutput,
+            agui_tools=[],
+        )
+
+        assert len(seen) == 2, f"expected a pre-load and a post-load model call, got {seen}"
+        assert "tools_manager" in seen[0]
+        # The continued leader must keep what it already had *and* see the freshly loaded tool.
+        assert "tools_manager" in seen[1], f"pre-existing tools were dropped on continue: {seen[1]}"
+        assert "rag__search_documents" in seen[1], f"loaded tool is not callable: {seen[1]}"
+        # The factory must survive so the next turn still merges that turn's frontend tools.
+        assert team.tools is factory

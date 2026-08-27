@@ -85,3 +85,50 @@ class TestRedisClientVerify:
             client = RedisClient("redis://localhost/0")
             assert await client.verify() is False
             await client.close()
+
+
+class TestRedisClientResilience:
+    """Timeout + retry policy on the two pools.
+
+    redis-py defaults to zero retries and an implicit 5s client-side ``socket_timeout``, so a
+    blocked event loop killed in-flight calls with ``REDIS_UNAVAILABLE`` while Redis was healthy.
+    """
+
+    @staticmethod
+    def _connections(url: str = "redis://localhost/0") -> tuple:
+        client = RedisClient(url)
+        return (
+            client._client.connection_pool.make_connection(),
+            client._blocking_client.connection_pool.make_connection(),
+        )
+
+    def test_socket_timeout_is_explicit_on_both_pools(self) -> None:
+        """Neither pool may inherit redis-py's implicit 5s default."""
+        from digitalkin.models.settings.redis import get_redis_settings
+
+        expected = get_redis_settings().pool.socket_timeout
+        default_conn, blocking_conn = self._connections()
+        assert default_conn.socket_timeout == pytest.approx(expected)
+        assert blocking_conn.socket_timeout == pytest.approx(expected)
+
+    def test_blocking_pool_retries_transient_errors(self) -> None:
+        """XREAD is a cursor read with no ack, so re-issuing it is idempotent."""
+        _, blocking_conn = self._connections()
+        assert blocking_conn.retry._retries == 3
+        assert {e.__name__ for e in blocking_conn.retry._supported_errors} == {
+            "ConnectionError",
+            "TimeoutError",
+        }
+
+    def test_non_blocking_pool_does_not_retry(self) -> None:
+        """XADD is not idempotent: a retry after an ambiguous failure would duplicate a frame."""
+        default_conn, _ = self._connections()
+        assert default_conn.retry._retries == 0
+
+    def test_socket_timeout_exceeds_the_xread_block_window(self) -> None:
+        """A socket timeout at or below the XREAD block time would fire on every idle stream."""
+        from digitalkin.models.settings.gateway import get_gateway_settings
+        from digitalkin.models.settings.redis import get_redis_settings
+
+        block_s = get_gateway_settings().stream.stream_read_block_ms / 1000
+        assert get_redis_settings().pool.socket_timeout > block_s

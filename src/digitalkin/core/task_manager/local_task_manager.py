@@ -49,7 +49,7 @@ class LocalTaskManager(BaseTaskManager):
         """
         await self._acquire_task_slot(coro)
         registered = False
-        try:  # noqa: PLW0717
+        try:  # ruff: ignore[too-many-statements-in-try-clause]
             async with self._tasks_lock:
                 await self._validate_task_creation(task_id, mission_id, coro)
                 session = self._create_session(task_id, mission_id, module)

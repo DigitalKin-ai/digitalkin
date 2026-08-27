@@ -122,6 +122,7 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
             visibility=visibility,
             creation_date=creation_date,
             update_date=update_date,
+            storage_id=proto.storage_id,
         )
 
     def _build_record_or_skip(self, proto: data_pb2.StorageRecord) -> StorageRecord | None:
@@ -182,7 +183,7 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
                 logger.exception("gRPC StoreRecord failed for %s:%s", record.collection, record.record_id)
             raise StorageServiceError(str(e)) from e
 
-    async def _read(self, collection: str, record_id: str, context: str) -> StorageRecord | None:
+    async def _read(self, collection: str, record_id: str, context: str, storage_id: str = "") -> StorageRecord | None:
         """Fetch a single document scoped to a specific context.
 
         Returns:
@@ -197,6 +198,7 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
                 context=self._context_enum(context),
                 collection=collection,
                 record_id=record_id,
+                storage_id=storage_id,
             )
             resp = await self.exec_grpc_query("ReadRecord", req)
             return self._build_record_from_proto(resp.stored_data)
@@ -287,7 +289,13 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
         return True
 
     async def _list(
-        self, collection: str, context: str, visibilities: list[Visibility] | None = None
+        self,
+        collection: str,
+        context: str,
+        visibilities: list[Visibility] | None = None,
+        record_id: str = "",
+        limit: int = 0,
+        offset: int = 0,
     ) -> list[StorageRecord]:
         """List all documents in a collection via gRPC scoped to a specific context.
 
@@ -302,6 +310,9 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
             req = data_pb2.ListRecordsRequest(
                 context=self._context_enum(context),
                 collection=collection,
+                record_id=record_id,
+                limit=limit,
+                offset=offset,
             )
             if visibilities:
                 req.visibilities.extend(self._visibility_enum(v) for v in visibilities)
@@ -319,7 +330,7 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
 
         return [record for r in resp.records if (record := self._build_record_or_skip(r)) is not None]
 
-    async def _remove_collection(self, collection: str, context: str) -> bool:
+    async def _remove_collection(self, collection: str, context: str, record_id: str = "") -> bool:
         """Delete an entire collection via gRPC scoped to a specific context.
 
         Returns:
@@ -332,6 +343,7 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
             req = data_pb2.RemoveCollectionRequest(
                 context=self._context_enum(context),
                 collection=collection,
+                record_id=record_id,
             )
             await self.exec_grpc_query("RemoveCollection", req)
         except PermissionDeniedError:

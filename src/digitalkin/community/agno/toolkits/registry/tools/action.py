@@ -15,11 +15,19 @@ from digitalkin.community.agno.toolkits.registry.action import (
     ChangeVisibilityAction,
     DeleteAction,
     GetAction,
+    ListVersionsAction,
     SearchAction,
+    SetVersionAction,
     UpdateAction,
 )
 
 ToolActions = Annotated[
-    GetAction | SearchAction | UpdateAction | DeleteAction | ChangeVisibilityAction,
+    GetAction
+    | SearchAction
+    | UpdateAction
+    | DeleteAction
+    | ChangeVisibilityAction
+    | ListVersionsAction
+    | SetVersionAction,
     Field(discriminator="action"),
 ]

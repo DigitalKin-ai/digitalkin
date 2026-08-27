@@ -186,20 +186,79 @@ class ToolModuleInfo(ModuleInfo):
 
 
 class ToolCache(BaseModel):
-    """Registry cache storing resolved tool references by setup field name."""
+    """Two-layer cache of resolved tool references, keyed by ``setup_id``.
 
-    entries: dict[str, ToolModuleInfo] = Field(default_factory=dict)
+    The layers differ by *lifetime*, which is the whole point of the split:
+
+    - ``declared`` — the tools the setup itself selects, resolved once by
+      ``SetupModel.build_tool_cache``. The servicer keeps this layer alive per
+      ``setup_id`` and hands the same object to every mission of that setup.
+    - ``dynamic`` — tools the agent loaded at runtime via
+      ``ModuleContext.resolve_tool``. This layer is **mission-scoped**: it is
+      rebuilt per mission from the ``loaded_tools`` storage collection, so a load
+      persists across the turns of one conversation and never leaks into another
+      mission of the same setup.
+
+    Never write a runtime resolution into ``declared`` — doing so is what leaked
+    dynamically-loaded tools across missions before the split existed.
+    """
+
+    declared: dict[str, ToolModuleInfo] = Field(
+        default_factory=dict, description="Setup-selected tools; shared across missions of one setup."
+    )
+    dynamic: dict[str, ToolModuleInfo] = Field(
+        default_factory=dict, description="Runtime-loaded tools; scoped to a single mission."
+    )
+
+    @property
+    def entries(self) -> dict[str, ToolModuleInfo]:
+        """Merged read-only view of both layers, ``dynamic`` winning on conflict.
+
+        Returns:
+            A fresh dict — mutating it does not touch either layer (and must not:
+            ``declared`` is shared with every other mission of this setup).
+        """
+        return {**self.declared, **self.dynamic}
+
+    def mission_view(self, dynamic: dict[str, ToolModuleInfo] | None = None) -> "ToolCache":
+        """Build a per-mission view that shares this cache's ``declared`` entries.
+
+        The mapping is shallow-copied so a mission can never mutate the shared
+        declared layer, while the ``ToolModuleInfo`` values are reused as-is
+        (they are treated as immutable, and re-validating them per turn is not free).
+
+        Args:
+            dynamic: Pre-resolved runtime tools to seed the mission layer with.
+
+        Returns:
+            A new ``ToolCache`` whose ``dynamic`` layer is private to this mission.
+        """
+        return ToolCache.model_construct(declared=dict(self.declared), dynamic=dynamic or {})
 
     def add(self, tool_module_info: ToolModuleInfo) -> None:
-        """Add a tool to the cache.
+        """Add a setup-declared tool to the ``declared`` layer.
 
         Args:
             tool_module_info: Resolved tool module information.
         """
         setup_id = tool_module_info.setup_id
-        self.entries[setup_id] = tool_module_info
+        self.declared[setup_id] = tool_module_info
         logger.debug(
-            "Tool cached: module_id=%s",
+            "Tool cached (declared): module_id=%s",
+            tool_module_info.module_id,
+            extra={"setup_id": setup_id},
+        )
+
+    def add_dynamic(self, tool_module_info: ToolModuleInfo) -> None:
+        """Add a runtime-loaded tool to the mission-scoped ``dynamic`` layer.
+
+        Args:
+            tool_module_info: Resolved tool module information.
+        """
+        setup_id = tool_module_info.setup_id
+        self.dynamic[setup_id] = tool_module_info
+        logger.debug(
+            "Tool cached (dynamic): module_id=%s",
             tool_module_info.module_id,
             extra={"setup_id": setup_id},
         )
@@ -208,7 +267,7 @@ class ToolCache(BaseModel):
         self,
         setup_id: str,
     ) -> ToolModuleInfo | None:
-        """Get a tool from cache, optionally querying registry on miss.
+        """Get a tool from either layer, preferring the mission-scoped one.
 
         Args:
             setup_id: Field name to look up.
@@ -216,14 +275,15 @@ class ToolCache(BaseModel):
         Returns:
             ToolModuleInfo if found, None otherwise.
         """
-        return self.entries.get(setup_id)
+        return self.dynamic.get(setup_id) or self.declared.get(setup_id)
 
     def clear(self) -> None:
-        """Clear all cache entries."""
-        self.entries.clear()
+        """Clear both layers."""
+        self.declared.clear()
+        self.dynamic.clear()
 
     def list_tools(self) -> list[str]:
-        """List all cached tool names.
+        """List all cached tool names across both layers.
 
         Returns:
             List of setup field names in cache.

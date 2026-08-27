@@ -13,6 +13,9 @@ class UserProfileStrategy(BaseStrategy, ABC):
     async def get_user_profile(self) -> dict[str, Any] | None:
         """Get user profile data.
 
+        The returned dict carries the profile fields plus ``mission_cost``: the total
+        the mission has accumulated so far, in the same unit as the cost service.
+
         Returns:
             User profile data, or None if not found.
 

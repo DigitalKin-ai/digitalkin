@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from digitalkin.community.agno.toolkits.registry.base import RegistryObjectToolKit
 
@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 
 
 class KinsManager(RegistryObjectToolKit):
-    """Manage Kin setups (ARCHETYPE): search, update, delete, change visibility."""
+    """Manage Kin setups (ARCHETYPE): search, update, delete, change visibility, roll back a version."""
 
     module_type: ClassVar[RegistryModuleType] = RegistryModuleType.ARCHETYPE
 
@@ -37,19 +37,22 @@ class KinsManager(RegistryObjectToolKit):
             name="kins_manager",
             actions=KinActions,
             description=(
-                "Manage Kin SETUPS (archetypes): search, update, delete, change_visibility. The action "
-                "discriminator selects the operation."
+                "Manage Kin SETUPS (archetypes): search, update, delete, change_visibility, plus "
+                "list_versions / set_version to inspect the configuration history and undo a bad "
+                "update. The action discriminator selects the operation."
             ),
             entrypoint=self.kins_manager,
         )
 
-    async def kins_manager(self, action: KinActions) -> str:
-        """Dispatch a Kin operation (search / update / delete / change_visibility).
+    async def kins_manager(self, action: KinActions | None = None, **fields: Any) -> str:
+        """Dispatch a Kin operation (search / update / delete / change_visibility / versions).
 
         Args:
             action: A discriminated Kin action; its type selects the operation.
+            fields: Absorbs a flattened call — some models send the action's own fields as
+                siblings of ``action`` rather than inside it. :meth:`_run` re-nests them.
 
         Returns:
             The canonical success envelope, or a fail envelope on rejection/invalid input.
         """
-        return await self._run(action)
+        return await self._run(action, **fields)

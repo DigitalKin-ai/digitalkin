@@ -186,7 +186,7 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         data = output_data.model_dump(mode="json")
 
         # Lock guards only the session validity check; queue.put() runs outside.
-        async with session._write_lock:  # noqa: SLF001
+        async with session._write_lock:  # ruff: ignore[private-member-access]
             if self.tasks_sessions.get(job_id) is None:
                 logger.debug("Queue write rejected - session removed during lock wait", extra={"job_id": job_id})
                 return

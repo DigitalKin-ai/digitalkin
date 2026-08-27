@@ -54,6 +54,8 @@ def _make_module_skeleton(
     ctx.session.current_ids.return_value = {"task_id": "task_test"}
     ctx.registry = MagicMock()
     ctx.communication = MagicMock()
+    # prepare() restores this mission's runtime-loaded tools right after the cache build.
+    ctx.rehydrate_loaded_tools = AsyncMock(return_value=0)
     inst.context = ctx
 
     setup_data.build_tool_cache = AsyncMock(return_value=MagicMock(entries=[]))

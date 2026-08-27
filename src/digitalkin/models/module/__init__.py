@@ -1,5 +1,14 @@
 """Module model exports. Import ag_ui types from ``digitalkin.models.module.ag_ui``."""
 
+from digitalkin.models.module.knowledge_files import (
+    KnowledgeFileFormatError,
+    knowledge_files_input,
+)
+from digitalkin.models.module.loaded_tools import (
+    LOADED_TOOLS_STORAGE_CONFIG,
+    LoadedToolRecord,
+    LoadedToolStore,
+)
 from digitalkin.models.module.module_context import ModuleContext
 from digitalkin.models.module.module_types import (
     DataModel,
@@ -25,9 +34,13 @@ from digitalkin.models.module.utility import (
 )
 
 __all__ = [
+    "LOADED_TOOLS_STORAGE_CONFIG",
     "DataModel",
     "DataTrigger",
     "EndOfStreamOutput",
+    "KnowledgeFileFormatError",
+    "LoadedToolRecord",
+    "LoadedToolStore",
     "ModuleContext",
     "RequestMetadata",
     "SelectSchema",
@@ -39,5 +52,6 @@ __all__ = [
     "ToolSelection",
     "UtilityProtocol",
     "UtilityRegistry",
+    "knowledge_files_input",
     "tool_reference_input",
 ]

@@ -15,9 +15,9 @@ class DefaultTaskManager(TaskManagerStrategy):
 
     def __init__(
         self,
-        mission_id: str = "",  # noqa: ARG002
-        setup_id: str = "",  # noqa: ARG002
-        setup_version_id: str = "",  # noqa: ARG002
+        mission_id: str = "",  # ruff: ignore[unused-method-argument]
+        setup_id: str = "",  # ruff: ignore[unused-method-argument]
+        setup_version_id: str = "",  # ruff: ignore[unused-method-argument]
     ) -> None:
         """Initialize in-memory signal store.
 
@@ -41,7 +41,7 @@ class DefaultTaskManager(TaskManagerStrategy):
         """
         self._signals[task_id] = data
         self._signals.move_to_end(task_id)
-        if len(self._signals) > 10000:  # noqa: PLR2004
+        if len(self._signals) > 10000:  # ruff: ignore[magic-value-comparison]
             self._signals.popitem(last=False)
         return data
 

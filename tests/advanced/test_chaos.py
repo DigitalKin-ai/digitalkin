@@ -73,10 +73,10 @@ class TestCircuitBreakerChaos:
         from digitalkin.grpc_servers.utils.circuit_breaker import CircuitBreaker
         from digitalkin.grpc_servers.exceptions import ServerError
         from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
-        from digitalkin.models.settings.grpc_client import get_circuit_breaker_settings
+        from digitalkin.models.settings.client.client import get_client_settings
 
-        monkeypatch.setenv("DIGITALKIN_CB_FAIL_MAX", "1")
-        get_circuit_breaker_settings.cache_clear()
+        monkeypatch.setenv("CLIENT_CIRCUIT_BREAKER_FAIL_MAX", "1")
+        get_client_settings.cache_clear()
         cb = CircuitBreaker.get_or_create("ChaosService")
         cb.record_failure()  # Trip the circuit
 

@@ -2,7 +2,6 @@
 
 import asyncio
 import json
-import os
 import time
 from argparse import ArgumentParser, Namespace
 from collections.abc import Awaitable, Callable
@@ -16,6 +15,7 @@ from agentic_mesh_protocol.module.v1 import (
 )
 from agentic_mesh_protocol.user_profile.v1 import user_profile_pb2
 from google.protobuf import json_format, struct_pb2
+from pydantic import ValidationError
 
 from digitalkin.core.job_manager.base_job_manager import BaseJobManager
 from digitalkin.core.job_manager.single_job_manager import SingleJobManager
@@ -27,6 +27,7 @@ from digitalkin.models.module.module import ModuleCodeModel
 from digitalkin.models.module.setup_types import SetupModel
 from digitalkin.models.services.services import ServicesMode
 from digitalkin.models.settings.gateway import get_gateway_settings
+from digitalkin.models.settings.redis import get_redis_settings
 from digitalkin.models.settings.server.servicer import get_module_servicer_settings
 from digitalkin.modules._base_module import BaseModule
 from digitalkin.services.registry import GrpcRegistry, RegistryStrategy
@@ -36,6 +37,7 @@ from digitalkin.services.setup.setup_strategy import SetupStrategy, SetupVersion
 from digitalkin.services.user_profile import DefaultUserProfile, GrpcUserProfile, UserProfileStrategy
 from digitalkin.utils.arg_parser import ArgParser
 from digitalkin.utils.development_mode_action import DevelopmentModeMappingAction
+from digitalkin.utils.env_manager import EnvManager
 
 
 class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
@@ -54,9 +56,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         parser.add_argument(
             "-d",
             "--dev-mode",
-            env_var="SERVICE_MODE",
             choices=ServicesMode.__members__,
-            default="local",
             action=DevelopmentModeMappingAction,
             dest="services_mode",
             help="Define Module Service configurations for endpoints",
@@ -69,13 +69,13 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             module_class: The module type to serve.
 
         Raises:
-            RuntimeError: If DIGITALKIN_REDIS_URL is not set.
+            RuntimeError: If DIGITALKIN_REDIS_URL resolves to an empty URL.
         """
         super().__init__()
         module_class.discover()
         self.module_class = module_class
 
-        redis_url = os.environ.get("DIGITALKIN_REDIS_URL")
+        redis_url = get_redis_settings().pool.url.get_secret_value()
         if not redis_url:
             msg = "DIGITALKIN_REDIS_URL is required"
             raise RuntimeError(msg)
@@ -89,10 +89,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         # Access-control client gating the setup cache. Always built, always called (fail-closed).
         if self.args.services_mode == ServicesMode.REMOTE:
             up_cfg = self.module_class.services_config_params.get("user_profile") or {}
-            up_client_config = up_cfg.get("client_config")
-            if not up_client_config:
-                msg = "user_profile client_config is required for setup access control"
-                raise RuntimeError(msg)
+            up_client_config = up_cfg.get("client_config") or EnvManager.client_config()
             self.user_profile = GrpcUserProfile("", "", "", up_client_config)
         else:
             self.user_profile = DefaultUserProfile("", "", "")
@@ -393,11 +390,29 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             return lifecycle_pb2.ConfigSetupModuleResponse(success=False)
         # Invalidate cached setup so concurrent/subsequent starts refetch the reconfigured version
         self._setup_cache.pop(setup_version.setup_id, None)
-        config_setup_data = self.module_class.create_config_setup_model(json_format.MessageToDict(request.content))
-        setup_version_data = await self.module_class.create_setup_model(
-            json_format.MessageToDict(request.setup_version.content),
-            config_fields=True,
-        )
+        try:
+            config_setup_data = self.module_class.create_config_setup_model(json_format.MessageToDict(request.content))
+            setup_version_data = await self.module_class.create_setup_model(
+                json_format.MessageToDict(request.setup_version.content),
+                config_fields=True,
+            )
+        except ValidationError as error:
+            # Without this the pydantic error escapes the servicer and grpc reports UNKNOWN
+            # with a stack trace, so a malformed setup reads as an SDK crash. Name the fields
+            # instead: the sender is the only one who can fix them.
+            fields = ", ".join(".".join(str(part) for part in item["loc"]) for item in error.errors())
+            msg = (
+                f"setup version {setup_version.id} does not match the module's setup model (missing/invalid: {fields})"
+            )
+            logger.error(
+                "ConfigSetupModule rejected setup_version=%s: %s",
+                setup_version.id,
+                error,
+                extra={"mission_id": request.mission_id},
+            )
+            context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+            context.set_details(msg)
+            return lifecycle_pb2.ConfigSetupModuleResponse(success=False)
 
         if not setup_version_data:
             msg = "No setup data returned."
@@ -530,7 +545,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
 
     async def GetModuleSelectInput(
         self,
-        request: information_pb2.GetModuleSelectInputRequest,  # noqa: ARG002
+        request: information_pb2.GetModuleSelectInputRequest,  # ruff: ignore[unused-method-argument]
         context: grpc.ServicerContext,
     ) -> information_pb2.GetModuleSelectInputResponse:
         """Get the trigger selection schema for the module.
