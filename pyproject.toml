@@ -27,7 +27,10 @@
     ]
 
     dependencies = [
-        "ag-ui-protocol>=0.1.18",
+        # Dev build: the only release carrying SUBAGENT_* events and event-level `metadata`,
+        # which is how a nested run's output is attributed to its author. Pinned exactly
+        # because it is a dated prerelease; move to >=0.1.21 once that ships stable.
+        "ag-ui-protocol==0.1.21.dev1787220377",
         "agentic-mesh-protocol==1.0.1.dev4",
         "agno>=2.8.0,<3",
         "anyio>=4.13.0",
@@ -38,7 +41,7 @@
         "pydantic>=2.12.4",
         "redis[hiredis]>=7.4.0,<9",
 ]
-version = "1.0.2"
+version = "1.0.3.dev0"
 
     [project.optional-dependencies]
         agno = [ "agno>=2.6" ]

@@ -20,6 +20,10 @@ class AgentRunEvent(str, Enum):
     RUN_COMPLETED = "run_completed"
     RUN_ERROR = "run_error"
 
+    SUBAGENT_STARTED = "subagent_started"
+    SUBAGENT_FINISHED = "subagent_finished"
+    SUBAGENT_ERROR = "subagent_error"
+
     REASONING_STARTED = "reasoning_started"
     REASONING_CONTENT_DELTA = "reasoning_content_delta"
     REASONING_STEP = "reasoning_step"
@@ -41,6 +45,10 @@ class BaseAgentRunEvent(BaseModel):
     event: AgentRunEvent = Field(..., description="Type of the event")
     timestamp: float | None = Field(default=None, description="Event timestamp (Unix time)")
     metadata: dict[str, Any] | None = Field(default=None, description="Additional event metadata")
+    subagent_run_id: str | None = Field(
+        default=None,
+        description="Delegated run that produced this event; None means it belongs to the top-level agent",
+    )
 
     class Config:
         """Pydantic configuration."""
@@ -61,6 +69,7 @@ class TextMessageStartedEvent(BaseAgentRunEvent):
 
     event: AgentRunEvent = Field(AgentRunEvent.TEXT_MESSAGE_STARTED, description="Event type")
     message_id: str = Field(..., description="Unique ID for this text message")
+    name: str | None = Field(default=None, description="Author label — the sub-agent that owns this message")
 
 
 class TextMessageCompletedEvent(BaseAgentRunEvent):
@@ -97,6 +106,42 @@ class RunErrorEvent(BaseAgentRunEvent):
     error_type: str | None = Field(default=None, description="Type/category of error")
     content: str | None = Field(default=None, description="Error message")
     error_details: dict[str, Any] | None = Field(default=None, description="Additional error details")
+
+
+class SubagentStartedEvent(BaseAgentRunEvent):
+    """Event emitted when the agent delegates work to a child agent.
+
+    ``subagent_run_id`` identifies the delegation; every event the child produces repeats it,
+    which is what lets a client attribute output to its author. The name is a display label
+    only and need not be unique.
+    """
+
+    event: AgentRunEvent = Field(AgentRunEvent.SUBAGENT_STARTED, description="Event type")
+    name: str = Field(..., description="Display name of the child agent")
+    parent_subagent_run_id: str | None = Field(
+        default=None, description="Owning delegation when this one is itself nested"
+    )
+    parent_tool_call_id: str | None = Field(
+        default=None, description="Tool call that spawned the child, for the agents-as-tools pattern"
+    )
+
+
+class SubagentFinishedEvent(BaseAgentRunEvent):
+    """Event emitted when a delegated run completes."""
+
+    event: AgentRunEvent = Field(AgentRunEvent.SUBAGENT_FINISHED, description="Event type")
+    result: str | None = Field(default=None, description="The child agent's final content")
+
+
+class SubagentErrorEvent(BaseAgentRunEvent):
+    """Event emitted when a delegated run fails.
+
+    Distinct from :class:`RunErrorEvent`: one child failing does not end the parent's run.
+    """
+
+    event: AgentRunEvent = Field(AgentRunEvent.SUBAGENT_ERROR, description="Event type")
+    message: str = Field(..., description="Error message from the child agent")
+    code: str | None = Field(default=None, description="Framework error type, when it reports one")
 
 
 class ReasoningStartedEvent(BaseAgentRunEvent):

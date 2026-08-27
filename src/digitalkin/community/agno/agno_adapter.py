@@ -62,6 +62,9 @@ from digitalkin.models.events import (
     RunContentEvent,
     RunErrorEvent,
     RunStartedEvent,
+    SubagentErrorEvent,
+    SubagentFinishedEvent,
+    SubagentStartedEvent,
     TextMessageCompletedEvent,
     TextMessageStartedEvent,
     ToolCallCompletedEvent,
@@ -82,16 +85,22 @@ class AgnoStreamAdapter:
 
     def __init__(self) -> None:
         """Initialize the AgnoStreamAdapter."""
-        self._reasoning_active: bool = False
-        self._current_reasoning_id: str | None = None
-
-        self._content_active: bool = False
-        self._current_message_id: str | None = None
+        # Text and reasoning sequences are tracked per run, not globally. Agno drains parallel
+        # member runs through one shared asyncio.Queue, so two members streaming at once
+        # interleave their deltas on the wire; a single message slot would splice both speakers
+        # into one bubble. Keyed by run id ("" for events carrying none), each entry holds the
+        # sequence id and the metadata of whoever opened it.
+        self._messages: dict[str, tuple[str, dict[str, Any] | None]] = {}
+        self._reasonings: dict[str, tuple[str, dict[str, Any] | None]] = {}
 
         self._closed_tool_call_ids: set[str] = set()
 
         self._active_run_id: str | None = None
         self._completed_run_ids: set[str] = set()
+        # Delegations in flight, keyed by the child's run id — which is exactly the
+        # ``subagent_run_id`` every event that child produces carries. Value is its display
+        # name and the metadata of the event that opened it.
+        self._subagents: dict[str, tuple[str, dict[str, Any] | None]] = {}
 
         self._is_paused: bool = False
         self._paused_tool_executions: list[Any] = []
@@ -101,6 +110,7 @@ class AgnoStreamAdapter:
         self._team_enum: type | None = None
 
         self._last_metadata: dict[str, Any] | None = None
+        self._run_key: str = ""
 
     @property
     def is_paused(self) -> bool:
@@ -116,6 +126,17 @@ class AgnoStreamAdapter:
     def paused_requirements(self) -> list[Any]:
         """Agno ``RunRequirement`` objects carried by the paused run."""
         return list(self._paused_requirements)
+
+    def _subagent_of(self, run_key: str) -> str | None:
+        """The delegation that owns a run, or None when the top-level agent does.
+
+        Args:
+            run_key: Run the event belongs to.
+
+        Returns:
+            ``run_key`` when it names a delegation in flight, else None.
+        """
+        return run_key if run_key in self._subagents else None
 
     @staticmethod
     def _build_metadata(agno_event: AgnoRunEvent, *, is_team: bool) -> dict[str, Any]:
@@ -218,6 +239,11 @@ class AgnoStreamAdapter:
 
         is_team = self._team_enum is not None and isinstance(event_type, self._team_enum)
         self._last_metadata = self._build_metadata(agno_event, is_team=is_team)
+        # Whatever sequence this event opens or closes belongs to its own run. Falling back to
+        # the run in progress (rather than a shared "" bucket) keeps an event that arrives
+        # without a run id attached to the run it actually came from, so its sequence can still
+        # be closed by that run's completion.
+        self._run_key = agno_event.__dict__.get("run_id") or self._active_run_id or ""
 
         return handler(agno_event, agno_event.__dict__.get("timestamp"))
 
@@ -239,14 +265,42 @@ class AgnoStreamAdapter:
         run_id = agno_event.run_id
 
         if parent_run_id:
+            # A nested run is a delegation, not a second AG-UI run: surface it as a
+            # named step so the client can show progress, and close the parent's open
+            # bubble so the member's content lands in its own labelled message.
+            if not run_id:
+                logger.info("[agno-adapter] DROP nested run_started without run_id parent_run_id=%s", parent_run_id)
+                return []
+
+            # Close the parent's own sequences so its bubble does not stay open across the
+            # delegation. Only the parent's — a sibling member may be mid-stream, and closing
+            # its message here would truncate it.
+            events: list[BaseAgentRunEvent] = self._close_content(parent_run_id, timestamp)
+            events.extend(self._close_reasoning(parent_run_id, timestamp))
+
+            # Attribution is by id, so the name is a plain label — no need to disambiguate
+            # members that share one, as the step-based scheme required.
+            name = (self._last_metadata or {}).get("name") or "member"
+            self._subagents[run_id] = (name, self._last_metadata)
+
             logger.info(
-                "[agno-adapter] DROP nested run_started run_id=%s parent_run_id=%s agent=%s/%s",
+                "[agno-adapter] SUBAGENT_STARTED name=%s subagent_run_id=%s parent_run_id=%s",
+                name,
                 run_id,
                 parent_run_id,
-                getattr(agno_event, "agent_id", None),
-                getattr(agno_event, "agent_name", None),
             )
-            return []
+            events.append(
+                SubagentStartedEvent(
+                    event=AgentRunEvent.SUBAGENT_STARTED,
+                    subagent_run_id=run_id,
+                    name=name,
+                    # A member of a team that is itself a member: the parent delegation owns it.
+                    parent_subagent_run_id=parent_run_id if parent_run_id in self._subagents else None,
+                    timestamp=timestamp,
+                    metadata=self._last_metadata,
+                )
+            )
+            return events
 
         if run_id and run_id == self._active_run_id:
             logger.info("[agno-adapter] DROP duplicate run_started run_id=%s", run_id)
@@ -285,28 +339,26 @@ class AgnoStreamAdapter:
         run_id = agno_event.run_id
 
         if parent_run_id:
-            # Close the subagent's text/reasoning bubble so the main agent's
-            # continuation gets a fresh message_id. Inject a "\n---\n" footer
-            # on the same message before the TextMessageCompletedEvent so the
-            # frontend can visually separate subagent content from the rest.
-            events: list[BaseAgentRunEvent] = []
-            if self._content_active:
+            # Close this member's own text/reasoning bubble, then the matching step. Siblings
+            # still streaming keep theirs open.
+            events: list[BaseAgentRunEvent] = self._close_content(self._run_key, timestamp)
+            events.extend(self._close_reasoning(self._run_key, timestamp))
+
+            subagent = self._subagents.pop(run_id, None) if run_id else None
+            if subagent is not None and run_id:
+                content = agno_event.content
                 events.append(
-                    RunContentEvent(
-                        event=AgentRunEvent.RUN_CONTENT,
-                        content=" \n\n --- \n\n ",
-                        message_id=self._current_message_id,
-                        reasoning_content=None,
-                        content_type=None,
+                    SubagentFinishedEvent(
+                        event=AgentRunEvent.SUBAGENT_FINISHED,
+                        subagent_run_id=run_id,
+                        result=str(content) if content else None,
                         timestamp=timestamp,
-                        metadata=self._last_metadata,
+                        metadata=subagent[1],
                     )
                 )
-                events.extend(self._close_content(timestamp))
-            if self._reasoning_active:
-                events.extend(self._close_reasoning(timestamp))
             logger.info(
-                "[agno-adapter] DROP nested run_completed run_id=%s parent_run_id=%s closed=%d",
+                "[agno-adapter] SUBAGENT_FINISHED name=%s subagent_run_id=%s parent_run_id=%s closed=%d",
+                subagent[0] if subagent else None,
                 run_id,
                 parent_run_id,
                 len(events),
@@ -323,12 +375,11 @@ class AgnoStreamAdapter:
             self._active_run_id,
         )
 
-        events = []
-
-        if self._content_active:
-            events.extend(self._close_content(timestamp))
-        if self._reasoning_active:
-            events.extend(self._close_reasoning(timestamp))
+        # AG-UI refuses RUN_FINISHED while any message, reasoning or step is still open, so
+        # everything still running when the top-level run ends is force-closed here.
+        events = self._close_all_content(timestamp)
+        events.extend(self._close_all_reasoning(timestamp))
+        events.extend(self._close_subagents(timestamp))
 
         if run_id:
             self._completed_run_ids.add(run_id)
@@ -355,7 +406,33 @@ class AgnoStreamAdapter:
             List containing a RunErrorEvent.
         """
         content = agno_event.content
-        return [
+        run_id = agno_event.run_id
+
+        if run_id and run_id in self._subagents:
+            # One child failing must not end the parent's run: AG-UI treats RUN_ERROR as
+            # terminal for the whole stream, so a member's failure gets its own event.
+            events = self._close_content(run_id, timestamp)
+            events.extend(self._close_reasoning(run_id, timestamp))
+            subagent = self._subagents.pop(run_id)
+            logger.info("[agno-adapter] SUBAGENT_ERROR name=%s subagent_run_id=%s", subagent[0], run_id)
+            events.append(
+                SubagentErrorEvent(
+                    event=AgentRunEvent.SUBAGENT_ERROR,
+                    subagent_run_id=run_id,
+                    message=str(content) if content else "subagent run failed",
+                    code=agno_event.error_type,
+                    timestamp=timestamp,
+                    metadata=subagent[1],
+                )
+            )
+            return events
+
+        # An error ends the stream: leave nothing half-open, or the client renders as many
+        # dangling bubbles as there were runs in flight.
+        events = self._close_all_content(timestamp)
+        events.extend(self._close_all_reasoning(timestamp))
+        events.extend(self._close_subagents(timestamp))
+        events.append(
             RunErrorEvent(
                 event=AgentRunEvent.RUN_ERROR,
                 error_type=agno_event.error_type,
@@ -364,7 +441,8 @@ class AgnoStreamAdapter:
                 timestamp=timestamp,
                 metadata=self._last_metadata,
             )
-        ]
+        )
+        return events
 
     # ── Reasoning Handlers (native Agno reasoning models) ───────────────
 
@@ -377,18 +455,16 @@ class AgnoStreamAdapter:
             List with an optional TextMessageCompletedEvent and a ReasoningStartedEvent.
         """
         _ = agno_event
-        events: list[BaseAgentRunEvent] = []
+        events: list[BaseAgentRunEvent] = self._close_content(self._run_key, timestamp)
 
-        if self._content_active:
-            events.extend(self._close_content(timestamp))
-
-        self._current_reasoning_id = str(uuid.uuid4())
-        self._reasoning_active = True
-        logger.debug("Reasoning started, id=%s", self._current_reasoning_id)
+        reasoning_id = str(uuid.uuid4())
+        self._reasonings[self._run_key] = (reasoning_id, self._last_metadata)
+        logger.debug("Reasoning started, id=%s", reasoning_id)
         events.append(
             ReasoningStartedEvent(
                 event=AgentRunEvent.REASONING_STARTED,
-                reasoning_id=self._current_reasoning_id,
+                reasoning_id=reasoning_id,
+                subagent_run_id=self._subagent_of(self._run_key),
                 timestamp=timestamp,
                 metadata=self._last_metadata,
             )
@@ -403,11 +479,13 @@ class AgnoStreamAdapter:
         Returns:
             List containing a ReasoningContentDeltaEvent.
         """
+        open_reasoning = self._reasonings.get(self._run_key)
         return [
             ReasoningContentDeltaEvent(
                 event=AgentRunEvent.REASONING_CONTENT_DELTA,
                 delta=agno_event.reasoning_content or "",
-                reasoning_id=self._current_reasoning_id,
+                reasoning_id=open_reasoning[0] if open_reasoning else None,
+                subagent_run_id=self._subagent_of(self._run_key),
                 timestamp=timestamp,
                 metadata=self._last_metadata,
             )
@@ -440,17 +518,18 @@ class AgnoStreamAdapter:
         if not content:
             return events
 
-        if self._content_active:
-            events.extend(self._close_content(timestamp))
+        events.extend(self._close_content(self._run_key, timestamp))
 
-        if not self._reasoning_active:
-            self._current_reasoning_id = str(uuid.uuid4())
-            self._reasoning_active = True
-            logger.debug("Reasoning auto-started (from reasoning_step), id=%s", self._current_reasoning_id)
+        open_reasoning = self._reasonings.get(self._run_key)
+        if open_reasoning is None:
+            open_reasoning = (str(uuid.uuid4()), self._last_metadata)
+            self._reasonings[self._run_key] = open_reasoning
+            logger.debug("Reasoning auto-started (from reasoning_step), id=%s", open_reasoning[0])
             events.append(
                 ReasoningStartedEvent(
                     event=AgentRunEvent.REASONING_STARTED,
-                    reasoning_id=self._current_reasoning_id,
+                    reasoning_id=open_reasoning[0],
+                    subagent_run_id=self._subagent_of(self._run_key),
                     timestamp=timestamp,
                     metadata=None,
                 )
@@ -460,7 +539,8 @@ class AgnoStreamAdapter:
             ReasoningStepEvent(
                 event=AgentRunEvent.REASONING_STEP,
                 delta=content,
-                reasoning_id=self._current_reasoning_id,
+                reasoning_id=open_reasoning[0],
+                subagent_run_id=self._subagent_of(self._run_key),
                 timestamp=timestamp,
                 metadata=self._last_metadata,
             )
@@ -477,7 +557,7 @@ class AgnoStreamAdapter:
         """
         _ = agno_event
         logger.debug("Reasoning completed")
-        return self._close_reasoning(timestamp)
+        return self._close_reasoning(self._run_key, timestamp)
 
     # ── Tool Call Handlers ──────────────────────────────────────────────
 
@@ -523,13 +603,10 @@ class AgnoStreamAdapter:
         Returns:
             List of any needed closing events and a ToolCallStartedEvent.
         """
-        events: list[BaseAgentRunEvent] = []
-
-        if self._reasoning_active:
-            logger.debug("Reasoning auto-completed (tool call started)")
-            events.extend(self._close_reasoning(timestamp))
-        if self._content_active:
-            events.extend(self._close_content(timestamp))
+        # Only this run's sequences: a member calling a tool must not truncate a sibling's
+        # message.
+        events: list[BaseAgentRunEvent] = self._close_reasoning(self._run_key, timestamp)
+        events.extend(self._close_content(self._run_key, timestamp))
 
         tool = agno_event.tool
         tool_info = None
@@ -544,6 +621,7 @@ class AgnoStreamAdapter:
             ToolCallStartedEvent(
                 event=AgentRunEvent.TOOL_CALL_STARTED,
                 tool=tool_info,
+                subagent_run_id=self._subagent_of(self._run_key),
                 timestamp=timestamp,
                 metadata=self._last_metadata,
             )
@@ -579,6 +657,7 @@ class AgnoStreamAdapter:
                 event=AgentRunEvent.TOOL_CALL_COMPLETED,
                 tool=tool_info,
                 content=str(content) if content else None,
+                subagent_run_id=self._subagent_of(self._run_key),
                 timestamp=timestamp,
                 metadata=self._last_metadata,
             )
@@ -594,12 +673,9 @@ class AgnoStreamAdapter:
         Returns:
             Synthesized tool-call events for the paused external tools.
         """
-        events: list[BaseAgentRunEvent] = []
-
-        if self._reasoning_active:
-            events.extend(self._close_reasoning(timestamp))
-        if self._content_active:
-            events.extend(self._close_content(timestamp))
+        # A pause suspends the whole stream, so close every run's sequences, not just this one's.
+        events: list[BaseAgentRunEvent] = self._close_all_reasoning(timestamp)
+        events.extend(self._close_all_content(timestamp))
 
         tools = getattr(agno_event, "tools", None) or []
         requirements = getattr(agno_event, "requirements", None) or []
@@ -680,6 +756,7 @@ class AgnoStreamAdapter:
                 event=AgentRunEvent.TOOL_CALL_ERROR,
                 tool=tool_info,
                 error_message=str(content) if content else None,
+                subagent_run_id=self._subagent_of(self._run_key),
                 timestamp=timestamp,
                 metadata=self._last_metadata,
             )
@@ -691,56 +768,121 @@ class AgnoStreamAdapter:
         Returns:
             List of closing events (empty if nothing is active).
         """
-        events: list[BaseAgentRunEvent] = []
-        if self._content_active:
-            logger.debug("Flushing active content sequence")
-            events.extend(self._close_content(None))
-        if self._reasoning_active:
-            logger.debug("Flushing active reasoning sequence")
-            events.extend(self._close_reasoning(None))
+        if self._messages:
+            logger.debug("Flushing %d active content sequence(s)", len(self._messages))
+        if self._reasonings:
+            logger.debug("Flushing %d active reasoning sequence(s)", len(self._reasonings))
+        if self._subagents:
+            logger.debug("Flushing %d open subagent(s)", len(self._subagents))
+        events: list[BaseAgentRunEvent] = self._close_all_content(None)
+        events.extend(self._close_all_reasoning(None))
+        events.extend(self._close_subagents(None))
         return events
 
-    def _close_reasoning(self, timestamp: Any) -> list[BaseAgentRunEvent]:
-        """Close active reasoning sequence.
+    def _close_reasoning(self, run_key: str, timestamp: Any) -> list[BaseAgentRunEvent]:
+        """Close one run's reasoning sequence.
+
+        The closing event carries the metadata of whoever *opened* the sequence, so a
+        consumer filtering on ``parent_run_id`` keeps start and end together.
+
+        Args:
+            run_key: Run whose sequence to close.
+            timestamp: Timestamp to stamp on the closing event.
 
         Returns:
-            List of closing events (empty if reasoning is not active).
+            List of closing events (empty if that run has no open reasoning).
         """
-        if not self._reasoning_active:
+        open_reasoning = self._reasonings.pop(run_key, None)
+        if open_reasoning is None:
             return []
 
-        events: list[BaseAgentRunEvent] = [
+        return [
             ReasoningCompletedEvent(
                 event=AgentRunEvent.REASONING_COMPLETED,
-                reasoning_id=self._current_reasoning_id,
+                reasoning_id=open_reasoning[0],
+                subagent_run_id=self._subagent_of(run_key),
                 timestamp=timestamp,
-                metadata=self._last_metadata,
+                metadata=open_reasoning[1],
             )
         ]
-        self._reasoning_active = False
-        self._current_reasoning_id = None
-        return events
 
-    def _close_content(self, timestamp: Any) -> list[BaseAgentRunEvent]:
-        """Close active text message sequence.
+    def _close_all_reasoning(self, timestamp: Any) -> list[BaseAgentRunEvent]:
+        """Close every open reasoning sequence, innermost first.
+
+        Args:
+            timestamp: Timestamp to stamp on the closing events.
 
         Returns:
-            List of closing events (empty if content is not active).
+            List of closing events, empty when none is open.
         """
-        if not self._content_active:
+        return [
+            event for run_key in reversed(list(self._reasonings)) for event in self._close_reasoning(run_key, timestamp)
+        ]
+
+    def _close_subagents(self, timestamp: Any) -> list[BaseAgentRunEvent]:
+        """Close every delegation still in flight, innermost first.
+
+        AG-UI refuses RUN_FINISHED while any subagent is still active, so nothing may be
+        left open when the top-level run ends.
+
+        Args:
+            timestamp: Timestamp to stamp on the closing events.
+
+        Returns:
+            List of SubagentFinishedEvent, empty when none is open.
+        """
+        events: list[BaseAgentRunEvent] = [
+            SubagentFinishedEvent(
+                event=AgentRunEvent.SUBAGENT_FINISHED,
+                subagent_run_id=run_id,
+                result=None,
+                timestamp=timestamp,
+                metadata=metadata,
+            )
+            for run_id, (_, metadata) in reversed(list(self._subagents.items()))
+        ]
+        self._subagents.clear()
+        return events
+
+    def _close_content(self, run_key: str, timestamp: Any) -> list[BaseAgentRunEvent]:
+        """Close one run's text message sequence.
+
+        The closing event carries the metadata of whoever *opened* the message, so a
+        consumer filtering on ``parent_run_id`` keeps start and end together.
+
+        Args:
+            run_key: Run whose sequence to close.
+            timestamp: Timestamp to stamp on the closing event.
+
+        Returns:
+            List of closing events (empty if that run has no open message).
+        """
+        open_message = self._messages.pop(run_key, None)
+        if open_message is None:
             return []
 
-        events: list[BaseAgentRunEvent] = [
+        return [
             TextMessageCompletedEvent(
                 event=AgentRunEvent.TEXT_MESSAGE_COMPLETED,
-                message_id=self._current_message_id or "",
+                message_id=open_message[0],
+                subagent_run_id=self._subagent_of(run_key),
                 timestamp=timestamp,
-                metadata=self._last_metadata,
+                metadata=open_message[1],
             )
         ]
-        self._content_active = False
-        self._current_message_id = None
-        return events
+
+    def _close_all_content(self, timestamp: Any) -> list[BaseAgentRunEvent]:
+        """Close every open text message, innermost first.
+
+        Args:
+            timestamp: Timestamp to stamp on the closing events.
+
+        Returns:
+            List of closing events, empty when none is open.
+        """
+        return [
+            event for run_key in reversed(list(self._messages)) for event in self._close_content(run_key, timestamp)
+        ]
 
     def _handle_run_content(self, agno_event: AgnoRunContentEvent, timestamp: Any) -> list[BaseAgentRunEvent]:
         """Handle RunEvent.run_content — the core state machine.
@@ -772,34 +914,32 @@ class AgnoStreamAdapter:
         Returns:
             List of reasoning lifecycle and content events.
         """
-        events: list[BaseAgentRunEvent] = []
-
         if not reasoning_content:
-            if self._reasoning_active:
-                events.extend(self._close_reasoning(timestamp))
-            return events
+            return self._close_reasoning(self._run_key, timestamp)
 
-        if self._content_active:
-            events.extend(self._close_content(timestamp))
+        events: list[BaseAgentRunEvent] = self._close_content(self._run_key, timestamp)
 
-        if not self._reasoning_active:
-            self._current_reasoning_id = str(uuid.uuid4())
-            logger.debug("Reasoning auto-started, id=%s", self._current_reasoning_id)
+        open_reasoning = self._reasonings.get(self._run_key)
+        if open_reasoning is None:
+            open_reasoning = (str(uuid.uuid4()), self._last_metadata)
+            logger.debug("Reasoning auto-started, id=%s", open_reasoning[0])
             events.append(
                 ReasoningStartedEvent(
                     event=AgentRunEvent.REASONING_STARTED,
-                    reasoning_id=self._current_reasoning_id,
+                    reasoning_id=open_reasoning[0],
+                    subagent_run_id=self._subagent_of(self._run_key),
                     timestamp=timestamp,
                     metadata=self._last_metadata,
                 )
             )
-            self._reasoning_active = True
+            self._reasonings[self._run_key] = open_reasoning
 
         events.append(
             ReasoningContentDeltaEvent(
                 event=AgentRunEvent.REASONING_CONTENT_DELTA,
                 delta=reasoning_content,
-                reasoning_id=self._current_reasoning_id,
+                reasoning_id=open_reasoning[0],
+                subagent_run_id=self._subagent_of(self._run_key),
                 timestamp=timestamp,
                 metadata=self._last_metadata,
             )
@@ -812,53 +952,39 @@ class AgnoStreamAdapter:
         Returns:
             List of text message lifecycle and content events.
         """
-        events: list[BaseAgentRunEvent] = []
-
         if not content:
-            if self._content_active:
-                events.extend(self._close_content(timestamp))
-            return events
+            return self._close_content(self._run_key, timestamp)
 
-        if self._reasoning_active:
+        events: list[BaseAgentRunEvent] = self._close_reasoning(self._run_key, timestamp)
+        if events:
             logger.debug("Reasoning auto-completed (text content arrived)")
-            events.extend(self._close_reasoning(timestamp))
 
-        if not self._content_active:
-            self._current_message_id = str(uuid.uuid4())
+        open_message = self._messages.get(self._run_key)
+        if open_message is None:
+            # ``name`` is a display label; ``subagent_run_id`` is what actually attributes the
+            # bubble, so members sharing a name no longer need disambiguating.
+            meta = self._last_metadata or {}
+            open_message = (str(uuid.uuid4()), self._last_metadata)
             events.append(
                 TextMessageStartedEvent(
                     event=AgentRunEvent.TEXT_MESSAGE_STARTED,
-                    message_id=self._current_message_id,
+                    message_id=open_message[0],
+                    name=meta.get("name") if meta.get("parent_run_id") else None,
+                    subagent_run_id=self._subagent_of(self._run_key),
                     timestamp=timestamp,
                     metadata=self._last_metadata,
                 )
             )
-            self._content_active = True
-
-            # Inject "--- <name> ---" header when the newly-opened
-            # bubble belongs to a team member (nested agent event).
-            meta = self._last_metadata or {}
-            if meta.get("parent_run_id") and meta.get("source") == "agent":
-                name = meta.get("name") or "member"
-                events.append(
-                    RunContentEvent(
-                        event=AgentRunEvent.RUN_CONTENT,
-                        content=f"\n --- \n ### {name} \n\n",
-                        message_id=self._current_message_id,
-                        reasoning_content=None,
-                        content_type=None,
-                        timestamp=timestamp,
-                        metadata=self._last_metadata,
-                    )
-                )
+            self._messages[self._run_key] = open_message
 
         events.append(
             RunContentEvent(
                 event=AgentRunEvent.RUN_CONTENT,
                 content=str(content),
-                message_id=self._current_message_id,
+                message_id=open_message[0],
                 reasoning_content=None,
                 content_type=None,
+                subagent_run_id=self._subagent_of(self._run_key),
                 timestamp=timestamp,
                 metadata=self._last_metadata,
             )
