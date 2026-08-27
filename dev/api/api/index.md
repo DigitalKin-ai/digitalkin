@@ -15824,6 +15824,9 @@ Classes:
 - **`RunContentEvent`** – Event emitted when the agent produces content (text, reasoning, etc.).
 - **`RunErrorEvent`** – Event emitted when an agent run encounters an error.
 - **`RunStartedEvent`** – Event emitted when an agent run starts.
+- **`SubagentErrorEvent`** – Event emitted when a delegated run fails.
+- **`SubagentFinishedEvent`** – Event emitted when a delegated run completes.
+- **`SubagentStartedEvent`** – Event emitted when the agent delegates work to a child agent.
 - **`TextMessageCompletedEvent`** – Event emitted when a text message sequence ends.
 - **`TextMessageStartedEvent`** – Event emitted when a new text message sequence begins.
 - **`ToolCallCompletedEvent`** – Event emitted when a tool call completes successfully.
@@ -16092,6 +16095,85 @@ Classes:
 
 Pydantic configuration.
 
+#### SubagentErrorEvent
+
+```
+              flowchart TD
+              digitalkin.models.events.SubagentErrorEvent[SubagentErrorEvent]
+              digitalkin.models.events.agent_events.BaseAgentRunEvent[BaseAgentRunEvent]
+
+                              digitalkin.models.events.agent_events.BaseAgentRunEvent --> digitalkin.models.events.SubagentErrorEvent
+                
+
+
+              click digitalkin.models.events.SubagentErrorEvent href "" "digitalkin.models.events.SubagentErrorEvent"
+              click digitalkin.models.events.agent_events.BaseAgentRunEvent href "" "digitalkin.models.events.agent_events.BaseAgentRunEvent"
+```
+
+Event emitted when a delegated run fails.
+
+Distinct from :class:`RunErrorEvent`: one child failing does not end the parent's run.
+
+Classes:
+
+- **`Config`** – Pydantic configuration.
+
+##### Config
+
+Pydantic configuration.
+
+#### SubagentFinishedEvent
+
+```
+              flowchart TD
+              digitalkin.models.events.SubagentFinishedEvent[SubagentFinishedEvent]
+              digitalkin.models.events.agent_events.BaseAgentRunEvent[BaseAgentRunEvent]
+
+                              digitalkin.models.events.agent_events.BaseAgentRunEvent --> digitalkin.models.events.SubagentFinishedEvent
+                
+
+
+              click digitalkin.models.events.SubagentFinishedEvent href "" "digitalkin.models.events.SubagentFinishedEvent"
+              click digitalkin.models.events.agent_events.BaseAgentRunEvent href "" "digitalkin.models.events.agent_events.BaseAgentRunEvent"
+```
+
+Event emitted when a delegated run completes.
+
+Classes:
+
+- **`Config`** – Pydantic configuration.
+
+##### Config
+
+Pydantic configuration.
+
+#### SubagentStartedEvent
+
+```
+              flowchart TD
+              digitalkin.models.events.SubagentStartedEvent[SubagentStartedEvent]
+              digitalkin.models.events.agent_events.BaseAgentRunEvent[BaseAgentRunEvent]
+
+                              digitalkin.models.events.agent_events.BaseAgentRunEvent --> digitalkin.models.events.SubagentStartedEvent
+                
+
+
+              click digitalkin.models.events.SubagentStartedEvent href "" "digitalkin.models.events.SubagentStartedEvent"
+              click digitalkin.models.events.agent_events.BaseAgentRunEvent href "" "digitalkin.models.events.agent_events.BaseAgentRunEvent"
+```
+
+Event emitted when the agent delegates work to a child agent.
+
+`subagent_run_id` identifies the delegation; every event the child produces repeats it, which is what lets a client attribute output to its author. The name is a display label only and need not be unique.
+
+Classes:
+
+- **`Config`** – Pydantic configuration.
+
+##### Config
+
+Pydantic configuration.
+
 #### TextMessageCompletedEvent
 
 ```
@@ -16249,6 +16331,9 @@ Classes:
 - **`RunContentEvent`** – Event emitted when the agent produces content (text, reasoning, etc.).
 - **`RunErrorEvent`** – Event emitted when an agent run encounters an error.
 - **`RunStartedEvent`** – Event emitted when an agent run starts.
+- **`SubagentErrorEvent`** – Event emitted when a delegated run fails.
+- **`SubagentFinishedEvent`** – Event emitted when a delegated run completes.
+- **`SubagentStartedEvent`** – Event emitted when the agent delegates work to a child agent.
 - **`TextMessageCompletedEvent`** – Event emitted when a text message sequence ends.
 - **`TextMessageStartedEvent`** – Event emitted when a new text message sequence begins.
 - **`ToolCallCompletedEvent`** – Event emitted when a tool call completes successfully.
@@ -16508,6 +16593,85 @@ Pydantic configuration.
 ```
 
 Event emitted when an agent run starts.
+
+Classes:
+
+- **`Config`** – Pydantic configuration.
+
+###### Config
+
+Pydantic configuration.
+
+##### SubagentErrorEvent
+
+```
+              flowchart TD
+              digitalkin.models.events.agent_events.SubagentErrorEvent[SubagentErrorEvent]
+              digitalkin.models.events.agent_events.BaseAgentRunEvent[BaseAgentRunEvent]
+
+                              digitalkin.models.events.agent_events.BaseAgentRunEvent --> digitalkin.models.events.agent_events.SubagentErrorEvent
+                
+
+
+              click digitalkin.models.events.agent_events.SubagentErrorEvent href "" "digitalkin.models.events.agent_events.SubagentErrorEvent"
+              click digitalkin.models.events.agent_events.BaseAgentRunEvent href "" "digitalkin.models.events.agent_events.BaseAgentRunEvent"
+```
+
+Event emitted when a delegated run fails.
+
+Distinct from :class:`RunErrorEvent`: one child failing does not end the parent's run.
+
+Classes:
+
+- **`Config`** – Pydantic configuration.
+
+###### Config
+
+Pydantic configuration.
+
+##### SubagentFinishedEvent
+
+```
+              flowchart TD
+              digitalkin.models.events.agent_events.SubagentFinishedEvent[SubagentFinishedEvent]
+              digitalkin.models.events.agent_events.BaseAgentRunEvent[BaseAgentRunEvent]
+
+                              digitalkin.models.events.agent_events.BaseAgentRunEvent --> digitalkin.models.events.agent_events.SubagentFinishedEvent
+                
+
+
+              click digitalkin.models.events.agent_events.SubagentFinishedEvent href "" "digitalkin.models.events.agent_events.SubagentFinishedEvent"
+              click digitalkin.models.events.agent_events.BaseAgentRunEvent href "" "digitalkin.models.events.agent_events.BaseAgentRunEvent"
+```
+
+Event emitted when a delegated run completes.
+
+Classes:
+
+- **`Config`** – Pydantic configuration.
+
+###### Config
+
+Pydantic configuration.
+
+##### SubagentStartedEvent
+
+```
+              flowchart TD
+              digitalkin.models.events.agent_events.SubagentStartedEvent[SubagentStartedEvent]
+              digitalkin.models.events.agent_events.BaseAgentRunEvent[BaseAgentRunEvent]
+
+                              digitalkin.models.events.agent_events.BaseAgentRunEvent --> digitalkin.models.events.agent_events.SubagentStartedEvent
+                
+
+
+              click digitalkin.models.events.agent_events.SubagentStartedEvent href "" "digitalkin.models.events.agent_events.SubagentStartedEvent"
+              click digitalkin.models.events.agent_events.BaseAgentRunEvent href "" "digitalkin.models.events.agent_events.BaseAgentRunEvent"
+```
+
+Event emitted when the agent delegates work to a child agent.
+
+`subagent_run_id` identifies the delegation; every event the child produces repeats it, which is what lets a client attribute output to its author. The name is a display label only and need not be unique.
 
 Classes:
 
@@ -18047,8 +18211,9 @@ Classes:
 - **`AgUiRunStartedOutput`** – AG-UI RunStarted event - signals that an agent run has begun.
 - **`AgUiStateDeltaOutput`** – AG-UI StateDelta event - JSON Patch (RFC 6902) operations on agent state.
 - **`AgUiStateSnapshotOutput`** – AG-UI StateSnapshot event - full agent state snapshot.
-- **`AgUiStepFinishedOutput`** – AG-UI StepFinished event - signals completion of a named agent step.
-- **`AgUiStepStartedOutput`** – AG-UI StepStarted event - signals start of a named agent step.
+- **`AgUiSubagentErrorOutput`** – AG-UI SubagentError event - signals a delegated run failed, without ending the run.
+- **`AgUiSubagentFinishedOutput`** – AG-UI SubagentFinished event - signals a delegated run completed.
+- **`AgUiSubagentStartedOutput`** – AG-UI SubagentStarted event - signals the agent delegated to a child agent.
 - **`AgUiTextMessageChunkOutput`** – AG-UI TextMessageChunk event - aggregated text message chunk.
 - **`AgUiTextMessageContentOutput`** – AG-UI TextMessageContent event - carries a text delta chunk.
 - **`AgUiTextMessageEndOutput`** – AG-UI TextMessageEnd event - signals end of a text message.
@@ -18473,47 +18638,68 @@ AG-UI StateDelta event - JSON Patch (RFC 6902) operations on agent state.
 
 AG-UI StateSnapshot event - full agent state snapshot.
 
-##### AgUiStepFinishedOutput
+##### AgUiSubagentErrorOutput
 
 ```
               flowchart TD
-              digitalkin.models.module.ag_ui.AgUiStepFinishedOutput[AgUiStepFinishedOutput]
+              digitalkin.models.module.ag_ui.AgUiSubagentErrorOutput[AgUiSubagentErrorOutput]
               digitalkin.models.module.ag_ui.AgUiDataTrigger[AgUiDataTrigger]
               digitalkin.models.module.base_types.DataTrigger[DataTrigger]
 
-                              digitalkin.models.module.ag_ui.AgUiDataTrigger --> digitalkin.models.module.ag_ui.AgUiStepFinishedOutput
+                              digitalkin.models.module.ag_ui.AgUiDataTrigger --> digitalkin.models.module.ag_ui.AgUiSubagentErrorOutput
                                 digitalkin.models.module.base_types.DataTrigger --> digitalkin.models.module.ag_ui.AgUiDataTrigger
                 
 
 
 
-              click digitalkin.models.module.ag_ui.AgUiStepFinishedOutput href "" "digitalkin.models.module.ag_ui.AgUiStepFinishedOutput"
+              click digitalkin.models.module.ag_ui.AgUiSubagentErrorOutput href "" "digitalkin.models.module.ag_ui.AgUiSubagentErrorOutput"
               click digitalkin.models.module.ag_ui.AgUiDataTrigger href "" "digitalkin.models.module.ag_ui.AgUiDataTrigger"
               click digitalkin.models.module.base_types.DataTrigger href "" "digitalkin.models.module.base_types.DataTrigger"
 ```
 
-AG-UI StepFinished event - signals completion of a named agent step.
+AG-UI SubagentError event - signals a delegated run failed, without ending the run.
 
-##### AgUiStepStartedOutput
+##### AgUiSubagentFinishedOutput
 
 ```
               flowchart TD
-              digitalkin.models.module.ag_ui.AgUiStepStartedOutput[AgUiStepStartedOutput]
+              digitalkin.models.module.ag_ui.AgUiSubagentFinishedOutput[AgUiSubagentFinishedOutput]
               digitalkin.models.module.ag_ui.AgUiDataTrigger[AgUiDataTrigger]
               digitalkin.models.module.base_types.DataTrigger[DataTrigger]
 
-                              digitalkin.models.module.ag_ui.AgUiDataTrigger --> digitalkin.models.module.ag_ui.AgUiStepStartedOutput
+                              digitalkin.models.module.ag_ui.AgUiDataTrigger --> digitalkin.models.module.ag_ui.AgUiSubagentFinishedOutput
                                 digitalkin.models.module.base_types.DataTrigger --> digitalkin.models.module.ag_ui.AgUiDataTrigger
                 
 
 
 
-              click digitalkin.models.module.ag_ui.AgUiStepStartedOutput href "" "digitalkin.models.module.ag_ui.AgUiStepStartedOutput"
+              click digitalkin.models.module.ag_ui.AgUiSubagentFinishedOutput href "" "digitalkin.models.module.ag_ui.AgUiSubagentFinishedOutput"
               click digitalkin.models.module.ag_ui.AgUiDataTrigger href "" "digitalkin.models.module.ag_ui.AgUiDataTrigger"
               click digitalkin.models.module.base_types.DataTrigger href "" "digitalkin.models.module.base_types.DataTrigger"
 ```
 
-AG-UI StepStarted event - signals start of a named agent step.
+AG-UI SubagentFinished event - signals a delegated run completed.
+
+##### AgUiSubagentStartedOutput
+
+```
+              flowchart TD
+              digitalkin.models.module.ag_ui.AgUiSubagentStartedOutput[AgUiSubagentStartedOutput]
+              digitalkin.models.module.ag_ui.AgUiDataTrigger[AgUiDataTrigger]
+              digitalkin.models.module.base_types.DataTrigger[DataTrigger]
+
+                              digitalkin.models.module.ag_ui.AgUiDataTrigger --> digitalkin.models.module.ag_ui.AgUiSubagentStartedOutput
+                                digitalkin.models.module.base_types.DataTrigger --> digitalkin.models.module.ag_ui.AgUiDataTrigger
+                
+
+
+
+              click digitalkin.models.module.ag_ui.AgUiSubagentStartedOutput href "" "digitalkin.models.module.ag_ui.AgUiSubagentStartedOutput"
+              click digitalkin.models.module.ag_ui.AgUiDataTrigger href "" "digitalkin.models.module.ag_ui.AgUiDataTrigger"
+              click digitalkin.models.module.base_types.DataTrigger href "" "digitalkin.models.module.base_types.DataTrigger"
+```
+
+AG-UI SubagentStarted event - signals the agent delegated to a child agent.
 
 ##### AgUiTextMessageChunkOutput
 
