@@ -21,8 +21,9 @@ from ag_ui.core.events import (
     RunStartedEvent,
     StateDeltaEvent,
     StateSnapshotEvent,
-    StepFinishedEvent,
-    StepStartedEvent,
+    SubagentErrorEvent,
+    SubagentFinishedEvent,
+    SubagentStartedEvent,
     TextMessageChunkEvent,
     TextMessageContentEvent,
     TextMessageEndEvent,
@@ -195,18 +196,25 @@ class AgUiRunErrorOutput(AgUiDataTrigger):
     event: RunErrorEvent = Field(..., description="AG-UI RunError event payload")
 
 
-class AgUiStepStartedOutput(AgUiDataTrigger):
-    """AG-UI StepStarted event - signals start of a named agent step."""
+class AgUiSubagentStartedOutput(AgUiDataTrigger):
+    """AG-UI SubagentStarted event - signals the agent delegated to a child agent."""
 
-    protocol: Literal["agui_step_started"] = "agui_step_started"
-    event: StepStartedEvent = Field(..., description="AG-UI StepStarted event payload")
+    protocol: Literal["agui_subagent_started"] = "agui_subagent_started"
+    event: SubagentStartedEvent = Field(..., description="AG-UI SubagentStarted event payload")
 
 
-class AgUiStepFinishedOutput(AgUiDataTrigger):
-    """AG-UI StepFinished event - signals completion of a named agent step."""
+class AgUiSubagentFinishedOutput(AgUiDataTrigger):
+    """AG-UI SubagentFinished event - signals a delegated run completed."""
 
-    protocol: Literal["agui_step_finished"] = "agui_step_finished"
-    event: StepFinishedEvent = Field(..., description="AG-UI StepFinished event payload")
+    protocol: Literal["agui_subagent_finished"] = "agui_subagent_finished"
+    event: SubagentFinishedEvent = Field(..., description="AG-UI SubagentFinished event payload")
+
+
+class AgUiSubagentErrorOutput(AgUiDataTrigger):
+    """AG-UI SubagentError event - signals a delegated run failed, without ending the run."""
+
+    protocol: Literal["agui_subagent_error"] = "agui_subagent_error"
+    event: SubagentErrorEvent = Field(..., description="AG-UI SubagentError event payload")
 
 
 class AgUiReasoningStartOutput(AgUiDataTrigger):
@@ -308,8 +316,9 @@ AgUiEventOutput: TypeAlias = Annotated[
         | AgUiRunStartedOutput
         | AgUiRunFinishedOutput
         | AgUiRunErrorOutput
-        | AgUiStepStartedOutput
-        | AgUiStepFinishedOutput
+        | AgUiSubagentStartedOutput
+        | AgUiSubagentFinishedOutput
+        | AgUiSubagentErrorOutput
         | AgUiReasoningStartOutput
         | AgUiReasoningMessageStartOutput
         | AgUiReasoningMessageContentOutput

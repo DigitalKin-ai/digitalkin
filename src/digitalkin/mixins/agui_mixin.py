@@ -22,6 +22,9 @@ from ag_ui.core.events import ReasoningStartEvent as AgUiReasoningStartEvent
 from ag_ui.core.events import RunErrorEvent as AgUiRunErrorEvent
 from ag_ui.core.events import RunFinishedEvent as AgUiRunFinishedEvent
 from ag_ui.core.events import RunStartedEvent as AgUiRunStartedEvent
+from ag_ui.core.events import SubagentErrorEvent as AgUiSubagentErrorEvent
+from ag_ui.core.events import SubagentFinishedEvent as AgUiSubagentFinishedEvent
+from ag_ui.core.events import SubagentStartedEvent as AgUiSubagentStartedEvent
 from ag_ui.core.events import TextMessageContentEvent as AgUiTextMessageContentEvent
 from ag_ui.core.events import TextMessageEndEvent as AgUiTextMessageEndEvent
 from ag_ui.core.events import TextMessageStartEvent as AgUiTextMessageStartEvent
@@ -42,6 +45,9 @@ from digitalkin.models.events import (
     RunContentEvent,
     RunErrorEvent,
     RunStartedEvent,
+    SubagentErrorEvent,
+    SubagentFinishedEvent,
+    SubagentStartedEvent,
     TextMessageCompletedEvent,
     TextMessageStartedEvent,
     ToolCallCompletedEvent,
@@ -58,6 +64,9 @@ from digitalkin.models.module.ag_ui import (
     AgUiRunErrorOutput,
     AgUiRunFinishedOutput,
     AgUiRunStartedOutput,
+    AgUiSubagentErrorOutput,
+    AgUiSubagentFinishedOutput,
+    AgUiSubagentStartedOutput,
     AgUiTextMessageContentOutput,
     AgUiTextMessageEndOutput,
     AgUiTextMessageStartOutput,
@@ -136,6 +145,9 @@ class AgUiMixin:
             AgentRunEvent.TEXT_MESSAGE_COMPLETED: cls._handle_text_message_completed,
             AgentRunEvent.RUN_COMPLETED: cls._handle_run_completed,
             AgentRunEvent.RUN_ERROR: cls._handle_run_error,
+            AgentRunEvent.SUBAGENT_STARTED: cls._handle_subagent_started,
+            AgentRunEvent.SUBAGENT_FINISHED: cls._handle_subagent_finished,
+            AgentRunEvent.SUBAGENT_ERROR: cls._handle_subagent_error,
             AgentRunEvent.TOOL_CALL_STARTED: cls._handle_tool_call_started,
             AgentRunEvent.TOOL_CALL_COMPLETED: cls._handle_tool_call_completed,
             AgentRunEvent.TOOL_CALL_ERROR: cls._handle_tool_call_error,
@@ -145,6 +157,31 @@ class AgUiMixin:
             AgentRunEvent.REASONING_COMPLETED: cls._handle_reasoning_completed,
             AgentRunEvent.CUSTOM: cls._handle_custom,
         }
+
+    @staticmethod
+    def _authored(event: BaseAgentRunEvent) -> dict[str, Any]:
+        """Author fields shared by every AG-UI event this mixin emits.
+
+        ``subagent_run_id`` is the attribution a client groups on. ``metadata`` is namespaced
+        under ``digitalkin`` because AG-UI reserves the ``ag-ui`` key for itself and leaves the
+        rest of the object to the application; a client merges it onto the message (or, for a
+        tool call, onto the tool call) with last-write-wins per key.
+
+        Run-level events carry no ``subagent_run_id`` — the adapter never sets one on them, as
+        AG-UI treats RUN_STARTED / RUN_FINISHED / RUN_ERROR as unattributable.
+
+        Args:
+            event: The DigitalKin event being converted.
+
+        Returns:
+            Keyword arguments to splat into the AG-UI event constructor.
+        """
+        fields: dict[str, Any] = {}
+        if event.metadata:
+            fields["metadata"] = {"digitalkin": event.metadata}
+        if event.subagent_run_id:
+            fields["subagent_run_id"] = event.subagent_run_id
+        return fields
 
     # ── Private Event Handlers ───────────────────────────────────────────────
 
@@ -173,6 +210,7 @@ class AgUiMixin:
             event=AgUiRunStartedEvent(
                 thread_id=self._thread_id,
                 run_id=self._run_id,
+                **self._authored(event),
             )
         )
         await self._send_agui(context, output)
@@ -183,10 +221,15 @@ class AgUiMixin:
         event: TextMessageStartedEvent,
     ) -> None:
         """Handle text message started event - emit AG-UI TextMessageStart."""
+        # ``name`` labels the bubble with the step that owns it, so a client can attribute a
+        # member's message when several stream at once. Typed on TextMessageStartEvent since
+        # ag-ui-protocol 0.1.18, which is this package's floor.
         output = AgUiTextMessageStartOutput(
             event=AgUiTextMessageStartEvent(
                 message_id=event.message_id,
                 role="assistant",
+                name=event.name,
+                **self._authored(event),
             )
         )
         await self._send_agui(context, output)
@@ -207,6 +250,7 @@ class AgUiMixin:
             event=AgUiTextMessageContentEvent(
                 message_id=message_id,
                 delta=content,
+                **self._authored(event),
             )
         )
         await self._send_agui(context, output)
@@ -218,7 +262,7 @@ class AgUiMixin:
     ) -> None:
         """Handle text message completed event - emit AG-UI TextMessageEnd."""
         output = AgUiTextMessageEndOutput(
-            event=AgUiTextMessageEndEvent(message_id=event.message_id),
+            event=AgUiTextMessageEndEvent(message_id=event.message_id, **self._authored(event)),
         )
         await self._send_agui(context, output)
 
@@ -242,6 +286,7 @@ class AgUiMixin:
             event=AgUiRunFinishedEvent(
                 thread_id=self._thread_id,
                 run_id=run_id,
+                **self._authored(event),
             )
         )
         await self._send_agui(context, output)
@@ -257,6 +302,59 @@ class AgUiMixin:
             event=AgUiRunErrorEvent(
                 message=error_msg,
                 code=event.error_type,
+                **self._authored(event),
+            )
+        )
+        await self._send_agui(context, output)
+
+    async def _handle_subagent_started(
+        self,
+        context: ModuleContext,
+        event: SubagentStartedEvent,
+    ) -> None:
+        """Handle subagent started event - emit AG-UI SubagentStarted."""
+        output = AgUiSubagentStartedOutput(
+            event=AgUiSubagentStartedEvent(
+                subagent_run_id=event.subagent_run_id or "",
+                name=event.name,
+                parent_subagent_run_id=event.parent_subagent_run_id,
+                parent_tool_call_id=event.parent_tool_call_id,
+                metadata={"digitalkin": event.metadata} if event.metadata else None,
+            )
+        )
+        await self._send_agui(context, output)
+
+    async def _handle_subagent_finished(
+        self,
+        context: ModuleContext,
+        event: SubagentFinishedEvent,
+    ) -> None:
+        """Handle subagent finished event - emit AG-UI SubagentFinished."""
+        output = AgUiSubagentFinishedOutput(
+            event=AgUiSubagentFinishedEvent(
+                subagent_run_id=event.subagent_run_id or "",
+                result=event.result,
+                metadata={"digitalkin": event.metadata} if event.metadata else None,
+            )
+        )
+        await self._send_agui(context, output)
+
+    async def _handle_subagent_error(
+        self,
+        context: ModuleContext,
+        event: SubagentErrorEvent,
+    ) -> None:
+        """Handle subagent error event - emit AG-UI SubagentError.
+
+        Deliberately not a RUN_ERROR: AG-UI treats that as terminal for the whole stream, and
+        one delegated agent failing does not end the parent's run.
+        """
+        output = AgUiSubagentErrorOutput(
+            event=AgUiSubagentErrorEvent(
+                subagent_run_id=event.subagent_run_id or "",
+                message=event.message,
+                code=event.code,
+                metadata={"digitalkin": event.metadata} if event.metadata else None,
             )
         )
         await self._send_agui(context, output)
@@ -277,6 +375,7 @@ class AgUiMixin:
             event=AgUiToolCallStartEvent(
                 tool_call_id=tool_call_id,
                 tool_call_name=tool.tool_name,
+                **self._authored(event),
             )
         )
         await self._send_agui(context, start_output)
@@ -287,6 +386,7 @@ class AgUiMixin:
                 event=AgUiToolCallArgsEvent(
                     tool_call_id=tool_call_id,
                     delta=args_str,
+                    **self._authored(event),
                 )
             )
             await self._send_agui(context, args_output)
@@ -303,7 +403,9 @@ class AgUiMixin:
 
         tool_call_id = tool.tool_call_id or str(uuid.uuid4())
 
-        end_output = AgUiToolCallEndOutput(event=AgUiToolCallEndEvent(tool_call_id=tool_call_id))
+        end_output = AgUiToolCallEndOutput(
+            event=AgUiToolCallEndEvent(tool_call_id=tool_call_id, **self._authored(event))
+        )
         await self._send_agui(context, end_output)
 
         result_content = tool.result or str(event.content or "")
@@ -315,6 +417,7 @@ class AgUiMixin:
                     tool_call_id=tool_call_id,
                     content=result_content,
                     role="tool",
+                    **self._authored(event),
                 )
             )
             await self._send_agui(context, result_output)
@@ -330,7 +433,7 @@ class AgUiMixin:
             return
 
         tool_call_id = tool.tool_call_id or str(uuid.uuid4())
-        output = AgUiToolCallEndOutput(event=AgUiToolCallEndEvent(tool_call_id=tool_call_id))
+        output = AgUiToolCallEndOutput(event=AgUiToolCallEndEvent(tool_call_id=tool_call_id, **self._authored(event)))
         await self._send_agui(context, output)
 
     async def _handle_reasoning_started(
@@ -342,12 +445,12 @@ class AgUiMixin:
         reasoning_id = event.reasoning_id or str(uuid.uuid4())
 
         start_output = AgUiReasoningStartOutput(
-            event=AgUiReasoningStartEvent(message_id=reasoning_id),
+            event=AgUiReasoningStartEvent(message_id=reasoning_id, **self._authored(event)),
         )
         await self._send_agui(context, start_output)
 
         message_start_output = AgUiReasoningMessageStartOutput(
-            event=AgUiReasoningMessageStartEvent(message_id=reasoning_id, role="reasoning")
+            event=AgUiReasoningMessageStartEvent(message_id=reasoning_id, role="reasoning", **self._authored(event))
         )
         await self._send_agui(context, message_start_output)
 
@@ -364,7 +467,7 @@ class AgUiMixin:
         reasoning_id = event.reasoning_id or ""
 
         output = AgUiReasoningMessageContentOutput(
-            event=AgUiReasoningMessageContentEvent(message_id=reasoning_id, delta=delta)
+            event=AgUiReasoningMessageContentEvent(message_id=reasoning_id, delta=delta, **self._authored(event))
         )
         await self._send_agui(context, output)
 
@@ -381,7 +484,7 @@ class AgUiMixin:
         reasoning_id = event.reasoning_id or ""
 
         output = AgUiReasoningMessageContentOutput(
-            event=AgUiReasoningMessageContentEvent(message_id=reasoning_id, delta=delta)
+            event=AgUiReasoningMessageContentEvent(message_id=reasoning_id, delta=delta, **self._authored(event))
         )
         await self._send_agui(context, output)
 
@@ -393,11 +496,13 @@ class AgUiMixin:
         """Handle reasoning completed event - emit AG-UI ReasoningMessageEnd + ReasoningEnd."""
         reasoning_id = event.reasoning_id or ""
 
-        message_end_output = AgUiReasoningMessageEndOutput(event=AgUiReasoningMessageEndEvent(message_id=reasoning_id))
+        message_end_output = AgUiReasoningMessageEndOutput(
+            event=AgUiReasoningMessageEndEvent(message_id=reasoning_id, **self._authored(event))
+        )
         await self._send_agui(context, message_end_output)
 
         end_output = AgUiReasoningEndOutput(
-            event=AgUiReasoningEndEvent(message_id=reasoning_id),
+            event=AgUiReasoningEndEvent(message_id=reasoning_id, **self._authored(event)),
         )
         await self._send_agui(context, end_output)
 

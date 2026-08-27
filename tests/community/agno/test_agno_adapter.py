@@ -25,6 +25,8 @@ from digitalkin.models.events import (
     RunContentEvent,
     RunErrorEvent,
     RunStartedEvent,
+    SubagentFinishedEvent,
+    SubagentStartedEvent,
     TextMessageCompletedEvent,
     TextMessageStartedEvent,
     ToolCallCompletedEvent,
@@ -148,6 +150,20 @@ def _make_tool_execution(**attrs: Any) -> types.SimpleNamespace:
     return types.SimpleNamespace(**data)
 
 
+def _open_message_id(adapter: Any) -> str | None:
+    """Id of the one open text message, or None.
+
+    Sequences are keyed by run, but every test below that reads an id has a single run in
+    flight — the concurrency cases assert on the emitted events instead.
+    """
+    return next((message_id for message_id, _ in adapter._messages.values()), None)
+
+
+def _open_reasoning_id(adapter: Any) -> str | None:
+    """Id of the one open reasoning sequence, or None."""
+    return next((reasoning_id for reasoning_id, _ in adapter._reasonings.values()), None)
+
+
 # ── Import / ImportError ────────────────────────────────────────────────────
 
 
@@ -252,15 +268,15 @@ def test_run_completed_closes_active_sequences_and_emits() -> None:
     adapter.to_digitalkin_events(
         _make_event(_FakeRunEvent.run_content, reasoning_content=None, content="hi"),
     )
-    assert adapter._content_active is True
-    assert adapter._reasoning_active is False
+    assert _open_message_id(adapter) is not None
+    assert adapter._reasonings == {}
 
     # Re-open reasoning so run_completed has both to close.
     adapter.to_digitalkin_events(
         _make_event(_FakeRunEvent.run_content, reasoning_content="think2", content=None),
     )
-    assert adapter._content_active is False
-    assert adapter._reasoning_active is True
+    assert adapter._messages == {}
+    assert _open_reasoning_id(adapter) is not None
 
     completed = adapter.to_digitalkin_events(
         _make_event(_FakeRunEvent.run_completed, run_id="r1", content="final"),
@@ -285,8 +301,8 @@ def test_run_completed_closes_only_active_text() -> None:
     adapter.to_digitalkin_events(
         _make_event(_FakeRunEvent.run_content, reasoning_content=None, content="hi"),
     )
-    assert adapter._content_active is True
-    assert adapter._reasoning_active is False
+    assert _open_message_id(adapter) is not None
+    assert adapter._reasonings == {}
 
     result = adapter.to_digitalkin_events(
         _make_event(_FakeRunEvent.run_completed, run_id="r1", content="final"),
@@ -321,8 +337,8 @@ def test_run_completed_deduplicates() -> None:
     assert duplicate == []
 
 
-def test_nested_run_started_is_dropped() -> None:
-    """A member agent's run (``parent_run_id`` set) must not surface as a new top-level run."""
+def test_nested_run_started_emits_subagent_not_a_second_run() -> None:
+    """A member agent's run (``parent_run_id`` set) surfaces as a delegation, not a new run."""
     from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
 
     adapter = AgnoStreamAdapter()
@@ -337,7 +353,9 @@ def test_nested_run_started_is_dropped() -> None:
             agent_name="Alice",
         ),
     )
-    assert nested == []
+    assert [type(e) for e in nested] == [SubagentStartedEvent]
+    assert nested[0].name == "Alice"
+    assert nested[0].subagent_run_id == "member-r1"
     # Outer run state preserved
     assert adapter._active_run_id == "team-r1"
 
@@ -388,15 +406,26 @@ def test_nested_member_content_still_propagates_with_metadata() -> None:
 
 
 def test_nested_run_completed_closes_open_subagent_text() -> None:
-    """Nested run_completed with active subagent text emits ``---`` footer then TextMessageCompleted."""
+    """Nested run_completed closes the member bubble and its step, with no text footer."""
     from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
 
     adapter = AgnoStreamAdapter()
     adapter.to_digitalkin_events(_make_event(_FakeTeamRunEvent.run_started, run_id="team-r1"))
-    # Subagent text chunk opens a bubble (auto text_message_started + header).
+    adapter.to_digitalkin_events(
+        _make_event(
+            _FakeRunEvent.run_started,
+            run_id="member-r1",
+            parent_run_id="team-r1",
+            agent_name="Alice",
+        ),
+    )
+    # Subagent text chunk opens its own labelled bubble. ``run_id`` is what binds it to the
+    # member's run — agno stamps it on every event, and it is how the bubble gets closed by
+    # this member's completion rather than by a sibling's.
     adapter.to_digitalkin_events(
         _make_event(
             _FakeRunEvent.run_content,
+            run_id="member-r1",
             content="hello from member",
             parent_run_id="team-r1",
             agent_name="Alice",
@@ -412,22 +441,359 @@ def test_nested_run_completed_closes_open_subagent_text() -> None:
         ),
     )
 
-    kinds = [type(e) for e in closed]
-    # Order: footer RunContent("\n---\n") → TextMessageCompleted. No RunCompleted (nested is dropped).
-    assert kinds[0] is RunContentEvent
-    assert kinds[1] is TextMessageCompletedEvent
-    assert closed[0].content == " \n\n --- \n\n "
-    # Same message_id on both footer and close.
-    assert closed[0].message_id == closed[1].message_id
+    # Order: TextMessageCompleted → SubagentFinished. No RunCompleted (nested never closes the
+    # run), and no RunContent — the separator is structural now, not injected into the text.
+    assert [type(e) for e in closed] == [TextMessageCompletedEvent, SubagentFinishedEvent]
+    assert closed[1].subagent_run_id == "member-r1"
+    assert closed[1].result == "member reply"
+    # The member's bubble is attributed to it, which is what a client groups on.
+    assert closed[0].subagent_run_id == "member-r1"
     # Metadata still reflects the subagent.
-    metadata = closed[1].metadata or {}
+    metadata = closed[0].metadata or {}
     assert metadata["parent_run_id"] == "team-r1"
     # The nested run must NOT appear in completed ids (outer run keeps going).
     assert "member-r1" not in adapter._completed_run_ids
 
 
-def test_subagent_first_text_emits_header_delimiter() -> None:
-    """First subagent text chunk opens TextMessage + ``--- SubAgent <name> ---`` header + real content."""
+def test_close_events_carry_the_opening_speakers_metadata() -> None:
+    """A close event belongs to whoever opened the sequence, not the current speaker.
+
+    The parent's bubble is closed when a member run starts. Stamping that
+    TEXT_MESSAGE_COMPLETED with the *member's* metadata would make any consumer
+    filtering on ``parent_run_id`` (e.g. isaac's ``stream_member_events=False``)
+    drop it, leaving the parent's message open and breaking the AG-UI stream.
+    """
+    from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
+
+    adapter = AgnoStreamAdapter()
+    adapter.to_digitalkin_events(_make_event(_FakeTeamRunEvent.run_started, run_id="team-r1"))
+    # Leader speaks first, so its bubble is open when the delegation happens.
+    adapter.to_digitalkin_events(
+        _make_event(_FakeTeamRunEvent.run_content, content="Let me delegate.", team_name="Squad"),
+    )
+
+    nested = adapter.to_digitalkin_events(
+        _make_event(_FakeRunEvent.run_started, run_id="m1", parent_run_id="team-r1", agent_name="Alice"),
+    )
+
+    closed = next(e for e in nested if isinstance(e, TextMessageCompletedEvent))
+    # The leader opened it, so the close must look like the leader — no parent_run_id.
+    assert (closed.metadata or {}).get("parent_run_id") is None
+    assert (closed.metadata or {}).get("source") == "team"
+    # The delegation itself is still the member's.
+    started = next(e for e in nested if isinstance(e, SubagentStartedEvent))
+    assert (started.metadata or {}).get("parent_run_id") == "team-r1"
+
+
+def test_force_closed_subagent_keeps_its_own_metadata() -> None:
+    """A delegation closed at run end keeps the member's metadata, so filters stay balanced."""
+    from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
+
+    adapter = AgnoStreamAdapter()
+    adapter.to_digitalkin_events(_make_event(_FakeTeamRunEvent.run_started, run_id="team-r1"))
+    adapter.to_digitalkin_events(
+        _make_event(_FakeRunEvent.run_started, run_id="m1", parent_run_id="team-r1", agent_name="Alice"),
+    )
+
+    # Team completes while the member's step is still open — _last_metadata is the team's.
+    result = adapter.to_digitalkin_events(
+        _make_event(_FakeTeamRunEvent.run_completed, run_id="team-r1", content="done"),
+    )
+
+    finished = next(e for e in result if isinstance(e, SubagentFinishedEvent))
+    assert (finished.metadata or {}).get("parent_run_id") == "team-r1"
+
+
+def test_concurrent_members_sharing_a_name_keep_that_name() -> None:
+    """Attribution is by ``subagent_run_id``, so a shared display name needs no disambiguating."""
+    from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
+
+    adapter = AgnoStreamAdapter()
+    adapter.to_digitalkin_events(_make_event(_FakeTeamRunEvent.run_started, run_id="team-r1"))
+
+    first = adapter.to_digitalkin_events(
+        _make_event(_FakeRunEvent.run_started, run_id="m1", parent_run_id="team-r1", agent_name="Alice"),
+    )
+    second = adapter.to_digitalkin_events(
+        _make_event(_FakeRunEvent.run_started, run_id="m2", parent_run_id="team-r1", agent_name="Alice"),
+    )
+
+    assert first[0].name == "Alice"
+    assert second[0].name == "Alice"
+    assert (first[0].subagent_run_id, second[0].subagent_run_id) == ("m1", "m2")
+
+    # Each closes under its own name.
+    closed_second = adapter.to_digitalkin_events(
+        _make_event(_FakeRunEvent.run_completed, run_id="m2", parent_run_id="team-r1"),
+    )
+    closed_first = adapter.to_digitalkin_events(
+        _make_event(_FakeRunEvent.run_completed, run_id="m1", parent_run_id="team-r1"),
+    )
+    assert closed_second[-1].subagent_run_id == "m2"
+    assert closed_first[-1].subagent_run_id == "m1"
+    assert adapter._subagents == {}
+
+
+def test_interleaved_members_keep_separate_bubbles() -> None:
+    """Two members streaming at once must not have their deltas spliced into one message.
+
+    Agno drains parallel ``delegate_task_to_member`` generators through a single
+    ``asyncio.Queue``, so their content events genuinely interleave on the wire. A single
+    message slot would splice both speakers into one bubble under one name.
+    """
+    from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
+
+    adapter = AgnoStreamAdapter()
+    adapter.to_digitalkin_events(_make_event(_FakeTeamRunEvent.run_started, run_id="team-r1"))
+    for run_id in ("m1", "m2"):
+        adapter.to_digitalkin_events(
+            _make_event(_FakeRunEvent.run_started, run_id=run_id, parent_run_id="team-r1", agent_name="sub"),
+        )
+
+    emitted: list[Any] = []
+    for run_id, chunk in (("m1", "Waves "), ("m2", "# Fun "), ("m1", "crash"), ("m2", "Facts")):
+        emitted.extend(
+            adapter.to_digitalkin_events(
+                _make_event(
+                    _FakeRunEvent.run_content,
+                    run_id=run_id,
+                    parent_run_id="team-r1",
+                    agent_name="sub",
+                    content=chunk,
+                ),
+            )
+        )
+
+    starts = [e for e in emitted if isinstance(e, TextMessageStartedEvent)]
+    assert len(starts) == 2
+    # Both members are called "sub". The display label stays ambiguous on purpose — attribution
+    # rides on subagent_run_id, so the client never has to match on a name.
+    assert [e.name for e in starts] == ["sub", "sub"]
+    assert [e.subagent_run_id for e in starts] == ["m1", "m2"]
+
+    by_message: dict[str, str] = {}
+    author: dict[str, str | None] = {}
+    for event in emitted:
+        if isinstance(event, RunContentEvent):
+            key = event.message_id or ""
+            by_message[key] = by_message.get(key, "") + event.content
+            author[key] = event.subagent_run_id
+    assert sorted(by_message.values()) == ["# Fun Facts", "Waves crash"]
+    # Every delta is stamped with its author, not just the opening event.
+    assert {by_message[k]: author[k] for k in by_message} == {"Waves crash": "m1", "# Fun Facts": "m2"}
+
+
+def test_a_members_tool_call_does_not_truncate_a_sibling() -> None:
+    """Closing on tool_call_started is scoped to the calling run."""
+    from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
+
+    adapter = AgnoStreamAdapter()
+    adapter.to_digitalkin_events(_make_event(_FakeTeamRunEvent.run_started, run_id="team-r1"))
+    for run_id in ("m1", "m2"):
+        adapter.to_digitalkin_events(
+            _make_event(_FakeRunEvent.run_started, run_id=run_id, parent_run_id="team-r1", agent_name="sub"),
+        )
+        adapter.to_digitalkin_events(
+            _make_event(_FakeRunEvent.run_content, run_id=run_id, parent_run_id="team-r1", content="hi"),
+        )
+
+    result = adapter.to_digitalkin_events(
+        _make_event(_FakeRunEvent.tool_call_started, run_id="m1", parent_run_id="team-r1", tool=_make_tool()),
+    )
+
+    closed = [e for e in result if isinstance(e, TextMessageCompletedEvent)]
+    assert len(closed) == 1
+    # m2 is still mid-message.
+    assert "m2" in adapter._messages
+
+
+def test_run_completed_closes_every_members_message_before_finishing() -> None:
+    """AG-UI refuses RUN_FINISHED while any text message is still open."""
+    from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
+
+    adapter = AgnoStreamAdapter()
+    adapter.to_digitalkin_events(_make_event(_FakeTeamRunEvent.run_started, run_id="team-r1"))
+    for run_id in ("m1", "m2"):
+        adapter.to_digitalkin_events(
+            _make_event(_FakeRunEvent.run_started, run_id=run_id, parent_run_id="team-r1", agent_name="sub"),
+        )
+        adapter.to_digitalkin_events(
+            _make_event(_FakeRunEvent.run_content, run_id=run_id, parent_run_id="team-r1", content="hi"),
+        )
+
+    result = adapter.to_digitalkin_events(
+        _make_event(_FakeTeamRunEvent.run_completed, run_id="team-r1", content="done"),
+    )
+
+    kinds = [type(e) for e in result]
+    assert kinds.count(TextMessageCompletedEvent) == 2
+    assert kinds.count(SubagentFinishedEvent) == 2
+    # Everything closes before the run does.
+    assert kinds.index(RunCompletedEvent) == len(kinds) - 1
+    assert adapter._messages == {}
+
+
+def test_members_reasoning_concurrently_get_distinct_sequences() -> None:
+    """Reasoning is per-run too, or two members' thoughts merge into one block."""
+    from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
+
+    adapter = AgnoStreamAdapter()
+    adapter.to_digitalkin_events(_make_event(_FakeTeamRunEvent.run_started, run_id="team-r1"))
+
+    emitted: list[Any] = []
+    for run_id in ("m1", "m2"):
+        emitted.extend(
+            adapter.to_digitalkin_events(
+                _make_event(
+                    _FakeRunEvent.run_content,
+                    run_id=run_id,
+                    parent_run_id="team-r1",
+                    reasoning_content="thinking",
+                    content=None,
+                ),
+            )
+        )
+
+    reasoning_ids = {e.reasoning_id for e in emitted if isinstance(e, ReasoningStartedEvent)}
+    assert len(reasoning_ids) == 2
+
+
+def test_run_error_closes_open_messages_and_reasoning() -> None:
+    """An error ends the stream; nothing may be left half-open on the client."""
+    from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
+
+    adapter = AgnoStreamAdapter()
+    adapter.to_digitalkin_events(_make_event(_FakeRunEvent.run_started, run_id="r1"))
+    adapter.to_digitalkin_events(_make_event(_FakeRunEvent.run_content, run_id="r1", content="hi"))
+
+    result = adapter.to_digitalkin_events(_make_event(_FakeRunEvent.run_error, content="boom"))
+
+    kinds = [type(e) for e in result]
+    assert kinds == [TextMessageCompletedEvent, RunErrorEvent]
+    assert adapter._messages == {}
+
+
+def test_flush_closes_every_open_member_message() -> None:
+    """A stream cut short must still balance each member's bubble."""
+    from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
+
+    adapter = AgnoStreamAdapter()
+    adapter.to_digitalkin_events(_make_event(_FakeTeamRunEvent.run_started, run_id="team-r1"))
+    for run_id in ("m1", "m2"):
+        adapter.to_digitalkin_events(
+            _make_event(_FakeRunEvent.run_started, run_id=run_id, parent_run_id="team-r1", agent_name="sub"),
+        )
+        adapter.to_digitalkin_events(
+            _make_event(_FakeRunEvent.run_content, run_id=run_id, parent_run_id="team-r1", content="hi"),
+        )
+
+    kinds = [type(e) for e in adapter.flush()]
+    assert kinds.count(TextMessageCompletedEvent) == 2
+    assert kinds.count(SubagentFinishedEvent) == 2
+    assert adapter._messages == {}
+    assert adapter._subagents == {}
+
+
+def test_unnamed_member_falls_back_to_a_generic_label() -> None:
+    """A nested run with no agent name still opens a delegation; AG-UI requires a name."""
+    from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
+
+    adapter = AgnoStreamAdapter()
+    adapter.to_digitalkin_events(_make_event(_FakeTeamRunEvent.run_started, run_id="team-r1"))
+
+    started = adapter.to_digitalkin_events(
+        _make_event(_FakeRunEvent.run_started, run_id="m1", parent_run_id="team-r1"),
+    )
+    assert started[0].name == "member"
+
+
+def test_nested_run_started_without_run_id_is_dropped() -> None:
+    """The run id *is* the subagent id, so without one the delegation cannot be opened."""
+    from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
+
+    adapter = AgnoStreamAdapter()
+    adapter.to_digitalkin_events(_make_event(_FakeTeamRunEvent.run_started, run_id="team-r1"))
+
+    assert (
+        adapter.to_digitalkin_events(
+            _make_event(_FakeRunEvent.run_started, parent_run_id="team-r1", agent_name="Alice"),
+        )
+        == []
+    )
+    assert adapter._subagents == {}
+
+
+def test_run_completed_closes_subagents_before_finishing() -> None:
+    """AG-UI rejects RUN_FINISHED while a step is active, so the run closes them first."""
+    from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
+
+    adapter = AgnoStreamAdapter()
+    adapter.to_digitalkin_events(_make_event(_FakeTeamRunEvent.run_started, run_id="team-r1"))
+    adapter.to_digitalkin_events(
+        _make_event(_FakeRunEvent.run_started, run_id="m1", parent_run_id="team-r1", agent_name="Alice"),
+    )
+
+    result = adapter.to_digitalkin_events(
+        _make_event(_FakeTeamRunEvent.run_completed, run_id="team-r1", content="done"),
+    )
+
+    kinds = [type(e) for e in result]
+    assert SubagentFinishedEvent in kinds
+    assert kinds[-1] is RunCompletedEvent
+    assert kinds.index(SubagentFinishedEvent) < kinds.index(RunCompletedEvent)
+    assert adapter._subagents == {}
+
+
+def test_run_error_closes_subagents() -> None:
+    """A failed run must not leave a step dangling for the client's reconnect preamble."""
+    from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
+
+    adapter = AgnoStreamAdapter()
+    adapter.to_digitalkin_events(_make_event(_FakeTeamRunEvent.run_started, run_id="team-r1"))
+    adapter.to_digitalkin_events(
+        _make_event(_FakeRunEvent.run_started, run_id="m1", parent_run_id="team-r1", agent_name="Alice"),
+    )
+
+    result = adapter.to_digitalkin_events(_make_event(_FakeTeamRunEvent.run_error, content="boom"))
+
+    assert [type(e) for e in result] == [SubagentFinishedEvent, RunErrorEvent]
+    assert adapter._subagents == {}
+
+
+def test_flush_closes_subagents() -> None:
+    """End of stream closes any step still open."""
+    from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
+
+    adapter = AgnoStreamAdapter()
+    adapter.to_digitalkin_events(_make_event(_FakeTeamRunEvent.run_started, run_id="team-r1"))
+    adapter.to_digitalkin_events(
+        _make_event(_FakeRunEvent.run_started, run_id="m1", parent_run_id="team-r1", agent_name="Alice"),
+    )
+
+    flushed = adapter.flush()
+
+    assert [type(e) for e in flushed] == [SubagentFinishedEvent]
+    assert flushed[0].subagent_run_id == "m1"
+    assert adapter._subagents == {}
+
+
+def test_main_agent_text_is_not_labelled() -> None:
+    """A top-level (non-nested) bubble carries no author name."""
+    from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
+
+    adapter = AgnoStreamAdapter()
+    adapter.to_digitalkin_events(_make_event(_FakeTeamRunEvent.run_started, run_id="team-r1"))
+
+    result = adapter.to_digitalkin_events(
+        _make_event(_FakeTeamRunEvent.run_content, content="leader text", team_name="Team"),
+    )
+
+    assert isinstance(result[0], TextMessageStartedEvent)
+    assert result[0].name is None
+
+
+def test_subagent_first_text_is_labelled_with_author_name() -> None:
+    """First subagent text chunk opens a TextMessage carrying ``name``, then the real content."""
     from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
 
     adapter = AgnoStreamAdapter()
@@ -441,15 +807,13 @@ def test_subagent_first_text_emits_header_delimiter() -> None:
         ),
     )
 
-    kinds = [type(e) for e in result]
-    # Order: TextMessageStarted → RunContent("--- SubAgent Alice ---\n") → RunContent(actual text).
-    assert kinds[0] is TextMessageStartedEvent
-    assert kinds[1] is RunContentEvent
-    assert kinds[2] is RunContentEvent
-    assert result[1].content == "\n --- \n ### Alice \n\n"
-    assert result[2].content == "subagent text"
-    # All three share the auto-minted subagent message_id.
-    assert result[0].message_id == result[1].message_id == result[2].message_id
+    # Order: TextMessageStarted(name="Alice") → RunContent(actual text). The author is a
+    # structured field now, so no header chunk is injected into the message body.
+    assert [type(e) for e in result] == [TextMessageStartedEvent, RunContentEvent]
+    assert result[0].name == "Alice"
+    assert result[1].content == "subagent text"
+    # Both share the auto-minted subagent message_id.
+    assert result[0].message_id == result[1].message_id
 
 
 def test_main_agent_text_after_subagent_gets_fresh_message_id_without_header() -> None:
@@ -461,6 +825,7 @@ def test_main_agent_text_after_subagent_gets_fresh_message_id_without_header() -
     sub = adapter.to_digitalkin_events(
         _make_event(
             _FakeRunEvent.run_content,
+            run_id="member-r1",
             content="subagent text",
             parent_run_id="team-r1",
             agent_name="Alice",
@@ -477,6 +842,7 @@ def test_main_agent_text_after_subagent_gets_fresh_message_id_without_header() -
     main = adapter.to_digitalkin_events(
         _make_event(
             _FakeTeamRunEvent.run_content,
+            run_id="team-r1",
             content="main text",
             team_name="Leader",
         ),
@@ -559,15 +925,14 @@ def test_reasoning_started_closes_active_content() -> None:
     adapter.to_digitalkin_events(
         _make_event(_FakeRunEvent.run_content, reasoning_content=None, content="hello"),
     )
-    assert adapter._content_active is True
+    assert _open_message_id(adapter) is not None
 
     result = adapter.to_digitalkin_events(_make_event(_FakeRunEvent.reasoning_started))
 
     kinds = [type(e) for e in result]
     assert TextMessageCompletedEvent in kinds
     assert ReasoningStartedEvent in kinds
-    assert adapter._reasoning_active is True
-    assert adapter._current_reasoning_id is not None
+    assert _open_reasoning_id(adapter) is not None
 
 
 def test_reasoning_content_delta_passes_through() -> None:
@@ -581,7 +946,7 @@ def test_reasoning_content_delta_passes_through() -> None:
     assert len(result) == 1
     assert isinstance(result[0], ReasoningContentDeltaEvent)
     assert result[0].delta == "step"
-    assert result[0].reasoning_id == adapter._current_reasoning_id
+    assert result[0].reasoning_id == _open_reasoning_id(adapter)
 
 
 def test_reasoning_content_delta_without_content_defaults_to_empty() -> None:
@@ -602,7 +967,7 @@ def test_reasoning_step_reuses_active_reasoning() -> None:
 
     adapter = AgnoStreamAdapter()
     adapter.to_digitalkin_events(_make_event(_FakeRunEvent.reasoning_started))
-    rid = adapter._current_reasoning_id
+    rid = _open_reasoning_id(adapter)
     result = adapter.to_digitalkin_events(
         _make_event(_FakeRunEvent.reasoning_step, reasoning_content="step body"),
     )
@@ -622,7 +987,7 @@ def test_reasoning_step_auto_opens_lifecycle() -> None:
     )
     kinds = [type(e) for e in result]
     assert kinds == [ReasoningStartedEvent, ReasoningStepEvent]
-    assert adapter._reasoning_active is True
+    assert _open_reasoning_id(adapter) is not None
 
 
 def test_reasoning_step_closes_active_content() -> None:
@@ -633,7 +998,7 @@ def test_reasoning_step_closes_active_content() -> None:
     adapter.to_digitalkin_events(
         _make_event(_FakeRunEvent.run_content, reasoning_content=None, content="hi"),
     )
-    assert adapter._content_active is True
+    assert _open_message_id(adapter) is not None
 
     result = adapter.to_digitalkin_events(
         _make_event(_FakeRunEvent.reasoning_step, reasoning_content="step"),
@@ -653,7 +1018,7 @@ def test_reasoning_step_empty_content_ignored() -> None:
         _make_event(_FakeRunEvent.reasoning_step, reasoning_content=""),
     )
     assert result == []
-    assert adapter._reasoning_active is False
+    assert adapter._reasonings == {}
 
 
 def test_multiple_reasoning_steps_share_lifecycle() -> None:
@@ -681,7 +1046,7 @@ def test_reasoning_completed_when_active() -> None:
     result = adapter.to_digitalkin_events(_make_event(_FakeRunEvent.reasoning_completed))
     assert len(result) == 1
     assert isinstance(result[0], ReasoningCompletedEvent)
-    assert adapter._reasoning_active is False
+    assert adapter._reasonings == {}
 
 
 def test_reasoning_completed_when_inactive_returns_empty() -> None:
@@ -703,8 +1068,7 @@ def test_tool_call_started_closes_reasoning_and_content() -> None:
     adapter.to_digitalkin_events(
         _make_event(_FakeRunEvent.run_content, reasoning_content=None, content="hi"),
     )
-    adapter._reasoning_active = True
-    adapter._current_reasoning_id = "rid"
+    adapter._reasonings[adapter._active_run_id or ""] = ("rid", None)
 
     tool = _make_tool(tool_call_id="tc1", tool_name="search", tool_args={"q": "x"})
     result = adapter.to_digitalkin_events(
@@ -1035,8 +1399,7 @@ def test_run_paused_closes_active_content_and_reasoning() -> None:
         _make_event(_FakeRunEvent.run_content, reasoning_content=None, content="thinking"),
     )
     # Force reasoning active too to exercise both branches
-    adapter._reasoning_active = True
-    adapter._current_reasoning_id = "rid"
+    adapter._reasonings[adapter._active_run_id or ""] = ("rid", None)
 
     tool = _make_tool_execution(
         tool_call_id="ext1",
@@ -1106,7 +1469,7 @@ def test_run_content_text_auto_opens_and_deltas() -> None:
     assert isinstance(result[0], TextMessageStartedEvent)
     assert isinstance(result[1], RunContentEvent)
     assert result[1].content == "hello"
-    assert result[1].message_id == adapter._current_message_id
+    assert result[1].message_id == _open_message_id(adapter)
 
     result2 = adapter.to_digitalkin_events(
         _make_event(_FakeRunEvent.run_content, reasoning_content=None, content=" world"),
@@ -1176,7 +1539,7 @@ def test_run_content_empty_content_closes_active_text() -> None:
     )
     assert len(result) == 1
     assert isinstance(result[0], TextMessageCompletedEvent)
-    assert adapter._content_active is False
+    assert adapter._messages == {}
 
 
 def test_run_content_empty_content_when_inactive_is_noop() -> None:
@@ -1201,7 +1564,7 @@ def test_run_content_empty_reasoning_closes_active_reasoning() -> None:
     )
     assert len(result) == 1
     assert isinstance(result[0], ReasoningCompletedEvent)
-    assert adapter._reasoning_active is False
+    assert adapter._reasonings == {}
 
 
 def test_run_content_empty_reasoning_when_inactive_is_noop() -> None:
@@ -1230,13 +1593,13 @@ def test_run_content_reasoning_after_explicit_started() -> None:
 
     adapter = AgnoStreamAdapter()
     adapter.to_digitalkin_events(_make_event(_FakeRunEvent.reasoning_started))
-    rid = adapter._current_reasoning_id
+    rid = _open_reasoning_id(adapter)
     result = adapter.to_digitalkin_events(
         _make_event(_FakeRunEvent.run_content, reasoning_content="step", content=None),
     )
     assert len(result) == 1
     assert isinstance(result[0], ReasoningContentDeltaEvent)
-    assert adapter._current_reasoning_id == rid
+    assert _open_reasoning_id(adapter) == rid
 
 
 # ── flush() ─────────────────────────────────────────────────────────────────
@@ -1247,7 +1610,7 @@ def test_close_content_noop_when_inactive() -> None:
     from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
 
     adapter = AgnoStreamAdapter()
-    assert adapter._close_content(None) == []
+    assert adapter._close_content("", None) == []
 
 
 def test_close_reasoning_noop_when_inactive() -> None:
@@ -1255,7 +1618,7 @@ def test_close_reasoning_noop_when_inactive() -> None:
     from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
 
     adapter = AgnoStreamAdapter()
-    assert adapter._close_reasoning(None) == []
+    assert adapter._close_reasoning("", None) == []
 
 
 def test_flush_empty() -> None:
@@ -1275,7 +1638,7 @@ def test_flush_closes_active_content() -> None:
     result = adapter.flush()
     assert len(result) == 1
     assert isinstance(result[0], TextMessageCompletedEvent)
-    assert adapter._content_active is False
+    assert adapter._messages == {}
 
 
 def test_flush_closes_active_reasoning() -> None:
@@ -1288,7 +1651,7 @@ def test_flush_closes_active_reasoning() -> None:
     result = adapter.flush()
     assert len(result) == 1
     assert isinstance(result[0], ReasoningCompletedEvent)
-    assert adapter._reasoning_active is False
+    assert adapter._reasonings == {}
 
 
 def test_flush_closes_both_when_both_forced() -> None:
@@ -1299,8 +1662,7 @@ def test_flush_closes_both_when_both_forced() -> None:
         _make_event(_FakeRunEvent.run_content, reasoning_content="think", content=None),
     )
     # Force content active too (normally mutually exclusive) to exercise both branches
-    adapter._content_active = True
-    adapter._current_message_id = "m1"
+    adapter._messages[adapter._active_run_id or ""] = ("m1", None)
 
     result = adapter.flush()
     kinds = [type(e) for e in result]
@@ -1601,9 +1963,7 @@ def test_realistic_sequence_with_reasoning_text_tool_and_pause() -> None:
 
     # Paused at the end with exactly one synthesised external tool pair
     assert adapter.is_paused is True
-    synthesised = [
-        e for e in events[-2:] if isinstance(e, (ToolCallStartedEvent, ToolCallCompletedEvent))
-    ]
+    synthesised = [e for e in events[-2:] if isinstance(e, (ToolCallStartedEvent, ToolCallCompletedEvent))]
     assert len(synthesised) == 2
 
 
