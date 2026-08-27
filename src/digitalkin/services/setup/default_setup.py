@@ -11,18 +11,27 @@ from digitalkin.logger import logger
 from digitalkin.models.services.registry import RegistrySetupStatus
 from digitalkin.models.services.storage import Visibility
 from digitalkin.services.setup.exceptions import SetupServiceError
-from digitalkin.services.setup.setup_strategy import SetupData, SetupStrategy, SetupVersionData
+from digitalkin.services.setup.setup_strategy import (
+    SetupData,
+    SetupStrategy,
+    SetupVersionData,
+    SetupVersionPage,
+)
 
 
 class DefaultSetup(SetupStrategy):
     """In-memory implementation of the setup strategy (same contract as GrpcSetup)."""
 
     setups: dict[str, SetupData]
+    # Every version ever cut, oldest first, keyed by setup id — the local stand-in for
+    # the service's version table that ListSetupVersions pages over.
+    versions: dict[str, list[SetupVersionData]]
 
     def __init__(self) -> None:
         """Initialize the default setup strategy."""
         super().__init__()
         self.setups = {}
+        self.versions = {}
 
     @staticmethod
     def _new_id() -> str:
@@ -104,6 +113,7 @@ class DefaultSetup(SetupStrategy):
             msg = "name is required"
             raise ValueError(msg)
         self.setups[setup_id] = setup
+        self.versions[setup_id] = [setup.current_setup_version]
         logger.debug("CREATE SETUP DATA %s:%s successful", setup_id, setup)
         return setup
 
@@ -111,7 +121,8 @@ class DefaultSetup(SetupStrategy):
         """Update a setup's name and current version content.
 
         Args:
-            setup_dict: Dictionary with 'setup_id', 'name' and 'content'.
+            setup_dict: Dictionary with 'setup_id', 'name', 'content' and optional
+                'set_as_current' (defaults to True).
 
         Returns:
             The updated setup with its current version.
@@ -127,8 +138,18 @@ class DefaultSetup(SetupStrategy):
             msg = "setup_id, name and content (object) are required"
             raise ValueError(msg)
         setup.name = name
-        setup.current_setup_version.content = content
-        setup.current_setup_version.creation_date = datetime.datetime.now(datetime.timezone.utc)
+        # A new revision rather than an in-place edit, matching UpdateSetup on the wire.
+        history = self.versions.setdefault(setup.id, [setup.current_setup_version])
+        version = SetupVersionData(
+            id=self._new_id(),
+            setup_id=setup.id,
+            version=f"1.0.{len(history)}",
+            content=content,
+            creation_date=datetime.datetime.now(datetime.timezone.utc),
+        )
+        history.append(version)
+        if setup_dict.get("set_as_current", True):
+            setup.current_setup_version = version
         return setup
 
     async def delete_setup(self, setup_dict: dict[str, Any]) -> bool:
@@ -145,6 +166,7 @@ class DefaultSetup(SetupStrategy):
             logger.debug("DELETE setup_id = %s: DOESN'T EXIST", setup_id)
             return False
         del self.setups[setup_id]
+        self.versions.pop(setup_id, None)
         return True
 
     async def change_visibility(self, setup_dict: dict[str, Any]) -> SetupData:
@@ -167,4 +189,48 @@ class DefaultSetup(SetupStrategy):
             msg = f"invalid visibility '{setup_dict.get('visibility')}'; use 'public', 'private' or 'internal'"
             raise ValueError(msg)
         setup.visibility = Visibility(scope)
+        return setup
+
+    async def list_setup_versions(self, setup_dict: dict[str, Any]) -> SetupVersionPage:
+        """List a setup's versions, most recent first.
+
+        Args:
+            setup_dict: Dictionary with 'setup_id' and optional 'limit' / 'offset'.
+
+        Returns:
+            The requested page, its total count and the currently active version id.
+
+        Raises:
+            SetupServiceError: setup_id does not exist.
+        """
+        setup = self._get_or_raise(setup_dict.get("setup_id", ""))
+        history = list(reversed(self.versions.get(setup.id, [setup.current_setup_version])))
+        offset = int(setup_dict.get("offset") or 0)
+        limit = int(setup_dict.get("limit") or 20)
+        return SetupVersionPage(
+            setup_versions=history[offset : offset + limit],
+            total_count=len(history),
+            current_setup_version_id=setup.current_setup_version.id,
+        )
+
+    async def set_current_setup_version(self, setup_dict: dict[str, Any]) -> SetupData:
+        """Activate an existing version of a setup, making it the current one.
+
+        Args:
+            setup_dict: Dictionary with 'setup_id' and 'setup_version_id'.
+
+        Returns:
+            The setup with its newly activated version.
+
+        Raises:
+            SetupServiceError: setup_id does not exist, or the version does not belong to it.
+        """
+        setup = self._get_or_raise(setup_dict.get("setup_id", ""))
+        setup_version_id = setup_dict.get("setup_version_id", "")
+        history = self.versions.get(setup.id, [setup.current_setup_version])
+        version = next((v for v in history if v.id == setup_version_id), None)
+        if version is None:
+            msg = f"setup version '{setup_version_id}' not found on setup '{setup.id}'"
+            raise SetupServiceError(msg)
+        setup.current_setup_version = version
         return setup

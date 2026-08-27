@@ -26,6 +26,7 @@ from tests.fixtures.grpc_fixtures import FakeContext
 from digitalkin.grpc_servers.exceptions import PermissionDeniedError
 from digitalkin.models.grpc_servers.models import ClientConfig
 from digitalkin.models.services.services import Context
+from digitalkin.models.services.storage import Visibility
 from digitalkin.models.settings.utils.channel import ControlFlow, SecurityMode
 from digitalkin.services.filesystem.exceptions import FilesystemServiceError
 from digitalkin.services.filesystem.filesystem_strategy import (
@@ -1189,3 +1190,134 @@ class TestFilesystemRefusalAndFailures:
             await client.get_file("f")
         with pytest.raises(FilesystemServiceError):
             await client.get_files(FileFilter())
+
+
+class TestVisibilityOnTheWire:
+    """Visibility is encoded onto every write path and decoded back off File."""
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    def test_upload_forwards_per_file_visibility(
+        self,
+        client: GrpcFilesystem,
+        test_channel: grpc_testing.Channel,
+    ) -> None:
+        upload = UploadFileData(
+            content=b"x",
+            name="f.txt",
+            file_type="DOCUMENT",
+            visibility=Visibility.INTERNAL,
+        )
+        future = client_execution_thread_pool.submit(asyncio.run, client.upload_files([upload]))
+        method_desc = service_name.methods_by_name["UploadFiles"]
+        _, request, rpc = test_channel.take_unary_unary(method_desc)
+
+        assert request.files[0].visibility == filesystem_pb2.VISIBILITY_INTERNAL
+
+        rpc.send_initial_metadata(())
+        rpc.terminate(
+            filesystem_pb2.UploadFilesResponse(results=[], total_uploaded=0, total_failed=0),
+            (),
+            grpc.StatusCode.OK,
+            "",
+        )
+        future.result(timeout=1.0)
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    def test_upload_defaults_to_unspecified(
+        self,
+        client: GrpcFilesystem,
+        test_channel: grpc_testing.Channel,
+    ) -> None:
+        """Unspecified means "let the service decide", so it must go out as the zero enum."""
+        upload = UploadFileData(content=b"x", name="f.txt", file_type="DOCUMENT")
+        future = client_execution_thread_pool.submit(asyncio.run, client.upload_files([upload]))
+        _, request, rpc = test_channel.take_unary_unary(service_name.methods_by_name["UploadFiles"])
+
+        assert request.files[0].visibility == filesystem_pb2.VISIBILITY_UNSPECIFIED
+
+        rpc.send_initial_metadata(())
+        rpc.terminate(
+            filesystem_pb2.UploadFilesResponse(results=[], total_uploaded=0, total_failed=0),
+            (),
+            grpc.StatusCode.OK,
+            "",
+        )
+        future.result(timeout=1.0)
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    def test_update_forwards_visibility(
+        self,
+        client: GrpcFilesystem,
+        test_channel: grpc_testing.Channel,
+    ) -> None:
+        future = client_execution_thread_pool.submit(
+            asyncio.run, client.update_file("files:1", visibility=Visibility.PUBLIC)
+        )
+        _, request, rpc = test_channel.take_unary_unary(service_name.methods_by_name["UpdateFile"])
+
+        assert request.visibility == filesystem_pb2.VISIBILITY_PUBLIC
+
+        rpc.send_initial_metadata(())
+        rpc.terminate(
+            filesystem_pb2.UpdateFileResponse(
+                result=filesystem_pb2.FileResult(file=filesystem_pb2.File(file_id="files:1"))
+            ),
+            (),
+            grpc.StatusCode.OK,
+            "",
+        )
+        future.result(timeout=1.0)
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    def test_filter_forwards_visibilities(
+        self,
+        client: GrpcFilesystem,
+        test_channel: grpc_testing.Channel,
+    ) -> None:
+        filters = FileFilter(visibilities=[Visibility.PRIVATE, Visibility.INTERNAL])
+        future = client_execution_thread_pool.submit(asyncio.run, client.get_files(filters))
+        _, request, rpc = test_channel.take_unary_unary(service_name.methods_by_name["GetFiles"])
+
+        assert list(request.filters.visibilities) == [
+            filesystem_pb2.VISIBILITY_PRIVATE,
+            filesystem_pb2.VISIBILITY_INTERNAL,
+        ]
+
+        rpc.send_initial_metadata(())
+        rpc.terminate(
+            filesystem_pb2.GetFilesResponse(files=[], total_count=0), (), grpc.StatusCode.OK, ""
+        )
+        future.result(timeout=1.0)
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    def test_visibility_is_decoded_onto_the_record(
+        self,
+        client: GrpcFilesystem,
+        test_channel: grpc_testing.Channel,
+    ) -> None:
+        future = client_execution_thread_pool.submit(asyncio.run, client.get_file("files:1"))
+        _, _request, rpc = test_channel.take_unary_unary(service_name.methods_by_name["GetFile"])
+
+        rpc.send_initial_metadata(())
+        rpc.terminate(
+            filesystem_pb2.GetFileResponse(
+                file=filesystem_pb2.File(
+                    file_id="files:1",
+                    context="missions:m1",
+                    name="f.txt",
+                    storage_uri="uri",
+                    file_url="url",
+                    visibility=filesystem_pb2.VISIBILITY_INTERNAL,
+                )
+            ),
+            (),
+            grpc.StatusCode.OK,
+            "",
+        )
+
+        assert future.result(timeout=1.0).visibility is Visibility.INTERNAL

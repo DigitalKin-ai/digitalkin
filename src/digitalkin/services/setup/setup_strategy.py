@@ -20,6 +20,14 @@ class SetupVersionData(BaseModel):
     creation_date: datetime.datetime
 
 
+class SetupVersionPage(BaseModel):
+    """A page of a setup's versions, most recent first."""
+
+    setup_versions: list[SetupVersionData]
+    total_count: int
+    current_setup_version_id: str = ""
+
+
 class SetupData(BaseModel):
     """Pydantic model for Setup data validation.
 
@@ -42,9 +50,9 @@ class SetupData(BaseModel):
 class SetupStrategy(ABC):
     """Abstract base class for setup strategies.
 
-    Mirrors the SetupService protocol: setup-level CRUD plus visibility change.
-    The version lifecycle is platform-owned — content flows through the setup's
-    ``current_setup_version``, never through standalone version RPCs.
+    Mirrors the SetupService protocol: setup-level CRUD, visibility change, and the
+    two read/activate version RPCs. Versions are still created only as a side effect
+    of ``update_setup`` — there is no standalone create/update/delete for them.
     """
 
     def __init__(self) -> None:
@@ -122,4 +130,26 @@ class SetupStrategy(ABC):
 
         Returns:
             The setup with its updated visibility.
+        """
+
+    @abstractmethod
+    async def list_setup_versions(self, setup_dict: dict[str, Any]) -> SetupVersionPage:
+        """List a setup's versions, most recent first.
+
+        Args:
+            setup_dict: Dictionary with 'setup_id' and optional 'limit' / 'offset'.
+
+        Returns:
+            The requested page, its total count and the currently active version id.
+        """
+
+    @abstractmethod
+    async def set_current_setup_version(self, setup_dict: dict[str, Any]) -> SetupData:
+        """Activate an existing version of a setup, making it the current one.
+
+        Args:
+            setup_dict: Dictionary with 'setup_id' and 'setup_version_id'.
+
+        Returns:
+            The setup with its newly activated version.
         """

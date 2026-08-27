@@ -63,6 +63,9 @@ class GrpcUserProfile(UserProfileStrategy, GrpcClientWrapper, GrpcErrorHandlerMi
                 return None
 
             user_profile_dict = ProtoUtils.proto_to_dict(response.user_profile, with_defaults=True)
+            # mission_cost rides on the response, not on the profile: the running total the
+            # mission has spent so far. Folded in here so callers keep a single dict to read.
+            user_profile_dict["mission_cost"] = response.mission_cost
 
             logger.debug("Retrieved user profile for mission_id: %s", self.mission_id)
             return user_profile_dict

@@ -41,6 +41,7 @@ class ModuleInfo(BaseModel):
     module_name: str = ""
     documentation: str | None = None
     status: RegistryModuleStatus | None = None
+    tags: list[str] = []
 
     @field_validator("module_type", mode="before")
     @classmethod
@@ -99,6 +100,20 @@ class RegistrySetupStatus(str, Enum):
         return cls.UNSPECIFIED
 
 
+class RegistrySortBy(str, Enum):
+    """Sort key for registry searches.
+
+    Member names mirror the proto ``SortBy`` enum (minus the ``SORT_BY_`` prefix):
+    they are encoded by name onto the wire, so they must match. UNSPECIFIED lets the
+    registry apply its own default — relevance when a query is set, updated_at otherwise.
+    """
+
+    UNSPECIFIED = "unspecified"
+    NAME = "name"
+    CREATED_AT = "created_at"
+    UPDATED_AT = "updated_at"
+
+
 class RegistryVisibility(str, Enum):
     """Visibility in the registry."""
 
@@ -124,6 +139,7 @@ class SetupInfo(BaseModel):
     module_type: RegistryModuleType | None = None
     setup_version_id: str | None = None
     setup_version: str | None = None
+    tags: list[str] = []
     config: dict[str, Any] | None = None
 
 
@@ -145,3 +161,4 @@ class SetupSummary(BaseModel):
     module_type: RegistryModuleType | None = None
     setup_version_id: str | None = None
     setup_version: str | None = None
+    tags: list[str] = []

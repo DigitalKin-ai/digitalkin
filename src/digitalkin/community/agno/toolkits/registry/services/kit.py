@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from digitalkin.community.agno.toolkits.registry.base import RegistryObjectToolKit
 
@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 
 
 class ServicesManager(RegistryObjectToolKit):
-    """Manage Service setups (SERVICE): create, search, load, update, delete, change visibility."""
+    """Manage Service setups (SERVICE): create, search, load, update, delete, visibility, versions."""
 
     module_type: ClassVar[RegistryModuleType] = RegistryModuleType.SERVICE
 
@@ -37,20 +37,24 @@ class ServicesManager(RegistryObjectToolKit):
             name="services_manager",
             actions=ServiceActions,
             description=(
-                "Manage Service SETUPS: create, search, load, update, delete, change_visibility. The "
+                "Manage Service SETUPS: create, search, load, update, delete, change_visibility, plus "
+                "list_versions / set_version to inspect the configuration history and undo a bad "
+                "update. The "
                 "action discriminator selects the operation; 'load' returns a service's configuration "
                 "content for use."
             ),
             entrypoint=self.services_manager,
         )
 
-    async def services_manager(self, action: ServiceActions) -> str:
-        """Dispatch a Service operation (create / search / load / update / delete / change_visibility).
+    async def services_manager(self, action: ServiceActions | None = None, **fields: Any) -> str:
+        """Dispatch a Service operation (create / search / load / update / delete / visibility / versions).
 
         Args:
             action: A discriminated Service action; its type selects the operation.
+            fields: Absorbs a flattened call — some models send the action's own fields as
+                siblings of ``action`` rather than inside it. :meth:`_run` re-nests them.
 
         Returns:
             The canonical success envelope, or a fail envelope on rejection/invalid input.
         """
-        return await self._run(action)
+        return await self._run(action, **fields)

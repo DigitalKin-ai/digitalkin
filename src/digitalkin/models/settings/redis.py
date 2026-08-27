@@ -20,6 +20,19 @@ class RedisPoolSettings(BaseSettings):
         default=15,
         description="Seconds between connection-level PINGs; 0 disables. Catches silently-dead sockets.",
     )
+    socket_timeout: float = Field(
+        default=15.0,
+        gt=0,
+        description=(
+            "Per-command read timeout, enforced by a client-side timer — keep it above the XREAD "
+            "block time and any tolerable event-loop stall."
+        ),
+    )
+    blocking_read_retries: int = Field(
+        default=3,
+        ge=0,
+        description="Retries on the XREAD pool (idempotent). The XADD pool stays at 0 to avoid duplicate frames.",
+    )
 
     def get_default_pool_size(self) -> int:
         """Non-blocking pool size, defaults to half of total.

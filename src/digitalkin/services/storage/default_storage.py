@@ -3,6 +3,7 @@
 import datetime
 import json
 import tempfile
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -128,6 +129,7 @@ class DefaultStorage(StorageStrategy):
         now = datetime.datetime.now(datetime.timezone.utc)
         record.creation_date = now
         record.update_date = now
+        record.storage_id = f"storage:{uuid.uuid4()}"
         self.storage[key] = record
         self._save_to_file()
         logger.debug("Created %s", key)
@@ -137,18 +139,22 @@ class DefaultStorage(StorageStrategy):
     def _key(context: str, collection: str, record_id: str) -> str:
         return f"{context}|{collection}:{record_id}"
 
-    async def _read(self, collection: str, record_id: str, context: str) -> StorageRecord | None:
+    async def _read(self, collection: str, record_id: str, context: str, storage_id: str = "") -> StorageRecord | None:
         """Get a record from the database scoped to a specific context.
 
         Args:
             collection: The unique name to retrieve data for
             record_id: The unique ID of the record
             context: Resolved owner context scoping the lookup.
+            storage_id: Address a specific stored record; a mismatch reads as absent.
 
         Returns:
             StorageRecord: The corresponding record
         """
-        return self.storage.get(self._key(context, collection, record_id))
+        record = self.storage.get(self._key(context, collection, record_id))
+        if record is not None and storage_id and record.storage_id != storage_id:
+            return None
+        return record
 
     async def _update(
         self,
@@ -202,7 +208,13 @@ class DefaultStorage(StorageStrategy):
         return True
 
     async def _list(
-        self, collection: str, context: str, visibilities: list[Visibility] | None = None
+        self,
+        collection: str,
+        context: str,
+        visibilities: list[Visibility] | None = None,
+        record_id: str = "",
+        limit: int = 0,
+        offset: int = 0,
     ) -> list[StorageRecord]:
         """List records in a collection scoped to a specific context.
 
@@ -210,29 +222,37 @@ class DefaultStorage(StorageStrategy):
             collection: The unique name to retrieve data for
             context: Resolved owner context scoping the listing.
             visibilities: Optional read-access scopes to filter by (None = no filter).
+            record_id: Restrict to this record id; empty means no filter.
+            limit: Max records to return; 0 applies the service default of 20.
+            offset: Records to skip before returning results.
 
         Returns:
             A list of storage records
         """
-        prefix = f"{context}|{collection}:"
-        records = [r for k, r in self.storage.items() if k.startswith(prefix)]
+        prefix = f"{context}|{collection}:{record_id}" if record_id else f"{context}|{collection}:"
+        records = [
+            r for k, r in self.storage.items() if k.startswith(prefix) and (not record_id or r.record_id == record_id)
+        ]
         if visibilities:
             allowed = set(visibilities)
             records = [r for r in records if r.visibility in allowed]
-        return records
+        return records[offset : offset + (limit or 20)]
 
-    async def _remove_collection(self, collection: str, context: str) -> bool:
+    async def _remove_collection(self, collection: str, context: str, record_id: str = "") -> bool:
         """Wipe a collection scoped to a specific context.
 
         Args:
             collection: The unique name to retrieve data for
             context: Resolved owner context scoping the wipe.
+            record_id: Restrict removal to this record id; empty wipes the whole collection.
 
         Returns:
             bool: True if the collection was removed, False otherwise
         """
         prefix = f"{context}|{collection}:"
-        to_delete = [k for k in self.storage if k.startswith(prefix)]
+        to_delete = [
+            k for k, r in self.storage.items() if k.startswith(prefix) and (not record_id or r.record_id == record_id)
+        ]
         for k in to_delete:
             del self.storage[k]
         self._save_to_file()

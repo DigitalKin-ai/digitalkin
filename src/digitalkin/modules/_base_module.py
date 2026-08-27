@@ -648,9 +648,16 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
                 self.context.registry,
                 self.context.communication,
             )
-            if tool_cache.entries:
-                self.context.tool_cache = tool_cache
+            # Installed unconditionally, even when the setup declares no tools: the
+            # mission view owns the ``dynamic`` layer, which is where runtime loads land.
+            # Gating on a non-empty declared layer used to leave the context holding a
+            # throwaway ToolCache, so a setup with no selected tools could never keep one.
+            self.context.tool_cache = tool_cache.mission_view()
             timer.mark("build_tool_cache")
+            # Restore the tools the agent loaded earlier in this mission, before
+            # initialize() builds the toolkits that have to expose them.
+            await self.context.rehydrate_loaded_tools()
+            timer.mark("rehydrate_loaded_tools")
 
         await self.initialize(self.context, setup_data)
         timer.mark("initialize")
@@ -719,6 +726,18 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
             self._status = ModuleStatus.STOPPING
             await self.cleanup()
             t1 = time.perf_counter_ns()
+            cleanup_ms = (t1 - t0) / 1e6
+            if cleanup_ms > 1000:  # noqa: PLR2004 — one-off log threshold, not a tunable
+                # A blocking cleanup hook freezes the loop and the damage lands elsewhere — in-flight
+                # gateway streams fail with a bogus REDIS_UNAVAILABLE. Name the culprit here.
+                logger.warning(
+                    "%s.cleanup() took %.0fms; if it blocks rather than awaits it stalls the event "
+                    "loop and unrelated in-flight operations will fail with spurious timeouts — "
+                    "move blocking calls to asyncio.to_thread",
+                    type(self).__name__,
+                    cleanup_ms,
+                    extra=self.context.session.current_ids(),
+                )
             try:
                 for handlers in self.trigger_handlers.values():
                     for handler in handlers:
@@ -741,7 +760,7 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
             logger.info(
                 "[close-debug] module.stop: cleanup=%.2fms flush=%.2fms eos=%.2fms "
                 "total=%.2fms t_done_ns=%d task_id=%s mission_id=%s",
-                (t1 - t0) / 1e6,
+                cleanup_ms,
                 (t2 - t1) / 1e6,
                 (t3 - t2) / 1e6,
                 (t3 - t0) / 1e6,

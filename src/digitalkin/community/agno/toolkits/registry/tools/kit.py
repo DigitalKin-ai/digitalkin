@@ -7,7 +7,7 @@ never makes a tool callable. To actually **use** a discovered tool, load it with
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from digitalkin.community.agno.toolkits.registry.base import RegistryObjectToolKit
 
@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 
 
 class ToolsManager(RegistryObjectToolKit):
-    """Manage Tool setups (TOOL_MODULE): search, get, update, delete, change visibility."""
+    """Manage Tool setups (TOOL_MODULE): search, get, update, delete, change visibility, versions."""
 
     module_type: ClassVar[RegistryModuleType] = RegistryModuleType.TOOL_MODULE
 
@@ -44,7 +44,8 @@ class ToolsManager(RegistryObjectToolKit):
             description=(
                 "Administer tool SETUPS — find and manage tools, but do NOT run them. Use it to "
                 "discover tool setups (search), read one (get), or administer a tool (update / "
-                "delete / change_visibility). It only touches a tool's setup (metadata, "
+                "delete / change_visibility / list_versions / set_version). It only touches a "
+                "tool's setup (metadata, "
                 "configuration, visibility, lifecycle) — it never makes a tool callable. To actually "
                 "USE a discovered tool, take its setup_id and load it with the separate load_manager "
                 "tool (the 'tool' action)."
@@ -52,13 +53,15 @@ class ToolsManager(RegistryObjectToolKit):
             entrypoint=self.tools_manager,
         )
 
-    async def tools_manager(self, action: ToolActions) -> str:
+    async def tools_manager(self, action: ToolActions | None = None, **fields: Any) -> str:
         """Administer tool setups (search / get / update / delete / change_visibility).
 
         Args:
             action: A discriminated Tool action; its type selects the operation.
+            fields: Absorbs a flattened call — some models send the action's own fields as
+                siblings of ``action`` rather than inside it. :meth:`_run` re-nests them.
 
         Returns:
             The canonical success envelope, or a fail envelope on rejection/invalid input.
         """
-        return await self._run(action)
+        return await self._run(action, **fields)

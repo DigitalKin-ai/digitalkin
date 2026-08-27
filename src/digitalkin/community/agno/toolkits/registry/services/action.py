@@ -17,7 +17,9 @@ from digitalkin.community.agno.toolkits.registry.action import (
     ChangeVisibilityAction,
     DeleteAction,
     GetAction,
+    ListVersionsAction,
     SearchAction,
+    SetVersionAction,
     UpdateAction,
 )
 from digitalkin.community.agno.toolkits.registry.base import RegistryAction
@@ -32,6 +34,9 @@ class CreateServiceAction(RegistryAction):
     Only a name and the configuration JSON are needed — owner, organisation and kind
     are derived server-side. Once created it is discoverable via ``search`` and
     readable via ``load``.
+    The service is always created *private* (owner only): visibility is not a creation
+    parameter. Widening it to ``internal`` (whole organisation) or ``public`` (everyone)
+    requires a separate ``change_visibility`` call.
     """
 
     action: Literal["create"] = "create"
@@ -80,6 +85,8 @@ ServiceActions = Annotated[
     | LoadServiceAction
     | UpdateAction
     | DeleteAction
-    | ChangeVisibilityAction,
+    | ChangeVisibilityAction
+    | ListVersionsAction
+    | SetVersionAction,
     Field(discriminator="action"),
 ]

@@ -7,6 +7,7 @@ from digitalkin.models.services.registry import (
     RegistryModuleStatus,
     RegistryModuleType,
     RegistrySetupStatus,
+    RegistrySortBy,
     RegistryVisibility,
     SetupInfo,
     SetupSummary,
@@ -56,16 +57,24 @@ class DefaultRegistry(RegistryStrategy):
         self,
         name: str | None = None,
         module_type: str | None = None,
+        tags: list[str] | None = None,
+        sort_by: RegistrySortBy = RegistrySortBy.UNSPECIFIED,
         limit: int = 20,
         offset: int = 0,
+        *,
+        descending: bool = False,
     ) -> list[ModuleInfo]:
         """Search the module catalog (module blueprints; needs a setup to be invocable).
 
         Args:
             name: Case-insensitive free text matched against module name AND documentation.
             module_type: Filter by type (archetype, tool_module, service).
+            tags: Match modules carrying at least one of these tags (case-insensitive).
+            sort_by: Sort key. Only NAME is ordered here — this store keeps no
+                timestamps, so CREATED_AT/UPDATED_AT fall back to insertion order.
             limit: Max results (1-100).
             offset: Pagination offset.
+            descending: Sort direction, applied when ``sort_by`` is NAME.
 
         Returns:
             List of matching modules.
@@ -80,6 +89,13 @@ class DefaultRegistry(RegistryStrategy):
 
         if module_type:
             results = [m for m in results if m.module_type == module_type]
+
+        if tags:
+            wanted = {t.lower() for t in tags}
+            results = [m for m in results if wanted & {t.lower() for t in m.tags}]
+
+        if sort_by is RegistrySortBy.NAME:
+            results.sort(key=lambda m: m.module_name.lower(), reverse=descending)
 
         return results[offset : offset + limit]
 
@@ -167,7 +183,9 @@ class DefaultRegistry(RegistryStrategy):
             port=module.port,
             version=module.version,
             module_name=module.module_name,
+            documentation=module.documentation,
             status=RegistryModuleStatus.ACTIVE,
+            tags=module.tags,
         )
         return RegistryModuleStatus.ACTIVE
 
@@ -204,7 +222,7 @@ class DefaultRegistry(RegistryStrategy):
         """
         self._setups[setup.setup_id] = setup
 
-    async def search_setups(
+    async def search_setups(  # Filter surface mirrors SearchSetupsRequest 1:1 # noqa: PLR0913
         self,
         query: str | None = None,
         setup_ids: list[str] | None = None,
@@ -212,8 +230,12 @@ class DefaultRegistry(RegistryStrategy):
         module_types: list[RegistryModuleType] | None = None,
         statuses: list[RegistrySetupStatus] | None = None,
         visibilities: list[RegistryVisibility] | None = None,
+        tags: list[str] | None = None,
+        sort_by: RegistrySortBy = RegistrySortBy.UNSPECIFIED,
         limit: int = 20,
         offset: int = 0,
+        *,
+        descending: bool = False,
     ) -> list[SetupSummary]:
         """Search the setup catalog (configured, invocable module instances).
 
@@ -224,8 +246,12 @@ class DefaultRegistry(RegistryStrategy):
             module_types: Filter by backing module type (tool_module, archetype, service).
             statuses: Filter by setup status. None = no filter.
             visibilities: Filter by visibility.
+            tags: Match setups carrying at least one of these tags (case-insensitive).
+            sort_by: Sort key. Only NAME is ordered here — this store keeps no
+                timestamps, so CREATED_AT/UPDATED_AT fall back to insertion order.
             limit: Max results (1-100).
             offset: Pagination offset.
+            descending: Sort direction, applied when ``sort_by`` is NAME.
 
         Returns:
             Matching setups as ``SetupSummary`` (no ``config`` field by construction).
@@ -244,6 +270,11 @@ class DefaultRegistry(RegistryStrategy):
         if query:
             needle = query.lower()
             results = [s for s in results if needle in s.name.lower() or needle in (s.documentation or "").lower()]
+        if tags:
+            wanted = {t.lower() for t in tags}
+            results = [s for s in results if wanted & {t.lower() for t in s.tags}]
+        if sort_by is RegistrySortBy.NAME:
+            results.sort(key=lambda s: s.name.lower(), reverse=descending)
         return [
             SetupSummary(
                 setup_id=s.setup_id,
@@ -257,6 +288,7 @@ class DefaultRegistry(RegistryStrategy):
                 module_type=s.module_type,
                 setup_version_id=s.setup_version_id,
                 setup_version=s.setup_version,
+                tags=s.tags,
             )
             for s in results[offset : offset + limit]
         ]

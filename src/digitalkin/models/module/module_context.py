@@ -1,5 +1,6 @@
 """Define the module context used in the triggers."""
 
+import asyncio
 from collections.abc import AsyncGenerator, Callable
 from datetime import tzinfo
 from types import SimpleNamespace
@@ -8,7 +9,9 @@ from zoneinfo import ZoneInfo
 
 from google.protobuf import json_format
 
+from digitalkin.grpc_servers.exceptions import PermissionDeniedError
 from digitalkin.logger import logger
+from digitalkin.models.module.loaded_tools import LoadedToolStore
 from digitalkin.models.module.request_metadata import RequestMetadata
 from digitalkin.models.module.tool_cache import ToolCache, ToolDefinition, ToolModuleInfo
 from digitalkin.models.settings.module import get_module_settings
@@ -334,7 +337,7 @@ class ModuleContext:
         Returns:
             List of (ToolDefinition, async_generator_function) tuples. Empty if not found.
         """
-        tool_module_info = self.tool_cache.entries.get(slug)
+        tool_module_info = self.tool_cache.get(slug)
         if not tool_module_info:
             return []
 
@@ -355,10 +358,13 @@ class ModuleContext:
         """Resolve a registry ``setup_id`` into a ``ToolModuleInfo`` and cache it.
 
         On-demand loader for a discovered tool. ``registry.get_setup`` always runs
-        first — it is the permission gate, and the tool cache is shared across
-        missions of the same agent setup, so a cache hit must never skip authz.
+        first — it is the permission gate, and the cache's ``declared`` layer is shared
+        across missions of the same agent setup, so a cache hit must never skip authz.
         The cache only short-circuits the module discovery + schema fetch.
         Permission denials propagate so callers can surface them distinctly.
+
+        The result lands in the cache's mission-scoped ``dynamic`` layer. Pair this with
+        :meth:`persist_loaded_tool` to make the load outlive the current turn.
 
         Args:
             setup_id: The registry setup id to load as an invocable tool.
@@ -376,7 +382,7 @@ class ModuleContext:
                 "resolve_tool: setup '%s' not found or has no module", setup_id, extra=self.session.current_ids()
             )
             return None
-        cached = self.tool_cache.entries.get(setup_id)
+        cached = self.tool_cache.get(setup_id)
         if cached is not None:
             logger.debug(
                 "resolve_tool: cache hit for setup '%s' (authz re-checked)", setup_id, extra=self.session.current_ids()
@@ -401,7 +407,10 @@ class ModuleContext:
             )
             return None
         tool_info = await ToolModuleInfo.from_module_info(info, setup_id, setup.name, self.communication)
-        self.tool_cache.add(tool_info)
+        # Mission-scoped layer, never ``declared``: the declared layer is the object the
+        # servicer shares with every other mission of this setup, so writing a runtime
+        # load there makes it reappear in unrelated conversations.
+        self.tool_cache.add_dynamic(tool_info)
         logger.info(
             "resolve_tool: resolved setup '%s' -> module '%s' (%d tools), cached",
             setup_id,
@@ -410,6 +419,81 @@ class ModuleContext:
             extra=self.session.current_ids(),
         )
         return tool_info
+
+    async def persist_loaded_tool(self, setup_id: str) -> bool:
+        """Record a runtime-loaded tool so it survives into this mission's next turn.
+
+        Every user message builds a fresh module instance, so the ``dynamic`` cache layer
+        and the agent's tool list are both rebuilt from scratch. Persisting the id is what
+        turns a load into a property of the *conversation* rather than of the turn.
+
+        Args:
+            setup_id: The loaded tool's registry setup id.
+
+        Returns:
+            ``True`` if the id was persisted; ``False`` if the module never registered the
+            ``loaded_tools`` collection, in which case the load lasts only this turn.
+        """
+        return await LoadedToolStore(self.storage).save(setup_id)
+
+    async def rehydrate_loaded_tools(self) -> int:
+        """Re-resolve this mission's previously-loaded tools into the ``dynamic`` layer.
+
+        Called once per turn from ``BaseModule.prepare()``, before ``initialize()`` builds
+        the agent's toolkits. Ids are re-resolved rather than replayed from a snapshot, so
+        each turn re-checks authorization and picks up schema changes; an id that no longer
+        resolves — revoked, deleted — is dropped from the mission so it is not retried on
+        every subsequent message.
+
+        Returns:
+            The number of tools restored into the dynamic layer.
+        """
+        store = LoadedToolStore(self.storage)
+        setup_ids = [sid for sid in await store.list_setup_ids() if sid not in self.tool_cache.dynamic]
+        if not setup_ids:
+            return 0
+
+        # Resolve concurrently: each id costs a get_setup + discover + schema fetch, and this
+        # sits on the critical path of every user message.
+        results = await asyncio.gather(
+            *(self.resolve_tool(setup_id) for setup_id in setup_ids),
+            return_exceptions=True,
+        )
+
+        restored = 0
+        for setup_id, result in zip(setup_ids, results, strict=True):
+            if isinstance(result, PermissionDeniedError):
+                logger.warning(
+                    "rehydrate_loaded_tools: access to '%s' was revoked; dropping it from the mission",
+                    setup_id,
+                    extra=self.session.current_ids(),
+                )
+                await store.forget(setup_id)
+            elif isinstance(result, BaseException):
+                # Transient (registry hiccup): keep the id so a later turn can retry.
+                logger.warning(
+                    "rehydrate_loaded_tools: could not restore '%s': %s",
+                    setup_id,
+                    result,
+                    extra=self.session.current_ids(),
+                )
+            elif result is None:
+                logger.warning(
+                    "rehydrate_loaded_tools: '%s' no longer exists; dropping it from the mission",
+                    setup_id,
+                    extra=self.session.current_ids(),
+                )
+                await store.forget(setup_id)
+            else:
+                restored += 1
+
+        logger.info(
+            "rehydrate_loaded_tools: restored %d/%d loaded tool(s)",
+            restored,
+            len(setup_ids),
+            extra=self.session.current_ids(),
+        )
+        return restored
 
     @staticmethod
     def _create_single_tool_function(

@@ -17,7 +17,7 @@ from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
 from digitalkin.logger import logger
 from digitalkin.models.grpc_servers.models import ClientConfig
 from digitalkin.services.setup.exceptions import SetupServiceError
-from digitalkin.services.setup.setup_strategy import SetupData, SetupStrategy
+from digitalkin.services.setup.setup_strategy import SetupData, SetupStrategy, SetupVersionData, SetupVersionPage
 from digitalkin.utils.proto_utils import ProtoUtils
 
 
@@ -194,7 +194,8 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
         """Update a setup's name and current version content.
 
         Args:
-            setup_dict: Dictionary with 'setup_id', 'name' and 'content'.
+            setup_dict: Dictionary with 'setup_id', 'name', 'content' and optional
+                'set_as_current' (defaults to True).
 
         Returns:
             The updated setup with its current version.
@@ -214,10 +215,13 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
         async with self.handle_grpc_errors("Setup Update"):
             content_struct = Struct()
             content_struct.update(setup_dict["content"])
+            # UpdateSetup cuts a new version rather than editing in place; without
+            # set_as_current the setup would keep serving the old content.
             request = setup_pb2.UpdateSetupRequest(
                 setup_id=setup_dict["setup_id"],
                 name=setup_dict["name"],
                 content=content_struct,
+                set_as_current=bool(setup_dict.get("set_as_current", True)),
             )
             response = await self.exec_grpc_query("UpdateSetup", request)
             if not response.success:
@@ -281,4 +285,69 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
                 msg = f"visibility change refused for '{setup_id}'"
                 raise SetupServiceError(msg)
             logger.debug("Setup '%s' visibility changed to %s", setup_id, scope)
+            return self._to_setup_data(response.setup, response.setup_version)
+
+    async def list_setup_versions(self, setup_dict: dict[str, Any]) -> SetupVersionPage:
+        """List a setup's versions, most recent first.
+
+        Args:
+            setup_dict: Dictionary with 'setup_id' and optional 'limit' / 'offset'.
+
+        Returns:
+            The requested page, its total count and the currently active version id.
+
+        Raises:
+            ValueError: If the setup_id is missing.
+            ServerError: If gRPC operation fails.
+            SetupServiceError: For any unexpected internal error.
+        """
+        setup_id = setup_dict.get("setup_id")
+        if not setup_id:
+            msg = "setup_id is required"
+            raise ValueError(msg)
+        async with self.handle_grpc_errors("List Setup Versions"):
+            # The proto floors limit at 1, so an unset/zero limit would be rejected outright.
+            request = setup_pb2.ListSetupVersionsRequest(
+                setup_id=setup_id,
+                limit=int(setup_dict.get("limit") or 20),
+                offset=int(setup_dict.get("offset") or 0),
+            )
+            response = await self.exec_grpc_query("ListSetupVersions", request)
+            return SetupVersionPage(
+                setup_versions=[
+                    SetupVersionData(**ProtoUtils.proto_to_dict(v, with_defaults=True)) for v in response.setup_versions
+                ],
+                total_count=response.total_count,
+                current_setup_version_id=response.current_setup_version_id,
+            )
+
+    async def set_current_setup_version(self, setup_dict: dict[str, Any]) -> SetupData:
+        """Activate an existing version of a setup, making it the current one.
+
+        Args:
+            setup_dict: Dictionary with 'setup_id' and 'setup_version_id'.
+
+        Returns:
+            The setup with its newly activated version.
+
+        Raises:
+            ValueError: If setup_id or setup_version_id is missing.
+            ServerError: If gRPC operation fails.
+            SetupServiceError: If the server reports failure or an unexpected error occurs.
+        """
+        setup_id = setup_dict.get("setup_id")
+        setup_version_id = setup_dict.get("setup_version_id")
+        if not setup_id or not setup_version_id:
+            msg = "setup_id and setup_version_id are required"
+            raise ValueError(msg)
+        async with self.handle_grpc_errors("Set Current Setup Version"):
+            request = setup_pb2.SetCurrentSetupVersionRequest(
+                setup_id=setup_id,
+                setup_version_id=setup_version_id,
+            )
+            response = await self.exec_grpc_query("SetCurrentSetupVersion", request)
+            if not response.success:
+                msg = f"version activation refused for '{setup_id}'"
+                raise SetupServiceError(msg)
+            logger.debug("Setup '%s' now on version %s", setup_id, setup_version_id)
             return self._to_setup_data(response.setup, response.setup_version)

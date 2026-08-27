@@ -78,6 +78,62 @@ class LoadToolAction(LoadAction):
     action: Literal["tool"] = "tool"
     setup_id: str = Field(..., description="The tool's setup id (from a tools_manager search/get) to load.")
 
+    async def _duplicate_outcome(self, ctx: LoadActionCtx, module_id: str) -> LoadOutcome | None:
+        """Resolve the two "already there" cases, or ``None`` if this is a genuinely new load.
+
+        Runs BEFORE ``resolve_tool``: ``module_id`` is already known from the registry lookup, so
+        a repeat load costs no schema fetch. Reads ``base_tools`` — what is callable right now —
+        which after rehydration also covers a tool loaded on an earlier turn of this mission.
+
+        Args:
+            ctx: The load context carrying the live tool list and the module context.
+            module_id: The requested setup's module, from the registry lookup.
+
+        Returns:
+            An ``already_loaded`` success, a conflict failure, or ``None`` to continue loading.
+        """
+        # Imported here, not at module top: ModuleToolkit requires the optional agno dependency at
+        # import time, while this module must stay importable without it (same convention as the
+        # rest of community.agno).
+        from digitalkin.community.agno.module_toolkit import ModuleToolkit
+
+        loaded = [tool for tool in ctx.base_tools if isinstance(tool, ModuleToolkit)]
+        existing = next((tool for tool in loaded if tool.tool_module_info.setup_id == self.setup_id), None)
+        if existing is not None:
+            # Re-persist rather than just report: the id is only durable if an earlier turn's write
+            # actually landed, and that write is fail-soft. Without this, one failed persist makes
+            # the tool re-loadable forever but never durable — the model keeps getting "already
+            # loaded" and the record never appears. The upsert is a no-op when it did land.
+            # Setup-declared tools are excluded: they need no mission record.
+            if self.setup_id not in ctx.context.tool_cache.declared:
+                await ctx.context.persist_loaded_tool(self.setup_id)
+            info = existing.tool_module_info
+            name = info.tool_name or info.module_name or info.slug
+            # Name the callable functions (they ARE callable right now) so an already-loaded result
+            # is as verifiable as a fresh load, instead of an empty list reading as "nothing to call".
+            callable_names = sorted({*existing.functions, *existing.async_functions})
+            listed = f" You can now call: {', '.join(callable_names)}." if callable_names else ""
+            return LoadOutcome(
+                ok=True,
+                status="already_loaded",
+                tool_name=name,
+                loaded_functions=callable_names,
+                message=f"'{name}' is already loaded; call it directly.{listed}",
+            )
+        # A *different* setup of an already-loaded module cannot rebind — the live binding wins
+        # server-side, so appending it would only add duplicate tool names and confirm a change that
+        # never takes effect. Refuse explicitly instead of lying.
+        conflict = next((tool for tool in loaded if tool.tool_module_info.module_id == module_id), None)
+        if conflict is not None:
+            return LoadOutcome(
+                ok=False,
+                message=(
+                    f"could not load setup {self.setup_id}: its tool module is already loaded via setup "
+                    f"{conflict.tool_module_info.setup_id}, whose configuration stays in effect"
+                ),
+            )
+        return None
+
     async def execute(self, ctx: LoadActionCtx) -> LoadOutcome:  # noqa: C901, PLR0911 — each return is a distinct, LLM-readable outcome
         """Resolve the setup into a ModuleToolkit and append it to the live tool list.
 
@@ -125,7 +181,11 @@ class LoadToolAction(LoadAction):
                 ),
             )
 
-        # Confirmed tool module — resolve it into a callable toolkit.
+        duplicate = await self._duplicate_outcome(ctx, setup.module_id)
+        if duplicate is not None:
+            return duplicate
+
+        # Confirmed tool module, not already loaded — resolve it into a callable toolkit.
         try:
             info = await ctx.context.resolve_tool(self.setup_id)
         except PermissionDeniedError:
@@ -140,42 +200,15 @@ class LoadToolAction(LoadAction):
                 ok=False, message=f"could not load setup {self.setup_id}: this tool module exposes no callable tools"
             )
 
-        # Imported here, not at module top: ModuleToolkit requires the optional agno dependency at
-        # import time, while this module must stay importable without it (same convention as the
-        # rest of community.agno).
         from digitalkin.community.agno.module_toolkit import ModuleToolkit
 
         name = info.tool_name or info.module_name or info.slug
-        loaded = [tool for tool in ctx.base_tools if isinstance(tool, ModuleToolkit)]
-        # Idempotent: re-loading the exact same setup is a no-op success. Still name the callable
-        # functions (they ARE callable right now) so an already-loaded result is as verifiable as a
-        # fresh load, instead of an empty ``loaded_functions`` that reads as "nothing to call".
-        existing = next((tool for tool in loaded if tool.tool_module_info.setup_id == self.setup_id), None)
-        if existing is not None:
-            callable_names = sorted({*existing.functions, *existing.async_functions})
-            listed = f" You can now call: {', '.join(callable_names)}." if callable_names else ""
-            return LoadOutcome(
-                ok=True,
-                status="already_loaded",
-                tool_name=name,
-                loaded_functions=callable_names,
-                message=f"'{name}' is already loaded; call it directly.{listed}",
-            )
-        # A *different* setup of an already-loaded module cannot rebind — the live binding wins
-        # server-side, so appending it would only add duplicate tool names and confirm a change that
-        # never takes effect. Refuse explicitly instead of lying.
-        conflict = next((tool for tool in loaded if tool.tool_module_info.module_id == info.module_id), None)
-        if conflict is not None:
-            return LoadOutcome(
-                ok=False,
-                message=(
-                    f"could not load setup {self.setup_id}: its tool module is already loaded via setup "
-                    f"{conflict.tool_module_info.setup_id}, whose configuration stays in effect"
-                ),
-            )
-
         toolkit = ModuleToolkit(ctx.context, info)
         ctx.base_tools.append(toolkit)
+        # Persist the id so the load outlives this turn. ``resolve_tool`` only reached the
+        # mission-scoped ``dynamic`` cache layer, which is rebuilt from scratch on the next
+        # user message; without this the tool would have to be re-loaded every turn.
+        await ctx.context.persist_loaded_tool(self.setup_id)
         await ctx.notify("tool_loaded", {"setup_id": self.setup_id, "tool_name": name})
         # Name the now-callable functions so the model can verify and call them directly.
         callable_names = sorted({*toolkit.functions, *toolkit.async_functions})

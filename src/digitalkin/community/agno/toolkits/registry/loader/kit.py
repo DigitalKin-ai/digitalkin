@@ -94,7 +94,8 @@ class LoadManager(DkToolkit):
         action, no change here.
 
         Args:
-            tool_args: The raw tool arguments from the paused call (``{"action": {...}}``).
+            tool_args: The raw tool arguments from the paused call (``{"action": {...}}``, or the
+                flattened ``{"action": "tool", "setup_id": ...}`` some models send instead).
 
         Returns:
             The canonical ``{output|error, metadata}`` envelope the runner writes back as the
@@ -103,7 +104,8 @@ class LoadManager(DkToolkit):
         if self._ctx is None or self._base_tools is None:
             return self._fail("tool loading is unavailable in this context", tool="load")
         try:
-            action = TypeAdapter(LoadActions).validate_python(tool_args.get("action"))
+            payload = self._nest_action(tool_args.get("action"), {k: v for k, v in tool_args.items() if k != "action"})
+            action = TypeAdapter(LoadActions).validate_python(payload)
         except ValidationError:
             # Name the accepted action tags (like the CRUD managers do) so a caller that sent an
             # out-of-union action — e.g. 'service' — can self-correct, instead of getting an opaque
