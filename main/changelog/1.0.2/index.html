@@ -1,0 +1,2150 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="A modular framework for building AI agents with gRPC servers and flexible service strategies">
+      
+      
+      
+        <link rel="canonical" href="https://digitalkin.com/main/changelog/1.0.2/">
+      
+      
+        <link rel="prev" href="../1.0.2.dev7/">
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/logo.png">
+      <meta name="generator" content="mkdocs-ProperDocs 1.6.7, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>dev → 1.0.2 — Registry Toolkit Managers, Setup CRUD & Storage/Filesystem Scopes - DigitalKin</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/_markdown_exec_pyodide.css">
+    
+      <link rel="stylesheet" href="../../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#dev-102-registry-toolkit-managers-setup-crud-storagefilesystem-scopes" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="DigitalKin" class="md-header__button md-logo" aria-label="DigitalKin" data-md-component="logo">
+      
+  <img src="../../assets/logo.png" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            DigitalKin
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              dev → 1.0.2 — Registry Toolkit Managers, Setup CRUD &amp; Storage/Filesystem Scopes
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m14.3 16-.7-2h-3.2l-.7 2H7.8L11 7h2l3.2 9zM20 8.69V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12zm-9.15 3.96h2.3L12 9z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="teal" data-md-color-accent="purple"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_2" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="black" data-md-color-accent="lime"  aria-label="Switch to system preference"  type="radio" name="__palette" id="__palette_2">
+    
+      <label class="md-header__button md-icon" title="Switch to system preference" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/DigitalKin-ai/digitalkin" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    DigitalKin-ai/digitalkin
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+    
+      
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  DigitalKin Python SDK
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../architecture_presentation/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  DigitalKin SDK v1.0.0
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../gateway_protocol/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Gateway Protocol
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../getting_started/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Getting Started
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../grpc-tuning/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  gRPC &amp; Concurrency Tuning Guide
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../guides/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Guides
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../next_steps/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Next Steps — Production Readiness Roadmap
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../sdk_redis_platform_talk/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Sdk redis platform talk
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../sdk_redis_platform_talk_nontech/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Sdk redis platform talk nontech
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../security_hardening_plan/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Security Hardening Plan — Gateway Architecture
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../session_report/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Session Report — Gateway + Redis Architecture
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../testing_strategy/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Testing Strategy — Gateway + Redis Architecture (20K Concurrent)
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../api/api/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Api
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../architecture/admission-queue/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Architecture
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    <li class="md-tabs__item md-tabs__item--active">
+      <a href="../0.3.4_to_0.3.5.dev0/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Changelog
+
+      </a>
+    </li>
+  
+
+      
+    </ul>
+  </div>
+</nav>
+    
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="DigitalKin" class="md-nav__button md-logo" aria-label="DigitalKin" data-md-component="logo">
+      
+  <img src="../../assets/logo.png" alt="logo">
+
+    </a>
+    DigitalKin
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/DigitalKin-ai/digitalkin" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    DigitalKin-ai/digitalkin
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    DigitalKin Python SDK
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture_presentation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    DigitalKin SDK v1.0.0
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../gateway_protocol/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Gateway Protocol
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting_started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../grpc-tuning/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    gRPC &amp; Concurrency Tuning Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guides
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../next_steps/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Next Steps — Production Readiness Roadmap
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../sdk_redis_platform_talk/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Sdk redis platform talk
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../sdk_redis_platform_talk_nontech/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Sdk redis platform talk nontech
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../security_hardening_plan/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Security Hardening Plan — Gateway Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../session_report/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Session Report — Gateway + Redis Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../testing_strategy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Testing Strategy — Gateway + Redis Architecture (20K Concurrent)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_13" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../api/api/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Api
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_13" id="__nav_13_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_13_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_13">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Api
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../api/dynamic_schema/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Dynamic Schema
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_14" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../architecture/admission-queue/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_14" id="__nav_14_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_14_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_14">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/concurrency-model/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Concurrency Model
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/resilience/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Retry &amp; Fault Tolerance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/sdk-flow/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    SDK Flow: Server to Module Execution
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_15" checked>
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../0.3.4_to_0.3.5.dev0/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Changelog
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_15" id="__nav_15_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_15_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_15">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Changelog
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../0.3.5_to_0.4.0/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    0.3.5 to 0.4.0
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../0.4.1/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    0.4.0 → 0.4.1 — AG-UI Frontend Tools (HITL)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../0.4.2/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    0.4.1 → 0.4.2 — Front-end Tools &amp; Custom AG-UI Events
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../0.4.3/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    0.4.2 → 0.4.3 — Live Tool-module Schema Refetching
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../0.4.4/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    0.4.3 → 0.4.4 — Tool-trigger Filtering Fix (DEV-631)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../1.0.2.dev6/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    1.0.2.dev5 → 1.0.2.dev6 — Record Visibility &amp; Context Scopes (incl. cross-owner USERS / ORGANIZATIONS)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../1.0.2.dev7/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    1.0.2.dev6 → 1.0.2.dev7 — Filesystem Context Scopes (mission/setup/user/organization)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    dev → 1.0.2 — Registry Toolkit Managers, Setup CRUD &amp; Storage/Filesystem Scopes
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    dev → 1.0.2 — Registry Toolkit Managers, Setup CRUD &amp; Storage/Filesystem Scopes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Summary
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#added" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Added">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#registry-toolkit-four-agent-facing-managers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Registry Toolkit — four agent-facing managers
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#content-validation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Content validation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#supporting-agno-toolkits-tool-loading" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Supporting Agno toolkits &amp; tool loading
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#services-models-settings" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Services, models &amp; settings
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#module-context" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Module &amp; context
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#changed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#fixed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#removed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Removed
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tests
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Summary
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#added" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Added
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Added">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#registry-toolkit-four-agent-facing-managers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Registry Toolkit — four agent-facing managers
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#content-validation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Content validation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#supporting-agno-toolkits-tool-loading" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Supporting Agno toolkits &amp; tool loading
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#services-models-settings" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Services, models &amp; settings
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#module-context" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Module &amp; context
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#changed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changed
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#fixed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fixed
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#removed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Removed
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tests
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+                
+
+
+
+  
+
+
+  <nav class="md-path" aria-label="Navigation" >
+    <ol class="md-path__list">
+      
+        
+  
+  
+    <li class="md-path__item">
+      <a href="../.." class="md-path__link">
+        
+  <span class="md-ellipsis">
+    DigitalKin Python SDK
+  </span>
+
+      </a>
+    </li>
+  
+
+      
+      
+        
+  
+  
+    
+    
+      <li class="md-path__item">
+        <a href="../0.3.5_to_0.4.0/" class="md-path__link">
+          
+  <span class="md-ellipsis">
+    Changelog
+  </span>
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ol>
+  </nav>
+
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+    <a href="https://github.com/DigitalKin-ai/digitalkin/edit/main/docs/changelog/1.0.2.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+    
+      
+    
+    <a href="https://github.com/DigitalKin-ai/digitalkin/raw/main/docs/changelog/1.0.2.md" title="View source of this page" class="md-content__button md-icon">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M17 18c.56 0 1 .44 1 1s-.44 1-1 1-1-.44-1-1 .44-1 1-1m0-3c-2.73 0-5.06 1.66-6 4 .94 2.34 3.27 4 6 4s5.06-1.66 6-4c-.94-2.34-3.27-4-6-4m0 6.5a2.5 2.5 0 0 1-2.5-2.5 2.5 2.5 0 0 1 2.5-2.5 2.5 2.5 0 0 1 2.5 2.5 2.5 2.5 0 0 1-2.5 2.5M9.27 20H6V4h7v5h5v4.07c.7.08 1.36.25 2 .49V8l-6-6H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h4.5a8.2 8.2 0 0 1-1.23-2"/></svg>
+    </a>
+  
+
+
+<h1 id="dev-102-registry-toolkit-managers-setup-crud-storagefilesystem-scopes"><code>dev</code> → 1.0.2 — Registry Toolkit Managers, Setup CRUD &amp; Storage/Filesystem Scopes<a class="headerlink" href="#dev-102-registry-toolkit-managers-setup-crud-storagefilesystem-scopes" title="Permanent link">¤</a></h1>
+<h2 id="summary">Summary<a class="headerlink" href="#summary" title="Permanent link">¤</a></h2>
+<p>This release aggregates everything on the branch relative to <code>dev</code>. The headline is the <strong>Registry Toolkit</strong>: four
+agent-facing Agno tools (<code>services_manager</code>, <code>kins_manager</code>, <code>tools_manager</code>, <code>load_manager</code>) that collapse the many
+individual registry tools into <strong>four entrypoints</strong>, each driven by a single discriminated-union <code>action</code> argument.
+Around it, the <strong>setup service</strong> was narrowed to setup-level CRUD + visibility (the version lifecycle is now
+platform-owned), the <strong>storage</strong> and <strong>filesystem</strong> services gained record visibility and context scopes (including the
+read-only cross-owner <code>USERS</code> / <code>ORGANIZATIONS</code> scopes, detailed in the <code>1.0.2.dev6</code> / <code>1.0.2.dev7</code> notes), and a set of
+supporting toolkits, content validation, and framework plumbing landed.</p>
+<blockquote>
+<p>Breaking changes are marked <strong>(breaking)</strong>. Storage/filesystem specifics are covered in <code>docs/changelog/1.0.2.dev6.md</code>
+and <code>docs/changelog/1.0.2.dev7.md</code>; they are summarised here for completeness.</p>
+</blockquote>
+<hr />
+<h2 id="added">Added<a class="headerlink" href="#added" title="Permanent link">¤</a></h2>
+<h3 id="registry-toolkit-four-agent-facing-managers">Registry Toolkit — four agent-facing managers<a class="headerlink" href="#registry-toolkit-four-agent-facing-managers" title="Permanent link">¤</a></h3>
+<p>A new surface under <code>src/digitalkin/community/agno/toolkits/registry/</code>. Each manager is one Agno tool taking one
+discriminated <code>action</code>; the union is the tool's LLM schema, and a malformed action comes back as a clean fail envelope
+the model self-corrects from (never a raised traceback).</p>
+<ul>
+<li><strong><code>services_manager</code></strong> (<code>ServicesManager</code>, SERVICE setups) — <code>get</code>, <code>create</code> (shareable service from name + config
+  JSON), <code>search</code>, <code>load</code> (returns the service's stored config content), <code>update</code>, <code>delete</code>, <code>change_visibility</code>.</li>
+<li><strong><code>kins_manager</code></strong> (<code>KinsManager</code>, ARCHETYPE setups) — <code>get</code>, <code>search</code>, <code>update</code>, <code>delete</code>, <code>change_visibility</code>.</li>
+<li><strong><code>tools_manager</code></strong> (<code>ToolsManager</code>, TOOL_MODULE setups) — <code>get</code>, <code>search</code>, <code>update</code>, <code>delete</code>, <code>change_visibility</code>;
+  it administers tool setups only and never makes a tool callable (no <code>create</code>).</li>
+<li><strong><code>load_manager</code></strong> (<code>LoadManager</code>) — an <strong>external-execution</strong> tool (<code>tool</code> action) that resolves a discovered tool
+  setup into a live <code>ModuleToolkit</code> and appends it to the agent's tool list, making it callable <strong>in the same turn</strong>.
+  Idempotent per <code>setup_id</code>, with distinct not-found / wrong-family / already-loaded / rebind-conflict messages.</li>
+</ul>
+<p><strong>Shared plumbing</strong> (<code>registry/base.py</code>, <code>registry/action.py</code>):</p>
+<ul>
+<li><code>RegistryObjectToolKit</code> (a <code>DkToolkit</code>) carrying the <code>RegistryActionCtx</code> action context, the <code>ensure_kind</code> <strong>type
+  guard</strong> that refuses cross-type access (e.g. <code>kins_manager</code> reading a tool, or a mutation on the wrong kind / a
+  deleted id), a fail-safe <code>_guard</code>/<code>_dispatch</code> envelope, best-effort setup-cache invalidation after writes, and
+  <code>_jsonable</code> normalisation that echoes <code>visibility</code> back in caller vocabulary (<code>VISIBILITY_INTERNAL</code> → <code>internal</code>).</li>
+<li>Tools register with <code>skip_entrypoint_processing</code> + an explicit schema, so args are validated in <code>_run</code> via a
+  <code>TypeAdapter</code> (including models that serialise the nested <code>action</code> as a JSON string).</li>
+<li>Shared actions <code>GetAction</code> / <code>SearchAction</code> / <code>UpdateAction</code> / <code>DeleteAction</code> / <code>ChangeVisibilityAction</code>.
+  <code>search</code> is semantic (nearest-match, capped at 25): it <strong>drops versionless (non-instantiable) rows</strong>, and its
+  <code>truncated</code> flag is a genuine next-page signal read on the rendered page (reads <code>limit + 1</code>, so a full page of exactly
+  <code>limit</code> rows is not falsely reported as truncated). Content-bearing actions run a <code>name</code> control-char validator and an
+  unsafe-content-key validator.</li>
+</ul>
+<h3 id="content-validation">Content validation<a class="headerlink" href="#content-validation" title="Permanent link">¤</a></h3>
+<ul>
+<li><strong><code>SetupContentValidator</code></strong> (<code>src/digitalkin/utils/setup_content_validator.py</code>) — validates a setup's <code>content</code>
+  against the backing module's config JSON schema before a create/update by compiling a throwaway <strong>strict</strong> Pydantic
+  model: resolves <code>$ref</code>/<code>$defs</code> (cycle-breaking), nests objects, types array elements and <code>additionalProperties</code> maps,
+  closes <code>enum</code>/<code>const</code> to <code>Literal</code>, honours nullability, forbids undeclared keys unless opted in, and enforces
+  numeric/string/array/object constraints. Plus <code>reject_control_chars</code> (C0 control chars in strings) and
+  <code>reject_unsafe_keys</code> (recursively rejects content keys carrying non-BMP/control characters that storage would silently
+  drop).</li>
+</ul>
+<h3 id="supporting-agno-toolkits-tool-loading">Supporting Agno toolkits &amp; tool loading<a class="headerlink" href="#supporting-agno-toolkits-tool-loading" title="Permanent link">¤</a></h3>
+<ul>
+<li><strong><code>DkToolkit</code></strong> (<code>toolkits/base.py</code>) — shared base for all DigitalKin Agno toolkits: the canonical
+  <code>{"output"|"error", "metadata"}</code> JSON envelope (<code>_ok</code>/<code>_fail</code>) and best-effort AG-UI custom-event emission
+  (<code>_notify</code>); toolkits never raise into the agent loop.</li>
+<li><strong><code>ChatHistoryTools</code></strong> (<code>toolkits/chat_history.py</code>) — a token-cheap two-step chat-history surface replacing Agno's
+  full-dump <code>get_chat_history</code>: <code>outline_chat_history</code> (metadata-only index with role/preview/size + paging) then
+  <code>read_chat_messages</code> (full content by id, with truncation and media as references).</li>
+<li><strong><code>UserProfileTools</code></strong> (<code>toolkits/user_profile.py</code>) — <code>get_user_profile</code> exposing the current user's
+  name/email/plan/credits, lazily fetched and cached.</li>
+<li><strong><code>DefaultToolkits</code></strong> (<code>toolkits/defaults.py</code>) — a one-call <code>build()</code> assembling the default toolkits (chat history,
+  user profile, the three registry managers when <code>context.setup</code> is wired, and <code>LoadManager</code> bound to the live tool
+  list) with <code>bind_host()</code> for two-phase agent construction.</li>
+<li><strong><code>ModuleToolkit</code></strong> (<code>module_toolkit.py</code>) — an Agno Toolkit wrapping a remote SDK tool module's tools over gRPC:
+  explicit-schema functions, SDK sentinel-protocol parsing, multimodal image extraction into <code>ToolResult.images</code>, AG-UI
+  event relay, timeouts, and per-call cost/timing metadata.</li>
+<li><strong><code>ToolCallMetadata</code> / <code>ToolOutputMetadata</code></strong> (<code>community/agno/models.py</code>) — cost/timing metadata models for module
+  tool calls (response time, API calls, cost estimate, credits, result counts) with serialisers and
+  <code>extract_tool_metadata</code>; both exported from <code>community.agno</code>.</li>
+</ul>
+<h3 id="services-models-settings">Services, models &amp; settings<a class="headerlink" href="#services-models-settings" title="Permanent link">¤</a></h3>
+<ul>
+<li><code>RegistryStrategy.search_setups(query, setup_ids, module_ids, module_types, statuses, visibilities, limit, offset)</code>
+  returning <code>SetupSummary</code> (a search-safe view that never carries <code>config</code>); implemented in <code>DefaultRegistry</code>
+  (in-memory) and <code>GrpcRegistry</code> (new <code>SearchSetups</code> RPC). Plus <code>search_tools</code> / <code>search_kins</code> / <code>search_services</code>
+  convenience views and <code>get_service_setup(setup_id)</code>.</li>
+<li><code>SetupStrategy.change_visibility(setup_dict)</code> (<code>public</code>/<code>private</code>/<code>internal</code>) and the <code>create_service_setup(name,
+  content)</code> convenience wrapper, both returning <code>SetupData</code>.</li>
+<li><code>SetupData</code> gains <code>status: RegistrySetupStatus</code> and <code>visibility: Visibility</code> (default <code>UNSPECIFIED</code>, coerced from
+  proto enum names). <code>StorageRecord</code> gains <code>visibility: Visibility</code>.</li>
+<li>New <code>SetupSummary</code> model; <code>RegistryModuleType.SERVICE</code> member; <code>SetupInfo.module_name</code> / <code>SetupInfo.module_type</code>.</li>
+<li>New <code>services.Context</code> enum (filesystem scopes) and <code>storage.Visibility</code> enum (<code>UNSPECIFIED</code>/<code>PUBLIC</code>/<code>PRIVATE</code>/
+  <code>INTERNAL</code>), with read-only cross-owner <code>USERS</code> / <code>ORGANIZATIONS</code> scopes.</li>
+<li><code>StreamErrorCode.SETUP_VALIDATION_ERROR</code>.</li>
+<li>New <code>models/settings/registry.py</code>: <code>RegistrySettings</code> (<code>search_timeout_s</code> default 10.0, env prefix
+  <code>DIGITALKIN_REGISTRY_</code>) with a cached <code>get_registry_settings()</code> singleton.</li>
+</ul>
+<h3 id="module-context">Module &amp; context<a class="headerlink" href="#module-context" title="Permanent link">¤</a></h3>
+<ul>
+<li><code>ModuleContext.resolve_tool(setup_id)</code> — resolves a registry setup id into a <code>ToolModuleInfo</code> and caches it, while
+  re-running <code>registry.get_setup</code> authorization on every call (even cache hits).</li>
+<li><code>ModuleContext.get_module_config_schema(module_id, *, llm_format=False)</code> — fetches a module's config-setup JSON schema
+  (used to validate <code>content</code> before create/update).</li>
+<li><code>ModuleContext.setup</code> — a new borrowed <code>SetupStrategy | None</code> field/param, letting setup-CRUD toolkits reach the
+  servicer's shared setup service.</li>
+<li><code>BaseModule.build_registry_documentation()</code> — assembles registry docs from the author description plus a markdown
+  non-utility trigger table; <code>BaseModule.registry_type</code> ClassVar (default <code>UNSPECIFIED</code>), overridden to <code>ARCHETYPE</code> on
+  <code>ArchetypeModule</code> and <code>TOOL_MODULE</code> on <code>ToolModule</code>.</li>
+<li><code>preload_instance</code> (base + <code>SingleJobManager</code>) gains <code>setup</code> and <code>invalidate_setup</code> params, wired onto
+  <code>context.setup</code> and <code>context.callbacks.invalidate_setup</code> before <code>prepare()</code>.</li>
+</ul>
+<hr />
+<h2 id="changed">Changed<a class="headerlink" href="#changed" title="Permanent link">¤</a></h2>
+<ul>
+<li><strong>(breaking)</strong> <code>RegistryModuleType.TOOL = "tool"</code> renamed to <code>TOOL_MODULE = "tool_module"</code> to mirror the proto
+  <code>ModuleType</code> names.</li>
+<li><strong>(breaking)</strong> Setup service narrowed to setup-level CRUD + visibility: <code>create_setup</code> returns <code>SetupData</code> (was <code>str</code>)
+  and takes <code>{name, content}</code> (owner/org/module resolved server-side); <code>get_setup</code> is keyed by <code>setup_id</code> (was name) and
+  returns the current version populated; <code>update_setup</code> returns <code>SetupData</code> (was <code>bool</code>) and takes
+  <code>{setup_id, name, content}</code>. <code>DefaultSetup</code> is now a pure in-memory store; <code>GrpcSetup</code> input-guard failures raise
+  <code>ValueError</code> (was <code>ValidationError</code>).</li>
+<li><strong>(breaking)</strong> Storage: the <code>scope: Literal["mission","setup"]</code> argument became <code>context: Context</code> (default
+  <code>MISSIONS</code>) across <code>store</code>/<code>read</code>/<code>update</code>/<code>remove</code>/<code>list</code>/<code>remove_collection</code>/<code>upsert</code>, and <code>data_type</code> became the
+  <code>DataType</code> enum (was a string). See <code>1.0.2.dev6</code>.</li>
+<li><strong>(breaking)</strong> Filesystem: <code>get_file</code> / <code>get_files</code> (<code>FileFilter</code>) take <code>context: Context</code> (was a <code>"mission"</code>/
+  <code>"setup"</code>
+  string); writes stay mission-scoped. See <code>1.0.2.dev7</code>.</li>
+<li><code>RegistryStrategy.search()</code> dropped <code>organization_id</code>, added <code>limit</code>/<code>offset</code> pagination, and now matches module name
+  <strong>and</strong> documentation (case-insensitive); the gRPC path moved <code>DiscoverModules</code> → <code>SearchModules</code> and honours the
+  tightened <code>search_timeout_s</code> deadline.</li>
+<li><code>RegistryStrategy.register()</code> gains <code>module_type</code> and <code>documentation</code> params; <code>ModuleServer</code> registration now sends
+  the module's <code>registry_type</code> and <code>build_registry_documentation()</code> output.</li>
+<li><code>GrpcRegistry</code> re-raises <code>PermissionDeniedError</code> unwrapped across its RPCs and fail-closes enum encoding
+  (<code>_encode_enum</code>
+  raises on Python/proto drift rather than silently dropping a filter).</li>
+<li><code>GrpcStorage</code> / <code>GrpcFilesystem</code> now send a context- <strong>kind</strong> wire enum (server resolves the concrete id from request
+  metadata) and map <code>Visibility</code> to the wire enum; <code>visibility</code> is forwarded on writes and <code>visibilities</code> on list.</li>
+<li><code>AgnoStreamAdapter</code> suffixes manager tool-call display names with the resolved action (e.g. <code>services_manager</code> →
+  <code>services_manager_create</code>, <code>load_manager</code> → <code>load_manager_tool</code>) so the front can tell collapsed operations apart
+  (cosmetic; LLM function name and HITL matching unchanged).</li>
+<li><code>AgnoHitlRunner</code> resolves <code>load_manager</code> pauses in-process and auto-continues the run (bounded to 20 iterations), so
+  discover → load → use reads as a single turn; it only surfaces a pause when a genuine frontend tool remains, and emits
+  a <code>RunErrorEvent</code> (<code>auto_continue_limit</code>) on exceeding the bound.</li>
+<li><code>BaseModule.description</code> is now optional (defaults to <code>""</code>).</li>
+<li><code>ModuleServicer</code> tool-cache methods gained hit/set/expire/build/invalidate logging.</li>
+</ul>
+<hr />
+<h2 id="fixed">Fixed<a class="headerlink" href="#fixed" title="Permanent link">¤</a></h2>
+<ul>
+<li><code>ModuleContext._create_single_tool_function</code>: a fatal <code>stream.error</code> frame (e.g. <code>SETUP_ACCESS_DENIED</code>) in a tool-call
+  stream now raises <code>ToolCallError</code> (new, in <code>communication/exceptions.py</code>) instead of yielding as a benign result, so a
+  denied sub-call aborts the parent run.</li>
+<li><code>ModuleRunner</code> wraps setup resolve / model-build / tool-cache in a <code>ValidationError</code> guard that emits
+  <code>SETUP_VALIDATION_ERROR</code> via <code>on_fatal</code> (with a missing-fields summary) rather than crashing the run.</li>
+<li><code>ToolReference.resolve_tool</code> returns <code>None</code> (dropping the selection) when no enabled trigger matches, instead of
+  caching a <code>ToolModuleInfo</code> with empty <code>tools</code>.</li>
+<li>Enum robustness: <code>ModuleInfo</code> normalizes legacy <code>module_type</code> (<code>"tool"</code>→<code>tool_module</code>, <code>"kin"</code>→<code>archetype</code>);
+  <code>RegistrySetupStatus._missing_</code> / <code>Visibility._missing_</code> coerce proto/any-case names and fall back to <code>UNSPECIFIED</code>,
+  so reads never crash on unknown states.</li>
+<li><code>GrpcStorage</code> <code>ListRecords</code>/<code>ReadRecord</code> log-and-skip a foreign-shaped record that fails validation instead of failing
+  the whole call.</li>
+<li><code>PausedRunStore.collect_pending</code> skips tool calls already resolved in-process, so a <code>load_manager</code> call handled by the
+  runner no longer leaks to the front as an unimplementable frontend tool; on auto-continue after a load, the runner
+  clears Agno's tools-factory cache so the just-loaded function is immediately callable.</li>
+<li><code>StorageMixin.store_storage</code>/<code>upsert_storage</code> convert the <code>data_type</code> string to <code>DataType[...]</code> before delegating.</li>
+<li><code>BaseServer</code> vCPU detection guarded by <code>sys.platform == "linux"</code> (falls back to <code>os.cpu_count()</code> elsewhere).</li>
+<li>Gateway BiDi dial-back close: a read parked before <code>outgoing_done</code> now switches to the close-grace timeout once
+  outputs drain, instead of parking to the full RPC deadline.</li>
+<li>Removed prohibited <code>getattr(...)</code> attribute access in <code>hitl.py</code> in favour of direct typed access.</li>
+</ul>
+<hr />
+<h2 id="removed">Removed<a class="headerlink" href="#removed" title="Permanent link">¤</a></h2>
+<ul>
+<li><strong>(breaking)</strong> All standalone setup-version RPCs and listing from the setup strategy/implementations:
+  <code>create_setup_version</code>, <code>get_setup_version</code>, <code>search_setup_versions</code>, <code>update_setup_version</code>, <code>delete_setup_version</code>,
+  and <code>list_setups</code> — the version lifecycle is now platform-owned via the setup's <code>current_setup_version</code>.</li>
+<li>The <code>Scope = Literal["mission","setup"]</code> alias in <code>storage_strategy.py</code> (superseded by <code>Context</code>).</li>
+<li><code>organization_id</code> from the registry <code>search()</code> API.</li>
+</ul>
+<hr />
+<h2 id="tests">Tests<a class="headerlink" href="#tests" title="Permanent link">¤</a></h2>
+<ul>
+<li><strong>Agno toolkits</strong> — a new <code>tests/community/agno/toolkits/</code> suite (~9 files): <code>DkToolkit</code> envelope/notifications; the
+  registry managers (<code>manage_*</code> dispatch, ~54 tests) covering setup-schema content validation, control-char and
+  empty-content rejection, and visibility enforcement; plus the load manager, chat-history tools, the default-toolkit
+  assembler, and user-profile tools.</li>
+<li><strong>Agno adapter/module</strong> — dynamic tool-loading tests (real <code>agno</code> dep), <code>ModuleToolkit</code> output/event-stream tests, and
+  adapter coverage for the action-suffixed manager tool names.</li>
+<li><strong>Modules</strong> — registry-documentation assembly and fatal <code>stream.error</code> abort suites; expanded tool-cache /
+  tool-reference tests (resolve+save, cache-hit permission re-checks, permission-denied propagation).</li>
+<li><strong>Services</strong> — new <code>DefaultRegistry</code> and registry-hardening (enum encode/decode symmetry, scoped settings) suites;
+  gRPC registry expanded for trimmed search summaries and <code>search_setups</code> mapping/filtering; storage expanded for record
+  visibility and cross-owner context; filesystem context-kind forwarding; the setup gRPC suite largely rewritten around
+  the reduced CRUD surface (no-RPC-on-missing-fields, version pinning).</li>
+<li><strong>Gateway / Core</strong> — dial-back close-after-fatal and stream-error propagation; <code>module_runner</code> M4 producer regression.</li>
+</ul>
+<p>Roughly 13 new test suites added and ~16 existing files expanded.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../1.0.2.dev7/" class="md-footer__link md-footer__link--prev" aria-label="Previous: 1.0.2.dev6 → 1.0.2.dev7 — Filesystem Context Scopes (mission/setup/user/organization)">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                1.0.2.dev6 → 1.0.2.dev7 — Filesystem Context Scopes (mission/setup/user/organization)
+              </div>
+            </div>
+          </a>
+        
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      Copyright &copy; 2025 Digitalkin
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+      
+      
+    
+    <a href="https://github.com/digitalkin-ai" target="_blank" rel="noopener" title="github.com" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+    </a>
+  
+    
+    
+    
+    
+      
+      
+    
+    <a href="https://pypi.org/project/digitalkin/" target="_blank" rel="noopener" title="pypi.org" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.8 200.5c-7.7-30.9-22.3-54.2-53.4-54.2h-40.1v47.4c0 36.8-31.2 67.8-66.8 67.8H172.7c-29.2 0-53.4 25-53.4 54.3v101.8c0 29 25.2 46 53.4 54.3 33.8 9.9 66.3 11.7 106.8 0 26.9-7.8 53.4-23.5 53.4-54.3v-40.7H226.2v-13.6h160.2c31.1 0 42.6-21.7 53.4-54.2 11.2-33.5 10.7-65.7 0-108.6M286.2 444.7a20.4 20.4 0 1 1 0-40.7 20.4 20.4 0 1 1 0 40.7M167.8 248.1h106.8c29.7 0 53.4-24.5 53.4-54.3V91.9c0-29-24.4-50.7-53.4-55.6-35.8-5.9-74.7-5.6-106.8.1-45.2 8-53.4 24.7-53.4 55.6v40.7h106.9v13.6h-147c-31.1 0-58.3 18.7-66.8 54.2-9.8 40.7-10.2 66.1 0 108.6 7.6 31.6 25.7 54.2 56.8 54.2H101v-48.8c0-35.3 30.5-66.4 66.8-66.4m-6.6-183.4a20.4 20.4 0 1 1 0 40.8 20.4 20.4 0 1 1 0-40.8"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["announce.dismiss", "content.action.edit", "content.action.view", "content.code.annotate", "content.code.copy", "content.tooltips", "navigation.footer", "navigation.instant.preview", "navigation.path", "navigation.sections", "navigation.tabs", "navigation.tabs.sticky", "navigation.top", "search.highlight", "search.suggest", "toc.follow"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "stable", "provider": "mike"}}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+        <script src="../../assets/_markdown_exec_pyodide.js"></script>
+      
+    
+  </body>
+</html>
