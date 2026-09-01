@@ -384,3 +384,147 @@ class TestResponseMerging:
         result = GrpcSetup._to_setup_data(setup, sibling)
         assert result.current_setup_version.id == "v-embedded"
         assert result.current_setup_version.version == "2.0.0"
+
+
+class TestSetupVersions:
+    """ListSetupVersions / SetCurrentSetupVersion, and the set_as_current flag on updates."""
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    def test_update_setup_activates_the_new_version_by_default(
+        self,
+        client: GrpcSetup,
+        test_channel: grpc_testing.Channel,
+        mock_servicer: MockSetupServicer,
+        thread_pool: futures.ThreadPoolExecutor,
+    ) -> None:
+        """UpdateSetup cuts a version rather than editing in place, so the flag must be set."""
+        setup = _seed_setup(mock_servicer)
+        future = thread_pool.submit(
+            asyncio.run,
+            client.update_setup({"setup_id": setup.id, "name": "renamed", "content": {"a": 2}}),
+        )
+        request = _exchange(future, test_channel, "UpdateSetup", mock_servicer.UpdateSetup)
+
+        assert request.set_as_current is True
+        assert future.result().current_setup_version.content == {"a": 2}
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    def test_update_setup_can_leave_the_new_version_inactive(
+        self,
+        client: GrpcSetup,
+        test_channel: grpc_testing.Channel,
+        mock_servicer: MockSetupServicer,
+        thread_pool: futures.ThreadPoolExecutor,
+    ) -> None:
+        setup = _seed_setup(mock_servicer)
+        original = setup.current_setup_version.id
+        future = thread_pool.submit(
+            asyncio.run,
+            client.update_setup(
+                {"setup_id": setup.id, "name": "renamed", "content": {"a": 2}, "set_as_current": False}
+            ),
+        )
+        request = _exchange(future, test_channel, "UpdateSetup", mock_servicer.UpdateSetup)
+
+        assert request.set_as_current is False
+        assert future.result().current_setup_version.id == original
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    def test_list_setup_versions_returns_page_total_and_current(
+        self,
+        client: GrpcSetup,
+        test_channel: grpc_testing.Channel,
+        mock_servicer: MockSetupServicer,
+        thread_pool: futures.ThreadPoolExecutor,
+    ) -> None:
+        setup = _seed_setup(mock_servicer)
+        for i in range(2):
+            mock_servicer.UpdateSetup(
+                setup_pb2.UpdateSetupRequest(
+                    setup_id=setup.id, name="seeded", content={"a": i}, set_as_current=True
+                ),
+                FakeContext(),
+            )
+
+        future = thread_pool.submit(asyncio.run, client.list_setup_versions({"setup_id": setup.id}))
+        request = _exchange(future, test_channel, "ListSetupVersions", mock_servicer.ListSetupVersions)
+        page = future.result()
+
+        # An unset limit must not reach the wire as 0 — the proto floors it at 1.
+        assert request.limit == 20
+        assert page.total_count == 3
+        assert page.current_setup_version_id == setup.current_setup_version.id
+        # Most recent first.
+        assert [v.content for v in page.setup_versions] == [{"a": 1}, {"a": 0}, {"k": "v"}]
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    def test_list_setup_versions_paginates(
+        self,
+        client: GrpcSetup,
+        test_channel: grpc_testing.Channel,
+        mock_servicer: MockSetupServicer,
+        thread_pool: futures.ThreadPoolExecutor,
+    ) -> None:
+        setup = _seed_setup(mock_servicer)
+        mock_servicer.UpdateSetup(
+            setup_pb2.UpdateSetupRequest(setup_id=setup.id, name="seeded", content={"a": 1}, set_as_current=True),
+            FakeContext(),
+        )
+
+        future = thread_pool.submit(
+            asyncio.run, client.list_setup_versions({"setup_id": setup.id, "limit": 1, "offset": 1})
+        )
+        request = _exchange(future, test_channel, "ListSetupVersions", mock_servicer.ListSetupVersions)
+        page = future.result()
+
+        assert (request.limit, request.offset) == (1, 1)
+        assert page.total_count == 2
+        assert [v.content for v in page.setup_versions] == [{"k": "v"}]
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    def test_set_current_setup_version_rolls_back(
+        self,
+        client: GrpcSetup,
+        test_channel: grpc_testing.Channel,
+        mock_servicer: MockSetupServicer,
+        thread_pool: futures.ThreadPoolExecutor,
+    ) -> None:
+        setup = _seed_setup(mock_servicer)
+        original = setup.current_setup_version.id
+        mock_servicer.UpdateSetup(
+            setup_pb2.UpdateSetupRequest(setup_id=setup.id, name="seeded", content={"a": 9}, set_as_current=True),
+            FakeContext(),
+        )
+        assert setup.current_setup_version.id != original
+
+        future = thread_pool.submit(
+            asyncio.run,
+            client.set_current_setup_version({"setup_id": setup.id, "setup_version_id": original}),
+        )
+        request = _exchange(
+            future, test_channel, "SetCurrentSetupVersion", mock_servicer.SetCurrentSetupVersion
+        )
+        result = future.result()
+
+        assert request.setup_version_id == original
+        assert result.current_setup_version.id == original
+        assert result.current_setup_version.content == {"k": "v"}
+
+    @pytest.mark.parametrize(
+        ("method", "payload"),
+        [
+            ("list_setup_versions", {}),
+            ("set_current_setup_version", {"setup_id": "s1"}),
+            ("set_current_setup_version", {"setup_version_id": "v1"}),
+        ],
+    )
+    def test_missing_identifiers_are_rejected_before_the_wire(
+        self, client: GrpcSetup, method: str, payload: dict
+    ) -> None:
+        with pytest.raises(ValueError, match="required"):
+            asyncio.run(getattr(client, method)(payload))

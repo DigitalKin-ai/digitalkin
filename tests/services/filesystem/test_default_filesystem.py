@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from digitalkin.models.services.storage import Visibility
 from digitalkin.services.filesystem import DefaultFilesystem
 from digitalkin.services.filesystem.exceptions import FilesystemServiceError
 from digitalkin.services.filesystem.filesystem_strategy import (
@@ -549,3 +550,81 @@ class TestDefaultFilesystem:
         assert file_data.status == "DELETED"
         file_path = Path(filesystem._get_context_temp_dir(file_metadata["context"]), file_metadata["name"])
         assert file_path.exists()
+
+
+class TestVisibility:
+    """The local filesystem carries visibility on records and filters on it."""
+
+    async def test_uploaded_visibility_lands_on_the_record(
+        self, filesystem: DefaultFilesystem, sample_file_data: bytes
+    ) -> None:
+        upload = UploadFileData(
+            content=sample_file_data,
+            name="internal.txt",
+            file_type="DOCUMENT",
+            visibility=Visibility.INTERNAL,
+        )
+        records, _, _ = await filesystem.upload_files([upload])
+        assert records[0].visibility is Visibility.INTERNAL
+
+    async def test_visibility_defaults_to_unspecified(
+        self, filesystem: DefaultFilesystem, sample_file_data: bytes
+    ) -> None:
+        upload = UploadFileData(content=sample_file_data, name="plain.txt", file_type="DOCUMENT")
+        records, _, _ = await filesystem.upload_files([upload])
+        assert records[0].visibility is Visibility.UNSPECIFIED
+
+    async def test_get_files_filters_on_visibility(
+        self, filesystem: DefaultFilesystem, sample_file_data: bytes
+    ) -> None:
+        await filesystem.upload_files([
+            UploadFileData(
+                content=sample_file_data, name="pub.txt", file_type="DOCUMENT", visibility=Visibility.PUBLIC
+            ),
+            UploadFileData(
+                content=sample_file_data, name="priv.txt", file_type="DOCUMENT", visibility=Visibility.PRIVATE
+            ),
+        ])
+
+        found, total = await filesystem.get_files(FileFilter(visibilities=[Visibility.PUBLIC]))
+
+        assert [f.name for f in found] == ["pub.txt"]
+        assert total == 1
+
+    async def test_empty_visibility_filter_matches_everything(
+        self, filesystem: DefaultFilesystem, sample_file_data: bytes
+    ) -> None:
+        await filesystem.upload_files([
+            UploadFileData(
+                content=sample_file_data, name="pub.txt", file_type="DOCUMENT", visibility=Visibility.PUBLIC
+            ),
+            UploadFileData(
+                content=sample_file_data, name="priv.txt", file_type="DOCUMENT", visibility=Visibility.PRIVATE
+            ),
+        ])
+
+        _, total = await filesystem.get_files(FileFilter())
+        assert total == 2
+
+    async def test_update_changes_visibility(
+        self, filesystem: DefaultFilesystem, sample_file_data: bytes
+    ) -> None:
+        upload = UploadFileData(
+            content=sample_file_data, name="f.txt", file_type="DOCUMENT", visibility=Visibility.PRIVATE
+        )
+        records, _, _ = await filesystem.upload_files([upload])
+
+        updated = await filesystem.update_file(records[0].id, visibility=Visibility.PUBLIC)
+        assert updated.visibility is Visibility.PUBLIC
+
+    async def test_update_without_visibility_leaves_it_alone(
+        self, filesystem: DefaultFilesystem, sample_file_data: bytes
+    ) -> None:
+        """UNSPECIFIED is the "no opinion" default, so it must not blank an existing scope."""
+        upload = UploadFileData(
+            content=sample_file_data, name="f.txt", file_type="DOCUMENT", visibility=Visibility.INTERNAL
+        )
+        records, _, _ = await filesystem.upload_files([upload])
+
+        updated = await filesystem.update_file(records[0].id, status="ARCHIVED")
+        assert updated.visibility is Visibility.INTERNAL

@@ -27,6 +27,7 @@ from digitalkin.models.services.registry import (
     RegistryModuleStatus,
     RegistryModuleType,
     RegistrySetupStatus,
+    RegistrySortBy,
     RegistryVisibility,
     SetupInfo,
     SetupSummary,
@@ -108,6 +109,7 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
             version=descriptor.version,
             module_name=descriptor.name,
             documentation=descriptor.documentation or None,
+            tags=list(descriptor.tags),
         )
 
     @staticmethod
@@ -142,6 +144,7 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
             else None,
             setup_version_id=descriptor.setup_version_id or None,
             setup_version=descriptor.setup_version or None,
+            tags=list(descriptor.tags),
             config=dict(descriptor.config) if descriptor.config else None,
         )
 
@@ -200,22 +203,30 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
             module_name=summary.name,
             documentation=summary.documentation or None,
             status=RegistryModuleStatus[status_name],
+            tags=list(summary.tags),
         )
 
     async def search(
         self,
         name: str | None = None,
         module_type: str | None = None,
+        tags: list[str] | None = None,
+        sort_by: RegistrySortBy = RegistrySortBy.UNSPECIFIED,
         limit: int = 20,
         offset: int = 0,
+        *,
+        descending: bool = False,
     ) -> list[ModuleInfo]:
         """Search the module catalog (module blueprints; needs a setup to be invocable).
 
         Args:
             name: Case-insensitive free text matched against module name AND documentation.
             module_type: Filter by type (archetype, tool_module, service).
+            tags: Match modules carrying at least one of these tags (case-insensitive).
+            sort_by: Sort key; UNSPECIFIED lets the registry choose.
             limit: Max results (1-100).
             offset: Pagination offset.
+            descending: Sort direction.
 
         Returns:
             List of matching modules as trimmed ModuleInfo (address/port are never
@@ -233,6 +244,7 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
         if module_type:
             enum_val = RegistryModuleType[module_type.upper()]
             module_types.append(self._encode_enum(registry_enums_pb2.ModuleType, "MODULE_TYPE", enum_val))
+        encoded_sort = self._encode_enum(registry_enums_pb2.SortBy, "SORT_BY", sort_by)
 
         async with self.handle_grpc_errors("SearchModules", RegistryServiceError):
             try:
@@ -241,6 +253,9 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
                     registry_requests_pb2.SearchModulesRequest(
                         query=name or "",
                         module_types=module_types,
+                        tags=tags or [],
+                        sort_by=encoded_sort,
+                        descending=descending,
                         limit=limit,
                         offset=offset,
                     ),
@@ -476,9 +491,10 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
             module_type=RegistryModuleType[type_name],
             setup_version_id=summary.setup_version_id or None,
             setup_version=summary.setup_version or None,
+            tags=list(summary.tags),
         )
 
-    async def search_setups(
+    async def search_setups(  # Filter surface mirrors SearchSetupsRequest 1:1 # noqa: PLR0913
         self,
         query: str | None = None,
         setup_ids: list[str] | None = None,
@@ -486,8 +502,12 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
         module_types: list[RegistryModuleType] | None = None,
         statuses: list[RegistrySetupStatus] | None = None,
         visibilities: list[RegistryVisibility] | None = None,
+        tags: list[str] | None = None,
+        sort_by: RegistrySortBy = RegistrySortBy.UNSPECIFIED,
         limit: int = 20,
         offset: int = 0,
+        *,
+        descending: bool = False,
     ) -> list[SetupSummary]:
         """Search the setup catalog (configured, invocable module instances).
 
@@ -499,8 +519,11 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
             statuses: Filter by setup status. None = no filter; agent-facing callers
                 should pass READY/CONFIGURATION_SUCCEEDED for invocable setups.
             visibilities: Filter by visibility.
+            tags: Match setups carrying at least one of these tags (case-insensitive).
+            sort_by: Sort key; UNSPECIFIED lets the registry choose.
             limit: Max results (1-100).
             offset: Pagination offset.
+            descending: Sort direction.
 
         Returns:
             Matching setups as ``SetupSummary`` (no ``config`` field by construction).
@@ -520,6 +543,7 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
         encoded_visibilities = [
             self._encode_enum(registry_enums_pb2.Visibility, "VISIBILITY", v) for v in visibilities or []
         ]
+        encoded_sort = self._encode_enum(registry_enums_pb2.SortBy, "SORT_BY", sort_by)
 
         async with self.handle_grpc_errors("SearchSetups", RegistryServiceError):
             try:
@@ -532,6 +556,9 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
                         module_types=encoded_types,
                         statuses=encoded_statuses,
                         visibilities=encoded_visibilities,
+                        tags=tags or [],
+                        sort_by=encoded_sort,
+                        descending=descending,
                         limit=limit,
                         offset=offset,
                     ),

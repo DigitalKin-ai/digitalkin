@@ -23,7 +23,22 @@ class _FakeToolkit:
 
 
 def _install_fake_agno() -> dict[str, Any]:
-    """Install fake agno modules into sys.modules, returning the displaced entries."""
+    """Install fake agno modules into sys.modules, returning the displaced entries.
+
+    No-op when the real agno is importable. The fake ``agno.tools`` is a plain module, not a
+    package, so it cannot satisfy ``from agno.tools.function import Function`` — the import the
+    registry toolkits make — and shadowing a working install with it makes the whole directory
+    uncollectable.
+
+    Returns:
+        The sys.modules entries displaced by the fakes; empty when the real agno is present.
+    """
+    try:
+        import agno.tools.function  # pylint: disable=C0415,W0611
+    except ImportError:
+        pass
+    else:
+        return {}
     saved = {key: sys.modules.get(key) for key in ("agno", "agno.tools")}
     agno_pkg = types.ModuleType("agno")
     agno_tools = types.ModuleType("agno.tools")

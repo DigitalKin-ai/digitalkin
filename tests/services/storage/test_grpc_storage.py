@@ -1855,3 +1855,127 @@ class TestStorageRefusalAndFailures:
         assert await client.remove("test_collection", "r") is False
         assert await client.list("test_collection") == []
         assert await client.remove_collection("test_collection") is False
+
+
+class TestStorageIdAndPagination:
+    """storage_id addressing and the ListRecords/RemoveCollection knobs added with it."""
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    def test_read_forwards_storage_id(
+        self,
+        client: GrpcStorage,
+        test_channel: grpc_testing.Channel,
+        mock_servicer: MockStorageServicer,
+        thread_pool: futures.ThreadPoolExecutor,
+    ) -> None:
+        method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name["ReadRecord"]
+        future = thread_pool.submit(
+            asyncio.run, client.read("test_collection", "record_001", storage_id="storage:abc")
+        )
+        _, request, rpc = test_channel.take_unary_unary(method_desc)
+
+        assert request.storage_id == "storage:abc"
+
+        rpc.send_initial_metadata(())
+        rpc.terminate(mock_servicer.ReadRecord(request, FakeContext()), (), grpc.StatusCode.OK, "")
+        future.result(timeout=1.0)
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    def test_read_defaults_storage_id_to_empty(
+        self,
+        client: GrpcStorage,
+        test_channel: grpc_testing.Channel,
+        mock_servicer: MockStorageServicer,
+        thread_pool: futures.ThreadPoolExecutor,
+    ) -> None:
+        """Empty means "let the service pick" — it must not become a bogus filter."""
+        method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name["ReadRecord"]
+        future = thread_pool.submit(asyncio.run, client.read("test_collection", "record_001"))
+        _, request, rpc = test_channel.take_unary_unary(method_desc)
+
+        assert request.storage_id == ""
+
+        rpc.send_initial_metadata(())
+        rpc.terminate(mock_servicer.ReadRecord(request, FakeContext()), (), grpc.StatusCode.OK, "")
+        future.result(timeout=1.0)
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    def test_list_forwards_record_id_and_pagination(
+        self,
+        client: GrpcStorage,
+        test_channel: grpc_testing.Channel,
+        mock_servicer: MockStorageServicer,
+        thread_pool: futures.ThreadPoolExecutor,
+    ) -> None:
+        method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name["ListRecords"]
+        future = thread_pool.submit(
+            asyncio.run,
+            client.list("test_collection", visibilities=[Visibility.PRIVATE], record_id="r1", limit=5, offset=10),
+        )
+        _, request, rpc = test_channel.take_unary_unary(method_desc)
+
+        assert request.record_id == "r1"
+        assert (request.limit, request.offset) == (5, 10)
+        assert list(request.visibilities) == [data_pb2.VISIBILITY_PRIVATE]
+
+        rpc.send_initial_metadata(())
+        rpc.terminate(mock_servicer.ListRecords(request, FakeContext()), (), grpc.StatusCode.OK, "")
+        future.result(timeout=1.0)
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    def test_remove_collection_forwards_record_id(
+        self,
+        client: GrpcStorage,
+        test_channel: grpc_testing.Channel,
+        mock_servicer: MockStorageServicer,
+        thread_pool: futures.ThreadPoolExecutor,
+    ) -> None:
+        method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name[
+            "RemoveCollection"
+        ]
+        future = thread_pool.submit(asyncio.run, client.remove_collection("test_collection", record_id="r1"))
+        _, request, rpc = test_channel.take_unary_unary(method_desc)
+
+        assert request.record_id == "r1"
+
+        rpc.send_initial_metadata(())
+        rpc.terminate(mock_servicer.RemoveCollection(request, FakeContext()), (), grpc.StatusCode.OK, "")
+        future.result(timeout=1.0)
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    def test_storage_id_is_decoded_off_the_wire(
+        self,
+        client: GrpcStorage,
+        test_channel: grpc_testing.Channel,
+        thread_pool: futures.ThreadPoolExecutor,
+        storage_config: dict[str, type[BaseModel]],
+    ) -> None:
+        """A record the service stamped must surface its storage_id on the model."""
+        method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name["ReadRecord"]
+        future = thread_pool.submit(asyncio.run, client.read("test_collection", "record_001"))
+        _, _request, rpc = test_channel.take_unary_unary(method_desc)
+
+        payload = Struct()
+        payload.update({"mission_id": MISSION_ID, "name": "n", "value": 1, "description": "d"})
+        record = data_pb2.StorageRecord(
+            data=payload,
+            context=MISSION_ID,
+            collection="test_collection",
+            record_id="record_001",
+            data_type=data_pb2.OUTPUT,
+            visibility=data_pb2.VISIBILITY_PRIVATE,
+            storage_id="storage:xyz",
+        )
+        rpc.send_initial_metadata(())
+        rpc.terminate(
+            data_pb2.ReadRecordResponse(success=True, stored_data=record), (), grpc.StatusCode.OK, ""
+        )
+
+        result = future.result(timeout=1.0)
+        assert result.storage_id == "storage:xyz"
+        assert result.visibility is Visibility.PRIVATE

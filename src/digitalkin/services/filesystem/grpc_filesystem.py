@@ -11,6 +11,7 @@ from digitalkin.grpc_servers.utils.grpc_error_handler import GrpcErrorHandlerMix
 from digitalkin.logger import logger
 from digitalkin.models.grpc_servers.models import ClientConfig
 from digitalkin.models.services.services import Context
+from digitalkin.models.services.storage import Visibility
 from digitalkin.services.filesystem.exceptions import FilesystemServiceError
 from digitalkin.services.filesystem.filesystem_strategy import (
     FileFilter,
@@ -78,6 +79,7 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper, GrpcErrorHandlerMixi
             file_url=file.file_url,
             status=filesystem_pb2.FileStatus.Name(file.status),
             content=file.content,
+            visibility=Visibility[filesystem_pb2.Visibility.Name(file.visibility).removeprefix("VISIBILITY_")],
         )
 
     @staticmethod
@@ -109,6 +111,26 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper, GrpcErrorHandlerMixi
                 return filesystem_pb2.CONTEXT_ORGANIZATIONS
         return filesystem_pb2.CONTEXT_UNSPECIFIED
 
+    @staticmethod
+    def _visibility_enum(visibility: Visibility) -> filesystem_pb2.Visibility:
+        """Map an SDK ``Visibility`` to its filesystem-proto wire enum.
+
+        Args:
+            visibility: The SDK visibility level.
+
+        Returns:
+            The matching ``VISIBILITY_*`` wire enum (``VISIBILITY_UNSPECIFIED`` by default).
+        """
+        match visibility:
+            case Visibility.PUBLIC:
+                return filesystem_pb2.VISIBILITY_PUBLIC
+            case Visibility.PRIVATE:
+                return filesystem_pb2.VISIBILITY_PRIVATE
+            case Visibility.INTERNAL:
+                return filesystem_pb2.VISIBILITY_INTERNAL
+            case _:
+                return filesystem_pb2.VISIBILITY_UNSPECIFIED
+
     def _filter_to_proto(self, filters: FileFilter) -> filesystem_pb2.FileFilter:
         """Convert a FileFilter to a FileFilter proto message.
 
@@ -119,12 +141,13 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper, GrpcErrorHandlerMixi
             filesystem_pb2.FileFilter: The converted FileFilter proto message
         """
         return filesystem_pb2.FileFilter(
-            **filters.model_dump(exclude={"file_types", "status", "context"}),
+            **filters.model_dump(exclude={"file_types", "status", "context", "visibilities"}),
             file_types=[self._file_type_to_enum(file_type) for file_type in filters.file_types]
             if filters.file_types
             else None,
             status=self._file_status_to_enum(filters.status) if filters.status else None,
             context=self._context_enum(filters.context),
+            visibilities=[self._visibility_enum(v) for v in filters.visibilities or []],
         )
 
     def __init__(
@@ -184,6 +207,7 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper, GrpcErrorHandlerMixi
                         metadata=metadata_struct,
                         status=filesystem_pb2.FileStatus.FILE_STATUS_UPLOADING,
                         replace_if_exists=file.replace_if_exists,
+                        visibility=self._visibility_enum(file.visibility),
                     )
                 )
             request = filesystem_pb2.UploadFilesRequest(files=upload_files)
@@ -243,6 +267,7 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper, GrpcErrorHandlerMixi
         metadata: dict[str, Any] | None = None,
         new_name: str | None = None,
         status: str | None = None,
+        visibility: Visibility = Visibility.UNSPECIFIED,
     ) -> FilesystemRecord:
         """Update a file in the filesystem.
 
@@ -254,6 +279,7 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper, GrpcErrorHandlerMixi
             metadata: Optional new metadata (will merge with existing)
             new_name: Optional new name for the file
             status: Optional new status for the file
+            visibility: Optional new read-access scope; UNSPECIFIED leaves it unchanged
 
         Returns:
             FilesystemRecord: Metadata about the updated file
@@ -270,6 +296,7 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper, GrpcErrorHandlerMixi
                 content_type=content_type,
                 new_name=new_name,
                 status=self._file_status_to_enum(status) if status else None,
+                visibility=self._visibility_enum(visibility),
             )
 
             if metadata:

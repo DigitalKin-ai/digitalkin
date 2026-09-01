@@ -39,7 +39,10 @@ class UserProfileTools(DkToolkit):
         )
 
     async def get_user_profile(self) -> str:
-        """Retrieve the current user's profile: name, email, subscription plan, and remaining credits.
+        """Retrieve the current user's profile: name, email, subscription plan, remaining credits, and mission cost.
+
+        ``mission_cost`` is what the current mission has accumulated so far, in the same
+        unit as the credit balance.
 
         IMPORTANT: You do NOT know what credits represent, how they are consumed,
         or what they correspond to in terms of usage. Never speculate, explain, or

@@ -3,6 +3,7 @@
 import pytest
 from pydantic import BaseModel, Field
 
+from digitalkin.models.services.storage import Visibility
 from digitalkin.services.storage.storage_strategy import StorageRecord, StorageStrategy
 
 
@@ -27,7 +28,9 @@ class _InMemoryStorage(StorageStrategy):
         self._store_data[self._key(record.context, record.collection, record.record_id)] = record
         return record
 
-    async def _read(self, collection: str, record_id: str, context: str) -> StorageRecord | None:
+    async def _read(
+        self, collection: str, record_id: str, context: str, storage_id: str = ""
+    ) -> StorageRecord | None:
         return self._store_data.get(self._key(context, collection, record_id))
 
     async def _update(
@@ -43,11 +46,19 @@ class _InMemoryStorage(StorageStrategy):
     async def _remove(self, collection: str, record_id: str, context: str) -> bool:
         return self._store_data.pop(self._key(context, collection, record_id), None) is not None
 
-    async def _list(self, collection: str, context: str) -> list[StorageRecord]:
+    async def _list(
+        self,
+        collection: str,
+        context: str,
+        visibilities: list[Visibility] | None = None,
+        record_id: str = "",
+        limit: int = 0,
+        offset: int = 0,
+    ) -> list[StorageRecord]:
         prefix = f"{context}|{collection}:"
         return [r for k, r in self._store_data.items() if k.startswith(prefix)]
 
-    async def _remove_collection(self, collection: str, context: str) -> bool:
+    async def _remove_collection(self, collection: str, context: str, record_id: str = "") -> bool:
         prefix = f"{context}|{collection}:"
         keys = [k for k in self._store_data if k.startswith(prefix)]
         for k in keys:

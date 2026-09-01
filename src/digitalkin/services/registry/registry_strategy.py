@@ -8,6 +8,7 @@ from digitalkin.models.services.registry import (
     RegistryModuleStatus,
     RegistryModuleType,
     RegistrySetupStatus,
+    RegistrySortBy,
     RegistryVisibility,
     SetupInfo,
     SetupSummary,
@@ -44,16 +45,23 @@ class RegistryStrategy(BaseStrategy, ABC):
         self,
         name: str | None = None,
         module_type: str | None = None,
+        tags: list[str] | None = None,
+        sort_by: RegistrySortBy = RegistrySortBy.UNSPECIFIED,
         limit: int = 20,
         offset: int = 0,
+        *,
+        descending: bool = False,
     ) -> list[ModuleInfo]:
         """Search the module catalog (module blueprints; needs a setup to be invocable).
 
         Args:
             name: Case-insensitive free text matched against module name AND documentation.
             module_type: Filter by type (archetype, tool_module, service).
+            tags: Match modules carrying at least one of these tags (case-insensitive).
+            sort_by: Sort key; UNSPECIFIED lets the registry choose.
             limit: Max results (1-100).
             offset: Pagination offset.
+            descending: Sort direction.
 
         Returns:
             List of matching modules as trimmed ModuleInfo (address/port are never
@@ -64,15 +72,22 @@ class RegistryStrategy(BaseStrategy, ABC):
     async def search_tools(
         self,
         name: str | None = None,
+        tags: list[str] | None = None,
+        sort_by: RegistrySortBy = RegistrySortBy.UNSPECIFIED,
         limit: int = 20,
         offset: int = 0,
+        *,
+        descending: bool = False,
     ) -> list[ModuleInfo]:
         """Tool registry view: modules of type TOOL_MODULE.
 
         Args:
             name: Case-insensitive free text matched against module name AND documentation.
+            tags: Match modules carrying at least one of these tags (case-insensitive).
+            sort_by: Sort key; UNSPECIFIED lets the registry choose.
             limit: Max results (1-100).
             offset: Pagination offset.
+            descending: Sort direction.
 
         Returns:
             List of matching tool modules.
@@ -80,22 +95,32 @@ class RegistryStrategy(BaseStrategy, ABC):
         return await self.search(
             name=name,
             module_type=RegistryModuleType.TOOL_MODULE.value,
+            tags=tags,
+            sort_by=sort_by,
             limit=limit,
             offset=offset,
+            descending=descending,
         )
 
     async def search_kins(
         self,
         name: str | None = None,
+        tags: list[str] | None = None,
+        sort_by: RegistrySortBy = RegistrySortBy.UNSPECIFIED,
         limit: int = 20,
         offset: int = 0,
+        *,
+        descending: bool = False,
     ) -> list[ModuleInfo]:
         """Kin registry view: modules of type ARCHETYPE.
 
         Args:
             name: Case-insensitive free text matched against module name AND documentation.
+            tags: Match modules carrying at least one of these tags (case-insensitive).
+            sort_by: Sort key; UNSPECIFIED lets the registry choose.
             limit: Max results (1-100).
             offset: Pagination offset.
+            descending: Sort direction.
 
         Returns:
             List of matching archetype (kin) modules.
@@ -103,22 +128,32 @@ class RegistryStrategy(BaseStrategy, ABC):
         return await self.search(
             name=name,
             module_type=RegistryModuleType.ARCHETYPE.value,
+            tags=tags,
+            sort_by=sort_by,
             limit=limit,
             offset=offset,
+            descending=descending,
         )
 
     async def search_services(
         self,
         name: str | None = None,
+        tags: list[str] | None = None,
+        sort_by: RegistrySortBy = RegistrySortBy.UNSPECIFIED,
         limit: int = 20,
         offset: int = 0,
+        *,
+        descending: bool = False,
     ) -> list[ModuleInfo]:
         """Service registry view: modules of type SERVICE.
 
         Args:
             name: Case-insensitive free text matched against module name AND documentation.
+            tags: Match modules carrying at least one of these tags (case-insensitive).
+            sort_by: Sort key; UNSPECIFIED lets the registry choose.
             limit: Max results (1-100).
             offset: Pagination offset.
+            descending: Sort direction.
 
         Returns:
             List of matching service modules.
@@ -126,12 +161,15 @@ class RegistryStrategy(BaseStrategy, ABC):
         return await self.search(
             name=name,
             module_type=RegistryModuleType.SERVICE.value,
+            tags=tags,
+            sort_by=sort_by,
             limit=limit,
             offset=offset,
+            descending=descending,
         )
 
     @abstractmethod
-    async def search_setups(
+    async def search_setups(  # Filter surface mirrors SearchSetupsRequest 1:1 # noqa: PLR0913
         self,
         query: str | None = None,
         setup_ids: list[str] | None = None,
@@ -139,8 +177,12 @@ class RegistryStrategy(BaseStrategy, ABC):
         module_types: list[RegistryModuleType] | None = None,
         statuses: list[RegistrySetupStatus] | None = None,
         visibilities: list[RegistryVisibility] | None = None,
+        tags: list[str] | None = None,
+        sort_by: RegistrySortBy = RegistrySortBy.UNSPECIFIED,
         limit: int = 20,
         offset: int = 0,
+        *,
+        descending: bool = False,
     ) -> list[SetupSummary]:
         """Search the setup catalog (configured, invocable module instances).
 
@@ -152,8 +194,11 @@ class RegistryStrategy(BaseStrategy, ABC):
             statuses: Filter by setup status. None = no filter; agent-facing callers
                 should pass READY/CONFIGURATION_SUCCEEDED for invocable setups.
             visibilities: Filter by visibility.
+            tags: Match setups carrying at least one of these tags (case-insensitive).
+            sort_by: Sort key; UNSPECIFIED lets the registry choose.
             limit: Max results (1-100).
             offset: Pagination offset.
+            descending: Sort direction.
 
         Returns:
             Matching setups as ``SetupSummary`` (no ``config`` field by construction).

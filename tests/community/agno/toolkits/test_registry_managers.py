@@ -14,15 +14,20 @@ from digitalkin.community.agno.toolkits.registry.action import (
     DeleteAction,
     ChangeVisibilityAction,
     GetAction,
+    ListVersionsAction,
     SearchAction,
+    SetVersionAction,
     UpdateAction,
 )
 from digitalkin.community.agno.toolkits.registry.services.action import CreateServiceAction, LoadServiceAction
 from digitalkin.grpc_servers.exceptions import PermissionDeniedError
+from digitalkin.services.registry.exceptions import RegistryServiceError
 from digitalkin.models.services.registry import (
     ModuleInfo,
     RegistryModuleType,
     RegistrySetupStatus,
+    RegistrySortBy,
+    RegistryVisibility,
     SetupInfo,
 )
 from digitalkin.models.services.storage import Visibility
@@ -38,6 +43,7 @@ _SEED = [
     ("setups:isaac", "modules:isaac", "archetype-isaac", RegistryModuleType.ARCHETYPE, "2.0.0", {"agent": "x"}),
 ]
 _NAMES = {"setups:duda": "Duda Builder", "setups:nikita": "Nikita", "setups:isaac": "Isaac"}
+_TAGS = {"setups:duda": ["Web", "builder"], "setups:nikita": ["branding"], "setups:isaac": ["agent"]}
 _DOCS = {
     "setups:duda": "Builds websites. " + "x" * 400,
     "setups:nikita": "Branding service",
@@ -84,6 +90,8 @@ def _stores() -> tuple[DefaultSetup, DefaultRegistry]:
                 module_name=module_name,
                 module_type=module_type,
                 setup_version=version,
+                visibility=RegistryVisibility.PRIVATE,
+                tags=_TAGS[setup_id],
                 config=content,
             )
         )
@@ -120,7 +128,7 @@ class TestInvalidActionIsCleanEnvelope:
 
     async def test_out_of_range_limit_is_a_fail_envelope(self) -> None:
         # A raw dict, exactly as Agno passes the model's arguments to the entrypoint.
-        env = _env(await ServicesManager(*_stores()).services_manager({"action": "search", "query": "x", "limit": 26}))
+        env = _env(await ServicesManager(*_stores()).services_manager({"action": "search", "query": "x", "limit": 101}))
         assert env["metadata"]["success"] is False
         assert env["metadata"]["tool"] == "services_manager"
         assert "limit" in env["error"]
@@ -174,6 +182,33 @@ class TestSearchFiltersByType:
     async def test_search_truncates_description(self) -> None:
         env = _env(await ToolsManager(*_stores()).tools_manager(SearchAction(query="duda")))
         assert len(env["output"]["setups"][0]["description"]) == 300
+
+
+class TestSearchLimit:
+    """``limit`` spans the full service page size, and the probe row never exceeds it."""
+
+    async def test_service_ceiling_is_accepted(self) -> None:
+        env = _env(await ToolsManager(*_stores()).tools_manager(SearchAction(query="", limit=100)))
+        assert env["metadata"]["success"] is True
+
+    async def test_probe_row_is_clamped_at_the_ceiling(self) -> None:
+        """At the ceiling there is no room for the +1 truncation probe, so the request is clamped."""
+        seen: dict[str, int] = {}
+
+        class _Recording(DefaultRegistry):
+            async def search_setups(self, *_args: object, **kwargs: object) -> list:
+                seen["limit"] = kwargs["limit"]  # type: ignore[assignment]
+                return []
+
+        reg = _Recording("", "", "")
+        await ToolsManager(DefaultSetup(), reg).tools_manager(SearchAction(query="", limit=100))
+        assert seen["limit"] == 100
+        await ToolsManager(DefaultSetup(), reg).tools_manager(SearchAction(query="", limit=99))
+        assert seen["limit"] == 100  # 99 + 1 probe row
+
+    def test_above_the_ceiling_is_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            SearchAction(query="", limit=101)
 
 
 class TestGetAndLoad:
@@ -635,3 +670,364 @@ class TestQaContractFixes:
     def test_get_has_no_version_field(self) -> None:
         """The ignored/deprecated 'version' field is gone from get."""
         assert "version" not in GetAction.model_fields
+
+
+class TestSearchFilterSurface:
+    """``search`` exposes the registry's whole filter surface, minus the type boundary."""
+
+    @staticmethod
+    def _recording() -> tuple[DefaultRegistry, dict[str, Any]]:
+        """A registry that captures the kwargs the toolkit forwards."""
+        seen: dict[str, Any] = {}
+
+        class _Recording(DefaultRegistry):
+            async def search_setups(self, **kwargs: Any) -> list:
+                seen.update(kwargs)
+                return []
+
+        return _Recording("", "", ""), seen
+
+    def test_every_registry_filter_is_llm_visible(self) -> None:
+        exposed = set(SearchAction.model_json_schema()["properties"])
+        assert exposed == {
+            "action",
+            "query",
+            "setup_ids",
+            "module_ids",
+            "statuses",
+            "visibilities",
+            "tags",
+            "sort_by",
+            "descending",
+            "limit",
+            "offset",
+        }
+
+    async def test_filters_are_forwarded_verbatim(self) -> None:
+        registry, seen = self._recording()
+        await ToolsManager(DefaultSetup(), registry).tools_manager(
+            SearchAction(
+                query="q",
+                setup_ids=["setups:a"],
+                module_ids=["modules:b"],
+                statuses=[RegistrySetupStatus.FAILED],
+                visibilities=[RegistryVisibility.PUBLIC],
+                tags=["rag"],
+                sort_by=RegistrySortBy.NAME,
+                descending=True,
+                offset=20,
+            )
+        )
+        assert seen["query"] == "q"
+        assert seen["setup_ids"] == ["setups:a"]
+        assert seen["module_ids"] == ["modules:b"]
+        assert seen["statuses"] == [RegistrySetupStatus.FAILED]
+        assert seen["visibilities"] == [RegistryVisibility.PUBLIC]
+        assert seen["tags"] == ["rag"]
+        assert seen["sort_by"] is RegistrySortBy.NAME
+        assert seen["descending"] is True
+        assert seen["offset"] == 20
+
+    async def test_module_type_stays_pinned_to_the_manager(self) -> None:
+        """The type boundary is not a caller-settable filter — it is the manager's identity."""
+        registry, seen = self._recording()
+        await KinsManager(DefaultSetup(), registry).kins_manager(SearchAction(query=""))
+        assert seen["module_types"] == [RegistryModuleType.ARCHETYPE]
+
+    async def test_status_defaults_to_the_invocable_pair(self) -> None:
+        registry, seen = self._recording()
+        await ToolsManager(DefaultSetup(), registry).tools_manager(SearchAction(query=""))
+        assert seen["statuses"] == [RegistrySetupStatus.READY, RegistrySetupStatus.CONFIGURATION_SUCCEEDED]
+
+    async def test_an_explicit_status_overrides_the_default(self) -> None:
+        """Otherwise a broken setup would be unreachable through this surface."""
+        registry, seen = self._recording()
+        await ToolsManager(DefaultSetup(), registry).tools_manager(
+            SearchAction(query="", statuses=[RegistrySetupStatus.FAILED])
+        )
+        assert seen["statuses"] == [RegistrySetupStatus.FAILED]
+
+    async def test_tag_filter_narrows_the_result(self) -> None:
+        env = _env(await ToolsManager(*_stores()).tools_manager(SearchAction(query="", tags=["web"])))
+        assert [s["setup_id"] for s in env["output"]["setups"]] == ["setups:duda"]
+
+    async def test_a_non_matching_tag_returns_nothing(self) -> None:
+        env = _env(await ToolsManager(*_stores()).tools_manager(SearchAction(query="", tags=["nope"])))
+        assert env["output"]["setups"] == []
+
+    async def test_offset_pages_past_the_only_match(self) -> None:
+        env = _env(await ToolsManager(*_stores()).tools_manager(SearchAction(query="", offset=1)))
+        assert env["output"]["setups"] == []
+        assert env["output"]["offset"] == 1
+
+    def test_a_negative_offset_is_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            SearchAction(query="", offset=-1)
+
+    def test_an_unknown_enum_value_is_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            SearchAction(query="", sort_by="sideways")
+
+
+class TestSearchRowsCarryFilterableFields:
+    """A filter is unusable if its values never appear in a result row."""
+
+    async def test_rows_expose_tags_visibility_and_status(self) -> None:
+        env = _env(await ToolsManager(*_stores()).tools_manager(SearchAction(query="")))
+        row = env["output"]["setups"][0]
+        assert row["tags"] == ["Web", "builder"]
+        assert row["visibility"] == "private"
+        assert row["status"] == "ready"
+
+    async def test_rows_still_never_leak_config(self) -> None:
+        raw = await ToolsManager(*_stores()).tools_manager(SearchAction(query=""))
+        assert "MUST-NOT-LEAK" not in raw
+
+
+class TestVersionHistory:
+    """``update`` cuts versions; ``list_versions`` + ``set_version`` make them reachable."""
+
+    @staticmethod
+    async def _kin() -> tuple[KinsManager, str]:
+        """A kins manager over one archetype setup whose content is ``{"tone": "good"}``."""
+        setup, registry = DefaultSetup(), DefaultRegistry("", "", "")
+        created = await setup.create_setup({"name": "isaac", "content": {"tone": "good"}})
+        registry._modules["local"] = ModuleInfo(module_id="local", module_type=RegistryModuleType.ARCHETYPE)
+        return KinsManager(setup, registry), created.id
+
+    @staticmethod
+    async def _content(manager: KinsManager, setup_id: str) -> Any:
+        env = _env(await manager.kins_manager(GetAction(setup_id=setup_id)))
+        return env["output"]["current_setup_version"]["content"]
+
+    async def test_update_activates_the_new_version_by_default(self) -> None:
+        manager, setup_id = await self._kin()
+        await manager.kins_manager(UpdateAction(setup_id=setup_id, name="isaac", content={"tone": "loud"}))
+        assert await self._content(manager, setup_id) == {"tone": "loud"}
+
+    async def test_update_can_stage_without_activating(self) -> None:
+        manager, setup_id = await self._kin()
+        await manager.kins_manager(
+            UpdateAction(setup_id=setup_id, name="isaac", content={"tone": "loud"}, set_as_current=False)
+        )
+        assert await self._content(manager, setup_id) == {"tone": "good"}
+        env = _env(await manager.kins_manager(ListVersionsAction(setup_id=setup_id)))
+        assert env["output"]["total_count"] == 2
+
+    async def test_list_versions_is_most_recent_first_and_flags_the_live_one(self) -> None:
+        manager, setup_id = await self._kin()
+        await manager.kins_manager(UpdateAction(setup_id=setup_id, name="isaac", content={"tone": "loud"}))
+        env = _env(await manager.kins_manager(ListVersionsAction(setup_id=setup_id)))
+
+        versions = env["output"]["versions"]
+        assert [v["is_current"] for v in versions] == [True, False]
+        assert env["output"]["current_setup_version_id"] == versions[0]["setup_version_id"]
+        assert env["output"]["total_count"] == 2
+
+    async def test_list_versions_never_returns_configuration_payloads(self) -> None:
+        """History rows are metadata: dumping every past config would blow up the context window."""
+        manager, setup_id = await self._kin()
+        raw = await manager.kins_manager(ListVersionsAction(setup_id=setup_id))
+        assert "content" not in _env(raw)["output"]["versions"][0]
+        assert "tone" not in raw
+
+    async def test_list_versions_paginates(self) -> None:
+        manager, setup_id = await self._kin()
+        for tone in ("a", "b"):
+            await manager.kins_manager(UpdateAction(setup_id=setup_id, name="isaac", content={"tone": tone}))
+        env = _env(await manager.kins_manager(ListVersionsAction(setup_id=setup_id, limit=1, offset=2)))
+        assert env["output"]["returned"] == 1
+        assert env["output"]["total_count"] == 3
+        assert env["output"]["offset"] == 2
+
+    async def test_set_version_undoes_a_bad_update(self) -> None:
+        manager, setup_id = await self._kin()
+        await manager.kins_manager(UpdateAction(setup_id=setup_id, name="isaac", content={"tone": "BROKEN"}))
+        env = _env(await manager.kins_manager(ListVersionsAction(setup_id=setup_id)))
+        previous = next(v for v in env["output"]["versions"] if not v["is_current"])
+
+        await manager.kins_manager(
+            SetVersionAction(setup_id=setup_id, setup_version_id=previous["setup_version_id"])
+        )
+        assert await self._content(manager, setup_id) == {"tone": "good"}
+
+    async def test_a_rollback_can_itself_be_rolled_forward(self) -> None:
+        """set_version creates nothing, so returning to the newer version is another set_version."""
+        manager, setup_id = await self._kin()
+        await manager.kins_manager(UpdateAction(setup_id=setup_id, name="isaac", content={"tone": "new"}))
+        env = _env(await manager.kins_manager(ListVersionsAction(setup_id=setup_id)))
+        newer, older = env["output"]["versions"]
+
+        await manager.kins_manager(SetVersionAction(setup_id=setup_id, setup_version_id=older["setup_version_id"]))
+        await manager.kins_manager(SetVersionAction(setup_id=setup_id, setup_version_id=newer["setup_version_id"]))
+
+        assert await self._content(manager, setup_id) == {"tone": "new"}
+        assert _env(await manager.kins_manager(ListVersionsAction(setup_id=setup_id)))["output"]["total_count"] == 2
+
+    async def test_set_version_refuses_a_version_from_another_setup(self) -> None:
+        manager, mine = await self._kin()
+        env = _env(await manager.kins_manager(SetVersionAction(setup_id=mine, setup_version_id="setups:other:v")))
+        assert env["metadata"]["success"] is False
+
+    async def test_set_version_marks_itself_as_a_write(self) -> None:
+        """``writes`` drives the servicer setup-cache invalidation; without it a rollback is invisible."""
+        assert SetVersionAction.writes is True
+        assert ListVersionsAction.writes is False
+
+
+class TestVersionActionsRespectTheTypeBoundary:
+    """Version history is as type-scoped as the setup it belongs to."""
+
+    async def test_list_versions_refuses_a_foreign_kind(self) -> None:
+        env = _env(await KinsManager(*_stores()).kins_manager(ListVersionsAction(setup_id="setups:duda")))
+        assert env["metadata"]["success"] is False
+        assert "kind mismatch" in json.dumps(env)
+
+    async def test_set_version_refuses_a_foreign_kind(self) -> None:
+        env = _env(
+            await ToolsManager(*_stores()).tools_manager(
+                SetVersionAction(setup_id="setups:isaac", setup_version_id="setups:isaac:v")
+            )
+        )
+        assert env["metadata"]["success"] is False
+        assert "kind mismatch" in json.dumps(env)
+
+    def test_both_actions_are_on_every_manager(self) -> None:
+        setup, registry = _stores()
+        for manager, tool in (
+            (ToolsManager(setup, registry), "tools_manager"),
+            (ServicesManager(setup, registry), "services_manager"),
+            (KinsManager(setup, registry), "kins_manager"),
+        ):
+            schema = json.dumps(manager.async_functions[tool].parameters)
+            assert "list_versions" in schema
+            assert "set_version" in schema
+
+
+class TestFlattenedCalls:
+    """Models routinely flatten a nested union instead of nesting it; that must still dispatch.
+
+    The tool schema declares one ``action`` property holding the union, but models send
+    ``{"action": "search", "query": ""}`` at least as often as the nested form. Because the
+    ``Function`` is registered with ``skip_entrypoint_processing``, agno splats those arguments
+    straight onto the entrypoint — so anything it does not absorb dies as a ``TypeError`` inside
+    agno, before validation can turn it into a correctable message.
+    """
+
+    async def test_the_flattened_form_dispatches(self) -> None:
+        env = _env(await KinsManager(*_stores()).kins_manager(action="search", query="", limit=5))
+        assert env["metadata"]["success"] is True
+        assert env["metadata"]["tool"] == "search"
+
+    async def test_the_flattened_form_matches_the_nested_one(self) -> None:
+        flat = _env(await ToolsManager(*_stores()).tools_manager(action="search", query="duda"))
+        nested = _env(await ToolsManager(*_stores()).tools_manager({"action": "search", "query": "duda"}))
+        assert flat["output"] == nested["output"]
+
+    async def test_a_bare_discriminator_needs_no_fields(self) -> None:
+        env = _env(await KinsManager(*_stores()).kins_manager(action="search"))
+        assert env["metadata"]["success"] is True
+
+    async def test_the_inner_object_may_arrive_as_a_json_string(self) -> None:
+        env = _env(await KinsManager(*_stores()).kins_manager('{"action": "search", "query": ""}'))
+        assert env["metadata"]["success"] is True
+
+    async def test_flattened_fields_reach_the_action(self) -> None:
+        """Re-nesting must carry the values, not merely stop the TypeError."""
+        seen: dict[str, Any] = {}
+
+        class _Recording(DefaultRegistry):
+            async def search_setups(self, **kwargs: Any) -> list:
+                seen.update(kwargs)
+                return []
+
+        await ToolsManager(DefaultSetup(), _Recording("", "", "")).tools_manager(
+            action="search", query="hello", limit=7, offset=3
+        )
+        assert seen["query"] == "hello"
+        assert seen["offset"] == 3
+
+    async def test_flattening_works_for_every_manager(self) -> None:
+        setup, registry = _stores()
+        for manager, call in (
+            (ToolsManager(setup, registry), "tools_manager"),
+            (ServicesManager(setup, registry), "services_manager"),
+            (KinsManager(setup, registry), "kins_manager"),
+        ):
+            env = _env(await getattr(manager, call)(action="search", query=""))
+            assert env["metadata"]["success"] is True, call
+
+    async def test_flattening_works_for_the_new_version_actions(self) -> None:
+        env = _env(await KinsManager(*_stores()).kins_manager(action="list_versions", setup_id="setups:isaac"))
+        assert env["metadata"]["success"] is True
+        assert env["output"]["total_count"] == 1
+
+    async def test_an_invalid_flattened_field_still_fails_cleanly(self) -> None:
+        """Absorbing the arguments must not turn a bad value into a silent success."""
+        env = _env(await KinsManager(*_stores()).kins_manager(action="search", limit=999))
+        assert env["metadata"]["success"] is False
+        assert "limit" in env["error"]
+
+    async def test_an_unknown_flattened_field_is_ignored_like_a_nested_one(self) -> None:
+        """Extras are dropped, not refused — the action models keep pydantic's default policy.
+
+        Worth pinning: re-nesting must not make the flattened path stricter than the nested one,
+        or a call the model can already make today would start failing depending on how it framed
+        the arguments.
+        """
+        setup, registry = _stores()
+        flat = _env(await KinsManager(setup, registry).kins_manager(action="search", nonsense=1))
+        nested = _env(await KinsManager(setup, registry).kins_manager({"action": "search", "nonsense": 1}))
+        assert flat["metadata"]["success"] is True
+        assert nested["metadata"]["success"] is True
+
+
+class TestOrphanedSetups:
+    """A setup whose backing module cannot be resolved must still be removable."""
+
+    @staticmethod
+    async def _orphan() -> tuple[DefaultSetup, DefaultRegistry, str]:
+        """A setup whose ``module_id`` the registry has never heard of."""
+        setup, registry = DefaultSetup(), DefaultRegistry("", "", "")
+        created = await setup.create_setup({"name": "orphan", "content": {"a": 1}})
+        return setup, registry, created.id
+
+    async def test_delete_removes_an_orphan(self) -> None:
+        """Otherwise the record is unremovable by anyone, forever."""
+        setup, registry, setup_id = await self._orphan()
+        env = _env(await ServicesManager(setup, registry).services_manager(DeleteAction(setup_id=setup_id)))
+        assert env["metadata"]["success"] is True
+        assert setup_id not in setup.setups
+
+    async def test_reads_still_refuse_an_orphan(self) -> None:
+        """Only delete is widened: an unknowable kind must not become a cross-type read."""
+        setup, registry, setup_id = await self._orphan()
+        manager = ServicesManager(setup, registry)
+        for action in (GetAction(setup_id=setup_id), ListVersionsAction(setup_id=setup_id)):
+            env = _env(await manager.services_manager(action))
+            assert env["metadata"]["success"] is False
+
+    async def test_a_registry_outage_does_not_authorise_a_delete(self) -> None:
+        """The widening keys on NOT-FOUND, not on 'the registry call failed'.
+
+        A transient outage must not destroy a healthy setup whose type simply could not be
+        read at that moment — including one belonging to another manager.
+        """
+        setup, _registry, setup_id = await self._orphan()
+
+        class _Unreachable(DefaultRegistry):
+            async def discover_by_id(self, module_id: str) -> ModuleInfo:
+                raise RegistryServiceError("registry unreachable")
+
+        env = _env(
+            await ServicesManager(setup, _Unreachable("", "", "")).services_manager(
+                DeleteAction(setup_id=setup_id)
+            )
+        )
+        assert env["metadata"]["success"] is False
+        assert setup_id in setup.setups
+
+    async def test_a_resolvable_setup_of_another_kind_is_still_refused(self) -> None:
+        env = _env(await ToolsManager(*_stores()).tools_manager(DeleteAction(setup_id="setups:isaac")))
+        assert env["metadata"]["success"] is False
+        assert "kind mismatch" in json.dumps(env)

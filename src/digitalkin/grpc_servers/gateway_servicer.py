@@ -687,13 +687,22 @@ class GatewayServicer:
                 )
                 yield self._sentinel(0, task_id, "stream.end")
                 return
-            except RedisError:
+            except RedisError as exc:
+                # RedisError spans ConnectionError/TimeoutError/OutOfMemoryError and this branch
+                # kills the caller's in-flight call — name the concrete one or it is undiagnosable.
+                logger.warning(
+                    "Gateway: redis unavailable during stream read: %s: %s",
+                    type(exc).__name__,
+                    exc,
+                    exc_info=True,
+                    extra={"task_id": task_id},
+                )
                 yield self._sentinel(
                     0,
                     task_id,
                     "stream.error",
                     code=StreamErrorCode.REDIS_UNAVAILABLE.value,
-                    message="redis unavailable during stream read",
+                    message=f"redis unavailable during stream read: {type(exc).__name__}: {exc}",
                     fatal=True,
                 )
                 yield self._sentinel(0, task_id, "stream.end")
@@ -954,14 +963,22 @@ class GatewayServicer:
                             f"dial-back idle timeout: no module output in {idle_timeout:.0f}s",
                         )
                         return
-                    except RedisError:
+                    except RedisError as exc:
+                        # Same reasoning as _consume_guarded: name the concrete error.
+                        logger.warning(
+                            "Dial-back: redis unavailable during stream read: %s: %s",
+                            type(exc).__name__,
+                            exc,
+                            exc_info=True,
+                            extra=log_extra,
+                        )
                         for sc in (
                             self._sentinel(
                                 0,
                                 task_id,
                                 "stream.error",
                                 code=StreamErrorCode.REDIS_UNAVAILABLE.value,
-                                message="redis unavailable during stream read",
+                                message=f"redis unavailable during stream read: {type(exc).__name__}: {exc}",
                                 fatal=True,
                             ),
                             self._sentinel(0, task_id, "stream.end"),

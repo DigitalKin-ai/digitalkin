@@ -28,6 +28,9 @@ class StorageRecord(BaseModel):
     data: BaseModel = Field(..., description="The typed payload of this record")
     creation_date: datetime.datetime | None = Field(default=None, description="When this record was first created")
     update_date: datetime.datetime | None = Field(default=None, description="When this record was last modified")
+    storage_id: str = Field(
+        default="", description="Service-assigned `storage:<id>` for this record; empty until stored"
+    )
 
 
 class StorageStrategy(BaseStrategy, ABC):
@@ -139,13 +142,14 @@ class StorageStrategy(BaseStrategy, ABC):
         """
 
     @abstractmethod
-    async def _read(self, collection: str, record_id: str, context: str) -> StorageRecord | None:
+    async def _read(self, collection: str, record_id: str, context: str, storage_id: str = "") -> StorageRecord | None:
         """Get records from storage scoped to a specific context.
 
         Args:
             collection: The unique name to retrieve data for
             record_id: The unique ID of the record
             context: Resolved owner context (e.g. `missions:<mission_id>` or `setup_versions:<setup_version_id>`).
+            storage_id: Address a specific stored revision; empty lets the service pick.
 
         Returns:
             A storage record with validated data
@@ -188,7 +192,13 @@ class StorageStrategy(BaseStrategy, ABC):
 
     @abstractmethod
     async def _list(
-        self, collection: str, context: str, visibilities: list[Visibility] | None = None
+        self,
+        collection: str,
+        context: str,
+        visibilities: list[Visibility] | None = None,
+        record_id: str = "",
+        limit: int = 0,
+        offset: int = 0,
     ) -> list[StorageRecord]:
         """List all records in a collection scoped to a specific context.
 
@@ -196,18 +206,22 @@ class StorageStrategy(BaseStrategy, ABC):
             collection: The unique name for the record type
             context: Owner context filter.
             visibilities: Optional read-access scopes to filter by (None = no filter).
+            record_id: Restrict to this record id; empty means no filter.
+            limit: Max records to return; 0 means the service default.
+            offset: Records to skip before returning results.
 
         Returns:
             A list of storage records
         """
 
     @abstractmethod
-    async def _remove_collection(self, collection: str, context: str) -> bool:
+    async def _remove_collection(self, collection: str, context: str, record_id: str = "") -> bool:
         """Delete all records in a collection scoped to a specific context.
 
         Args:
             collection: The unique name for the record type
             context: Owner context for which to wipe records.
+            record_id: Restrict removal to this record id; empty wipes the whole collection.
 
         Returns:
             True if the deletion was successful, False otherwise
@@ -283,20 +297,27 @@ class StorageStrategy(BaseStrategy, ABC):
         async with self._record_lock(record.context, collection, record_id):
             return await self._store(record)
 
-    async def read(self, collection: str, record_id: str, context: Context = Context.MISSIONS) -> StorageRecord | None:
+    async def read(
+        self,
+        collection: str,
+        record_id: str,
+        context: Context = Context.MISSIONS,
+        storage_id: str = "",
+    ) -> StorageRecord | None:
         """Get a record by key under the given scope.
 
         Args:
             collection: The unique name to retrieve data for
             record_id: The unique ID of the record
             context: Which context to read from (default: "mission").
+            storage_id: Address a specific stored revision; empty lets the service pick.
 
         Returns:
             The matching record if it exists, otherwise None.
         """
         ctx = self._resolve_context(context)
         async with self._record_lock(ctx, collection, record_id):
-            return await self._read(collection, record_id, ctx)
+            return await self._read(collection, record_id, ctx, storage_id)
 
     async def update(
         self,
@@ -346,6 +367,9 @@ class StorageStrategy(BaseStrategy, ABC):
         collection: str,
         context: Context = Context.MISSIONS,
         visibilities: list[Visibility] | None = None,
+        record_id: str = "",
+        limit: int = 0,
+        offset: int = 0,
     ) -> list[StorageRecord]:
         """Get all records in a collection under the given scope.
 
@@ -354,28 +378,39 @@ class StorageStrategy(BaseStrategy, ABC):
             context: Which context to list (default: "mission"). "user"/"organization"
                 list across an owner and require `owner_id`.
             visibilities: Optional read-access scopes to filter by (None = no filter).
+            record_id: Restrict to this record id; empty means no filter.
+            limit: Max records to return; 0 means the service default (20, capped at 100).
+            offset: Records to skip before returning results.
 
         Returns:
             A list of storage records under the resolved context.
         """
-        return await self._list(collection, self._resolve_context(context), visibilities)
+        return await self._list(collection, self._resolve_context(context), visibilities, record_id, limit, offset)
 
-    async def remove_collection(self, collection: str, context: Context = Context.MISSIONS) -> bool:
+    async def remove_collection(
+        self, collection: str, context: Context = Context.MISSIONS, record_id: str = ""
+    ) -> bool:
         """Wipe a collection clean under the given scope.
 
         Args:
             collection: The unique name for the record type
             context: Which context the records live under (default: "mission").
+            record_id: Restrict removal to this record id; empty wipes the whole collection.
 
         Returns:
             True if the deletion was successful, False otherwise
         """
         ctx = self._resolve_context(context)
-        result = await self._remove_collection(collection, ctx)
+        result = await self._remove_collection(collection, ctx, record_id)
         if result:
-            prefix = f"{ctx}|{collection}:"
-            for key in [k for k in self._record_locks if k.startswith(prefix)]:
-                self._record_locks.pop(key, None)
+            # A record_id names one exact lock; without it the whole collection's locks go.
+            # Not a startswith sweep in the first case, or "rec1" would evict "rec10" too.
+            if record_id:
+                self._record_locks.pop(f"{ctx}|{collection}:{record_id}", None)
+            else:
+                prefix = f"{ctx}|{collection}:"
+                for key in [k for k in self._record_locks if k.startswith(prefix)]:
+                    self._record_locks.pop(key, None)
         return result
 
     async def upsert(

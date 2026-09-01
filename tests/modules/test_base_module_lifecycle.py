@@ -526,6 +526,41 @@ class TestStop:
         sent = module.context.callbacks.send_message.call_args[0][0]
         assert sent.root.protocol == "stream.end"
 
+    async def test_slow_cleanup_is_warned_about(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A cleanup hook that blocks the loop must name itself in the logs.
+
+        The damage lands on unrelated in-flight work (bogus ``REDIS_UNAVAILABLE`` on gateway
+        streams), so without this warning the module that actually stalled is invisible.
+        """
+        cls = _make_module_cls()
+        module = _instantiate(cls)
+        module.context.callbacks.send_message = AsyncMock()
+
+        async def _slow_cleanup() -> None:
+            await asyncio.sleep(1.05)
+
+        with patch.object(module, "cleanup", new=_slow_cleanup), caplog.at_level("WARNING", logger="digitalkin"):
+            await module.stop()
+
+        warnings = [r for r in caplog.records if "cleanup() took" in r.getMessage()]
+        assert len(warnings) == 1
+        assert cls.__name__ in warnings[0].getMessage()
+        assert "asyncio.to_thread" in warnings[0].getMessage()
+
+    async def test_fast_cleanup_is_not_warned_about(self, caplog: pytest.LogCaptureFixture) -> None:
+        """The normal path stays quiet."""
+        cls = _make_module_cls()
+        module = _instantiate(cls)
+        module.context.callbacks.send_message = AsyncMock()
+
+        with (
+            patch.object(module, "cleanup", new_callable=AsyncMock),
+            caplog.at_level("WARNING", logger="digitalkin"),
+        ):
+            await module.stop()
+
+        assert not [r for r in caplog.records if "cleanup() took" in r.getMessage()]
+
     async def test_cleanup_error_sets_failed(self) -> None:
         """stop() sets FAILED when cleanup raises."""
         cls = _make_module_cls()

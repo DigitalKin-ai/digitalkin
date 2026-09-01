@@ -11,12 +11,15 @@ This test suite validates the GrpcRegistry service implementation, including:
 import asyncio
 import types
 from concurrent import futures
+from enum import Enum
 
 import grpc
 import grpc_testing
 import pytest
 from agentic_mesh_protocol.registry.v1 import (
     registry_enums_pb2,
+    registry_models_pb2,
+    registry_requests_pb2,
     registry_service_pb2,
     registry_service_pb2_grpc,
 )
@@ -26,6 +29,7 @@ from digitalkin.models.services.registry import (
     RegistryModuleStatus,
     RegistryModuleType,
     RegistrySetupStatus,
+    RegistrySortBy,
     RegistryVisibility,
 )
 from digitalkin.models.settings.utils.channel import ControlFlow, SecurityMode
@@ -862,3 +866,151 @@ class TestSearchSetups:
         _, results = self._run_search(client, test_channel, mock_servicer, thread_pool, query="nothing")
 
         assert results == []
+
+
+class TestTagsAndSorting:
+    """tags / sort_by / descending reach the wire, and tags come back on the models."""
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    def test_search_modules_forwards_tags_and_sort(
+        self,
+        client: GrpcRegistry,
+        test_channel: grpc_testing.Channel,
+        mock_servicer: MockRegistryServicer,
+        thread_pool: futures.ThreadPoolExecutor,
+    ) -> None:
+        method_desc = registry_service_pb2.DESCRIPTOR.services_by_name["RegistryService"].methods_by_name[
+            "SearchModules"
+        ]
+        future = thread_pool.submit(
+            asyncio.run,
+            client.search(tags=["rag", "ocr"], sort_by=RegistrySortBy.NAME, descending=True),
+        )
+        _, request, rpc = test_channel.take_unary_unary(method_desc)
+
+        assert list(request.tags) == ["rag", "ocr"]
+        assert request.sort_by == registry_enums_pb2.SORT_BY_NAME
+        assert request.descending is True
+
+        rpc.send_initial_metadata(())
+        rpc.terminate(mock_servicer.SearchModules(request, FakeContext()), (), grpc.StatusCode.OK, "")
+        future.result(timeout=1.0)
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    def test_search_modules_defaults_leave_sorting_to_the_registry(
+        self,
+        client: GrpcRegistry,
+        test_channel: grpc_testing.Channel,
+        mock_servicer: MockRegistryServicer,
+        thread_pool: futures.ThreadPoolExecutor,
+    ) -> None:
+        method_desc = registry_service_pb2.DESCRIPTOR.services_by_name["RegistryService"].methods_by_name[
+            "SearchModules"
+        ]
+        future = thread_pool.submit(asyncio.run, client.search())
+        _, request, rpc = test_channel.take_unary_unary(method_desc)
+
+        assert list(request.tags) == []
+        assert request.sort_by == registry_enums_pb2.SORT_BY_UNSPECIFIED
+        assert request.descending is False
+
+        rpc.send_initial_metadata(())
+        rpc.terminate(mock_servicer.SearchModules(request, FakeContext()), (), grpc.StatusCode.OK, "")
+        future.result(timeout=1.0)
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    def test_search_setups_forwards_tags_and_sort(
+        self,
+        client: GrpcRegistry,
+        test_channel: grpc_testing.Channel,
+        mock_servicer: MockRegistryServicer,
+        thread_pool: futures.ThreadPoolExecutor,
+    ) -> None:
+        method_desc = registry_service_pb2.DESCRIPTOR.services_by_name["RegistryService"].methods_by_name[
+            "SearchSetups"
+        ]
+        future = thread_pool.submit(
+            asyncio.run,
+            client.search_setups(tags=["billing"], sort_by=RegistrySortBy.CREATED_AT),
+        )
+        _, request, rpc = test_channel.take_unary_unary(method_desc)
+
+        assert list(request.tags) == ["billing"]
+        assert request.sort_by == registry_enums_pb2.SORT_BY_CREATED_AT
+        assert request.descending is False
+
+        rpc.send_initial_metadata(())
+        rpc.terminate(mock_servicer.SearchSetups(request, FakeContext()), (), grpc.StatusCode.OK, "")
+        future.result(timeout=1.0)
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    def test_module_summary_tags_are_decoded(
+        self,
+        client: GrpcRegistry,
+        test_channel: grpc_testing.Channel,
+        thread_pool: futures.ThreadPoolExecutor,
+    ) -> None:
+        method_desc = registry_service_pb2.DESCRIPTOR.services_by_name["RegistryService"].methods_by_name[
+            "SearchModules"
+        ]
+        future = thread_pool.submit(asyncio.run, client.search())
+        _, _request, rpc = test_channel.take_unary_unary(method_desc)
+
+        rpc.send_initial_metadata(())
+        rpc.terminate(
+            registry_requests_pb2.SearchModulesResponse(
+                modules=[
+                    registry_models_pb2.ModuleSummary(
+                        id="modules:1", name="M", tags=["rag", "ocr"]
+                    )
+                ],
+                total=1,
+            ),
+            (),
+            grpc.StatusCode.OK,
+            "",
+        )
+
+        assert future.result(timeout=1.0)[0].tags == ["rag", "ocr"]
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    def test_setup_summary_tags_are_decoded(
+        self,
+        client: GrpcRegistry,
+        test_channel: grpc_testing.Channel,
+        thread_pool: futures.ThreadPoolExecutor,
+    ) -> None:
+        method_desc = registry_service_pb2.DESCRIPTOR.services_by_name["RegistryService"].methods_by_name[
+            "SearchSetups"
+        ]
+        future = thread_pool.submit(asyncio.run, client.search_setups())
+        _, _request, rpc = test_channel.take_unary_unary(method_desc)
+
+        rpc.send_initial_metadata(())
+        rpc.terminate(
+            registry_requests_pb2.SearchSetupsResponse(
+                setups=[
+                    registry_models_pb2.SetupSummary(id="setups:1", name="S", tags=["billing"])
+                ],
+                total=1,
+            ),
+            (),
+            grpc.StatusCode.OK,
+            "",
+        )
+
+        assert future.result(timeout=1.0)[0].tags == ["billing"]
+
+    def test_an_unknown_sort_key_fails_closed(self, client: GrpcRegistry) -> None:
+        """Enum drift must raise rather than silently ship a filter the server ignores."""
+
+        class _Rogue(Enum):
+            NOT_A_SORT_KEY = "nope"
+
+        with pytest.raises(ValueError, match="SORT_BY_NOT_A_SORT_KEY"):
+            asyncio.run(client.search(sort_by=_Rogue.NOT_A_SORT_KEY))

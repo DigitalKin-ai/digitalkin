@@ -26,7 +26,7 @@ from pydantic import BaseModel, TypeAdapter, ValidationError, create_model, fiel
 from digitalkin.community.agno.toolkits.base import DkToolkit
 from digitalkin.grpc_servers.exceptions import PermissionDeniedError, ServerError
 from digitalkin.logger import logger
-from digitalkin.services.registry.exceptions import RegistryServiceError
+from digitalkin.services.registry.exceptions import RegistryModuleNotFoundError, RegistryServiceError
 from digitalkin.services.setup.exceptions import SetupServiceError
 from digitalkin.utils.proto_utils import ProtoUtils
 from digitalkin.utils.setup_content_validator import SetupContentValidator
@@ -114,7 +114,7 @@ class RegistryActionCtx(BaseActionCtx):
             return
         SetupContentValidator.validate(content, schema)
 
-    async def ensure_kind(self, setup_id: str) -> SetupData:
+    async def ensure_kind(self, setup_id: str, *, orphan_ok: bool = False) -> SetupData:
         """Resolve a setup by id and assert its backing module is this manager's type.
 
         The three managers share one ``SetupService`` backend, so an id resolves whatever
@@ -127,15 +127,32 @@ class RegistryActionCtx(BaseActionCtx):
 
         Args:
             setup_id: The setup id the action targets.
+            orphan_ok: Accept a setup whose backing module the registry cannot resolve at all.
+                Only ``delete`` sets this — see below.
 
         Returns:
             The resolved setup.
 
         Raises:
             ValueError: The setup's backing module is not of this manager's type.
+            RegistryModuleNotFoundError: The backing module cannot be resolved and ``orphan_ok``
+                is not set.
         """
         setup = await self.setup.get_setup({"setup_id": setup_id})
-        module = await self.registry.discover_by_id(setup.module_id)
+        try:
+            module = await self.registry.discover_by_id(setup.module_id)
+        except RegistryModuleNotFoundError:
+            # A setup can outlive its module (a create that resolved to a module the registry never
+            # had, a module since removed). Its kind is then unknowable, so every manager refuses it
+            # — including delete, which leaves a permanently unremovable record. An orphan belongs to
+            # no type, so there is nothing to confuse it with: let delete through, and only delete.
+            # Caught by class, not by message: a transient registry outage raises the plain
+            # RegistryServiceError and still fails closed, so a reachable setup of another type is
+            # never destroyed because the registry blinked.
+            if not orphan_ok:
+                raise
+            logger.warning("%s: %s has no resolvable module; allowing delete", type(self).__name__, setup_id)
+            return setup
         if module.module_type != self.module_type:
             msg = f"{setup_id} is not a {self.module_type.value} setup (kind mismatch); refused"
             raise ValueError(msg)
@@ -247,7 +264,7 @@ class RegistryObjectToolKit(DkToolkit):
         )
         super().__init__(name=name, tools=[tool], context=context)
 
-    async def _run(self, action: Any) -> str:
+    async def _run(self, action: Any = None, **fields: Any) -> str:
         """Validate a raw discriminated action then dispatch it.
 
         The single entrypoint shared by every manager. Agno passes the model's raw ``action``
@@ -257,20 +274,26 @@ class RegistryObjectToolKit(DkToolkit):
         field, never a raised ``ValidationError``.
 
         Args:
-            action: The raw action payload, or a built action instance.
+            action: The raw action payload, a JSON string of it, a built action instance, or the
+                bare discriminator when the model flattened the call.
+            fields: Sibling keyword arguments — the flattened action's own fields. ``Function``
+                is registered with ``skip_entrypoint_processing``, so agno splats the model's
+                arguments straight onto the entrypoint; without absorbing them here a flattened
+                call dies as a ``TypeError`` inside agno instead of reaching validation.
 
         Returns:
             The dispatch envelope, or a fail envelope naming the invalid field(s).
         """
+        payload = self._nest_action(action, fields)
         try:
             # Some models serialise the nested ``action`` object as a JSON string instead of an
             # object (the discriminated-union schema triggers it) — parse that with validate_json;
             # a dict (agno's parsed args) or an already-built instance (tests) go through
             # validate_python.
             parsed = (
-                self._adapter.validate_json(action)
-                if isinstance(action, str)
-                else self._adapter.validate_python(action)
+                self._adapter.validate_json(payload)
+                if isinstance(payload, str)
+                else self._adapter.validate_python(payload)
             )
         except ValidationError as error:
             detail = "; ".join(f"{'.'.join(str(p) for p in item['loc'])}: {item['msg']}" for item in error.errors())

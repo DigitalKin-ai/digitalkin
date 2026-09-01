@@ -13,6 +13,10 @@ import asyncio
 from typing import TYPE_CHECKING, Any
 
 import redis.asyncio as aioredis
+from redis.asyncio.retry import Retry
+from redis.backoff import ExponentialBackoff
+from redis.exceptions import ConnectionError as RedisConnectionError
+from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from digitalkin.grpc_servers.utils.validators import GatewayValidator
 from digitalkin.logger import logger
@@ -48,17 +52,25 @@ class RedisClient:  # noqa: PLR0904
         default_size = pool.get_default_pool_size()
         blocking_size = pool.get_blocking_pool_size()
 
+        # socket_timeout is a client-side asyncio timer, so a blocked event loop trips it and
+        # reports "Timeout reading from <host>" even when Redis is healthy. Set it explicitly.
         self._client = aioredis.Redis.from_url(
             self.url,
             max_connections=default_size,
             decode_responses=False,
             health_check_interval=pool.health_check_interval,
+            socket_timeout=pool.socket_timeout,
         )
+        # Retries here only: XREAD is an idempotent cursor read. The pool above keeps redis-py's
+        # zero-retry default since a retried XADD would duplicate a stream frame.
         self._blocking_client = aioredis.Redis.from_url(
             self.url,
             max_connections=blocking_size,
             decode_responses=False,
             health_check_interval=pool.health_check_interval,
+            socket_timeout=pool.socket_timeout,
+            retry=Retry(ExponentialBackoff(cap=0.5, base=0.01), pool.blocking_read_retries),
+            retry_on_error=[RedisConnectionError, RedisTimeoutError],
         )
 
         logger.debug(

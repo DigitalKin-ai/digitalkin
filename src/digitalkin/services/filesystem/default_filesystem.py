@@ -10,6 +10,7 @@ from anyio import Path as AsyncPath
 
 from digitalkin.logger import logger
 from digitalkin.models.services.services import Context
+from digitalkin.models.services.storage import Visibility
 from digitalkin.services.filesystem.exceptions import FilesystemServiceError
 from digitalkin.services.filesystem.filesystem_strategy import (
     FileFilter,
@@ -91,6 +92,7 @@ class DefaultFilesystem(FilesystemStrategy):
             and (not filters.max_size_bytes or f.size_bytes <= filters.max_size_bytes)
             and (not filters.prefix or f.name.startswith(filters.prefix))
             and (not filters.content_type or f.content_type == filters.content_type)
+            and (not filters.visibilities or f.visibility in filters.visibilities)
         ]
 
     async def upload_files(
@@ -139,6 +141,7 @@ class DefaultFilesystem(FilesystemStrategy):
                     storage_uri=storage_uri,
                     file_url=storage_uri,
                     status="ACTIVE",
+                    visibility=file.visibility,
                 )
 
                 self.db[file_data.id] = file_data
@@ -251,7 +254,7 @@ class DefaultFilesystem(FilesystemStrategy):
         else:
             return file_data
 
-    async def update_file(
+    async def update_file(  # Complex: one independent branch per optional field # noqa: C901
         self,
         file_id: str,
         content: bytes | None = None,
@@ -270,6 +273,7 @@ class DefaultFilesystem(FilesystemStrategy):
         metadata: dict[str, Any] | None = None,
         new_name: str | None = None,
         status: str | None = None,
+        visibility: Visibility = Visibility.UNSPECIFIED,
     ) -> FilesystemRecord:
         """Update file metadata, content, or both.
 
@@ -287,6 +291,7 @@ class DefaultFilesystem(FilesystemStrategy):
             metadata: Optional new metadata (will merge with existing)
             new_name: Optional new name for the file
             status: Optional new status for the file
+            visibility: Optional new read-access scope; UNSPECIFIED leaves it unchanged
 
         Returns:
             FilesystemRecord: Metadata about the updated file
@@ -321,6 +326,9 @@ class DefaultFilesystem(FilesystemStrategy):
 
             if status is not None:
                 existing_file.status = status
+
+            if visibility is not Visibility.UNSPECIFIED:
+                existing_file.visibility = visibility
 
             if new_name is not None:
                 new_path = os.path.join(context_dir, new_name)

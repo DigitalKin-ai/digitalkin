@@ -81,6 +81,33 @@ class DkToolkit(Toolkit):
         """
         return json.dumps({"error": error, "metadata": {"success": False, **metadata}}, ensure_ascii=False)
 
+    @staticmethod
+    def _nest_action(action: Any, fields: dict[str, Any]) -> Any:
+        """Normalise the three shapes a model sends a nested ``action`` object in.
+
+        The tool schema declares a single ``action`` property holding a discriminated union, but
+        models routinely flatten it — sending ``{"action": "search", "query": ""}`` instead of
+        ``{"action": {"action": "search", "query": ""}}`` — or serialise the inner object as a
+        JSON string. Both are the model reading a nested union schema the obvious way, not a
+        malformed call, so they are accepted rather than refused.
+
+        Args:
+            action: The ``action`` argument as received: the object, a JSON string of it, or the
+                bare discriminator when the model flattened the call.
+            fields: Any sibling keyword arguments, i.e. the flattened action's own fields.
+
+        Returns:
+            The payload to validate: a JSON string is passed through for ``validate_json``,
+            anything else comes back as a dict.
+        """
+        if isinstance(action, str):
+            # A JSON string is the inner object already; anything else is the bare discriminator,
+            # whose fields were flattened alongside it (empty when the action takes none).
+            return action if action.lstrip().startswith("{") else {"action": action, **fields}
+        if fields and isinstance(action, dict):
+            return {**action, **fields}
+        return fields if action is None and fields else action
+
     async def _notify(self, name: str, value: Any) -> None:
         """Emit an AG-UI custom event on the agent's output stream (best-effort).
 

@@ -51,6 +51,22 @@ async def test_consume_guarded_redis_error_emits_sentinel() -> None:
     err = outs[0].data.fields["root"].struct_value.fields
     assert err["code"].string_value == StreamErrorCode.REDIS_UNAVAILABLE.value
     assert err["fatal"].bool_value is True
+    # RedisError spans ConnectionError/TimeoutError/OutOfMemoryError/...; naming the concrete
+    # one is the difference between a diagnosable incident and an opaque "redis unavailable".
+    assert "ConnectionError" in err["message"].string_value
+    assert "redis down" in err["message"].string_value
+
+
+async def test_consume_guarded_redis_error_is_logged_with_traceback(caplog: pytest.LogCaptureFixture) -> None:
+    """The branch kills the caller's in-flight call, so it must leave a diagnosable log record."""
+    servicer = GatewayServicer(redis_client=_RedisDownOnRead())  # type: ignore[arg-type]
+    with caplog.at_level("WARNING", logger="digitalkin"):
+        [m async for m in servicer._consume_guarded("task_r2", 0)]
+    records = [r for r in caplog.records if "redis unavailable during stream read" in r.getMessage()]
+    assert len(records) == 1
+    assert "ConnectionError" in records[0].getMessage()
+    assert records[0].exc_info is not None
+    assert records[0].task_id == "task_r2"
 
 
 async def test_startstream_claim_redis_error_returns_not_accepted() -> None:
