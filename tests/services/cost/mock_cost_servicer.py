@@ -7,7 +7,8 @@ from agentic_mesh_protocol.cost.v1 import cost_pb2, cost_service_pb2_grpc
 from pydantic import ValidationError
 
 from digitalkin.logger import logger
-from digitalkin.services.cost.cost_strategy import CostData, CostType
+from digitalkin.models.services.cost import CostType
+from digitalkin.services.cost.cost_strategy import CostData
 
 
 class MockCostServicer(cost_service_pb2_grpc.CostServiceServicer):

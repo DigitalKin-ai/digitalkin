@@ -8,7 +8,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from digitalkin.core.profiling.task_profiler import ProfilerMode, TaskProfiler
+from digitalkin.core.profiling.task_profiler import TaskProfiler
+from digitalkin.models.settings.profiling import ProfilerMode
 
 
 class TestProfilerMode:

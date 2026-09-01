@@ -1,0 +1,624 @@
+"""Tests for the server-initiated dial-back flow.
+
+Covers `GatewayServicer._dial_consumer`:
+- Happy path: stream.init → client query → output drain → stream.end.
+- No metadata header: gateway does not dial back.
+- Consumer never replies: gate is set defensively, no leak.
+- Multi-turn upstream: every consumer reply lands on session.input_queue.
+- Co-existence with the M2M client-initiated Stream BiDi (regression).
+
+The fake consumer is a real gRPC server (in-process) implementing
+`GatewayService.Stream`. The dispatcher is bypassed — tests prime Redis
+directly via fakeredis to drive `_consume_from_redis`.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from collections.abc import AsyncIterator
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock
+
+import grpc.aio
+import pytest
+from agentic_mesh_protocol.gateway.v1 import gateway_pb2, gateway_service_pb2_grpc
+from google.protobuf import struct_pb2
+
+try:
+    import fakeredis.aioredis as fakeredis_aio
+except ImportError:
+    fakeredis_aio = None  # type: ignore[assignment]
+
+pytestmark = [pytest.mark.timeout(30)]
+SKIP_NO_FAKEREDIS = pytest.mark.skipif(fakeredis_aio is None, reason="fakeredis not installed")
+
+
+# ---------------------------------------------------------------------------
+# Fake Redis adapter (matches the RedisClient interface used by the gateway)
+# ---------------------------------------------------------------------------
+
+
+class _FakeRedisClient:
+    def __init__(self) -> None:
+        self._client = fakeredis_aio.FakeRedis()
+
+    async def xadd(self, name: str, fields: dict[str, str | bytes], *, maxlen: int | None = None) -> bytes:
+        kwargs: dict[str, Any] = {}
+        if maxlen is not None:
+            kwargs["maxlen"] = maxlen
+            kwargs["approximate"] = True
+        return await self._client.xadd(name, fields, **kwargs)  # type: ignore[return-value]
+
+    async def xread(self, streams: dict[str, str | bytes], *, count: int = 50, block: int = 0) -> list:
+        return await self._client.xread(streams, count=count, block=block)  # type: ignore[return-value]
+
+    async def xrevrange(self, name: str, max_id: str = "+", min_id: str = "-", count: int | None = None) -> list:
+        return await self._client.xrevrange(name, max=max_id, min=min_id, count=count)  # type: ignore[return-value]
+
+    async def xlen(self, name: str) -> int:
+        return await self._client.xlen(name)  # type: ignore[return-value]
+
+    async def expire(self, name: str, seconds: int) -> bool:
+        return await self._client.expire(name, seconds)  # type: ignore[return-value]
+
+    async def get(self, name: str) -> bytes | None:
+        return await self._client.get(name)  # type: ignore[return-value]
+
+    async def set(self, name: str, value: str | bytes, *, ex: int | None = None) -> bool:
+        return await self._client.set(name, value, ex=ex)  # type: ignore[return-value]
+
+    async def hset(self, name: str, mapping: dict[str, str]) -> int:
+        return await self._client.hset(name, mapping=mapping)  # type: ignore[return-value]
+
+    async def publish(self, channel: str, message: str | bytes) -> int:
+        return await self._client.publish(channel, message)  # type: ignore[return-value]
+
+    async def eval(self, script: str, keys: list[str], args: list[str]) -> int | str | bytes | None:
+        return await self._client.eval(script, len(keys), *keys, *args)  # type: ignore[return-value]
+
+    def pipeline(self) -> Any:
+        return self._client.pipeline()
+
+    def pubsub(self) -> Any:
+        return self._client.pubsub()
+
+    async def close(self) -> None:
+        await self._client.aclose()
+
+
+# ---------------------------------------------------------------------------
+# Fake consumer-side GatewayService implementing only Stream
+# ---------------------------------------------------------------------------
+
+
+class _FakeConsumerServicer(gateway_service_pb2_grpc.GatewayServiceServicer):
+    """Records the BiDi traffic and drives the consumer-side handshake."""
+
+    def __init__(
+        self,
+        *,
+        query_data: dict | None = None,
+        extra_upstream: list[dict] | None = None,
+        hang: bool = False,
+        ignore_stream_end: bool = False,
+        hold_open: bool = False,
+    ) -> None:
+        self.received: list[Any] = []
+        self.query_data = query_data
+        self.extra_upstream = extra_upstream or []
+        self.hang = hang
+        self.ignore_stream_end = ignore_stream_end
+        self.hold_open = hold_open
+
+    async def StartStream(self, request, context):
+        return gateway_pb2.StartStreamResponse(accepted=False, task_id=request.task_id)
+
+    async def SendSignal(self, request, context):
+        return gateway_pb2.ClientSignalResponse(success=False, task_id=request.task_id)
+
+    async def Stream(self, request_iterator, context):
+        # Pull the first incoming StreamClient (must be stream.init).
+        first = await anext(request_iterator)
+        self.received.append(first)
+
+        if self.hang:
+            # Don't reply, just keep reading until the call deadline-exceeds.
+            try:
+                async for msg in request_iterator:
+                    self.received.append(msg)
+            except Exception:
+                return
+            return
+
+        # Reply with the user query.
+        if self.query_data is not None:
+            qstruct = struct_pb2.Struct()
+            qstruct.update(self.query_data)
+            yield gateway_pb2.StreamServer(seq=0, task_id=first.task_id, data=qstruct)
+
+        # Optional follow-up upstream messages.
+        for payload in self.extra_upstream:
+            ustruct = struct_pb2.Struct()
+            ustruct.update(payload)
+            yield gateway_pb2.StreamServer(seq=0, task_id=first.task_id, data=ustruct)
+
+        if self.hold_open:
+            # Drain in the background but NEVER close the response stream, even after
+            # the gateway half-closes its send side. This keeps the gateway's inbound
+            # read parked, so only the gateway's own close logic (bounded once outputs
+            # finish draining) can tear the BiDi down — the BUG 1 regression shape.
+            try:
+                async for msg in request_iterator:
+                    self.received.append(msg)
+            except Exception:  # noqa: BLE001
+                return
+            await asyncio.sleep(3600)
+            return
+
+        # Drain any outputs the gateway pushes (it's pushing StreamClients to us).
+        try:
+            async for msg in request_iterator:
+                self.received.append(msg)
+                # Stop reading once we see stream.end (unless misbehaving on purpose).
+                root = msg.data.fields.get("root")
+                if root is not None:
+                    pf = root.struct_value.fields.get("protocol")
+                    if pf is not None and pf.string_value == "stream.end" and not self.ignore_stream_end:
+                        return
+        except Exception:
+            return
+
+
+@pytest.fixture
+async def fake_consumer_server() -> AsyncIterator[tuple[_FakeConsumerServicer, str]]:
+    """Spin up an in-process gRPC server with `_FakeConsumerServicer`.
+
+    Yields the servicer (for assertions) and the host:port to dial.
+    """
+    servicer = _FakeConsumerServicer()
+    server = grpc.aio.server()
+    gateway_service_pb2_grpc.add_GatewayServiceServicer_to_server(servicer, server)
+    port = server.add_insecure_port("127.0.0.1:0")
+    await server.start()
+    try:
+        yield servicer, f"127.0.0.1:{port}"
+    finally:
+        await server.stop(grace=0.1)
+
+
+# ---------------------------------------------------------------------------
+# Gateway servicer fixture (uses fakeredis)
+# ---------------------------------------------------------------------------
+
+
+class _FakeModuleRunner:
+    """Records ModuleRunner.run invocations; never blocks."""
+
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    async def run(
+        self,
+        query: Any,
+        *,
+        task_id: str,
+        setup_id: str,
+        mission_id: str,
+        on_fatal: Any,  # noqa: ARG002
+    ) -> None:
+        self.calls.append({
+            "query": query, "task_id": task_id,
+            "setup_id": setup_id, "mission_id": mission_id,
+        })
+
+
+@pytest.fixture
+async def gateway() -> AsyncIterator[Any]:
+    from digitalkin.grpc_servers.gateway_servicer import GatewayServicer
+    from digitalkin.models.grpc_servers.models import ClientConfig
+    from digitalkin.models.settings.utils.channel import SecurityMode
+
+    redis = _FakeRedisClient()
+    cfg = ClientConfig(host="127.0.0.1", port=1, security=SecurityMode.INSECURE)
+    runner = _FakeModuleRunner()
+    servicer = GatewayServicer(
+        redis_client=redis,  # type: ignore[arg-type]
+        client_config=cfg,
+        module_runner=runner,  # type: ignore[arg-type]
+    )
+    servicer._fake_runner = runner  # type: ignore[attr-defined]  # for tests to introspect
+    try:
+        yield servicer
+    finally:
+        await servicer._registry.shutdown()  # cancel any background dial-back task before it re-dials a dead peer
+        await redis.close()
+
+
+def _mock_context(metadata: dict[str, str] | None = None) -> MagicMock:
+    ctx = MagicMock()
+    ctx.invocation_metadata.return_value = list(metadata.items()) if metadata else []
+    return ctx
+
+
+def _start_request(task_id: str = "task_dial") -> Any:
+    request = MagicMock()
+    request.task_id = task_id
+    request.setup_id = "setups:test"
+    request.mission_id = "missions:test"
+    return request
+
+
+def _protocol_of(stream_msg: Any) -> str:
+    root = stream_msg.data.fields.get("root")
+    if root is None:
+        return ""
+    pf = root.struct_value.fields.get("protocol")
+    return pf.string_value if pf is not None else ""
+
+
+# ===========================================================================
+# Tests
+# ===========================================================================
+
+
+@SKIP_NO_FAKEREDIS
+class TestDialConsumer:
+    async def test_no_metadata_no_dial(self, gateway, fake_consumer_server) -> None:
+        """Without `x-client-address` metadata, gateway does not dial back."""
+        servicer, address = fake_consumer_server  # noqa: ARG002 (address unused intentionally)
+
+        # Issue StartStream WITHOUT metadata
+        await gateway.StartStream(_start_request("task_no_meta"), _mock_context())
+        # Give the event loop a tick — if a dial-back were scheduled it would
+        # have started.
+        await asyncio.sleep(0.1)
+        assert servicer.received == []
+
+    async def test_happy_path_handshake_and_output(self, gateway) -> None:
+        """stream.init → query → 2 outputs from Redis → stream.end."""
+        servicer = _FakeConsumerServicer(query_data={"protocol": "test", "x": 1})
+        server = grpc.aio.server()
+        gateway_service_pb2_grpc.add_GatewayServiceServicer_to_server(servicer, server)
+        port = server.add_insecure_port("127.0.0.1:0")
+        await server.start()
+        try:
+            task_id = "task_happy"
+
+            # Pre-populate Redis with two domain outputs + EOS in the production
+            # xadd format ({"pb","seq"} then {"eos"}) so _consume_from_redis drains it.
+            stream_key = f"task:{task_id}:stream"
+            for i in range(2):
+                s = struct_pb2.Struct()
+                s.update({"protocol": "healthcheck_ping", "status": "pong", "i": i})
+                await gateway._redis_client.xadd(stream_key, {"pb": s.SerializeToString(), "seq": str(i + 1)})
+            await gateway._redis_client.xadd(stream_key, {"eos": b"true"})
+
+            ctx = _mock_context({"x-client-address": f"127.0.0.1:{port}"})
+            # Let StartStream register the session (avoid dedup early-return).
+            await gateway.StartStream(_start_request(task_id), ctx)
+
+            # Wait until consumer sees stream.end on the wire.
+            for _ in range(80):
+                if any(_protocol_of(m) == "stream.end" for m in servicer.received):
+                    break
+                await asyncio.sleep(0.1)
+
+            protos = [_protocol_of(m) for m in servicer.received]
+            assert protos[0] == "stream.init", f"got: {protos}"
+            assert "stream.end" in protos, f"got: {protos}"
+
+            # Reaper-at-stream-end: session must be unregistered when the
+            # dial-back finishes — not 120 s later via heartbeat staleness.
+            for _ in range(20):
+                if gateway._registry.get(task_id) is None:
+                    break
+                await asyncio.sleep(0.05)
+            assert gateway._registry.get(task_id) is None, (
+                "session still registered after stream.end — reaper would log a false zombie"
+            )
+        finally:
+            await server.stop(grace=0.1)
+
+    async def test_first_reply_invokes_module_runner(self, gateway) -> None:
+        """The consumer's first StreamServer reply (the query) is handed to ModuleRunner.run."""
+        servicer = _FakeConsumerServicer(
+            query_data={"protocol": "agui_stream", "user_prompt": "hello"},
+        )
+        server = grpc.aio.server()
+        gateway_service_pb2_grpc.add_GatewayServiceServicer_to_server(servicer, server)
+        port = server.add_insecure_port("127.0.0.1:0")
+        await server.start()
+        try:
+            task_id = "task_runner"
+            ctx = _mock_context({"x-client-address": f"127.0.0.1:{port}"})
+            await gateway.StartStream(_start_request(task_id), ctx)
+
+            runner = gateway._fake_runner
+            for _ in range(50):
+                if runner.calls:
+                    break
+                await asyncio.sleep(0.05)
+
+            assert len(runner.calls) >= 1
+            call = runner.calls[0]
+            assert call["task_id"] == task_id
+            assert call["query"].fields["user_prompt"].string_value == "hello"
+        finally:
+            await server.stop(grace=0.1)
+
+    async def test_multi_turn_upstream(self, gateway) -> None:
+        """First reply → ModuleRunner; subsequent replies → Redis input stream."""
+        servicer = _FakeConsumerServicer(
+            query_data={"q": "first"},
+            extra_upstream=[{"q": "second"}, {"q": "third"}],
+        )
+        server = grpc.aio.server()
+        gateway_service_pb2_grpc.add_GatewayServiceServicer_to_server(servicer, server)
+        port = server.add_insecure_port("127.0.0.1:0")
+        await server.start()
+        try:
+            task_id = "task_multi"
+            ctx = _mock_context({"x-client-address": f"127.0.0.1:{port}"})
+            await gateway.StartStream(_start_request(task_id), ctx)
+
+            redis = gateway._redis_client
+            input_key = f"task:{task_id}:input"
+            for _ in range(80):
+                xlen = await redis.xlen(input_key)
+                if xlen >= 2:
+                    break
+                await asyncio.sleep(0.05)
+
+            # First reply went to ModuleRunner (in-memory by-value).
+            runner = gateway._fake_runner
+            assert len(runner.calls) == 1
+            assert runner.calls[0]["query"].fields["q"].string_value == "first"
+
+            # Follow-up replies XADD'd to the Redis input stream as raw bytes.
+            entries = await redis._client.xrange(input_key)  # noqa: SLF001
+            payloads = []
+            for _entry_id, fields in entries:
+                pb = fields.get(b"pb")
+                assert pb is not None
+                s = struct_pb2.Struct()
+                s.ParseFromString(pb)
+                payloads.append(s.fields["q"].string_value)
+            assert payloads == ["second", "third"]
+        finally:
+            await server.stop(grace=0.1)
+
+    async def test_session_missing_releases_channel(self, gateway, fake_consumer_server) -> None:
+        """If session lookup misses, _dial_consumer releases the channel cleanly."""
+        servicer, address = fake_consumer_server
+        # Drive _dial_consumer directly with a task_id we never registered.
+        await gateway._dial_consumer(
+            task_id="task_no_session",
+            mission_id="missions:none",
+            setup_id="setups:none",
+            address=address,
+        )
+        # Should return immediately without dialing (servicer never called).
+        assert servicer.received == []
+
+    async def test_stub_stream_usage_error_does_not_escape(
+        self, gateway, fake_consumer_server, monkeypatch
+    ) -> None:
+        """If `stub.Stream(...)` raises cygrpc.UsageError (channel closed before BiDi),
+        the spawned task must NOT crash with 'Task exception was never retrieved'.
+        Regression test for the production crash where the consumer is unreachable.
+        """
+        from grpc._cython.cygrpc import UsageError
+
+        from digitalkin.services.communication.grpc_communication import GrpcCommunication
+
+        _servicer, address = fake_consumer_server  # noqa: F841
+        emitted: list[dict] = []
+
+        async def _capture(task_id, *, code, message, log_extra=None):  # noqa: ARG001
+            emitted.append({"task_id": task_id, "code": code, "message": message})
+
+        monkeypatch.setattr(gateway, "_emit_fatal_to_redis", _capture)
+
+        # Register a session so _dial_consumer proceeds past the registry lookup.
+        from digitalkin.grpc_servers.stream_session import StreamSession
+
+        gateway._registry._local_cache["task_usage"] = StreamSession(task_id="task_usage")
+
+        # Patch dial_consumer_stream to return a stub whose Stream raises UsageError.
+        class _BoomStub:
+            def Stream(self, _outgoing, *, timeout):  # noqa: N802, ARG002
+                raise UsageError("Channel is closed.")
+
+        async def _release() -> None:
+            return None
+
+        def _fake_dial(self, _address):  # noqa: ANN001, ARG001
+            self._channel = MagicMock(_closed=True)
+            self._channel_cache_key = "fake:insecure:gzip"
+            return _BoomStub(), _release
+
+        monkeypatch.setattr(GrpcCommunication, "dial_consumer_stream", _fake_dial)
+
+        # Must complete normally — no exception escaping the spawned task.
+        await gateway._dial_consumer(
+            task_id="task_usage",
+            mission_id="missions:test",
+            setup_id="setups:test",
+            address=address,
+        )
+
+        # Should have emitted exactly one DIAL_BACK_RPC_ERROR (not DIAL_BACK_NO_QUERY).
+        codes = [e["code"] for e in emitted]
+        assert "DIAL_BACK_RPC_ERROR" in codes, f"got: {codes}"
+        assert "DIAL_BACK_NO_QUERY" not in codes, f"got: {codes}"
+
+    async def test_dial_consumer_outgoing_yields_streamserver(
+        self, gateway, fake_consumer_server, monkeypatch
+    ) -> None:
+        """Dial-back contract: gateway emits StreamServer messages.
+
+        Pins the wire-direction so a regression to ``StreamClient`` (which
+        is wire-compatible due to identical proto field tags) is caught.
+        """
+        from digitalkin.services.communication.grpc_communication import GrpcCommunication
+
+        _servicer, address = fake_consumer_server  # noqa: F841
+        seen_outgoing: list[Any] = []
+
+        # Capture every message the gateway yields on the dial-back BiDi.
+        class _RecordingStub:
+            def Stream(self, outgoing, *, timeout):  # noqa: N802, ARG002
+                async def _drive() -> AsyncIterator[gateway_pb2.StreamServer]:
+                    async for msg in outgoing:
+                        seen_outgoing.append(msg)
+                        # Return immediately after the first capture so the
+                        # dial-back coroutine exits cleanly.
+                        return
+                        yield  # pragma: no cover  # makes this an async gen
+                return _drive()
+
+        async def _release() -> None:
+            return None
+
+        def _fake_dial(self, _address):  # noqa: ANN001, ARG001
+            self._channel = MagicMock(_closed=False)
+            self._channel_cache_key = "fake:insecure:gzip"
+            return _RecordingStub(), _release
+
+        monkeypatch.setattr(GrpcCommunication, "dial_consumer_stream", _fake_dial)
+        monkeypatch.setattr(gateway, "_emit_fatal_to_redis", AsyncMock())
+
+        from digitalkin.grpc_servers.stream_session import StreamSession
+        gateway._registry._local_cache["task_type"] = StreamSession(task_id="task_type")
+
+        await gateway._dial_consumer(
+            task_id="task_type",
+            mission_id="missions:test",
+            setup_id="setups:test",
+            address=address,
+        )
+
+        assert seen_outgoing, "gateway emitted nothing on the dial-back outgoing"
+        assert all(
+            isinstance(m, gateway_pb2.StreamServer) for m in seen_outgoing
+        ), f"expected only StreamServer, got: {[type(m).__name__ for m in seen_outgoing]}"
+
+    # The three obsolete ``_DialBackServicer.Stream`` tests that lived here
+    # have been deleted. Their behavior (yield StreamClient with the cached
+    # query, return on stream.end / fatal stream.error) now lives on the
+    # unified ``GatewayServicer.Stream`` dial-back-receive branch and is
+    # covered by ``tests/gateway/test_gateway_servicer_dialback_branch.py``.
+
+    @SKIP_NO_FAKEREDIS
+    async def test_dial_consumer_watchdog_closes_after_stream_end(self, gateway) -> None:
+        """Gateway watchdog: if the consumer ignores stream.end, the BiDi
+        is force-closed after ``GatewaySettings.dial_back_close_grace_s``
+        instead of waiting on keepalive (~2 min)."""
+        # Shrink the grace window via monkeypatched env so the test doesn't
+        # have to idle seconds.
+        from digitalkin.models.settings.gateway import get_gateway_settings
+
+        import os
+        os.environ["DIGITALKIN_GATEWAY_DIAL_BACK_CLOSE_GRACE_S"] = "0.3"
+        get_gateway_settings.cache_clear()
+        try:
+            servicer = _FakeConsumerServicer(
+                query_data={"protocol": "test", "x": 1},
+                ignore_stream_end=True,  # misbehave: keep BiDi open
+            )
+            server = grpc.aio.server()
+            gateway_service_pb2_grpc.add_GatewayServiceServicer_to_server(servicer, server)
+            port = server.add_insecure_port("127.0.0.1:0")
+            await server.start()
+            try:
+                task_id = "task_watchdog"
+                stream_key = f"task:{task_id}:stream"
+                out = struct_pb2.Struct()
+                out.update({"protocol": "healthcheck_ping", "status": "pong"})
+                await gateway._redis_client.xadd(stream_key, {"pb": out.SerializeToString(), "seq": "1"})
+                await gateway._redis_client.xadd(stream_key, {"eos": b"true"})
+
+                ctx = _mock_context({"x-client-address": f"127.0.0.1:{port}"})
+                t0 = asyncio.get_event_loop().time()
+                await gateway.StartStream(_start_request(task_id), ctx)
+                # Wait until session is unregistered, which only happens after
+                # the dial-back's finally runs.
+                for _ in range(60):
+                    if gateway._registry.get(task_id) is None:
+                        break
+                    await asyncio.sleep(0.05)
+                elapsed = asyncio.get_event_loop().time() - t0
+
+                assert gateway._registry.get(task_id) is None, (
+                    "dial-back never finished — watchdog didn't fire"
+                )
+                # The dial-back should have completed within a small multiple of
+                # the grace window (Redis seeding + grace + bookkeeping).
+                assert elapsed < 3.0, f"watchdog took {elapsed:.2f}s — expected < 3.0s"
+            finally:
+                await server.stop(grace=0.1)
+        finally:
+            os.environ.pop("DIGITALKIN_GATEWAY_DIAL_BACK_CLOSE_GRACE_S", None)
+            get_gateway_settings.cache_clear()
+
+    @SKIP_NO_FAKEREDIS
+    async def test_dial_consumer_closes_after_fatal_when_consumer_holds_open(self, gateway) -> None:
+        """BUG 1 regression: after a SETUP_ACCESS_DENIED (fatal stream.error + EOS) finishes
+        draining, the dial-back BiDi tears down within ``dial_back_close_grace_s`` even when the
+        consumer holds its response stream open — instead of parking to ``dial_back_max_lifetime_s``.
+
+        Pre-fix, the receive loop commits to an unbounded inbound read before ``outgoing_done``
+        fires and never re-evaluates, so it blocks to the lifetime ceiling.
+        """
+        import os
+
+        from digitalkin.models.settings.gateway import get_gateway_settings
+
+        os.environ["DIGITALKIN_GATEWAY_DIAL_BACK_CLOSE_GRACE_S"] = "0.2"
+        os.environ["DIGITALKIN_GATEWAY_DIAL_BACK_MAX_LIFETIME_S"] = "3.0"
+        get_gateway_settings.cache_clear()
+        try:
+            servicer = _FakeConsumerServicer(
+                query_data={"protocol": "agui_stream", "user_prompt": "hi"},
+                hold_open=True,
+            )
+            server = grpc.aio.server()
+            gateway_service_pb2_grpc.add_GatewayServiceServicer_to_server(servicer, server)
+            port = server.add_insecure_port("127.0.0.1:0")
+            await server.start()
+            try:
+                task_id = "task_fatal_hold"
+                stream_key = f"task:{task_id}:stream"
+                err = struct_pb2.Struct()
+                err.update({
+                    "root": {
+                        "protocol": "stream.error",
+                        "code": "SETUP_ACCESS_DENIED",
+                        "message": "denied",
+                        "fatal": True,
+                    }
+                })
+                await gateway._redis_client.xadd(stream_key, {"pb": err.SerializeToString(), "seq": "1"})
+                await gateway._redis_client.xadd(stream_key, {"eos": b"true"})
+
+                ctx = _mock_context({"x-client-address": f"127.0.0.1:{port}"})
+                t0 = asyncio.get_event_loop().time()
+                await gateway.StartStream(_start_request(task_id), ctx)
+                for _ in range(80):
+                    if gateway._registry.get(task_id) is None:
+                        break
+                    await asyncio.sleep(0.05)
+                elapsed = asyncio.get_event_loop().time() - t0
+
+                assert gateway._registry.get(task_id) is None, (
+                    "dial-back never finished — the BiDi hung past close_grace (BUG 1)"
+                )
+                # Fix bounds teardown by close_grace (0.2s); the regression parks to
+                # max_lifetime (3.0s). A threshold well below 3.0s proves the fix.
+                assert elapsed < 1.5, f"dial-back took {elapsed:.2f}s — expected teardown near close_grace"
+            finally:
+                await server.stop(grace=0.1)
+        finally:
+            os.environ.pop("DIGITALKIN_GATEWAY_DIAL_BACK_CLOSE_GRACE_S", None)
+            os.environ.pop("DIGITALKIN_GATEWAY_DIAL_BACK_MAX_LIFETIME_S", None)
+            get_gateway_settings.cache_clear()

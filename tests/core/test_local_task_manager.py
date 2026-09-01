@@ -22,6 +22,7 @@ import pytest_asyncio
 from digitalkin.core.task_manager.local_task_manager import LocalTaskManager
 from digitalkin.core.task_manager.task_session import TaskSession
 from digitalkin.models.core.task_monitor import CancellationReason
+from digitalkin.models.settings.task_manager import get_task_manager_settings
 from digitalkin.modules._base_module import BaseModule
 from digitalkin.services.task_manager.task_manager_strategy import TaskManagerStrategy
 
@@ -35,34 +36,16 @@ pytestmark = pytest.mark.timeout(30)
 
 
 @pytest_asyncio.fixture
-async def mock_signal_service() -> Mock:
+async def mock_signal_service() -> Mock:  # noqa: RUF029
     """Mock TaskManagerStrategy with all required async methods."""
     svc = Mock(spec=TaskManagerStrategy)
     svc.send_signal = AsyncMock(return_value={})
-
-    _sub_counter = 0
-
-    async def _make_subscription(*_args, **_kwargs):
-        nonlocal _sub_counter
-        _sub_counter += 1
-
-        async def _empty_gen():
-            try:
-                await asyncio.Event().wait()
-            except asyncio.CancelledError:
-                return
-            yield  # pragma: no cover
-
-        return (f"sub_{_sub_counter}", _empty_gen())
-
-    svc.subscribe_signals = AsyncMock(side_effect=_make_subscription)
-    svc.unsubscribe_signals = AsyncMock()
     svc.close = AsyncMock()
     return svc
 
 
 @pytest_asyncio.fixture
-async def mock_base_module(mock_signal_service: Mock) -> Mock:
+async def mock_base_module(mock_signal_service: Mock) -> Mock:  # noqa: RUF029
     """Mock BaseModule with async stop() method and signal service."""
     module = Mock(spec=BaseModule)
     module.stop = AsyncMock()
@@ -102,38 +85,29 @@ def _make_mock_task_session(mock_signal_service: Mock) -> Mock:
     session.cleanup = AsyncMock()
     session._last_exception = None
     session._last_traceback = None
-
-    async def stay_alive():
-        try:
-            while True:
-                await asyncio.sleep(0.01)
-        except asyncio.CancelledError:
-            raise
-
-    session.listen_signals = AsyncMock(side_effect=stay_alive)
     return session
 
 
 @pytest_asyncio.fixture
-async def mock_task_session(mock_signal_service: Mock) -> Mock:
+async def mock_task_session(mock_signal_service: Mock) -> Mock:  # noqa: RUF029
     """Mock TaskSession with expected attributes and async methods."""
     return _make_mock_task_session(mock_signal_service)
 
 
 @pytest_asyncio.fixture
-async def task_manager() -> LocalTaskManager:
+async def task_manager(monkeypatch: pytest.MonkeyPatch) -> LocalTaskManager:  # noqa: RUF029
     """Standard LocalTaskManager with test-friendly settings."""
-    mgr = LocalTaskManager(default_timeout=2.0)
-    mgr.max_concurrent_tasks = 10
-    return mgr
+    monkeypatch.setenv("DIGITALKIN_TASK_MANAGER_MAX_CONCURRENT_TASKS", "10")
+    get_task_manager_settings.cache_clear()
+    return LocalTaskManager(default_timeout=2.0)
 
 
 @pytest_asyncio.fixture
-async def high_capacity_manager() -> LocalTaskManager:
+async def high_capacity_manager(monkeypatch: pytest.MonkeyPatch) -> LocalTaskManager:  # noqa: RUF029
     """High-capacity manager for stress tests."""
-    mgr = LocalTaskManager(default_timeout=1.0)
-    mgr.max_concurrent_tasks = 150
-    return mgr
+    monkeypatch.setenv("DIGITALKIN_TASK_MANAGER_MAX_CONCURRENT_TASKS", "150")
+    get_task_manager_settings.cache_clear()
+    return LocalTaskManager(default_timeout=1.0)
 
 
 # ============================================================================
@@ -184,11 +158,14 @@ class TestTaskCreation:
     async def test_create_task_max_limit(
         self,
         mock_base_module: Mock,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Negative: Exceeding max tasks raises RuntimeError after wait timeout."""
+        monkeypatch.setenv("DIGITALKIN_TASK_MANAGER_MAX_CONCURRENT_TASKS", "2")
+        monkeypatch.setenv("DIGITALKIN_TASK_MANAGER_MAX_QUEUED_TASKS", "0")
+        monkeypatch.setenv("DIGITALKIN_TASK_MANAGER_TASK_WAIT_TIMEOUT", "0.1")
+        get_task_manager_settings.cache_clear()
         small_manager = LocalTaskManager(default_timeout=1.0)
-        small_manager.max_concurrent_tasks = 2
-        small_manager._task_wait_timeout = 0.1
 
         async def work() -> None:
             await asyncio.sleep(0.5)
@@ -251,15 +228,19 @@ class TestExecutorIntegration:
 
         await task_manager.create_task(task_id, mission_id, mock_base_module, logging_coro())
 
-        # Wait for supervisor task to complete
+        # Capture the session reference BEFORE awaiting supervisor completion —
+        # the supervisor's `finally` now folds cleanup (former _deferred_cleanup),
+        # so by the time supervisor_task returns the session has been removed
+        # from `tasks_sessions`.
+        session = task_manager.tasks_sessions[task_id]
         supervisor_task = task_manager.tasks[task_id]
         await supervisor_task
 
         assert "started" in execution_log
         assert "completed" in execution_log
-
-        session = task_manager.tasks_sessions[task_id]
         assert session.status == "completed"
+        # Cleanup ran inside supervisor's `finally` — session should be gone.
+        assert task_id not in task_manager.tasks_sessions
 
 
 # ============================================================================
@@ -394,7 +375,7 @@ class TestCleanupShutdown:
         assert task_manager._shutdown_event.is_set()
 
     @pytest.mark.asyncio
-    async def test_shutdown_idempotent(self, task_manager: LocalTaskManager) -> None:
+    async def test_shutdown_idempotent(self, task_manager: LocalTaskManager, monkeypatch: pytest.MonkeyPatch) -> None:
         """Test shutdown can be called multiple times safely."""
         await task_manager.shutdown("missions:shutdown")
         await task_manager.shutdown("missions:shutdown")
@@ -420,7 +401,7 @@ class TestConcurrencyStress:
 
         async def quick_task() -> None:
             nonlocal completed_count
-            await asyncio.sleep(random.uniform(0.01, 0.05))
+            await asyncio.sleep(random.uniform(0.01, 0.05))  # noqa: S311
             completed_count += 1
 
         for i in range(50):
@@ -463,11 +444,14 @@ class TestConcurrencyStress:
     async def test_toctou_lock_prevents_oversubscription(
         self,
         mock_base_module: Mock,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Test that semaphore prevents oversubscription of max_concurrent_tasks."""
+        monkeypatch.setenv("DIGITALKIN_TASK_MANAGER_MAX_CONCURRENT_TASKS", "5")
+        monkeypatch.setenv("DIGITALKIN_TASK_MANAGER_MAX_QUEUED_TASKS", "0")
+        monkeypatch.setenv("DIGITALKIN_TASK_MANAGER_TASK_WAIT_TIMEOUT", "0.1")
+        get_task_manager_settings.cache_clear()
         mgr = LocalTaskManager()
-        mgr.max_concurrent_tasks = 5
-        mgr._task_wait_timeout = 0.1
 
         async def slow_task() -> None:
             await asyncio.sleep(1)

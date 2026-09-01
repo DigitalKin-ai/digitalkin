@@ -3,7 +3,9 @@
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
+
+from digitalkin.logger import logger
 
 
 class RegistryModuleStatus(str, Enum):
@@ -16,11 +18,16 @@ class RegistryModuleStatus(str, Enum):
 
 
 class RegistryModuleType(str, Enum):
-    """Module type in the registry."""
+    """Module type in the registry.
+
+    Member names mirror the proto ``ModuleType`` enum (minus the ``MODULE_TYPE_``
+    prefix): they are looked up by name from the wire value, so they must match.
+    """
 
     UNSPECIFIED = "unspecified"
     ARCHETYPE = "archetype"
-    TOOL = "tool"
+    TOOL_MODULE = "tool_module"
+    SERVICE = "service"
 
 
 class ModuleInfo(BaseModel):
@@ -34,6 +41,33 @@ class ModuleInfo(BaseModel):
     module_name: str = ""
     documentation: str | None = None
     status: RegistryModuleStatus | None = None
+    tags: list[str] = []
+
+    @field_validator("module_type", mode="before")
+    @classmethod
+    def _coerce_legacy_module_type(cls, value: object) -> object:
+        """Normalize the legacy 'tool'/'kin' vocabulary written by older SDK releases.
+
+        Setup contents persisted before the enum aligned on the proto names carry
+        ``resolved_tools`` entries with ``module_type: "tool"``; the config-setup flow
+        strips and rebuilds the field, so tolerated payloads self-heal on the next
+        reconfiguration.
+
+        Args:
+            value: The raw module_type value.
+
+        Returns:
+            The normalized enum member, or the value unchanged.
+        """
+        if value == "tool":
+            # TODO(validate): remove marker once legacy setups are purged in prod
+            logger.warning("[VALIDATE MTYPE] legacy module_type 'tool' normalized to 'tool_module'")
+            return RegistryModuleType.TOOL_MODULE
+        if value == "kin":
+            # TODO(validate): remove marker once legacy setups are purged in prod
+            logger.warning("[VALIDATE MTYPE] legacy module_type 'kin' normalized to 'archetype'")
+            return RegistryModuleType.ARCHETYPE
+        return value
 
 
 class RegistrySetupStatus(str, Enum):
@@ -49,6 +83,35 @@ class RegistrySetupStatus(str, Enum):
     NEEDS_CONFIGURATION = "needs_configuration"
     CONFIGURATION_FAILED = "configuration_failed"
     CONFIGURATION_SUCCEEDED = "configuration_succeeded"
+
+    @classmethod
+    def _missing_(cls, value: object) -> "RegistrySetupStatus":
+        """Coerce a proto enum name (e.g. ``DRAFT``) or any-case string to a member.
+
+        Lenient by design: the setup proto status can carry states this enum does not
+        mirror (e.g. ``VALIDATING``), and reading a setup must never crash — an empty or
+        unrecognised value falls back to ``UNSPECIFIED``.
+
+        Returns:
+            The matching member, or ``UNSPECIFIED``.
+        """
+        if isinstance(value, str):
+            return next((member for member in cls if member.value == value.lower()), cls.UNSPECIFIED)
+        return cls.UNSPECIFIED
+
+
+class RegistrySortBy(str, Enum):
+    """Sort key for registry searches.
+
+    Member names mirror the proto ``SortBy`` enum (minus the ``SORT_BY_`` prefix):
+    they are encoded by name onto the wire, so they must match. UNSPECIFIED lets the
+    registry apply its own default — relevance when a query is set, updated_at otherwise.
+    """
+
+    UNSPECIFIED = "unspecified"
+    NAME = "name"
+    CREATED_AT = "created_at"
+    UPDATED_AT = "updated_at"
 
 
 class RegistryVisibility(str, Enum):
@@ -72,6 +135,30 @@ class SetupInfo(BaseModel):
     owner_id: str | None = None
     card_id: str | None = None
     module_id: str | None = None
+    module_name: str | None = None
+    module_type: RegistryModuleType | None = None
     setup_version_id: str | None = None
     setup_version: str | None = None
+    tags: list[str] = []
     config: dict[str, Any] | None = None
+
+
+class SetupSummary(BaseModel):
+    """Search-safe setup view — the shape returned by ``search_setups``.
+
+    Deliberately has no ``config`` field: a setup's secrets can never be
+    serialized from a search result. Use ``get_setup`` for the full ``SetupInfo``.
+    """
+
+    setup_id: str
+    name: str
+    documentation: str | None = None
+    status: RegistrySetupStatus | None = None
+    visibility: RegistryVisibility | None = None
+    organization_id: str | None = None
+    module_id: str | None = None
+    module_name: str | None = None
+    module_type: RegistryModuleType | None = None
+    setup_version_id: str | None = None
+    setup_version: str | None = None
+    tags: list[str] = []

@@ -3,43 +3,49 @@
 import abc
 import asyncio
 import os
+import sys
+
+from digitalkin.models.settings.profiling import get_profiling_settings
+
+if get_profiling_settings().uvloop:
+    try:
+        import uvloop
+
+        asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+    except ImportError:
+        pass
 from collections.abc import Callable, Sequence
 from concurrent import futures
 from pathlib import Path
-from typing import Any, ClassVar, cast
+from typing import Any, cast
 
 import grpc
 from grpc import aio as grpc_aio
 
-from digitalkin.grpc_servers.utils.exceptions import (
+from digitalkin.grpc_servers.exceptions import (
     ConfigurationError,
     ReflectionError,
     SecurityError,
     ServerStateError,
     ServicerError,
 )
+from digitalkin.grpc_servers.interceptors.request_ids import RequestIdServerInterceptor
 from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
 from digitalkin.logger import logger
 from digitalkin.models.grpc_servers.types import GrpcServer, ServiceDescriptor, T
-from digitalkin.models.settings.server.server import ServerSettings
+from digitalkin.models.settings.server.server import get_server_settings
 from digitalkin.models.settings.utils.channel import ControlFlow, SecurityMode
 
 
 class BaseServer(abc.ABC):
-    """Base class for gRPC servers in DigitalKin.
-
-    This class provides the foundation for both synchronous and asynchronous gRPC
-    servers used in the DigitalKin ecosystem. It supports both secure and insecure
-    communication modes.
+    """Foundation for sync/async gRPC servers with secure/insecure modes.
 
     Attributes:
-        server: The gRPC server instance (either sync or async).
-        _servicers: List of registered servicers.
-        _service_names: List of service names for reflection.
-        _health_servicer: Optional health check servicer.
+        server: The gRPC server instance.
+        _servicers: Registered servicers.
+        _service_names: Service names exposed via reflection.
+        _health_servicer: Optional health-check servicer.
     """
-
-    _server_settings: ClassVar[ServerSettings] = ServerSettings()
 
     def __init__(
         self,
@@ -52,10 +58,9 @@ class BaseServer(abc.ABC):
         """
         self.server: GrpcServer | None = None
         self._servicers: list[Any] = []
-        self._service_names: list[str] = []  # Track service names for reflection
-        self._health_servicer: Any = None  # For health checking
+        self._service_names: list[str] = []
+        self._health_servicer: Any = None
         self._interceptors: list[Any] = list(interceptors) if interceptors else []
-        self._asyncio_monitor: Any = None
 
     def register_servicer(
         self,
@@ -64,22 +69,21 @@ class BaseServer(abc.ABC):
         service_descriptor: ServiceDescriptor | None = None,
         service_names: list[str] | None = None,
     ) -> None:
-        """Register a servicer with the gRPC server and track it for reflection.
+        """Register a servicer and track its names for reflection.
 
         Args:
-            servicer: The servicer implementation instance
-            add_to_server_fn: The function to add the servicer to the server
-            service_descriptor: Optional service descriptor (pb2 DESCRIPTOR)
-            service_names: Optional explicit list of service full names
+            servicer: The servicer instance.
+            add_to_server_fn: Function adding the servicer to the server.
+            service_descriptor: Optional pb2 DESCRIPTOR.
+            service_names: Optional explicit list of service full names.
 
         Raises:
-            ServicerError: If the server is not created before calling
+            ServicerError: If the server is not created.
         """
         if self.server is None:
             msg = "Server must be created before registering servicers"
             raise ServicerError(msg)
 
-        # Register the servicer
         try:
             add_to_server_fn(servicer, self.server)
             self._servicers.append(servicer)
@@ -87,14 +91,12 @@ class BaseServer(abc.ABC):
             msg = f"Failed to register servicer: {e}"
             raise ServicerError(msg) from e
 
-        # Add service names from explicit list
         if service_names:
             for name in service_names:
                 if name not in self._service_names:
                     self._service_names.append(name)
                     logger.debug("Registered explicit service name for reflection: %s", name)
 
-        # If a descriptor is provided, extract service names
         if service_descriptor is not None:
             for service in service_descriptor.services_by_name.values():
                 if service.full_name not in self._service_names:
@@ -103,42 +105,49 @@ class BaseServer(abc.ABC):
 
     @abc.abstractmethod
     def _register_servicers(self) -> None:
-        """Register servicers with the gRPC server.
-
-        This method should be implemented by subclasses to register
-        the appropriate servicers for their specific functionality.
+        """Register servicers (subclass hook).
 
         Raises:
-            ServicerError: If the server is not created before calling this method.
+            ServicerError: If the server is not created.
         """
 
     def _add_reflection(self) -> None:
-        """Add reflection service to the gRPC server if enabled.
+        """Register both v1 and v1alpha reflection on the server.
+
+        v1 and v1alpha wire formats are identical — only the service name
+        differs. Registering both keeps Postman 10.x+ and other v1-first
+        clients working.
 
         Raises:
             ReflectionError: If reflection initialization fails.
         """
-        if not self._server_settings.reflection or self.server is None or not self._service_names:
+        if not get_server_settings().reflection or self.server is None or not self._service_names:
             return
 
-        try:
-            from grpc_reflection.v1alpha import (
-                reflection,
-            )  # Optional dependency, import only if reflection enabled
+        try:  # noqa: PLW0717
+            import grpc
+            from grpc_reflection.v1alpha import reflection as reflection_v1alpha
+            from grpc_reflection.v1alpha import reflection_pb2 as reflection_pb2_v1alpha
 
-            # Get all registered service names
             service_names = self._service_names.copy()
+            service_names.append(reflection_v1alpha.SERVICE_NAME)
+            v1_service_name = "grpc.reflection.v1.ServerReflection"
+            service_names.append(v1_service_name)
 
-            # Add the reflection service name
-            reflection_service = reflection.SERVICE_NAME
-            service_names.append(reflection_service)
+            reflection_v1alpha.enable_server_reflection(service_names, self.server)
 
-            # Register services with the reflection service
-            # This creates a dynamic file descriptor database that can respond to
-            # reflection queries with detailed service information
-            reflection.enable_server_reflection(service_names, self.server)
+            servicer = reflection_v1alpha.ReflectionServicer(service_names)
+            method_handlers = {
+                "ServerReflectionInfo": grpc.stream_stream_rpc_method_handler(
+                    servicer.ServerReflectionInfo,
+                    request_deserializer=reflection_pb2_v1alpha.ServerReflectionRequest.FromString,
+                    response_serializer=reflection_pb2_v1alpha.ServerReflectionResponse.SerializeToString,
+                ),
+            }
+            handler = grpc.method_handlers_generic_handler(v1_service_name, method_handlers)
+            self.server.add_generic_rpc_handlers((handler,))
 
-            logger.debug("Added gRPC reflection service with services: %s", service_names)
+            logger.debug("Added gRPC reflection v1 + v1alpha: %s", service_names)
         except ImportError:
             logger.warning("Could not enable reflection: grpcio-reflection package not installed")
         except Exception as e:
@@ -147,29 +156,17 @@ class BaseServer(abc.ABC):
             raise ReflectionError(error_msg) from e
 
     def _add_health_service(self) -> None:
-        """Add health checking service to the gRPC server.
-
-        The health service allows clients to check server status.
-        """
+        """Register the gRPC health-check service and mark all services SERVING."""
         if self.server is None:
             return
 
-        try:
-            from grpc_health.v1 import (
-                health_pb2,
-                health_pb2_grpc,
-            )  # Optional dependency, import only if health service needed
-            from grpc_health.v1.health import (
-                HealthServicer,
-            )  # Optional dependency, import only if health service needed
+        try:  # noqa: PLW0717
+            from grpc_health.v1 import health_pb2, health_pb2_grpc
+            from grpc_health.v1.health import HealthServicer
 
-            # Create health servicer
             health_servicer = HealthServicer()
-
-            # Register health servicer
             health_pb2_grpc.add_HealthServicer_to_server(health_servicer, self.server)
 
-            # Add service name to reflection list
             if health_pb2.DESCRIPTOR.services_by_name:
                 service_name = health_pb2.DESCRIPTOR.services_by_name["Health"].full_name
                 if service_name not in self._service_names:
@@ -177,14 +174,10 @@ class BaseServer(abc.ABC):
 
             logger.debug("Added gRPC health checking service")
 
-            # Set all services as SERVING
             for service_name in self._service_names:
                 health_servicer.set(service_name, health_pb2.HealthCheckResponse.SERVING)
-
-            # Set overall service status
             health_servicer.set("", health_pb2.HealthCheckResponse.SERVING)
 
-            # Store reference to health servicer
             self._health_servicer = health_servicer
 
         except ImportError:
@@ -193,7 +186,7 @@ class BaseServer(abc.ABC):
             logger.warning("Failed to enable health service: %s", e)
 
     def _create_server(self) -> GrpcServer:
-        """Create a gRPC server instance based on the server settings.
+        """Create a gRPC server from current settings.
 
         Returns:
             A configured gRPC server instance.
@@ -201,49 +194,50 @@ class BaseServer(abc.ABC):
         Raises:
             ConfigurationError: If the server settings are invalid.
         """
-        try:
-            # Create the server based on mode
-            grpc_compression = self._server_settings.grpc.compression.to_grpc()
+        try:  # noqa: PLW0717
+            grpc_compression = get_server_settings().grpc.compression.to_grpc()
 
-            # Machine capabilities
-            try:
-                cpu_count = len(os.sched_getaffinity(0))  # type: ignore[attr-defined]  # Linux-only, caught by AttributeError on macOS/Windows
-                logger.info("vCPU count: %d", cpu_count)
-            except (AttributeError, OSError):
+            # sched_getaffinity is Linux-only; the sys.platform guard lets mypy skip
+            # it as unreachable on other platforms without a type: ignore.
+            if sys.platform == "linux":
+                try:
+                    cpu_count = len(os.sched_getaffinity(0))
+                    logger.info("vCPU count: %d", cpu_count)
+                except OSError:
+                    cpu_count = os.cpu_count() or 1
+                    logger.info("CPU count: %d", cpu_count)
+            else:
                 cpu_count = os.cpu_count() or 1
                 logger.info("CPU count: %d", cpu_count)
-
-            # Compute defaults from machine capabilities, overridable via env vars
 
             logger.info(
                 "gRPC server settings.server: cpus=%d, max_concurrent_rpcs=%d, thread_pool_workers=%d, mode=%s",
                 cpu_count,
-                self._server_settings.max_concurrent_rpcs,
-                self._server_settings.thread_pool_workers,
-                self._server_settings.channel.communication_mode.value,
+                get_server_settings().max_concurrent_rpcs,
+                get_server_settings().thread_pool_workers,
+                get_server_settings().channel.communication_mode.value,
             )
 
-            if self._server_settings.channel.communication_mode == ControlFlow.ASYNC:
+            if get_server_settings().channel.communication_mode == ControlFlow.ASYNC:
                 server = grpc_aio.server(
-                    options=self._server_settings.grpc.options,
+                    options=get_server_settings().grpc.options,
                     compression=grpc_compression,
-                    interceptors=self._interceptors or None,
-                    maximum_concurrent_rpcs=self._server_settings.max_concurrent_rpcs,
+                    interceptors=[RequestIdServerInterceptor(), *self._interceptors],
+                    maximum_concurrent_rpcs=get_server_settings().max_concurrent_rpcs,
                     migration_thread_pool=futures.ThreadPoolExecutor(
-                        max_workers=self._server_settings.thread_pool_workers
+                        max_workers=get_server_settings().thread_pool_workers
                     ),
                 )
             else:
-                server = grpc.server(  # type: ignore[assignment]  # sync grpc.Server assigned to GrpcServer union
-                    futures.ThreadPoolExecutor(max_workers=self._server_settings.max_workers),
-                    options=self._server_settings.grpc.options,
+                server = grpc.server(  # type: ignore[assignment]
+                    futures.ThreadPoolExecutor(max_workers=get_server_settings().max_workers),
+                    options=get_server_settings().grpc.options,
                     compression=grpc_compression,
                     interceptors=self._interceptors or None,
-                    maximum_concurrent_rpcs=self._server_settings.max_concurrent_rpcs,
+                    maximum_concurrent_rpcs=get_server_settings().max_concurrent_rpcs,
                 )
 
-            # Add the appropriate port
-            if self._server_settings.channel.security == SecurityMode.SECURE:
+            if get_server_settings().channel.security == SecurityMode.SECURE:
                 self._add_secure_port(server)
             else:
                 self._add_insecure_port(server)
@@ -254,62 +248,56 @@ class BaseServer(abc.ABC):
         else:
             return server
 
-    def _add_secure_port(self, server: GrpcServer) -> None:
-        """Add a secure port to the server.
+    def _add_secure_port(self, server: GrpcServer) -> None:  # noqa: PLR6301
+        """Add a secure port using credentials from settings.
 
         Args:
             server: The gRPC server to add the port to.
 
         Raises:
-            SecurityError: If credentials are not configured correctly.
+            SecurityError: If credentials are missing or unreadable.
         """
-        if not self._server_settings.channel.credentials:
+        creds = get_server_settings().channel.credentials
+        if not creds:
             msg = "Credentials must be provided for secure server"
             raise SecurityError(msg)
 
-        try:
-            # Read key and certificate files
-            if (
-                self._server_settings.channel.credentials.key_path
-                and self._server_settings.channel.credentials.cert_path
-            ):
-                private_key = Path(self._server_settings.channel.credentials.key_path).read_bytes()
-                certificate_chain = Path(self._server_settings.channel.credentials.cert_path).read_bytes()
+        try:  # noqa: PLW0717
+            if creds.key_path and creds.cert_path:
+                private_key = Path(creds.key_path).read_bytes()
+                certificate_chain = Path(creds.cert_path).read_bytes()
             else:
                 msg = "Key path and certificate path must be provided for secure server"
                 raise SecurityError(msg)
 
-            # Read root certificate if provided
             root_certificates = None
-            if self._server_settings.channel.credentials.root_cert_path:
-                root_certificates = Path(self._server_settings.channel.credentials.root_cert_path).read_bytes()
+            if creds.root_cert_path:
+                root_certificates = Path(creds.root_cert_path).read_bytes()
         except OSError as e:
             msg = f"Failed to read credential files: {e}"
             raise SecurityError(msg) from e
 
-        try:
-            # Create server credentials
+        try:  # noqa: PLW0717
             server_credentials = grpc.ssl_server_credentials(
                 [(private_key, certificate_chain)],
                 root_certificates=root_certificates,
                 require_client_auth=(root_certificates is not None),
             )
 
-            # Add secure port to server
-            if self._server_settings.channel.communication_mode == ControlFlow.ASYNC:
+            if get_server_settings().channel.communication_mode == ControlFlow.ASYNC:
                 async_server = cast("grpc_aio.Server", server)
-                async_server.add_secure_port(self._server_settings.channel.address, server_credentials)
+                async_server.add_secure_port(get_server_settings().channel.address, server_credentials)
             else:
                 sync_server = cast("grpc.Server", server)
-                sync_server.add_secure_port(self._server_settings.channel.address, server_credentials)
+                sync_server.add_secure_port(get_server_settings().channel.address, server_credentials)
 
-            logger.debug("Added secure port %s", self._server_settings.channel.address)
+            logger.debug("Added secure port %s", get_server_settings().channel.address)
         except Exception as e:
             msg = f"Failed to configure with actual settings secure port: {e}"
             raise SecurityError(msg) from e
 
-    def _add_insecure_port(self, server: GrpcServer) -> None:
-        """Add an insecure port to the server.
+    def _add_insecure_port(self, server: GrpcServer) -> None:  # noqa: PLR6301
+        """Add an insecure port.
 
         Args:
             server: The gRPC server to add the port to.
@@ -317,54 +305,42 @@ class BaseServer(abc.ABC):
         Raises:
             ConfigurationError: If adding the insecure port fails.
         """
-        try:
-            if self._server_settings.channel.communication_mode == ControlFlow.ASYNC:
+        try:  # noqa: PLW0717
+            if get_server_settings().channel.communication_mode == ControlFlow.ASYNC:
                 async_server = cast("grpc_aio.Server", server)
-                async_server.add_insecure_port(self._server_settings.channel.address)
+                async_server.add_insecure_port(get_server_settings().channel.address)
             else:
                 sync_server = cast("grpc.Server", server)
-                sync_server.add_insecure_port(self._server_settings.channel.address)
+                sync_server.add_insecure_port(get_server_settings().channel.address)
 
-            logger.debug("Added insecure port %s", self._server_settings.channel.address)
+            logger.debug("Added insecure port %s", get_server_settings().channel.address)
         except Exception as e:
             msg = f"Failed to add insecure port: {e}"
             raise ConfigurationError(msg) from e
 
     def start(self) -> None:
-        """Start the gRPC server.
-
-        If using async mode, this will use the event loop to start the server.
-        If using sync mode, this will start the server in a non-blocking way.
+        """Start the gRPC server (sync or async per settings).
 
         Raises:
             ServerStateError: If the server fails to start.
         """
         self.server = self._create_server()
         self._register_servicers()
-
-        # Add health service
         self._add_health_service()
-
-        # Add reflection if enabled
         self._add_reflection()
 
-        # Start the server
-        logger.debug(
-            "Starting gRPC server on %s", self._server_settings.channel.address, extra={"config": ServerSettings}
-        )
-        try:
-            if self._server_settings.channel.communication_mode == ControlFlow.ASYNC:
-                # For async server, use the event loop
+        logger.debug("Starting gRPC server on %s", get_server_settings().channel.address)
+        try:  # noqa: PLW0717
+            if get_server_settings().channel.communication_mode == ControlFlow.ASYNC:
                 loop = asyncio.get_event_loop()
                 if loop.is_closed():
                     loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(loop)
                 loop.run_until_complete(self._start_async())
             else:
-                # For sync server, directly call start
                 sync_server = cast("grpc.Server", self.server)
                 sync_server.start()
-            logger.debug("✅ gRPC server started on %s", self._server_settings.channel.address)
+            logger.debug("✅ gRPC server started on %s", get_server_settings().channel.address)
         except Exception as e:
             logger.exception("❎ Error starting server")
             msg = f"Failed to start server: {e}"
@@ -384,102 +360,64 @@ class BaseServer(abc.ABC):
         await async_server.start()
 
     async def start_async(self) -> None:
-        """Start the gRPC server asynchronously.
-
-        This method should be used directly in an async context.
+        """Start the gRPC server in an async context.
 
         Raises:
             ServerStateError: If the server fails to start.
         """
         self.server = self._create_server()
         self._register_servicers()
-
-        # Add health service
         self._add_health_service()
-
-        # Add reflection if enabled
         self._add_reflection()
 
-        # Start the server
-        logger.debug("Starting gRPC server on %s", self._server_settings.channel.address)
-        try:
-            if self._server_settings.channel.communication_mode == ControlFlow.ASYNC:
+        logger.debug("Starting gRPC server on %s", get_server_settings().channel.address)
+        try:  # noqa: PLW0717
+            if get_server_settings().channel.communication_mode == ControlFlow.ASYNC:
                 await self._start_async()
             else:
-                # For sync server in async context
                 sync_server = cast("grpc.Server", self.server)
                 sync_server.start()
-            logger.debug("✅ gRPC server started on %s", self._server_settings.channel.address)
+            logger.debug("✅ gRPC server started on %s", get_server_settings().channel.address)
         except Exception as e:
             logger.exception("❎ Error starting server")
             msg = f"Failed to start server: {e}"
             raise ServerStateError(msg) from e
 
-        # Start asyncio-inspector if enabled
-        if os.environ.get("DIGITALKIN_ASYNCIO_INSPECTOR", "").lower() == "true":
-            try:
-                from digitalkin.core.profiling.asyncio_monitor import AsyncioMonitor
-
-                port = int(os.environ.get("DIGITALKIN_ASYNCIO_INSPECTOR_PORT", "8765"))
-                self._asyncio_monitor = AsyncioMonitor(port=port)
-                await self._asyncio_monitor.start()
-            except Exception:
-                logger.exception("Failed to start asyncio-inspector")
-
     def stop(self, grace: float | None = None) -> None:
-        """Stop the gRPC server and close all cached gRPC client channels.
+        """Stop the gRPC server and close cached client channels.
 
         Args:
-            grace: Optional grace period in seconds for existing RPCs to complete.
+            grace: Optional grace period in seconds.
         """
-        self._asyncio_monitor = None
-
         if self.server is None:
             logger.warning("Attempted to stop server, but no server is running")
             return
 
         logger.debug("Stopping gRPC server...")
-        if self._server_settings.channel.communication_mode == ControlFlow.ASYNC:
-            # We'll use a different approach that works whether we're in a running event loop or not
-            try:
-                # Get the current event loop
+        if get_server_settings().channel.communication_mode == ControlFlow.ASYNC:
+            try:  # noqa: PLW0717
                 loop = asyncio.get_event_loop()
 
                 if loop.is_running():
-                    # If we're in a running event loop, we can't run_until_complete
-                    # Just warn the user they should use stop_async
                     logger.warning(
                         "Called stop() on async server from a running event loop. "
-                        "This might not fully shut down the server. "
                         "Use await stop_async() in async contexts instead."
                     )
-                    # Set server to None to avoid further operations
                     self.server = None
                     logger.debug("✅ gRPC server marked as stopped")
                     return
-                # If not in a running event loop, use run_until_complete
                 loop.run_until_complete(self._stop_async(grace))
                 loop.run_until_complete(GrpcClientWrapper.close_all_cached_channels())
-                from digitalkin.services.task_manager.grpc_task_manager import _SharedPoller, _SharedSendBuffer
-
-                loop.run_until_complete(_SharedPoller.close_all())
-                loop.run_until_complete(_SharedSendBuffer.close_all())
             except RuntimeError:
-                # Event loop issues - try with a new loop
                 logger.debug("Creating new event loop for shutdown")
                 try:
                     new_loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(new_loop)
                     new_loop.run_until_complete(self._stop_async(grace))
                     new_loop.run_until_complete(GrpcClientWrapper.close_all_cached_channels())
-                    from digitalkin.services.task_manager.grpc_task_manager import _SharedPoller, _SharedSendBuffer
-
-                    new_loop.run_until_complete(_SharedPoller.close_all())
-                    new_loop.run_until_complete(_SharedSendBuffer.close_all())
                 finally:
                     new_loop.close()
         else:
-            # For sync server, we can just call stop
             sync_server = cast("grpc.Server", self.server)
             sync_server.stop(grace=grace)
 
@@ -490,7 +428,7 @@ class BaseServer(abc.ABC):
         """Stop the async gRPC server.
 
         Args:
-            grace: Optional grace period in seconds for existing RPCs to complete.
+            grace: Optional grace period in seconds.
         """
         if self.server is None:
             return
@@ -499,64 +437,43 @@ class BaseServer(abc.ABC):
         await async_server.stop(grace=grace)
 
     async def stop_async(self, grace: float | None = None) -> None:
-        """Stop the gRPC server asynchronously and close all cached client channels.
-
-        This method should be used in async contexts.
+        """Stop the gRPC server in an async context and close cached channels.
 
         Args:
-            grace: Optional grace period in seconds for existing RPCs to complete.
+            grace: Optional grace period in seconds.
         """
-        if self._asyncio_monitor is not None:
-            await self._asyncio_monitor.stop()
-            self._asyncio_monitor = None
-
         if self.server is None:
             logger.warning("Attempted to stop server, but no server is running")
             return
 
         logger.debug("Stopping gRPC server asynchronously...")
-        if self._server_settings.channel.communication_mode == ControlFlow.ASYNC:
+        if get_server_settings().channel.communication_mode == ControlFlow.ASYNC:
             await self._stop_async(grace)
         else:
-            # For sync server, we can just call stop
             sync_server = cast("grpc.Server", self.server)
             sync_server.stop(grace=grace)
 
         await GrpcClientWrapper.close_all_cached_channels()
-        # Lazy import to avoid circular dependency (grpc_task_manager imports from grpc_servers)
-        from digitalkin.services.task_manager.grpc_task_manager import _SharedPoller, _SharedSendBuffer
-
-        await _SharedPoller.close_all()
-        await _SharedSendBuffer.close_all()
         logger.debug("✅ gRPC server stopped")
         self.server = None
 
     def wait_for_termination(self) -> None:
-        """Wait for the server to terminate.
-
-        In synchronous mode, this blocks until the server is terminated.
-        In asynchronous mode, a warning is logged suggesting to use `await_termination`.
-        """
+        """Block until the sync server terminates; warn on async mode."""
         if self.server is None:
             logger.warning("Attempted to wait for termination, but no server is running")
             return
 
-        if self._server_settings.channel.communication_mode == ControlFlow.SYNC:
-            # For sync server
+        if get_server_settings().channel.communication_mode == ControlFlow.SYNC:
             sync_server = cast("grpc.Server", self.server)
             sync_server.wait_for_termination()
         else:
-            # For async server, the caller should use await_termination instead
             logger.warning(
                 "Called wait_for_termination on async server. Use await_termination instead for async servers.",
             )
 
     async def await_termination(self) -> None:
-        """Wait for the async server to terminate.
-
-        This method should only be used with async servers.
-        """
-        if self._server_settings.channel.communication_mode == ControlFlow.SYNC:
+        """Await termination of the async server; warn on sync mode."""
+        if get_server_settings().channel.communication_mode == ControlFlow.SYNC:
             logger.warning(
                 "Called await_termination on sync server. Use wait_for_termination instead for sync servers.",
             )
@@ -566,6 +483,5 @@ class BaseServer(abc.ABC):
             logger.warning("Attempted to await termination, but no server is running")
             return
 
-        # For async server
         async_server = cast("grpc_aio.Server", self.server)
         await async_server.wait_for_termination()

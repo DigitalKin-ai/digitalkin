@@ -6,6 +6,11 @@ from digitalkin.models.services.registry import (
     ModuleInfo,
     RegistryModuleStatus,
     RegistryModuleType,
+    RegistrySetupStatus,
+    RegistrySortBy,
+    RegistryVisibility,
+    SetupInfo,
+    SetupSummary,
 )
 from digitalkin.services.registry.exceptions import RegistryModuleNotFoundError
 from digitalkin.services.registry.registry_models import ModuleStatusInfo
@@ -16,9 +21,21 @@ class DefaultRegistry(RegistryStrategy):
     """Default registry strategy using in-memory storage."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
-        """Initialize with per-instance module store."""
+        """Initialize with per-instance module and setup stores."""
         super().__init__(*args, **kwargs)
         self._modules: dict[str, ModuleInfo] = {}
+        self._setups: dict[str, SetupInfo] = {}
+
+    async def wait_for_ready(self, timeout: float = 1.0) -> bool:  # noqa: ARG002, PLR6301
+        """Local registry is always ready (in-memory store).
+
+        Args:
+            timeout: Ignored for local registry.
+
+        Returns:
+            Always True — no network dependency.
+        """
+        return True
 
     async def discover_by_id(self, module_id: str) -> ModuleInfo:
         """Get module info by ID.
@@ -40,15 +57,24 @@ class DefaultRegistry(RegistryStrategy):
         self,
         name: str | None = None,
         module_type: str | None = None,
-        organization_id: str  # noqa: ARG002
-        | None = None,  # Strategy interface parameter, not used in local implementation
+        tags: list[str] | None = None,
+        sort_by: RegistrySortBy = RegistrySortBy.UNSPECIFIED,
+        limit: int = 20,
+        offset: int = 0,
+        *,
+        descending: bool = False,
     ) -> list[ModuleInfo]:
-        """Search for modules by criteria.
+        """Search the module catalog (module blueprints; needs a setup to be invocable).
 
         Args:
-            name: Filter by name (partial match).
-            module_type: Filter by type (archetype, tool).
-            organization_id: Filter by organization (not used in local storage).
+            name: Case-insensitive free text matched against module name AND documentation.
+            module_type: Filter by type (archetype, tool_module, service).
+            tags: Match modules carrying at least one of these tags (case-insensitive).
+            sort_by: Sort key. Only NAME is ordered here — this store keeps no
+                timestamps, so CREATED_AT/UPDATED_AT fall back to insertion order.
+            limit: Max results (1-100).
+            offset: Pagination offset.
+            descending: Sort direction, applied when ``sort_by`` is NAME.
 
         Returns:
             List of matching modules.
@@ -56,12 +82,22 @@ class DefaultRegistry(RegistryStrategy):
         results = list(self._modules.values())
 
         if name:
-            results = [m for m in results if name in m.module_name]
+            needle = name.lower()
+            results = [
+                m for m in results if needle in m.module_name.lower() or needle in (m.documentation or "").lower()
+            ]
 
         if module_type:
             results = [m for m in results if m.module_type == module_type]
 
-        return results
+        if tags:
+            wanted = {t.lower() for t in tags}
+            results = [m for m in results if wanted & {t.lower() for t in m.tags}]
+
+        if sort_by is RegistrySortBy.NAME:
+            results.sort(key=lambda m: m.module_name.lower(), reverse=descending)
+
+        return results[offset : offset + limit]
 
     async def get_status(self, module_id: str) -> ModuleStatusInfo:
         """Get module status.
@@ -90,6 +126,8 @@ class DefaultRegistry(RegistryStrategy):
         address: str,
         port: int,
         version: str,
+        module_type: RegistryModuleType = RegistryModuleType.UNSPECIFIED,
+        documentation: str = "",
     ) -> ModuleInfo | None:
         """Register a module with the registry.
 
@@ -100,6 +138,8 @@ class DefaultRegistry(RegistryStrategy):
             address: Network address.
             port: Network port.
             version: Module version.
+            module_type: Declared module type; UNSPECIFIED preserves the existing record's type.
+            documentation: Internal documentation for registry index search.
 
         Returns:
             ModuleInfo if successful, None otherwise.
@@ -107,11 +147,14 @@ class DefaultRegistry(RegistryStrategy):
         existing = self._modules.get(module_id)
         self._modules[module_id] = ModuleInfo(
             module_id=module_id,
-            module_type=existing.module_type if existing else RegistryModuleType.UNSPECIFIED,
+            module_type=module_type
+            if module_type != RegistryModuleType.UNSPECIFIED
+            else (existing.module_type if existing else RegistryModuleType.UNSPECIFIED),
             address=address,
             port=port,
             version=version,
             module_name=existing.module_name if existing else module_id,
+            documentation=documentation or (existing.documentation if existing else None),
             status=RegistryModuleStatus.ACTIVE,
         )
         return self._modules[module_id]
@@ -140,7 +183,9 @@ class DefaultRegistry(RegistryStrategy):
             port=module.port,
             version=module.version,
             module_name=module.module_name,
+            documentation=module.documentation,
             status=RegistryModuleStatus.ACTIVE,
+            tags=module.tags,
         )
         return RegistryModuleStatus.ACTIVE
 
@@ -158,9 +203,92 @@ class DefaultRegistry(RegistryStrategy):
             return True
         return False
 
-    async def get_setup(self, setup_id: str) -> None:
-        """Get setup info (not supported in default registry).
+    async def get_setup(self, setup_id: str) -> SetupInfo | None:
+        """Get setup info from the in-memory store.
 
         Args:
             setup_id: The setup identifier.
+
+        Returns:
+            SetupInfo if present, None otherwise.
         """
+        return self._setups.get(setup_id)
+
+    def add_setup(self, setup: SetupInfo) -> None:
+        """Add a setup to the in-memory store (helper for testing).
+
+        Args:
+            setup: The setup to store, keyed by its setup_id.
+        """
+        self._setups[setup.setup_id] = setup
+
+    async def search_setups(  # Filter surface mirrors SearchSetupsRequest 1:1 # noqa: PLR0913
+        self,
+        query: str | None = None,
+        setup_ids: list[str] | None = None,
+        module_ids: list[str] | None = None,
+        module_types: list[RegistryModuleType] | None = None,
+        statuses: list[RegistrySetupStatus] | None = None,
+        visibilities: list[RegistryVisibility] | None = None,
+        tags: list[str] | None = None,
+        sort_by: RegistrySortBy = RegistrySortBy.UNSPECIFIED,
+        limit: int = 20,
+        offset: int = 0,
+        *,
+        descending: bool = False,
+    ) -> list[SetupSummary]:
+        """Search the setup catalog (configured, invocable module instances).
+
+        Args:
+            query: Case-insensitive free text matched against setup name AND documentation.
+            setup_ids: Restrict to these setup ids.
+            module_ids: Restrict to setups backed by these modules.
+            module_types: Filter by backing module type (tool_module, archetype, service).
+            statuses: Filter by setup status. None = no filter.
+            visibilities: Filter by visibility.
+            tags: Match setups carrying at least one of these tags (case-insensitive).
+            sort_by: Sort key. Only NAME is ordered here — this store keeps no
+                timestamps, so CREATED_AT/UPDATED_AT fall back to insertion order.
+            limit: Max results (1-100).
+            offset: Pagination offset.
+            descending: Sort direction, applied when ``sort_by`` is NAME.
+
+        Returns:
+            Matching setups as ``SetupSummary`` (no ``config`` field by construction).
+        """
+        results = list(self._setups.values())
+        if setup_ids:
+            results = [s for s in results if s.setup_id in setup_ids]
+        if module_ids:
+            results = [s for s in results if s.module_id in module_ids]
+        if module_types:
+            results = [s for s in results if s.module_type in module_types]
+        if statuses:
+            results = [s for s in results if s.status in statuses]
+        if visibilities:
+            results = [s for s in results if s.visibility in visibilities]
+        if query:
+            needle = query.lower()
+            results = [s for s in results if needle in s.name.lower() or needle in (s.documentation or "").lower()]
+        if tags:
+            wanted = {t.lower() for t in tags}
+            results = [s for s in results if wanted & {t.lower() for t in s.tags}]
+        if sort_by is RegistrySortBy.NAME:
+            results.sort(key=lambda s: s.name.lower(), reverse=descending)
+        return [
+            SetupSummary(
+                setup_id=s.setup_id,
+                name=s.name,
+                documentation=s.documentation,
+                status=s.status,
+                visibility=s.visibility,
+                organization_id=s.organization_id,
+                module_id=s.module_id,
+                module_name=s.module_name,
+                module_type=s.module_type,
+                setup_version_id=s.setup_version_id,
+                setup_version=s.setup_version,
+                tags=s.tags,
+            )
+            for s in results[offset : offset + limit]
+        ]

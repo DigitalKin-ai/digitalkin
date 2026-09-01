@@ -23,6 +23,7 @@ import pytest_asyncio
 from digitalkin.core.task_manager.base_task_manager import BaseTaskManager
 from digitalkin.core.task_manager.task_session import TaskSession
 from digitalkin.models.core.task_monitor import CancellationReason
+from digitalkin.models.settings.task_manager import get_task_manager_settings
 from digitalkin.modules._base_module import BaseModule
 from digitalkin.services.task_manager.task_manager_strategy import TaskManagerStrategy
 
@@ -58,6 +59,8 @@ class ConcreteTaskManager(BaseTaskManager):
             async with self._tasks_lock:
                 await self._validate_task_creation(task_id, mission_id, coro)
                 self._create_session(task_id, mission_id, module)
+            # Close the coroutine — this test impl doesn't execute it
+            coro.close()
         except Exception:
             if task_id not in self.tasks_sessions:
                 self._task_slot.release()
@@ -70,24 +73,16 @@ class ConcreteTaskManager(BaseTaskManager):
 
 
 @pytest_asyncio.fixture
-async def mock_signal_service() -> Mock:
+async def mock_signal_service() -> Mock:  # noqa: RUF029
     """Mock TaskManagerStrategy with all required async methods."""
     svc = Mock(spec=TaskManagerStrategy)
     svc.send_signal = AsyncMock(return_value={})
-    svc.subscribe_signals = AsyncMock(return_value=("sub_123", _empty_gen()))
-    svc.unsubscribe_signals = AsyncMock()
     svc.close = AsyncMock()
     return svc
 
 
-async def _empty_gen():
-    """Empty async generator."""
-    return
-    yield  # pragma: no cover
-
-
 @pytest_asyncio.fixture
-async def mock_base_module(mock_signal_service: Mock) -> Mock:
+async def mock_base_module(mock_signal_service: Mock) -> Mock:  # noqa: RUF029
     """Mock BaseModule with async stop() method and signal service."""
     module = Mock(spec=BaseModule)
     module.stop = AsyncMock()
@@ -107,15 +102,15 @@ async def mock_base_module(mock_signal_service: Mock) -> Mock:
 
 
 @pytest_asyncio.fixture
-async def task_manager() -> ConcreteTaskManager:
+async def task_manager(monkeypatch: pytest.MonkeyPatch) -> ConcreteTaskManager:  # noqa: RUF029
     """Standard concrete task manager for testing."""
-    mgr = ConcreteTaskManager(default_timeout=2.0)
-    mgr.max_concurrent_tasks = 10
-    return mgr
+    monkeypatch.setenv("DIGITALKIN_TASK_MANAGER_MAX_CONCURRENT_TASKS", "10")
+    get_task_manager_settings.cache_clear()
+    return ConcreteTaskManager(default_timeout=2.0)
 
 
 @pytest_asyncio.fixture
-async def mock_task_session(mock_signal_service: Mock) -> Mock:
+async def mock_task_session(mock_signal_service: Mock) -> Mock:  # noqa: RUF029
     """Mock TaskSession with expected attributes and async methods."""
     session = Mock(spec=TaskSession)
     session.mission_id = "missions:mock"
@@ -152,14 +147,15 @@ class TestAbstractMethods:
     def test_default_params(self) -> None:
         """Test default parameter values."""
         mgr = ConcreteTaskManager()
-        assert mgr.default_timeout == 300.0
-        assert mgr.max_concurrent_tasks == 100
+        assert mgr.default_timeout == 300.0  # noqa: RUF069
+        assert mgr.max_concurrent_tasks == 500
 
-    def test_custom_params(self) -> None:
-        """Test custom parameter values."""
+    def test_custom_params(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Test settings-driven concurrency limit."""
+        monkeypatch.setenv("DIGITALKIN_TASK_MANAGER_MAX_CONCURRENT_TASKS", "50")
+        get_task_manager_settings.cache_clear()
         mgr = ConcreteTaskManager(default_timeout=5.0)
-        mgr.max_concurrent_tasks = 50
-        assert mgr.default_timeout == 5.0
+        assert mgr.default_timeout == 5.0  # noqa: RUF069
         assert mgr.max_concurrent_tasks == 50
 
 
@@ -177,7 +173,7 @@ class TestValidation:
     ) -> None:
         """Test that duplicate task_id raises ValueError."""
 
-        async def work():
+        async def work() -> None:
             await asyncio.sleep(1)
 
         await task_manager.create_task("dup", "missions:test", mock_base_module, work())
@@ -186,13 +182,33 @@ class TestValidation:
             await task_manager.create_task("dup", "missions:test", mock_base_module, work())
 
     @pytest.mark.asyncio
-    async def test_max_concurrent_tasks_raises(self, mock_base_module: Mock) -> None:
-        """Test that exceeding max tasks raises RuntimeError after wait timeout."""
-        mgr = ConcreteTaskManager(default_timeout=1.0)
-        mgr.max_concurrent_tasks = 2
-        mgr._task_wait_timeout = 0.1
+    async def test_duplicate_task_id_keeps_live_session(self, mock_base_module: Mock) -> None:
+        """H2: a duplicate task_id must reject without tearing down the already-running task."""
+        from digitalkin.core.task_manager.local_task_manager import LocalTaskManager
 
-        async def work():
+        mgr = LocalTaskManager()
+        original = mgr._create_session("dup", "missions:test", mock_base_module)  # noqa: SLF001
+        assert mgr.tasks_sessions["dup"] is original
+
+        async def work() -> None:
+            await asyncio.sleep(1)
+
+        with pytest.raises(ValueError, match="already exists"):
+            await mgr.create_task("dup", "missions:test", mock_base_module, work())
+
+        # The original session must survive untouched (was _cleanup_task'd before the H2 fix).
+        assert mgr.tasks_sessions.get("dup") is original
+
+    @pytest.mark.asyncio
+    async def test_max_concurrent_tasks_raises(self, mock_base_module: Mock, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Test that exceeding max tasks raises RuntimeError after wait timeout."""
+        monkeypatch.setenv("DIGITALKIN_TASK_MANAGER_MAX_CONCURRENT_TASKS", "2")
+        monkeypatch.setenv("DIGITALKIN_TASK_MANAGER_MAX_QUEUED_TASKS", "0")
+        monkeypatch.setenv("DIGITALKIN_TASK_MANAGER_TASK_WAIT_TIMEOUT", "0.1")
+        get_task_manager_settings.cache_clear()
+        mgr = ConcreteTaskManager(default_timeout=1.0)
+
+        async def work() -> None:
             await asyncio.sleep(1)
 
         await mgr.create_task("t1", "missions:test", mock_base_module, work())
@@ -207,13 +223,13 @@ class TestValidation:
     ) -> None:
         """Test that duplicate validation closes the rejected coroutine."""
 
-        async def work():
+        async def work() -> None:
             await asyncio.sleep(1)
 
         await task_manager.create_task("dup2", "missions:test", mock_base_module, work())
 
         coro = work()
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="already exists"):
             await task_manager.create_task("dup2", "missions:test", mock_base_module, coro)
 
         # Coroutine should be closed
@@ -221,13 +237,15 @@ class TestValidation:
             await coro
 
     @pytest.mark.asyncio
-    async def test_max_tasks_closes_coroutine(self, mock_base_module: Mock) -> None:
+    async def test_max_tasks_closes_coroutine(self, mock_base_module: Mock, monkeypatch: pytest.MonkeyPatch) -> None:
         """Test that max tasks validation closes the rejected coroutine."""
+        monkeypatch.setenv("DIGITALKIN_TASK_MANAGER_MAX_CONCURRENT_TASKS", "1")
+        monkeypatch.setenv("DIGITALKIN_TASK_MANAGER_MAX_QUEUED_TASKS", "0")
+        monkeypatch.setenv("DIGITALKIN_TASK_MANAGER_TASK_WAIT_TIMEOUT", "0.1")
+        get_task_manager_settings.cache_clear()
         mgr = ConcreteTaskManager()
-        mgr.max_concurrent_tasks = 1
-        mgr._task_wait_timeout = 0.1
 
-        async def work():
+        async def work() -> None:
             await asyncio.sleep(1)
 
         await mgr.create_task("t1", "missions:test", mock_base_module, work())
@@ -532,7 +550,7 @@ class TestProperties:
         mock_base_module: Mock,
     ) -> None:
         """Test task_count counts pending and running sessions."""
-        async def work():
+        async def work() -> None:
             await asyncio.sleep(1)
 
         await task_manager.create_task("t1", "missions:test", mock_base_module, work())
@@ -596,13 +614,15 @@ class TestTasksLock:
     """Tests for _tasks_lock preventing TOCTOU race conditions."""
 
     @pytest.mark.asyncio
-    async def test_concurrent_create_respects_max(self, mock_base_module: Mock) -> None:
+    async def test_concurrent_create_respects_max(self, mock_base_module: Mock, monkeypatch: pytest.MonkeyPatch) -> None:
         """Test that concurrent creates don't exceed max_concurrent_tasks."""
+        monkeypatch.setenv("DIGITALKIN_TASK_MANAGER_MAX_CONCURRENT_TASKS", "3")
+        monkeypatch.setenv("DIGITALKIN_TASK_MANAGER_MAX_QUEUED_TASKS", "0")
+        monkeypatch.setenv("DIGITALKIN_TASK_MANAGER_TASK_WAIT_TIMEOUT", "0.1")
+        get_task_manager_settings.cache_clear()
         mgr = ConcreteTaskManager()
-        mgr.max_concurrent_tasks = 3
-        mgr._task_wait_timeout = 0.1
 
-        async def work():
+        async def work() -> None:
             await asyncio.sleep(1)
 
         # Try to create 5 tasks concurrently with max=3

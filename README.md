@@ -26,8 +26,7 @@ communicate over gRPC, register with a service mesh, and scale independently.
 - **Profiling** — optional `[profiling]` extra with asyncio-inspector,
   pyinstrument, viztracer, and yappi
 - **Batched history writes** — efficient storage writes for conversation history
-- **TaskIQ integration** — optional distributed task execution backed by
-  RabbitMQ and Redis (`[taskiq]` extra)
+- **Redis Streams** — durable message passing, crash recovery, and reconnection
 
 ## Installation
 
@@ -42,11 +41,11 @@ pip install digitalkin
 **Optional extras:**
 
 ```bash
-# Distributed task execution (RabbitMQ + Redis)
-uv add "digitalkin[taskiq]"
-
 # Async profiling tools
 uv add "digitalkin[profiling]"
+
+# uvloop for faster event loop
+uv add "digitalkin[performance]"
 ```
 
 ## Quick Start
@@ -124,26 +123,15 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-## TaskIQ with RabbitMQ
+## Redis Gateway
 
-TaskIQ integration allows the module to scale for heavy CPU tasks by
-distributing requests to stateless worker instances.
+The embedded gateway enables real-time bidirectional communication between
+modules via Redis Streams, with crash recovery and horizontal scaling.
 
-- **Decoupled Scalability**: RabbitMQ brokers messages, letting producers and
-  consumers scale independently.
-- **Reliability**: Durable queues, acknowledgements, and dead-lettering ensure
-  tasks aren't lost.
-- **Concurrency Control**: TaskIQ's worker pool manages parallel execution
-  without custom schedulers.
-- **Flexibility**: Built-in retries, exponential backoff, and Redis
-  result-backend for resilient workflows.
+- **Durable Streaming**: Output persisted to Redis Streams — reconnection via `from_seq`.
+- **Zero-Copy Proto**: Binary proto serialization to Redis — no JSON intermediary.
+- **Horizontal Scaling**: Each module instance embeds its own gateway. Scale by adding replicas behind a load balancer.
 
-To enable RabbitMQ streaming:
-
-```bash
-sudo rabbitmq-plugins enable rabbitmq_stream
-task start-taskiq
-```
 
 ## Development
 
@@ -176,8 +164,6 @@ task docs-serve           # Serve docs locally (mkdocs)
 task docs-build           # Build docs
 
 task generate-certificates  # Generate mTLS certs for gRPC
-task start-taskiq           # Start TaskIQ worker
-
 task clean                # Remove build artifacts + __pycache__
 task clean-all            # Above + remove .venv
 ```

@@ -5,13 +5,13 @@ following Django/FastAPI patterns where context is passed explicitly to each met
 """
 
 import asyncio
-import os
 
 from digitalkin.logger import logger
 from digitalkin.mixins.logger_mixin import LoggerMixin
 from digitalkin.mixins.storage_mixin import StorageMixin
 from digitalkin.models.module.module_context import ModuleContext
 from digitalkin.models.services.storage import FileHistory, FileModel
+from digitalkin.models.settings.module import get_module_settings
 
 
 class FileHistoryMixin(StorageMixin, LoggerMixin):
@@ -33,7 +33,6 @@ class FileHistoryMixin(StorageMixin, LoggerMixin):
     _fh_persisted: set[str]
     _fh_dirty: dict[str, int]
     _fh_flush_locks: dict[str, asyncio.Lock]
-    _fh_flush_threshold: int
 
     def __init__(self) -> None:
         """Initialize file history state."""
@@ -48,7 +47,6 @@ class FileHistoryMixin(StorageMixin, LoggerMixin):
         self._fh_persisted = set()
         self._fh_dirty = {}
         self._fh_flush_locks = {}
-        self._fh_flush_threshold = int(os.environ.get("DIGITALKIN_FILE_HISTORY_FLUSH_THRESHOLD", "10"))
 
     def _get_fh_history_key(self, context: ModuleContext) -> str:
         """Get session-specific history key.
@@ -91,7 +89,7 @@ class FileHistoryMixin(StorageMixin, LoggerMixin):
 
         Files are added to the in-memory cache immediately. A storage
         write is deferred until the batch threshold is reached (default 10,
-        env: DIGITALKIN_FILE_HISTORY_FLUSH_THRESHOLD) or flush_file_history().
+        env: DIGITALKIN_MODULE_FILE_HISTORY_FLUSH_THRESHOLD) or flush_file_history().
 
         Args:
             context: Module context containing storage strategy.
@@ -104,7 +102,7 @@ class FileHistoryMixin(StorageMixin, LoggerMixin):
         pending = self._fh_dirty.get(history_key, 0) + 1
         self._fh_dirty[history_key] = pending
 
-        if pending >= self._fh_flush_threshold:
+        if pending >= get_module_settings().file_history_flush_threshold:
             await self._flush_fh_key(context, history_key)
 
     async def flush_file_history(self, context: ModuleContext) -> None:
@@ -134,8 +132,8 @@ class FileHistoryMixin(StorageMixin, LoggerMixin):
                 return
 
             self.log_debug(context, "Flushing file history for session: %s", history_key)
+            data = file_history.model_dump()
             try:
-                data = file_history.model_dump()
                 if history_key in self._fh_persisted:
                     await self.update_storage(context, self.FILE_HISTORY_COLLECTION, history_key, data)
                 else:

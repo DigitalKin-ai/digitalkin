@@ -1,22 +1,29 @@
 """Define the module context used in the triggers."""
 
-import os
+import asyncio
 from collections.abc import AsyncGenerator, Callable
 from datetime import tzinfo
 from types import SimpleNamespace
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from google.protobuf import json_format
+
+from digitalkin.grpc_servers.exceptions import PermissionDeniedError
 from digitalkin.logger import logger
+from digitalkin.models.module.loaded_tools import LoadedToolStore
 from digitalkin.models.module.request_metadata import RequestMetadata
 from digitalkin.models.module.tool_cache import ToolCache, ToolDefinition, ToolModuleInfo
-from digitalkin.services.agent.agent_strategy import AgentStrategy
+from digitalkin.models.settings.module import get_module_settings
 from digitalkin.services.communication.communication_strategy import CommunicationStrategy
+from digitalkin.services.communication.exceptions import ToolCallError
 from digitalkin.services.cost.cost_strategy import CostStrategy
 from digitalkin.services.filesystem.filesystem_strategy import FilesystemStrategy
 from digitalkin.services.identity.identity_strategy import IdentityStrategy
+from digitalkin.services.registry.exceptions import RegistryModuleNotFoundError
 from digitalkin.services.registry.registry_strategy import RegistryStrategy
-from digitalkin.services.snapshot.snapshot_strategy import SnapshotStrategy
+from digitalkin.services.secret.secret_strategy import SecretStrategy
+from digitalkin.services.setup.setup_strategy import SetupStrategy
 from digitalkin.services.storage.storage_strategy import StorageStrategy
 from digitalkin.services.task_manager.task_manager_strategy import TaskManagerStrategy
 from digitalkin.services.user_profile.user_profile_strategy import UserProfileStrategy
@@ -37,10 +44,12 @@ class Session(SimpleNamespace):
         mission_id: str,
         setup_id: str,
         setup_version_id: str,
-        timezone: tzinfo | None = None,
         **kwargs: dict[str, Any],
     ) -> None:
         """Init Module Session.
+
+        Timezone comes from ``ModuleSettings.timezone`` (env
+        ``DIGITALKIN_MODULE_TIMEZONE``).
 
         Raises:
             ValueError: If mandatory args are missing.
@@ -62,7 +71,7 @@ class Session(SimpleNamespace):
         self.mission_id = mission_id
         self.setup_id = setup_id
         self.setup_version_id = setup_version_id
-        self.timezone = timezone or ZoneInfo(os.environ.get("DIGITALKIN_TIMEZONE", "Europe/Paris"))
+        self.timezone = ZoneInfo(get_module_settings().timezone)
 
         super().__init__(**kwargs)
 
@@ -88,15 +97,15 @@ class ModuleContext:
     """
 
     # services list
-    agent: AgentStrategy
     communication: CommunicationStrategy
     cost: CostStrategy
     filesystem: FilesystemStrategy
     identity: IdentityStrategy
     registry: RegistryStrategy
-    snapshot: SnapshotStrategy
+    secret: SecretStrategy
+    setup: SetupStrategy | None
     storage: StorageStrategy
-    task_manager: TaskManagerStrategy
+    task_manager: TaskManagerStrategy | None
     user_profile: UserProfileStrategy
 
     session: Session
@@ -104,20 +113,19 @@ class ModuleContext:
     metadata: SimpleNamespace
     helpers: SimpleNamespace
     state: SimpleNamespace
+    shared: dict[str, Any]
     tool_cache: ToolCache
     request_metadata: RequestMetadata
 
     def __init__(  # All service strategies are mandatory constructor args # noqa: PLR0913, PLR0917
         self,
-        agent: AgentStrategy,
         communication: CommunicationStrategy,
         cost: CostStrategy,
         filesystem: FilesystemStrategy,
         identity: IdentityStrategy,
         registry: RegistryStrategy,
-        snapshot: SnapshotStrategy,
+        secret: SecretStrategy,
         storage: StorageStrategy,
-        task_manager: TaskManagerStrategy,
         user_profile: UserProfileStrategy,
         session: dict[str, Any],
         metadata: dict[str, Any] | None = None,
@@ -125,34 +133,41 @@ class ModuleContext:
         callbacks: dict[str, Any] | None = None,
         tool_cache: ToolCache | None = None,
         request_metadata: dict[str, str] | None = None,
+        borrowed: frozenset[str] | None = None,
+        shared: dict[str, Any] | None = None,
+        task_manager: TaskManagerStrategy | None = None,
+        setup: SetupStrategy | None = None,
     ) -> None:
         """Register mandatory services, session, metadata and callbacks.
 
         Args:
-            agent: AgentStrategy.
             communication: CommunicationStrategy.
             cost: CostStrategy.
             filesystem: FilesystemStrategy.
             identity: IdentityStrategy.
             registry: RegistryStrategy.
-            snapshot: SnapshotStrategy.
+            secret: SecretStrategy.
             storage: StorageStrategy.
-            task_manager: TaskManagerStrategy.
             user_profile: UserProfileStrategy.
+            task_manager: Optional, injected by SingleJobManager (RedisTaskManager).
+            setup: Optional setup service, borrowed from the servicer (shared channel).
             metadata: dict defining differents Module metadata.
             helpers: dict different user defined helpers.
             session: dict referring the session IDs or informations.
             callbacks: Functions allowing user to agent interaction.
             tool_cache: ToolCache with pre-resolved tool references from setup.
             request_metadata: gRPC request metadata (headers) from the incoming request.
+            borrowed: Strategy names that are shared singletons — skip .close() on cleanup.
+            shared: Server-lifetime cache shared across all module instances.
         """
-        self.agent = agent
+        self._borrowed = (borrowed or frozenset()) | frozenset({"task_manager", "setup"})
         self.communication = communication
         self.cost = cost
         self.filesystem = filesystem
         self.identity = identity
         self.registry = registry
-        self.snapshot = snapshot
+        self.secret = secret
+        self.setup = setup
         self.storage = storage
         self.task_manager = task_manager
         self.user_profile = user_profile
@@ -162,6 +177,7 @@ class ModuleContext:
         self.helpers = SimpleNamespace(**(helpers or {}))
         self.callbacks = SimpleNamespace(**(callbacks or {}))
         self.state = SimpleNamespace()
+        self.shared = shared if shared is not None else {}
         self.tool_cache = tool_cache or ToolCache()
         self.request_metadata = RequestMetadata(request_metadata)
 
@@ -192,6 +208,28 @@ class ModuleContext:
         )
 
         return await self.communication.get_module_schemas(
+            module_address=module_info.address,
+            module_port=module_info.port,
+            llm_format=llm_format,
+        )
+
+    async def get_module_config_schema(self, module_id: str, *, llm_format: bool = False) -> dict[str, Any]:
+        """Get a module's config-setup JSON schema by id (discovers address/port, then queries it).
+
+        This is the schema a caller fills as a setup's ``content``; use it to validate ``content``
+        before a create/update.
+
+        Args:
+            module_id: Module identifier to look up in the registry.
+            llm_format: Return the LLM-friendly schema format.
+
+        Returns:
+            The config-setup JSON schema, or ``{}`` when the module can't be reached.
+        """
+        module_info = await self.registry.discover_by_id(module_id)
+        if not module_info.address:
+            return {}
+        return await self.communication.get_module_config_schema(
             module_address=module_info.address,
             module_port=module_info.port,
             llm_format=llm_format,
@@ -299,7 +337,7 @@ class ModuleContext:
         Returns:
             List of (ToolDefinition, async_generator_function) tuples. Empty if not found.
         """
-        tool_module_info = self.tool_cache.entries.get(slug)
+        tool_module_info = self.tool_cache.get(slug)
         if not tool_module_info:
             return []
 
@@ -315,6 +353,147 @@ class ModuleContext:
             result.append((tool_def, fn))
 
         return result
+
+    async def resolve_tool(self, setup_id: str) -> ToolModuleInfo | None:
+        """Resolve a registry ``setup_id`` into a ``ToolModuleInfo`` and cache it.
+
+        On-demand loader for a discovered tool. ``registry.get_setup`` always runs
+        first — it is the permission gate, and the cache's ``declared`` layer is shared
+        across missions of the same agent setup, so a cache hit must never skip authz.
+        The cache only short-circuits the module discovery + schema fetch.
+        Permission denials propagate so callers can surface them distinctly.
+
+        The result lands in the cache's mission-scoped ``dynamic`` layer. Pair this with
+        :meth:`persist_loaded_tool` to make the load outlive the current turn.
+
+        Args:
+            setup_id: The registry setup id to load as an invocable tool.
+
+        Returns:
+            The resolved ``ToolModuleInfo`` (also added to the tool cache), or ``None``
+            if the setup or its module could not be found.
+
+        Raises:
+            PermissionDeniedError: If the registry/communication call is not permitted.
+        """
+        setup = await self.registry.get_setup(setup_id)
+        if setup is None or not setup.module_id:
+            logger.warning(
+                "resolve_tool: setup '%s' not found or has no module", setup_id, extra=self.session.current_ids()
+            )
+            return None
+        cached = self.tool_cache.get(setup_id)
+        if cached is not None:
+            logger.debug(
+                "resolve_tool: cache hit for setup '%s' (authz re-checked)", setup_id, extra=self.session.current_ids()
+            )
+            return cached
+        try:
+            info = await self.registry.discover_by_id(setup.module_id)
+        except RegistryModuleNotFoundError:
+            logger.warning(
+                "resolve_tool: module '%s' for setup '%s' not found in registry",
+                setup.module_id,
+                setup_id,
+                extra=self.session.current_ids(),
+            )
+            return None
+        if info is None:
+            logger.warning(
+                "resolve_tool: module '%s' for setup '%s' not found in registry",
+                setup.module_id,
+                setup_id,
+                extra=self.session.current_ids(),
+            )
+            return None
+        tool_info = await ToolModuleInfo.from_module_info(info, setup_id, setup.name, self.communication)
+        # Mission-scoped layer, never ``declared``: the declared layer is the object the
+        # servicer shares with every other mission of this setup, so writing a runtime
+        # load there makes it reappear in unrelated conversations.
+        self.tool_cache.add_dynamic(tool_info)
+        logger.info(
+            "resolve_tool: resolved setup '%s' -> module '%s' (%d tools), cached",
+            setup_id,
+            setup.module_id,
+            len(tool_info.tools),
+            extra=self.session.current_ids(),
+        )
+        return tool_info
+
+    async def persist_loaded_tool(self, setup_id: str) -> bool:
+        """Record a runtime-loaded tool so it survives into this mission's next turn.
+
+        Every user message builds a fresh module instance, so the ``dynamic`` cache layer
+        and the agent's tool list are both rebuilt from scratch. Persisting the id is what
+        turns a load into a property of the *conversation* rather than of the turn.
+
+        Args:
+            setup_id: The loaded tool's registry setup id.
+
+        Returns:
+            ``True`` if the id was persisted; ``False`` if the module never registered the
+            ``loaded_tools`` collection, in which case the load lasts only this turn.
+        """
+        return await LoadedToolStore(self.storage).save(setup_id)
+
+    async def rehydrate_loaded_tools(self) -> int:
+        """Re-resolve this mission's previously-loaded tools into the ``dynamic`` layer.
+
+        Called once per turn from ``BaseModule.prepare()``, before ``initialize()`` builds
+        the agent's toolkits. Ids are re-resolved rather than replayed from a snapshot, so
+        each turn re-checks authorization and picks up schema changes; an id that no longer
+        resolves — revoked, deleted — is dropped from the mission so it is not retried on
+        every subsequent message.
+
+        Returns:
+            The number of tools restored into the dynamic layer.
+        """
+        store = LoadedToolStore(self.storage)
+        setup_ids = [sid for sid in await store.list_setup_ids() if sid not in self.tool_cache.dynamic]
+        if not setup_ids:
+            return 0
+
+        # Resolve concurrently: each id costs a get_setup + discover + schema fetch, and this
+        # sits on the critical path of every user message.
+        results = await asyncio.gather(
+            *(self.resolve_tool(setup_id) for setup_id in setup_ids),
+            return_exceptions=True,
+        )
+
+        restored = 0
+        for setup_id, result in zip(setup_ids, results, strict=True):
+            if isinstance(result, PermissionDeniedError):
+                logger.warning(
+                    "rehydrate_loaded_tools: access to '%s' was revoked; dropping it from the mission",
+                    setup_id,
+                    extra=self.session.current_ids(),
+                )
+                await store.forget(setup_id)
+            elif isinstance(result, BaseException):
+                # Transient (registry hiccup): keep the id so a later turn can retry.
+                logger.warning(
+                    "rehydrate_loaded_tools: could not restore '%s': %s",
+                    setup_id,
+                    result,
+                    extra=self.session.current_ids(),
+                )
+            elif result is None:
+                logger.warning(
+                    "rehydrate_loaded_tools: '%s' no longer exists; dropping it from the mission",
+                    setup_id,
+                    extra=self.session.current_ids(),
+                )
+                await store.forget(setup_id)
+            else:
+                restored += 1
+
+        logger.info(
+            "rehydrate_loaded_tools: restored %d/%d loaded tool(s)",
+            restored,
+            len(setup_ids),
+            extra=self.session.current_ids(),
+        )
+        return restored
 
     @staticmethod
     def _create_single_tool_function(
@@ -344,7 +523,7 @@ class ModuleContext:
         ) -> AsyncGenerator[dict, None]:  # Tool kwargs are dynamically typed
             kwargs["protocol"] = protocol
             wrapped_input = {"root": kwargs}
-            async for response in communication.call_module(
+            async for output_proto in communication.call_module(
                 module_address=tool_module_info.address,
                 module_port=tool_module_info.port,
                 input_data=wrapped_input,
@@ -352,7 +531,14 @@ class ModuleContext:
                 mission_id=session.mission_id,
                 metadata=grpc_metadata,
             ):
-                yield response
+                frame = json_format.MessageToDict(output_proto)
+                root = frame.get("root")
+                # A fatal stream.error (e.g. SETUP_ACCESS_DENIED) must abort the tool call,
+                # not surface as a benign result — otherwise the parent run never terminates.
+                if isinstance(root, dict) and root.get("protocol") == "stream.error" and root.get("fatal"):
+                    msg = f"[{root.get('code', '')}] {root.get('message', '')}"
+                    raise ToolCallError(msg)
+                yield frame
 
         tool_function.__name__ = tool_module_info.slug + "__" + tool_def.name
         tool_function.__doc__ = tool_def.description
@@ -360,20 +546,24 @@ class ModuleContext:
         return tool_function
 
     async def cleanup(self) -> None:
-        """Close all service strategies and release their resources."""
-        for service in (
-            self.task_manager,
-            self.communication,
-            self.cost,
-            self.storage,
-            self.registry,
-            self.filesystem,
-            self.user_profile,
-            self.agent,
-            self.identity,
-            self.snapshot,
-        ):
-            if service is not None:
+        """Close owned service strategies and release their resources.
+
+        Borrowed strategies (shared singletons) are skipped — they are
+        closed at server shutdown, not per-request.
+        """
+        owned = (
+            ("task_manager", self.task_manager),
+            ("communication", self.communication),
+            ("cost", self.cost),
+            ("storage", self.storage),
+            ("registry", self.registry),
+            ("filesystem", self.filesystem),
+            ("user_profile", self.user_profile),
+            ("secret", self.secret),
+            ("identity", self.identity),
+        )
+        for name, service in owned:
+            if service is not None and name not in self._borrowed:
                 try:
                     await service.close()
                 except Exception:

@@ -6,11 +6,9 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from digitalkin.models.services.services import Context
+from digitalkin.models.services.storage import Visibility
 from digitalkin.services.base_strategy import BaseStrategy
-
-
-class FilesystemServiceError(Exception):
-    """Base exception for Filesystem service errors."""
 
 
 class FilesystemRecord(BaseModel):
@@ -28,13 +26,15 @@ class FilesystemRecord(BaseModel):
     file_url: str = Field(description="Public URL for accessing the file content")
     status: str = Field(default="UNSPECIFIED", description="Current status of the file")
     content: bytes | None = Field(default=None, description="The content of the file")
+    visibility: Visibility = Field(default=Visibility.UNSPECIFIED, description="Read-access scope of the file")
 
 
 class FileFilter(BaseModel):
     """Filter criteria for querying files."""
 
-    context: Literal["mission", "setup"] = Field(
-        default="mission", description="The context of the files (mission or setup)"
+    context: Context = Field(
+        default=Context.MISSIONS,
+        description="The context of the files: mission/setup (owner) or user/organization (read-only cross-owner)",
     )
     names: list[str] | None = Field(default=None, description="Filter by file names (exact matches)")
     file_ids: list[str] | None = Field(default=None, description="Filter by file IDs")
@@ -63,6 +63,9 @@ class FileFilter(BaseModel):
     max_size_bytes: int | None = Field(default=None, description="Filter files with maximum size")
     prefix: str | None = Field(default=None, description="Filter by path prefix (e.g., 'folder1/')")
     content_type: str | None = Field(default=None, description="Filter by content type")
+    visibilities: list[Visibility] | None = Field(
+        default=None, description="Filter by read-access scope; None or empty means no filter"
+    )
 
 
 class UploadFileData(BaseModel):
@@ -83,6 +86,9 @@ class UploadFileData(BaseModel):
     content_type: str | None = Field(default=None, description="The content type of the file")
     metadata: dict[str, Any] | None = Field(default=None, description="The metadata of the file")
     replace_if_exists: bool = Field(default=False, description="Whether to replace the file if it already exists")
+    visibility: Visibility = Field(
+        default=Visibility.UNSPECIFIED, description="Read-access scope; UNSPECIFIED lets the service default it"
+    )
 
 
 class FilesystemStrategy(BaseStrategy, ABC):
@@ -133,7 +139,7 @@ class FilesystemStrategy(BaseStrategy, ABC):
     async def get_file(
         self,
         file_id: str,
-        context: Literal["mission", "setup"] = "mission",
+        context: Context = Context.MISSIONS,
         *,
         include_content: bool = False,
     ) -> FilesystemRecord:
@@ -145,7 +151,7 @@ class FilesystemStrategy(BaseStrategy, ABC):
 
         Args:
             file_id: The ID of the file to be retrieved
-            context: The context of the files (mission or setup)
+            context: The context of the file (mission/setup, or user/organization for cross-owner reads)
             include_content: Whether to include file content in response
 
         Returns:
@@ -204,6 +210,7 @@ class FilesystemStrategy(BaseStrategy, ABC):
         metadata: dict[str, Any] | None = None,
         new_name: str | None = None,
         status: str | None = None,
+        visibility: Visibility = Visibility.UNSPECIFIED,
     ) -> FilesystemRecord:
         """Update file metadata, content, or both.
 
@@ -221,6 +228,7 @@ class FilesystemStrategy(BaseStrategy, ABC):
             metadata: Optional new metadata (will merge with existing)
             new_name: Optional new name for the file
             status: Optional new status for the file
+            visibility: Optional new read-access scope; UNSPECIFIED leaves it unchanged
 
         Returns:
             FilesystemRecord: Metadata about the updated file

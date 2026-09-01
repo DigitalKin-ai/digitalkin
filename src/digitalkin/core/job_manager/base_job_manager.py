@@ -1,17 +1,16 @@
 """Background module manager."""
 
 import abc
-from collections.abc import AsyncGenerator, Callable, Coroutine
-from contextlib import AbstractAsyncContextManager
+from collections.abc import Callable, Coroutine
 from typing import Any, Generic
 
 from digitalkin.core.task_manager.base_task_manager import BaseTaskManager
 from digitalkin.core.task_manager.task_session import TaskSession
 from digitalkin.models.module.module import ModuleCodeModel
 from digitalkin.models.module.module_types import DataModel, InputModelT, OutputModelT, SetupModelT
+from digitalkin.models.services.services import ServicesMode
 from digitalkin.modules._base_module import BaseModule
 from digitalkin.services.services_config import ServicesConfig
-from digitalkin.services.services_models import ServicesMode
 
 
 class BaseJobManager(abc.ABC, Generic[InputModelT, OutputModelT, SetupModelT]):
@@ -51,15 +50,14 @@ class BaseJobManager(abc.ABC, Generic[InputModelT, OutputModelT, SetupModelT]):
     # Properties to expose task manager attributes
     @property
     def tasks_sessions(self) -> dict[str, TaskSession]:
-        """Get task sessions from the task manager."""
+        """Task sessions from the task manager."""
         return self._task_manager.tasks_sessions
 
     @property
     def tasks(self) -> dict[str, Any]:
-        """Get tasks from the task manager."""
+        """Tasks from the task manager."""
         return self._task_manager.tasks
 
-    # Delegate task lifecycle methods to task manager
     async def create_task(
         self,
         task_id: str,
@@ -70,6 +68,8 @@ class BaseJobManager(abc.ABC, Generic[InputModelT, OutputModelT, SetupModelT]):
     ) -> None:
         """Create a task using the task manager.
 
+        Delegate task lifecycle methods to task manager
+
         Args:
             task_id: Unique identifier for the task
             mission_id: Mission identifier
@@ -78,18 +78,6 @@ class BaseJobManager(abc.ABC, Generic[InputModelT, OutputModelT, SetupModelT]):
             **kwargs: Additional arguments for task creation
         """
         await self._task_manager.create_task(task_id, mission_id, module, coro, **kwargs)
-
-    async def clean_session(self, task_id: str, mission_id: str) -> bool:
-        """Clean a task's session.
-
-        Args:
-            task_id: Unique identifier for the task.
-            mission_id: Mission identifier.
-
-        Returns:
-            bool: True if the task was successfully cancelled, False otherwise.
-        """
-        return await self._task_manager.clean_session(task_id, mission_id)
 
     async def cancel_task(self, task_id: str, mission_id: str, timeout: float | None = None) -> bool:
         """Cancel a task.
@@ -165,43 +153,6 @@ class BaseJobManager(abc.ABC, Generic[InputModelT, OutputModelT, SetupModelT]):
         return callback_wrapper
 
     @abc.abstractmethod
-    def generate_stream_consumer(
-        self, job_id: str
-    ) -> AbstractAsyncContextManager[AsyncGenerator[dict[str, Any], None]]:
-        """Generate a stream consumer for the job's message stream.
-
-        Args:
-            job_id: The unique identifier of the job to filter messages for.
-
-        Yields:
-            dict[str, Any]: The messages from the associated module's stream.
-        """
-
-    @abc.abstractmethod
-    async def create_module_instance_job(
-        self,
-        input_data: InputModelT,
-        setup_data: SetupModelT,
-        mission_id: str,
-        setup_id: str,
-        setup_version_id: str,
-        request_metadata: dict[str, str] | None = None,
-    ) -> str:
-        """Create and start a new job for the module's instance.
-
-        Args:
-            input_data: The input data required to start the job.
-            setup_data: The setup configuration for the module.
-            mission_id: The mission ID associated with the job.
-            setup_id: The setup ID.
-            setup_version_id: The setup version ID associated with the module.
-            request_metadata: gRPC request metadata (headers) to forward to the module.
-
-        Returns:
-            str: The unique identifier (job ID) of the created job.
-        """
-
-    @abc.abstractmethod
     async def generate_config_setup_module_response(self, job_id: str) -> SetupModelT | ModuleCodeModel:
         """Generate a stream consumer for a module's output data.
 
@@ -245,43 +196,45 @@ class BaseJobManager(abc.ABC, Generic[InputModelT, OutputModelT, SetupModelT]):
         """
 
     @abc.abstractmethod
-    async def stop_module(self, job_id: str) -> bool:
-        """Stop a running module job.
-
-        Args:
-            job_id: The unique identifier of the job to stop.
-
-        Returns:
-            bool: True if the job was successfully stopped, False if it does not exist.
-        """
-
-    @abc.abstractmethod
-    async def wait_for_completion(self, job_id: str) -> None:
-        """Wait for a task to complete.
-
-        This method blocks until the specified job has reached a terminal state.
-        The implementation varies by job manager type:
-        - SingleJobManager: Awaits the asyncio.Task directly
-        - TaskiqJobManager: Polls task status
-
-        Args:
-            job_id: The unique identifier of the job to wait for.
-
-        Raises:
-            KeyError: If the job_id is not found.
-        """
-
-    @abc.abstractmethod
-    async def stop_all_modules(self) -> None:
-        """Stop all currently running module jobs.
-
-        This method ensures that all active jobs are gracefully terminated.
-        """
-
-    @abc.abstractmethod
     async def list_modules(self) -> dict[str, dict[str, Any]]:
         """List all modules along with their statuses.
 
         Returns:
             dict[str, dict[str, Any]]: A dictionary containing information about all modules and their statuses.
+        """
+
+    @abc.abstractmethod
+    async def preload_instance(
+        self,
+        setup_data: SetupModelT,
+        mission_id: str,
+        setup_id: str,
+        setup_version_id: str,
+        request_metadata: dict[str, str] | None = None,
+        job_id: str | None = None,
+        tool_cache: Any = None,
+        callback: Callable | None = None,
+        setup: Any = None,
+        invalidate_setup: Callable[[], None] | None = None,
+    ) -> tuple[Any, str, Callable]:
+        """Build a module instance and run its idempotent ``prepare()``.
+
+        Returns:
+            Tuple of (prepared module instance, job_id, output callback).
+        """
+
+    @abc.abstractmethod
+    async def run_instance(
+        self,
+        module: Any,
+        job_id: str,
+        mission_id: str,
+        input_data: InputModelT,
+        setup_data: SetupModelT,
+        callback: Callable,
+    ) -> str:
+        """Run a pre-prepared module instance (from ``preload_instance``) with input.
+
+        Returns:
+            The job_id of the scheduled run.
         """

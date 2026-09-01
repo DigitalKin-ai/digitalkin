@@ -1,5 +1,6 @@
 """Setup model types with dynamic schema resolution and tool reference support."""
 
+import asyncio
 import copy
 import types
 import typing
@@ -10,14 +11,11 @@ from pydantic import BaseModel, ConfigDict, Field, create_model
 from digitalkin.logger import logger
 from digitalkin.models.module.tool_cache import ToolCache, ToolModuleInfo
 from digitalkin.models.module.tool_reference import ToolReference
-from digitalkin.utils.dynamic_schema import (
-    DynamicField,
-    get_fetchers,
-    has_dynamic,
-    resolve_safe,
-)
+from digitalkin.utils.dynamic_schema import DynamicField, DynamicSchemaResolver
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable
+
     from pydantic.fields import FieldInfo
 
     from digitalkin.services.communication import CommunicationStrategy
@@ -30,9 +28,11 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
     """Base setup model with dynamic schema and tool cache support."""
 
     _clean_model_cache: ClassVar[dict[tuple[type, bool, bool], type]] = {}
+    _CLEAN_MODEL_CACHE_MAX: ClassVar[int] = 64
     resolved_tools: dict[str, ToolModuleInfo] = Field(
         default_factory=dict,
         json_schema_extra={"ui:widget": "hidden"},
+        exclude=True,
     )
 
     @classmethod
@@ -76,7 +76,7 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
             current_annotation = field_info.annotation
 
             if force:
-                if has_dynamic(field_info):
+                if DynamicSchemaResolver.has_dynamic(field_info):
                     current_field_info = await cls._refresh_field_schema(name, field_info)
 
                 refreshed_annotation = await cls._refresh_annotation(current_annotation)
@@ -92,7 +92,7 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
         extra_bases = tuple(b for b in cls.__bases__ if b is not SetupModel)
         base: type | tuple[type, ...] = (SetupModel, *extra_bases) if extra_bases else SetupModel
 
-        m: type[SetupModel] = create_model(  # type: ignore[assignment]
+        m: type[SetupModel] = create_model(
             f"{cls.__name__}",
             __base__=base,
             __config__=ConfigDict(
@@ -105,9 +105,16 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
         cls._remove_excluded_inherited_fields(m, excluded_fields, clean_fields)
 
         if not force:
+            if len(cls._clean_model_cache) >= cls._CLEAN_MODEL_CACHE_MAX:
+                del cls._clean_model_cache[next(iter(cls._clean_model_cache))]
             cls._clean_model_cache[cache_key] = m
 
         return cast("type[SetupModelT]", m)
+
+    @classmethod
+    def clear_clean_model_cache(cls) -> None:
+        """Clear the filtered model cache. Called by cache invalidation."""
+        cls._clean_model_cache.clear()
 
     @staticmethod
     def _remove_excluded_inherited_fields(
@@ -291,11 +298,11 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
         args = get_args(annotation)
         new_args = tuple(refreshed if a is original else a for a in args)
         if origin in {list, set, frozenset}:
-            return origin[new_args[0]]  # type: ignore[index]
+            return origin[new_args[0]]
         if origin is dict:
-            return dict[new_args[0], new_args[1]]  # type: ignore[misc,index,valid-type]
+            return dict[new_args[0], new_args[1]]  # type: ignore[valid-type]
         if origin is tuple:
-            return tuple[new_args]  # type: ignore[misc,index,valid-type]
+            return tuple[new_args]  # type: ignore[valid-type]
         return refreshed
 
     @classmethod
@@ -329,11 +336,11 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
         if not replacements:
             return None
 
-        new_args = [replacements.get(a, a) for a in args]  # type: ignore[arg-type]
+        new_args = [replacements.get(a, a) for a in args]
         rebuilt = new_args[0]
         for arg in new_args[1:]:
-            rebuilt |= arg  # type: ignore[operator]
-        return rebuilt  # type: ignore[return-value]
+            rebuilt |= arg
+        return rebuilt
 
     @classmethod
     async def _refresh_nested_model(cls, model_cls: "type[BaseModel]") -> "type[BaseModel]":
@@ -352,7 +359,7 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
             current_field_info = field_info
             current_annotation = field_info.annotation
 
-            if has_dynamic(field_info):
+            if DynamicSchemaResolver.has_dynamic(field_info):
                 current_field_info = await cls._refresh_field_schema(name, field_info)
                 has_changes = True
 
@@ -394,12 +401,12 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
         Returns:
             New FieldInfo with resolved values, or original if all fetchers fail.
         """
-        fetchers = get_fetchers(field_info)
+        fetchers = DynamicSchemaResolver.get_fetchers(field_info)
 
         if not fetchers:
             return field_info
 
-        result = await resolve_safe(fetchers)
+        result = await DynamicSchemaResolver.resolve_safe(fetchers)
 
         if result.errors:
             for key, error in result.errors.items():
@@ -427,11 +434,12 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
         registry: "RegistryStrategy | None" = None,
         communication: "CommunicationStrategy | None" = None,
     ) -> ToolCache:
-        """Build tool cache, resolving uncached tools via registry.
+        """Build tool cache, resolving tools via registry.
 
-        Walks ToolReference fields recursively. For each selected tool,
-        checks resolved_tools first (cache). If missing and registry is
-        available, resolves via gRPC and populates the cache.
+        ``resolved_tools`` is a within-build dedup cache, not a cross-request
+        store: when a registry is available it is cleared first so a stale or
+        empty entry can never be served — every build re-resolves. Without a
+        registry the existing entries are kept (degraded/embedded path).
 
         Args:
             registry: Registry service for resolving uncached tools.
@@ -440,12 +448,15 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
         Returns:
             ToolCache with resolved tool entries.
         """
+        if registry and communication:
+            self.resolved_tools.clear()
         cache = ToolCache()
         await self._collect_tools_recursive(self, cache, registry, communication)
-        logger.info("Tool cache built: %d entries", len(cache.entries))
+        counts = " ".join(f"{sid}={len(info.tools)}" for sid, info in cache.entries.items())
+        logger.info("Tool cache built: %d entries [%s]", len(cache.entries), counts)
         return cache
 
-    async def _collect_tools_recursive(
+    async def _collect_tools_recursive(  # noqa: C901
         self,
         model_instance: BaseModel,
         cache: ToolCache,
@@ -460,20 +471,33 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
             registry: Optional registry for resolving uncached tools.
             communication: Optional communication for module schemas.
         """
+        # Gather across ToolReferences so multiple refs don't serialise their RPCs.
+        tool_ref_tasks: list[Awaitable[None]] = []
+        nested_models: list[BaseModel] = []
         for field_name, field_value in model_instance.__dict__.items():
             if field_value is None:
                 continue
             if isinstance(field_value, ToolReference):
-                await self._collect_from_tool_ref(field_name, field_value, cache, registry, communication)
+                tool_ref_tasks.append(
+                    self._collect_from_tool_ref(field_name, field_value, cache, registry, communication)
+                )
             elif isinstance(field_value, BaseModel):
-                await self._collect_tools_recursive(field_value, cache, registry, communication)
+                nested_models.append(field_value)
             elif isinstance(field_value, (list, dict)):
                 items = field_value if isinstance(field_value, list) else field_value.values()
                 for item in items:
                     if isinstance(item, ToolReference):
-                        await self._collect_from_tool_ref(field_name, item, cache, registry, communication)
+                        tool_ref_tasks.append(
+                            self._collect_from_tool_ref(field_name, item, cache, registry, communication)
+                        )
                     elif isinstance(item, BaseModel):
-                        await self._collect_tools_recursive(item, cache, registry, communication)
+                        nested_models.append(item)
+        if tool_ref_tasks:
+            await asyncio.gather(*tool_ref_tasks)
+        if nested_models:
+            await asyncio.gather(
+                *(self._collect_tools_recursive(m, cache, registry, communication) for m in nested_models),
+            )
 
     async def _collect_from_tool_ref(
         self,
@@ -495,21 +519,32 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
         if not tool_ref.selected_tools:
             return
 
-        # Resolve uncached entries via registry
         has_uncached = any(
             entry.setup_id and entry.setup_id not in self.resolved_tools for entry in tool_ref.selected_tools
         )
         if has_uncached and registry and communication:
             try:
-                infos = await tool_ref.resolve(registry, communication)
+                infos = await tool_ref.resolve(registry, communication, trim=False)
                 for info in infos:
                     self.resolved_tools[info.setup_id] = info
                     logger.info("Resolved tool '%s' -> module_id=%s", info.setup_id, info.module_id)
             except Exception:
                 logger.exception("Failed to resolve ToolReference '%s'", field_name)
 
-        # Add all resolved entries to cache
+        missing: list[str] = []
         for entry in tool_ref.selected_tools:
             tool_info = self.resolved_tools.get(entry.setup_id) if entry.setup_id else None
-            if tool_info:
-                cache.add(tool_info)
+            if tool_info is None:
+                if entry.setup_id:
+                    missing.append(entry.setup_id)
+                continue
+            cache.add(tool_info)
+
+        if missing:
+            logger.warning(
+                "ToolReference '%s' has %d unresolved setup_id(s): %s "
+                "(each has an upstream 'Tool resolve failed' log with the reason)",
+                field_name,
+                len(missing),
+                missing,
+            )

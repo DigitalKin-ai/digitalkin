@@ -3,14 +3,15 @@
 import datetime
 import json
 import tempfile
+import uuid
 from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel
 
 from digitalkin.logger import logger
+from digitalkin.models.services.storage import DataType, Visibility
 from digitalkin.services.storage.storage_strategy import (
-    DataType,
     StorageRecord,
     StorageStrategy,
 )
@@ -50,7 +51,7 @@ class DefaultStorage(StorageStrategy):
         if not self.storage_file.exists():
             return {}
 
-        try:
+        try:  # noqa: PLW0717
             raw = json.loads(self.storage_file.read_text(encoding="utf-8"))
             out: dict[str, StorageRecord] = {}
 
@@ -67,6 +68,7 @@ class DefaultStorage(StorageStrategy):
                     record_id=rd["record_id"],
                     data=data_model,
                     data_type=DataType[rd["data_type"]],
+                    visibility=Visibility[rd["visibility"]] if rd.get("visibility") else Visibility.UNSPECIFIED,
                     creation_date=datetime.datetime.fromisoformat(rd["creation_date"])
                     if rd.get("creation_date")
                     else None,
@@ -97,6 +99,7 @@ class DefaultStorage(StorageStrategy):
                         "collection": record.collection,
                         "record_id": record.record_id,
                         "data_type": record.data_type.name,
+                        "visibility": record.visibility.name,
                         "data": record.data.model_dump(),
                         "creation_date": record.creation_date.isoformat() if record.creation_date else None,
                         "update_date": record.update_date.isoformat() if record.update_date else None,
@@ -126,6 +129,7 @@ class DefaultStorage(StorageStrategy):
         now = datetime.datetime.now(datetime.timezone.utc)
         record.creation_date = now
         record.update_date = now
+        record.storage_id = f"storage:{uuid.uuid4()}"
         self.storage[key] = record
         self._save_to_file()
         logger.debug("Created %s", key)
@@ -135,27 +139,39 @@ class DefaultStorage(StorageStrategy):
     def _key(context: str, collection: str, record_id: str) -> str:
         return f"{context}|{collection}:{record_id}"
 
-    async def _read(self, collection: str, record_id: str, context: str) -> StorageRecord | None:
+    async def _read(self, collection: str, record_id: str, context: str, storage_id: str = "") -> StorageRecord | None:
         """Get a record from the database scoped to a specific context.
 
         Args:
             collection: The unique name to retrieve data for
             record_id: The unique ID of the record
-            context: Owner context scoping the lookup.
+            context: Resolved owner context scoping the lookup.
+            storage_id: Address a specific stored record; a mismatch reads as absent.
 
         Returns:
             StorageRecord: The corresponding record
         """
-        return self.storage.get(self._key(context, collection, record_id))
+        record = self.storage.get(self._key(context, collection, record_id))
+        if record is not None and storage_id and record.storage_id != storage_id:
+            return None
+        return record
 
-    async def _update(self, collection: str, record_id: str, data: BaseModel, context: str) -> StorageRecord | None:
+    async def _update(
+        self,
+        collection: str,
+        record_id: str,
+        data: BaseModel,
+        context: str,
+        visibility: Visibility = Visibility.UNSPECIFIED,
+    ) -> StorageRecord | None:
         """Update a record in the database scoped to a specific context.
 
         Args:
             collection: The unique name to retrieve data for
             record_id: The unique ID of the record
             data: The data to modify
-            context: Owner context scoping the update.
+            context: Resolved owner context scoping the update.
+            visibility: New read-access scope; UNSPECIFIED leaves it unchanged.
 
         Returns:
             StorageRecord: The modified record
@@ -165,6 +181,8 @@ class DefaultStorage(StorageStrategy):
         if not rec:
             return None
         rec.data = data
+        if visibility is not Visibility.UNSPECIFIED:
+            rec.visibility = visibility
         rec.update_date = datetime.datetime.now(datetime.timezone.utc)
         self._save_to_file()
         logger.debug("Modified %s", key)
@@ -176,7 +194,7 @@ class DefaultStorage(StorageStrategy):
         Args:
             collection: The unique name to retrieve data for
             record_id: The unique ID of the record
-            context: Owner context scoping the deletion.
+            context: Resolved owner context scoping the deletion.
 
         Returns:
             bool: True if the record was removed, False otherwise
@@ -189,31 +207,52 @@ class DefaultStorage(StorageStrategy):
         logger.debug("Removed %s", key)
         return True
 
-    async def _list(self, collection: str, context: str) -> list[StorageRecord]:
+    async def _list(
+        self,
+        collection: str,
+        context: str,
+        visibilities: list[Visibility] | None = None,
+        record_id: str = "",
+        limit: int = 0,
+        offset: int = 0,
+    ) -> list[StorageRecord]:
         """List records in a collection scoped to a specific context.
 
         Args:
             collection: The unique name to retrieve data for
-            context: Owner context scoping the listing.
+            context: Resolved owner context scoping the listing.
+            visibilities: Optional read-access scopes to filter by (None = no filter).
+            record_id: Restrict to this record id; empty means no filter.
+            limit: Max records to return; 0 applies the service default of 20.
+            offset: Records to skip before returning results.
 
         Returns:
             A list of storage records
         """
-        prefix = f"{context}|{collection}:"
-        return [r for k, r in self.storage.items() if k.startswith(prefix)]
+        prefix = f"{context}|{collection}:{record_id}" if record_id else f"{context}|{collection}:"
+        records = [
+            r for k, r in self.storage.items() if k.startswith(prefix) and (not record_id or r.record_id == record_id)
+        ]
+        if visibilities:
+            allowed = set(visibilities)
+            records = [r for r in records if r.visibility in allowed]
+        return records[offset : offset + (limit or 20)]
 
-    async def _remove_collection(self, collection: str, context: str) -> bool:
+    async def _remove_collection(self, collection: str, context: str, record_id: str = "") -> bool:
         """Wipe a collection scoped to a specific context.
 
         Args:
             collection: The unique name to retrieve data for
-            context: Owner context scoping the wipe.
+            context: Resolved owner context scoping the wipe.
+            record_id: Restrict removal to this record id; empty wipes the whole collection.
 
         Returns:
             bool: True if the collection was removed, False otherwise
         """
         prefix = f"{context}|{collection}:"
-        to_delete = [k for k in self.storage if k.startswith(prefix)]
+        to_delete = [
+            k for k, r in self.storage.items() if k.startswith(prefix) and (not record_id or r.record_id == record_id)
+        ]
         for k in to_delete:
             del self.storage[k]
         self._save_to_file()

@@ -1,19 +1,21 @@
 """Module gRPC server implementation for DigitalKin."""
 
+import os
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
-from agentic_mesh_protocol.module.v1 import (
-    module_service_pb2,
-    module_service_pb2_grpc,
-)
+from agentic_mesh_protocol.gateway.v1 import gateway_service_pb2, gateway_service_pb2_grpc
+from agentic_mesh_protocol.module.v1 import module_service_pb2, module_service_pb2_grpc
 
+from digitalkin.core.task_manager.module_runner import ModuleRunner
+from digitalkin.core.task_manager.redis import RedisClient
+from digitalkin.core.task_manager.redis.redis_signal import SharedRedisListener
 from digitalkin.grpc_servers._base_server import BaseServer
+from digitalkin.grpc_servers.gateway_servicer import GatewayServicer
 from digitalkin.grpc_servers.module_servicer import ModuleServicer
 from digitalkin.logger import logger
-from digitalkin.models.grpc_servers.models import (
-    ClientConfig,
-)
+from digitalkin.models.grpc_servers.models import ClientConfig
+from digitalkin.models.settings.server.server import get_server_settings
 from digitalkin.modules._base_module import BaseModule
 from digitalkin.services.registry import GrpcRegistry
 
@@ -24,13 +26,9 @@ if TYPE_CHECKING:
 class ModuleServer(BaseServer):
     """gRPC server for a DigitalKin module.
 
-    This server exposes the module's functionality through the ModuleService gRPC interface.
-    It can optionally register itself with a Registry server.
-
     Attributes:
-        module: The module instance being served.
-        server_config: Server configuration.
-        client_config: Setup client configuration.
+        module_class: The module class being served.
+        client_config: Client configuration for services and registry.
         module_servicer: The gRPC servicer handling module requests.
     """
 
@@ -43,23 +41,27 @@ class ModuleServer(BaseServer):
         """Initialize the module server.
 
         Args:
-            module_class: The module instance to be served.
-            client_config: Client configuration used by services and registry connection.
-            interceptors: Optional sequence of gRPC server interceptors.
+            module_class: The module class to serve.
+            client_config: Client configuration for services and registry.
+            interceptors: Optional gRPC server interceptors.
         """
-        super().__init__(interceptors=interceptors)
+        all_interceptors = list(interceptors) if interceptors else []
+
+        super().__init__(interceptors=all_interceptors or None)
         self.module_class = module_class
         self.client_config = client_config
-        self.module_servicer: ModuleServicer | None = None
         self.registry: RegistryStrategy | None = None
+        self.module_servicer: ModuleServicer | None = None
+        self._gateway_servicer: GatewayServicer | None = None
+        self._gateway_redis_client: RedisClient | None = None
 
         self._prepare_registry_config()
 
     def _register_servicers(self) -> None:
-        """Register the module servicer with the gRPC server.
+        """Register module and gateway servicers.
 
         Raises:
-            RuntimeError: No registered server
+            RuntimeError: If server is not created yet.
         """
         if self.server is None:
             msg = "Server must be created before registering servicers"
@@ -70,71 +72,237 @@ class ModuleServer(BaseServer):
         self.register_servicer(
             self.module_servicer,
             module_service_pb2_grpc.add_ModuleServiceServicer_to_server,
-            service_descriptor=module_service_pb2.DESCRIPTOR,
+            # DESCRIPTOR (not names) is required for grpcurl/Postman reflection.
+            # protobuf FileDescriptor structurally satisfies the reflection use (services_by_name)
+            # but not the narrower ServiceDescriptor Protocol's value type.
+            service_descriptor=module_service_pb2.DESCRIPTOR,  # type: ignore[arg-type]
         )
 
-        # Initialize setup stub before server starts accepting RPCs
         if self.client_config is not None:
             self.module_servicer.setup.__post_init__(self.client_config)
 
         logger.debug("Registered Module servicer")
+        self._register_gateway_servicer()
+
+    def _register_gateway_servicer(self) -> None:
+        """Register the embedded GatewayServicer.
+
+        The dial-back is the sole orchestrator: when a consumer dials in
+        and sends its first reply, the gateway's ``_dial_consumer`` calls
+        the injected ``ModuleRunner`` directly. There is no separate
+        dispatcher process, queue, or Redis stream for dispatch.
+
+        Raises:
+            RuntimeError: If DIGITALKIN_REDIS_URL is not set.
+        """
+        redis_url = os.environ.get("DIGITALKIN_REDIS_URL")
+        if not redis_url:
+            msg = "DIGITALKIN_REDIS_URL is required. The gateway needs Redis for stream persistence."
+            raise RuntimeError(msg)
+
+        redis_client = RedisClient(redis_url)
+        self._gateway_redis_client = redis_client  # owner closes it in stop_async; the gateway only borrows
+        assert self.module_servicer is not None  # noqa: S101 — set during registration before this runs
+        module_runner = ModuleRunner(redis_client=redis_client, servicer=self.module_servicer)
+
+        self._gateway_servicer = GatewayServicer(
+            redis_client=redis_client,
+            cache_handler=self._handle_cache_invalidation,
+            client_config=self.client_config,
+            module_runner=module_runner,
+        )
+
+        # Expose the live M2M registry to GrpcCommunication so call_module
+        # rendezvouses on this gateway (single-port).
+        from digitalkin.services.communication.grpc_communication import GrpcCommunication
+
+        GrpcCommunication.set_m2m_call_registry(self._gateway_servicer.m2m)
+
+        self.register_servicer(
+            self._gateway_servicer,
+            gateway_service_pb2_grpc.add_GatewayServiceServicer_to_server,
+            service_descriptor=gateway_service_pb2.DESCRIPTOR,  # type: ignore[arg-type]  # protobuf FileDescriptor; see above
+        )
+
+        logger.info("GatewayServicer + ModuleRunner registered (Redis: %s)", redis_url)
+
+        listener = SharedRedisListener.singleton_or_none()
+        if listener is not None:
+            listener.set_cache_invalidator(self._handle_cache_invalidation)
+
+    async def _handle_cache_invalidation(self, action: str, setup_id: str = "") -> None:
+        """Dispatch cache invalidation by action name.
+
+        ``INVALIDATE_SETUP`` and ``INVALIDATE_TOOLS`` require a ``setup_id`` —
+        without one they log a warning and skip. ``INVALIDATE_ALL`` is the only
+        full-wipe path.
+
+        Args:
+            action: SignalAction enum name (e.g. ``INVALIDATE_SETUP``).
+            setup_id: Setup identifier for scoped invalidation; ignored by full-wipe actions.
+        """
+        handlers: dict[str, Any] = {
+            "INVALIDATE_ALL": self._invalidate_all,
+            "INVALIDATE_CHANNELS": self._invalidate_channels,
+            "INVALIDATE_MODELS": self._invalidate_models,
+            "INVALIDATE_SETUP": self._invalidate_setup,
+            "INVALIDATE_TOOLS": self._invalidate_tools,
+            "INVALIDATE_SHARED": self._invalidate_shared,
+        }
+        handler = handlers.get(action)
+        if handler is None:
+            logger.warning("Unknown invalidation action: %s", action)
+            return
+        if action in {"INVALIDATE_SETUP", "INVALIDATE_TOOLS"}:
+            await handler(setup_id)
+        else:
+            await handler()
+        logger.info("Cache invalidated: %s setup_id=%s", action, setup_id or "<all>")
+
+    async def _invalidate_all(self) -> None:
+        if self.module_servicer is not None:
+            self.module_servicer.invalidate_setup_cache()
+            self.module_servicer.invalidate_tool_cache()
+        await self._invalidate_shared()
+        await self._invalidate_models()
+        await self._invalidate_channels()
+
+    async def _invalidate_setup(self, setup_id: str = "") -> None:
+        if self.module_servicer is None:
+            return
+        if not setup_id:
+            logger.warning("INVALIDATE_SETUP received without setup_id — skipping (scoped-only policy)")
+            return
+        self.module_servicer._setup_cache.pop(setup_id, None)  # noqa: SLF001
+        self.module_servicer._setup_inflight.pop(setup_id, None)  # noqa: SLF001
+
+    async def _invalidate_tools(self, setup_id: str = "") -> None:
+        if self.module_servicer is None:
+            return
+        if not setup_id:
+            logger.warning("INVALIDATE_TOOLS received without setup_id — skipping (scoped-only policy)")
+            return
+        self.module_servicer._tool_cache_by_setup.pop(setup_id, None)  # noqa: SLF001
+
+    async def _invalidate_shared(self) -> None:
+        self.module_class.clear_shared()
+
+    async def _invalidate_models(self) -> None:  # noqa: PLR6301
+        from digitalkin.models.module.setup_types import SetupModel
+
+        SetupModel.clear_clean_model_cache()
+
+    async def _invalidate_channels(self) -> None:  # noqa: PLR6301
+        from digitalkin.core.resilience.bulkhead import Bulkhead
+        from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
+
+        # M9: close channels (resets ref_counts, clears stubs + breakers) instead of a bare cache clear.
+        await GrpcClientWrapper.close_all_cached_channels()
+        Bulkhead.clear_all()
 
     def _prepare_registry_config(self) -> None:
-        """Prepare registry client config on module_class before server starts.
-
-        This ensures ServicesConfig created by JobManager will have registry config,
-        allowing spawned module instances to inherit the registry configuration.
-        """
+        """Inject registry client config into module_class for spawned instances."""
         if not self.client_config:
             return
 
-        # Ensure we have a per-class copy (not shared with parent) before mutation
         if "services_config_params" not in self.module_class.__dict__:
             self.module_class.services_config_params = dict(self.module_class.services_config_params)
         self.module_class.services_config_params["registry"] = {"client_config": self.client_config}
 
-    def _init_registry(self) -> None:
-        """Initialize server-level registry client for registration."""
+    async def _init_and_register(self) -> None:
+        """Initialize registry client, health-check, and register.
+
+        Raises:
+            RuntimeError: If client_config is missing, module_id is invalid,
+                registry is unreachable, or registration fails.
+        """
         if not self.client_config:
-            return
+            msg = "client_config is required for registry registration"
+            raise RuntimeError(msg)
 
         self.registry = GrpcRegistry("", "", "", self.client_config)
 
-    def start(self) -> None:
-        """Start the module server and register with the registry if configured."""
-        import asyncio
+        if not await self.registry.wait_for_ready():
+            msg = "Registry server is unreachable (health check failed after 1s)"
+            raise RuntimeError(msg)
 
-        logger.info("Starting module server", extra={"server_config": self._server_settings})
-        super().start()
+        module_id = self.module_class.get_module_id()
+        version = self.module_class.metadata.get("version", "0.0.0")
 
-        try:
-            self._init_registry()
-            asyncio.get_event_loop().run_until_complete(self._register_with_registry())
-        except Exception:
-            logger.exception("Failed to register with registry")
+        if not module_id or module_id == "unknown":
+            msg = (
+                f"Module {self.module_class.__name__} has no valid module_id. "
+                "Set DIGITALKIN_MODULE_ID or define metadata['module_id']."
+            )
+            raise RuntimeError(msg)
+
+        advertise_address = get_server_settings().channel.advertise_host or get_server_settings().channel.host
+
+        logger.info(
+            "Registering module with registry at %s:%d version=%s module_id=%s",
+            advertise_address,
+            get_server_settings().channel.port,
+            version,
+            module_id,
+        )
+
+        result = await self.registry.register(
+            module_id=module_id,
+            address=advertise_address,
+            port=get_server_settings().channel.port,
+            version=version,
+            module_type=self.module_class.registry_type,
+            documentation=self.module_class.build_registry_documentation(),
+        )
+
+        if not result:
+            msg = f"Registry registration failed for module_id={module_id}"
+            raise RuntimeError(msg)
+
+        logger.info(
+            "Module registered successfully at %s:%d module_id=%s",
+            advertise_address,
+            get_server_settings().channel.port,
+            result.module_id,
+        )
 
     async def start_async(self) -> None:
-        """Start the module server and register with the registry if configured."""
-        logger.info("Starting module server", extra={"server_config": self._server_settings})
+        """Start the module server.
+
+        Raises:
+            RuntimeError: If module_servicer failed to initialize.
+        """
+        logger.info("Starting module server")
         await super().start_async()
 
-        # module_servicer is now set by _register_servicers() during super().start_async()
-        if self.module_servicer is not None:
-            logger.debug("debug:start_async job_manager type=%s", type(self.module_servicer.job_manager).__name__)
-            await self.module_servicer.job_manager.start()
+        if self.module_servicer is None:
+            msg = "module_servicer was not initialized during server startup"
+            raise RuntimeError(msg)
 
+        logger.debug("debug:start_async job_manager type=%s", type(self.module_servicer.job_manager).__name__)
+        await self.module_servicer.job_manager.start()
+
+        if self._gateway_servicer is not None:
+            await self._gateway_servicer.start()
+
+        if self.client_config is not None:
+            await self._init_and_register()
+
+    async def _shutdown_servicer(self) -> None:
+        """Shut down the module servicer and its job manager."""
+        if self.module_servicer is None:
+            return
         try:
-            self._init_registry()
-            await self._register_with_registry()
+            await self.module_servicer.shutdown()
         except Exception:
-            logger.exception("Failed to register with registry")
+            logger.exception("Failed to shutdown module servicer resources")
+        try:
+            await self.module_servicer.job_manager.stop()
+        except Exception:
+            logger.exception("Failed to stop job manager during shutdown")
 
     async def stop_async(self, grace: float | None = None) -> None:
-        """Stop the module server with async cleanup.
-
-        Deregisters from registry and stops the server. Modules also become
-        inactive when they stop sending heartbeats as a fallback.
-        """
+        """Stop the module server with async cleanup."""
         if self.registry is not None:
             try:
                 module_id = self.module_class.get_module_id()
@@ -144,98 +312,28 @@ class ModuleServer(BaseServer):
             except Exception:
                 logger.exception("Failed to deregister from registry")
 
-        # Shut down servicer-level resources (GrpcSetup channel, registry cache)
-        if self.module_servicer is not None:
-            try:
-                await self.module_servicer.shutdown()
-            except Exception:
-                logger.exception("Failed to shutdown module servicer resources")
+        await self._shutdown_servicer()
+        self.module_class.clear_shared()
 
+        if self.registry is not None:
             try:
-                await self.module_servicer.job_manager.stop_all_modules()
+                await self.registry.close()
             except Exception:
-                logger.exception("Failed to stop all modules during shutdown")
+                logger.exception("Failed to close registry")
 
+        if self._gateway_servicer is not None:
             try:
-                await self.module_servicer.job_manager.stop()
+                await self._gateway_servicer.stop()
             except Exception:
-                logger.exception("Failed to stop job manager during shutdown")
+                logger.exception("Failed to stop gateway servicer")
 
-        # Close server-level registry channel
-        if isinstance(self.registry, GrpcRegistry):
+        if self._gateway_redis_client is not None:
+            # M8: this server created the gateway's Redis client, so it closes it (owner closes;
+            # the gateway only borrows). Pools were leaked on every server stop.
             try:
-                await self.registry.close_channel()
+                await self._gateway_redis_client.close()
             except Exception:
-                logger.exception("Failed to close server registry channel")
+                logger.exception("Failed to close gateway Redis client")
 
         logger.debug("debug:stop_async stopping gRPC server grace=%s", grace)
         await super().stop_async(grace)
-
-    async def _register_with_registry(self) -> None:
-        """Register this module with the registry server.
-
-        Probes the services-provider channel for readiness (1s max) before
-        attempting registration.  When the provider is unreachable the module
-        still starts — it just won't be discoverable until the next restart
-        or a manual re-registration.
-        """
-        if not self.registry:
-            logger.debug("No registry configured, skipping registration")
-            return
-
-        module_id = self.module_class.get_module_id()
-        version = self.module_class.metadata.get("version", "0.0.0")
-
-        if not module_id or module_id == "unknown":
-            logger.warning(
-                "Module has no valid module_id, skipping registration",
-                extra={"module_class": self.module_class.__name__},
-            )
-            return
-
-        advertise_address = self._server_settings.channel.advertise_host or self._server_settings.channel.host
-
-        # Fast connectivity probe — detect DOWN in ≤1 s
-        if not await self.registry.wait_for_ready(timeout=1.0):
-            logger.error(
-                "Services provider is DOWN — channel not ready after 1 s, "
-                "skipping registration (module will start without registry)",
-                extra={
-                    "module_id": module_id,
-                    "address": advertise_address,
-                    "port": self._server_settings.channel.port,
-                },
-            )
-            return
-
-        logger.info(
-            "Attempting to register module with registry",
-            extra={
-                "module_id": module_id,
-                "address": advertise_address,
-                "port": self._server_settings.channel.port,
-                "version": version,
-            },
-        )
-
-        result = await self.registry.register(
-            module_id=module_id,
-            address=advertise_address,
-            port=self._server_settings.channel.port,
-            version=version,
-        )
-
-        if result:
-            logger.info(
-                "Module registered successfully",
-                extra={
-                    "module_id": result.module_id,
-                    "address": advertise_address,
-                    "port": self._server_settings.channel.port,
-                },
-            )
-        else:
-            logger.warning(
-                "Module registration returned None (module may not exist in registry)",
-                extra={"module_id": module_id, "address": advertise_address},
-            )

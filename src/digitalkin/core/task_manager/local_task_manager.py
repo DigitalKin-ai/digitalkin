@@ -6,6 +6,7 @@ from typing import Any
 from digitalkin.core.task_manager.base_task_manager import BaseTaskManager
 from digitalkin.core.task_manager.task_executor import TaskExecutor
 from digitalkin.logger import logger
+from digitalkin.models.settings.task_manager import get_task_manager_settings
 from digitalkin.modules._base_module import BaseModule
 
 
@@ -47,11 +48,12 @@ class LocalTaskManager(BaseTaskManager):
             RuntimeError: If task overload
         """
         await self._acquire_task_slot(coro)
-        try:
-            # Validate and register session atomically
+        registered = False
+        try:  # noqa: PLW0717
             async with self._tasks_lock:
                 await self._validate_task_creation(task_id, mission_id, coro)
                 session = self._create_session(task_id, mission_id, module)
+                registered = True
 
             logger.info(
                 "Creating local task: '%s'",
@@ -62,37 +64,37 @@ class LocalTaskManager(BaseTaskManager):
                 },
             )
 
-            # Execute task using TaskExecutor
+            async def _finalize() -> None:
+                await self._cleanup_task(task_id, mission_id=mission_id)
+
             supervisor_task = await self._executor.execute_task(
                 task_id,
                 mission_id,
                 coro,
                 session,
+                on_finalize=_finalize,
+                stream_drain_timeout=get_task_manager_settings().stream_drain_timeout,
             )
             self.tasks[task_id] = supervisor_task
-            self._register_auto_cleanup(task_id, mission_id)
 
             logger.info(
-                "Local task created and started: '%s'",
+                "Local task created and started: '%s' (total_tasks=%d)",
                 task_id,
-                extra={
-                    "mission_id": mission_id,
-                    "task_id": task_id,
-                    "total_tasks": len(self.tasks),
-                },
+                len(self.tasks),
+                extra={"mission_id": mission_id, "task_id": task_id},
             )
 
-        except Exception as e:
+        except Exception:
             coro.close()
-            # Release semaphore if session was never registered (cleanup won't release it)
-            if task_id not in self.tasks_sessions:
-                self._task_slot.release()
-            else:
+            if registered:
                 await self._cleanup_task(task_id, mission_id=mission_id)
-            logger.error(
+            else:
+                # H2: this call never registered a session (e.g. duplicate task_id) —
+                # undo only THIS call's admission; never touch the live task.
+                self._release_admission()
+            logger.exception(
                 "Failed to create local task: '%s'",
                 task_id,
-                extra={"mission_id": mission_id, "task_id": task_id, "error": str(e)},
-                exc_info=True,
+                extra={"mission_id": mission_id, "task_id": task_id},
             )
             raise

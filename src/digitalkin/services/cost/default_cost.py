@@ -3,14 +3,13 @@
 from typing import Literal
 
 from digitalkin.logger import logger
-from digitalkin.models.services.cost import AmountLimit, QuantityLimit
+from digitalkin.models.services.cost import AmountLimit, CostType, QuantityLimit
 from digitalkin.services.cost.cost_strategy import (
     CostConfig,
     CostData,
-    CostServiceError,
     CostStrategy,
-    CostType,
 )
+from digitalkin.services.cost.exceptions import CostServiceError
 
 
 class DefaultCost(CostStrategy):

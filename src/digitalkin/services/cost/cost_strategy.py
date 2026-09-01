@@ -1,24 +1,12 @@
 """This module contains the abstract base class for cost strategies."""
 
 from abc import ABC, abstractmethod
-from enum import Enum
 from typing import Literal
 
 from pydantic import BaseModel
 
-from digitalkin.models.services.cost import AmountLimit, QuantityLimit
+from digitalkin.models.services.cost import AmountLimit, CostType, QuantityLimit
 from digitalkin.services.base_strategy import BaseStrategy
-
-
-class CostType(Enum):
-    """Enum defining the types of costs that can be registered."""
-
-    OTHER = "OTHER"
-    TOKEN_INPUT = "TOKEN_INPUT"
-    TOKEN_OUTPUT = "TOKEN_OUTPUT"
-    API_CALL = "API_CALL"
-    STORAGE = "STORAGE"
-    TIME = "TIME"
 
 
 class CostConfig(BaseModel):
@@ -49,10 +37,6 @@ class CostData(BaseModel):
     rate: float
     setup_version_id: str
     quantity: float
-
-
-class CostServiceError(Exception):
-    """Custom exception for CostService errors."""
 
 
 class CostStrategy(BaseStrategy, ABC):

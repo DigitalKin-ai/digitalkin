@@ -26,8 +26,19 @@ from digitalkin.models.events import (
     AgentRunEvent,
     RunCompletedEvent,
     RunStartedEvent,
+    SubagentErrorEvent,
+    SubagentFinishedEvent,
+    SubagentStartedEvent,
+    TextMessageStartedEvent,
 )
-from digitalkin.models.module.ag_ui import AgUiRunFinishedOutput, AgUiRunStartedOutput
+from digitalkin.models.module.ag_ui import (
+    AgUiRunFinishedOutput,
+    AgUiRunStartedOutput,
+    AgUiSubagentErrorOutput,
+    AgUiSubagentFinishedOutput,
+    AgUiSubagentStartedOutput,
+    AgUiTextMessageStartOutput,
+)
 
 CLIENT_THREAD_ID = "missions:01kpwyz1xm5t0xc847mwkr1tm0"
 CLIENT_RUN_ID = "01kpwyz3xpncrkccnsa5a9g5fh"
@@ -217,3 +228,128 @@ class TestEndToEndConsistency:
 
         assert mixin._run_id == CLIENT_RUN_ID
         assert mixin._thread_id == CLIENT_THREAD_ID
+
+
+class TestSubAgentLabelling:
+    """The author label and step lifecycle must reach the wire as structured fields."""
+
+    @pytest.mark.asyncio
+    async def test_author_name_is_forwarded_to_text_message_start(self) -> None:
+        """A labelled bubble carries ``name`` so the client can attribute it."""
+        mixin = AgUiMixin()
+        ctx = _make_context()
+
+        await mixin._handle_text_message_started(
+            ctx,
+            TextMessageStartedEvent(
+                event=AgentRunEvent.TEXT_MESSAGE_STARTED,
+                message_id="m1",
+                name="Alice",
+                timestamp=None,
+                metadata=None,
+            ),
+        )
+
+        event = _emitted_event(ctx, AgUiTextMessageStartOutput)
+        assert event.message_id == "m1"
+        # `name` is an extra field until ag-ui-protocol types it, so assert on the payload.
+        assert event.model_dump(by_alias=True, exclude_none=True)["name"] == "Alice"
+
+    @pytest.mark.asyncio
+    async def test_unlabelled_bubble_omits_name(self) -> None:
+        """A top-level bubble must not carry a ``name`` key at all."""
+        mixin = AgUiMixin()
+        ctx = _make_context()
+
+        await mixin._handle_text_message_started(
+            ctx,
+            TextMessageStartedEvent(
+                event=AgentRunEvent.TEXT_MESSAGE_STARTED,
+                message_id="m1",
+                name=None,
+                timestamp=None,
+                metadata=None,
+            ),
+        )
+
+        event = _emitted_event(ctx, AgUiTextMessageStartOutput)
+        assert "name" not in event.model_dump(by_alias=True, exclude_none=True)
+
+    @pytest.mark.asyncio
+    async def test_subagent_lifecycle_is_emitted(self) -> None:
+        """Delegation boundaries surface as AG-UI SUBAGENT_STARTED / SUBAGENT_FINISHED."""
+        mixin = AgUiMixin()
+        ctx = _make_context()
+
+        await mixin._handle_subagent_started(
+            ctx,
+            SubagentStartedEvent(
+                event=AgentRunEvent.SUBAGENT_STARTED,
+                subagent_run_id="m1",
+                name="Alice",
+                timestamp=None,
+                metadata=None,
+            ),
+        )
+        started = _emitted_event(ctx, AgUiSubagentStartedOutput)
+        assert (started.subagent_run_id, started.name) == ("m1", "Alice")
+
+        await mixin._handle_subagent_finished(
+            ctx,
+            SubagentFinishedEvent(
+                event=AgentRunEvent.SUBAGENT_FINISHED,
+                subagent_run_id="m1",
+                result="done",
+                timestamp=None,
+                metadata=None,
+            ),
+        )
+        finished = _emitted_event(ctx, AgUiSubagentFinishedOutput)
+        assert (finished.subagent_run_id, finished.result) == ("m1", "done")
+
+    @pytest.mark.asyncio
+    async def test_subagent_error_does_not_end_the_run(self) -> None:
+        """A failing child emits SUBAGENT_ERROR; RUN_ERROR would kill the whole AG-UI stream."""
+        mixin = AgUiMixin()
+        ctx = _make_context()
+
+        await mixin._handle_subagent_error(
+            ctx,
+            SubagentErrorEvent(
+                event=AgentRunEvent.SUBAGENT_ERROR,
+                subagent_run_id="m1",
+                message="boom",
+                code="ValueError",
+                timestamp=None,
+                metadata=None,
+            ),
+        )
+        errored = _emitted_event(ctx, AgUiSubagentErrorOutput)
+        assert (errored.subagent_run_id, errored.message, errored.code) == ("m1", "boom", "ValueError")
+
+    @pytest.mark.asyncio
+    async def test_attribution_is_forwarded_onto_agui_events(self) -> None:
+        """``subagent_run_id`` and namespaced ``metadata`` must survive the conversion.
+
+        They are the whole attribution channel: without them a client cannot tell which agent
+        produced a bubble when several stream at once.
+        """
+        mixin = AgUiMixin()
+        ctx = _make_context()
+
+        await mixin._handle_text_message_started(
+            ctx,
+            TextMessageStartedEvent(
+                event=AgentRunEvent.TEXT_MESSAGE_STARTED,
+                message_id="msg-1",
+                name="Alice",
+                subagent_run_id="m1",
+                timestamp=None,
+                metadata={"source": "agent", "parent_run_id": "team-r1"},
+            ),
+        )
+
+        event = _emitted_event(ctx, AgUiTextMessageStartOutput)
+        assert event.subagent_run_id == "m1"
+        # Namespaced: AG-UI reserves the "ag-ui" key and leaves the rest to the application.
+        assert event.metadata == {"digitalkin": {"source": "agent", "parent_run_id": "team-r1"}}

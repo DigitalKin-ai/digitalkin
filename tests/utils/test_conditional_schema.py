@@ -8,8 +8,6 @@ from digitalkin.utils.conditional_schema import (
     Conditional,
     ConditionalField,
     ConditionalSchemaMixin,
-    get_conditional_metadata,
-    has_conditional,
 )
 from digitalkin.utils.schema_splitter import SchemaSplitter
 
@@ -70,7 +68,7 @@ class TestGetConditionalMetadata:
         class Model(BaseModel):
             option: Annotated[str, cond] = "default"
 
-        result = get_conditional_metadata(Model.model_fields["option"])
+        result = ConditionalSchemaMixin.get_conditional_metadata(Model.model_fields["option"])
         assert result is cond
 
     def test_returns_none_without_conditional(self) -> None:
@@ -79,7 +77,7 @@ class TestGetConditionalMetadata:
         class Model(BaseModel):
             field: str = "value"
 
-        result = get_conditional_metadata(Model.model_fields["field"])
+        result = ConditionalSchemaMixin.get_conditional_metadata(Model.model_fields["field"])
         assert result is None
 
     def test_returns_none_with_other_metadata(self) -> None:
@@ -88,7 +86,7 @@ class TestGetConditionalMetadata:
         class Model(BaseModel):
             field: Annotated[str, "some_other_metadata"] = "value"
 
-        result = get_conditional_metadata(Model.model_fields["field"])
+        result = ConditionalSchemaMixin.get_conditional_metadata(Model.model_fields["field"])
         assert result is None
 
 
@@ -101,7 +99,7 @@ class TestHasConditional:
         class Model(BaseModel):
             option: Annotated[str, Conditional(trigger="enabled", show_when=True)] = "value"
 
-        assert has_conditional(Model.model_fields["option"]) is True
+        assert ConditionalSchemaMixin.has_conditional(Model.model_fields["option"]) is True
 
     def test_returns_false_without_conditional(self) -> None:
         """Test returns False when no ConditionalField."""
@@ -109,7 +107,7 @@ class TestHasConditional:
         class Model(BaseModel):
             field: str = "value"
 
-        assert has_conditional(Model.model_fields["field"]) is False
+        assert ConditionalSchemaMixin.has_conditional(Model.model_fields["field"]) is False
 
 
 class TestConditionalSchemaMixin:

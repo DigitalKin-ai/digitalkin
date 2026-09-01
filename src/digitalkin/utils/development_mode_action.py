@@ -7,7 +7,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from digitalkin.logger import logger
-from digitalkin.services.services_models import ServicesMode
+from digitalkin.models.services.services import ServicesMode
 
 logger.setLevel(logging.INFO)
 

@@ -5,6 +5,8 @@ import logging
 import secrets
 import string
 import types
+from typing import TYPE_CHECKING
+from unittest.mock import AsyncMock
 
 import grpc
 import grpc_testing
@@ -16,18 +18,26 @@ from agentic_mesh_protocol.filesystem.v1 import (
 )
 from google.protobuf import struct_pb2
 from grpc.framework.foundation import logging_pool
+from hypothesis import given
+from hypothesis import strategies as st
+from mock_filesystem_servicer import MockFilesystemServicer
+from tests.fixtures.grpc_fixtures import FakeContext
 
+from digitalkin.grpc_servers.exceptions import PermissionDeniedError
 from digitalkin.models.grpc_servers.models import ClientConfig
+from digitalkin.models.services.services import Context
+from digitalkin.models.services.storage import Visibility
 from digitalkin.models.settings.utils.channel import ControlFlow, SecurityMode
+from digitalkin.services.filesystem.exceptions import FilesystemServiceError
 from digitalkin.services.filesystem.filesystem_strategy import (
     FileFilter,
     FilesystemRecord,
-    FilesystemServiceError,
     UploadFileData,
 )
 from digitalkin.services.filesystem.grpc_filesystem import GrpcFilesystem
-from mock_filesystem_servicer import MockFilesystemServicer
-from tests.fixtures.grpc_fixtures import FakeContext
+
+if TYPE_CHECKING:
+    from digitalkin.models.services import services
 
 service_instance = MockFilesystemServicer()
 service_name = filesystem_service_pb2.DESCRIPTOR.services_by_name["FilesystemService"]
@@ -91,7 +101,7 @@ def client(test_channel: grpc_testing.Channel) -> GrpcFilesystem:
     # Override the channel and stub to use our test channel
     client.stub = filesystem_service_pb2_grpc.FilesystemServiceStub(test_channel)
 
-    async def _test_exec_grpc_query(self, query_endpoint, request):
+    async def _test_exec_grpc_query(self, query_endpoint, request) -> object:
         response = getattr(self.stub, query_endpoint)(request)
         return await response if asyncio.iscoroutine(response) else response
 
@@ -288,7 +298,7 @@ class TestUploadFiles:
         upload_request = filesystem_pb2.UploadFilesRequest(
             files=[
                 filesystem_pb2.UploadFileData(
-                    context=file_metadata["context"],
+                    context=filesystem_pb2.CONTEXT_SETUP,
                     name=file_metadata["name"],
                     file_type=GrpcFilesystem._file_type_to_enum(file_metadata["file_type"]),
                     content_type=file_metadata["content_type"],
@@ -348,7 +358,7 @@ class TestGetFile:
         upload_request = filesystem_pb2.UploadFilesRequest(
             files=[
                 filesystem_pb2.UploadFileData(
-                    context=file_metadata["context"],
+                    context=filesystem_pb2.CONTEXT_SETUP,
                     name=file_metadata["name"],
                     file_type=GrpcFilesystem._file_type_to_enum(file_metadata["file_type"]),
                     content_type=file_metadata["content_type"],
@@ -374,7 +384,7 @@ class TestGetFile:
 
         # Create a request object for the mock servicer
         get_request = filesystem_pb2.GetFileRequest(
-            context=file_metadata["context"],
+            context=filesystem_pb2.CONTEXT_SETUP,
             file_id=file_id,
             include_content=False,
         )
@@ -457,7 +467,7 @@ class TestGetFiles:
 
         upload_files = [
             filesystem_pb2.UploadFileData(
-                context=file_metadata["context"],
+                context=filesystem_pb2.CONTEXT_SETUP,
                 name=name,
                 file_type=GrpcFilesystem._file_type_to_enum(file_metadata["file_type"]),
                 content_type=file_metadata["content_type"],
@@ -497,9 +507,9 @@ class TestGetFiles:
 
         # Create a request object for the mock servicer
         get_request = filesystem_pb2.GetFilesRequest(
-            context=file_metadata["context"],
+            context=filesystem_pb2.CONTEXT_SETUP,
             filters=filesystem_pb2.FileFilter(
-                context=file_metadata["context"],
+                context=filesystem_pb2.CONTEXT_SETUP,
                 file_types=[GrpcFilesystem._file_type_to_enum(file_metadata["file_type"])],
                 status=GrpcFilesystem._file_status_to_enum(file_metadata["status"]),
             ),
@@ -550,16 +560,6 @@ class TestGetFiles:
         )
 
         _, _, rpc = test_channel.take_unary_unary(method_desc)
-        filesystem_pb2.GetFilesRequest(
-            context="nonexistent_context",
-            filters=filesystem_pb2.FileFilter(
-                context="nonexistent_context",
-                file_types=[GrpcFilesystem._file_type_to_enum(file_metadata["file_type"])],
-                status=GrpcFilesystem._file_status_to_enum(file_metadata["status"]),
-            ),
-            list_size=10,
-            offset=0,
-        )
         empty_response = filesystem_pb2.GetFilesResponse(files=[], total_count=0)
         rpc.send_initial_metadata(())
         rpc.terminate(empty_response, (), grpc.StatusCode.OK, "")
@@ -604,7 +604,7 @@ class TestUpdateFile:
         upload_request = filesystem_pb2.UploadFilesRequest(
             files=[
                 filesystem_pb2.UploadFileData(
-                    context=file_metadata["context"],
+                    context=filesystem_pb2.CONTEXT_SETUP,
                     name=file_metadata["name"],
                     file_type=GrpcFilesystem._file_type_to_enum(file_metadata["file_type"]),
                     content_type=file_metadata["content_type"],
@@ -642,7 +642,7 @@ class TestUpdateFile:
 
         # Create a request object for the mock servicer
         update_request = filesystem_pb2.UpdateFileRequest(
-            context=file_metadata["context"],
+            context=filesystem_pb2.CONTEXT_SETUP,
             file_id=file_id,
             content=updated_content,
             file_type=GrpcFilesystem._file_type_to_enum("DOCUMENT"),
@@ -739,7 +739,7 @@ class TestDeleteFiles:
 
         upload_files = [
             filesystem_pb2.UploadFileData(
-                context=file_metadata["context"],
+                context=filesystem_pb2.CONTEXT_SETUP,
                 name=name,
                 file_type=GrpcFilesystem._file_type_to_enum(file_metadata["file_type"]),
                 content_type=file_metadata["content_type"],
@@ -779,9 +779,9 @@ class TestDeleteFiles:
 
         # Create a request object for the mock servicer
         delete_request = filesystem_pb2.DeleteFilesRequest(
-            context=file_metadata["context"],
+            context=filesystem_pb2.CONTEXT_SETUP,
             filters=filesystem_pb2.FileFilter(
-                context=file_metadata["context"],
+                context=filesystem_pb2.CONTEXT_SETUP,
                 file_types=[GrpcFilesystem._file_type_to_enum(file_metadata["file_type"])],
                 status=GrpcFilesystem._file_status_to_enum(file_metadata["status"]),
             ),
@@ -948,7 +948,7 @@ class TestFilesystemEdgeCases:
         upload_request = filesystem_pb2.UploadFilesRequest(
             files=[
                 filesystem_pb2.UploadFileData(
-                    context=file_metadata["context"],
+                    context=filesystem_pb2.CONTEXT_SETUP,
                     name=file_metadata["name"],
                     file_type=GrpcFilesystem._file_type_to_enum(file_metadata["file_type"]),
                     content_type=file_metadata["content_type"],
@@ -985,7 +985,7 @@ class TestFilesystemEdgeCases:
         method_desc = service_desc.methods_by_name["UpdateFile"]
         _, _, rpc = test_channel.take_unary_unary(method_desc)
         update_request = filesystem_pb2.UpdateFileRequest(
-            context=file_metadata["context"],
+            context=filesystem_pb2.CONTEXT_SETUP,
             file_id=file_id,
             status=GrpcFilesystem._file_status_to_enum("ACTIVE"),
         )
@@ -1002,7 +1002,7 @@ class TestFilesystemEdgeCases:
         method_desc = service_desc.methods_by_name["GetFile"]
         _, _, rpc = test_channel.take_unary_unary(method_desc)
         get_request = filesystem_pb2.GetFileRequest(
-            context=file_metadata["context"],
+            context=filesystem_pb2.CONTEXT_SETUP,
             file_id=file_id,
         )
         response = mock_servicer.GetFile(get_request, FakeContext())
@@ -1029,10 +1029,8 @@ class TestFilesystemEdgeCases:
             ),
         )
 
-        # Build proto filter manually to avoid context ID conversion
-        # The mock servicer expects raw context ("setup") not ID ("setup:1")
         filters_proto = filesystem_pb2.FileFilter(
-            context=file_metadata["context"],
+            context=filesystem_pb2.CONTEXT_SETUP,
             file_types=[GrpcFilesystem._file_type_to_enum(file_metadata["file_type"])],
             status=GrpcFilesystem._file_status_to_enum("ACTIVE"),
         )
@@ -1040,7 +1038,7 @@ class TestFilesystemEdgeCases:
         method_desc = service_desc.methods_by_name["DeleteFiles"]
         _, _, rpc = test_channel.take_unary_unary(method_desc)
         delete_request = filesystem_pb2.DeleteFilesRequest(
-            context=file_metadata["context"],
+            context=filesystem_pb2.CONTEXT_SETUP,
             filters=filters_proto,
             permanent=False,
             force=False,
@@ -1078,3 +1076,248 @@ class TestFilesystemEdgeCases:
 #     """
 #
 # Add regression tests below as bugs are discovered and fixed.
+
+
+class TestContextScopes:
+    """Tests that the ContextFile kind maps to the right wire enum."""
+
+    @pytest.mark.parametrize(
+        ("context", "wire"),
+        [
+            (Context.MISSIONS, filesystem_pb2.CONTEXT_MISSIONS),
+            (Context.SETUP, filesystem_pb2.CONTEXT_SETUP),
+            (Context.USERS, filesystem_pb2.CONTEXT_USERS),
+            (Context.ORGANIZATIONS, filesystem_pb2.CONTEXT_ORGANIZATIONS),
+            (Context.UNSPECIFIED, filesystem_pb2.CONTEXT_UNSPECIFIED),
+        ],
+    )
+    def test_get_files_forwards_context_kind(
+        self,
+        context: Context,
+        wire: "services.Context",
+        client: GrpcFilesystem,
+        test_channel: grpc_testing.Channel,
+        mock_servicer: MockFilesystemServicer,
+    ) -> None:
+        """get_files emits the matching context kind on the request and its filter.
+
+        Covers the cross-owner scopes USERS / ORGANIZATIONS added alongside the
+        existing MISSIONS / SETUP; the concrete owner id is resolved server-side.
+        """
+        future = client_execution_thread_pool.submit(
+            asyncio.run,
+            client.get_files(FileFilter(context=context)),
+        )
+
+        method_desc = service_name.methods_by_name["GetFiles"]
+        _, request, rpc = test_channel.take_unary_unary(method_desc)
+
+        assert request.context == wire
+        assert request.filters.context == wire
+
+        rpc.send_initial_metadata(())
+        rpc.terminate(mock_servicer.GetFiles(request, FakeContext()), (), grpc.StatusCode.OK, "")
+
+        files, _total = future.result(timeout=5.0)
+        assert isinstance(files, list)
+
+    def test_get_file_forwards_cross_owner_context(
+        self,
+        client: GrpcFilesystem,
+        test_channel: grpc_testing.Channel,
+        mock_servicer: MockFilesystemServicer,
+    ) -> None:
+        """get_file under USERS emits CONTEXT_USERS on the wire."""
+        future = client_execution_thread_pool.submit(
+            asyncio.run,
+            client.get_file("file_x", context=Context.USERS),
+        )
+
+        method_desc = service_name.methods_by_name["GetFile"]
+        _, request, rpc = test_channel.take_unary_unary(method_desc)
+
+        assert request.context == filesystem_pb2.CONTEXT_USERS
+
+        rpc.send_initial_metadata(())
+        rpc.terminate(mock_servicer.GetFile(request, FakeContext()), (), grpc.StatusCode.OK, "")
+        assert isinstance(future.result(timeout=5.0), FilesystemRecord)
+
+
+class TestContextEnumContract:
+    """SDK ``Context`` kind -> filesystem wire enum (``_context_enum``)."""
+
+    _WIRE = (
+        (Context.MISSIONS, filesystem_pb2.CONTEXT_MISSIONS),
+        (Context.SETUP, filesystem_pb2.CONTEXT_SETUP),
+        (Context.USERS, filesystem_pb2.CONTEXT_USERS),
+        (Context.ORGANIZATIONS, filesystem_pb2.CONTEXT_ORGANIZATIONS),
+        (Context.UNSPECIFIED, filesystem_pb2.CONTEXT_UNSPECIFIED),
+    )
+
+    @pytest.mark.unit
+    @pytest.mark.contract
+    @pytest.mark.parametrize(("ctx", "wire"), _WIRE)
+    def test_context_enum_maps_to_wire(self, ctx: "Context", wire: int) -> None:
+        """Each Context kind maps to its filesystem proto ``CONTEXT_*`` constant."""
+        assert GrpcFilesystem._context_enum(ctx) == wire
+
+    @pytest.mark.property
+    @given(ctx=st.sampled_from(list(Context)))
+    def test_context_enum_is_total(self, ctx: "Context") -> None:
+        """Every Context kind maps to a defined filesystem wire enum (never crashes)."""
+        assert GrpcFilesystem._context_enum(ctx) in {wire for _, wire in self._WIRE}
+
+
+class TestFilesystemRefusalAndFailures:
+    """Refusals (PERMISSION_DENIED) propagate; other gRPC failures wrap as FilesystemServiceError."""
+
+    @pytest.mark.grpc
+    @pytest.mark.regression
+    async def test_permission_denied_propagates(self, client: GrpcFilesystem) -> None:
+        """Authz refusals are re-raised as-is, never masked as a service error."""
+        client.exec_grpc_query = AsyncMock(side_effect=PermissionDeniedError("denied"))  # type: ignore[method-assign]
+        with pytest.raises(PermissionDeniedError):
+            await client.get_file("f")
+        with pytest.raises(PermissionDeniedError):
+            await client.get_files(FileFilter())
+
+    @pytest.mark.grpc
+    @pytest.mark.chaos
+    async def test_grpc_failure_wrapped(self, client: GrpcFilesystem) -> None:
+        """A generic gRPC failure surfaces as FilesystemServiceError on reads."""
+        client.exec_grpc_query = AsyncMock(side_effect=RuntimeError("boom"))  # type: ignore[method-assign]
+        with pytest.raises(FilesystemServiceError):
+            await client.get_file("f")
+        with pytest.raises(FilesystemServiceError):
+            await client.get_files(FileFilter())
+
+
+class TestVisibilityOnTheWire:
+    """Visibility is encoded onto every write path and decoded back off File."""
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    def test_upload_forwards_per_file_visibility(
+        self,
+        client: GrpcFilesystem,
+        test_channel: grpc_testing.Channel,
+    ) -> None:
+        upload = UploadFileData(
+            content=b"x",
+            name="f.txt",
+            file_type="DOCUMENT",
+            visibility=Visibility.INTERNAL,
+        )
+        future = client_execution_thread_pool.submit(asyncio.run, client.upload_files([upload]))
+        method_desc = service_name.methods_by_name["UploadFiles"]
+        _, request, rpc = test_channel.take_unary_unary(method_desc)
+
+        assert request.files[0].visibility == filesystem_pb2.VISIBILITY_INTERNAL
+
+        rpc.send_initial_metadata(())
+        rpc.terminate(
+            filesystem_pb2.UploadFilesResponse(results=[], total_uploaded=0, total_failed=0),
+            (),
+            grpc.StatusCode.OK,
+            "",
+        )
+        future.result(timeout=1.0)
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    def test_upload_defaults_to_unspecified(
+        self,
+        client: GrpcFilesystem,
+        test_channel: grpc_testing.Channel,
+    ) -> None:
+        """Unspecified means "let the service decide", so it must go out as the zero enum."""
+        upload = UploadFileData(content=b"x", name="f.txt", file_type="DOCUMENT")
+        future = client_execution_thread_pool.submit(asyncio.run, client.upload_files([upload]))
+        _, request, rpc = test_channel.take_unary_unary(service_name.methods_by_name["UploadFiles"])
+
+        assert request.files[0].visibility == filesystem_pb2.VISIBILITY_UNSPECIFIED
+
+        rpc.send_initial_metadata(())
+        rpc.terminate(
+            filesystem_pb2.UploadFilesResponse(results=[], total_uploaded=0, total_failed=0),
+            (),
+            grpc.StatusCode.OK,
+            "",
+        )
+        future.result(timeout=1.0)
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    def test_update_forwards_visibility(
+        self,
+        client: GrpcFilesystem,
+        test_channel: grpc_testing.Channel,
+    ) -> None:
+        future = client_execution_thread_pool.submit(
+            asyncio.run, client.update_file("files:1", visibility=Visibility.PUBLIC)
+        )
+        _, request, rpc = test_channel.take_unary_unary(service_name.methods_by_name["UpdateFile"])
+
+        assert request.visibility == filesystem_pb2.VISIBILITY_PUBLIC
+
+        rpc.send_initial_metadata(())
+        rpc.terminate(
+            filesystem_pb2.UpdateFileResponse(
+                result=filesystem_pb2.FileResult(file=filesystem_pb2.File(file_id="files:1"))
+            ),
+            (),
+            grpc.StatusCode.OK,
+            "",
+        )
+        future.result(timeout=1.0)
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    def test_filter_forwards_visibilities(
+        self,
+        client: GrpcFilesystem,
+        test_channel: grpc_testing.Channel,
+    ) -> None:
+        filters = FileFilter(visibilities=[Visibility.PRIVATE, Visibility.INTERNAL])
+        future = client_execution_thread_pool.submit(asyncio.run, client.get_files(filters))
+        _, request, rpc = test_channel.take_unary_unary(service_name.methods_by_name["GetFiles"])
+
+        assert list(request.filters.visibilities) == [
+            filesystem_pb2.VISIBILITY_PRIVATE,
+            filesystem_pb2.VISIBILITY_INTERNAL,
+        ]
+
+        rpc.send_initial_metadata(())
+        rpc.terminate(
+            filesystem_pb2.GetFilesResponse(files=[], total_count=0), (), grpc.StatusCode.OK, ""
+        )
+        future.result(timeout=1.0)
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    def test_visibility_is_decoded_onto_the_record(
+        self,
+        client: GrpcFilesystem,
+        test_channel: grpc_testing.Channel,
+    ) -> None:
+        future = client_execution_thread_pool.submit(asyncio.run, client.get_file("files:1"))
+        _, _request, rpc = test_channel.take_unary_unary(service_name.methods_by_name["GetFile"])
+
+        rpc.send_initial_metadata(())
+        rpc.terminate(
+            filesystem_pb2.GetFileResponse(
+                file=filesystem_pb2.File(
+                    file_id="files:1",
+                    context="missions:m1",
+                    name="f.txt",
+                    storage_uri="uri",
+                    file_url="url",
+                    visibility=filesystem_pb2.VISIBILITY_INTERNAL,
+                )
+            ),
+            (),
+            grpc.StatusCode.OK,
+            "",
+        )
+
+        assert future.result(timeout=1.0).visibility is Visibility.INTERNAL

@@ -2,11 +2,12 @@
 
 import asyncio
 import json
-import os
+import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Coroutine
 from typing import Any, ClassVar, Generic
 
+from digitalkin.grpc_servers.exceptions import PermissionDeniedError
 from digitalkin.grpc_servers.utils.utility_schema_extender import UtilitySchemaExtender
 from digitalkin.logger import logger
 from digitalkin.models.module.module import ModuleCodeModel, ModuleStatus
@@ -19,12 +20,18 @@ from digitalkin.models.module.module_types import (
     SetupModelT,
 )
 from digitalkin.models.module.select_schema import SelectSchema
-from digitalkin.models.module.utility import EndOfStreamOutput, ModuleStartInfoOutput, UtilityProtocol
+from digitalkin.models.module.tool_cache import ToolCache
+from digitalkin.models.module.utility import EndOfStreamOutput, UtilityProtocol
+from digitalkin.models.services.registry import RegistryModuleType
 from digitalkin.models.services.storage import BaseRole
+from digitalkin.models.settings.module import get_module_settings
 from digitalkin.modules.trigger_handler import TriggerHandler
 from digitalkin.services.services_config import ServicesConfig, ServicesStrategy
 from digitalkin.utils.package_discover import ModuleDiscoverer
 from digitalkin.utils.schema_splitter import SchemaSplitter
+
+# Pre-built generic; avoids regenerating one per start()/stop().
+_EndOfStreamDataModel: type[DataModel] = DataModel[EndOfStreamOutput]
 
 
 class BaseModule(  # Module SDK base class requires many public methods # noqa: PLR0904
@@ -39,7 +46,7 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
     """BaseModule is the abstract base for all modules in the DigitalKin SDK."""
 
     name: str
-    description: str
+    description: str = ""
 
     setup_format: type[SetupModelT]
     input_format: type[InputModelT]
@@ -51,8 +58,20 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
     context: ModuleContext
     triggers_discoverer: ClassVar[ModuleDiscoverer]
     _extended_input_format: ClassVar[type[DataModel] | None] = None
+    _shared: ClassVar[dict[str, Any]] = {}
+    _builds_tool_cache: ClassVar[bool] = False
+    registry_type: ClassVar[RegistryModuleType] = RegistryModuleType.UNSPECIFIED
+    """Only ArchetypeModule (tool-composing) resolves a tool cache."""
 
-    # service config params — subclasses MUST define their own to avoid sharing
+    @classmethod
+    def clear_shared(cls) -> None:
+        """Swap shared cache with a fresh dict.
+
+        Running tasks keep their existing ``context.shared`` reference
+        (old dict). New module instances get the fresh empty dict.
+        """
+        cls._shared = {}
+
     services_config_strategies: ClassVar[dict[str, ServicesStrategy | None]]
     services_config_params: ClassVar[dict[str, dict[str, Any | None] | None]]
 
@@ -72,25 +91,23 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
 
     @classmethod
     def get_module_id(cls) -> str:
-        """Get the module ID from environment variable or metadata.
+        """Get the module ID from settings or metadata.
 
         Returns:
-            The module_id from DIGITALKIN_MODULE_ID env var, or metadata module_id,
-            or "unknown" if neither exists.
+            The module_id from ModuleSettings.id (env DIGITALKIN_MODULE_ID), or
+            metadata module_id, or "unknown" if neither exists.
         """
-        return os.environ.get("DIGITALKIN_MODULE_ID") or cls.metadata.get("module_id", "unknown")
+        return get_module_settings().id or cls.metadata.get("module_id", "unknown")
 
     def _init_strategies(self, mission_id: str, setup_id: str, setup_version_id: str) -> dict[str, Any]:
         """Initialize the services configuration.
 
         Returns:
             dict of services with name: Strategy
-                agent: AgentStrategy
                 cost: CostStrategy
                 filesystem: FilesystemStrategy
                 identity: IdentityStrategy
                 registry: RegistryStrategy
-                snapshot: SnapshotStrategy
                 storage: StorageStrategy
                 user_profile: UserProfileStrategy
         """
@@ -112,6 +129,7 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
         setup_id: str,
         setup_version_id: str,
         request_metadata: dict[str, str] | None = None,
+        tool_cache: ToolCache | None = None,
     ) -> None:
         """Initialize the module.
 
@@ -121,13 +139,15 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
             setup_id: Setup identifier.
             setup_version_id: Setup version identifier.
             request_metadata: gRPC request metadata (headers) from the incoming request.
+            tool_cache: Pre-resolved ToolCache (skips per-request gRPC resolution).
         """
         self._status = ModuleStatus.CREATED
+        self._prebuilt_tool_cache = tool_cache
         self.trigger_handlers: dict[str, tuple] = {}
+        # Set by idempotent prepare() so start() can short-circuit.
+        self._prepared: bool = False
 
-        # Initialize minimum context
         self.context = ModuleContext(
-            # Initialize services configuration
             **self._init_strategies(mission_id, setup_id, setup_version_id),
             session={
                 "setup_id": setup_id,
@@ -135,13 +155,15 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
                 "setup_version_id": setup_version_id,
                 "job_id": job_id,
             },
+            borrowed=self.services_config._stateless_strategies,  # noqa: SLF001
             callbacks={"logger": logger},
             request_metadata=request_metadata,
+            shared=self._shared,
         )
 
     @property
     def status(self) -> ModuleStatus:
-        """Get the module status.
+        """The module status.
 
         Returns:
             The module status
@@ -213,6 +235,29 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
             return json.dumps({}, indent=2)
 
         return json.dumps(select_schema, indent=2)
+
+    @classmethod
+    def build_registry_documentation(cls) -> str:
+        """Assemble the registry documentation: author description + LLM-readable trigger table.
+
+        Enforces an author-written description of the archetype/tool specificity
+        (``cls.description``, falling back to ``metadata['description']``), then appends a
+        markdown table of the module's non-utility triggers for registry index search.
+
+        Returns:
+            Markdown documentation string sent as the registration ``documentation``.
+
+        Raises:
+            ValueError: If the module declares no description.
+        """
+        description = (cls.description or cls.metadata.get("description", "")).strip()
+        if not description:
+            msg = f"{cls.__name__} must define a non-empty 'description' for registry indexing"
+            raise ValueError(msg)
+        protocols = cls.triggers_discoverer.get_registered_protocols_with_info(exclude_utility=True)
+        rows = "\n".join(f"| {protocol} | {desc} |" for protocol, desc in sorted(protocols.items()))
+        table = f"| Trigger | Description |\n| --- | --- |\n{rows}" if rows else "_No triggers._"
+        return f"{description}\n\n## Triggers\n\n{table}"
 
     @classmethod
     async def get_output_format(cls, *, llm_format: bool) -> str:
@@ -320,7 +365,6 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
         if not config:
             return json.dumps({}, indent=2)
 
-        # Convert CostConfig objects to serializable dict
         cost_schema = {
             name: {
                 "name": cost_config.cost_name,
@@ -419,17 +463,13 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
         Built-in healthcheck handlers (ping, services, status) are automatically registered
         to provide standard healthcheck functionality for all modules.
         """
-        from digitalkin.models.module.utility import (
-            UtilityRegistry,
-        )  # Lazy import to avoid circular dependency
+        from digitalkin.models.module.utility import UtilityRegistry
 
         cls.triggers_discoverer.discover_modules()
 
-        # Auto-register built-in SDK triggers (healthcheck, etc.)
         for trigger_cls in UtilityRegistry.get_builtin_triggers():
             cls.triggers_discoverer.register_trigger(trigger_cls)
 
-        # Cache extended input model with utility protocols for runtime validation
         if cls.input_format is not None:
             cls._extended_input_format = UtilitySchemaExtender.create_extended_input_model(cls.input_format)
 
@@ -469,7 +509,6 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
         model_cls = self._extended_input_format or self.input_format
         input_instance = model_cls.model_validate(input_data)
 
-        # Apply cost limits if present in input (field added dynamically by UtilitySchemaExtender)
         if (
             cost_limits := input_instance.model_dump().get("cost_limits")
         ) is not None and self.context.cost is not None:
@@ -533,7 +572,12 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
             logger.info("Module %s finished", self.name, extra=self.context.session.current_ids())
         except asyncio.CancelledError:
             self._status = ModuleStatus.CANCELLED
-            logger.error("Module %s cancelled", self.name, extra=self.context.session.current_ids())
+            logger.info("Module %s cancelled", self.name, extra=self.context.session.current_ids())
+            raise
+        except PermissionDeniedError as e:
+            self._status = ModuleStatus.FAILED
+            logger.warning("Permission denied in module %s: %s", self.name, e, extra=self.context.session.current_ids())
+            await self._notify_permission_denied(self.context.callbacks.send_message, e)
         except Exception as e:
             self._status = ModuleStatus.FAILED
             logger.exception("Error inside module %s", self.name, extra=self.context.session.current_ids())
@@ -546,9 +590,83 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
                     )
                 )
             except Exception:
-                logger.exception("Failed to send error callback")
+                logger.exception("Failed to send error callback", extra=self.context.session.current_ids())
         else:
             self._status = ModuleStatus.STOPPING
+
+    async def _notify_permission_denied(
+        self,
+        callback: Callable[..., Coroutine[Any, Any, None]],
+        e: PermissionDeniedError,
+    ) -> None:
+        """Send a PermissionDenied notification to the user via the callback.
+
+        Args:
+            callback: The output callback installed on the module context.
+            e: The permission-denied error raised by a service call.
+        """
+        try:
+            await callback(
+                ModuleCodeModel(
+                    code="PermissionDenied",
+                    short_description="Permission denied",
+                    message=str(e),
+                )
+            )
+        except Exception:
+            logger.exception("Failed to send permission-denied callback", extra=self.context.session.current_ids())
+
+    async def prepare(
+        self,
+        setup_data: SetupModelT,
+        callback: Callable[[OutputModelT | ModuleCodeModel | DataModel[UtilityProtocol]], Coroutine[Any, Any, None]],
+    ) -> None:
+        """Wire callbacks, build tool cache, run ``initialize()``, discover triggers.
+
+        Idempotent — second call is a no-op. Lets the dial-back
+        orchestrator pay the ``initialize()`` cost off the critical path.
+
+        Args:
+            setup_data: The setup configuration for the module.
+            callback: Output callback installed on the module context.
+
+        Raises:
+            Exception: anything raised by ``build_tool_cache``,
+                ``initialize``, or ``init_handlers`` propagates so the
+                caller can convert to ``stream.error``.
+        """
+        if self._prepared:
+            return
+        from digitalkin.core.profiling.step_timer import StepTimer
+
+        timer = StepTimer()
+        self.context.callbacks.send_message = callback
+        timer.mark("set_callback")
+
+        if self._builds_tool_cache:
+            tool_cache = self._prebuilt_tool_cache or await setup_data.build_tool_cache(
+                self.context.registry,
+                self.context.communication,
+            )
+            # Installed unconditionally, even when the setup declares no tools: the
+            # mission view owns the ``dynamic`` layer, which is where runtime loads land.
+            # Gating on a non-empty declared layer used to leave the context holding a
+            # throwaway ToolCache, so a setup with no selected tools could never keep one.
+            self.context.tool_cache = tool_cache.mission_view()
+            timer.mark("build_tool_cache")
+            # Restore the tools the agent loaded earlier in this mission, before
+            # initialize() builds the toolkits that have to expose them.
+            await self.context.rehydrate_loaded_tools()
+            timer.mark("rehydrate_loaded_tools")
+
+        await self.initialize(self.context, setup_data)
+        timer.mark("initialize")
+
+        self.trigger_handlers = self.triggers_discoverer.init_handlers(self.context)
+        timer.mark("init_handlers")
+
+        self._prepared = True
+        timer.log("module.prepare", task_id=self.context.session.current_ids().get("job_id", ""))
 
     async def start(
         self,
@@ -558,35 +676,25 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
         done_callback: Callable | None = None,
     ) -> None:
         """Start the module."""
+        from digitalkin.core.profiling.step_timer import StepTimer
+
+        timer = StepTimer()
         try:
-            self.context.callbacks.send_message = callback
-
-            tool_cache = await setup_data.build_tool_cache(self.context.registry, self.context.communication)
-            if tool_cache.entries:
-                self.context.tool_cache = tool_cache
-            logger.debug("debug:start tool_cache entries=%s", len(tool_cache.entries))
-
-            await callback(
-                DataModel(
-                    root=ModuleStartInfoOutput(
-                        job_id=self.context.session.job_id,
-                        mission_id=self.context.session.mission_id,
-                        setup_id=self.context.session.setup_id,
-                        setup_version_id=self.context.session.setup_version_id,
-                        module_id=self.get_module_id(),
-                        module_name=self.name,
-                    ),
-                    annotations={"role": BaseRole.SYSTEM},
-                )
-            )
-
-            logger.debug("Initialize module %s", self.context.session.job_id)
-            await self.initialize(self.context, setup_data)
+            await self.prepare(setup_data, callback)
+            timer.mark("prepare")
+        except PermissionDeniedError as e:
+            self._status = ModuleStatus.FAILED
+            logger.warning("Permission denied initializing module: %s", e, extra=self.context.session.current_ids())
+            await self._notify_permission_denied(callback, e)
+            if done_callback is not None:
+                await done_callback(None)
+            await self.stop()
+            return
         except Exception as e:
             self._status = ModuleStatus.FAILED
             short_description = "Error initializing module"
             error_detail = f"{type(e).__name__}: {e}" if str(e) else type(e).__name__
-            logger.exception("%s: %s", short_description, error_detail)
+            logger.exception("%s: %s", short_description, error_detail, extra=self.context.session.current_ids())
             await callback(
                 ModuleCodeModel(
                     code="Error",
@@ -600,47 +708,69 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
             return
 
         try:
-            self.trigger_handlers = self.triggers_discoverer.init_handlers(self.context)
             await self._run_lifecycle(input_data, setup_data)
+            timer.mark("run_lifecycle")
         except Exception:
             self._status = ModuleStatus.FAILED
-            logger.exception("Error during module lifecyle")
+            logger.exception("Error during module lifecycle", extra=self.context.session.current_ids())
         finally:
+            timer.log("module.start", task_id=self.context.session.current_ids().get("job_id", ""))
             await self.stop()
 
     async def stop(self) -> None:
         """Stop the module. Idempotent — second call is a no-op."""
+        t0 = time.perf_counter_ns()
         if self._status in {ModuleStatus.STOPPED, ModuleStatus.FAILED}:
             return
-        logger.info("Stopping module %s | job_id=%s", self.name, self.context.session.job_id)
-        try:
+        try:  # noqa: PLW0717
             self._status = ModuleStatus.STOPPING
-            # Let module finalize (wait for pending callbacks, close streams, etc.)
             await self.cleanup()
-            # Flush batched histories — all messages are in cache, in correct order
+            t1 = time.perf_counter_ns()
+            cleanup_ms = (t1 - t0) / 1e6
+            if cleanup_ms > 1000:  # noqa: PLR2004 — one-off log threshold, not a tunable
+                # A blocking cleanup hook freezes the loop and the damage lands elsewhere — in-flight
+                # gateway streams fail with a bogus REDIS_UNAVAILABLE. Name the culprit here.
+                logger.warning(
+                    "%s.cleanup() took %.0fms; if it blocks rather than awaits it stalls the event "
+                    "loop and unrelated in-flight operations will fail with spurious timeouts — "
+                    "move blocking calls to asyncio.to_thread",
+                    type(self).__name__,
+                    cleanup_ms,
+                    extra=self.context.session.current_ids(),
+                )
             try:
                 for handlers in self.trigger_handlers.values():
                     for handler in handlers:
                         await handler.flush_file_history(self.context)
             except Exception:
                 logger.warning("Failed to flush handler history during stop", exc_info=True)
-            try:
+            t2 = time.perf_counter_ns()
+            if "send_message" in vars(self.context.callbacks):
                 await self.context.callbacks.send_message(
-                    DataModel[EndOfStreamOutput](
+                    _EndOfStreamDataModel(
                         root=EndOfStreamOutput(),
                         annotations={"role": BaseRole.SYSTEM},
                     )
                 )
-            except AttributeError:
-                logger.warning(
-                    "send_message callback not set, skipping end-of-stream"
-                    " (expected for start_config_setup which does not register send_message)"
-                )
+            else:
+                logger.debug("send_message not registered; skipping end-of-stream (config-setup path)")
+            t3 = time.perf_counter_ns()
             self._status = ModuleStatus.STOPPED
-            logger.debug("Module %s cleaned", self.name)
+            ids = self.context.session.current_ids()
+            logger.info(
+                "[close-debug] module.stop: cleanup=%.2fms flush=%.2fms eos=%.2fms "
+                "total=%.2fms t_done_ns=%d task_id=%s mission_id=%s",
+                cleanup_ms,
+                (t2 - t1) / 1e6,
+                (t3 - t2) / 1e6,
+                (t3 - t0) / 1e6,
+                t3,
+                ids.get("job_id", ""),
+                ids.get("mission_id", ""),
+            )
         except Exception:
             self._status = ModuleStatus.FAILED
-            logger.exception("Error stopping module")
+            logger.exception("Error stopping module", extra=self.context.session.current_ids())
 
     async def _resolve_tools(self, config_setup_data: SetupModelT) -> None:
         """Resolve tool references and build cache.
@@ -648,6 +778,8 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
         Args:
             config_setup_data: Setup data containing tool references.
         """
+        if not self._builds_tool_cache:
+            return
         logger.debug("Starting tool resolution", extra=self.context.session.current_ids())
         # New setup version: discard any inherited resolved_tools so the live
         # tool-module schemas are re-fetched. Mission runs reuse the persisted
@@ -673,12 +805,12 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
             config_setup_data: Initial setup data to configure.
             callback: Callback to send the configured setup model.
         """
-        try:
+        try:  # noqa: PLW0717
             logger.debug("Run Config Setup lifecycle", extra=self.context.session.current_ids())
             self._status = ModuleStatus.RUNNING
             self.context.callbacks.set_config_setup = callback
 
-            # Resolve tools first to populate companion fields, then run config setup
+            # Resolve tools first so config setup sees populated companion fields.
             await self._resolve_tools(config_setup_data)
             updated_config = await self.run_config_setup(self.context, config_setup_data)
 

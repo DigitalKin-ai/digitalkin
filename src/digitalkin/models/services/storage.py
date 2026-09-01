@@ -42,3 +42,39 @@ class FileHistory(BaseModel):
     """File history model."""
 
     files: list[FileModel] = Field(..., description="List of files")
+
+
+class DataType(Enum):
+    """Enum defining the types of data that can be stored."""
+
+    OUTPUT = "OUTPUT"
+    VIEW = "VIEW"
+    LOGS = "LOGS"
+    OTHER = "OTHER"
+
+
+class Visibility(Enum):
+    """Read-access scope of a record, mirroring the storage proto kinds by name.
+
+    Ownership (who may edit) stays keyed on the record context; this only governs
+    who may read. UNSPECIFIED lets the storage service apply its server-side default.
+    """
+
+    UNSPECIFIED = "unspecified"
+    PUBLIC = "public"
+    PRIVATE = "private"
+    INTERNAL = "internal"
+
+    @classmethod
+    def _missing_(cls, value: object) -> "Visibility | None":
+        """Coerce a proto wire name (``VISIBILITY_PRIVATE``) or any-case string; empty → UNSPECIFIED.
+
+        Returns:
+            The matching member, or ``None`` for an unrecognised non-empty value.
+        """
+        if isinstance(value, str):
+            key = value.lower().removeprefix("visibility_")
+            if not key:
+                return cls.UNSPECIFIED
+            return next((member for member in cls if member.value == key), None)
+        return None
