@@ -1108,6 +1108,8 @@ Methods:
 - **`create_tool_functions`** – Create tool functions for all protocols in a tool setup.
 - **`get_module_config_schema`** – Get a module's config-setup JSON schema by id (discovers address/port, then queries it).
 - **`get_module_schemas_by_id`** – Get module schemas by ID, discovering address/port from registry.
+- **`persist_loaded_tool`** – Record a runtime-loaded tool so it survives into this mission's next turn.
+- **`rehydrate_loaded_tools`** – Re-resolve this mission's previously-loaded tools into the dynamic layer.
 - **`resolve_tool`** – Resolve a registry setup_id into a ToolModuleInfo and cache it.
 
 ### cleanup
@@ -1212,6 +1214,41 @@ Returns:
 
 - `dict[str, dict]` – Dictionary containing schemas: {"input": ..., "output": ..., "setup": ..., "secret": ...}
 
+### persist_loaded_tool
+
+```python
+persist_loaded_tool(setup_id: str) -> bool
+```
+
+Record a runtime-loaded tool so it survives into this mission's next turn.
+
+Every user message builds a fresh module instance, so the `dynamic` cache layer and the agent's tool list are both rebuilt from scratch. Persisting the id is what turns a load into a property of the *conversation* rather than of the turn.
+
+Parameters:
+
+- #### **`setup_id`**
+
+  (`str`) – The loaded tool's registry setup id.
+
+Returns:
+
+- `bool` – True if the id was persisted; False if the module never registered the
+- `bool` – loaded_tools collection, in which case the load lasts only this turn.
+
+### rehydrate_loaded_tools
+
+```python
+rehydrate_loaded_tools() -> int
+```
+
+Re-resolve this mission's previously-loaded tools into the `dynamic` layer.
+
+Called once per turn from `BaseModule.prepare()`, before `initialize()` builds the agent's toolkits. Ids are re-resolved rather than replayed from a snapshot, so each turn re-checks authorization and picks up schema changes; an id that no longer resolves — revoked, deleted — is dropped from the mission so it is not retried on every subsequent message.
+
+Returns:
+
+- `int` – The number of tools restored into the dynamic layer.
+
 ### resolve_tool
 
 ```python
@@ -1220,7 +1257,9 @@ resolve_tool(setup_id: str) -> ToolModuleInfo | None
 
 Resolve a registry `setup_id` into a `ToolModuleInfo` and cache it.
 
-On-demand loader for a discovered tool. `registry.get_setup` always runs first — it is the permission gate, and the tool cache is shared across missions of the same agent setup, so a cache hit must never skip authz. The cache only short-circuits the module discovery + schema fetch. Permission denials propagate so callers can surface them distinctly.
+On-demand loader for a discovered tool. `registry.get_setup` always runs first — it is the permission gate, and the cache's `declared` layer is shared across missions of the same agent setup, so a cache hit must never skip authz. The cache only short-circuits the module discovery + schema fetch. Permission denials propagate so callers can surface them distinctly.
+
+The result lands in the cache's mission-scoped `dynamic` layer. Pair this with :meth:`persist_loaded_tool` to make the load outlive the current turn.
 
 Parameters:
 
@@ -4010,10 +4049,10 @@ Classes:
 - **`ChatHistoryTools`** – Two-tool chat-history surface bound to a constructed Agent or Team.
 - **`DefaultToolkits`** – Assemble the default DigitalKin toolkits (chat history, user profile, registry).
 - **`DkToolkit`** – Base class for DigitalKin agno toolkits.
-- **`KinsManager`** – Manage Kin setups (ARCHETYPE): search, update, delete, change visibility.
+- **`KinsManager`** – Manage Kin setups (ARCHETYPE): search, update, delete, change visibility, roll back a version.
 - **`LoadManager`** – Expose load_manager — an external-execution tool that loads objects into the agent.
-- **`ServicesManager`** – Manage Service setups (SERVICE): create, search, load, update, delete, change visibility.
-- **`ToolsManager`** – Manage Tool setups (TOOL_MODULE): search, get, update, delete, change visibility.
+- **`ServicesManager`** – Manage Service setups (SERVICE): create, search, load, update, delete, visibility, versions.
+- **`ToolsManager`** – Manage Tool setups (TOOL_MODULE): search, get, update, delete, change visibility, versions.
 - **`UserProfileTools`** – Toolkit that gives the agent access to the current user's profile.
 
 ##### ChatHistoryTools
@@ -4269,7 +4308,7 @@ KinsManager(
               click digitalkin.community.agno.toolkits.base.DkToolkit href "" "digitalkin.community.agno.toolkits.base.DkToolkit"
 ```
 
-Manage Kin setups (ARCHETYPE): search, update, delete, change visibility.
+Manage Kin setups (ARCHETYPE): search, update, delete, change visibility, roll back a version.
 
 Parameters:
 
@@ -4287,21 +4326,25 @@ Parameters:
 
 Methods:
 
-- **`kins_manager`** – Dispatch a Kin operation (search / update / delete / change_visibility).
+- **`kins_manager`** – Dispatch a Kin operation (search / update / delete / change_visibility / versions).
 
 ###### kins_manager
 
 ```python
-kins_manager(action: KinActions) -> str
+kins_manager(action: KinActions | None = None, **fields: Any) -> str
 ```
 
-Dispatch a Kin operation (search / update / delete / change_visibility).
+Dispatch a Kin operation (search / update / delete / change_visibility / versions).
 
 Parameters:
 
 - ###### **`action`**
 
-  (`KinActions`) – A discriminated Kin action; its type selects the operation.
+  (`KinActions | None`, default: `None` ) – A discriminated Kin action; its type selects the operation.
+
+- ###### **`fields`**
+
+  (`Any`, default: `{}` ) – Absorbs a flattened call — some models send the action's own fields as siblings of action rather than inside it. :meth:\_run re-nests them.
 
 Returns:
 
@@ -4403,7 +4446,7 @@ Parameters:
 
 - ###### **`tool_args`**
 
-  (`dict[str, Any]`) – The raw tool arguments from the paused call ({"action": {...}}).
+  (`dict[str, Any]`) – The raw tool arguments from the paused call ({"action": {...}}, or the flattened {"action": "tool", "setup_id": ...} some models send instead).
 
 Returns:
 
@@ -4437,7 +4480,7 @@ ServicesManager(
               click digitalkin.community.agno.toolkits.base.DkToolkit href "" "digitalkin.community.agno.toolkits.base.DkToolkit"
 ```
 
-Manage Service setups (SERVICE): create, search, load, update, delete, change visibility.
+Manage Service setups (SERVICE): create, search, load, update, delete, visibility, versions.
 
 Parameters:
 
@@ -4455,21 +4498,25 @@ Parameters:
 
 Methods:
 
-- **`services_manager`** – Dispatch a Service operation (create / search / load / update / delete / change_visibility).
+- **`services_manager`** – Dispatch a Service operation (create / search / load / update / delete / visibility / versions).
 
 ###### services_manager
 
 ```python
-services_manager(action: ServiceActions) -> str
+services_manager(action: ServiceActions | None = None, **fields: Any) -> str
 ```
 
-Dispatch a Service operation (create / search / load / update / delete / change_visibility).
+Dispatch a Service operation (create / search / load / update / delete / visibility / versions).
 
 Parameters:
 
 - ###### **`action`**
 
-  (`ServiceActions`) – A discriminated Service action; its type selects the operation.
+  (`ServiceActions | None`, default: `None` ) – A discriminated Service action; its type selects the operation.
+
+- ###### **`fields`**
+
+  (`Any`, default: `{}` ) – Absorbs a flattened call — some models send the action's own fields as siblings of action rather than inside it. :meth:\_run re-nests them.
 
 Returns:
 
@@ -4502,7 +4549,7 @@ ToolsManager(
               click digitalkin.community.agno.toolkits.base.DkToolkit href "" "digitalkin.community.agno.toolkits.base.DkToolkit"
 ```
 
-Manage Tool setups (TOOL_MODULE): search, get, update, delete, change visibility.
+Manage Tool setups (TOOL_MODULE): search, get, update, delete, change visibility, versions.
 
 Parameters:
 
@@ -4525,7 +4572,7 @@ Methods:
 ###### tools_manager
 
 ```python
-tools_manager(action: ToolActions) -> str
+tools_manager(action: ToolActions | None = None, **fields: Any) -> str
 ```
 
 Administer tool setups (search / get / update / delete / change_visibility).
@@ -4534,7 +4581,11 @@ Parameters:
 
 - ###### **`action`**
 
-  (`ToolActions`) – A discriminated Tool action; its type selects the operation.
+  (`ToolActions | None`, default: `None` ) – A discriminated Tool action; its type selects the operation.
+
+- ###### **`fields`**
+
+  (`Any`, default: `{}` ) – Absorbs a flattened call — some models send the action's own fields as siblings of action rather than inside it. :meth:\_run re-nests them.
 
 Returns:
 
@@ -4577,7 +4628,7 @@ Parameters:
 
 Methods:
 
-- **`get_user_profile`** – Retrieve the current user's profile: name, email, subscription plan, and remaining credits.
+- **`get_user_profile`** – Retrieve the current user's profile: name, email, subscription plan, remaining credits, and mission cost.
 
 ###### get_user_profile
 
@@ -4585,7 +4636,9 @@ Methods:
 get_user_profile() -> str
 ```
 
-Retrieve the current user's profile: name, email, subscription plan, and remaining credits.
+Retrieve the current user's profile: name, email, subscription plan, remaining credits, and mission cost.
+
+`mission_cost` is what the current mission has accumulated so far, in the same unit as the credit balance.
 
 Important
 
@@ -4875,15 +4928,17 @@ Modules:
 
 CRUD actions shared by the three Registry Toolkit managers (Tools / Services / Kins).
 
-`SearchAction` reads setups of the manager's `module_type` from the registry; `UpdateAction` / `DeleteAction` / `ChangeVisibilityAction` write through the setup service. Each manager composes its own action union from these (plus type-specific actions such as service create/load).
+`SearchAction` reads setups of the manager's `module_type` from the registry; `UpdateAction` / `DeleteAction` / `ChangeVisibilityAction` / `SetVersionAction` write through the setup service, and `ListVersionsAction` reads its version history. Each manager composes its own action union from these (plus type-specific actions such as service create/load).
 
 Classes:
 
 - **`ChangeVisibilityAction`** – Change who can see and use an instance.
 - **`DeleteAction`** – Delete an instance by id (a soft delete: it disappears from search).
 - **`GetAction`** – Fetch one instance by id, with its current version content, status and visibility.
+- **`ListVersionsAction`** – List an instance's configuration history, most recent first.
 - **`SearchAction`** – Semantic search over ready-to-use instances of this object type (configured setups).
-- **`UpdateAction`** – Update an existing instance's name and current version content.
+- **`SetVersionAction`** – Activate one of an instance's existing versions — the way to undo a bad update.
+- **`UpdateAction`** – Update an instance: cut a new version of its configuration, and rename it.
 
 ###### ChangeVisibilityAction
 
@@ -4950,6 +5005,8 @@ Only instances of this manager's own object type can be deleted — deleting a s
 - deleting a **non-existent** or **already-deleted** id returns "not found" (a deleted id is no longer resolvable, so re-deleting is not a silent no-op);
 - once deleted, the id is **no longer retrievable** via `get` or `load`.
 
+A setup whose backing module the registry cannot resolve has no knowable type, so every other action refuses it. Delete accepts it anyway — otherwise such a record could never be removed by anyone.
+
 Methods:
 
 - **`execute`** – Delete the setup (soft delete via the setup service).
@@ -4962,7 +5019,7 @@ execute(ctx: RegistryActionCtx) -> Any
 
 Delete the setup (soft delete via the setup service).
 
-Guards the object type first — a mutation must not cross the type boundary any more than a read does — then deletes.
+Guards the object type first — a mutation must not cross the type boundary any more than a read does — then deletes. `orphan_ok` makes the one exception: a setup whose module cannot be resolved has no type to cross, and refusing it would strand the record permanently.
 
 Returns:
 
@@ -5005,6 +5062,47 @@ Returns:
 
 - `Any` – The setup with its current version, status and visibility.
 
+###### ListVersionsAction
+
+```
+              flowchart TD
+              digitalkin.community.agno.toolkits.registry.action.ListVersionsAction[ListVersionsAction]
+              digitalkin.community.agno.toolkits.registry.base.RegistryAction[RegistryAction]
+              digitalkin.community.agno.toolkits.registry.base.BaseAction[BaseAction]
+
+                              digitalkin.community.agno.toolkits.registry.base.RegistryAction --> digitalkin.community.agno.toolkits.registry.action.ListVersionsAction
+                                digitalkin.community.agno.toolkits.registry.base.BaseAction --> digitalkin.community.agno.toolkits.registry.base.RegistryAction
+                
+
+
+
+              click digitalkin.community.agno.toolkits.registry.action.ListVersionsAction href "" "digitalkin.community.agno.toolkits.registry.action.ListVersionsAction"
+              click digitalkin.community.agno.toolkits.registry.base.RegistryAction href "" "digitalkin.community.agno.toolkits.registry.base.RegistryAction"
+              click digitalkin.community.agno.toolkits.registry.base.BaseAction href "" "digitalkin.community.agno.toolkits.registry.base.BaseAction"
+```
+
+List an instance's configuration history, most recent first.
+
+Every `update` cuts a new version rather than overwriting the old one, so this is how you find an earlier configuration to go back to — pair it with `set_version`. Rows are metadata only: use `get` to read the configuration the instance currently serves.
+
+Methods:
+
+- **`execute`** – List the setup's versions, refusing a foreign object type.
+
+###### execute
+
+```python
+execute(ctx: RegistryActionCtx) -> Any
+```
+
+List the setup's versions, refusing a foreign object type.
+
+Guards the object type first: a version history is as much this manager's business as the setup itself, so `kins_manager` must not enumerate a tool's revisions.
+
+Returns:
+
+- `Any` – {"total_count", "returned", "offset", "current_setup_version_id", "versions": [...]}.
+
 ###### SearchAction
 
 ```
@@ -5028,6 +5126,8 @@ Semantic search over ready-to-use instances of this object type (configured setu
 
 This is a SEMANTIC (nearest-match) search, never exhaustive: it returns the closest setups regardless of how weak the match is, so a non-empty result does NOT mean anything matched the query, and an empty result only means the whole corpus is empty. Do NOT use it to test whether a specific setup exists — fetch it by id with `get` (which returns a clean not-found instead). The index is also eventually consistent: right after a write (create/update/delete) results may briefly lag, so to read a change you just made use `get` rather than re-searching.
 
+Every filter the registry accepts is exposed here except the object type, which is fixed to this manager's own kind. Filters combine with AND; within one filter the values are OR'd.
+
 Methods:
 
 - **`execute`** – Search invocable setups of the manager's type and trim each row for the LLM.
@@ -5042,7 +5142,48 @@ Search invocable setups of the manager's type and trim each row for the LLM.
 
 Returns:
 
-- `Any` – {"total_returned", "truncated", "setups": [...]}.
+- `Any` – {"total_returned", "truncated", "offset", "setups": [...]}.
+
+###### SetVersionAction
+
+```
+              flowchart TD
+              digitalkin.community.agno.toolkits.registry.action.SetVersionAction[SetVersionAction]
+              digitalkin.community.agno.toolkits.registry.base.RegistryAction[RegistryAction]
+              digitalkin.community.agno.toolkits.registry.base.BaseAction[BaseAction]
+
+                              digitalkin.community.agno.toolkits.registry.base.RegistryAction --> digitalkin.community.agno.toolkits.registry.action.SetVersionAction
+                                digitalkin.community.agno.toolkits.registry.base.BaseAction --> digitalkin.community.agno.toolkits.registry.base.RegistryAction
+                
+
+
+
+              click digitalkin.community.agno.toolkits.registry.action.SetVersionAction href "" "digitalkin.community.agno.toolkits.registry.action.SetVersionAction"
+              click digitalkin.community.agno.toolkits.registry.base.RegistryAction href "" "digitalkin.community.agno.toolkits.registry.base.RegistryAction"
+              click digitalkin.community.agno.toolkits.registry.base.BaseAction href "" "digitalkin.community.agno.toolkits.registry.base.BaseAction"
+```
+
+Activate one of an instance's existing versions — the way to undo a bad `update`.
+
+Takes a `setup_version_id` from `list_versions`; it does not create anything, so rolling forward again is just another `set_version` on the newer id. Nothing is lost either way.
+
+Methods:
+
+- **`execute`** – Make an existing version the current one.
+
+###### execute
+
+```python
+execute(ctx: RegistryActionCtx) -> Any
+```
+
+Make an existing version the current one.
+
+Guards the object type first — a mutation must not cross the type boundary — then activates. A version id belonging to another setup is refused by the setup service.
+
+Returns:
+
+- `Any` – The setup with its newly activated version.
 
 ###### UpdateAction
 
@@ -5063,11 +5204,13 @@ Returns:
               click digitalkin.community.agno.toolkits.registry.base.BaseAction href "" "digitalkin.community.agno.toolkits.registry.base.BaseAction"
 ```
 
-Update an existing instance's name and current version content.
+Update an instance: cut a new version of its configuration, and rename it.
+
+The previous configuration is not overwritten — it stays in the version history, so an update that turns out to be wrong can be undone with `set_version`. Use `list_versions` to find the id to go back to.
 
 Methods:
 
-- **`execute`** – Update the setup's name and current version content.
+- **`execute`** – Cut a new version of the setup's content and rename it.
 
 ###### execute
 
@@ -5075,7 +5218,7 @@ Methods:
 execute(ctx: RegistryActionCtx) -> Any
 ```
 
-Update the setup's name and current version content.
+Cut a new version of the setup's content and rename it.
 
 Guards the object type first (which also refuses a deleted target, since the setup service excludes deleted ids), then validates `content` against the module's config schema so a missing/wrong field is refused with a correctable message before the write.
 
@@ -5228,7 +5371,7 @@ Methods:
 ###### ensure_kind
 
 ```python
-ensure_kind(setup_id: str) -> SetupData
+ensure_kind(setup_id: str, *, orphan_ok: bool = False) -> SetupData
 ```
 
 Resolve a setup by id and assert its backing module is this manager's type.
@@ -5241,6 +5384,10 @@ Parameters:
 
   (`str`) – The setup id the action targets.
 
+- ###### **`orphan_ok`**
+
+  (`bool`, default: `False` ) – Accept a setup whose backing module the registry cannot resolve at all. Only delete sets this — see below.
+
 Returns:
 
 - `SetupData` – The resolved setup.
@@ -5248,6 +5395,7 @@ Returns:
 Raises:
 
 - `ValueError` – The setup's backing module is not of this manager's type.
+- `RegistryModuleNotFoundError` – The backing module cannot be resolved and orphan_ok is not set.
 
 ###### validate_content
 
@@ -5358,7 +5506,7 @@ Kins expose the shared CRUD + search actions (no create/load on this surface).
 
 Classes:
 
-- **`KinsManager`** – Manage Kin setups (ARCHETYPE): search, update, delete, change visibility.
+- **`KinsManager`** – Manage Kin setups (ARCHETYPE): search, update, delete, change visibility, roll back a version.
 
 ###### KinsManager
 
@@ -5387,7 +5535,7 @@ KinsManager(
               click digitalkin.community.agno.toolkits.base.DkToolkit href "" "digitalkin.community.agno.toolkits.base.DkToolkit"
 ```
 
-Manage Kin setups (ARCHETYPE): search, update, delete, change visibility.
+Manage Kin setups (ARCHETYPE): search, update, delete, change visibility, roll back a version.
 
 Parameters:
 
@@ -5405,21 +5553,25 @@ Parameters:
 
 Methods:
 
-- **`kins_manager`** – Dispatch a Kin operation (search / update / delete / change_visibility).
+- **`kins_manager`** – Dispatch a Kin operation (search / update / delete / change_visibility / versions).
 
 ###### kins_manager
 
 ```python
-kins_manager(action: KinActions) -> str
+kins_manager(action: KinActions | None = None, **fields: Any) -> str
 ```
 
-Dispatch a Kin operation (search / update / delete / change_visibility).
+Dispatch a Kin operation (search / update / delete / change_visibility / versions).
 
 Parameters:
 
 - ###### **`action`**
 
-  (`KinActions`) – A discriminated Kin action; its type selects the operation.
+  (`KinActions | None`, default: `None` ) – A discriminated Kin action; its type selects the operation.
+
+- ###### **`fields`**
+
+  (`Any`, default: `{}` ) – Absorbs a flattened call — some models send the action's own fields as siblings of action rather than inside it. :meth:\_run re-nests them.
 
 Returns:
 
@@ -5689,7 +5841,7 @@ Parameters:
 
 - ###### **`tool_args`**
 
-  (`dict[str, Any]`) – The raw tool arguments from the paused call ({"action": {...}}).
+  (`dict[str, Any]`) – The raw tool arguments from the paused call ({"action": {...}}, or the flattened {"action": "tool", "setup_id": ...} some models send instead).
 
 Returns:
 
@@ -5740,7 +5892,7 @@ Classes:
 
 Create a shareable service other kins can discover.
 
-Only a name and the configuration JSON are needed — owner, organisation and kind are derived server-side. Once created it is discoverable via `search` and readable via `load`.
+Only a name and the configuration JSON are needed — owner, organisation and kind are derived server-side. Once created it is discoverable via `search` and readable via `load`. The service is always created *private* (owner only): visibility is not a creation parameter. Widening it to `internal` (whole organisation) or `public` (everyone) requires a separate `change_visibility` call.
 
 Methods:
 
@@ -5803,7 +5955,7 @@ Returns:
 
 Classes:
 
-- **`ServicesManager`** – Manage Service setups (SERVICE): create, search, load, update, delete, change visibility.
+- **`ServicesManager`** – Manage Service setups (SERVICE): create, search, load, update, delete, visibility, versions.
 
 ###### ServicesManager
 
@@ -5832,7 +5984,7 @@ ServicesManager(
               click digitalkin.community.agno.toolkits.base.DkToolkit href "" "digitalkin.community.agno.toolkits.base.DkToolkit"
 ```
 
-Manage Service setups (SERVICE): create, search, load, update, delete, change visibility.
+Manage Service setups (SERVICE): create, search, load, update, delete, visibility, versions.
 
 Parameters:
 
@@ -5850,21 +6002,25 @@ Parameters:
 
 Methods:
 
-- **`services_manager`** – Dispatch a Service operation (create / search / load / update / delete / change_visibility).
+- **`services_manager`** – Dispatch a Service operation (create / search / load / update / delete / visibility / versions).
 
 ###### services_manager
 
 ```python
-services_manager(action: ServiceActions) -> str
+services_manager(action: ServiceActions | None = None, **fields: Any) -> str
 ```
 
-Dispatch a Service operation (create / search / load / update / delete / change_visibility).
+Dispatch a Service operation (create / search / load / update / delete / visibility / versions).
 
 Parameters:
 
 - ###### **`action`**
 
-  (`ServiceActions`) – A discriminated Service action; its type selects the operation.
+  (`ServiceActions | None`, default: `None` ) – A discriminated Service action; its type selects the operation.
+
+- ###### **`fields`**
+
+  (`Any`, default: `{}` ) – Absorbs a flattened call — some models send the action's own fields as siblings of action rather than inside it. :meth:\_run re-nests them.
 
 Returns:
 
@@ -5893,7 +6049,7 @@ This administers tool **setups** (search / get / update / delete / change visibi
 
 Classes:
 
-- **`ToolsManager`** – Manage Tool setups (TOOL_MODULE): search, get, update, delete, change visibility.
+- **`ToolsManager`** – Manage Tool setups (TOOL_MODULE): search, get, update, delete, change visibility, versions.
 
 ###### ToolsManager
 
@@ -5922,7 +6078,7 @@ ToolsManager(
               click digitalkin.community.agno.toolkits.base.DkToolkit href "" "digitalkin.community.agno.toolkits.base.DkToolkit"
 ```
 
-Manage Tool setups (TOOL_MODULE): search, get, update, delete, change visibility.
+Manage Tool setups (TOOL_MODULE): search, get, update, delete, change visibility, versions.
 
 Parameters:
 
@@ -5945,7 +6101,7 @@ Methods:
 ###### tools_manager
 
 ```python
-tools_manager(action: ToolActions) -> str
+tools_manager(action: ToolActions | None = None, **fields: Any) -> str
 ```
 
 Administer tool setups (search / get / update / delete / change_visibility).
@@ -5954,7 +6110,11 @@ Parameters:
 
 - ###### **`action`**
 
-  (`ToolActions`) – A discriminated Tool action; its type selects the operation.
+  (`ToolActions | None`, default: `None` ) – A discriminated Tool action; its type selects the operation.
+
+- ###### **`fields`**
+
+  (`Any`, default: `{}` ) – Absorbs a flattened call — some models send the action's own fields as siblings of action rather than inside it. :meth:\_run re-nests them.
 
 Returns:
 
@@ -6005,7 +6165,7 @@ Parameters:
 
 Methods:
 
-- **`get_user_profile`** – Retrieve the current user's profile: name, email, subscription plan, and remaining credits.
+- **`get_user_profile`** – Retrieve the current user's profile: name, email, subscription plan, remaining credits, and mission cost.
 
 ###### get_user_profile
 
@@ -6013,7 +6173,9 @@ Methods:
 get_user_profile() -> str
 ```
 
-Retrieve the current user's profile: name, email, subscription plan, and remaining credits.
+Retrieve the current user's profile: name, email, subscription plan, remaining credits, and mission cost.
+
+`mission_cost` is what the current mission has accumulated so far, in the same unit as the credit balance.
 
 Important
 
@@ -17230,6 +17392,7 @@ Modules:
 
 - **`ag_ui`** – Output model for the Template module.
 - **`base_types`** – Base types for module models.
+- **`loaded_tools`** – Mission-scoped persistence for tools the agent loaded at runtime.
 - **`module`** – Module model.
 - **`module_context`** – Define the module context used in the triggers.
 - **`module_types`** – Types for module models - backward compatibility re-exports.
@@ -17245,11 +17408,13 @@ Classes:
 - **`DataModel`** – Base definition of input/output model showing mandatory root fields.
 - **`DataTrigger`** – Defines the root input/output model exposing the protocol.
 - **`EndOfStreamOutput`** – Signal that the stream has ended.
+- **`LoadedToolRecord`** – A tool the agent loaded at runtime during this mission.
+- **`LoadedToolStore`** – Storage wrapper for the mission-scoped loaded_tools collection.
 - **`ModuleContext`** – ModuleContext provides a container for strategies and resources used by a module.
 - **`RequestMetadata`** – Immutable container for gRPC request metadata (headers).
 - **`SelectSchema`** – Base class for generating trigger selection schema.
 - **`SetupModel`** – Base setup model with dynamic schema and tool cache support.
-- **`ToolCache`** – Registry cache storing resolved tool references by setup field name.
+- **`ToolCache`** – Two-layer cache of resolved tool references, keyed by setup_id.
 - **`ToolDefinition`** – Complete definition of an LLM tool with resolved JSON Schema parameters.
 - **`ToolModuleInfo`** – Module info for tool modules.
 - **`ToolReference`** – Tool selection containing setup IDs and trigger filters.
@@ -17260,6 +17425,20 @@ Classes:
 Functions:
 
 - **`tool_reference_input`** – Create ToolReferenceInput type with schema options and validation.
+
+Attributes:
+
+- **`LOADED_TOOLS_STORAGE_CONFIG`** (`dict[str, type[BaseModel]]`) – Storage config fragment for the loaded_tools collection.
+
+#### LOADED_TOOLS_STORAGE_CONFIG
+
+```python
+LOADED_TOOLS_STORAGE_CONFIG: dict[str, type[BaseModel]] = {
+    _LOADED_TOOLS_COLLECTION: LoadedToolRecord
+}
+```
+
+Storage config fragment for the `loaded_tools` collection.
 
 #### DataModel
 
@@ -17323,6 +17502,87 @@ my_input = MyInput(root=DataTrigger(protocol="message")) print(my_input.root.pro
 ```
 
 Signal that the stream has ended.
+
+#### LoadedToolRecord
+
+```
+              flowchart TD
+              digitalkin.models.module.LoadedToolRecord[LoadedToolRecord]
+
+              
+
+              click digitalkin.models.module.LoadedToolRecord href "" "digitalkin.models.module.LoadedToolRecord"
+```
+
+A tool the agent loaded at runtime during this mission.
+
+#### LoadedToolStore
+
+```python
+LoadedToolStore(storage: StorageStrategy)
+```
+
+Storage wrapper for the mission-scoped `loaded_tools` collection.
+
+Every method is fail-soft and returns instead of raising: a module that never registered the collection (see :data:`LOADED_TOOLS_STORAGE_CONFIG`) must degrade to the old turn-scoped behaviour, not crash the run through the HITL runner. Registration is checked before each call so a module that does not opt into runtime tool loading pays no storage round-trip per turn.
+
+Parameters:
+
+- ##### **`storage`**
+
+  (`StorageStrategy`) – The module's storage strategy. Records are written under the default mission context, which is what scopes a load to one conversation.
+
+Methods:
+
+- **`forget`** – Drop a persisted id that no longer resolves, so it is not retried every turn.
+- **`list_setup_ids`** – List the tool setup ids loaded so far in this mission.
+- **`save`** – Record setup_id as loaded for this mission (idempotent).
+
+##### forget
+
+```python
+forget(setup_id: str) -> None
+```
+
+Drop a persisted id that no longer resolves, so it is not retried every turn.
+
+Parameters:
+
+- ###### **`setup_id`**
+
+  (`str`) – The setup id to remove from the mission's loaded set.
+
+##### list_setup_ids
+
+```python
+list_setup_ids() -> list[str]
+```
+
+List the tool setup ids loaded so far in this mission.
+
+Returns:
+
+- `list[str]` – The persisted setup ids, or an empty list if none exist or the
+- `list[str]` – collection is not registered.
+
+##### save
+
+```python
+save(setup_id: str) -> bool
+```
+
+Record `setup_id` as loaded for this mission (idempotent).
+
+Parameters:
+
+- ###### **`setup_id`**
+
+  (`str`) – The loaded tool's registry setup id.
+
+Returns:
+
+- `bool` – True if the id is now persisted, False if persistence is
+- `bool` – unavailable — the caller keeps the tool for the current turn either way.
 
 #### ModuleContext
 
@@ -17434,6 +17694,8 @@ Methods:
 - **`create_tool_functions`** – Create tool functions for all protocols in a tool setup.
 - **`get_module_config_schema`** – Get a module's config-setup JSON schema by id (discovers address/port, then queries it).
 - **`get_module_schemas_by_id`** – Get module schemas by ID, discovering address/port from registry.
+- **`persist_loaded_tool`** – Record a runtime-loaded tool so it survives into this mission's next turn.
+- **`rehydrate_loaded_tools`** – Re-resolve this mission's previously-loaded tools into the dynamic layer.
 - **`resolve_tool`** – Resolve a registry setup_id into a ToolModuleInfo and cache it.
 
 ##### cleanup
@@ -17538,6 +17800,41 @@ Returns:
 
 - `dict[str, dict]` – Dictionary containing schemas: {"input": ..., "output": ..., "setup": ..., "secret": ...}
 
+##### persist_loaded_tool
+
+```python
+persist_loaded_tool(setup_id: str) -> bool
+```
+
+Record a runtime-loaded tool so it survives into this mission's next turn.
+
+Every user message builds a fresh module instance, so the `dynamic` cache layer and the agent's tool list are both rebuilt from scratch. Persisting the id is what turns a load into a property of the *conversation* rather than of the turn.
+
+Parameters:
+
+- ###### **`setup_id`**
+
+  (`str`) – The loaded tool's registry setup id.
+
+Returns:
+
+- `bool` – True if the id was persisted; False if the module never registered the
+- `bool` – loaded_tools collection, in which case the load lasts only this turn.
+
+##### rehydrate_loaded_tools
+
+```python
+rehydrate_loaded_tools() -> int
+```
+
+Re-resolve this mission's previously-loaded tools into the `dynamic` layer.
+
+Called once per turn from `BaseModule.prepare()`, before `initialize()` builds the agent's toolkits. Ids are re-resolved rather than replayed from a snapshot, so each turn re-checks authorization and picks up schema changes; an id that no longer resolves — revoked, deleted — is dropped from the mission so it is not retried on every subsequent message.
+
+Returns:
+
+- `int` – The number of tools restored into the dynamic layer.
+
 ##### resolve_tool
 
 ```python
@@ -17546,7 +17843,9 @@ resolve_tool(setup_id: str) -> ToolModuleInfo | None
 
 Resolve a registry `setup_id` into a `ToolModuleInfo` and cache it.
 
-On-demand loader for a discovered tool. `registry.get_setup` always runs first — it is the permission gate, and the tool cache is shared across missions of the same agent setup, so a cache hit must never skip authz. The cache only short-circuits the module discovery + schema fetch. Permission denials propagate so callers can surface them distinctly.
+On-demand loader for a discovered tool. `registry.get_setup` always runs first — it is the permission gate, and the cache's `declared` layer is shared across missions of the same agent setup, so a cache hit must never skip authz. The cache only short-circuits the module discovery + schema fetch. Permission denials propagate so callers can surface them distinctly.
+
+The result lands in the cache's mission-scoped `dynamic` layer. Pair this with :meth:`persist_loaded_tool` to make the load outlive the current turn.
 
 Parameters:
 
@@ -17859,14 +18158,40 @@ Returns:
               click digitalkin.models.module.ToolCache href "" "digitalkin.models.module.ToolCache"
 ```
 
-Registry cache storing resolved tool references by setup field name.
+Two-layer cache of resolved tool references, keyed by `setup_id`.
+
+The layers differ by *lifetime*, which is the whole point of the split:
+
+- `declared` — the tools the setup itself selects, resolved once by `SetupModel.build_tool_cache`. The servicer keeps this layer alive per `setup_id` and hands the same object to every mission of that setup.
+- `dynamic` — tools the agent loaded at runtime via `ModuleContext.resolve_tool`. This layer is **mission-scoped**: it is rebuilt per mission from the `loaded_tools` storage collection, so a load persists across the turns of one conversation and never leaks into another mission of the same setup.
+
+Never write a runtime resolution into `declared` — doing so is what leaked dynamically-loaded tools across missions before the split existed.
 
 Methods:
 
-- **`add`** – Add a tool to the cache.
-- **`clear`** – Clear all cache entries.
-- **`get`** – Get a tool from cache, optionally querying registry on miss.
-- **`list_tools`** – List all cached tool names.
+- **`add`** – Add a setup-declared tool to the declared layer.
+- **`add_dynamic`** – Add a runtime-loaded tool to the mission-scoped dynamic layer.
+- **`clear`** – Clear both layers.
+- **`get`** – Get a tool from either layer, preferring the mission-scoped one.
+- **`list_tools`** – List all cached tool names across both layers.
+- **`mission_view`** – Build a per-mission view that shares this cache's declared entries.
+
+Attributes:
+
+- **`entries`** (`dict[str, ToolModuleInfo]`) – Merged read-only view of both layers, dynamic winning on conflict.
+
+##### entries
+
+```python
+entries: dict[str, ToolModuleInfo]
+```
+
+Merged read-only view of both layers, `dynamic` winning on conflict.
+
+Returns:
+
+- `dict[str, ToolModuleInfo]` – A fresh dict — mutating it does not touch either layer (and must not:
+- `dict[str, ToolModuleInfo]` – declared is shared with every other mission of this setup).
 
 ##### add
 
@@ -17874,7 +18199,21 @@ Methods:
 add(tool_module_info: ToolModuleInfo) -> None
 ```
 
-Add a tool to the cache.
+Add a setup-declared tool to the `declared` layer.
+
+Parameters:
+
+- ###### **`tool_module_info`**
+
+  (`ToolModuleInfo`) – Resolved tool module information.
+
+##### add_dynamic
+
+```python
+add_dynamic(tool_module_info: ToolModuleInfo) -> None
+```
+
+Add a runtime-loaded tool to the mission-scoped `dynamic` layer.
 
 Parameters:
 
@@ -17888,7 +18227,7 @@ Parameters:
 clear() -> None
 ```
 
-Clear all cache entries.
+Clear both layers.
 
 ##### get
 
@@ -17896,7 +18235,7 @@ Clear all cache entries.
 get(setup_id: str) -> ToolModuleInfo | None
 ```
 
-Get a tool from cache, optionally querying registry on miss.
+Get a tool from either layer, preferring the mission-scoped one.
 
 Parameters:
 
@@ -17914,11 +18253,31 @@ Returns:
 list_tools() -> list[str]
 ```
 
-List all cached tool names.
+List all cached tool names across both layers.
 
 Returns:
 
 - `list[str]` – List of setup field names in cache.
+
+##### mission_view
+
+```python
+mission_view(dynamic: dict[str, ToolModuleInfo] | None = None) -> ToolCache
+```
+
+Build a per-mission view that shares this cache's `declared` entries.
+
+The mapping is shallow-copied so a mission can never mutate the shared declared layer, while the `ToolModuleInfo` values are reused as-is (they are treated as immutable, and re-validating them per turn is not free).
+
+Parameters:
+
+- ###### **`dynamic`**
+
+  (`dict[str, ToolModuleInfo] | None`, default: `None` ) – Pre-resolved runtime tools to seed the mission layer with.
+
+Returns:
+
+- `ToolCache` – A new ToolCache whose dynamic layer is private to this mission.
 
 #### ToolDefinition
 
@@ -19046,6 +19405,120 @@ class MyInput(DataModel): root: DataTrigger user_define_data: Any
 
 my_input = MyInput(root=DataTrigger(protocol="message")) print(my_input.root.protocol) # Output: message
 
+#### loaded_tools
+
+Mission-scoped persistence for tools the agent loaded at runtime.
+
+A dynamic tool load (`load_manager` → :meth:`ModuleContext.resolve_tool`) has to outlive the turn that made it: every user message builds a fresh module instance, so the in-memory toolkit list and the `dynamic` layer of the :class:`~digitalkin.models.module.tool_cache.ToolCache` are both gone by the next message. This module owns the only thing that survives — the list of loaded `setup_id`s, written to the mission-scoped `loaded_tools` storage collection.
+
+Only ids are stored, never resolved schemas: rehydration re-runs `resolve_tool`, which re-checks authorization and picks up any schema change, so a tool revoked or altered between two turns is handled correctly instead of being replayed from a stale snapshot.
+
+Modules that want runtime tool loading must register the collection::
+
+```text
+services_config_params = {"storage": {"config": {**LOADED_TOOLS_STORAGE_CONFIG}}}
+```
+
+Classes:
+
+- **`LoadedToolRecord`** – A tool the agent loaded at runtime during this mission.
+- **`LoadedToolStore`** – Storage wrapper for the mission-scoped loaded_tools collection.
+
+Attributes:
+
+- **`LOADED_TOOLS_STORAGE_CONFIG`** (`dict[str, type[BaseModel]]`) – Storage config fragment for the loaded_tools collection.
+
+##### LOADED_TOOLS_STORAGE_CONFIG
+
+```python
+LOADED_TOOLS_STORAGE_CONFIG: dict[str, type[BaseModel]] = {
+    _LOADED_TOOLS_COLLECTION: LoadedToolRecord
+}
+```
+
+Storage config fragment for the `loaded_tools` collection.
+
+##### LoadedToolRecord
+
+```
+              flowchart TD
+              digitalkin.models.module.loaded_tools.LoadedToolRecord[LoadedToolRecord]
+
+              
+
+              click digitalkin.models.module.loaded_tools.LoadedToolRecord href "" "digitalkin.models.module.loaded_tools.LoadedToolRecord"
+```
+
+A tool the agent loaded at runtime during this mission.
+
+##### LoadedToolStore
+
+```python
+LoadedToolStore(storage: StorageStrategy)
+```
+
+Storage wrapper for the mission-scoped `loaded_tools` collection.
+
+Every method is fail-soft and returns instead of raising: a module that never registered the collection (see :data:`LOADED_TOOLS_STORAGE_CONFIG`) must degrade to the old turn-scoped behaviour, not crash the run through the HITL runner. Registration is checked before each call so a module that does not opt into runtime tool loading pays no storage round-trip per turn.
+
+Parameters:
+
+- ###### **`storage`**
+
+  (`StorageStrategy`) – The module's storage strategy. Records are written under the default mission context, which is what scopes a load to one conversation.
+
+Methods:
+
+- **`forget`** – Drop a persisted id that no longer resolves, so it is not retried every turn.
+- **`list_setup_ids`** – List the tool setup ids loaded so far in this mission.
+- **`save`** – Record setup_id as loaded for this mission (idempotent).
+
+###### forget
+
+```python
+forget(setup_id: str) -> None
+```
+
+Drop a persisted id that no longer resolves, so it is not retried every turn.
+
+Parameters:
+
+- ###### **`setup_id`**
+
+  (`str`) – The setup id to remove from the mission's loaded set.
+
+###### list_setup_ids
+
+```python
+list_setup_ids() -> list[str]
+```
+
+List the tool setup ids loaded so far in this mission.
+
+Returns:
+
+- `list[str]` – The persisted setup ids, or an empty list if none exist or the
+- `list[str]` – collection is not registered.
+
+###### save
+
+```python
+save(setup_id: str) -> bool
+```
+
+Record `setup_id` as loaded for this mission (idempotent).
+
+Parameters:
+
+- ###### **`setup_id`**
+
+  (`str`) – The loaded tool's registry setup id.
+
+Returns:
+
+- `bool` – True if the id is now persisted, False if persistence is
+- `bool` – unavailable — the caller keeps the tool for the current turn either way.
+
 #### module
 
 Module model.
@@ -19214,6 +19687,8 @@ Methods:
 - **`create_tool_functions`** – Create tool functions for all protocols in a tool setup.
 - **`get_module_config_schema`** – Get a module's config-setup JSON schema by id (discovers address/port, then queries it).
 - **`get_module_schemas_by_id`** – Get module schemas by ID, discovering address/port from registry.
+- **`persist_loaded_tool`** – Record a runtime-loaded tool so it survives into this mission's next turn.
+- **`rehydrate_loaded_tools`** – Re-resolve this mission's previously-loaded tools into the dynamic layer.
 - **`resolve_tool`** – Resolve a registry setup_id into a ToolModuleInfo and cache it.
 
 ###### cleanup
@@ -19318,6 +19793,41 @@ Returns:
 
 - `dict[str, dict]` – Dictionary containing schemas: {"input": ..., "output": ..., "setup": ..., "secret": ...}
 
+###### persist_loaded_tool
+
+```python
+persist_loaded_tool(setup_id: str) -> bool
+```
+
+Record a runtime-loaded tool so it survives into this mission's next turn.
+
+Every user message builds a fresh module instance, so the `dynamic` cache layer and the agent's tool list are both rebuilt from scratch. Persisting the id is what turns a load into a property of the *conversation* rather than of the turn.
+
+Parameters:
+
+- ###### **`setup_id`**
+
+  (`str`) – The loaded tool's registry setup id.
+
+Returns:
+
+- `bool` – True if the id was persisted; False if the module never registered the
+- `bool` – loaded_tools collection, in which case the load lasts only this turn.
+
+###### rehydrate_loaded_tools
+
+```python
+rehydrate_loaded_tools() -> int
+```
+
+Re-resolve this mission's previously-loaded tools into the `dynamic` layer.
+
+Called once per turn from `BaseModule.prepare()`, before `initialize()` builds the agent's toolkits. Ids are re-resolved rather than replayed from a snapshot, so each turn re-checks authorization and picks up schema changes; an id that no longer resolves — revoked, deleted — is dropped from the mission so it is not retried on every subsequent message.
+
+Returns:
+
+- `int` – The number of tools restored into the dynamic layer.
+
 ###### resolve_tool
 
 ```python
@@ -19326,7 +19836,9 @@ resolve_tool(setup_id: str) -> ToolModuleInfo | None
 
 Resolve a registry `setup_id` into a `ToolModuleInfo` and cache it.
 
-On-demand loader for a discovered tool. `registry.get_setup` always runs first — it is the permission gate, and the tool cache is shared across missions of the same agent setup, so a cache hit must never skip authz. The cache only short-circuits the module discovery + schema fetch. Permission denials propagate so callers can surface them distinctly.
+On-demand loader for a discovered tool. `registry.get_setup` always runs first — it is the permission gate, and the cache's `declared` layer is shared across missions of the same agent setup, so a cache hit must never skip authz. The cache only short-circuits the module discovery + schema fetch. Permission denials propagate so callers can surface them distinctly.
+
+The result lands in the cache's mission-scoped `dynamic` layer. Pair this with :meth:`persist_loaded_tool` to make the load outlive the current turn.
 
 Parameters:
 
@@ -19843,7 +20355,7 @@ Tool cache for resolved tool references.
 Classes:
 
 - **`SelectedTool`** – Selected tool information.
-- **`ToolCache`** – Registry cache storing resolved tool references by setup field name.
+- **`ToolCache`** – Two-layer cache of resolved tool references, keyed by setup_id.
 - **`ToolDefinition`** – Complete definition of an LLM tool with resolved JSON Schema parameters.
 - **`ToolModuleInfo`** – Module info for tool modules.
 
@@ -19871,14 +20383,40 @@ Selected tool information.
               click digitalkin.models.module.tool_cache.ToolCache href "" "digitalkin.models.module.tool_cache.ToolCache"
 ```
 
-Registry cache storing resolved tool references by setup field name.
+Two-layer cache of resolved tool references, keyed by `setup_id`.
+
+The layers differ by *lifetime*, which is the whole point of the split:
+
+- `declared` — the tools the setup itself selects, resolved once by `SetupModel.build_tool_cache`. The servicer keeps this layer alive per `setup_id` and hands the same object to every mission of that setup.
+- `dynamic` — tools the agent loaded at runtime via `ModuleContext.resolve_tool`. This layer is **mission-scoped**: it is rebuilt per mission from the `loaded_tools` storage collection, so a load persists across the turns of one conversation and never leaks into another mission of the same setup.
+
+Never write a runtime resolution into `declared` — doing so is what leaked dynamically-loaded tools across missions before the split existed.
 
 Methods:
 
-- **`add`** – Add a tool to the cache.
-- **`clear`** – Clear all cache entries.
-- **`get`** – Get a tool from cache, optionally querying registry on miss.
-- **`list_tools`** – List all cached tool names.
+- **`add`** – Add a setup-declared tool to the declared layer.
+- **`add_dynamic`** – Add a runtime-loaded tool to the mission-scoped dynamic layer.
+- **`clear`** – Clear both layers.
+- **`get`** – Get a tool from either layer, preferring the mission-scoped one.
+- **`list_tools`** – List all cached tool names across both layers.
+- **`mission_view`** – Build a per-mission view that shares this cache's declared entries.
+
+Attributes:
+
+- **`entries`** (`dict[str, ToolModuleInfo]`) – Merged read-only view of both layers, dynamic winning on conflict.
+
+###### entries
+
+```python
+entries: dict[str, ToolModuleInfo]
+```
+
+Merged read-only view of both layers, `dynamic` winning on conflict.
+
+Returns:
+
+- `dict[str, ToolModuleInfo]` – A fresh dict — mutating it does not touch either layer (and must not:
+- `dict[str, ToolModuleInfo]` – declared is shared with every other mission of this setup).
 
 ###### add
 
@@ -19886,7 +20424,21 @@ Methods:
 add(tool_module_info: ToolModuleInfo) -> None
 ```
 
-Add a tool to the cache.
+Add a setup-declared tool to the `declared` layer.
+
+Parameters:
+
+- ###### **`tool_module_info`**
+
+  (`ToolModuleInfo`) – Resolved tool module information.
+
+###### add_dynamic
+
+```python
+add_dynamic(tool_module_info: ToolModuleInfo) -> None
+```
+
+Add a runtime-loaded tool to the mission-scoped `dynamic` layer.
 
 Parameters:
 
@@ -19900,7 +20452,7 @@ Parameters:
 clear() -> None
 ```
 
-Clear all cache entries.
+Clear both layers.
 
 ###### get
 
@@ -19908,7 +20460,7 @@ Clear all cache entries.
 get(setup_id: str) -> ToolModuleInfo | None
 ```
 
-Get a tool from cache, optionally querying registry on miss.
+Get a tool from either layer, preferring the mission-scoped one.
 
 Parameters:
 
@@ -19926,11 +20478,31 @@ Returns:
 list_tools() -> list[str]
 ```
 
-List all cached tool names.
+List all cached tool names across both layers.
 
 Returns:
 
 - `list[str]` – List of setup field names in cache.
+
+###### mission_view
+
+```python
+mission_view(dynamic: dict[str, ToolModuleInfo] | None = None) -> ToolCache
+```
+
+Build a per-mission view that shares this cache's `declared` entries.
+
+The mapping is shallow-copied so a mission can never mutate the shared declared layer, while the `ToolModuleInfo` values are reused as-is (they are treated as immutable, and re-validating them per turn is not free).
+
+Parameters:
+
+- ###### **`dynamic`**
+
+  (`dict[str, ToolModuleInfo] | None`, default: `None` ) – Pre-resolved runtime tools to seed the mission layer with.
+
+Returns:
+
+- `ToolCache` – A new ToolCache whose dynamic layer is private to this mission.
 
 ##### ToolDefinition
 
@@ -20559,6 +21131,7 @@ Classes:
 - **`RegistryModuleStatus`** – Module status in the registry.
 - **`RegistryModuleType`** – Module type in the registry.
 - **`RegistrySetupStatus`** – Setup status in the registry.
+- **`RegistrySortBy`** – Sort key for registry searches.
 - **`RegistryVisibility`** – Visibility in the registry.
 - **`SetupInfo`** – Setup information from registry.
 - **`SetupSummary`** – Search-safe setup view — the shape returned by search_setups.
@@ -20616,6 +21189,21 @@ Member names mirror the proto `ModuleType` enum (minus the `MODULE_TYPE_` prefix
 ```
 
 Setup status in the registry.
+
+##### RegistrySortBy
+
+```
+              flowchart TD
+              digitalkin.models.services.registry.RegistrySortBy[RegistrySortBy]
+
+              
+
+              click digitalkin.models.services.registry.RegistrySortBy href "" "digitalkin.models.services.registry.RegistrySortBy"
+```
+
+Sort key for registry searches.
+
+Member names mirror the proto `SortBy` enum (minus the `SORT_BY_` prefix): they are encoded by name onto the wire, so they must match. UNSPECIFIED lets the registry apply its own default — relevance when a query is set, updated_at otherwise.
 
 ##### RegistryVisibility
 
@@ -27887,6 +28475,7 @@ update_file(
     metadata: dict[str, Any] | None = None,
     new_name: str | None = None,
     status: str | None = None,
+    visibility: Visibility = UNSPECIFIED,
 ) -> FilesystemRecord
 ```
 
@@ -27928,6 +28517,10 @@ Parameters:
 - ##### **`status`**
 
   (`str | None`, default: `None` ) – Optional new status for the file
+
+- ##### **`visibility`**
+
+  (`Visibility`, default: `UNSPECIFIED` ) – Optional new read-access scope; UNSPECIFIED leaves it unchanged
 
 Returns:
 
@@ -28265,8 +28858,12 @@ Returns:
 search(
     name: str | None = None,
     module_type: str | None = None,
+    tags: list[str] | None = None,
+    sort_by: RegistrySortBy = UNSPECIFIED,
     limit: int = 20,
     offset: int = 0,
+    *,
+    descending: bool = False,
 ) -> list[ModuleInfo]
 ```
 
@@ -28282,6 +28879,14 @@ Parameters:
 
   (`str | None`, default: `None` ) – Filter by type (archetype, tool_module, service).
 
+- ##### **`tags`**
+
+  (`list[str] | None`, default: `None` ) – Match modules carrying at least one of these tags (case-insensitive).
+
+- ##### **`sort_by`**
+
+  (`RegistrySortBy`, default: `UNSPECIFIED` ) – Sort key. Only NAME is ordered here — this store keeps no timestamps, so CREATED_AT/UPDATED_AT fall back to insertion order.
+
 - ##### **`limit`**
 
   (`int`, default: `20` ) – Max results (1-100).
@@ -28289,6 +28894,10 @@ Parameters:
 - ##### **`offset`**
 
   (`int`, default: `0` ) – Pagination offset.
+
+- ##### **`descending`**
+
+  (`bool`, default: `False` ) – Sort direction, applied when sort_by is NAME.
 
 Returns:
 
@@ -28298,7 +28907,13 @@ Returns:
 
 ```python
 search_kins(
-    name: str | None = None, limit: int = 20, offset: int = 0
+    name: str | None = None,
+    tags: list[str] | None = None,
+    sort_by: RegistrySortBy = UNSPECIFIED,
+    limit: int = 20,
+    offset: int = 0,
+    *,
+    descending: bool = False,
 ) -> list[ModuleInfo]
 ```
 
@@ -28310,6 +28925,14 @@ Parameters:
 
   (`str | None`, default: `None` ) – Case-insensitive free text matched against module name AND documentation.
 
+- ##### **`tags`**
+
+  (`list[str] | None`, default: `None` ) – Match modules carrying at least one of these tags (case-insensitive).
+
+- ##### **`sort_by`**
+
+  (`RegistrySortBy`, default: `UNSPECIFIED` ) – Sort key; UNSPECIFIED lets the registry choose.
+
 - ##### **`limit`**
 
   (`int`, default: `20` ) – Max results (1-100).
@@ -28317,6 +28940,10 @@ Parameters:
 - ##### **`offset`**
 
   (`int`, default: `0` ) – Pagination offset.
+
+- ##### **`descending`**
+
+  (`bool`, default: `False` ) – Sort direction.
 
 Returns:
 
@@ -28326,7 +28953,13 @@ Returns:
 
 ```python
 search_services(
-    name: str | None = None, limit: int = 20, offset: int = 0
+    name: str | None = None,
+    tags: list[str] | None = None,
+    sort_by: RegistrySortBy = UNSPECIFIED,
+    limit: int = 20,
+    offset: int = 0,
+    *,
+    descending: bool = False,
 ) -> list[ModuleInfo]
 ```
 
@@ -28338,6 +28971,14 @@ Parameters:
 
   (`str | None`, default: `None` ) – Case-insensitive free text matched against module name AND documentation.
 
+- ##### **`tags`**
+
+  (`list[str] | None`, default: `None` ) – Match modules carrying at least one of these tags (case-insensitive).
+
+- ##### **`sort_by`**
+
+  (`RegistrySortBy`, default: `UNSPECIFIED` ) – Sort key; UNSPECIFIED lets the registry choose.
+
 - ##### **`limit`**
 
   (`int`, default: `20` ) – Max results (1-100).
@@ -28345,6 +28986,10 @@ Parameters:
 - ##### **`offset`**
 
   (`int`, default: `0` ) – Pagination offset.
+
+- ##### **`descending`**
+
+  (`bool`, default: `False` ) – Sort direction.
 
 Returns:
 
@@ -28360,8 +29005,12 @@ search_setups(
     module_types: list[RegistryModuleType] | None = None,
     statuses: list[RegistrySetupStatus] | None = None,
     visibilities: list[RegistryVisibility] | None = None,
+    tags: list[str] | None = None,
+    sort_by: RegistrySortBy = UNSPECIFIED,
     limit: int = 20,
     offset: int = 0,
+    *,
+    descending: bool = False,
 ) -> list[SetupSummary]
 ```
 
@@ -28393,6 +29042,14 @@ Parameters:
 
   (`list[RegistryVisibility] | None`, default: `None` ) – Filter by visibility.
 
+- ##### **`tags`**
+
+  (`list[str] | None`, default: `None` ) – Match setups carrying at least one of these tags (case-insensitive).
+
+- ##### **`sort_by`**
+
+  (`RegistrySortBy`, default: `UNSPECIFIED` ) – Sort key. Only NAME is ordered here — this store keeps no timestamps, so CREATED_AT/UPDATED_AT fall back to insertion order.
+
 - ##### **`limit`**
 
   (`int`, default: `20` ) – Max results (1-100).
@@ -28400,6 +29057,10 @@ Parameters:
 - ##### **`offset`**
 
   (`int`, default: `0` ) – Pagination offset.
+
+- ##### **`descending`**
+
+  (`bool`, default: `False` ) – Sort direction, applied when sort_by is NAME.
 
 Returns:
 
@@ -28409,7 +29070,13 @@ Returns:
 
 ```python
 search_tools(
-    name: str | None = None, limit: int = 20, offset: int = 0
+    name: str | None = None,
+    tags: list[str] | None = None,
+    sort_by: RegistrySortBy = UNSPECIFIED,
+    limit: int = 20,
+    offset: int = 0,
+    *,
+    descending: bool = False,
 ) -> list[ModuleInfo]
 ```
 
@@ -28421,6 +29088,14 @@ Parameters:
 
   (`str | None`, default: `None` ) – Case-insensitive free text matched against module name AND documentation.
 
+- ##### **`tags`**
+
+  (`list[str] | None`, default: `None` ) – Match modules carrying at least one of these tags (case-insensitive).
+
+- ##### **`sort_by`**
+
+  (`RegistrySortBy`, default: `UNSPECIFIED` ) – Sort key; UNSPECIFIED lets the registry choose.
+
 - ##### **`limit`**
 
   (`int`, default: `20` ) – Max results (1-100).
@@ -28428,6 +29103,10 @@ Parameters:
 - ##### **`offset`**
 
   (`int`, default: `0` ) – Pagination offset.
+
+- ##### **`descending`**
+
+  (`bool`, default: `False` ) – Sort direction.
 
 Returns:
 
@@ -28512,6 +29191,9 @@ list(
     collection: str,
     context: Context = MISSIONS,
     visibilities: list[Visibility] | None = None,
+    record_id: str = "",
+    limit: int = 0,
+    offset: int = 0,
 ) -> list[StorageRecord]
 ```
 
@@ -28531,6 +29213,18 @@ Parameters:
 
   (`list[Visibility] | None`, default: `None` ) – Optional read-access scopes to filter by (None = no filter).
 
+- ##### **`record_id`**
+
+  (`str`, default: `''` ) – Restrict to this record id; empty means no filter.
+
+- ##### **`limit`**
+
+  (`int`, default: `0` ) – Max records to return; 0 means the service default (20, capped at 100).
+
+- ##### **`offset`**
+
+  (`int`, default: `0` ) – Records to skip before returning results.
+
 Returns:
 
 - `list[StorageRecord]` – A list of storage records under the resolved context.
@@ -28539,7 +29233,7 @@ Returns:
 
 ```python
 read(
-    collection: str, record_id: str, context: Context = MISSIONS
+    collection: str, record_id: str, context: Context = MISSIONS, storage_id: str = ""
 ) -> StorageRecord | None
 ```
 
@@ -28558,6 +29252,10 @@ Parameters:
 - ##### **`context`**
 
   (`Context`, default: `MISSIONS` ) – Which context to read from (default: "mission").
+
+- ##### **`storage_id`**
+
+  (`str`, default: `''` ) – Address a specific stored revision; empty lets the service pick.
 
 Returns:
 
@@ -28592,7 +29290,9 @@ Returns:
 #### remove_collection
 
 ```python
-remove_collection(collection: str, context: Context = MISSIONS) -> bool
+remove_collection(
+    collection: str, context: Context = MISSIONS, record_id: str = ""
+) -> bool
 ```
 
 Wipe a collection clean under the given scope.
@@ -28606,6 +29306,10 @@ Parameters:
 - ##### **`context`**
 
   (`Context`, default: `MISSIONS` ) – Which context the records live under (default: "mission").
+
+- ##### **`record_id`**
+
+  (`str`, default: `''` ) – Restrict removal to this record id; empty wipes the whole collection.
 
 Returns:
 
@@ -28944,6 +29648,7 @@ update_file(
     metadata: dict[str, Any] | None = None,
     new_name: str | None = None,
     status: str | None = None,
+    visibility: Visibility = UNSPECIFIED,
 ) -> FilesystemRecord
 ```
 
@@ -28985,6 +29690,10 @@ Parameters:
 - ##### **`status`**
 
   (`str | None`, default: `None` ) – Optional new status for the file
+
+- ##### **`visibility`**
+
+  (`Visibility`, default: `UNSPECIFIED` ) – Optional new read-access scope; UNSPECIFIED leaves it unchanged
 
 Returns:
 
@@ -29627,8 +30336,12 @@ Returns:
 search(
     name: str | None = None,
     module_type: str | None = None,
+    tags: list[str] | None = None,
+    sort_by: RegistrySortBy = UNSPECIFIED,
     limit: int = 20,
     offset: int = 0,
+    *,
+    descending: bool = False,
 ) -> list[ModuleInfo]
 ```
 
@@ -29644,6 +30357,14 @@ Parameters:
 
   (`str | None`, default: `None` ) – Filter by type (archetype, tool_module, service).
 
+- ##### **`tags`**
+
+  (`list[str] | None`, default: `None` ) – Match modules carrying at least one of these tags (case-insensitive).
+
+- ##### **`sort_by`**
+
+  (`RegistrySortBy`, default: `UNSPECIFIED` ) – Sort key; UNSPECIFIED lets the registry choose.
+
 - ##### **`limit`**
 
   (`int`, default: `20` ) – Max results (1-100).
@@ -29651,6 +30372,10 @@ Parameters:
 - ##### **`offset`**
 
   (`int`, default: `0` ) – Pagination offset.
+
+- ##### **`descending`**
+
+  (`bool`, default: `False` ) – Sort direction.
 
 Returns:
 
@@ -29661,7 +30386,13 @@ Returns:
 
 ```python
 search_kins(
-    name: str | None = None, limit: int = 20, offset: int = 0
+    name: str | None = None,
+    tags: list[str] | None = None,
+    sort_by: RegistrySortBy = UNSPECIFIED,
+    limit: int = 20,
+    offset: int = 0,
+    *,
+    descending: bool = False,
 ) -> list[ModuleInfo]
 ```
 
@@ -29673,6 +30404,14 @@ Parameters:
 
   (`str | None`, default: `None` ) – Case-insensitive free text matched against module name AND documentation.
 
+- ##### **`tags`**
+
+  (`list[str] | None`, default: `None` ) – Match modules carrying at least one of these tags (case-insensitive).
+
+- ##### **`sort_by`**
+
+  (`RegistrySortBy`, default: `UNSPECIFIED` ) – Sort key; UNSPECIFIED lets the registry choose.
+
 - ##### **`limit`**
 
   (`int`, default: `20` ) – Max results (1-100).
@@ -29680,6 +30419,10 @@ Parameters:
 - ##### **`offset`**
 
   (`int`, default: `0` ) – Pagination offset.
+
+- ##### **`descending`**
+
+  (`bool`, default: `False` ) – Sort direction.
 
 Returns:
 
@@ -29689,7 +30432,13 @@ Returns:
 
 ```python
 search_services(
-    name: str | None = None, limit: int = 20, offset: int = 0
+    name: str | None = None,
+    tags: list[str] | None = None,
+    sort_by: RegistrySortBy = UNSPECIFIED,
+    limit: int = 20,
+    offset: int = 0,
+    *,
+    descending: bool = False,
 ) -> list[ModuleInfo]
 ```
 
@@ -29701,6 +30450,14 @@ Parameters:
 
   (`str | None`, default: `None` ) – Case-insensitive free text matched against module name AND documentation.
 
+- ##### **`tags`**
+
+  (`list[str] | None`, default: `None` ) – Match modules carrying at least one of these tags (case-insensitive).
+
+- ##### **`sort_by`**
+
+  (`RegistrySortBy`, default: `UNSPECIFIED` ) – Sort key; UNSPECIFIED lets the registry choose.
+
 - ##### **`limit`**
 
   (`int`, default: `20` ) – Max results (1-100).
@@ -29708,6 +30465,10 @@ Parameters:
 - ##### **`offset`**
 
   (`int`, default: `0` ) – Pagination offset.
+
+- ##### **`descending`**
+
+  (`bool`, default: `False` ) – Sort direction.
 
 Returns:
 
@@ -29723,8 +30484,12 @@ search_setups(
     module_types: list[RegistryModuleType] | None = None,
     statuses: list[RegistrySetupStatus] | None = None,
     visibilities: list[RegistryVisibility] | None = None,
+    tags: list[str] | None = None,
+    sort_by: RegistrySortBy = UNSPECIFIED,
     limit: int = 20,
     offset: int = 0,
+    *,
+    descending: bool = False,
 ) -> list[SetupSummary]
 ```
 
@@ -29756,6 +30521,14 @@ Parameters:
 
   (`list[RegistryVisibility] | None`, default: `None` ) – Filter by visibility.
 
+- ##### **`tags`**
+
+  (`list[str] | None`, default: `None` ) – Match setups carrying at least one of these tags (case-insensitive).
+
+- ##### **`sort_by`**
+
+  (`RegistrySortBy`, default: `UNSPECIFIED` ) – Sort key; UNSPECIFIED lets the registry choose.
+
 - ##### **`limit`**
 
   (`int`, default: `20` ) – Max results (1-100).
@@ -29763,6 +30536,10 @@ Parameters:
 - ##### **`offset`**
 
   (`int`, default: `0` ) – Pagination offset.
+
+- ##### **`descending`**
+
+  (`bool`, default: `False` ) – Sort direction.
 
 Returns:
 
@@ -29772,7 +30549,13 @@ Returns:
 
 ```python
 search_tools(
-    name: str | None = None, limit: int = 20, offset: int = 0
+    name: str | None = None,
+    tags: list[str] | None = None,
+    sort_by: RegistrySortBy = UNSPECIFIED,
+    limit: int = 20,
+    offset: int = 0,
+    *,
+    descending: bool = False,
 ) -> list[ModuleInfo]
 ```
 
@@ -29784,6 +30567,14 @@ Parameters:
 
   (`str | None`, default: `None` ) – Case-insensitive free text matched against module name AND documentation.
 
+- ##### **`tags`**
+
+  (`list[str] | None`, default: `None` ) – Match modules carrying at least one of these tags (case-insensitive).
+
+- ##### **`sort_by`**
+
+  (`RegistrySortBy`, default: `UNSPECIFIED` ) – Sort key; UNSPECIFIED lets the registry choose.
+
 - ##### **`limit`**
 
   (`int`, default: `20` ) – Max results (1-100).
@@ -29791,6 +30582,10 @@ Parameters:
 - ##### **`offset`**
 
   (`int`, default: `0` ) – Pagination offset.
+
+- ##### **`descending`**
+
+  (`bool`, default: `False` ) – Sort direction.
 
 Returns:
 
@@ -29888,6 +30683,9 @@ list(
     collection: str,
     context: Context = MISSIONS,
     visibilities: list[Visibility] | None = None,
+    record_id: str = "",
+    limit: int = 0,
+    offset: int = 0,
 ) -> list[StorageRecord]
 ```
 
@@ -29907,6 +30705,18 @@ Parameters:
 
   (`list[Visibility] | None`, default: `None` ) – Optional read-access scopes to filter by (None = no filter).
 
+- ##### **`record_id`**
+
+  (`str`, default: `''` ) – Restrict to this record id; empty means no filter.
+
+- ##### **`limit`**
+
+  (`int`, default: `0` ) – Max records to return; 0 means the service default (20, capped at 100).
+
+- ##### **`offset`**
+
+  (`int`, default: `0` ) – Records to skip before returning results.
+
 Returns:
 
 - `list[StorageRecord]` – A list of storage records under the resolved context.
@@ -29915,7 +30725,7 @@ Returns:
 
 ```python
 read(
-    collection: str, record_id: str, context: Context = MISSIONS
+    collection: str, record_id: str, context: Context = MISSIONS, storage_id: str = ""
 ) -> StorageRecord | None
 ```
 
@@ -29934,6 +30744,10 @@ Parameters:
 - ##### **`context`**
 
   (`Context`, default: `MISSIONS` ) – Which context to read from (default: "mission").
+
+- ##### **`storage_id`**
+
+  (`str`, default: `''` ) – Address a specific stored revision; empty lets the service pick.
 
 Returns:
 
@@ -29968,7 +30782,9 @@ Returns:
 #### remove_collection
 
 ```python
-remove_collection(collection: str, context: Context = MISSIONS) -> bool
+remove_collection(
+    collection: str, context: Context = MISSIONS, record_id: str = ""
+) -> bool
 ```
 
 Wipe a collection clean under the given scope.
@@ -29982,6 +30798,10 @@ Parameters:
 - ##### **`context`**
 
   (`Context`, default: `MISSIONS` ) – Which context the records live under (default: "mission").
+
+- ##### **`record_id`**
+
+  (`str`, default: `''` ) – Restrict removal to this record id; empty wipes the whole collection.
 
 Returns:
 
@@ -33468,6 +34288,7 @@ update_file(
     metadata: dict[str, Any] | None = None,
     new_name: str | None = None,
     status: str | None = None,
+    visibility: Visibility = UNSPECIFIED,
 ) -> FilesystemRecord
 ```
 
@@ -33509,6 +34330,10 @@ Parameters:
 - ###### **`status`**
 
   (`str | None`, default: `None` ) – Optional new status for the file
+
+- ###### **`visibility`**
+
+  (`Visibility`, default: `UNSPECIFIED` ) – Optional new read-access scope; UNSPECIFIED leaves it unchanged
 
 Returns:
 
@@ -33734,6 +34559,7 @@ update_file(
     metadata: dict[str, Any] | None = None,
     new_name: str | None = None,
     status: str | None = None,
+    visibility: Visibility = UNSPECIFIED,
 ) -> FilesystemRecord
 ```
 
@@ -33775,6 +34601,10 @@ Parameters:
 - ###### **`status`**
 
   (`str | None`, default: `None` ) – Optional new status for the file
+
+- ###### **`visibility`**
+
+  (`Visibility`, default: `UNSPECIFIED` ) – Optional new read-access scope; UNSPECIFIED leaves it unchanged
 
 Returns:
 
@@ -34122,6 +34952,7 @@ update_file(
     metadata: dict[str, Any] | None = None,
     new_name: str | None = None,
     status: str | None = None,
+    visibility: Visibility = UNSPECIFIED,
 ) -> FilesystemRecord
 ```
 
@@ -34156,6 +34987,10 @@ Parameters:
 - ###### **`status`**
 
   (`str | None`, default: `None` ) – Optional new status for the file
+
+- ###### **`visibility`**
+
+  (`Visibility`, default: `UNSPECIFIED` ) – Optional new read-access scope; UNSPECIFIED leaves it unchanged
 
 Returns:
 
@@ -34388,6 +35223,7 @@ update_file(
     metadata: dict[str, Any] | None = None,
     new_name: str | None = None,
     status: str | None = None,
+    visibility: Visibility = UNSPECIFIED,
 ) -> FilesystemRecord
 ```
 
@@ -34429,6 +35265,10 @@ Parameters:
 - ###### **`status`**
 
   (`str | None`, default: `None` ) – Optional new status for the file
+
+- ###### **`visibility`**
+
+  (`Visibility`, default: `UNSPECIFIED` ) – Optional new read-access scope; UNSPECIFIED leaves it unchanged
 
 Returns:
 
@@ -34712,6 +35552,7 @@ update_file(
     metadata: dict[str, Any] | None = None,
     new_name: str | None = None,
     status: str | None = None,
+    visibility: Visibility = UNSPECIFIED,
 ) -> FilesystemRecord
 ```
 
@@ -34753,6 +35594,10 @@ Parameters:
 - ###### **`status`**
 
   (`str | None`, default: `None` ) – Optional new status for the file
+
+- ###### **`visibility`**
+
+  (`Visibility`, default: `UNSPECIFIED` ) – Optional new read-access scope; UNSPECIFIED leaves it unchanged
 
 Returns:
 
@@ -35121,6 +35966,7 @@ update_file(
     metadata: dict[str, Any] | None = None,
     new_name: str | None = None,
     status: str | None = None,
+    visibility: Visibility = UNSPECIFIED,
 ) -> FilesystemRecord
 ```
 
@@ -35155,6 +36001,10 @@ Parameters:
 - ###### **`status`**
 
   (`str | None`, default: `None` ) – Optional new status for the file
+
+- ###### **`visibility`**
+
+  (`Visibility`, default: `UNSPECIFIED` ) – Optional new read-access scope; UNSPECIFIED leaves it unchanged
 
 Returns:
 
@@ -35716,8 +36566,12 @@ Returns:
 search(
     name: str | None = None,
     module_type: str | None = None,
+    tags: list[str] | None = None,
+    sort_by: RegistrySortBy = UNSPECIFIED,
     limit: int = 20,
     offset: int = 0,
+    *,
+    descending: bool = False,
 ) -> list[ModuleInfo]
 ```
 
@@ -35733,6 +36587,14 @@ Parameters:
 
   (`str | None`, default: `None` ) – Filter by type (archetype, tool_module, service).
 
+- ###### **`tags`**
+
+  (`list[str] | None`, default: `None` ) – Match modules carrying at least one of these tags (case-insensitive).
+
+- ###### **`sort_by`**
+
+  (`RegistrySortBy`, default: `UNSPECIFIED` ) – Sort key. Only NAME is ordered here — this store keeps no timestamps, so CREATED_AT/UPDATED_AT fall back to insertion order.
+
 - ###### **`limit`**
 
   (`int`, default: `20` ) – Max results (1-100).
@@ -35740,6 +36602,10 @@ Parameters:
 - ###### **`offset`**
 
   (`int`, default: `0` ) – Pagination offset.
+
+- ###### **`descending`**
+
+  (`bool`, default: `False` ) – Sort direction, applied when sort_by is NAME.
 
 Returns:
 
@@ -35749,7 +36615,13 @@ Returns:
 
 ```python
 search_kins(
-    name: str | None = None, limit: int = 20, offset: int = 0
+    name: str | None = None,
+    tags: list[str] | None = None,
+    sort_by: RegistrySortBy = UNSPECIFIED,
+    limit: int = 20,
+    offset: int = 0,
+    *,
+    descending: bool = False,
 ) -> list[ModuleInfo]
 ```
 
@@ -35761,6 +36633,14 @@ Parameters:
 
   (`str | None`, default: `None` ) – Case-insensitive free text matched against module name AND documentation.
 
+- ###### **`tags`**
+
+  (`list[str] | None`, default: `None` ) – Match modules carrying at least one of these tags (case-insensitive).
+
+- ###### **`sort_by`**
+
+  (`RegistrySortBy`, default: `UNSPECIFIED` ) – Sort key; UNSPECIFIED lets the registry choose.
+
 - ###### **`limit`**
 
   (`int`, default: `20` ) – Max results (1-100).
@@ -35768,6 +36648,10 @@ Parameters:
 - ###### **`offset`**
 
   (`int`, default: `0` ) – Pagination offset.
+
+- ###### **`descending`**
+
+  (`bool`, default: `False` ) – Sort direction.
 
 Returns:
 
@@ -35777,7 +36661,13 @@ Returns:
 
 ```python
 search_services(
-    name: str | None = None, limit: int = 20, offset: int = 0
+    name: str | None = None,
+    tags: list[str] | None = None,
+    sort_by: RegistrySortBy = UNSPECIFIED,
+    limit: int = 20,
+    offset: int = 0,
+    *,
+    descending: bool = False,
 ) -> list[ModuleInfo]
 ```
 
@@ -35789,6 +36679,14 @@ Parameters:
 
   (`str | None`, default: `None` ) – Case-insensitive free text matched against module name AND documentation.
 
+- ###### **`tags`**
+
+  (`list[str] | None`, default: `None` ) – Match modules carrying at least one of these tags (case-insensitive).
+
+- ###### **`sort_by`**
+
+  (`RegistrySortBy`, default: `UNSPECIFIED` ) – Sort key; UNSPECIFIED lets the registry choose.
+
 - ###### **`limit`**
 
   (`int`, default: `20` ) – Max results (1-100).
@@ -35796,6 +36694,10 @@ Parameters:
 - ###### **`offset`**
 
   (`int`, default: `0` ) – Pagination offset.
+
+- ###### **`descending`**
+
+  (`bool`, default: `False` ) – Sort direction.
 
 Returns:
 
@@ -35811,8 +36713,12 @@ search_setups(
     module_types: list[RegistryModuleType] | None = None,
     statuses: list[RegistrySetupStatus] | None = None,
     visibilities: list[RegistryVisibility] | None = None,
+    tags: list[str] | None = None,
+    sort_by: RegistrySortBy = UNSPECIFIED,
     limit: int = 20,
     offset: int = 0,
+    *,
+    descending: bool = False,
 ) -> list[SetupSummary]
 ```
 
@@ -35844,6 +36750,14 @@ Parameters:
 
   (`list[RegistryVisibility] | None`, default: `None` ) – Filter by visibility.
 
+- ###### **`tags`**
+
+  (`list[str] | None`, default: `None` ) – Match setups carrying at least one of these tags (case-insensitive).
+
+- ###### **`sort_by`**
+
+  (`RegistrySortBy`, default: `UNSPECIFIED` ) – Sort key. Only NAME is ordered here — this store keeps no timestamps, so CREATED_AT/UPDATED_AT fall back to insertion order.
+
 - ###### **`limit`**
 
   (`int`, default: `20` ) – Max results (1-100).
@@ -35851,6 +36765,10 @@ Parameters:
 - ###### **`offset`**
 
   (`int`, default: `0` ) – Pagination offset.
+
+- ###### **`descending`**
+
+  (`bool`, default: `False` ) – Sort direction, applied when sort_by is NAME.
 
 Returns:
 
@@ -35860,7 +36778,13 @@ Returns:
 
 ```python
 search_tools(
-    name: str | None = None, limit: int = 20, offset: int = 0
+    name: str | None = None,
+    tags: list[str] | None = None,
+    sort_by: RegistrySortBy = UNSPECIFIED,
+    limit: int = 20,
+    offset: int = 0,
+    *,
+    descending: bool = False,
 ) -> list[ModuleInfo]
 ```
 
@@ -35872,6 +36796,14 @@ Parameters:
 
   (`str | None`, default: `None` ) – Case-insensitive free text matched against module name AND documentation.
 
+- ###### **`tags`**
+
+  (`list[str] | None`, default: `None` ) – Match modules carrying at least one of these tags (case-insensitive).
+
+- ###### **`sort_by`**
+
+  (`RegistrySortBy`, default: `UNSPECIFIED` ) – Sort key; UNSPECIFIED lets the registry choose.
+
 - ###### **`limit`**
 
   (`int`, default: `20` ) – Max results (1-100).
@@ -35879,6 +36811,10 @@ Parameters:
 - ###### **`offset`**
 
   (`int`, default: `0` ) – Pagination offset.
+
+- ###### **`descending`**
+
+  (`bool`, default: `False` ) – Sort direction.
 
 Returns:
 
@@ -36289,8 +37225,12 @@ Parameters:
 search(
     name: str | None = None,
     module_type: str | None = None,
+    tags: list[str] | None = None,
+    sort_by: RegistrySortBy = UNSPECIFIED,
     limit: int = 20,
     offset: int = 0,
+    *,
+    descending: bool = False,
 ) -> list[ModuleInfo]
 ```
 
@@ -36306,6 +37246,14 @@ Parameters:
 
   (`str | None`, default: `None` ) – Filter by type (archetype, tool_module, service).
 
+- ###### **`tags`**
+
+  (`list[str] | None`, default: `None` ) – Match modules carrying at least one of these tags (case-insensitive).
+
+- ###### **`sort_by`**
+
+  (`RegistrySortBy`, default: `UNSPECIFIED` ) – Sort key; UNSPECIFIED lets the registry choose.
+
 - ###### **`limit`**
 
   (`int`, default: `20` ) – Max results (1-100).
@@ -36313,6 +37261,10 @@ Parameters:
 - ###### **`offset`**
 
   (`int`, default: `0` ) – Pagination offset.
+
+- ###### **`descending`**
+
+  (`bool`, default: `False` ) – Sort direction.
 
 Returns:
 
@@ -36328,7 +37280,13 @@ Raises:
 
 ```python
 search_kins(
-    name: str | None = None, limit: int = 20, offset: int = 0
+    name: str | None = None,
+    tags: list[str] | None = None,
+    sort_by: RegistrySortBy = UNSPECIFIED,
+    limit: int = 20,
+    offset: int = 0,
+    *,
+    descending: bool = False,
 ) -> list[ModuleInfo]
 ```
 
@@ -36340,6 +37298,14 @@ Parameters:
 
   (`str | None`, default: `None` ) – Case-insensitive free text matched against module name AND documentation.
 
+- ###### **`tags`**
+
+  (`list[str] | None`, default: `None` ) – Match modules carrying at least one of these tags (case-insensitive).
+
+- ###### **`sort_by`**
+
+  (`RegistrySortBy`, default: `UNSPECIFIED` ) – Sort key; UNSPECIFIED lets the registry choose.
+
 - ###### **`limit`**
 
   (`int`, default: `20` ) – Max results (1-100).
@@ -36347,6 +37313,10 @@ Parameters:
 - ###### **`offset`**
 
   (`int`, default: `0` ) – Pagination offset.
+
+- ###### **`descending`**
+
+  (`bool`, default: `False` ) – Sort direction.
 
 Returns:
 
@@ -36356,7 +37326,13 @@ Returns:
 
 ```python
 search_services(
-    name: str | None = None, limit: int = 20, offset: int = 0
+    name: str | None = None,
+    tags: list[str] | None = None,
+    sort_by: RegistrySortBy = UNSPECIFIED,
+    limit: int = 20,
+    offset: int = 0,
+    *,
+    descending: bool = False,
 ) -> list[ModuleInfo]
 ```
 
@@ -36368,6 +37344,14 @@ Parameters:
 
   (`str | None`, default: `None` ) – Case-insensitive free text matched against module name AND documentation.
 
+- ###### **`tags`**
+
+  (`list[str] | None`, default: `None` ) – Match modules carrying at least one of these tags (case-insensitive).
+
+- ###### **`sort_by`**
+
+  (`RegistrySortBy`, default: `UNSPECIFIED` ) – Sort key; UNSPECIFIED lets the registry choose.
+
 - ###### **`limit`**
 
   (`int`, default: `20` ) – Max results (1-100).
@@ -36375,6 +37359,10 @@ Parameters:
 - ###### **`offset`**
 
   (`int`, default: `0` ) – Pagination offset.
+
+- ###### **`descending`**
+
+  (`bool`, default: `False` ) – Sort direction.
 
 Returns:
 
@@ -36390,8 +37378,12 @@ search_setups(
     module_types: list[RegistryModuleType] | None = None,
     statuses: list[RegistrySetupStatus] | None = None,
     visibilities: list[RegistryVisibility] | None = None,
+    tags: list[str] | None = None,
+    sort_by: RegistrySortBy = UNSPECIFIED,
     limit: int = 20,
     offset: int = 0,
+    *,
+    descending: bool = False,
 ) -> list[SetupSummary]
 ```
 
@@ -36423,6 +37415,14 @@ Parameters:
 
   (`list[RegistryVisibility] | None`, default: `None` ) – Filter by visibility.
 
+- ###### **`tags`**
+
+  (`list[str] | None`, default: `None` ) – Match setups carrying at least one of these tags (case-insensitive).
+
+- ###### **`sort_by`**
+
+  (`RegistrySortBy`, default: `UNSPECIFIED` ) – Sort key; UNSPECIFIED lets the registry choose.
+
 - ###### **`limit`**
 
   (`int`, default: `20` ) – Max results (1-100).
@@ -36430,6 +37430,10 @@ Parameters:
 - ###### **`offset`**
 
   (`int`, default: `0` ) – Pagination offset.
+
+- ###### **`descending`**
+
+  (`bool`, default: `False` ) – Sort direction.
 
 Returns:
 
@@ -36444,7 +37448,13 @@ Raises:
 
 ```python
 search_tools(
-    name: str | None = None, limit: int = 20, offset: int = 0
+    name: str | None = None,
+    tags: list[str] | None = None,
+    sort_by: RegistrySortBy = UNSPECIFIED,
+    limit: int = 20,
+    offset: int = 0,
+    *,
+    descending: bool = False,
 ) -> list[ModuleInfo]
 ```
 
@@ -36456,6 +37466,14 @@ Parameters:
 
   (`str | None`, default: `None` ) – Case-insensitive free text matched against module name AND documentation.
 
+- ###### **`tags`**
+
+  (`list[str] | None`, default: `None` ) – Match modules carrying at least one of these tags (case-insensitive).
+
+- ###### **`sort_by`**
+
+  (`RegistrySortBy`, default: `UNSPECIFIED` ) – Sort key; UNSPECIFIED lets the registry choose.
+
 - ###### **`limit`**
 
   (`int`, default: `20` ) – Max results (1-100).
@@ -36463,6 +37481,10 @@ Parameters:
 - ###### **`offset`**
 
   (`int`, default: `0` ) – Pagination offset.
+
+- ###### **`descending`**
+
+  (`bool`, default: `False` ) – Sort direction.
 
 Returns:
 
@@ -36770,8 +37792,12 @@ Returns:
 search(
     name: str | None = None,
     module_type: str | None = None,
+    tags: list[str] | None = None,
+    sort_by: RegistrySortBy = UNSPECIFIED,
     limit: int = 20,
     offset: int = 0,
+    *,
+    descending: bool = False,
 ) -> list[ModuleInfo]
 ```
 
@@ -36787,6 +37813,14 @@ Parameters:
 
   (`str | None`, default: `None` ) – Filter by type (archetype, tool_module, service).
 
+- ###### **`tags`**
+
+  (`list[str] | None`, default: `None` ) – Match modules carrying at least one of these tags (case-insensitive).
+
+- ###### **`sort_by`**
+
+  (`RegistrySortBy`, default: `UNSPECIFIED` ) – Sort key; UNSPECIFIED lets the registry choose.
+
 - ###### **`limit`**
 
   (`int`, default: `20` ) – Max results (1-100).
@@ -36794,6 +37828,10 @@ Parameters:
 - ###### **`offset`**
 
   (`int`, default: `0` ) – Pagination offset.
+
+- ###### **`descending`**
+
+  (`bool`, default: `False` ) – Sort direction.
 
 Returns:
 
@@ -36804,7 +37842,13 @@ Returns:
 
 ```python
 search_kins(
-    name: str | None = None, limit: int = 20, offset: int = 0
+    name: str | None = None,
+    tags: list[str] | None = None,
+    sort_by: RegistrySortBy = UNSPECIFIED,
+    limit: int = 20,
+    offset: int = 0,
+    *,
+    descending: bool = False,
 ) -> list[ModuleInfo]
 ```
 
@@ -36816,6 +37860,14 @@ Parameters:
 
   (`str | None`, default: `None` ) – Case-insensitive free text matched against module name AND documentation.
 
+- ###### **`tags`**
+
+  (`list[str] | None`, default: `None` ) – Match modules carrying at least one of these tags (case-insensitive).
+
+- ###### **`sort_by`**
+
+  (`RegistrySortBy`, default: `UNSPECIFIED` ) – Sort key; UNSPECIFIED lets the registry choose.
+
 - ###### **`limit`**
 
   (`int`, default: `20` ) – Max results (1-100).
@@ -36823,6 +37875,10 @@ Parameters:
 - ###### **`offset`**
 
   (`int`, default: `0` ) – Pagination offset.
+
+- ###### **`descending`**
+
+  (`bool`, default: `False` ) – Sort direction.
 
 Returns:
 
@@ -36832,7 +37888,13 @@ Returns:
 
 ```python
 search_services(
-    name: str | None = None, limit: int = 20, offset: int = 0
+    name: str | None = None,
+    tags: list[str] | None = None,
+    sort_by: RegistrySortBy = UNSPECIFIED,
+    limit: int = 20,
+    offset: int = 0,
+    *,
+    descending: bool = False,
 ) -> list[ModuleInfo]
 ```
 
@@ -36844,6 +37906,14 @@ Parameters:
 
   (`str | None`, default: `None` ) – Case-insensitive free text matched against module name AND documentation.
 
+- ###### **`tags`**
+
+  (`list[str] | None`, default: `None` ) – Match modules carrying at least one of these tags (case-insensitive).
+
+- ###### **`sort_by`**
+
+  (`RegistrySortBy`, default: `UNSPECIFIED` ) – Sort key; UNSPECIFIED lets the registry choose.
+
 - ###### **`limit`**
 
   (`int`, default: `20` ) – Max results (1-100).
@@ -36851,6 +37921,10 @@ Parameters:
 - ###### **`offset`**
 
   (`int`, default: `0` ) – Pagination offset.
+
+- ###### **`descending`**
+
+  (`bool`, default: `False` ) – Sort direction.
 
 Returns:
 
@@ -36866,8 +37940,12 @@ search_setups(
     module_types: list[RegistryModuleType] | None = None,
     statuses: list[RegistrySetupStatus] | None = None,
     visibilities: list[RegistryVisibility] | None = None,
+    tags: list[str] | None = None,
+    sort_by: RegistrySortBy = UNSPECIFIED,
     limit: int = 20,
     offset: int = 0,
+    *,
+    descending: bool = False,
 ) -> list[SetupSummary]
 ```
 
@@ -36899,6 +37977,14 @@ Parameters:
 
   (`list[RegistryVisibility] | None`, default: `None` ) – Filter by visibility.
 
+- ###### **`tags`**
+
+  (`list[str] | None`, default: `None` ) – Match setups carrying at least one of these tags (case-insensitive).
+
+- ###### **`sort_by`**
+
+  (`RegistrySortBy`, default: `UNSPECIFIED` ) – Sort key; UNSPECIFIED lets the registry choose.
+
 - ###### **`limit`**
 
   (`int`, default: `20` ) – Max results (1-100).
@@ -36906,6 +37992,10 @@ Parameters:
 - ###### **`offset`**
 
   (`int`, default: `0` ) – Pagination offset.
+
+- ###### **`descending`**
+
+  (`bool`, default: `False` ) – Sort direction.
 
 Returns:
 
@@ -36915,7 +38005,13 @@ Returns:
 
 ```python
 search_tools(
-    name: str | None = None, limit: int = 20, offset: int = 0
+    name: str | None = None,
+    tags: list[str] | None = None,
+    sort_by: RegistrySortBy = UNSPECIFIED,
+    limit: int = 20,
+    offset: int = 0,
+    *,
+    descending: bool = False,
 ) -> list[ModuleInfo]
 ```
 
@@ -36927,6 +38023,14 @@ Parameters:
 
   (`str | None`, default: `None` ) – Case-insensitive free text matched against module name AND documentation.
 
+- ###### **`tags`**
+
+  (`list[str] | None`, default: `None` ) – Match modules carrying at least one of these tags (case-insensitive).
+
+- ###### **`sort_by`**
+
+  (`RegistrySortBy`, default: `UNSPECIFIED` ) – Sort key; UNSPECIFIED lets the registry choose.
+
 - ###### **`limit`**
 
   (`int`, default: `20` ) – Max results (1-100).
@@ -36934,6 +38038,10 @@ Parameters:
 - ###### **`offset`**
 
   (`int`, default: `0` ) – Pagination offset.
+
+- ###### **`descending`**
+
+  (`bool`, default: `False` ) – Sort direction.
 
 Returns:
 
@@ -37205,8 +38313,12 @@ Returns:
 search(
     name: str | None = None,
     module_type: str | None = None,
+    tags: list[str] | None = None,
+    sort_by: RegistrySortBy = UNSPECIFIED,
     limit: int = 20,
     offset: int = 0,
+    *,
+    descending: bool = False,
 ) -> list[ModuleInfo]
 ```
 
@@ -37222,6 +38334,14 @@ Parameters:
 
   (`str | None`, default: `None` ) – Filter by type (archetype, tool_module, service).
 
+- ###### **`tags`**
+
+  (`list[str] | None`, default: `None` ) – Match modules carrying at least one of these tags (case-insensitive).
+
+- ###### **`sort_by`**
+
+  (`RegistrySortBy`, default: `UNSPECIFIED` ) – Sort key. Only NAME is ordered here — this store keeps no timestamps, so CREATED_AT/UPDATED_AT fall back to insertion order.
+
 - ###### **`limit`**
 
   (`int`, default: `20` ) – Max results (1-100).
@@ -37229,6 +38349,10 @@ Parameters:
 - ###### **`offset`**
 
   (`int`, default: `0` ) – Pagination offset.
+
+- ###### **`descending`**
+
+  (`bool`, default: `False` ) – Sort direction, applied when sort_by is NAME.
 
 Returns:
 
@@ -37238,7 +38362,13 @@ Returns:
 
 ```python
 search_kins(
-    name: str | None = None, limit: int = 20, offset: int = 0
+    name: str | None = None,
+    tags: list[str] | None = None,
+    sort_by: RegistrySortBy = UNSPECIFIED,
+    limit: int = 20,
+    offset: int = 0,
+    *,
+    descending: bool = False,
 ) -> list[ModuleInfo]
 ```
 
@@ -37250,6 +38380,14 @@ Parameters:
 
   (`str | None`, default: `None` ) – Case-insensitive free text matched against module name AND documentation.
 
+- ###### **`tags`**
+
+  (`list[str] | None`, default: `None` ) – Match modules carrying at least one of these tags (case-insensitive).
+
+- ###### **`sort_by`**
+
+  (`RegistrySortBy`, default: `UNSPECIFIED` ) – Sort key; UNSPECIFIED lets the registry choose.
+
 - ###### **`limit`**
 
   (`int`, default: `20` ) – Max results (1-100).
@@ -37257,6 +38395,10 @@ Parameters:
 - ###### **`offset`**
 
   (`int`, default: `0` ) – Pagination offset.
+
+- ###### **`descending`**
+
+  (`bool`, default: `False` ) – Sort direction.
 
 Returns:
 
@@ -37266,7 +38408,13 @@ Returns:
 
 ```python
 search_services(
-    name: str | None = None, limit: int = 20, offset: int = 0
+    name: str | None = None,
+    tags: list[str] | None = None,
+    sort_by: RegistrySortBy = UNSPECIFIED,
+    limit: int = 20,
+    offset: int = 0,
+    *,
+    descending: bool = False,
 ) -> list[ModuleInfo]
 ```
 
@@ -37278,6 +38426,14 @@ Parameters:
 
   (`str | None`, default: `None` ) – Case-insensitive free text matched against module name AND documentation.
 
+- ###### **`tags`**
+
+  (`list[str] | None`, default: `None` ) – Match modules carrying at least one of these tags (case-insensitive).
+
+- ###### **`sort_by`**
+
+  (`RegistrySortBy`, default: `UNSPECIFIED` ) – Sort key; UNSPECIFIED lets the registry choose.
+
 - ###### **`limit`**
 
   (`int`, default: `20` ) – Max results (1-100).
@@ -37285,6 +38441,10 @@ Parameters:
 - ###### **`offset`**
 
   (`int`, default: `0` ) – Pagination offset.
+
+- ###### **`descending`**
+
+  (`bool`, default: `False` ) – Sort direction.
 
 Returns:
 
@@ -37300,8 +38460,12 @@ search_setups(
     module_types: list[RegistryModuleType] | None = None,
     statuses: list[RegistrySetupStatus] | None = None,
     visibilities: list[RegistryVisibility] | None = None,
+    tags: list[str] | None = None,
+    sort_by: RegistrySortBy = UNSPECIFIED,
     limit: int = 20,
     offset: int = 0,
+    *,
+    descending: bool = False,
 ) -> list[SetupSummary]
 ```
 
@@ -37333,6 +38497,14 @@ Parameters:
 
   (`list[RegistryVisibility] | None`, default: `None` ) – Filter by visibility.
 
+- ###### **`tags`**
+
+  (`list[str] | None`, default: `None` ) – Match setups carrying at least one of these tags (case-insensitive).
+
+- ###### **`sort_by`**
+
+  (`RegistrySortBy`, default: `UNSPECIFIED` ) – Sort key. Only NAME is ordered here — this store keeps no timestamps, so CREATED_AT/UPDATED_AT fall back to insertion order.
+
 - ###### **`limit`**
 
   (`int`, default: `20` ) – Max results (1-100).
@@ -37340,6 +38512,10 @@ Parameters:
 - ###### **`offset`**
 
   (`int`, default: `0` ) – Pagination offset.
+
+- ###### **`descending`**
+
+  (`bool`, default: `False` ) – Sort direction, applied when sort_by is NAME.
 
 Returns:
 
@@ -37349,7 +38525,13 @@ Returns:
 
 ```python
 search_tools(
-    name: str | None = None, limit: int = 20, offset: int = 0
+    name: str | None = None,
+    tags: list[str] | None = None,
+    sort_by: RegistrySortBy = UNSPECIFIED,
+    limit: int = 20,
+    offset: int = 0,
+    *,
+    descending: bool = False,
 ) -> list[ModuleInfo]
 ```
 
@@ -37361,6 +38543,14 @@ Parameters:
 
   (`str | None`, default: `None` ) – Case-insensitive free text matched against module name AND documentation.
 
+- ###### **`tags`**
+
+  (`list[str] | None`, default: `None` ) – Match modules carrying at least one of these tags (case-insensitive).
+
+- ###### **`sort_by`**
+
+  (`RegistrySortBy`, default: `UNSPECIFIED` ) – Sort key; UNSPECIFIED lets the registry choose.
+
 - ###### **`limit`**
 
   (`int`, default: `20` ) – Max results (1-100).
@@ -37368,6 +38558,10 @@ Parameters:
 - ###### **`offset`**
 
   (`int`, default: `0` ) – Pagination offset.
+
+- ###### **`descending`**
+
+  (`bool`, default: `False` ) – Sort direction.
 
 Returns:
 
@@ -37895,8 +39089,12 @@ Parameters:
 search(
     name: str | None = None,
     module_type: str | None = None,
+    tags: list[str] | None = None,
+    sort_by: RegistrySortBy = UNSPECIFIED,
     limit: int = 20,
     offset: int = 0,
+    *,
+    descending: bool = False,
 ) -> list[ModuleInfo]
 ```
 
@@ -37912,6 +39110,14 @@ Parameters:
 
   (`str | None`, default: `None` ) – Filter by type (archetype, tool_module, service).
 
+- ###### **`tags`**
+
+  (`list[str] | None`, default: `None` ) – Match modules carrying at least one of these tags (case-insensitive).
+
+- ###### **`sort_by`**
+
+  (`RegistrySortBy`, default: `UNSPECIFIED` ) – Sort key; UNSPECIFIED lets the registry choose.
+
 - ###### **`limit`**
 
   (`int`, default: `20` ) – Max results (1-100).
@@ -37919,6 +39125,10 @@ Parameters:
 - ###### **`offset`**
 
   (`int`, default: `0` ) – Pagination offset.
+
+- ###### **`descending`**
+
+  (`bool`, default: `False` ) – Sort direction.
 
 Returns:
 
@@ -37934,7 +39144,13 @@ Raises:
 
 ```python
 search_kins(
-    name: str | None = None, limit: int = 20, offset: int = 0
+    name: str | None = None,
+    tags: list[str] | None = None,
+    sort_by: RegistrySortBy = UNSPECIFIED,
+    limit: int = 20,
+    offset: int = 0,
+    *,
+    descending: bool = False,
 ) -> list[ModuleInfo]
 ```
 
@@ -37946,6 +39162,14 @@ Parameters:
 
   (`str | None`, default: `None` ) – Case-insensitive free text matched against module name AND documentation.
 
+- ###### **`tags`**
+
+  (`list[str] | None`, default: `None` ) – Match modules carrying at least one of these tags (case-insensitive).
+
+- ###### **`sort_by`**
+
+  (`RegistrySortBy`, default: `UNSPECIFIED` ) – Sort key; UNSPECIFIED lets the registry choose.
+
 - ###### **`limit`**
 
   (`int`, default: `20` ) – Max results (1-100).
@@ -37953,6 +39177,10 @@ Parameters:
 - ###### **`offset`**
 
   (`int`, default: `0` ) – Pagination offset.
+
+- ###### **`descending`**
+
+  (`bool`, default: `False` ) – Sort direction.
 
 Returns:
 
@@ -37962,7 +39190,13 @@ Returns:
 
 ```python
 search_services(
-    name: str | None = None, limit: int = 20, offset: int = 0
+    name: str | None = None,
+    tags: list[str] | None = None,
+    sort_by: RegistrySortBy = UNSPECIFIED,
+    limit: int = 20,
+    offset: int = 0,
+    *,
+    descending: bool = False,
 ) -> list[ModuleInfo]
 ```
 
@@ -37974,6 +39208,14 @@ Parameters:
 
   (`str | None`, default: `None` ) – Case-insensitive free text matched against module name AND documentation.
 
+- ###### **`tags`**
+
+  (`list[str] | None`, default: `None` ) – Match modules carrying at least one of these tags (case-insensitive).
+
+- ###### **`sort_by`**
+
+  (`RegistrySortBy`, default: `UNSPECIFIED` ) – Sort key; UNSPECIFIED lets the registry choose.
+
 - ###### **`limit`**
 
   (`int`, default: `20` ) – Max results (1-100).
@@ -37981,6 +39223,10 @@ Parameters:
 - ###### **`offset`**
 
   (`int`, default: `0` ) – Pagination offset.
+
+- ###### **`descending`**
+
+  (`bool`, default: `False` ) – Sort direction.
 
 Returns:
 
@@ -37996,8 +39242,12 @@ search_setups(
     module_types: list[RegistryModuleType] | None = None,
     statuses: list[RegistrySetupStatus] | None = None,
     visibilities: list[RegistryVisibility] | None = None,
+    tags: list[str] | None = None,
+    sort_by: RegistrySortBy = UNSPECIFIED,
     limit: int = 20,
     offset: int = 0,
+    *,
+    descending: bool = False,
 ) -> list[SetupSummary]
 ```
 
@@ -38029,6 +39279,14 @@ Parameters:
 
   (`list[RegistryVisibility] | None`, default: `None` ) – Filter by visibility.
 
+- ###### **`tags`**
+
+  (`list[str] | None`, default: `None` ) – Match setups carrying at least one of these tags (case-insensitive).
+
+- ###### **`sort_by`**
+
+  (`RegistrySortBy`, default: `UNSPECIFIED` ) – Sort key; UNSPECIFIED lets the registry choose.
+
 - ###### **`limit`**
 
   (`int`, default: `20` ) – Max results (1-100).
@@ -38036,6 +39294,10 @@ Parameters:
 - ###### **`offset`**
 
   (`int`, default: `0` ) – Pagination offset.
+
+- ###### **`descending`**
+
+  (`bool`, default: `False` ) – Sort direction.
 
 Returns:
 
@@ -38050,7 +39312,13 @@ Raises:
 
 ```python
 search_tools(
-    name: str | None = None, limit: int = 20, offset: int = 0
+    name: str | None = None,
+    tags: list[str] | None = None,
+    sort_by: RegistrySortBy = UNSPECIFIED,
+    limit: int = 20,
+    offset: int = 0,
+    *,
+    descending: bool = False,
 ) -> list[ModuleInfo]
 ```
 
@@ -38062,6 +39330,14 @@ Parameters:
 
   (`str | None`, default: `None` ) – Case-insensitive free text matched against module name AND documentation.
 
+- ###### **`tags`**
+
+  (`list[str] | None`, default: `None` ) – Match modules carrying at least one of these tags (case-insensitive).
+
+- ###### **`sort_by`**
+
+  (`RegistrySortBy`, default: `UNSPECIFIED` ) – Sort key; UNSPECIFIED lets the registry choose.
+
 - ###### **`limit`**
 
   (`int`, default: `20` ) – Max results (1-100).
@@ -38069,6 +39345,10 @@ Parameters:
 - ###### **`offset`**
 
   (`int`, default: `0` ) – Pagination offset.
+
+- ###### **`descending`**
+
+  (`bool`, default: `False` ) – Sort direction.
 
 Returns:
 
@@ -38313,8 +39593,12 @@ Returns:
 search(
     name: str | None = None,
     module_type: str | None = None,
+    tags: list[str] | None = None,
+    sort_by: RegistrySortBy = UNSPECIFIED,
     limit: int = 20,
     offset: int = 0,
+    *,
+    descending: bool = False,
 ) -> list[ModuleInfo]
 ```
 
@@ -38330,6 +39614,14 @@ Parameters:
 
   (`str | None`, default: `None` ) – Filter by type (archetype, tool_module, service).
 
+- ###### **`tags`**
+
+  (`list[str] | None`, default: `None` ) – Match modules carrying at least one of these tags (case-insensitive).
+
+- ###### **`sort_by`**
+
+  (`RegistrySortBy`, default: `UNSPECIFIED` ) – Sort key; UNSPECIFIED lets the registry choose.
+
 - ###### **`limit`**
 
   (`int`, default: `20` ) – Max results (1-100).
@@ -38337,6 +39629,10 @@ Parameters:
 - ###### **`offset`**
 
   (`int`, default: `0` ) – Pagination offset.
+
+- ###### **`descending`**
+
+  (`bool`, default: `False` ) – Sort direction.
 
 Returns:
 
@@ -38347,7 +39643,13 @@ Returns:
 
 ```python
 search_kins(
-    name: str | None = None, limit: int = 20, offset: int = 0
+    name: str | None = None,
+    tags: list[str] | None = None,
+    sort_by: RegistrySortBy = UNSPECIFIED,
+    limit: int = 20,
+    offset: int = 0,
+    *,
+    descending: bool = False,
 ) -> list[ModuleInfo]
 ```
 
@@ -38359,6 +39661,14 @@ Parameters:
 
   (`str | None`, default: `None` ) – Case-insensitive free text matched against module name AND documentation.
 
+- ###### **`tags`**
+
+  (`list[str] | None`, default: `None` ) – Match modules carrying at least one of these tags (case-insensitive).
+
+- ###### **`sort_by`**
+
+  (`RegistrySortBy`, default: `UNSPECIFIED` ) – Sort key; UNSPECIFIED lets the registry choose.
+
 - ###### **`limit`**
 
   (`int`, default: `20` ) – Max results (1-100).
@@ -38366,6 +39676,10 @@ Parameters:
 - ###### **`offset`**
 
   (`int`, default: `0` ) – Pagination offset.
+
+- ###### **`descending`**
+
+  (`bool`, default: `False` ) – Sort direction.
 
 Returns:
 
@@ -38375,7 +39689,13 @@ Returns:
 
 ```python
 search_services(
-    name: str | None = None, limit: int = 20, offset: int = 0
+    name: str | None = None,
+    tags: list[str] | None = None,
+    sort_by: RegistrySortBy = UNSPECIFIED,
+    limit: int = 20,
+    offset: int = 0,
+    *,
+    descending: bool = False,
 ) -> list[ModuleInfo]
 ```
 
@@ -38387,6 +39707,14 @@ Parameters:
 
   (`str | None`, default: `None` ) – Case-insensitive free text matched against module name AND documentation.
 
+- ###### **`tags`**
+
+  (`list[str] | None`, default: `None` ) – Match modules carrying at least one of these tags (case-insensitive).
+
+- ###### **`sort_by`**
+
+  (`RegistrySortBy`, default: `UNSPECIFIED` ) – Sort key; UNSPECIFIED lets the registry choose.
+
 - ###### **`limit`**
 
   (`int`, default: `20` ) – Max results (1-100).
@@ -38394,6 +39722,10 @@ Parameters:
 - ###### **`offset`**
 
   (`int`, default: `0` ) – Pagination offset.
+
+- ###### **`descending`**
+
+  (`bool`, default: `False` ) – Sort direction.
 
 Returns:
 
@@ -38409,8 +39741,12 @@ search_setups(
     module_types: list[RegistryModuleType] | None = None,
     statuses: list[RegistrySetupStatus] | None = None,
     visibilities: list[RegistryVisibility] | None = None,
+    tags: list[str] | None = None,
+    sort_by: RegistrySortBy = UNSPECIFIED,
     limit: int = 20,
     offset: int = 0,
+    *,
+    descending: bool = False,
 ) -> list[SetupSummary]
 ```
 
@@ -38442,6 +39778,14 @@ Parameters:
 
   (`list[RegistryVisibility] | None`, default: `None` ) – Filter by visibility.
 
+- ###### **`tags`**
+
+  (`list[str] | None`, default: `None` ) – Match setups carrying at least one of these tags (case-insensitive).
+
+- ###### **`sort_by`**
+
+  (`RegistrySortBy`, default: `UNSPECIFIED` ) – Sort key; UNSPECIFIED lets the registry choose.
+
 - ###### **`limit`**
 
   (`int`, default: `20` ) – Max results (1-100).
@@ -38449,6 +39793,10 @@ Parameters:
 - ###### **`offset`**
 
   (`int`, default: `0` ) – Pagination offset.
+
+- ###### **`descending`**
+
+  (`bool`, default: `False` ) – Sort direction.
 
 Returns:
 
@@ -38458,7 +39806,13 @@ Returns:
 
 ```python
 search_tools(
-    name: str | None = None, limit: int = 20, offset: int = 0
+    name: str | None = None,
+    tags: list[str] | None = None,
+    sort_by: RegistrySortBy = UNSPECIFIED,
+    limit: int = 20,
+    offset: int = 0,
+    *,
+    descending: bool = False,
 ) -> list[ModuleInfo]
 ```
 
@@ -38470,6 +39824,14 @@ Parameters:
 
   (`str | None`, default: `None` ) – Case-insensitive free text matched against module name AND documentation.
 
+- ###### **`tags`**
+
+  (`list[str] | None`, default: `None` ) – Match modules carrying at least one of these tags (case-insensitive).
+
+- ###### **`sort_by`**
+
+  (`RegistrySortBy`, default: `UNSPECIFIED` ) – Sort key; UNSPECIFIED lets the registry choose.
+
 - ###### **`limit`**
 
   (`int`, default: `20` ) – Max results (1-100).
@@ -38477,6 +39839,10 @@ Parameters:
 - ###### **`offset`**
 
   (`int`, default: `0` ) – Pagination offset.
+
+- ###### **`descending`**
+
+  (`bool`, default: `False` ) – Sort direction.
 
 Returns:
 
@@ -39590,6 +40956,8 @@ Methods:
 - **`create_setup`** – Create a new setup; identifiers are generated locally.
 - **`delete_setup`** – Delete a setup by its unique identifier.
 - **`get_setup`** – Retrieve a setup by its unique identifier.
+- **`list_setup_versions`** – List a setup's versions, most recent first.
+- **`set_current_setup_version`** – Activate an existing version of a setup, making it the current one.
 - **`update_setup`** – Update a setup's name and current version content.
 
 ###### __post_init__
@@ -39709,6 +41077,50 @@ Raises:
 
 - `SetupServiceError` – setup_id does not exist.
 
+###### list_setup_versions
+
+```python
+list_setup_versions(setup_dict: dict[str, Any]) -> SetupVersionPage
+```
+
+List a setup's versions, most recent first.
+
+Parameters:
+
+- ###### **`setup_dict`**
+
+  (`dict[str, Any]`) – Dictionary with 'setup_id' and optional 'limit' / 'offset'.
+
+Returns:
+
+- `SetupVersionPage` – The requested page, its total count and the currently active version id.
+
+Raises:
+
+- `SetupServiceError` – setup_id does not exist.
+
+###### set_current_setup_version
+
+```python
+set_current_setup_version(setup_dict: dict[str, Any]) -> SetupData
+```
+
+Activate an existing version of a setup, making it the current one.
+
+Parameters:
+
+- ###### **`setup_dict`**
+
+  (`dict[str, Any]`) – Dictionary with 'setup_id' and 'setup_version_id'.
+
+Returns:
+
+- `SetupData` – The setup with its newly activated version.
+
+Raises:
+
+- `SetupServiceError` – setup_id does not exist, or the version does not belong to it.
+
 ###### update_setup
 
 ```python
@@ -39721,7 +41133,7 @@ Parameters:
 
 - ###### **`setup_dict`**
 
-  (`dict[str, Any]`) – Dictionary with 'setup_id', 'name' and 'content'.
+  (`dict[str, Any]`) – Dictionary with 'setup_id', 'name', 'content' and optional 'set_as_current' (defaults to True).
 
 Returns:
 
@@ -39802,7 +41214,9 @@ Methods:
 - **`exec_grpc_query`** – Execute a gRPC query with circuit breaker protection and retry.
 - **`get_setup`** – Retrieve a setup by its unique identifier.
 - **`handle_grpc_errors`** – Context manager for consistent gRPC error handling with detailed logging.
+- **`list_setup_versions`** – List a setup's versions, most recent first.
 - **`release_cached_channel`** – Decrement refcount for a cache key and close channel when last ref is released.
+- **`set_current_setup_version`** – Activate an existing version of a setup, making it the current one.
 - **`update_setup`** – Update a setup's name and current version content.
 
 ###### __post_init__
@@ -40047,6 +41461,30 @@ Raises:
 - `ServerError` – gRPC communication failed - remote service returned error or is unreachable.
 - `SetupServiceError` – Unexpected error during setup operation - includes connection/timeout issues.
 
+###### list_setup_versions
+
+```python
+list_setup_versions(setup_dict: dict[str, Any]) -> SetupVersionPage
+```
+
+List a setup's versions, most recent first.
+
+Parameters:
+
+- ###### **`setup_dict`**
+
+  (`dict[str, Any]`) – Dictionary with 'setup_id' and optional 'limit' / 'offset'.
+
+Returns:
+
+- `SetupVersionPage` – The requested page, its total count and the currently active version id.
+
+Raises:
+
+- `ValueError` – If the setup_id is missing.
+- `ServerError` – If gRPC operation fails.
+- `SetupServiceError` – For any unexpected internal error.
+
 ###### release_cached_channel
 
 ```python
@@ -40061,6 +41499,30 @@ Parameters:
 
   (`str`) – Channel cache key to release.
 
+###### set_current_setup_version
+
+```python
+set_current_setup_version(setup_dict: dict[str, Any]) -> SetupData
+```
+
+Activate an existing version of a setup, making it the current one.
+
+Parameters:
+
+- ###### **`setup_dict`**
+
+  (`dict[str, Any]`) – Dictionary with 'setup_id' and 'setup_version_id'.
+
+Returns:
+
+- `SetupData` – The setup with its newly activated version.
+
+Raises:
+
+- `ValueError` – If setup_id or setup_version_id is missing.
+- `ServerError` – If gRPC operation fails.
+- `SetupServiceError` – If the server reports failure or an unexpected error occurs.
+
 ###### update_setup
 
 ```python
@@ -40073,7 +41535,7 @@ Parameters:
 
 - ###### **`setup_dict`**
 
-  (`dict[str, Any]`) – Dictionary with 'setup_id', 'name' and 'content'.
+  (`dict[str, Any]`) – Dictionary with 'setup_id', 'name', 'content' and optional 'set_as_current' (defaults to True).
 
 Returns:
 
@@ -40094,6 +41556,7 @@ Classes:
 - **`SetupData`** – Pydantic model for Setup data validation.
 - **`SetupStrategy`** – Abstract base class for setup strategies.
 - **`SetupVersionData`** – Pydantic model for SetupVersion data validation.
+- **`SetupVersionPage`** – A page of a setup's versions, most recent first.
 
 ##### SetupData
 
@@ -40127,7 +41590,7 @@ SetupStrategy()
 
 Abstract base class for setup strategies.
 
-Mirrors the SetupService protocol: setup-level CRUD plus visibility change. The version lifecycle is platform-owned — content flows through the setup's `current_setup_version`, never through standalone version RPCs.
+Mirrors the SetupService protocol: setup-level CRUD, visibility change, and the two read/activate version RPCs. Versions are still created only as a side effect of `update_setup` — there is no standalone create/update/delete for them.
 
 Methods:
 
@@ -40137,6 +41600,8 @@ Methods:
 - **`create_setup`** – Create a new setup; owner/organisation/module derive from the request context.
 - **`delete_setup`** – Delete a setup by its unique identifier.
 - **`get_setup`** – Retrieve a setup by its unique identifier.
+- **`list_setup_versions`** – List a setup's versions, most recent first.
+- **`set_current_setup_version`** – Activate an existing version of a setup, making it the current one.
 - **`update_setup`** – Update a setup's name and current version content.
 
 ###### __post_init__
@@ -40243,6 +41708,42 @@ Returns:
 
 - `SetupData` – The setup with its current version populated.
 
+###### list_setup_versions
+
+```python
+list_setup_versions(setup_dict: dict[str, Any]) -> SetupVersionPage
+```
+
+List a setup's versions, most recent first.
+
+Parameters:
+
+- ###### **`setup_dict`**
+
+  (`dict[str, Any]`) – Dictionary with 'setup_id' and optional 'limit' / 'offset'.
+
+Returns:
+
+- `SetupVersionPage` – The requested page, its total count and the currently active version id.
+
+###### set_current_setup_version
+
+```python
+set_current_setup_version(setup_dict: dict[str, Any]) -> SetupData
+```
+
+Activate an existing version of a setup, making it the current one.
+
+Parameters:
+
+- ###### **`setup_dict`**
+
+  (`dict[str, Any]`) – Dictionary with 'setup_id' and 'setup_version_id'.
+
+Returns:
+
+- `SetupData` – The setup with its newly activated version.
+
 ###### update_setup
 
 ```python
@@ -40273,6 +41774,19 @@ Returns:
 ```
 
 Pydantic model for SetupVersion data validation.
+
+##### SetupVersionPage
+
+```
+              flowchart TD
+              digitalkin.services.setup.setup_strategy.SetupVersionPage[SetupVersionPage]
+
+              
+
+              click digitalkin.services.setup.setup_strategy.SetupVersionPage href "" "digitalkin.services.setup.setup_strategy.SetupVersionPage"
+```
+
+A page of a setup's versions, most recent first.
 
 ### storage
 
@@ -40352,6 +41866,9 @@ list(
     collection: str,
     context: Context = MISSIONS,
     visibilities: list[Visibility] | None = None,
+    record_id: str = "",
+    limit: int = 0,
+    offset: int = 0,
 ) -> list[StorageRecord]
 ```
 
@@ -40371,6 +41888,18 @@ Parameters:
 
   (`list[Visibility] | None`, default: `None` ) – Optional read-access scopes to filter by (None = no filter).
 
+- ###### **`record_id`**
+
+  (`str`, default: `''` ) – Restrict to this record id; empty means no filter.
+
+- ###### **`limit`**
+
+  (`int`, default: `0` ) – Max records to return; 0 means the service default (20, capped at 100).
+
+- ###### **`offset`**
+
+  (`int`, default: `0` ) – Records to skip before returning results.
+
 Returns:
 
 - `list[StorageRecord]` – A list of storage records under the resolved context.
@@ -40379,7 +41908,7 @@ Returns:
 
 ```python
 read(
-    collection: str, record_id: str, context: Context = MISSIONS
+    collection: str, record_id: str, context: Context = MISSIONS, storage_id: str = ""
 ) -> StorageRecord | None
 ```
 
@@ -40398,6 +41927,10 @@ Parameters:
 - ###### **`context`**
 
   (`Context`, default: `MISSIONS` ) – Which context to read from (default: "mission").
+
+- ###### **`storage_id`**
+
+  (`str`, default: `''` ) – Address a specific stored revision; empty lets the service pick.
 
 Returns:
 
@@ -40432,7 +41965,9 @@ Returns:
 ##### remove_collection
 
 ```python
-remove_collection(collection: str, context: Context = MISSIONS) -> bool
+remove_collection(
+    collection: str, context: Context = MISSIONS, record_id: str = ""
+) -> bool
 ```
 
 Wipe a collection clean under the given scope.
@@ -40446,6 +41981,10 @@ Parameters:
 - ###### **`context`**
 
   (`Context`, default: `MISSIONS` ) – Which context the records live under (default: "mission").
+
+- ###### **`record_id`**
+
+  (`str`, default: `''` ) – Restrict removal to this record id; empty wipes the whole collection.
 
 Returns:
 
@@ -40737,6 +42276,9 @@ list(
     collection: str,
     context: Context = MISSIONS,
     visibilities: list[Visibility] | None = None,
+    record_id: str = "",
+    limit: int = 0,
+    offset: int = 0,
 ) -> list[StorageRecord]
 ```
 
@@ -40756,6 +42298,18 @@ Parameters:
 
   (`list[Visibility] | None`, default: `None` ) – Optional read-access scopes to filter by (None = no filter).
 
+- ###### **`record_id`**
+
+  (`str`, default: `''` ) – Restrict to this record id; empty means no filter.
+
+- ###### **`limit`**
+
+  (`int`, default: `0` ) – Max records to return; 0 means the service default (20, capped at 100).
+
+- ###### **`offset`**
+
+  (`int`, default: `0` ) – Records to skip before returning results.
+
 Returns:
 
 - `list[StorageRecord]` – A list of storage records under the resolved context.
@@ -40764,7 +42318,7 @@ Returns:
 
 ```python
 read(
-    collection: str, record_id: str, context: Context = MISSIONS
+    collection: str, record_id: str, context: Context = MISSIONS, storage_id: str = ""
 ) -> StorageRecord | None
 ```
 
@@ -40783,6 +42337,10 @@ Parameters:
 - ###### **`context`**
 
   (`Context`, default: `MISSIONS` ) – Which context to read from (default: "mission").
+
+- ###### **`storage_id`**
+
+  (`str`, default: `''` ) – Address a specific stored revision; empty lets the service pick.
 
 Returns:
 
@@ -40831,7 +42389,9 @@ Returns:
 ##### remove_collection
 
 ```python
-remove_collection(collection: str, context: Context = MISSIONS) -> bool
+remove_collection(
+    collection: str, context: Context = MISSIONS, record_id: str = ""
+) -> bool
 ```
 
 Wipe a collection clean under the given scope.
@@ -40845,6 +42405,10 @@ Parameters:
 - ###### **`context`**
 
   (`Context`, default: `MISSIONS` ) – Which context the records live under (default: "mission").
+
+- ###### **`record_id`**
+
+  (`str`, default: `''` ) – Restrict removal to this record id; empty wipes the whole collection.
 
 Returns:
 
@@ -41065,6 +42629,9 @@ list(
     collection: str,
     context: Context = MISSIONS,
     visibilities: list[Visibility] | None = None,
+    record_id: str = "",
+    limit: int = 0,
+    offset: int = 0,
 ) -> list[StorageRecord]
 ```
 
@@ -41084,6 +42651,18 @@ Parameters:
 
   (`list[Visibility] | None`, default: `None` ) – Optional read-access scopes to filter by (None = no filter).
 
+- ###### **`record_id`**
+
+  (`str`, default: `''` ) – Restrict to this record id; empty means no filter.
+
+- ###### **`limit`**
+
+  (`int`, default: `0` ) – Max records to return; 0 means the service default (20, capped at 100).
+
+- ###### **`offset`**
+
+  (`int`, default: `0` ) – Records to skip before returning results.
+
 Returns:
 
 - `list[StorageRecord]` – A list of storage records under the resolved context.
@@ -41092,7 +42671,7 @@ Returns:
 
 ```python
 read(
-    collection: str, record_id: str, context: Context = MISSIONS
+    collection: str, record_id: str, context: Context = MISSIONS, storage_id: str = ""
 ) -> StorageRecord | None
 ```
 
@@ -41111,6 +42690,10 @@ Parameters:
 - ###### **`context`**
 
   (`Context`, default: `MISSIONS` ) – Which context to read from (default: "mission").
+
+- ###### **`storage_id`**
+
+  (`str`, default: `''` ) – Address a specific stored revision; empty lets the service pick.
 
 Returns:
 
@@ -41145,7 +42728,9 @@ Returns:
 ##### remove_collection
 
 ```python
-remove_collection(collection: str, context: Context = MISSIONS) -> bool
+remove_collection(
+    collection: str, context: Context = MISSIONS, record_id: str = ""
+) -> bool
 ```
 
 Wipe a collection clean under the given scope.
@@ -41159,6 +42744,10 @@ Parameters:
 - ###### **`context`**
 
   (`Context`, default: `MISSIONS` ) – Which context the records live under (default: "mission").
+
+- ###### **`record_id`**
+
+  (`str`, default: `''` ) – Restrict removal to this record id; empty wipes the whole collection.
 
 Returns:
 
@@ -41374,6 +42963,9 @@ list(
     collection: str,
     context: Context = MISSIONS,
     visibilities: list[Visibility] | None = None,
+    record_id: str = "",
+    limit: int = 0,
+    offset: int = 0,
 ) -> list[StorageRecord]
 ```
 
@@ -41393,6 +42985,18 @@ Parameters:
 
   (`list[Visibility] | None`, default: `None` ) – Optional read-access scopes to filter by (None = no filter).
 
+- ###### **`record_id`**
+
+  (`str`, default: `''` ) – Restrict to this record id; empty means no filter.
+
+- ###### **`limit`**
+
+  (`int`, default: `0` ) – Max records to return; 0 means the service default (20, capped at 100).
+
+- ###### **`offset`**
+
+  (`int`, default: `0` ) – Records to skip before returning results.
+
 Returns:
 
 - `list[StorageRecord]` – A list of storage records under the resolved context.
@@ -41401,7 +43005,7 @@ Returns:
 
 ```python
 read(
-    collection: str, record_id: str, context: Context = MISSIONS
+    collection: str, record_id: str, context: Context = MISSIONS, storage_id: str = ""
 ) -> StorageRecord | None
 ```
 
@@ -41420,6 +43024,10 @@ Parameters:
 - ###### **`context`**
 
   (`Context`, default: `MISSIONS` ) – Which context to read from (default: "mission").
+
+- ###### **`storage_id`**
+
+  (`str`, default: `''` ) – Address a specific stored revision; empty lets the service pick.
 
 Returns:
 
@@ -41454,7 +43062,9 @@ Returns:
 ###### remove_collection
 
 ```python
-remove_collection(collection: str, context: Context = MISSIONS) -> bool
+remove_collection(
+    collection: str, context: Context = MISSIONS, record_id: str = ""
+) -> bool
 ```
 
 Wipe a collection clean under the given scope.
@@ -41468,6 +43078,10 @@ Parameters:
 - ###### **`context`**
 
   (`Context`, default: `MISSIONS` ) – Which context the records live under (default: "mission").
+
+- ###### **`record_id`**
+
+  (`str`, default: `''` ) – Restrict removal to this record id; empty wipes the whole collection.
 
 Returns:
 
@@ -41788,6 +43402,9 @@ list(
     collection: str,
     context: Context = MISSIONS,
     visibilities: list[Visibility] | None = None,
+    record_id: str = "",
+    limit: int = 0,
+    offset: int = 0,
 ) -> list[StorageRecord]
 ```
 
@@ -41807,6 +43424,18 @@ Parameters:
 
   (`list[Visibility] | None`, default: `None` ) – Optional read-access scopes to filter by (None = no filter).
 
+- ###### **`record_id`**
+
+  (`str`, default: `''` ) – Restrict to this record id; empty means no filter.
+
+- ###### **`limit`**
+
+  (`int`, default: `0` ) – Max records to return; 0 means the service default (20, capped at 100).
+
+- ###### **`offset`**
+
+  (`int`, default: `0` ) – Records to skip before returning results.
+
 Returns:
 
 - `list[StorageRecord]` – A list of storage records under the resolved context.
@@ -41815,7 +43444,7 @@ Returns:
 
 ```python
 read(
-    collection: str, record_id: str, context: Context = MISSIONS
+    collection: str, record_id: str, context: Context = MISSIONS, storage_id: str = ""
 ) -> StorageRecord | None
 ```
 
@@ -41834,6 +43463,10 @@ Parameters:
 - ###### **`context`**
 
   (`Context`, default: `MISSIONS` ) – Which context to read from (default: "mission").
+
+- ###### **`storage_id`**
+
+  (`str`, default: `''` ) – Address a specific stored revision; empty lets the service pick.
 
 Returns:
 
@@ -41882,7 +43515,9 @@ Returns:
 ###### remove_collection
 
 ```python
-remove_collection(collection: str, context: Context = MISSIONS) -> bool
+remove_collection(
+    collection: str, context: Context = MISSIONS, record_id: str = ""
+) -> bool
 ```
 
 Wipe a collection clean under the given scope.
@@ -41896,6 +43531,10 @@ Parameters:
 - ###### **`context`**
 
   (`Context`, default: `MISSIONS` ) – Which context the records live under (default: "mission").
+
+- ###### **`record_id`**
+
+  (`str`, default: `''` ) – Restrict removal to this record id; empty wipes the whole collection.
 
 Returns:
 
@@ -42138,6 +43777,9 @@ list(
     collection: str,
     context: Context = MISSIONS,
     visibilities: list[Visibility] | None = None,
+    record_id: str = "",
+    limit: int = 0,
+    offset: int = 0,
 ) -> list[StorageRecord]
 ```
 
@@ -42157,6 +43799,18 @@ Parameters:
 
   (`list[Visibility] | None`, default: `None` ) – Optional read-access scopes to filter by (None = no filter).
 
+- ###### **`record_id`**
+
+  (`str`, default: `''` ) – Restrict to this record id; empty means no filter.
+
+- ###### **`limit`**
+
+  (`int`, default: `0` ) – Max records to return; 0 means the service default (20, capped at 100).
+
+- ###### **`offset`**
+
+  (`int`, default: `0` ) – Records to skip before returning results.
+
 Returns:
 
 - `list[StorageRecord]` – A list of storage records under the resolved context.
@@ -42165,7 +43819,7 @@ Returns:
 
 ```python
 read(
-    collection: str, record_id: str, context: Context = MISSIONS
+    collection: str, record_id: str, context: Context = MISSIONS, storage_id: str = ""
 ) -> StorageRecord | None
 ```
 
@@ -42184,6 +43838,10 @@ Parameters:
 - ###### **`context`**
 
   (`Context`, default: `MISSIONS` ) – Which context to read from (default: "mission").
+
+- ###### **`storage_id`**
+
+  (`str`, default: `''` ) – Address a specific stored revision; empty lets the service pick.
 
 Returns:
 
@@ -42218,7 +43876,9 @@ Returns:
 ###### remove_collection
 
 ```python
-remove_collection(collection: str, context: Context = MISSIONS) -> bool
+remove_collection(
+    collection: str, context: Context = MISSIONS, record_id: str = ""
+) -> bool
 ```
 
 Wipe a collection clean under the given scope.
@@ -42232,6 +43892,10 @@ Parameters:
 - ###### **`context`**
 
   (`Context`, default: `MISSIONS` ) – Which context the records live under (default: "mission").
+
+- ###### **`record_id`**
+
+  (`str`, default: `''` ) – Restrict removal to this record id; empty wipes the whole collection.
 
 Returns:
 
@@ -43280,6 +44944,8 @@ get_user_profile() -> dict[str, Any] | None
 
 Get user profile data.
 
+The returned dict carries the profile fields plus `mission_cost`: the total the mission has accumulated so far, in the same unit as the cost service.
+
 Returns:
 
 - `dict[str, Any] | None` – User profile data, or None if not found.
@@ -43755,6 +45421,8 @@ get_user_profile() -> dict[str, Any] | None
 ```
 
 Get user profile data.
+
+The returned dict carries the profile fields plus `mission_cost`: the total the mission has accumulated so far, in the same unit as the cost service.
 
 Returns:
 
