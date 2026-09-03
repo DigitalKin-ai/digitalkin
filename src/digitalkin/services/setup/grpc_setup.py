@@ -19,6 +19,7 @@ from digitalkin.models.grpc_servers.models import ClientConfig
 from digitalkin.services.setup.exceptions import SetupServiceError
 from digitalkin.services.setup.setup_strategy import SetupData, SetupStrategy, SetupVersionData, SetupVersionPage
 from digitalkin.utils.proto_utils import ProtoUtils
+from digitalkin.utils.setup_content_validator import SetupContentValidator
 
 
 class GrpcSetup(SetupStrategy, GrpcClientWrapper):
@@ -172,13 +173,16 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
             The created setup with its initial version.
 
         Raises:
-            ValueError: If name or content is missing.
+            ValueError: If name or content is missing, or output_format_spec is oversized.
             ServerError: If gRPC operation fails.
             SetupServiceError: If the server reports failure or an unexpected error occurs.
         """
         if not setup_dict.get("name") or not isinstance(setup_dict.get("content"), dict):
             msg = "name and content (object) are required"
             raise ValueError(msg)
+        # Outside handle_grpc_errors: an input guard must stay a ValueError, not become a
+        # SetupServiceError via the catch-all.
+        SetupContentValidator.reject_oversized_output_format_spec(setup_dict["content"])
         async with self.handle_grpc_errors("Setup Creation"):
             content_struct = Struct()
             content_struct.update(setup_dict["content"])
@@ -201,7 +205,7 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
             The updated setup with its current version.
 
         Raises:
-            ValueError: If setup_id, name or content is missing.
+            ValueError: If setup_id, name or content is missing, or output_format_spec is oversized.
             ServerError: If gRPC operation fails.
             SetupServiceError: If the server reports failure or an unexpected error occurs.
         """
@@ -212,6 +216,7 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
         ):
             msg = "setup_id, name and content (object) are required"
             raise ValueError(msg)
+        SetupContentValidator.reject_oversized_output_format_spec(setup_dict["content"])
         async with self.handle_grpc_errors("Setup Update"):
             content_struct = Struct()
             content_struct.update(setup_dict["content"])

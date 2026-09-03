@@ -17,6 +17,7 @@ from digitalkin.services.setup.setup_strategy import (
     SetupVersionData,
     SetupVersionPage,
 )
+from digitalkin.utils.setup_content_validator import SetupContentValidator
 
 
 class DefaultSetup(SetupStrategy):
@@ -87,6 +88,7 @@ class DefaultSetup(SetupStrategy):
         Raises:
             ValueError: If name or content is invalid.
         """
+        SetupContentValidator.reject_oversized_output_format_spec(setup_dict.get("content") or {})
         setup_id = self._new_id()
         try:
             setup = SetupData(
@@ -137,6 +139,7 @@ class DefaultSetup(SetupStrategy):
         if not name or not isinstance(content, dict):
             msg = "setup_id, name and content (object) are required"
             raise ValueError(msg)
+        SetupContentValidator.reject_oversized_output_format_spec(content)
         setup.name = name
         # A new revision rather than an in-place edit, matching UpdateSetup on the wire.
         history = self.versions.setdefault(setup.id, [setup.current_setup_version])
