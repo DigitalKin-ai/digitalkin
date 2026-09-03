@@ -16,6 +16,7 @@ from pydantic import Field
 from digitalkin.community.agno.toolkits.registry.base import RegistryAction
 from digitalkin.logger import logger
 from digitalkin.models.services.registry import (
+    RegistryModuleType,
     RegistrySetupStatus,
     RegistrySortBy,
     RegistryVisibility,
@@ -23,6 +24,7 @@ from digitalkin.models.services.registry import (
 
 if TYPE_CHECKING:
     from digitalkin.community.agno.toolkits.registry.base import RegistryActionCtx
+    from digitalkin.models.services.registry import SetupSummary
 
 
 class GetAction(RegistryAction):
@@ -35,9 +37,9 @@ class GetAction(RegistryAction):
         """Read the setup (always its current version), refusing a foreign object type.
 
         Returns:
-            The setup with its current version, status and visibility.
+            The setup with its current version, status and visibility, and a service's key map.
         """
-        return await ctx.ensure_kind(self.setup_id)
+        return await ctx.with_structure(await ctx.ensure_kind(self.setup_id))
 
 
 class SearchAction(RegistryAction):
@@ -54,7 +56,6 @@ class SearchAction(RegistryAction):
     this manager's own kind. Filters combine with AND; within one filter the values are OR'd.
     """
 
-    _DOC_PREVIEW_CHARS: ClassVar[int] = 300
     # The service ceiling itself (storage and registry both cap a page at 100), so the toolkit
     # no longer imposes a tighter one of its own.
     _MAX_RESULTS: ClassVar[int] = 100
@@ -124,22 +125,42 @@ class SearchAction(RegistryAction):
         # would both contradict ``total_returned`` and, at exactly ``cap`` rows, promise an empty
         # next page.
         truncated = len(usable) > cap
-        rows = [
-            {
-                "setup_id": setup.setup_id,
-                "name": setup.name,
-                "module_name": setup.module_name,
-                "version": setup.setup_version,
-                # Echoed because they are filterable: a caller cannot use the ``tags``,
-                # ``visibilities`` or ``statuses`` filters without first seeing the values in use.
-                "tags": setup.tags,
-                "visibility": setup.visibility.value if setup.visibility else None,
-                "status": setup.status.value if setup.status else None,
-                "description": (setup.documentation or "")[: self._DOC_PREVIEW_CHARS],
-            }
-            for setup in usable[:cap]
-        ]
+        rows = [self._row(setup, ctx.module_type) for setup in usable[:cap]]
         return {"total_returned": len(rows), "truncated": truncated, "offset": self.offset, "setups": rows}
+
+    @staticmethod
+    def _row(setup: SetupSummary, module_type: RegistryModuleType) -> dict[str, Any]:
+        """Trim one search hit to the fields a caller can act on.
+
+        Args:
+            setup: The summary returned by the registry.
+            module_type: The manager's object type; only services render a structure map.
+
+        Returns:
+            The rendered row.
+        """
+        row: dict[str, Any] = {
+            "setup_id": setup.setup_id,
+            "name": setup.name,
+            "module_name": setup.module_name,
+            "version": setup.setup_version,
+            # Echoed because they are filterable: a caller cannot use the ``tags``,
+            # ``visibilities`` or ``statuses`` filters without first seeing the values in use.
+            "tags": setup.tags,
+            "visibility": setup.visibility.value if setup.visibility else None,
+            "status": setup.status.value if setup.status else None,
+            "documentation": setup.documentation or None,
+        }
+        # Only service setups carry a map, so tools and kins rows never show one. A service row
+        # always does, {} included: a caller iterating rows must not meet a missing key.
+        if module_type == RegistryModuleType.SERVICE:
+            if not setup.structure:
+                logger.info(
+                    "[VALIDATE STRUCTROW] service row rendered with an empty structure: setup_id=%s",
+                    setup.setup_id,
+                )  # TODO(validate): remove after prod validation
+            row["structure"] = setup.structure
+        return row
 
 
 class UpdateAction(RegistryAction):
@@ -166,6 +187,21 @@ class UpdateAction(RegistryAction):
         "without changing what the instance currently serves, then activate it later with "
         "``set_version``.",
     )
+    documentation: str | None = Field(
+        default=None,
+        max_length=300,
+        description="Free text describing what this instance is for, indexed by ``search``, at "
+        "most 300 characters. Omit to keep the text the instance already has; pass a string to "
+        "replace it, or an empty string to clear it.",
+    )
+
+    def _type_payload(self) -> dict[str, Any]:  # ruff: ignore[no-self-use]
+        """Fields this object type adds to the update.
+
+        Returns:
+            Nothing by default; ``services_manager`` overrides it to refresh the structure map.
+        """
+        return {}
 
     async def execute(self, ctx: RegistryActionCtx) -> Any:
         """Cut a new version of the setup's content and rename it.
@@ -184,6 +220,10 @@ class UpdateAction(RegistryAction):
             "name": self.name,
             "content": self.content,
             "set_as_current": self.set_as_current,
+            "documentation": (
+                setup.current_setup_version.documentation if self.documentation is None else self.documentation
+            ),
+            **self._type_payload(),
         })
 
 
@@ -247,7 +287,7 @@ class ChangeVisibilityAction(RegistryAction):
         # change_visibility composes its response from a snapshot read before the write, so a
         # concurrent update makes it echo a stale version/content. Re-read the committed state so the
         # response reflects the write (and any concurrent one), not a pre-write in-memory object.
-        return await ctx.setup.get_setup({"setup_id": self.setup_id})
+        return await ctx.with_structure(await ctx.setup.get_setup({"setup_id": self.setup_id}))
 
 
 class ListVersionsAction(RegistryAction):
@@ -333,7 +373,9 @@ class SetVersionAction(RegistryAction):
             The setup with its newly activated version.
         """
         await ctx.ensure_kind(self.setup_id)
-        return await ctx.setup.set_current_setup_version({
-            "setup_id": self.setup_id,
-            "setup_version_id": self.setup_version_id,
-        })
+        return await ctx.with_structure(
+            await ctx.setup.set_current_setup_version({
+                "setup_id": self.setup_id,
+                "setup_version_id": self.setup_version_id,
+            })
+        )

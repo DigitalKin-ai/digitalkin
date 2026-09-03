@@ -16,7 +16,7 @@ class GatewayValidator:
     _ADDRESS_PATTERN: ClassVar[re.Pattern[str]] = re.compile(r"^[a-zA-Z0-9_.-]{1,253}:\d{1,5}$")
     # Wildcard bind addresses — invalid as dial-back targets even though
     # servers commonly bind to them. (S104 flags the literal as a bind hint.)
-    _WILDCARD_HOSTS: ClassVar[frozenset[str]] = frozenset({"[::]", "0.0.0.0", "::"})  # noqa: S104
+    _WILDCARD_HOSTS: ClassVar[frozenset[str]] = frozenset({"[::]", "0.0.0.0", "::"})  # ruff: ignore[hardcoded-bind-all-interfaces]
     _MASK_PATTERN: ClassVar[re.Pattern[str]] = re.compile(r"://([^:/@]*):([^@]+)@")
     _MAX_TCP_PORT: ClassVar[int] = 65535
 

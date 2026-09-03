@@ -3,7 +3,7 @@
 from functools import lru_cache
 from typing import Any
 
-from pydantic import Field
+from pydantic import Field, NonNegativeInt, model_validator
 from pydantic_settings import SettingsConfigDict
 
 from digitalkin.models.settings.utils.channel import BaseChannelSettings
@@ -26,15 +26,35 @@ class ServerChannelSettings(BaseChannelSettings):
         validate_assignment=True,
     )
 
+    host: str = Field(default="[::]", description="Host address the module server binds to")
+
+    port: NonNegativeInt = Field(default=50055, description="Port the module server listens on")
+
     advertise_host: str | None = Field(
-        None, description="Public hostname/IP sent to registry for discovery. Falls back to host if not set."
+        default=None,
+        description="Public hostname/IP sent to registry for discovery. Falls back to host if not set.",
+        json_schema_extra={"env_required": True, "env_example": "digitalkin-module-host"},
     )
 
-    database_url: str | None = Field(None, description="Database URL for registry data storage")
+    database_url: str | None = Field(default=None, description="Database URL for registry data storage")
 
     def __init__(self, **values: Any) -> None:
         """Initialize ServerChannelSettings with default credentials if not provided."""
         super().__init__(**values)
+
+    @model_validator(mode="after")
+    def validate_credentials(self) -> "ServerChannelSettings":
+        """Accept secure mode without explicit credential paths.
+
+        ``EnvManager.server_credentials`` falls back to the
+        ``CERTIFICATE_CERT_VOLUME`` directory and raises ``SecurityError``
+        when the key or certificate is missing there, so secure mode still
+        fails closed.
+
+        Returns:
+            The validated settings.
+        """
+        return self
 
 
 @lru_cache(maxsize=1)

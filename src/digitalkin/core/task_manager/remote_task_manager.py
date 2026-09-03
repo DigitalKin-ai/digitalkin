@@ -39,7 +39,7 @@ class RemoteTaskManager(BaseTaskManager):
         """
         await self._acquire_task_slot(coro)
         registered = False
-        try:  # noqa: PLW0717
+        try:  # ruff: ignore[too-many-statements-in-try-clause]
             # Validate and register session atomically
             async with self._tasks_lock:
                 await self._validate_task_creation(task_id, mission_id, coro)
