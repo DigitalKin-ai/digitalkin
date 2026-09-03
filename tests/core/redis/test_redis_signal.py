@@ -420,6 +420,7 @@ class TestSharedRedisListenerLifecycle:
         import time as _time
 
         from digitalkin.core.task_manager.redis.redis_signal import SharedRedisListener
+        from digitalkin.models.settings.redis import get_redis_settings
 
         records: list[logging.LogRecord] = []
         handler = logging.Handler()
@@ -519,6 +520,7 @@ class TestSharedRedisListenerRegisterIsFast:
         import time as _time
 
         from digitalkin.core.task_manager.redis.redis_signal import SharedRedisListener
+        from digitalkin.models.settings.redis import get_redis_settings
 
         class _SlowPubSub(_FakePubSub):
             async def psubscribe(self, *patterns: str) -> None:
@@ -536,6 +538,10 @@ class TestSharedRedisListenerRegisterIsFast:
         task = asyncio.create_task(long_running(), name="slow_subscribe_test")
         try:
             await listener.start()  # 2s slow PSUBSCRIBE happens here, once.
+            # Warm the settings singleton: the autouse cache-clearing fixture leaves it
+            # cold, and register() reads it — timing its first pydantic construction
+            # would measure the test harness, not the code under test.
+            get_redis_settings()
             t0 = _time.perf_counter_ns()
             listener.register("t1", session, task)
             elapsed_ms = (_time.perf_counter_ns() - t0) / 1e6

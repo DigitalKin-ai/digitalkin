@@ -153,7 +153,7 @@ class PlainJSONFormatter(logging.Formatter):
 class RequestIdLogFilter(logging.Filter):
     """Inject ambient request IDs (task/setup/mission) onto every log record."""
 
-    def filter(self, record: logging.LogRecord) -> bool:  # noqa: PLR6301
+    def filter(self, record: logging.LogRecord) -> bool:  # ruff: ignore[no-self-use]
         """Add ambient IDs to the record if present.
 
         Uses ``setdefault`` so an explicit ``extra=`` at the call site wins.

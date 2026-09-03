@@ -28,7 +28,7 @@ class TaskExecutor:
     """
 
     @staticmethod
-    async def execute_task(  # noqa: C901
+    async def execute_task(  # ruff: ignore[complex-structure]
         task_id: str,
         mission_id: str,
         coro: Coroutine[Any, Any, None],
@@ -73,11 +73,11 @@ class TaskExecutor:
                 action = session.pending_signal_action
                 session.pending_signal_action = ""
                 if action == "stop":
-                    await session._handle_stop()  # noqa: SLF001
+                    await session._handle_stop()  # ruff: ignore[private-member-access]
                 else:
                     if session.cancellation_reason == CancellationReason.UNKNOWN:
                         session.cancellation_reason = CancellationReason.SIGNAL_SERVICE_CANCEL
-                    await session._handle_cancel(session.cancellation_reason)  # noqa: SLF001
+                    await session._handle_cancel(session.cancellation_reason)  # ruff: ignore[private-member-access]
                 logger.info("Task cancelled (%s)", session.cancellation_reason.value, extra=ids)
             except Exception as e:
                 await session.set_status("failed")
