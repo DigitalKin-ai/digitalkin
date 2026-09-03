@@ -133,6 +133,25 @@ class TestCreateSetup:
         assert result.current_setup_version.setup_id == result.id
 
     @pytest.mark.grpc
+    @pytest.mark.integration
+    def test_create_setup_sends_documentation(
+        self,
+        client: GrpcSetup,
+        test_channel: grpc_testing.Channel,
+        mock_servicer: MockSetupServicer,
+        thread_pool: futures.ThreadPoolExecutor,
+    ) -> None:
+        future = thread_pool.submit(
+            asyncio.run,
+            client.create_setup({"name": "s", "content": {}, "documentation": "what it does"}),
+        )
+        request = _exchange(future, test_channel, "CreateSetup", mock_servicer.CreateSetup)
+
+        assert request.documentation == "what it does"
+        # Write-only on the wire: the Setup message carries none back.
+        assert future.result().documentation == ""
+
+    @pytest.mark.grpc
     @pytest.mark.validation
     async def test_create_setup_missing_fields_no_rpc(self, client: GrpcSetup) -> None:
         with pytest.raises(ValueError, match="name and content"):
@@ -258,6 +277,28 @@ class TestUpdateSetup:
         result = future.result()
         assert result.name == "renamed"
         assert result.current_setup_version.content == {"a": 2}
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    def test_update_setup_sends_documentation(
+        self,
+        client: GrpcSetup,
+        test_channel: grpc_testing.Channel,
+        mock_servicer: MockSetupServicer,
+        thread_pool: futures.ThreadPoolExecutor,
+    ) -> None:
+        seeded = _seed_setup(mock_servicer)
+
+        future = thread_pool.submit(
+            asyncio.run,
+            client.update_setup(
+                {"setup_id": seeded.id, "name": "n", "content": {}, "documentation": "revised"}
+            ),
+        )
+        request = _exchange(future, test_channel, "UpdateSetup", mock_servicer.UpdateSetup)
+
+        assert request.documentation == "revised"
+        future.result()
 
     @pytest.mark.grpc
     @pytest.mark.edge_case

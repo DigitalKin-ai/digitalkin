@@ -79,7 +79,7 @@ class DefaultSetup(SetupStrategy):
         """Create a new setup; identifiers are generated locally.
 
         Args:
-            setup_dict: Dictionary with 'name' and 'content'.
+            setup_dict: Dictionary with 'name', 'content' and optional 'documentation'.
 
         Returns:
             The created setup with its initial version.
@@ -97,6 +97,7 @@ class DefaultSetup(SetupStrategy):
                 module_id="local",
                 status=RegistrySetupStatus.READY,
                 visibility=Visibility.PRIVATE,
+                documentation=setup_dict.get("documentation") or "",
                 current_setup_version=SetupVersionData(
                     id=self._new_id(),
                     setup_id=setup_id,
@@ -122,7 +123,7 @@ class DefaultSetup(SetupStrategy):
 
         Args:
             setup_dict: Dictionary with 'setup_id', 'name', 'content' and optional
-                'set_as_current' (defaults to True).
+                'documentation' / 'set_as_current' (defaults to True).
 
         Returns:
             The updated setup with its current version.
@@ -138,6 +139,8 @@ class DefaultSetup(SetupStrategy):
             msg = "setup_id, name and content (object) are required"
             raise ValueError(msg)
         setup.name = name
+        # Mirrors the wire: documentation has no presence, so omitting it clears it.
+        setup.documentation = setup_dict.get("documentation") or ""
         # A new revision rather than an in-place edit, matching UpdateSetup on the wire.
         history = self.versions.setdefault(setup.id, [setup.current_setup_version])
         version = SetupVersionData(

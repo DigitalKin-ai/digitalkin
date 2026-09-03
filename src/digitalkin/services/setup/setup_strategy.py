@@ -35,6 +35,10 @@ class SetupData(BaseModel):
     (``READY``, ``VISIBILITY_PRIVATE``) or any-case string maps to the matching
     member, and an empty value (backends that predate the fields) becomes
     ``UNSPECIFIED``.
+
+    ``documentation`` is write-only on the wire: CreateSetup/UpdateSetup take it, the
+    ``Setup`` message never returns it, so it stays empty on a remote read and is only
+    populated by the in-memory strategy. Read it back through ``search_setups``.
     """
 
     id: str
@@ -45,6 +49,7 @@ class SetupData(BaseModel):
     current_setup_version: SetupVersionData
     status: RegistrySetupStatus = RegistrySetupStatus.UNSPECIFIED
     visibility: Visibility = Visibility.UNSPECIFIED
+    documentation: str = ""
 
 
 class SetupStrategy(ABC):
@@ -72,7 +77,7 @@ class SetupStrategy(ABC):
             The setup with its current version populated.
         """
 
-    async def create_service_setup(self, name: str, content: dict[str, Any]) -> SetupData:
+    async def create_service_setup(self, name: str, content: dict[str, Any], documentation: str = "") -> SetupData:
         """Create a service setup — a shareable configuration document.
 
         Only a name and the content JSON are needed; everything else (owner,
@@ -81,18 +86,19 @@ class SetupStrategy(ABC):
         Args:
             name: Human-readable service name.
             content: The service configuration JSON.
+            documentation: Free text indexed by the registry search.
 
         Returns:
             The created setup with its initial version.
         """
-        return await self.create_setup({"name": name, "content": content})
+        return await self.create_setup({"name": name, "content": content, "documentation": documentation})
 
     @abstractmethod
     async def create_setup(self, setup_dict: dict[str, Any]) -> SetupData:
         """Create a new setup; owner/organisation/module derive from the request context.
 
         Args:
-            setup_dict: Dictionary with 'name' and 'content'.
+            setup_dict: Dictionary with 'name', 'content' and optional 'documentation'.
 
         Returns:
             The created setup with its initial version.
@@ -103,7 +109,8 @@ class SetupStrategy(ABC):
         """Update a setup's name and current version content.
 
         Args:
-            setup_dict: Dictionary with 'setup_id', 'name' and 'content'.
+            setup_dict: Dictionary with 'setup_id', 'name', 'content' and optional
+                'documentation' (omitted clears it, as the wire carries no presence).
 
         Returns:
             The updated setup with its current version.

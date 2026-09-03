@@ -31,7 +31,7 @@
         # which is how a nested run's output is attributed to its author. Pinned exactly
         # because it is a dated prerelease; move to >=0.1.21 once that ships stable.
         "ag-ui-protocol==0.1.21.dev1787220377",
-        "agentic-mesh-protocol==1.0.1",
+        "agentic-mesh-protocol==1.0.2.dev1",
         "agno>=2.8.0,<3",
         "anyio>=4.13.0",
         "grpcio-health-checking==1.82.1",

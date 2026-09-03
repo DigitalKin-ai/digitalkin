@@ -13,6 +13,36 @@ class TestCreateServiceSetup:
         setup = await DefaultSetup().create_service_setup("Nikita", {"branding": True})
         assert setup.name == "Nikita"
         assert setup.current_setup_version.content == {"branding": True}
+        assert setup.documentation == ""
+
+    async def test_forwards_documentation(self) -> None:
+        setup = await DefaultSetup().create_service_setup("Nikita", {"branding": True}, "brand voice service")
+        assert setup.documentation == "brand voice service"
+
+
+class TestDocumentation:
+    """documentation is set at creation and rewritten on every update."""
+
+    async def test_create_stores_documentation(self) -> None:
+        setup = await DefaultSetup().create_setup({"name": "n", "content": {}, "documentation": "what it does"})
+        assert setup.documentation == "what it does"
+
+    async def test_update_replaces_documentation(self) -> None:
+        strategy = DefaultSetup()
+        setup = await strategy.create_setup({"name": "n", "content": {}, "documentation": "old"})
+
+        await strategy.update_setup(
+            {"setup_id": setup.id, "name": "n", "content": {}, "documentation": "new"}
+        )
+        assert setup.documentation == "new"
+
+    async def test_update_without_documentation_clears_it(self) -> None:
+        """No presence on the wire, so an omitted documentation is an empty one."""
+        strategy = DefaultSetup()
+        setup = await strategy.create_setup({"name": "n", "content": {}, "documentation": "old"})
+
+        await strategy.update_setup({"setup_id": setup.id, "name": "n", "content": {}})
+        assert setup.documentation == ""
 
 
 class TestVersionHistory:
