@@ -118,7 +118,7 @@ class BaseChannelSettings(BaseSettings):
         Raises:
             ConfigurationError: If port is outside valid range
         """
-        if not 0 < v < 65536:  # TCP port range constant # noqa: PLR2004
+        if not 0 < v < 65536:  # TCP port range constant # ruff: ignore[magic-value-comparison]
             msg = f"Port must be between 1 and 65535, got {v}"
             raise ConfigurationError(msg)
         return v

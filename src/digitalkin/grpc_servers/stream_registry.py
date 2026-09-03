@@ -39,7 +39,7 @@ class StreamRegistry:
 
     def __init__(
         self,
-        redis_client: RedisClient | None = None,  # noqa: ARG002 — kept for back-compat with callers
+        redis_client: RedisClient | None = None,  # ruff: ignore[unused-method-argument] — kept for back-compat with callers
     ) -> None:
         """Initialize the stream registry.
 
@@ -60,8 +60,8 @@ class StreamRegistry:
     async def register(
         self,
         session: StreamSession,
-        setup_id: str = "",  # noqa: ARG002 — accepted for back-compat with callers
-        mission_id: str = "",  # noqa: ARG002 — accepted for back-compat with callers
+        setup_id: str = "",  # ruff: ignore[unused-method-argument] — accepted for back-compat with callers
+        mission_id: str = "",  # ruff: ignore[unused-method-argument] — accepted for back-compat with callers
     ) -> bool:
         """Register a new session. Capacity is enforced process-locally.
 
