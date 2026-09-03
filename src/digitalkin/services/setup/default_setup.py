@@ -79,7 +79,7 @@ class DefaultSetup(SetupStrategy):
         """Create a new setup; identifiers are generated locally.
 
         Args:
-            setup_dict: Dictionary with 'name' and 'content'.
+            setup_dict: Dictionary with 'name', 'content' and optional 'documentation'.
 
         Returns:
             The created setup with its initial version.
@@ -100,6 +100,7 @@ class DefaultSetup(SetupStrategy):
                 current_setup_version=SetupVersionData(
                     id=self._new_id(),
                     setup_id=setup_id,
+                    documentation=setup_dict.get("documentation") or "",
                     version="1.0.0",
                     content=setup_dict.get("content") or {},
                     creation_date=datetime.datetime.now(datetime.timezone.utc),
@@ -122,7 +123,7 @@ class DefaultSetup(SetupStrategy):
 
         Args:
             setup_dict: Dictionary with 'setup_id', 'name', 'content' and optional
-                'set_as_current' (defaults to True).
+                'documentation' / 'set_as_current' (defaults to True).
 
         Returns:
             The updated setup with its current version.
@@ -145,6 +146,7 @@ class DefaultSetup(SetupStrategy):
             setup_id=setup.id,
             version=f"1.0.{len(history)}",
             content=content,
+            documentation=setup_dict.get("documentation") or "",
             creation_date=datetime.datetime.now(datetime.timezone.utc),
         )
         history.append(version)

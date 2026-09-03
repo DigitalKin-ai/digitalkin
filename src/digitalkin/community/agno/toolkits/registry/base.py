@@ -171,22 +171,23 @@ class RegistryAction(BaseAction[RegistryActionCtx], ABC):
 
     writes: ClassVar[bool] = False
 
-    @field_validator("name", check_fields=False)
+    @field_validator("name", "documentation", check_fields=False)
     @classmethod
-    def _name_has_no_control_chars(cls, value: str) -> str:
-        """Reject control characters in a user-facing ``name`` so it fails loudly, not silently.
+    def _text_has_no_control_chars(cls, value: str | None) -> str | None:
+        """Reject control characters in user-facing free text so it fails loudly, not silently.
 
-        The action's ``name`` bypasses the content validator, so without this a NUL byte or ANSI
-        escape would reach persistence and be stripped there, altering the value without telling
-        the caller. Applies to any action declaring ``name`` (update, service create).
+        ``name`` and ``documentation`` bypass the content validator, so without this a NUL byte
+        or ANSI escape would reach persistence and be stripped there, altering the value without
+        telling the caller. Applies to any action declaring either (update, service create).
+        ``None`` is the "leave unchanged" marker on update and has nothing to check.
 
         Returns:
-            The name unchanged when clean.
+            The value unchanged when clean.
 
         Raises:
-            ValueError: The name carries a control character.
+            ValueError: The value carries a control character.
         """
-        return SetupContentValidator.reject_control_chars(value)
+        return value if value is None else SetupContentValidator.reject_control_chars(value)
 
     @field_validator("content", check_fields=False)
     @classmethod

@@ -11,13 +11,19 @@ from digitalkin.models.services.storage import Visibility
 
 
 class SetupVersionData(BaseModel):
-    """Pydantic model for SetupVersion data validation."""
+    """Pydantic model for SetupVersion data validation.
+
+    ``documentation`` is cut with the version that carries it: CreateSetup/UpdateSetup take
+    it alongside ``content``, and the ``SetupVersion`` message returns it, so a read gives
+    back the text stored with the active revision.
+    """
 
     id: str
     setup_id: str
     version: str
     content: dict[str, Any]
     creation_date: datetime.datetime
+    documentation: str = ""
 
 
 class SetupVersionPage(BaseModel):
@@ -35,6 +41,9 @@ class SetupData(BaseModel):
     (``READY``, ``VISIBILITY_PRIVATE``) or any-case string maps to the matching
     member, and an empty value (backends that predate the fields) becomes
     ``UNSPECIFIED``.
+
+    The setup's documentation lives on the version that carries it — read it at
+    ``current_setup_version.documentation``.
     """
 
     id: str
@@ -72,7 +81,7 @@ class SetupStrategy(ABC):
             The setup with its current version populated.
         """
 
-    async def create_service_setup(self, name: str, content: dict[str, Any]) -> SetupData:
+    async def create_service_setup(self, name: str, content: dict[str, Any], documentation: str = "") -> SetupData:
         """Create a service setup — a shareable configuration document.
 
         Only a name and the content JSON are needed; everything else (owner,
@@ -81,18 +90,19 @@ class SetupStrategy(ABC):
         Args:
             name: Human-readable service name.
             content: The service configuration JSON.
+            documentation: Free text indexed by the registry search.
 
         Returns:
             The created setup with its initial version.
         """
-        return await self.create_setup({"name": name, "content": content})
+        return await self.create_setup({"name": name, "content": content, "documentation": documentation})
 
     @abstractmethod
     async def create_setup(self, setup_dict: dict[str, Any]) -> SetupData:
         """Create a new setup; owner/organisation/module derive from the request context.
 
         Args:
-            setup_dict: Dictionary with 'name' and 'content'.
+            setup_dict: Dictionary with 'name', 'content' and optional 'documentation'.
 
         Returns:
             The created setup with its initial version.
@@ -103,7 +113,8 @@ class SetupStrategy(ABC):
         """Update a setup's name and current version content.
 
         Args:
-            setup_dict: Dictionary with 'setup_id', 'name' and 'content'.
+            setup_dict: Dictionary with 'setup_id', 'name', 'content' and optional
+                'documentation' (cut onto the new version, like 'content').
 
         Returns:
             The updated setup with its current version.

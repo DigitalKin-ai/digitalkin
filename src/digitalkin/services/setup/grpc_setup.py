@@ -166,7 +166,7 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
         """Create a new setup; owner/organisation/module derive from the request context.
 
         Args:
-            setup_dict: Dictionary with 'name' and 'content'.
+            setup_dict: Dictionary with 'name', 'content' and optional 'documentation'.
 
         Returns:
             The created setup with its initial version.
@@ -182,7 +182,11 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
         async with self.handle_grpc_errors("Setup Creation"):
             content_struct = Struct()
             content_struct.update(setup_dict["content"])
-            request = setup_pb2.CreateSetupRequest(name=setup_dict["name"], content=content_struct)
+            request = setup_pb2.CreateSetupRequest(
+                name=setup_dict["name"],
+                content=content_struct,
+                documentation=setup_dict.get("documentation") or "",
+            )
             response = await self.exec_grpc_query("CreateSetup", request)
             if not response.success:
                 msg = f"setup creation refused for '{setup_dict['name']}'"
@@ -195,7 +199,7 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
 
         Args:
             setup_dict: Dictionary with 'setup_id', 'name', 'content' and optional
-                'set_as_current' (defaults to True).
+                'documentation' / 'set_as_current' (defaults to True).
 
         Returns:
             The updated setup with its current version.
@@ -222,6 +226,7 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
                 name=setup_dict["name"],
                 content=content_struct,
                 set_as_current=bool(setup_dict.get("set_as_current", True)),
+                documentation=setup_dict.get("documentation") or "",
             )
             response = await self.exec_grpc_query("UpdateSetup", request)
             if not response.success:

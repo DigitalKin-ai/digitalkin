@@ -48,14 +48,20 @@ class CreateServiceAction(RegistryAction):
         description="The service configuration (a non-empty JSON object). "
         "Note: JSON numbers round-trip as floats over the wire.",
     )
+    documentation: str = Field(
+        default="",
+        description="Free text describing what this service is for and when to use it. It is "
+        "what ``search`` matches on and previews back, so a service created without it is "
+        "findable only by name.",
+    )
 
     async def execute(self, ctx: RegistryActionCtx) -> Any:
-        """Create the service setup from its name and content.
+        """Create the service setup from its name, content and documentation.
 
         Returns:
             The created service setup.
         """
-        return await ctx.setup.create_service_setup(self.name, self.content)
+        return await ctx.setup.create_service_setup(self.name, self.content, self.documentation)
 
 
 class LoadServiceAction(RegistryAction):
