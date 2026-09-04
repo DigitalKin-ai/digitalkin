@@ -188,7 +188,7 @@ class M2MCallRegistry:
             "mission_id": handle.mission_id,
             "target_key": handle.target_key,
         }
-        logger.info("[m2m-dialback] dial-back received, replying with query", extra=log_extra)
+        logger.debug("[m2m-dialback] dial-back received, replying with query", extra=log_extra)
         yield gateway_pb2.StreamClient(from_seq=0, task_id=task_id, data=handle.query)
 
         try:

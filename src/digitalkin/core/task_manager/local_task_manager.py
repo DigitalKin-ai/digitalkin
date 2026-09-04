@@ -55,7 +55,7 @@ class LocalTaskManager(BaseTaskManager):
                 session = self._create_session(task_id, mission_id, module)
                 registered = True
 
-            logger.info(
+            logger.debug(
                 "Creating local task: '%s'",
                 task_id,
                 extra={
@@ -77,7 +77,7 @@ class LocalTaskManager(BaseTaskManager):
             )
             self.tasks[task_id] = supervisor_task
 
-            logger.info(
+            logger.debug(
                 "Local task created and started: '%s' (total_tasks=%d)",
                 task_id,
                 len(self.tasks),

@@ -46,7 +46,7 @@ class RemoteTaskManager(BaseTaskManager):
                 self._create_session(task_id, mission_id, module)
                 registered = True
 
-            logger.info(
+            logger.debug(
                 "Registering remote task: '%s'",
                 task_id,
                 extra={
@@ -58,7 +58,7 @@ class RemoteTaskManager(BaseTaskManager):
             # Close coroutine - worker will recreate and execute it
             coro.close()
 
-            logger.info(
+            logger.debug(
                 "Remote task registered: '%s' (total_sessions=%d)",
                 task_id,
                 len(self.tasks_sessions),

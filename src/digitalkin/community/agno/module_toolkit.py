@@ -24,6 +24,7 @@ from digitalkin.core.profiling.step_timer import StepTimer
 from digitalkin.logger import logger
 from digitalkin.models.module import ModuleContext
 from digitalkin.models.module.ag_ui import AgUiCustomEventOutput, AgUiOutput
+from digitalkin.models.module.module_context import STREAM_SENTINEL_PROTOCOLS
 from digitalkin.models.module.tool_cache import ToolDefinition, ToolModuleInfo
 
 # Default timeout for tool calls in seconds
@@ -89,29 +90,10 @@ class ModuleToolkit(DkToolkit):
         self._tool_module_info = tool_module_info
         self._timeout = timeout_seconds
 
-        sdk_tool_names = sorted(t.name for t in tool_module_info.tools)
-        logger.info(
-            "Creating ModuleToolkit: setup_id='%s' slug='%s' module_name='%s' sdk_tools_count=%d sdk_tool_names=%s",
-            tool_module_info.setup_id,
-            tool_module_info.slug,
-            tool_module_info.module_name,
-            len(tool_module_info.tools),
-            sdk_tool_names,
-        )
-
         tool_functions = context.create_tool_functions(tool_module_info.setup_id)
 
         if allowed_tools is not None:
             tool_functions = [(td, fn) for td, fn in tool_functions if td.name in allowed_tools]
-
-        fn_names = sorted(td.name for td, _ in tool_functions)
-        logger.info(
-            "Built tool_functions: setup_id='%s' slug='%s' fn_count=%d fn_names=%s",
-            tool_module_info.setup_id,
-            tool_module_info.slug,
-            len(tool_functions),
-            fn_names,
-        )
 
         # Function objects with explicit JSON schema + skip_entrypoint_processing=True
         # bypass Agno's inspect.signature() introspection, which sees **kwargs: Any and
@@ -129,16 +111,9 @@ class ModuleToolkit(DkToolkit):
                     skip_entrypoint_processing=True,
                 )
             )
-            logger.info(
-                "[lat-audit] tool_wrapped: setup_id='%s' fn_name='%s' param_count=%d param_names=%s desc_chars=%d",
-                tool_module_info.setup_id,
-                wrapper.__name__,
-                tool_def.parameter_count,
-                sorted(tool_def.parameter_names),
-                len(tool_def.description or ""),
-            )
 
         if not agno_functions:
+            sdk_tool_names = sorted(t.name for t in tool_module_info.tools)
             if not tool_module_info.tools:
                 reason = "sdk_returned_zero_tools"
             elif not tool_functions:
@@ -156,13 +131,12 @@ class ModuleToolkit(DkToolkit):
                 len(tool_functions),
             )
 
-        logger.info(
-            "[lat-audit] toolkit_built: setup_id='%s' slug='%s' sdk_tools=%d wrapped=%d empty=%s",
-            tool_module_info.setup_id,
+        logger.debug(
+            "ModuleToolkit built: slug=%s setup_id=%s tools=%d/%d",
             tool_module_info.slug,
-            len(tool_module_info.tools),
+            tool_module_info.setup_id,
             len(agno_functions),
-            not agno_functions,
+            len(tool_module_info.tools),
         )
 
         toolkit_name = (
@@ -312,11 +286,12 @@ class ModuleToolkit(DkToolkit):
         if tool_metadata and tool_metadata.cost_estimate_usd is not None:
             cost_info = f", cost=${tool_metadata.cost_estimate_usd:.4f}"
         logger.info(
-            "Tool '%s' completed in %.2fms (success=True%s, images=%d) setup_id=%s task_id=%s",
+            "Tool '%s' completed in %.2fms (success=True%s, images=%d) args=%s setup_id=%s task_id=%s",
             tool_name,
             duration_ms,
             cost_info,
             len(image_urls),
+            sorted(input_kwargs),
             self._tool_module_info.setup_id,
             self._context.session.job_id,
         )
@@ -346,10 +321,11 @@ class ModuleToolkit(DkToolkit):
             input_kwargs=input_kwargs,
         )
         logger.warning(
-            "Tool '%s' failed in %.2fms: %s setup_id=%s task_id=%s",
+            "Tool '%s' failed in %.2fms: %s args=%s setup_id=%s task_id=%s",
             tool_name,
             duration_ms,
             error_msg,
+            sorted(input_kwargs),
             self._tool_module_info.setup_id,
             self._context.session.job_id,
         )
@@ -362,17 +338,28 @@ class ModuleToolkit(DkToolkit):
         Each response is the ``MessageToDict`` of a payload Struct, shape
         ``{"root": {"protocol": "...", ...}, "annotations": {...}}``. A
         "successful" response is the most recent one whose ``root.protocol``
-        is *not* a lifecycle/error sentinel.
+        is *not* a lifecycle/error sentinel. A fatal ``stream.error`` anywhere in
+        the stream (e.g. a tool that streamed progress lines and then died, or a
+        gateway idle timeout ending the stream mid-call) means the tool did not
+        finish, regardless of what streamed before or after it. A non-fatal
+        ``stream.error`` (the target module kept the stream open) does not fail
+        the call on its own.
 
         Returns:
-            The matching dict, or None if every response was a sentinel.
+            The matching dict, or None if any response was a fatal stream.error
+            or every response was a sentinel.
         """
+        for resp in results:
+            root = resp.get("root")
+            if isinstance(root, dict) and root.get("protocol") == "stream.error" and root.get("fatal"):
+                return None
+
         for resp in reversed(results):
             root = resp.get("root")
             if not isinstance(root, dict):
                 continue
             protocol = root.get("protocol", "")
-            if protocol in {"stream.start", "stream.end", "stream.init", "stream.error"}:
+            if protocol in STREAM_SENTINEL_PROTOCOLS:
                 continue
             return resp
         return None
@@ -477,13 +464,18 @@ class ModuleToolkit(DkToolkit):
         tag = f"tool.call[{self._tool_module_info.slug}/{tool_name}]"
 
         async def wrapper(**kwargs: Any) -> str | ToolResult:
+            if context.session.cancelled:
+                logger.warning("Tool call refused after task cancellation: tool=%s task_id=%s", tool_name, task_id)
+                msg = f"task cancelled before tool '{tool_name}'"
+                raise asyncio.CancelledError(msg)
+
             start_time = time.perf_counter()
             call_timer = StepTimer()
             outcome = "ok"
 
             kwargs = ModuleToolkit._unwrap_kwargs(kwargs, tool_name, expected_params)
 
-            logger.info(
+            logger.debug(
                 "Calling tool '%s' with kwargs: %s setup_id=%s task_id=%s",
                 tool_name,
                 list(kwargs.keys()),

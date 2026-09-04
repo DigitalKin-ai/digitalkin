@@ -271,7 +271,7 @@ class GatewayServicer:
             return gateway_pb2.StartStreamResponse(accepted=False, task_id=task_id)
         timer.mark("xadd_stream_start")
 
-        logger.info("→ Dial-back scheduled to consumer %s", client_address, extra=log_extra)
+        logger.debug("→ Dial-back scheduled to consumer %s", client_address, extra=log_extra)
         self._spawn(
             self._dial_consumer(
                 task_id=task_id,
@@ -625,7 +625,7 @@ class GatewayServicer:
         async for struct_data in reader.read_structs(skip_to_seq=skip_to_seq):
             if first:
                 t2 = time.perf_counter_ns()
-                logger.info(
+                logger.debug(
                     "Stream: cursor=%.1fms xread_wait=%.1fms total_to_first=%.1fms task_id=%s",
                     (t1 - t0) / 1e6,
                     (t2 - t1) / 1e6,
@@ -641,7 +641,7 @@ class GatewayServicer:
         seq = reader._last_seq + 2 if resume else seq + 1  # noqa: SLF001
         yield self._sentinel(seq, task_id, "stream.end")
         t_after_yield = time.perf_counter_ns()
-        logger.info(
+        logger.debug(
             "[close-debug] gateway_stream_end: reader_to_yield=%.2fms t_yielded_ns=%d task_id=%s",
             (t_after_yield - t_after_reader) / 1e6,
             t_after_yield,
@@ -879,7 +879,7 @@ class GatewayServicer:
             )
             return False
         t_stub = time.perf_counter_ns()
-        logger.info("→ Dial-back channel ready to %s", address, extra=log_extra)
+        logger.debug("→ Dial-back channel ready to %s", address, extra=log_extra)
 
         def _ch_state(chan: Any) -> str:
             """Best-effort connectivity probe.
@@ -893,7 +893,7 @@ class GatewayServicer:
             except Exception as exc:
                 return f"err:{type(exc).__name__}"
 
-        logger.info(
+        logger.debug(
             "[dial-debug] channel_ready dt_init=%.3fms ch_state=%s channel_id=%s ref_count=%d cache_keys=%d",
             (t_stub - t_dial0) / 1e6,
             _ch_state(comm._channel),  # noqa: SLF001
@@ -932,13 +932,13 @@ class GatewayServicer:
             nonlocal delivered_eos
             try:
                 yield init_server
-                logger.info(
+                logger.debug(
                     "→ %s sent, waiting for consumer reply before draining outputs",
                     handshake,
                     extra={"task_id": task_id, "mission_id": mission_id, "setup_id": setup_id},
                 )
                 await output_started.wait()
-                logger.info(
+                logger.debug(
                     "✓ Output drain started — streaming module outputs to consumer",
                     extra={"task_id": task_id, "mission_id": mission_id, "setup_id": setup_id},
                 )
@@ -998,14 +998,14 @@ class GatewayServicer:
 
         retriable = False
         t_pre_stream = time.perf_counter_ns()
-        logger.info(
+        logger.debug(
             "[dial-debug] pre_stream dt_since_ready=%.3fms ch_state=%s",
             (t_pre_stream - t_stub) / 1e6,
             _ch_state(comm._channel),  # noqa: SLF001
             extra=log_extra,
         )
         try:  # noqa: PLW0717
-            logger.info(
+            logger.debug(
                 "→ Opening BiDi to consumer %s (sending %s)",
                 address,
                 handshake,
@@ -1034,7 +1034,7 @@ class GatewayServicer:
                 except StopAsyncIteration:
                     break
                 except asyncio.TimeoutError:
-                    logger.info(
+                    logger.debug(
                         "Consumer didn't close response stream within %.1fs after stream.end — closing BiDi",
                         grace,
                         extra=log_extra,
@@ -1046,7 +1046,7 @@ class GatewayServicer:
                 if first and resume:
                     limit = get_gateway_settings().stream.from_seq_limit
                     resume_cursor = min(upstream.from_seq, limit)
-                    logger.info(
+                    logger.debug(
                         "← Consumer resume cursor=%d received — resuming output (no re-run)",
                         resume_cursor,
                         extra=log_extra,
@@ -1058,7 +1058,7 @@ class GatewayServicer:
                 if not (upstream.data and len(upstream.data.fields) > 0):
                     continue
                 if first:
-                    logger.info(
+                    logger.debug(
                         "← First consumer reply received — starting module runner",
                         extra=log_extra,
                     )

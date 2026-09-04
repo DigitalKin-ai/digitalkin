@@ -102,7 +102,7 @@ class BaseTaskManager(ABC):
             self._task_slot.release()
             if get_task_manager_settings().max_queued_tasks > 0:
                 self._system_gate.release()
-            logger.info(
+            logger.debug(
                 "Task cleaned up (%d remaining) final_status=%s cancellation_reason=%s",
                 len(self.tasks_sessions),
                 final_status,
@@ -194,7 +194,7 @@ class BaseTaskManager(ABC):
 
         self._waiting_count += 1
         if self._waiting_count > 0:
-            logger.info(
+            logger.debug(
                 "Task queued for execution (%d waiting, %d/%d slots busy)",
                 self._waiting_count,
                 self._active_slots,
@@ -302,7 +302,7 @@ class BaseTaskManager(ABC):
             )
             return False
 
-        logger.info(
+        logger.debug(
             "Sending signal '%s' to task '%s'",
             signal_type,
             task_id,
@@ -425,7 +425,9 @@ class BaseTaskManager(ABC):
         else:
             await self._cleanup_task(task_id, mission_id)
 
-        logger.info("Cleaning up session for task: '%s'", task_id, extra={"mission_id": mission_id, "task_id": task_id})
+        logger.debug(
+            "Cleaning up session for task: '%s'", task_id, extra={"mission_id": mission_id, "task_id": task_id}
+        )
         return True
 
     async def cancel_all_tasks(self, mission_id: str, timeout: float | None = None) -> dict[str, bool | BaseException]:

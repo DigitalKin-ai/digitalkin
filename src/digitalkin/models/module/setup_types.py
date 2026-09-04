@@ -527,7 +527,7 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
                 infos = await tool_ref.resolve(registry, communication, trim=False)
                 for info in infos:
                     self.resolved_tools[info.setup_id] = info
-                    logger.info("Resolved tool '%s' -> module_id=%s", info.setup_id, info.module_id)
+                    logger.debug("Resolved tool '%s' -> module_id=%s", info.setup_id, info.module_id)
             except Exception:
                 logger.exception("Failed to resolve ToolReference '%s'", field_name)
 

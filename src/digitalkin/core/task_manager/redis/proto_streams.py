@@ -114,7 +114,7 @@ class ProtoStreamReader:
 
                     eos = fields.get(b"eos", b"")
                     if eos == b"true":
-                        logger.info(
+                        logger.debug(
                             "[close-debug] reader_saw_eos: last_xread_block=%.2fms t_seen_ns=%d task_id=%s",
                             (t_xread_end - t_xread_start) / 1e6,
                             t_xread_end,

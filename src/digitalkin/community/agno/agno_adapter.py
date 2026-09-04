@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 import uuid
 from typing import TYPE_CHECKING, Any, TypeAlias
 
@@ -99,8 +100,9 @@ class AgnoStreamAdapter:
         self._completed_run_ids: set[str] = set()
         # Delegations in flight, keyed by the child's run id — which is exactly the
         # ``subagent_run_id`` every event that child produces carries. Value is its display
-        # name and the metadata of the event that opened it.
-        self._subagents: dict[str, tuple[str, dict[str, Any] | None]] = {}
+        # name, the metadata of the event that opened it, and the ``time.monotonic()``
+        # timestamp it started at (used to log the member's run duration on completion).
+        self._subagents: dict[str, tuple[str, dict[str, Any] | None, float]] = {}
 
         self._is_paused: bool = False
         self._paused_tool_executions: list[Any] = []
@@ -269,7 +271,7 @@ class AgnoStreamAdapter:
             # named step so the client can show progress, and close the parent's open
             # bubble so the member's content lands in its own labelled message.
             if not run_id:
-                logger.info("[agno-adapter] DROP nested run_started without run_id parent_run_id=%s", parent_run_id)
+                logger.debug("[agno-adapter] DROP nested run_started without run_id parent_run_id=%s", parent_run_id)
                 return []
 
             # Close the parent's own sequences so its bubble does not stay open across the
@@ -281,7 +283,7 @@ class AgnoStreamAdapter:
             # Attribution is by id, so the name is a plain label — no need to disambiguate
             # members that share one, as the step-based scheme required.
             name = (self._last_metadata or {}).get("name") or "member"
-            self._subagents[run_id] = (name, self._last_metadata)
+            self._subagents[run_id] = (name, self._last_metadata, time.monotonic())
 
             logger.info(
                 "[agno-adapter] SUBAGENT_STARTED name=%s subagent_run_id=%s parent_run_id=%s",
@@ -303,10 +305,10 @@ class AgnoStreamAdapter:
             return events
 
         if run_id and run_id == self._active_run_id:
-            logger.info("[agno-adapter] DROP duplicate run_started run_id=%s", run_id)
+            logger.debug("[agno-adapter] DROP duplicate run_started run_id=%s", run_id)
             return []
 
-        logger.info(
+        logger.debug(
             "[agno-adapter] EMIT run_started run_id=%s session_id=%s active_was=%s metadata=%s",
             run_id,
             getattr(agno_event, "session_id", None),
@@ -356,20 +358,31 @@ class AgnoStreamAdapter:
                         metadata=subagent[1],
                     )
                 )
-            logger.info(
-                "[agno-adapter] SUBAGENT_FINISHED name=%s subagent_run_id=%s parent_run_id=%s closed=%d",
-                subagent[0] if subagent else None,
-                run_id,
-                parent_run_id,
-                len(events),
-            )
+            if subagent is None:
+                logger.info(
+                    "[agno-adapter] SUBAGENT_FINISHED name=unknown subagent_run_id=%s parent_run_id=%s closed=%d",
+                    run_id,
+                    parent_run_id,
+                    len(events),
+                )
+            else:
+                elapsed_s = time.monotonic() - subagent[2]
+                logger.info(
+                    "[agno-adapter] SUBAGENT_FINISHED name=%s subagent_run_id=%s parent_run_id=%s "
+                    "closed=%d elapsed_s=%.1f",
+                    subagent[0],
+                    run_id,
+                    parent_run_id,
+                    len(events),
+                    elapsed_s,
+                )
             return events
 
         if run_id and run_id in self._completed_run_ids and run_id != self._active_run_id:
-            logger.info("[agno-adapter] DROP duplicate run_completed run_id=%s", run_id)
+            logger.debug("[agno-adapter] DROP duplicate run_completed run_id=%s", run_id)
             return []
 
-        logger.info(
+        logger.debug(
             "[agno-adapter] EMIT run_completed run_id=%s active_run_id=%s",
             run_id,
             self._active_run_id,
@@ -414,7 +427,13 @@ class AgnoStreamAdapter:
             events = self._close_content(run_id, timestamp)
             events.extend(self._close_reasoning(run_id, timestamp))
             subagent = self._subagents.pop(run_id)
-            logger.info("[agno-adapter] SUBAGENT_ERROR name=%s subagent_run_id=%s", subagent[0], run_id)
+            elapsed_s = time.monotonic() - subagent[2]
+            logger.info(
+                "[agno-adapter] SUBAGENT_ERROR name=%s subagent_run_id=%s elapsed_s=%.1f",
+                subagent[0],
+                run_id,
+                elapsed_s,
+            )
             events.append(
                 SubagentErrorEvent(
                     event=AgentRunEvent.SUBAGENT_ERROR,
@@ -839,7 +858,7 @@ class AgnoStreamAdapter:
                 timestamp=timestamp,
                 metadata=metadata,
             )
-            for run_id, (_, metadata) in reversed(list(self._subagents.items()))
+            for run_id, (_, metadata, _start) in reversed(list(self._subagents.items()))
         ]
         self._subagents.clear()
         return events

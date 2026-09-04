@@ -13,6 +13,7 @@ best-effort ``SendSignal(CANCEL)`` to the target.
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from collections.abc import AsyncIterator
 from typing import Any
@@ -288,6 +289,88 @@ class TestCallTimeout:
                 mission_id="missions:test",
             ):
                 pass
+
+    async def test_timeout_after_handshake_only_reports_chunks_seen_zero(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Only the dial-back handshake frame arrived; it must not inflate ``chunks_seen``."""
+        monkeypatch.setenv("DIGITALKIN_M2M_CALL_TIMEOUT_S", "0.15")
+        get_gateway_settings.cache_clear()
+        gw = _gw()
+        comm = _comm(gw)
+
+        stub_mock = MagicMock()
+        stub_mock.StartStream = AsyncMock(
+            return_value=gateway_pb2.StartStreamResponse(accepted=True, task_id="tid"),
+        )
+        stub_mock.SendSignal = AsyncMock()
+        comm._get_or_create_channel = MagicMock(return_value=MagicMock())  # type: ignore[method-assign]
+        comm._get_or_create_stub = MagicMock(return_value=stub_mock)  # type: ignore[method-assign]
+
+        async def _drive() -> None:
+            async for _ in comm.call_module(
+                module_address="127.0.0.1",
+                module_port=9999,
+                input_data={"root": {"protocol": "x"}},
+                setup_id="setups:test",
+                mission_id="missions:test",
+            ):
+                pass
+
+        task = asyncio.create_task(_drive())
+        await asyncio.sleep(0.02)  # let call_module register and call StartStream
+        entry = gw._m2m.get("tid")
+        assert entry is not None
+        # Only the dial-back handshake frame arrives; no domain output ever does.
+        entry.output_queue.put_nowait(_struct({"root": {"protocol": "stream.init"}}))
+
+        with caplog.at_level(logging.WARNING, logger="digitalkin"), pytest.raises(M2MCallTimeout):
+            await task
+
+        records = [r for r in caplog.records if "call_module_failed" in r.getMessage()]
+        assert len(records) == 1
+        assert "chunks_seen=0" in records[0].getMessage()
+
+    async def test_timeout_after_resume_handshake_only_reports_chunks_seen_zero(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """`stream.resume` is a handshake sentinel too; it must not inflate ``chunks_seen``."""
+        monkeypatch.setenv("DIGITALKIN_M2M_CALL_TIMEOUT_S", "0.15")
+        get_gateway_settings.cache_clear()
+        gw = _gw()
+        comm = _comm(gw)
+
+        stub_mock = MagicMock()
+        stub_mock.StartStream = AsyncMock(
+            return_value=gateway_pb2.StartStreamResponse(accepted=True, task_id="tid"),
+        )
+        stub_mock.SendSignal = AsyncMock()
+        comm._get_or_create_channel = MagicMock(return_value=MagicMock())  # type: ignore[method-assign]
+        comm._get_or_create_stub = MagicMock(return_value=stub_mock)  # type: ignore[method-assign]
+
+        async def _drive() -> None:
+            async for _ in comm.call_module(
+                module_address="127.0.0.1",
+                module_port=9999,
+                input_data={"root": {"protocol": "x"}},
+                setup_id="setups:test",
+                mission_id="missions:test",
+            ):
+                pass
+
+        task = asyncio.create_task(_drive())
+        await asyncio.sleep(0.02)  # let call_module register and call StartStream
+        entry = gw._m2m.get("tid")
+        assert entry is not None
+        # Only the resume handshake frame arrives; no domain output ever does.
+        entry.output_queue.put_nowait(_struct({"root": {"protocol": "stream.resume"}}))
+
+        with caplog.at_level(logging.WARNING, logger="digitalkin"), pytest.raises(M2MCallTimeout):
+            await task
+
+        records = [r for r in caplog.records if "call_module_failed" in r.getMessage()]
+        assert len(records) == 1
+        assert "chunks_seen=0" in records[0].getMessage()
 
 
 class TestCancellation:

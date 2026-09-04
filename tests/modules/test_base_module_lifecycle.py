@@ -357,6 +357,7 @@ class TestRunLifecycle:
             await module._run_lifecycle(_LcInputModel(root=_LcInputTrigger()), _LcSetupModel())
 
         assert module.status == ModuleStatus.CANCELLED
+        assert module.context.session.cancelled is True
 
     @pytest.mark.unit
     @pytest.mark.regression

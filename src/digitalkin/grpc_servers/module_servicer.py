@@ -214,7 +214,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             # ``module_servicer.py:367``) clears the entry.
             if value is not None:
                 self.set_tool_cache(setup_id, value)
-                logger.info("tool cache built for setup '%s'", setup_id)
+                logger.debug("tool cache built for setup '%s'", setup_id)
             fut.set_result(value)
         except Exception as exc:
             fut.set_exception(exc)
@@ -290,14 +290,10 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         allowed = await self.user_profile.check_resource_access(user_profile_pb2.RESOURCE_TYPE_SETUP, setup_id)
         ids = RequestContext.current()
         if not allowed:
-            logger.info(
-                "[VALIDATE AC1] setup access DENIED: setup_id=%s", setup_id, extra=ids
-            )  # TODO(validate): remove after prod validation
+            logger.warning("[VALIDATE AC1] setup access DENIED: setup_id=%s", setup_id, extra=ids)
             msg = f"access denied to setup {setup_id}"
             raise PermissionDeniedError(msg)
-        logger.info(
-            "[VALIDATE AC1] setup access granted: setup_id=%s", setup_id, extra=ids
-        )  # TODO(validate): remove after prod validation
+        logger.debug("[VALIDATE AC1] setup access granted: setup_id=%s", setup_id, extra=ids)
 
     async def resolve_setup(self, setup_id: str, mission_id: str) -> SetupVersionData:
         """Return setup version data from cache or remote service.
@@ -375,7 +371,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         Raises:
             ServicerError: if the setup data is not returned or job creation fails.
         """
-        logger.info(
+        logger.debug(
             "ConfigSetupVersion called for module '%s' setup_version=%s",
             self.module_class.__name__,
             request.setup_version.id,
@@ -385,9 +381,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         if not await self.user_profile.check_resource_access(
             user_profile_pb2.RESOURCE_TYPE_SETUP, setup_version.setup_id
         ):
-            logger.info(
-                "[VALIDATE AC1] setup config access DENIED: setup_id=%s", setup_version.setup_id
-            )  # TODO(validate): remove after prod validation
+            logger.warning("[VALIDATE AC1] setup config access DENIED: setup_id=%s", setup_version.setup_id)
             context.set_code(grpc.StatusCode.PERMISSION_DENIED)
             context.set_details(f"access denied to setup {setup_version.setup_id}")
             return lifecycle_pb2.ConfigSetupModuleResponse(success=False)

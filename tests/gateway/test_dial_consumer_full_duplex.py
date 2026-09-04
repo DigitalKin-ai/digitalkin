@@ -16,6 +16,7 @@ exercised by `test_dial_consumer.py`.
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any
 
 import grpc.aio
@@ -108,8 +109,16 @@ class TestFullDuplex:
         finally:
             await server.stop(grace=0.1)
 
-    async def test_unbounded_outputs(self, gateway_with_runner) -> None:
-        """100 outputs pumped through task:{id}:stream all reach the consumer."""
+    async def test_unbounded_outputs(self, gateway_with_runner, caplog: pytest.LogCaptureFixture) -> None:
+        """100 outputs pumped through task:{id}:stream all reach the consumer.
+
+        Also covers the full StartStream -> dial-back -> drain cycle's log
+        volume: this GatewayServicer path never reaches ``TaskExecutor``
+        (the module runner is faked), so the only INFO line from
+        ``digitalkin.*`` loggers for the whole cycle is the "Task accepted"
+        lifecycle line — everything else (dial-back scheduling, channel
+        readiness, handshake, drain start, cursor timing) is DEBUG-level trace.
+        """
         gateway, redis = gateway_with_runner
         n_outputs = 100
         servicer = _FakeConsumerServicer(query_data={"q": "go"})
@@ -129,14 +138,15 @@ class TestFullDuplex:
                 await redis.xadd(stream_key, {"pb": s.SerializeToString(), "seq": str(i + 1)})
             await redis.xadd(stream_key, {"eos": b"true"})
 
-            ctx = _mock_context({"x-client-address": f"127.0.0.1:{port}"})
-            await gateway.StartStream(_start_request(task_id), ctx)
+            with caplog.at_level(logging.INFO, logger="digitalkin"):
+                ctx = _mock_context({"x-client-address": f"127.0.0.1:{port}"})
+                await gateway.StartStream(_start_request(task_id), ctx)
 
-            # Wait until the consumer sees stream.end on the wire.
-            for _ in range(200):
-                if any(_protocol_of(m) == "stream.end" for m in servicer.received):
-                    break
-                await asyncio.sleep(0.1)
+                # Wait until the consumer sees stream.end on the wire.
+                for _ in range(200):
+                    if any(_protocol_of(m) == "stream.end" for m in servicer.received):
+                        break
+                    await asyncio.sleep(0.1)
 
             ticks = [
                 int(m.data.fields["root"].struct_value.fields["i"].number_value)
@@ -146,5 +156,16 @@ class TestFullDuplex:
             assert ticks == list(range(n_outputs))
             protos = [_protocol_of(m) for m in servicer.received]
             assert protos[-1] == "stream.end"
+
+            # This cycle never reaches TaskExecutor (fake module runner), so
+            # "Task accepted" is the only lifecycle line — and the only INFO line.
+            info = [
+                r.getMessage()
+                for r in caplog.records
+                if r.levelno == logging.INFO and r.name.startswith("digitalkin")
+            ]
+            lifecycle = [m for m in info if m.startswith("Task accepted")]
+            assert len(lifecycle) == 1, info
+            assert info == lifecycle, info
         finally:
             await server.stop(grace=0.1)

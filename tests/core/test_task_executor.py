@@ -8,6 +8,7 @@ separate signal listener task is gone.
 
 import asyncio
 import contextlib
+import logging
 import time
 from typing import NoReturn
 from unittest.mock import AsyncMock, Mock
@@ -77,6 +78,7 @@ class TestMainTaskCompletion:
         self,
         task_executor: TaskExecutor,
         mock_base_module: Mock,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         """Test executor when main task completes successfully."""
         task_id = "main_success"
@@ -90,17 +92,25 @@ class TestMainTaskCompletion:
             await asyncio.sleep(0.1)
             execution_log.append("main_end")
 
-        supervisor = await task_executor.execute_task(
-            task_id, mission_id, main_coro(), session
-        )
+        with caplog.at_level(logging.INFO, logger="digitalkin"):
+            supervisor = await task_executor.execute_task(
+                task_id, mission_id, main_coro(), session
+            )
 
-        await supervisor
+            await supervisor
 
         assert session.status == "completed"
         assert "main_start" in execution_log
         assert "main_end" in execution_log
         assert session.started_at is not None
         assert session.completed_at is not None
+
+        # The whole run must produce exactly the two lifecycle lines at INFO:
+        # "Task completed" (status transition) and "Task done" (final summary).
+        info = [r.getMessage() for r in caplog.records if r.levelno == logging.INFO and r.name.startswith("digitalkin")]
+        lifecycle = [m for m in info if m.startswith("Task completed") or m.startswith("Task done")]
+        assert len(lifecycle) == 2, info
+        assert info == lifecycle, info
 
     @pytest.mark.asyncio
     async def test_main_task_completion_timing_accuracy(

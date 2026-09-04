@@ -13,6 +13,7 @@ Spins up three real gRPC servers:
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import AsyncIterator
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -191,6 +192,7 @@ class TestM2MCallModule:
         backend_server: tuple[_FakeBackendGateway, str, int],
         callee_server: tuple[_FakeCalleeGatewayServicer, str, int],
         caller_gateway: tuple[GatewayServicer, str, int],
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         backend, backend_host, backend_port = backend_server
         callee_servicer, callee_host, callee_port = callee_server
@@ -208,17 +210,22 @@ class TestM2MCallModule:
         outputs: list[Any] = []
         token = RequestContext.bind(task_id="task:parent")
         try:
-            async for out_struct in comm.call_module(
-                module_address=callee_host,
-                module_port=callee_port,
-                input_data={"root": {"protocol": "transform", "text": "hello"}},
-                setup_id="setups:test",
-                mission_id="missions:test",
-            ):
-                outputs.append(out_struct)
+            with caplog.at_level(logging.DEBUG, logger="digitalkin"):
+                async for out_struct in comm.call_module(
+                    module_address=callee_host,
+                    module_port=callee_port,
+                    input_data={"root": {"protocol": "transform", "text": "hello"}},
+                    setup_id="setups:test",
+                    mission_id="missions:test",
+                ):
+                    outputs.append(out_struct)
         finally:
             RequestContext.reset(token)
             await comm.close()
+
+        # The m2m handshake lines describe the wire protocol, not an outcome — DEBUG only.
+        info_messages = [r.getMessage() for r in caplog.records if r.levelno == logging.INFO]
+        assert not any("AssociateTask minted" in m or "StartStream accepted" in m for m in info_messages)
 
         domain = [o for o in outputs if o.fields["root"].struct_value.fields["protocol"].string_value == "transform"]
         assert [o.fields["root"].struct_value.fields["value"].string_value for o in domain] == [

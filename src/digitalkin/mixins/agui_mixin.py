@@ -196,7 +196,7 @@ class AgUiMixin:
         if not self._thread_id:
             self._thread_id = event.thread_id or str(uuid.uuid4())
 
-        context.callbacks.logger.info(
+        context.callbacks.logger.debug(
             "[agui-mixin] RUN_STARTED thread_id=%s run_id=%s event_run_id=%s event_thread_id=%s metadata=%s",
             self._thread_id,
             self._run_id,
@@ -273,7 +273,7 @@ class AgUiMixin:
     ) -> None:
         """Handle run completed event - emit AG-UI RunFinished."""
         run_id = self._run_id or event.run_id or str(uuid.uuid4())
-        context.callbacks.logger.info(
+        context.callbacks.logger.debug(
             "[agui-mixin] RUN_FINISHED thread_id=%s event_run_id=%s self._run_id=%s resolved=%s metadata=%s",
             self._thread_id,
             event.run_id,
