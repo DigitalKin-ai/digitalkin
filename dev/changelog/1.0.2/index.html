@@ -1890,6 +1890,12 @@ the model self-corrects from (never a raised traceback).</p>
   numeric/string/array/object constraints. Plus <code>reject_control_chars</code> (C0 control chars in strings) and
   <code>reject_unsafe_keys</code> (recursively rejects content keys carrying non-BMP/control characters that storage would silently
   drop).</li>
+<li><strong><code>SetupContentValidator.reject_oversized_output_format_spec</code></strong> — refuses a content <code>output_format_spec</code> of 4096
+  characters or more (the write would succeed and leave the setup unusable, with nothing pointing back at the field).
+  Recursive through nested objects and arrays; non-string values are left to the schema check. Unlike <code>validate</code>, it
+  needs no module context or schema fetch, so it is called unconditionally from <code>create_setup</code> <strong>and</strong> <code>update_setup</code>
+  on both <code>DefaultSetup</code> and <code>GrpcSetup</code> — the only choke point every write passes through — and raises <code>ValueError</code>
+  before any RPC.</li>
 </ul>
 <h3 id="supporting-agno-toolkits-tool-loading">Supporting Agno toolkits &amp; tool loading<a class="headerlink" href="#supporting-agno-toolkits-tool-loading" title="Permanent link">¤</a></h3>
 <ul>

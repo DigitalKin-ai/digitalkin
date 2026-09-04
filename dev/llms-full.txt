@@ -41501,7 +41501,7 @@ Returns:
 
 Raises:
 
-- `ValueError` – If name or content is missing.
+- `ValueError` – If name or content is missing, or output_format_spec is oversized.
 - `ServerError` – If gRPC operation fails.
 - `SetupServiceError` – If the server reports failure or an unexpected error occurs.
 
@@ -41719,7 +41719,7 @@ Returns:
 
 Raises:
 
-- `ValueError` – If setup_id, name or content is missing.
+- `ValueError` – If setup_id, name or content is missing, or output_format_spec is oversized.
 - `ServerError` – If gRPC operation fails.
 - `SetupServiceError` – If the server reports failure or an unexpected error occurs.
 
@@ -46867,6 +46867,7 @@ Mirrors the schema's own strictness rather than a loose superset: objects reject
 Methods:
 
 - **`reject_control_chars`** – Refuse C0 control characters (except tab/newline/carriage-return) in a string.
+- **`reject_oversized_output_format_spec`** – Refuse an output_format_spec that reaches the length the setup cannot carry.
 - **`reject_unsafe_keys`** – Refuse content keys carrying characters persistence silently drops or mangles.
 - **`validate`** – Validate content against schema.
 
@@ -46885,6 +46886,30 @@ Returns:
 Raises:
 
 - `ValueError` – The string carries a control character (e.g. a NUL byte or ANSI escape), which downstream consumers persist verbatim and mis-render.
+
+##### reject_oversized_output_format_spec
+
+```python
+reject_oversized_output_format_spec(content: dict[str, Any]) -> dict[str, Any]
+```
+
+Refuse an `output_format_spec` that reaches the length the setup cannot carry.
+
+The write itself succeeds, so the breakage surfaces later as an unusable setup with no diagnostic pointing back at the field. Reject up front, naming the path and the actual size. Recurses through nested objects and arrays; a non-string value is left to the schema check, which owns typing.
+
+Parameters:
+
+- ###### **`content`**
+
+  (`dict[str, Any]`) – The setup content about to be written.
+
+Returns:
+
+- `dict[str, Any]` – The content unchanged when every output_format_spec fits.
+
+Raises:
+
+- `ValueError` – An output_format_spec string is at or over the limit.
 
 ##### reject_unsafe_keys
 
