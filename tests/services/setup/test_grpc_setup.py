@@ -141,6 +141,13 @@ class TestCreateSetup:
             await client.create_setup({"name": "x", "content": "not-a-dict"})
 
     @pytest.mark.grpc
+    @pytest.mark.validation
+    async def test_create_setup_oversized_output_format_spec_no_rpc(self, client: GrpcSetup) -> None:
+        """The guard trips before the channel is touched, and stays a ValueError."""
+        with pytest.raises(ValueError, match="must stay under 4096"):
+            await client.create_setup({"name": "x", "content": {"output_format_spec": "x" * 4096}})
+
+    @pytest.mark.grpc
     @pytest.mark.edge_case
     async def test_create_setup_permission_denied(self, client: GrpcSetup) -> None:
         """setup's handler lets a permission error pass through unwrapped (not SetupServiceError)."""
@@ -274,6 +281,14 @@ class TestUpdateSetup:
     async def test_update_setup_missing_fields_no_rpc(self, client: GrpcSetup) -> None:
         with pytest.raises(ValueError, match="setup_id, name and content"):
             await client.update_setup({"setup_id": "s1", "name": "", "content": {}})
+
+    @pytest.mark.grpc
+    @pytest.mark.validation
+    async def test_update_setup_oversized_output_format_spec_no_rpc(self, client: GrpcSetup) -> None:
+        with pytest.raises(ValueError, match="must stay under 4096"):
+            await client.update_setup(
+                {"setup_id": "s1", "name": "x", "content": {"output_format_spec": "x" * 4096}}
+            )
 
 
 class TestDeleteSetup:
