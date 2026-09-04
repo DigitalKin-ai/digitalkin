@@ -136,7 +136,7 @@ class ModuleRunner:
                     await self._redis_client.xadd(stream_key, {"eos": b"true"})
                     await self._redis_client.expire(stream_key, stream_settings.redis_stream_ttl)
                     t_eos_write_end = time.perf_counter_ns()
-                    logger.info(
+                    logger.debug(
                         "[close-debug] producer_eos_write: xadd_expire=%.2fms t_done_ns=%d task_id=%s",
                         (t_eos_write_end - t_eos_write_start) / 1e6,
                         t_eos_write_end,
@@ -165,7 +165,7 @@ class ModuleRunner:
 
             top_level_keys = list(query.fields.keys())
             query_byte_size = query.ByteSize()
-            logger.info(
+            logger.debug(
                 "[input-debug] inbound Struct: top_keys=%s wire_bytes=%d",
                 top_level_keys,
                 query_byte_size,
@@ -231,10 +231,12 @@ class ModuleRunner:
                 dict_repr,
                 extra=log_extra,
             )
-            missing_summary = f" missing_fields={missing_paths}" if missing_paths else ""
+            first_errors = "; ".join(
+                f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}" for e in exc.errors(include_url=False)[:3]
+            )[:500]
             await on_fatal(
                 StreamErrorCode.INPUT_VALIDATION_ERROR.value,
-                f"input validation failed for {model_name}: top_keys={top_level_keys}{missing_summary}",
+                f"input validation failed for {model_name}: {first_errors}",
             )
         except BackpressureTimeoutError as exc:
             logger.exception("ModuleRunner: backpressure timeout", extra=log_extra)

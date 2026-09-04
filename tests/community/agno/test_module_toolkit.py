@@ -14,6 +14,7 @@ Behaviours pinned here:
 
 import asyncio
 import json
+import logging
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -25,13 +26,14 @@ from agno.tools.function import ToolResult
 
 from digitalkin.community.agno.module_toolkit import ModuleToolkit
 from digitalkin.models.module.ag_ui import AgUiOutput
+from digitalkin.services.communication.exceptions import ToolCallError
 
 
 def _toolkit() -> ModuleToolkit:
     """Build a ModuleToolkit without running __init__ (which needs a live context)."""
     toolkit = ModuleToolkit.__new__(ModuleToolkit)
-    toolkit._tool_module_info = MagicMock(module_id="mod_1", setup_id="setup_1")
-    toolkit._context = MagicMock(session=MagicMock(job_id="job_1"))
+    toolkit._tool_module_info = MagicMock(module_id="mod_1", setup_id="setup_1", slug="mod_1")
+    toolkit._context = MagicMock(session=SimpleNamespace(job_id="job_1", cancelled=False))
     return toolkit
 
 
@@ -96,6 +98,76 @@ class TestFindSuccessfulResponse:
 
     def test_empty_results_returns_none(self):
         assert ModuleToolkit._find_successful_response([]) is None
+
+    def test_stream_resume_handshake_is_skipped(self):
+        """`stream.resume` is a handshake sentinel, like `stream.init` — not a domain frame."""
+        results = [
+            {"root": {"protocol": "search", "results": [1]}},
+            {"root": {"protocol": "stream.resume"}},
+            {"root": {"protocol": "stream.end"}},
+        ]
+        resp = ModuleToolkit._find_successful_response(results)
+        assert resp == {"root": {"protocol": "search", "results": [1]}}
+
+
+class TestFatalStreamError:
+    """A fatal `stream.error` anywhere in the stream means the tool did not finish.
+
+    Progress lines (e.g. tool-rag-methods `add_documents` streaming
+    "Indexing i/n: name" before each file) or a gateway idle-timeout error must
+    not surface the last progress line, or any later stray frame, as a success.
+    A non-fatal `stream.error` (the target module kept the stream open, per
+    `M2MCallRegistry.handle_dial_back_receive`) does not fail the call on its own.
+    """
+
+    def test_progress_then_fatal_error_is_a_failure(self) -> None:
+        """A progress line followed by stream.error must not be returned as the tool result."""
+        results = [
+            {"root": {"protocol": "tool_content", "content": "Indexing 7/10: g.pdf"}},
+            {"root": {"protocol": "stream.error", "code": "INTERNAL", "message": "boom", "fatal": True}},
+            {"root": {"protocol": "stream.end"}},
+        ]
+        assert ModuleToolkit._find_successful_response(results) is None
+
+    def test_progress_then_receipt_is_the_receipt(self) -> None:
+        results = [
+            {"root": {"protocol": "tool_content", "content": "Indexing 1/1: a.pdf"}},
+            {"root": {"protocol": "tool_content", "content": "receipt"}},
+            {"root": {"protocol": "stream.end"}},
+        ]
+        assert ModuleToolkit._find_successful_response(results)["root"]["content"] == "receipt"
+
+    def test_non_fatal_error_then_receipt_is_the_receipt(self) -> None:
+        """A non-fatal stream.error (the module kept the stream open) does not fail the call."""
+        results = [
+            {"root": {"protocol": "stream.error", "code": "TRANSIENT", "message": "retrying", "fatal": False}},
+            {"root": {"protocol": "tool_content", "content": "receipt"}},
+            {"root": {"protocol": "stream.end"}},
+        ]
+        assert ModuleToolkit._find_successful_response(results)["root"]["content"] == "receipt"
+
+    def test_error_before_a_stray_domain_frame_is_still_a_failure(self) -> None:
+        """A stream.error anywhere in the results fails the call, even if a domain
+        frame streamed after it (e.g. a late, out-of-order write)."""
+        results = [
+            {"root": {"protocol": "stream.error", "code": "INTERNAL", "message": "boom", "fatal": True}},
+            {"root": {"protocol": "tool_content", "content": "stray frame"}},
+        ]
+        assert ModuleToolkit._find_successful_response(results) is None
+
+    def test_failure_text_carries_the_stream_error_code_and_message(self) -> None:
+        """The JSON body handed back to the model names the failure, not a generic 'no response'."""
+        toolkit = _toolkit()
+        results = [
+            {"root": {"protocol": "tool_content", "content": "Indexing 7/10: g.pdf"}},
+            {"root": {"protocol": "stream.error", "code": "INTERNAL", "message": "boom", "fatal": True}},
+            {"root": {"protocol": "stream.end"}},
+        ]
+        assert ModuleToolkit._find_successful_response(results) is None
+        error_msg = ModuleToolkit._extract_error_message(results)
+        body = json.loads(toolkit._handle_failure("add_documents", error_msg, 1.0, {}))
+        assert "INTERNAL" in body["error"]
+        assert "boom" in body["error"]
 
 
 class TestExtractErrorMessage:
@@ -271,3 +343,96 @@ class TestRelayCustomEvent:
             asyncio.run(ModuleToolkit._relay_custom_event(_context(send), message))
 
         send.assert_not_awaited()
+
+
+class TestToolkitBuildLogging:
+    def test_build_emits_one_debug_line_and_no_info(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A toolkit build is trace, not lifecycle: one DEBUG summary, nothing at INFO."""
+        tool_def = SimpleNamespace(
+            name="read_json",
+            description="Read a record",
+            parameters_schema={"type": "object", "properties": {}},
+            parameter_count=0,
+            parameter_names=[],
+        )
+
+        async def fn(**kwargs: object) -> None:
+            yield {}
+
+        context = MagicMock()
+        context.create_tool_functions.return_value = [(tool_def, fn)]
+        info = MagicMock(setup_id="setup_1", slug="storage", module_name="Storage", tool_name="", tools=[tool_def])
+
+        with caplog.at_level(logging.DEBUG, logger="digitalkin"):
+            ModuleToolkit(context=context, tool_module_info=info)
+
+        build_records = [r for r in caplog.records if "toolkit" in r.getMessage().lower()]
+        assert [r.levelno for r in build_records] == [logging.DEBUG]
+        assert "storage" in build_records[0].getMessage()
+        assert "tools=1/1" in build_records[0].getMessage()
+
+
+class TestToolCallLogging:
+    def test_success_logs_once_at_info_with_argument_keys(self, caplog: pytest.LogCaptureFixture) -> None:
+        """The completion line is the only INFO record and carries the sorted argument keys."""
+        toolkit = _toolkit()
+        with caplog.at_level(logging.DEBUG, logger="digitalkin"):
+            toolkit._handle_success(
+                "read_json",
+                {"root": {"protocol": "tool_content", "content": "x"}},
+                12.5,
+                {"collection": "a", "record_id": "b"},
+            )
+        info = [r for r in caplog.records if r.levelno == logging.INFO]
+        assert len(info) == 1
+        assert "read_json" in info[0].getMessage()
+        assert "args=['collection', 'record_id']" in info[0].getMessage()
+
+
+class TestCancelledTask:
+    @pytest.mark.asyncio
+    async def test_wrapper_refuses_after_cancel(self, caplog: pytest.LogCaptureFixture) -> None:
+        toolkit = _toolkit()
+        toolkit._context.session.cancelled = True
+        toolkit._timeout = 1.0
+        called = False
+
+        async def fn(**kwargs: object):
+            nonlocal called
+            called = True
+            yield {}
+
+        tool_def = SimpleNamespace(
+            name="write_json", description="", parameters_schema={}, parameter_count=0, parameter_names=[]
+        )
+        wrapper = toolkit._create_tool_wrapper(tool_def, fn)
+        with caplog.at_level(logging.WARNING, logger="digitalkin"), pytest.raises(asyncio.CancelledError):
+            await wrapper()
+        assert called is False
+        assert any("refused after task cancellation" in r.getMessage() for r in caplog.records)
+
+
+class TestWrapperFatalStreamError:
+    """The real fatal path: `_create_single_tool_function` raises `ToolCallError`, not a
+    `stream.error` dict — the wrapper must still surface it as a failure with code+message."""
+
+    @pytest.mark.asyncio
+    async def test_tool_call_error_becomes_a_failure_with_code_and_message(self) -> None:
+        toolkit = _toolkit()
+        toolkit._timeout = 1.0
+
+        async def fn(**kwargs: object):
+            msg = "[SETUP_ACCESS_DENIED] denied"
+            raise ToolCallError(msg)
+            yield {}  # pragma: no cover  # unreachable; makes this an async generator
+
+        tool_def = SimpleNamespace(
+            name="search", description="", parameters_schema={}, parameter_count=0, parameter_names=[]
+        )
+        wrapper = toolkit._create_tool_wrapper(tool_def, fn)
+        result = await wrapper()
+
+        assert isinstance(result, str)
+        body = json.loads(result)
+        assert "SETUP_ACCESS_DENIED" in body["error"]
+        assert "denied" in body["error"]

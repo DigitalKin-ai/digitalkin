@@ -12,8 +12,11 @@ The stateful backend authenticates exactly like prod: a task id it did not
 register is rejected ``UNAUTHENTICATED "Invalid or inactive task"`` — the
 regression test reproduces the prod bug that motivated the backend mint.
 
-Assertions are tied to the prod validation markers: ``[VALIDATE AT2]`` (caller
-mint) and ``[VALIDATE AC1]`` (setup access verdict).
+Assertions are tied to the ``[VALIDATE AC1]`` prod validation marker (setup
+access verdict). The caller mint is asserted directly on the backend's fake
+``AssociateTask`` state (``state.mint_count`` etc.) rather than a log marker:
+the handshake line that used to carry ``[VALIDATE AT2]`` is DEBUG-only now
+that prod validation is complete.
 """
 
 from __future__ import annotations
@@ -130,19 +133,28 @@ def _clear_singletons() -> Generator[None]:
 
 @pytest.fixture
 def digitalkin_records() -> Generator[list[logging.LogRecord]]:
-    """Capture 'digitalkin' logger records (the [VALIDATE ...] markers) at INFO.
+    """Capture 'digitalkin' logger records (the [VALIDATE ...] markers) at DEBUG.
+
+    The "granted" marker is DEBUG-only trace now that prod validation is complete
+    (only the "DENIED" marker stays a WARNING security signal), so the logger's
+    own effective level is lowered to DEBUG for the duration of the test —
+    otherwise the root logger's INFO level (set in ``tests/conftest.py``) would
+    filter it out before it ever reaches this handler.
 
     Yields:
         The captured records list, live-updated while the test runs.
     """
     records: list[logging.LogRecord] = []
     handler = logging.Handler()
-    handler.setLevel(logging.INFO)
+    handler.setLevel(logging.DEBUG)
     handler.emit = records.append  # type: ignore[method-assign]
     lg = logging.getLogger("digitalkin")
+    previous_level = lg.level
+    lg.setLevel(logging.DEBUG)
     lg.addHandler(handler)
     yield records
     lg.removeHandler(handler)
+    lg.setLevel(previous_level)
 
 
 def _marker_lines(records: list[logging.LogRecord], marker: str) -> list[str]:
@@ -452,11 +464,9 @@ class TestM2MEndToEnd:
         assert "healthcheck_ping" in protocols, [json_format.MessageToDict(o) for o in outputs]
         assert _stream_errors(outputs) == []
 
-        # 4. The prod validation markers traced the whole chain.
-        at2 = _marker_lines(digitalkin_records, "[VALIDATE AT2]")
-        assert len(at2) == 1
-        assert f"parent={PARENT_TASK_ID}" in at2[0]
-        assert "child=child-1" in at2[0]
+        # 4. The prod validation marker traced the access verdict (the mint side of
+        #    the chain is asserted above via state.mint_* — its own log line is
+        #    DEBUG-only now that prod validation is complete, so it carries no marker).
         ac1 = _marker_lines(digitalkin_records, "[VALIDATE AC1]")
         assert any("setup access granted" in line and SETUP_ID in line for line in ac1)
 

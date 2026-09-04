@@ -28,6 +28,17 @@ from digitalkin.services.storage.storage_strategy import StorageStrategy
 from digitalkin.services.task_manager.task_manager_strategy import TaskManagerStrategy
 from digitalkin.services.user_profile.user_profile_strategy import UserProfileStrategy
 
+# Lifecycle/handshake sentinels carried on ``root.protocol``: never domain output. Shared by
+# ModuleToolkit._find_successful_response (skips them when picking the tool's result) and
+# GrpcCommunication.call_module (excludes them from chunks_seen).
+STREAM_SENTINEL_PROTOCOLS: frozenset[str] = frozenset({
+    "stream.start",
+    "stream.init",
+    "stream.resume",
+    "stream.end",
+    "stream.error",
+})
+
 
 class Session(SimpleNamespace):
     """Session data container with mandatory setup_id and mission_id."""
@@ -37,6 +48,7 @@ class Session(SimpleNamespace):
     setup_id: str
     setup_version_id: str
     timezone: tzinfo
+    cancelled: bool
 
     def __init__(
         self,
@@ -74,6 +86,9 @@ class Session(SimpleNamespace):
         self.timezone = ZoneInfo(get_module_settings().timezone)
 
         super().__init__(**kwargs)
+
+        # Set by `_run_lifecycle` on cancellation; toolkits refuse further calls.
+        self.cancelled = False
 
     def current_ids(self) -> dict[str, str]:
         """Return current session ids as a dictionary.

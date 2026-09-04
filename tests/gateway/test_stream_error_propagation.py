@@ -276,6 +276,19 @@ def _real_validation_error() -> ValidationError:
     raise AssertionError("model_validate unexpectedly succeeded")
 
 
+def _real_type_validation_error() -> ValidationError:
+    """Produce a genuine pydantic ValidationError from a present field with the wrong type."""
+
+    class _Strict(BaseModel):
+        patch: dict[str, Any]
+
+    try:
+        _Strict.model_validate({"patch": "not-a-dict"})
+    except ValidationError as exc:
+        return exc
+    raise AssertionError("model_validate unexpectedly succeeded")
+
+
 @SKIP_NO_FAKEREDIS
 class TestValidationErrorPhases:
     @staticmethod
@@ -351,6 +364,39 @@ class TestValidationErrorPhases:
             assert code == StreamErrorCode.INPUT_VALIDATION_ERROR.value
             assert "input validation failed" in message
             assert "FakeInput" in message
+        finally:
+            await redis.close()
+
+    async def test_input_validation_error_reports_field_and_reason(self) -> None:
+        """A type error on a present field must name the field and reason, not just top-level keys."""
+        from digitalkin.core.task_manager.module_runner import ModuleRunner
+
+        redis = _FakeRedisClient()
+        try:
+            servicer = self._servicer()
+            servicer.module_class.create_input_model = MagicMock(side_effect=_real_type_validation_error())
+            servicer.module_class._extended_input_format = None
+            servicer.module_class.input_format = type("FakeInput", (), {})
+            runner = ModuleRunner(redis_client=redis, servicer=servicer)  # type: ignore[arg-type]
+
+            received: list[tuple[str, str]] = []
+
+            async def _on_fatal(code: str, message: str) -> None:
+                received.append((code, message))
+
+            await runner.run(
+                struct_pb2.Struct(),
+                task_id="task_val",
+                setup_id="setups:s1",
+                mission_id="missions:m1",
+                on_fatal=_on_fatal,
+            )
+
+            assert len(received) == 1
+            code, message = received[0]
+            assert code == StreamErrorCode.INPUT_VALIDATION_ERROR.value
+            assert "patch" in message
+            assert "dict" in message
         finally:
             await redis.close()
 

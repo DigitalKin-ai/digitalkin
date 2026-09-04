@@ -336,6 +336,11 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
             M2MTargetUnavailable: Target's breaker is open.
             M2MCallTimeout: Output queue stalled past ``call_timeout_s``.
         """
+        # Local import: digitalkin.models.module.module_context pulls in this package
+        # (services.communication) at import time via CommunicationStrategy, so a
+        # module-level import here would be circular.
+        from digitalkin.models.module.module_context import STREAM_SENTINEL_PROTOCOLS
+
         if self._m2m_calls is None:
             msg = (
                 "call_module needs an M2MCallRegistry wired into GrpcCommunication. "
@@ -405,13 +410,13 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
             if not task_id:
                 msg = f"backend returned no task_id from AssociateTask (parent={parent_task_id})"
                 raise RuntimeError(msg)  # noqa: TRY301
-            logger.info(
-                "[VALIDATE AT2] AssociateTask minted: parent=%s child=%s target=%s",
+            logger.debug(
+                "[m2m] AssociateTask minted: parent=%s child=%s target=%s",
                 parent_task_id,
                 task_id,
                 target_key,
                 extra=log_extra,
-            )  # TODO(validate): remove after prod validation
+            )
             log_extra["task_id"] = task_id
             timer.mark("associate_task")
             last_mark = "associate_task"
@@ -469,7 +474,7 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
                     breaker.record_failure()
                     msg = f"target {target_key} rejected StartStream task_id={task_id}"
                     raise RuntimeError(msg)
-                logger.info("[m2m] StartStream accepted task_id=%s", task_id, extra=log_extra)
+                logger.debug("[m2m] StartStream accepted task_id=%s", task_id, extra=log_extra)
 
                 first_seen = False
                 error_observed = False
@@ -491,7 +496,22 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
                         break
 
                     now_ns = time.perf_counter_ns()
-                    chunks_seen += 1
+
+                    root_field = item.fields.get("root") if item.fields else None
+                    protocol_value = ""
+                    if root_field is not None:
+                        proto_field = root_field.struct_value.fields.get("protocol")
+                        protocol_value = proto_field.string_value if proto_field is not None else ""
+                        if protocol_value == "stream.error":
+                            fatal_field = root_field.struct_value.fields.get("fatal")
+                            if fatal_field is not None and fatal_field.bool_value:
+                                error_observed = True
+
+                    # Sentinel check first: the dial-back handshake frame (stream.start /
+                    # stream.init / stream.resume) is not domain output, so it must not
+                    # inflate chunks_seen.
+                    if protocol_value not in STREAM_SENTINEL_PROTOCOLS:
+                        chunks_seen += 1
                     depth = output_queue.qsize()
                     max_qdepth = max(max_qdepth, depth)
                     if not first_seen:
@@ -502,14 +522,6 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
                         gaps_ns.append(now_ns - last_chunk_ns)
                     last_chunk_ns = now_ns
 
-                    root_field = item.fields.get("root") if item.fields else None
-                    if root_field is not None:
-                        proto_field = root_field.struct_value.fields.get("protocol")
-                        protocol_value = proto_field.string_value if proto_field is not None else ""
-                        if protocol_value == "stream.error":
-                            fatal_field = root_field.struct_value.fields.get("fatal")
-                            if fatal_field is not None and fatal_field.bool_value:
-                                error_observed = True
                     if callback:
                         await callback(item)
                     yield item

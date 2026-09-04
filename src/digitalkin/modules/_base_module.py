@@ -572,6 +572,7 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
             logger.info("Module %s finished", self.name, extra=self.context.session.current_ids())
         except asyncio.CancelledError:
             self._status = ModuleStatus.CANCELLED
+            self.context.session.cancelled = True
             logger.info("Module %s cancelled", self.name, extra=self.context.session.current_ids())
             raise
         except PermissionDeniedError as e:
@@ -757,7 +758,7 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
             t3 = time.perf_counter_ns()
             self._status = ModuleStatus.STOPPED
             ids = self.context.session.current_ids()
-            logger.info(
+            logger.debug(
                 "[close-debug] module.stop: cleanup=%.2fms flush=%.2fms eos=%.2fms "
                 "total=%.2fms t_done_ns=%d task_id=%s mission_id=%s",
                 cleanup_ms,

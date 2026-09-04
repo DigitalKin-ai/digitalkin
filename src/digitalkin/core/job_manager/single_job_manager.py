@@ -325,7 +325,7 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         )
         timer.mark("create_task")
         timer.log("run_instance", task_id=job_id)
-        logger.info("Managed task started: '%s'", job_id, extra={"task_id": job_id})
+        logger.debug("Managed task started: '%s'", job_id, extra={"task_id": job_id})
         return job_id
 
     async def list_modules(self) -> dict[str, dict[str, Any]]:
