@@ -169,7 +169,7 @@ class RegistryStrategy(BaseStrategy, ABC):
         )
 
     @abstractmethod
-    async def search_setups(  # Filter surface mirrors SearchSetupsRequest 1:1 # noqa: PLR0913
+    async def search_setups(  # Filter surface mirrors SearchSetupsRequest 1:1 # ruff: ignore[too-many-arguments]
         self,
         query: str | None = None,
         setup_ids: list[str] | None = None,
@@ -275,7 +275,7 @@ class RegistryStrategy(BaseStrategy, ABC):
         setup = await self.get_setup(setup_id)
         return setup.config if setup else None
 
-    async def wait_for_ready(self, timeout: float = 1.0) -> bool:  # noqa: PLR6301
+    async def wait_for_ready(self, timeout: float = 1.0) -> bool:  # ruff: ignore[no-self-use]
         """Check if the registry backend is reachable.
 
         Args:

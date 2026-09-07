@@ -346,7 +346,11 @@ class RegistryObjectToolKit(DkToolkit):
         Also echoes ``visibility`` back in the caller's vocabulary — the input enum is
         ``public``/``private``/``internal`` but the backend returns the proto name
         ``VISIBILITY_INTERNAL``, so a naive round-trip fails. Strip the prefix and
-        lower-case it so the field read back matches the field written.
+        lower-case it so the field read back matches the field written. Confined to the
+        model branch on purpose: every action carrying a real setup visibility returns a
+        ``SetupData``, while the actions returning a plain dict return a *configuration*
+        (``load``) or its key map (``structure``), where a key called ``visibility`` is the
+        service's own data and rewriting it would corrupt what the caller asked for.
 
         Args:
             value: A Pydantic model, proto message, or plain scalar/collection.

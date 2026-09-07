@@ -17,6 +17,7 @@ from digitalkin.services.setup.setup_strategy import (
     SetupVersionData,
     SetupVersionPage,
 )
+from digitalkin.utils.json_structure import JsonStructure
 
 
 class DefaultSetup(SetupStrategy):
@@ -65,21 +66,34 @@ class DefaultSetup(SetupStrategy):
         """Retrieve a setup by its unique identifier.
 
         Args:
-            setup_dict: Dictionary with 'setup_id' and optional 'version'.
+            setup_dict: Dictionary with 'setup_id', optional 'version' and optional
+                'structure_key'.
 
         Returns:
-            The setup with its current version populated.
+            The setup with its current version populated. With a non-empty
+            'structure_key', the version content is replaced by the {key path: value}
+            projection of that one path — the local mirror of server-side projection.
+            An empty key is treated as absent, because GetSetupRequest.structure_key has
+            no proto3 presence and the wire cannot tell the two apart.
 
         Raises:
             SetupServiceError: setup_id does not exist.
         """
-        return self._get_or_raise(setup_dict.get("setup_id", ""))
+        setup = self._get_or_raise(setup_dict.get("setup_id", ""))
+        key = setup_dict.get("structure_key")
+        if not key:
+            return setup
+        projected = setup.model_copy(deep=True)
+        projected.current_setup_version.content = JsonStructure.resolve(setup.current_setup_version.content, [key])
+        return projected
 
     async def create_setup(self, setup_dict: dict[str, Any]) -> SetupData:
         """Create a new setup; identifiers are generated locally.
 
         Args:
-            setup_dict: Dictionary with 'name' and 'content'.
+            setup_dict: Dictionary with 'name', 'content' and optional 'structure' — the
+                authored ``{key path: summary}`` map, filtered to the paths that resolve
+                in ``content``. Absent, it is derived from ``content``.
 
         Returns:
             The created setup with its initial version.
@@ -102,6 +116,11 @@ class DefaultSetup(SetupStrategy):
                     setup_id=setup_id,
                     version="1.0.0",
                     content=setup_dict.get("content") or {},
+                    structure=(
+                        JsonStructure.check(setup_dict.get("content") or {}, setup_dict["structure"])
+                        if setup_dict.get("structure")
+                        else JsonStructure.describe(setup_dict.get("content") or {})
+                    ),
                     creation_date=datetime.datetime.now(datetime.timezone.utc),
                 ),
             )
@@ -121,8 +140,10 @@ class DefaultSetup(SetupStrategy):
         """Update a setup's name and current version content.
 
         Args:
-            setup_dict: Dictionary with 'setup_id', 'name', 'content' and optional
-                'set_as_current' (defaults to True).
+            setup_dict: Dictionary with 'setup_id', 'name', 'content', optional
+                'set_as_current' (defaults to True) and optional 'structure' — the authored
+                ``{key path: summary}`` map for the new content. Omitting it falls back to
+                a derived map, discarding any authored summaries.
 
         Returns:
             The updated setup with its current version.
@@ -145,6 +166,11 @@ class DefaultSetup(SetupStrategy):
             setup_id=setup.id,
             version=f"1.0.{len(history)}",
             content=content,
+            structure=(
+                JsonStructure.check(content, setup_dict["structure"])
+                if setup_dict.get("structure")
+                else JsonStructure.describe(content)
+            ),
             creation_date=datetime.datetime.now(datetime.timezone.utc),
         )
         history.append(version)

@@ -159,7 +159,7 @@ class ChannelConfig(BaseModel):
     """
 
     host: str = Field(
-        "0.0.0.0",  # noqa: S104
+        "0.0.0.0",  # ruff: ignore[hardcoded-bind-all-interfaces]
         description="Host address to bind the client to",
     )  # Bind to all interfaces by design
     port: int = Field(50051, description="Port to listen on")
@@ -187,7 +187,7 @@ class ChannelConfig(BaseModel):
         Raises:
             ConfigurationError: If port is outside valid range
         """
-        if not 0 < v < 65536:  # TCP port range constant # noqa: PLR2004
+        if not 0 < v < 65536:  # TCP port range constant # ruff: ignore[magic-value-comparison]
             msg = f"Port must be between 1 and 65535, got {v}"
             raise ConfigurationError(msg)
         return v

@@ -530,7 +530,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
 
     async def GetModuleSelectInput(
         self,
-        request: information_pb2.GetModuleSelectInputRequest,  # noqa: ARG002
+        request: information_pb2.GetModuleSelectInputRequest,  # ruff: ignore[unused-method-argument]
         context: grpc.ServicerContext,
     ) -> information_pb2.GetModuleSelectInputResponse:
         """Get the trigger selection schema for the module.

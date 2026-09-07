@@ -15,6 +15,7 @@ from enum import Enum
 
 import grpc
 import grpc_testing
+from google.protobuf.struct_pb2 import Struct
 import pytest
 from agentic_mesh_protocol.registry.v1 import (
     registry_enums_pb2,
@@ -1005,6 +1006,64 @@ class TestTagsAndSorting:
         )
 
         assert future.result(timeout=1.0)[0].tags == ["billing"]
+
+    def test_setup_summary_structure_is_decoded(
+        self,
+        client: GrpcRegistry,
+        test_channel: grpc_testing.Channel,
+        thread_pool: futures.ThreadPoolExecutor,
+    ) -> None:
+        """The key map rides along on search, so discovery already shows a setup's shape."""
+        method_desc = registry_service_pb2.DESCRIPTOR.services_by_name["RegistryService"].methods_by_name[
+            "SearchSetups"
+        ]
+        future = thread_pool.submit(asyncio.run, client.search_setups())
+        _, _request, rpc = test_channel.take_unary_unary(method_desc)
+
+        structure = Struct()
+        structure.update({"llm.provider": "litellm", "region": "eu-west"})
+        rpc.send_initial_metadata(())
+        rpc.terminate(
+            registry_requests_pb2.SearchSetupsResponse(
+                setups=[
+                    registry_models_pb2.SetupSummary(id="setups:1", name="S", structure=structure)
+                ],
+                total=1,
+            ),
+            (),
+            grpc.StatusCode.OK,
+            "",
+        )
+
+        assert future.result(timeout=1.0)[0].structure == {
+            "llm.provider": "litellm",
+            "region": "eu-west",
+        }
+
+    def test_setup_summary_without_structure_is_empty(
+        self,
+        client: GrpcRegistry,
+        test_channel: grpc_testing.Channel,
+        thread_pool: futures.ThreadPoolExecutor,
+    ) -> None:
+        """A summary predating the field decodes to an empty map, never None."""
+        method_desc = registry_service_pb2.DESCRIPTOR.services_by_name["RegistryService"].methods_by_name[
+            "SearchSetups"
+        ]
+        future = thread_pool.submit(asyncio.run, client.search_setups())
+        _, _request, rpc = test_channel.take_unary_unary(method_desc)
+
+        rpc.send_initial_metadata(())
+        rpc.terminate(
+            registry_requests_pb2.SearchSetupsResponse(
+                setups=[registry_models_pb2.SetupSummary(id="setups:1", name="S")], total=1
+            ),
+            (),
+            grpc.StatusCode.OK,
+            "",
+        )
+
+        assert future.result(timeout=1.0)[0].structure == {}
 
     def test_an_unknown_sort_key_fails_closed(self, client: GrpcRegistry) -> None:
         """Enum drift must raise rather than silently ship a filter the server ignores."""
