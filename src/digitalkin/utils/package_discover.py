@@ -114,7 +114,7 @@ class ModuleDiscoverer:
         Returns:
             True if import and validation succeed, False otherwise.
         """
-        try:  # noqa: PLW0717
+        try:  # ruff: ignore[too-many-statements-in-try-clause]
             module_file = self._module_file_path(module_name, base_path, package_name)
             self._validate_module_path(module_file, base_path)
             if not fnmatch(module_file.name, self.file_pattern):
@@ -195,7 +195,7 @@ class ModuleDiscoverer:
         Raises:
             UnsafePackageError: On invalid paths or oversize files.
         """
-        try:  # noqa: PLW0717
+        try:  # ruff: ignore[too-many-statements-in-try-clause]
             resolved_module = module_path.resolve()
             resolved_base = base_path.resolve()
             if not str(resolved_module).startswith(str(resolved_base)):
@@ -234,7 +234,7 @@ class ModuleDiscoverer:
         Returns:
             True if imported successfully, False otherwise.
         """
-        try:  # noqa: PLW0717
+        try:  # ruff: ignore[too-many-statements-in-try-clause]
             if not self._is_safe_module_name(module_name):
                 return False
             if module_name in sys.modules:

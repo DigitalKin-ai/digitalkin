@@ -11,6 +11,8 @@ from agentic_mesh_protocol.setup.v1 import (
 )
 
 from digitalkin.logger import logger
+from digitalkin.utils.json_structure import JsonStructure
+from digitalkin.utils.proto_utils import ProtoUtils
 
 
 class MockSetupServicer(setup_service_pb2_grpc.SetupServiceServicer):
@@ -35,6 +37,9 @@ class MockSetupServicer(setup_service_pb2_grpc.SetupServiceServicer):
         super().__init__()
         self.setups = {}
         self.versions = {}
+        # What the client sent on the last write, so tests can assert the SDK derived it.
+        self.structures = {}
+        self.documentations = {}
 
     @staticmethod
     def _sibling_response_pair(setup: setup_pb2.Setup) -> tuple[setup_pb2.Setup, setup_pb2.SetupVersion]:
@@ -75,6 +80,8 @@ class MockSetupServicer(setup_service_pb2_grpc.SetupServiceServicer):
             ),
         )
         self.setups[setup_id] = setup
+        self.structures[setup_id] = request.structure
+        self.documentations[setup_id] = request.documentation
         # Snapshot, not the live message: current_setup_version gets CopyFrom'd on every
         # update, which would rewrite this history entry in place if it were aliased.
         seed = setup_pb2.SetupVersion()
@@ -82,7 +89,9 @@ class MockSetupServicer(setup_service_pb2_grpc.SetupServiceServicer):
         self.versions[setup_id] = [seed]
         logger.debug("CREATE SETUP %s successful", setup_id)
         bare, version = self._sibling_response_pair(setup)
-        return setup_pb2.CreateSetupResponse(success=True, setup=bare, setup_version=version)
+        return setup_pb2.CreateSetupResponse(
+            success=True, setup=bare, setup_version=version, structure=request.structure
+        )
 
     def GetSetup(self, request: setup_pb2.GetSetupRequest, context: grpc.ServicerContext) -> setup_pb2.GetSetupResponse:
         setup = self.setups.get(request.setup_id)
@@ -92,8 +101,18 @@ class MockSetupServicer(setup_service_pb2_grpc.SetupServiceServicer):
             context.set_code(grpc.StatusCode.NOT_FOUND)
             context.set_details(msg)
             return setup_pb2.GetSetupResponse()
-        # Embedded current_setup_version populated: exercises the client's preferred path.
-        return setup_pb2.GetSetupResponse(setup=setup, setup_version=setup.current_setup_version)
+        if not request.structure_key:
+            # Embedded current_setup_version populated: exercises the client's preferred path.
+            return setup_pb2.GetSetupResponse(setup=setup, setup_version=setup.current_setup_version)
+        # Server-side projection: one key path, resolved against the stored document.
+        projected = setup_pb2.Setup()
+        projected.CopyFrom(setup)
+        values = JsonStructure.resolve(
+            ProtoUtils.proto_to_dict(setup.current_setup_version.content), [request.structure_key]
+        )
+        projected.current_setup_version.content.Clear()
+        projected.current_setup_version.content.update(values)
+        return setup_pb2.GetSetupResponse(setup=projected, setup_version=projected.current_setup_version)
 
     def UpdateSetup(
         self, request: setup_pb2.UpdateSetupRequest, context: grpc.ServicerContext
@@ -115,8 +134,11 @@ class MockSetupServicer(setup_service_pb2_grpc.SetupServiceServicer):
         history.append(version)
         if request.set_as_current:
             setup.current_setup_version.CopyFrom(version)
+        self.structures[request.setup_id] = request.structure
+        self.documentations[request.setup_id] = request.documentation
         return setup_pb2.UpdateSetupResponse(
-            success=True, setup=setup, setup_version=setup.current_setup_version
+            success=True, setup=setup, setup_version=setup.current_setup_version,
+            structure=request.structure,
         )
 
     def DeleteSetup(

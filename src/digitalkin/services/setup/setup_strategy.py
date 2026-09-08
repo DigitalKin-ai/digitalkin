@@ -11,12 +11,18 @@ from digitalkin.models.services.storage import Visibility
 
 
 class SetupVersionData(BaseModel):
-    """Pydantic model for SetupVersion data validation."""
+    """Pydantic model for SetupVersion data validation.
+
+    ``structure`` maps a key path in ``content`` to a short summary of what is there (see
+    :class:`~digitalkin.utils.json_structure.JsonStructure`), written by whoever created or
+    updated the setup. Empty means none was stored.
+    """
 
     id: str
     setup_id: str
     version: str
     content: dict[str, Any]
+    structure: dict[str, str] = {}
     creation_date: datetime.datetime
 
 
@@ -66,13 +72,18 @@ class SetupStrategy(ABC):
         """Retrieve a setup by its unique identifier.
 
         Args:
-            setup_dict: Dictionary with 'setup_id' and optional 'version'.
+            setup_dict: Dictionary with 'setup_id', optional 'version', and optional
+                'structure_key'. One key path projects the version content down to that
+                path; omitting it (or passing an empty string, which the wire cannot
+                tell apart) returns the whole document.
 
         Returns:
             The setup with its current version populated.
         """
 
-    async def create_service_setup(self, name: str, content: dict[str, Any]) -> SetupData:
+    async def create_service_setup(
+        self, name: str, content: dict[str, Any], structure: dict[str, str] | None = None
+    ) -> SetupData:
         """Create a service setup — a shareable configuration document.
 
         Only a name and the content JSON are needed; everything else (owner,
@@ -81,18 +92,22 @@ class SetupStrategy(ABC):
         Args:
             name: Human-readable service name.
             content: The service configuration JSON.
+            structure: The authored ``{key path: summary}`` map for ``content``. Omit to
+                have one derived from the values instead.
 
         Returns:
             The created setup with its initial version.
         """
-        return await self.create_setup({"name": name, "content": content})
+        return await self.create_setup({"name": name, "content": content, "structure": structure})
 
     @abstractmethod
     async def create_setup(self, setup_dict: dict[str, Any]) -> SetupData:
         """Create a new setup; owner/organisation/module derive from the request context.
 
         Args:
-            setup_dict: Dictionary with 'name' and 'content'.
+            setup_dict: Dictionary with 'name', 'content' and optional 'structure' — the
+                authored ``{key path: summary}`` map. Entries whose paths do not resolve
+                in ``content`` are dropped; an absent map is derived from the values.
 
         Returns:
             The created setup with its initial version.
@@ -103,7 +118,9 @@ class SetupStrategy(ABC):
         """Update a setup's name and current version content.
 
         Args:
-            setup_dict: Dictionary with 'setup_id', 'name' and 'content'.
+            setup_dict: Dictionary with 'setup_id', 'name', 'content' and optional
+                'structure'. The map is always rewritten from what this call carries, so
+                omitting it replaces an authored map with a derived one.
 
         Returns:
             The updated setup with its current version.

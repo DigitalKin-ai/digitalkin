@@ -136,6 +136,9 @@ class SearchAction(RegistryAction):
                 "visibility": setup.visibility.value if setup.visibility else None,
                 "status": setup.status.value if setup.status else None,
                 "description": (setup.documentation or "")[: self._DOC_PREVIEW_CHARS],
+                # The shape of the configuration, so choosing a scope needs no second call:
+                # read a key from here and pass it to ``load``.
+                "structure": setup.structure,
             }
             for setup in usable[:cap]
         ]
@@ -166,6 +169,15 @@ class UpdateAction(RegistryAction):
         "without changing what the instance currently serves, then activate it later with "
         "``set_version``.",
     )
+    structure: dict[str, str] | None = Field(
+        default=None,
+        description="Refreshed map of key path -> one-line summary of what lives at it, "
+        "describing the content this call carries. Same form as on create: summarise what each "
+        'key is FOR, join nested keys with "." (llm.model), bracket-quote a key containing '
+        '. [ ] " or \\ (limits["max.tokens"]), index a list element (tools[0]). Omitting it '
+        "replaces the stored map with one derived from the raw values, losing every written "
+        "summary — supply it whenever the instance had one.",
+    )
 
     async def execute(self, ctx: RegistryActionCtx) -> Any:
         """Cut a new version of the setup's content and rename it.
@@ -184,6 +196,7 @@ class UpdateAction(RegistryAction):
             "name": self.name,
             "content": self.content,
             "set_as_current": self.set_as_current,
+            "structure": self.structure,
         })
 
 

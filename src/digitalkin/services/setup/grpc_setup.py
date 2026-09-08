@@ -18,6 +18,7 @@ from digitalkin.logger import logger
 from digitalkin.models.grpc_servers.models import ClientConfig
 from digitalkin.services.setup.exceptions import SetupServiceError
 from digitalkin.services.setup.setup_strategy import SetupData, SetupStrategy, SetupVersionData, SetupVersionPage
+from digitalkin.utils.json_structure import JsonStructure
 from digitalkin.utils.proto_utils import ProtoUtils
 from digitalkin.utils.setup_content_validator import SetupContentValidator
 
@@ -46,7 +47,7 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
         await self.close_channel()
 
     @asynccontextmanager
-    async def handle_grpc_errors(  # noqa: PLR6301
+    async def handle_grpc_errors(  # ruff: ignore[no-self-use]
         self, operation: str
     ) -> AsyncGenerator[Any, Any]:  # Mixin: self available for subclass overrides
         """Context manager for consistent gRPC error handling with detailed logging.
@@ -112,7 +113,11 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
             raise SetupServiceError(msg) from e
 
     @staticmethod
-    def _to_setup_data(setup_msg: setup_pb2.Setup, version_msg: setup_pb2.SetupVersion) -> SetupData:
+    def _to_setup_data(
+        setup_msg: setup_pb2.Setup,
+        version_msg: setup_pb2.SetupVersion,
+        structure: Struct | None = None,
+    ) -> SetupData:
         """Assemble a ``SetupData`` from a response's setup + sibling setup_version.
 
         The setup's embedded ``current_setup_version`` wins when populated;
@@ -121,6 +126,9 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
         Args:
             setup_msg: The response ``Setup`` message.
             version_msg: The response-level ``SetupVersion`` message.
+            structure: The response-level ``structure`` Struct. Only Create/Update carry
+                one — ``SetupVersion`` has no structure field, so a plain GetSetup leaves
+                it empty.
 
         Returns:
             The validated ``SetupData``.
@@ -135,16 +143,21 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
             raise SetupServiceError(msg)
         data = ProtoUtils.proto_to_dict(setup_msg, with_defaults=True)
         data["current_setup_version"] = ProtoUtils.proto_to_dict(version_msg, with_defaults=True)
+        if structure is not None:
+            data["current_setup_version"]["structure"] = dict(structure)
         return SetupData(**data)
 
     async def get_setup(self, setup_dict: dict[str, Any]) -> SetupData:
         """Retrieve a setup by its unique identifier.
 
         Args:
-            setup_dict: Dictionary with 'setup_id' and optional 'version'.
+            setup_dict: Dictionary with 'setup_id', optional 'version' and optional
+                'structure_key'. The wire takes one key path; the server projects the
+                version content down to it.
 
         Returns:
-            The setup with its current version populated.
+            The setup with its current version populated. ``structure`` is empty —
+            GetSetupResponse carries no structure field.
 
         Raises:
             ValueError: If the setup_id is missing.
@@ -159,6 +172,9 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
             request = setup_pb2.GetSetupRequest(
                 setup_id=setup_dict["setup_id"],
                 version=setup_dict.get("version") or None,
+                # structure_key has no proto3 presence, so "" and unset are the same
+                # request on the wire: both mean "the whole document".
+                structure_key=setup_dict.get("structure_key") or "",
             )
             response = await self.exec_grpc_query("GetSetup", request)
             return self._to_setup_data(response.setup, response.setup_version)
@@ -167,10 +183,13 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
         """Create a new setup; owner/organisation/module derive from the request context.
 
         Args:
-            setup_dict: Dictionary with 'name' and 'content'.
+            setup_dict: Dictionary with 'name', 'content', optional 'documentation' and
+                optional 'structure' — the authored ``{key path: summary}`` map, filtered
+                to the paths that resolve in ``content``. Absent, it is derived from
+                ``content`` so a writer with no author still stores one.
 
         Returns:
-            The created setup with its initial version.
+            The created setup with its initial version and structure.
 
         Raises:
             ValueError: If name or content is missing, or output_format_spec is oversized.
@@ -186,23 +205,38 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
         async with self.handle_grpc_errors("Setup Creation"):
             content_struct = Struct()
             content_struct.update(setup_dict["content"])
-            request = setup_pb2.CreateSetupRequest(name=setup_dict["name"], content=content_struct)
+            structure_struct = Struct()
+            structure_struct.update(
+                JsonStructure.check(setup_dict["content"], setup_dict["structure"])
+                if setup_dict.get("structure")
+                else JsonStructure.describe(setup_dict["content"])
+            )
+            request = setup_pb2.CreateSetupRequest(
+                name=setup_dict["name"],
+                content=content_struct,
+                documentation=setup_dict.get("documentation", ""),
+                structure=structure_struct,
+            )
             response = await self.exec_grpc_query("CreateSetup", request)
             if not response.success:
                 msg = f"setup creation refused for '{setup_dict['name']}'"
                 raise SetupServiceError(msg)
             logger.debug("Setup '%s' created successfully", setup_dict["name"])
-            return self._to_setup_data(response.setup, response.setup_version)
+            return self._to_setup_data(response.setup, response.setup_version, response.structure)
 
     async def update_setup(self, setup_dict: dict[str, Any]) -> SetupData:
         """Update a setup's name and current version content.
 
         Args:
-            setup_dict: Dictionary with 'setup_id', 'name', 'content' and optional
-                'set_as_current' (defaults to True).
+            setup_dict: Dictionary with 'setup_id', 'name', 'content', optional
+                'set_as_current' (defaults to True), optional 'documentation' and optional
+                'structure' — the authored ``{key path: summary}`` map for the new content.
+                It is always rewritten, so it cannot drift from what is stored; omitting it
+                falls back to a derived map, which discards any authored summaries the
+                previous version carried.
 
         Returns:
-            The updated setup with its current version.
+            The updated setup with its current version and structure.
 
         Raises:
             ValueError: If setup_id, name or content is missing, or output_format_spec is oversized.
@@ -220,6 +254,12 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
         async with self.handle_grpc_errors("Setup Update"):
             content_struct = Struct()
             content_struct.update(setup_dict["content"])
+            structure_struct = Struct()
+            structure_struct.update(
+                JsonStructure.check(setup_dict["content"], setup_dict["structure"])
+                if setup_dict.get("structure")
+                else JsonStructure.describe(setup_dict["content"])
+            )
             # UpdateSetup cuts a new version rather than editing in place; without
             # set_as_current the setup would keep serving the old content.
             request = setup_pb2.UpdateSetupRequest(
@@ -227,13 +267,15 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
                 name=setup_dict["name"],
                 content=content_struct,
                 set_as_current=bool(setup_dict.get("set_as_current", True)),
+                documentation=setup_dict.get("documentation", ""),
+                structure=structure_struct,
             )
             response = await self.exec_grpc_query("UpdateSetup", request)
             if not response.success:
                 msg = f"setup update refused for '{setup_dict['setup_id']}'"
                 raise SetupServiceError(msg)
             logger.debug("Setup '%s' updated successfully", setup_dict["setup_id"])
-            return self._to_setup_data(response.setup, response.setup_version)
+            return self._to_setup_data(response.setup, response.setup_version, response.structure)
 
     async def delete_setup(self, setup_dict: dict[str, Any]) -> bool:
         """Delete a setup by its unique identifier.
