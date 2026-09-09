@@ -39,12 +39,14 @@ class ServerSettings(BaseSettings):
     reflection: bool = Field(default=True, description="Enable reflection for the server")
     max_concurrent_rpcs: NonNegativeInt = Field(
         (os.cpu_count() or 1) * 200,
-        description="Maximum number of RPCs handled in parallel by the server.",
+        description="Maximum number of RPCs handled in parallel by the server. Defaults to cpu_count * 200.",
+        json_schema_extra={"env_example": ""},
     )
     max_workers: NonNegativeInt = Field(10, description="Maximum number of workers for sync mode")
     thread_pool_workers: NonNegativeInt = Field(
         min(4, os.cpu_count() or 1),
-        description="Number of workers in the server thread pool.",
+        description="Number of workers in the server thread pool. Defaults to min(4, cpu_count).",
+        json_schema_extra={"env_example": ""},
     )
 
     def __init__(self, **values: Any) -> None:

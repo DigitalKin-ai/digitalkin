@@ -21,7 +21,7 @@ from digitalkin.grpc_servers.interceptors.request_ids import RequestIdClientInte
 from digitalkin.grpc_servers.utils.circuit_breaker import CircuitBreaker
 from digitalkin.logger import logger
 from digitalkin.models.grpc_servers.models import ClientConfig
-from digitalkin.models.settings.grpc_client import get_grpc_client_settings
+from digitalkin.models.settings.client.client import get_client_settings
 from digitalkin.models.settings.utils.channel import SecurityMode
 
 
@@ -240,7 +240,7 @@ class GrpcClientWrapper:
 
         Retries on transient errors (UNAVAILABLE, INTERNAL, DEADLINE_EXCEEDED)
         with exponential backoff. Retry count and backoff base are configurable
-        via DIGITALKIN_GRPC_QUERY_MAX_RETRIES and DIGITALKIN_GRPC_QUERY_BACKOFF_BASE_MS.
+        via CLIENT_MAX_RETRIES and CLIENT_BACKOFF_BASE_MS.
 
         Arguments:
             query_endpoint: rpc query name (e.g., "GetSetup", "CreateSetupVersion")
@@ -269,10 +269,10 @@ class GrpcClientWrapper:
             error_msg = f"[gRPC-client:{self.service_name}.{query_endpoint}] {e}"
             raise ServerError(error_msg) from e
 
-        grpc_settings = get_grpc_client_settings()
-        eff_timeout = timeout if timeout is not None else grpc_settings.timeout
-        max_retries = grpc_settings.max_retries
-        backoff_base_ms = grpc_settings.backoff_base_ms
+        client_settings = get_client_settings()
+        eff_timeout = timeout if timeout is not None else client_settings.timeout
+        max_retries = client_settings.max_retries
+        backoff_base_ms = client_settings.backoff_base_ms
         backoff_delays = tuple(backoff_base_ms / 1000 * (2**i) for i in range(max_retries))
         last_error: grpc.RpcError | None = None
 

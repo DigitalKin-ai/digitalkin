@@ -35,6 +35,7 @@ from digitalkin.logger import logger
 from digitalkin.models.grpc_servers.types import GrpcServer, ServiceDescriptor, T
 from digitalkin.models.settings.server.server import get_server_settings
 from digitalkin.models.settings.utils.channel import ControlFlow, SecurityMode
+from digitalkin.utils.env_manager import EnvManager
 
 
 class BaseServer(abc.ABC):
@@ -257,10 +258,9 @@ class BaseServer(abc.ABC):
         Raises:
             SecurityError: If credentials are missing or unreadable.
         """
-        creds = get_server_settings().channel.credentials
-        if not creds:
-            msg = "Credentials must be provided for secure server"
-            raise SecurityError(msg)
+        # Explicit SERVER_CHANNEL_CREDENTIALS__* paths, else the CERTIFICATE_CERT_VOLUME
+        # directory; the resolution itself raises when the key or certificate is absent.
+        creds = EnvManager.server_credentials()
 
         try:  # noqa: PLW0717
             if creds.key_path and creds.cert_path:
