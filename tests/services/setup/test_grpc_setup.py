@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, Mock
 import grpc
 import grpc_testing
 import pytest
+from pydantic import ValidationError
 from agentic_mesh_protocol.setup.v1 import (
     setup_pb2,
     setup_service_pb2,
@@ -20,6 +21,7 @@ from digitalkin.models.grpc_servers.models import ClientConfig
 from digitalkin.models.services.registry import RegistrySetupStatus
 from digitalkin.models.services.storage import Visibility
 from digitalkin.models.settings.utils.channel import ControlFlow, SecurityMode
+from digitalkin.services.setup.default_setup import DefaultSetup
 from digitalkin.services.setup.exceptions import SetupServiceError
 from digitalkin.services.setup.grpc_setup import GrpcSetup
 from digitalkin.services.setup.setup_strategy import SetupData
@@ -186,6 +188,13 @@ class TestCreateSetup:
             await client.create_setup({"name": "", "content": {"a": 1}})
         with pytest.raises(ValueError, match="name and content"):
             await client.create_setup({"name": "x", "content": "not-a-dict"})
+
+    @pytest.mark.grpc
+    @pytest.mark.validation
+    async def test_create_setup_oversized_output_format_spec_no_rpc(self, client: GrpcSetup) -> None:
+        """The guard trips before the channel is touched, and stays a ValueError."""
+        with pytest.raises(ValueError, match="must stay under 4096"):
+            await client.create_setup({"name": "x", "content": {"output_format_spec": "x" * 4096}})
 
     @pytest.mark.grpc
     @pytest.mark.edge_case
@@ -365,6 +374,12 @@ class TestUpdateSetup:
         with pytest.raises(ValueError, match="setup_id, name and content"):
             await client.update_setup({"setup_id": "s1", "name": "", "content": {}})
 
+    @pytest.mark.grpc
+    @pytest.mark.validation
+    async def test_update_setup_oversized_output_format_spec_no_rpc(self, client: GrpcSetup) -> None:
+        with pytest.raises(ValueError, match="must stay under 4096"):
+            await client.update_setup({"setup_id": "s1", "name": "x", "content": {"output_format_spec": "x" * 4096}})
+
 
 class TestDeleteSetup:
     """delete_setup returns the server's success flag."""
@@ -420,9 +435,7 @@ class TestChangeVisibility:
     ) -> None:
         seeded = _seed_setup(mock_servicer)
 
-        future = thread_pool.submit(
-            asyncio.run, client.change_visibility({"setup_id": seeded.id, "visibility": scope})
-        )
+        future = thread_pool.submit(asyncio.run, client.change_visibility({"setup_id": seeded.id, "visibility": scope}))
         request = _exchange(future, test_channel, "ChangeVisibility", mock_servicer.ChangeVisibility)
 
         assert request.setup_id == seeded.id
@@ -459,7 +472,12 @@ class TestResponseMerging:
             GrpcSetup._to_setup_data(setup, setup_pb2.SetupVersion())
 
     def test_sibling_version_is_the_source(self) -> None:
-        """The response-level setup_version fills the model, whatever the Setup carries."""
+        """The response-level setup_version fills the model when the Setup embeds none.
+
+        Not "whatever the Setup carries": an embedded ``current_setup_version`` still wins.
+        ``TestMissingContentDiagnostic`` covers what that precedence costs when the two
+        disagree.
+        """
         now = datetime.datetime.now(datetime.timezone.utc)
         setup = setup_pb2.Setup(id="s1", name="n", organisation_id="o", owner_id="u", module_id="m")
         sibling = setup_pb2.SetupVersion(
@@ -509,9 +527,12 @@ class TestSetupVersions:
         original = setup.current_setup_version.id
         future = thread_pool.submit(
             asyncio.run,
-            client.update_setup(
-                {"setup_id": setup.id, "name": "renamed", "content": {"a": 2}, "set_as_current": False}
-            ),
+            client.update_setup({
+                "setup_id": setup.id,
+                "name": "renamed",
+                "content": {"a": 2},
+                "set_as_current": False,
+            }),
         )
         request = _exchange(future, test_channel, "UpdateSetup", mock_servicer.UpdateSetup)
 
@@ -530,9 +551,7 @@ class TestSetupVersions:
         setup = _seed_setup(mock_servicer)
         for i in range(2):
             mock_servicer.UpdateSetup(
-                setup_pb2.UpdateSetupRequest(
-                    setup_id=setup.id, name="seeded", content={"a": i}, set_as_current=True
-                ),
+                setup_pb2.UpdateSetupRequest(setup_id=setup.id, name="seeded", content={"a": i}, set_as_current=True),
                 FakeContext(),
             )
 
@@ -593,9 +612,7 @@ class TestSetupVersions:
             asyncio.run,
             client.set_current_setup_version({"setup_id": setup.id, "setup_version_id": original}),
         )
-        request = _exchange(
-            future, test_channel, "SetCurrentSetupVersion", mock_servicer.SetCurrentSetupVersion
-        )
+        request = _exchange(future, test_channel, "SetCurrentSetupVersion", mock_servicer.SetCurrentSetupVersion)
         result = future.result()
 
         assert request.setup_version_id == original
@@ -615,3 +632,308 @@ class TestSetupVersions:
     ) -> None:
         with pytest.raises(ValueError, match="required"):
             asyncio.run(getattr(client, method)(payload))
+
+
+class TestAuthoredStructureOnTheWire:
+    """A supplied key map crosses the wire, filtered to the paths present in the content."""
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    def test_create_sends_the_authored_map(
+        self, client: GrpcSetup, test_channel: grpc_testing.Channel, mock_servicer, thread_pool
+    ) -> None:
+        authored = {"llm.provider": "which backend routes the call", "region": "where it runs"}
+        future = thread_pool.submit(
+            asyncio.run,
+            client.create_setup({
+                "name": "n",
+                "content": {"llm": {"provider": "litellm"}, "region": "eu-west"},
+                "structure": authored,
+            }),
+        )
+
+        request = _exchange(future, test_channel, "CreateSetup", mock_servicer.CreateSetup)
+        result = future.result()
+
+        assert dict(request.structure) == authored
+        assert result.current_setup_version.structure == authored
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    def test_create_drops_an_entry_the_content_does_not_have(
+        self, client: GrpcSetup, test_channel: grpc_testing.Channel, mock_servicer, thread_pool
+    ) -> None:
+        future = thread_pool.submit(
+            asyncio.run,
+            client.create_setup({
+                "name": "n",
+                "content": {"region": "eu-west"},
+                "structure": {"region": "where it runs", "llm.provider": "not in this document"},
+            }),
+        )
+
+        request = _exchange(future, test_channel, "CreateSetup", mock_servicer.CreateSetup)
+        future.result()
+
+        assert dict(request.structure) == {"region": "where it runs"}
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    def test_update_sends_the_authored_map(
+        self, client: GrpcSetup, test_channel: grpc_testing.Channel, mock_servicer, thread_pool
+    ) -> None:
+        create = thread_pool.submit(asyncio.run, client.create_setup({"name": "n", "content": {"a": "one"}}))
+        _exchange(create, test_channel, "CreateSetup", mock_servicer.CreateSetup)
+        setup = create.result()
+
+        future = thread_pool.submit(
+            asyncio.run,
+            client.update_setup({
+                "setup_id": setup.id,
+                "name": "n",
+                "content": {"a": "two"},
+                "structure": {"a": "the a knob"},
+            }),
+        )
+
+        request = _exchange(future, test_channel, "UpdateSetup", mock_servicer.UpdateSetup)
+        future.result()
+
+        assert dict(request.structure) == {"a": "the a knob"}
+
+
+class TestStructureOnTheWire:
+    """With no map supplied the SDK derives one on writes, and forwards one key path on reads."""
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    def test_create_sends_a_map_derived_from_the_content(
+        self, client: GrpcSetup, test_channel: grpc_testing.Channel, mock_servicer, thread_pool
+    ) -> None:
+        content = {"llm": {"provider": "litellm"}, "region": "eu-west"}
+        future = thread_pool.submit(asyncio.run, client.create_setup({"name": "n", "content": content}))
+
+        request = _exchange(future, test_channel, "CreateSetup", mock_servicer.CreateSetup)
+        result = future.result()
+
+        assert dict(request.structure) == {"llm.provider": "litellm", "region": "eu-west"}
+        assert result.current_setup_version.structure == {"llm.provider": "litellm", "region": "eu-west"}
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    def test_create_forwards_documentation(
+        self, client: GrpcSetup, test_channel: grpc_testing.Channel, mock_servicer, thread_pool
+    ) -> None:
+        future = thread_pool.submit(
+            asyncio.run,
+            client.create_setup({"name": "n", "content": {"a": 1}, "documentation": "what it does"}),
+        )
+
+        request = _exchange(future, test_channel, "CreateSetup", mock_servicer.CreateSetup)
+        future.result()
+
+        assert request.documentation == "what it does"
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    def test_update_recomputes_the_map_from_the_new_content(
+        self, client: GrpcSetup, test_channel: grpc_testing.Channel, mock_servicer, thread_pool
+    ) -> None:
+        create = thread_pool.submit(asyncio.run, client.create_setup({"name": "n", "content": {"a": "one"}}))
+        _exchange(create, test_channel, "CreateSetup", mock_servicer.CreateSetup)
+        setup = create.result()
+
+        future = thread_pool.submit(
+            asyncio.run,
+            client.update_setup({"setup_id": setup.id, "name": "n", "content": {"a": "two", "b": "new"}}),
+        )
+        request = _exchange(future, test_channel, "UpdateSetup", mock_servicer.UpdateSetup)
+        result = future.result()
+
+        assert dict(request.structure) == {"a": "two", "b": "new"}
+        assert result.current_setup_version.structure == {"a": "two", "b": "new"}
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    def test_get_forwards_the_structure_key_and_server_projects(
+        self, client: GrpcSetup, test_channel: grpc_testing.Channel, mock_servicer, thread_pool
+    ) -> None:
+        create = thread_pool.submit(
+            asyncio.run,
+            client.create_setup({"name": "n", "content": {"llm": {"provider": "litellm"}, "region": "eu"}}),
+        )
+        _exchange(create, test_channel, "CreateSetup", mock_servicer.CreateSetup)
+        setup = create.result()
+
+        future = thread_pool.submit(
+            asyncio.run, client.get_setup({"setup_id": setup.id, "structure_key": "llm.provider"})
+        )
+        request = _exchange(future, test_channel, "GetSetup", mock_servicer.GetSetup)
+        result = future.result()
+
+        assert request.structure_key == "llm.provider"
+        assert result.current_setup_version.content == {"llm.provider": "litellm"}
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    def test_get_without_a_key_sends_an_empty_string(
+        self, client: GrpcSetup, test_channel: grpc_testing.Channel, mock_servicer, thread_pool
+    ) -> None:
+        create = thread_pool.submit(asyncio.run, client.create_setup({"name": "n", "content": {"a": 1}}))
+        _exchange(create, test_channel, "CreateSetup", mock_servicer.CreateSetup)
+        setup = create.result()
+
+        future = thread_pool.submit(asyncio.run, client.get_setup({"setup_id": setup.id}))
+        request = _exchange(future, test_channel, "GetSetup", mock_servicer.GetSetup)
+        result = future.result()
+
+        assert request.structure_key == ""
+        assert result.current_setup_version.content == {"a": 1}
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    def test_get_leaves_structure_empty(
+        self, client: GrpcSetup, test_channel: grpc_testing.Channel, mock_servicer, thread_pool
+    ) -> None:
+        """GetSetupResponse carries no structure field, so a plain read cannot populate it."""
+        create = thread_pool.submit(asyncio.run, client.create_setup({"name": "n", "content": {"a": 1}}))
+        _exchange(create, test_channel, "CreateSetup", mock_servicer.CreateSetup)
+        setup = create.result()
+
+        future = thread_pool.submit(asyncio.run, client.get_setup({"setup_id": setup.id}))
+        _exchange(future, test_channel, "GetSetup", mock_servicer.GetSetup)
+
+        assert future.result().current_setup_version.structure == {}
+
+
+@pytest.mark.contract
+class TestLocalRemoteParity:
+    """LOCAL and REMOTE must agree on the structure surface, or behaviour changes with deployment.
+
+    ``DefaultSetup`` mirrors the backend by design (`.claude/rules/services.md`), and the
+    projection contract in particular is easy to drift: the wire cannot distinguish an empty
+    ``structure_key`` from an absent one, so both strategies must read "" as the whole document.
+    """
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    def test_an_authored_map_is_filtered_identically(
+        self, client: GrpcSetup, test_channel: grpc_testing.Channel, mock_servicer, thread_pool
+    ) -> None:
+        payload = {
+            "name": "n",
+            "content": {"llm": {"model": "gpt-4o"}},
+            "structure": {"llm.model": "which model answers", "absent.key": "not in this document"},
+        }
+
+        future = thread_pool.submit(asyncio.run, client.create_setup(dict(payload)))
+        _exchange(future, test_channel, "CreateSetup", mock_servicer.CreateSetup)
+        remote = future.result()
+        local = asyncio.run(DefaultSetup().create_setup(dict(payload)))
+
+        assert remote.current_setup_version.structure == {"llm.model": "which model answers"}
+        assert local.current_setup_version.structure == remote.current_setup_version.structure
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    def test_an_absent_map_is_derived_identically(
+        self, client: GrpcSetup, test_channel: grpc_testing.Channel, mock_servicer, thread_pool
+    ) -> None:
+        payload = {"name": "n", "content": {"llm": {"model": "gpt-4o"}, "region": "eu"}}
+
+        future = thread_pool.submit(asyncio.run, client.create_setup(dict(payload)))
+        _exchange(future, test_channel, "CreateSetup", mock_servicer.CreateSetup)
+        remote = future.result()
+        local = asyncio.run(DefaultSetup().create_setup(dict(payload)))
+
+        assert local.current_setup_version.structure == remote.current_setup_version.structure
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    @pytest.mark.edge_case
+    @pytest.mark.parametrize("key", ["", "llm.model"])
+    def test_projection_agrees_on_the_key(
+        self, client: GrpcSetup, test_channel: grpc_testing.Channel, mock_servicer, thread_pool, key: str
+    ) -> None:
+        """ "" means the whole document on both sides — the wire has no presence to say otherwise."""
+        content = {"llm": {"model": "gpt-4o"}, "region": "eu"}
+
+        create = thread_pool.submit(asyncio.run, client.create_setup({"name": "n", "content": content}))
+        _exchange(create, test_channel, "CreateSetup", mock_servicer.CreateSetup)
+        created = create.result()
+        future = thread_pool.submit(asyncio.run, client.get_setup({"setup_id": created.id, "structure_key": key}))
+        _exchange(future, test_channel, "GetSetup", mock_servicer.GetSetup)
+        remote = future.result()
+
+        local_strategy = DefaultSetup()
+        local_created = asyncio.run(local_strategy.create_setup({"name": "n", "content": content}))
+        local = asyncio.run(local_strategy.get_setup({"setup_id": local_created.id, "structure_key": key}))
+
+        assert local.current_setup_version.content == remote.current_setup_version.content
+
+
+@pytest.mark.regression
+class TestMissingContentDiagnostic:
+    """A version arriving without content must say which of the two fields was read.
+
+    Production (archetype-ada, 2026-09-08/09) failed here with a bare pydantic
+    "current_setup_version.content Field required", which named neither the setup nor
+    which SetupVersion the SDK had taken — the response carries the version twice.
+    """
+
+    @staticmethod
+    def _stub() -> setup_pb2.SetupVersion:
+        """A SetupVersion with identity but no content Struct — the shape production returned."""
+        return setup_pb2.SetupVersion(id="setup_versions:01ABC", setup_id="setups:01X", version="1.0.0")
+
+    def test_names_the_sibling_when_only_it_has_content(self) -> None:
+        """The actionable case: the payload was in the field the SDK did not read."""
+        full = self._stub()
+        full.content.update({"a": 1})
+        setup = setup_pb2.Setup(id="setups:01X", name="n", module_id="m")
+        setup.current_setup_version.CopyFrom(self._stub())
+
+        with pytest.raises(SetupServiceError) as excinfo:
+            GrpcSetup._to_setup_data(setup, full)
+
+        assert "read from setup.current_setup_version" in str(excinfo.value)
+        assert "sibling setup_version carries content" in str(excinfo.value)
+        assert "setups:01X" in str(excinfo.value)
+
+    def test_says_so_when_neither_carries_content(self) -> None:
+        """The backend-side case: nothing to read anywhere."""
+        setup = setup_pb2.Setup(id="setups:01X", name="n", module_id="m")
+        setup.current_setup_version.CopyFrom(self._stub())
+
+        with pytest.raises(SetupServiceError, match="sibling setup_version empty too"):
+            GrpcSetup._to_setup_data(setup, setup_pb2.SetupVersion())
+
+    def test_reports_the_sibling_as_the_source_when_no_embedded_version(self) -> None:
+        setup = setup_pb2.Setup(id="setups:01X", name="n", module_id="m")
+
+        with pytest.raises(SetupServiceError, match=r"read from setup_version; sibling setup_version not populated"):
+            GrpcSetup._to_setup_data(setup, self._stub())
+
+    def test_an_empty_but_present_content_is_accepted(self) -> None:
+        """{} is a legitimate configuration; only an unset Struct is the failure."""
+        version = self._stub()
+        version.content.SetInParent()
+        version.creation_date.FromDatetime(datetime.datetime.now(datetime.timezone.utc))
+        setup = setup_pb2.Setup(id="setups:01X", name="n", module_id="m")
+        setup.current_setup_version.CopyFrom(version)
+
+        assert GrpcSetup._to_setup_data(setup, version).current_setup_version.content == {}
+
+    def test_creation_date_is_the_same_trap_one_field_over(self) -> None:
+        """An unset Timestamp is dropped like an unset Struct, and the model requires it too.
+
+        Production always sent it (as epoch), so this is latent rather than live — but it
+        fails with the same opaque "Field required" the content check was added to replace.
+        """
+        version = self._stub()
+        version.content.SetInParent()
+        setup = setup_pb2.Setup(id="setups:01X", name="n", module_id="m")
+        setup.current_setup_version.CopyFrom(version)
+
+        with pytest.raises(ValidationError, match="creation_date"):
+            GrpcSetup._to_setup_data(setup, version)

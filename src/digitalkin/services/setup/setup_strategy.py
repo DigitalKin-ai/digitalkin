@@ -13,17 +13,22 @@ from digitalkin.models.services.storage import Visibility
 class SetupVersionData(BaseModel):
     """Pydantic model for SetupVersion data validation.
 
-    ``documentation`` is cut with the version that carries it: CreateSetup/UpdateSetup take
-    it alongside ``content``, and the ``SetupVersion`` message returns it, so a read gives
-    back the text stored with the active revision.
+    ``structure`` maps a key path in ``content`` to a short summary of what is there (see
+    :class:`~digitalkin.utils.json_structure.JsonStructure`), written by whoever created or
+    updated the setup. Empty means none was stored.
+
+    ``documentation`` is free text indexed by the registry search. It is cut with the version
+    that carries it, and ``SetupVersion`` returns it as of protocol 1.0.2.dev2 — before that
+    the field existed only on the write requests and always read back empty.
     """
 
     id: str
     setup_id: str
     version: str
-    content: dict[str, Any]
-    creation_date: datetime.datetime
     documentation: str = ""
+    content: dict[str, Any]
+    structure: dict[str, str] = {}
+    creation_date: datetime.datetime
 
 
 class SetupVersionPage(BaseModel):
@@ -75,13 +80,22 @@ class SetupStrategy(ABC):
         """Retrieve a setup by its unique identifier.
 
         Args:
-            setup_dict: Dictionary with 'setup_id' and optional 'version'.
+            setup_dict: Dictionary with 'setup_id', optional 'version', and optional
+                'structure_key'. One key path projects the version content down to that
+                path; omitting it (or passing an empty string, which the wire cannot
+                tell apart) returns the whole document.
 
         Returns:
             The setup with its current version populated.
         """
 
-    async def create_service_setup(self, name: str, content: dict[str, Any], documentation: str = "") -> SetupData:
+    async def create_service_setup(
+        self,
+        name: str,
+        content: dict[str, Any],
+        documentation: str = "",
+        structure: dict[str, str] | None = None,
+    ) -> SetupData:
         """Create a service setup — a shareable configuration document.
 
         Only a name and the content JSON are needed; everything else (owner,
@@ -90,19 +104,29 @@ class SetupStrategy(ABC):
         Args:
             name: Human-readable service name.
             content: The service configuration JSON.
-            documentation: Free text indexed by the registry search.
+            documentation: Free text describing the service, indexed by the registry search.
+            structure: The authored ``{key path: summary}`` map for ``content``. Omit to
+                have one derived from the values instead.
 
         Returns:
             The created setup with its initial version.
         """
-        return await self.create_setup({"name": name, "content": content, "documentation": documentation})
+        return await self.create_setup({
+            "name": name,
+            "content": content,
+            "documentation": documentation,
+            "structure": structure,
+        })
 
     @abstractmethod
     async def create_setup(self, setup_dict: dict[str, Any]) -> SetupData:
         """Create a new setup; owner/organisation/module derive from the request context.
 
         Args:
-            setup_dict: Dictionary with 'name', 'content' and optional 'documentation'.
+            setup_dict: Dictionary with 'name', 'content', optional 'documentation' and
+                optional 'structure' — the authored ``{key path: summary}`` map. Entries
+                whose paths do not resolve in ``content`` are dropped; an absent map is
+                derived from the values.
 
         Returns:
             The created setup with its initial version.
@@ -114,7 +138,9 @@ class SetupStrategy(ABC):
 
         Args:
             setup_dict: Dictionary with 'setup_id', 'name', 'content' and optional
-                'documentation' (cut onto the new version, like 'content').
+                'documentation' (cut onto the new version, like 'content') and optional
+                'structure'. The map is always rewritten from what this call carries, so
+                omitting it replaces an authored map with a derived one.
 
         Returns:
             The updated setup with its current version.

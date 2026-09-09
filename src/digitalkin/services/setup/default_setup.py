@@ -17,6 +17,8 @@ from digitalkin.services.setup.setup_strategy import (
     SetupVersionData,
     SetupVersionPage,
 )
+from digitalkin.utils.json_structure import JsonStructure
+from digitalkin.utils.setup_content_validator import SetupContentValidator
 
 
 class DefaultSetup(SetupStrategy):
@@ -65,21 +67,35 @@ class DefaultSetup(SetupStrategy):
         """Retrieve a setup by its unique identifier.
 
         Args:
-            setup_dict: Dictionary with 'setup_id' and optional 'version'.
+            setup_dict: Dictionary with 'setup_id', optional 'version' and optional
+                'structure_key'.
 
         Returns:
-            The setup with its current version populated.
+            The setup with its current version populated. With a non-empty
+            'structure_key', the version content is replaced by the {key path: value}
+            projection of that one path — the local mirror of server-side projection.
+            An empty key is treated as absent, because GetSetupRequest.structure_key has
+            no proto3 presence and the wire cannot tell the two apart.
 
         Raises:
             SetupServiceError: setup_id does not exist.
         """
-        return self._get_or_raise(setup_dict.get("setup_id", ""))
+        setup = self._get_or_raise(setup_dict.get("setup_id", ""))
+        key = setup_dict.get("structure_key")
+        if not key:
+            return setup
+        projected = setup.model_copy(deep=True)
+        projected.current_setup_version.content = JsonStructure.resolve(setup.current_setup_version.content, [key])
+        return projected
 
     async def create_setup(self, setup_dict: dict[str, Any]) -> SetupData:
         """Create a new setup; identifiers are generated locally.
 
         Args:
-            setup_dict: Dictionary with 'name', 'content' and optional 'documentation'.
+            setup_dict: Dictionary with 'name', 'content', optional 'documentation' and
+                optional 'structure' — the authored ``{key path: summary}`` map, filtered
+                to the paths that resolve in ``content``. Absent, it is derived from
+                ``content``.
 
         Returns:
             The created setup with its initial version.
@@ -87,6 +103,7 @@ class DefaultSetup(SetupStrategy):
         Raises:
             ValueError: If name or content is invalid.
         """
+        SetupContentValidator.reject_oversized_output_format_spec(setup_dict.get("content") or {})
         setup_id = self._new_id()
         try:
             setup = SetupData(
@@ -100,9 +117,14 @@ class DefaultSetup(SetupStrategy):
                 current_setup_version=SetupVersionData(
                     id=self._new_id(),
                     setup_id=setup_id,
-                    documentation=setup_dict.get("documentation") or "",
                     version="1.0.0",
+                    documentation=setup_dict.get("documentation") or "",
                     content=setup_dict.get("content") or {},
+                    structure=(
+                        JsonStructure.check(setup_dict.get("content") or {}, setup_dict["structure"])
+                        if setup_dict.get("structure")
+                        else JsonStructure.describe(setup_dict.get("content") or {})
+                    ),
                     creation_date=datetime.datetime.now(datetime.timezone.utc),
                 ),
             )
@@ -122,8 +144,11 @@ class DefaultSetup(SetupStrategy):
         """Update a setup's name and current version content.
 
         Args:
-            setup_dict: Dictionary with 'setup_id', 'name', 'content' and optional
-                'documentation' / 'set_as_current' (defaults to True).
+            setup_dict: Dictionary with 'setup_id', 'name', 'content', optional
+                'set_as_current' (defaults to True), optional 'documentation' and optional
+                'structure' — the authored ``{key path: summary}`` map for the new content.
+                Omitting the map falls back to a derived one, discarding any authored
+                summaries; omitting the documentation clears it, matching the wire.
 
         Returns:
             The updated setup with its current version.
@@ -138,6 +163,7 @@ class DefaultSetup(SetupStrategy):
         if not name or not isinstance(content, dict):
             msg = "setup_id, name and content (object) are required"
             raise ValueError(msg)
+        SetupContentValidator.reject_oversized_output_format_spec(content)
         setup.name = name
         # A new revision rather than an in-place edit, matching UpdateSetup on the wire.
         history = self.versions.setdefault(setup.id, [setup.current_setup_version])
@@ -145,8 +171,15 @@ class DefaultSetup(SetupStrategy):
             id=self._new_id(),
             setup_id=setup.id,
             version=f"1.0.{len(history)}",
-            content=content,
+            # No presence on UpdateSetupRequest, so an omitted value clears it server-side.
+            # Mirror that rather than preserving the old text: same input, same result.
             documentation=setup_dict.get("documentation") or "",
+            content=content,
+            structure=(
+                JsonStructure.check(content, setup_dict["structure"])
+                if setup_dict.get("structure")
+                else JsonStructure.describe(content)
+            ),
             creation_date=datetime.datetime.now(datetime.timezone.utc),
         )
         history.append(version)

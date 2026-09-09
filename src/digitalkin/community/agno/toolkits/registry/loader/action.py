@@ -134,7 +134,7 @@ class LoadToolAction(LoadAction):
             )
         return None
 
-    async def execute(self, ctx: LoadActionCtx) -> LoadOutcome:  # noqa: C901, PLR0911 — each return is a distinct, LLM-readable outcome
+    async def execute(self, ctx: LoadActionCtx) -> LoadOutcome:  # ruff: ignore[complex-structure, too-many-return-statements] — each return is a distinct, LLM-readable outcome
         """Resolve the setup into a ModuleToolkit and append it to the live tool list.
 
         Idempotent per ``setup_id``; never raises. The setup's family is read first so a

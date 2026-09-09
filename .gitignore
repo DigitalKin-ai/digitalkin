@@ -195,8 +195,15 @@ CLAUDE.md
 docker/init_pycharm_helpers.sh
 scripts
 
-# Claude Code (share .claude/agents + .claude/skills; keep local settings out)
-.claude
+# Claude Code. `.claude/*` and not `.claude`: git cannot re-include a path whose
+# parent directory is itself excluded, so the bare form made the negations below
+# impossible and silently ignored the whole toolkit.
+.claude/*
+!.claude/agents/
+!.claude/skills/
+!.claude/rules/
+!.claude/hooks/
+!.claude/settings.json
 graphify-out
 .todo
 .playwright-mcp
