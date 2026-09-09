@@ -46,6 +46,17 @@ repos:
         types: [python]
         files: ^src/digitalkin/.*\.py$
 
+  # The .env templates are generated from the settings classes: regenerate them
+  # here so a new or renamed field can never ship without its documentation.
+  - repo: local
+    hooks:
+      - id: env-template
+        name: env-template
+        entry: uv run task env-template
+        language: system
+        pass_filenames: false
+        files: ^src/digitalkin/models/settings/.*\.py$
+
   # Add pytest as a local hook
   - repo: local
     hooks:

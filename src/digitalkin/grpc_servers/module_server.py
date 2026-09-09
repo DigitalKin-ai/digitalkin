@@ -1,6 +1,5 @@
 """Module gRPC server implementation for DigitalKin."""
 
-import os
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
@@ -15,9 +14,12 @@ from digitalkin.grpc_servers.gateway_servicer import GatewayServicer
 from digitalkin.grpc_servers.module_servicer import ModuleServicer
 from digitalkin.logger import logger
 from digitalkin.models.grpc_servers.models import ClientConfig
+from digitalkin.models.services.services import ServicesMode
+from digitalkin.models.settings.redis import get_redis_settings
 from digitalkin.models.settings.server.server import get_server_settings
 from digitalkin.modules._base_module import BaseModule
 from digitalkin.services.registry import GrpcRegistry
+from digitalkin.utils.env_manager import EnvManager
 
 if TYPE_CHECKING:
     from digitalkin.services.registry import RegistryStrategy
@@ -40,6 +42,11 @@ class ModuleServer(BaseServer):
     ) -> None:
         """Initialize the module server.
 
+        In remote mode an omitted ``client_config`` is built from the
+        environment, so a module no longer declares one to reach the registry
+        and the services provider. Local mode keeps it unset: there is no
+        registry to register with.
+
         Args:
             module_class: The module class to serve.
             client_config: Client configuration for services and registry.
@@ -49,6 +56,8 @@ class ModuleServer(BaseServer):
 
         super().__init__(interceptors=all_interceptors or None)
         self.module_class = module_class
+        if client_config is None and EnvManager.services_mode() == ServicesMode.REMOTE:
+            client_config = EnvManager.client_config()
         self.client_config = client_config
         self.registry: RegistryStrategy | None = None
         self.module_servicer: ModuleServicer | None = None
@@ -93,9 +102,9 @@ class ModuleServer(BaseServer):
         dispatcher process, queue, or Redis stream for dispatch.
 
         Raises:
-            RuntimeError: If DIGITALKIN_REDIS_URL is not set.
+            RuntimeError: If DIGITALKIN_REDIS_URL resolves to an empty URL.
         """
-        redis_url = os.environ.get("DIGITALKIN_REDIS_URL")
+        redis_url = get_redis_settings().pool.url.get_secret_value()
         if not redis_url:
             msg = "DIGITALKIN_REDIS_URL is required. The gateway needs Redis for stream persistence."
             raise RuntimeError(msg)

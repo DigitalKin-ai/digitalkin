@@ -3,8 +3,10 @@
 import pytest
 
 from digitalkin.grpc_servers.exceptions import ConfigurationError, SecurityError
+from digitalkin.models.settings.certificate import get_certificate_settings
 from digitalkin.models.settings.server.server import ServerSettings
-from digitalkin.models.settings.utils.channel import ControlFlow, SecurityMode, Credentials
+from digitalkin.models.settings.utils.channel import ControlFlow, Credentials, SecurityMode
+from digitalkin.utils.env_manager import EnvManager
 
 
 @pytest.mark.grpc
@@ -171,14 +173,22 @@ class TestServerConfig:
         # Check enable_health_check
         assert config.health_check is False
 
-    def test_server_config_secure_without_credentials(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Test error when secure mode is specified without credentials."""
-        # When creating a ServerConfig with secure mode but no credentials,
-        # it should raise ConfigurationError
-        with pytest.raises(ConfigurationError, match="Credentials must be provided when using secure mode"):
-            monkeypatch.setenv("SERVER_CHANNEL_SECURITY", "secure")
-            monkeypatch.delenv("SERVER_CHANNEL_CREDENTIALS", raising=False)
-            ServerSettings()
+    def test_server_config_secure_without_credentials(self, monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+        """Secure mode without explicit paths is accepted, then fails on an empty volume.
+
+        The credentials are resolved from CERTIFICATE_CERT_VOLUME, so the
+        fail-closed check lives in EnvManager.server_credentials rather than in
+        the settings model.
+        """
+        monkeypatch.setenv("SERVER_CHANNEL_SECURITY", "secure")
+        monkeypatch.delenv("SERVER_CHANNEL_CREDENTIALS", raising=False)
+        monkeypatch.setenv("CERTIFICATE_CERT_VOLUME", str(tmp_path))
+        get_certificate_settings.cache_clear()
+
+        assert ServerSettings().channel.security == SecurityMode.SECURE
+
+        with pytest.raises(SecurityError, match="Server key or certificate not found"):
+            EnvManager.server_credentials()
 
     def test_server_config_secure_with_credentials(self, dummy_certs, monkeypatch: pytest.MonkeyPatch) -> None:
         """Test that secure mode with proper credentials is valid."""

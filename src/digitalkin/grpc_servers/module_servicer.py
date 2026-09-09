@@ -2,7 +2,6 @@
 
 import asyncio
 import json
-import os
 import time
 from argparse import ArgumentParser, Namespace
 from collections.abc import Awaitable, Callable
@@ -27,6 +26,7 @@ from digitalkin.models.module.module import ModuleCodeModel
 from digitalkin.models.module.setup_types import SetupModel
 from digitalkin.models.services.services import ServicesMode
 from digitalkin.models.settings.gateway import get_gateway_settings
+from digitalkin.models.settings.redis import get_redis_settings
 from digitalkin.models.settings.server.servicer import get_module_servicer_settings
 from digitalkin.modules._base_module import BaseModule
 from digitalkin.services.registry import GrpcRegistry, RegistryStrategy
@@ -36,6 +36,7 @@ from digitalkin.services.setup.setup_strategy import SetupStrategy, SetupVersion
 from digitalkin.services.user_profile import DefaultUserProfile, GrpcUserProfile, UserProfileStrategy
 from digitalkin.utils.arg_parser import ArgParser
 from digitalkin.utils.development_mode_action import DevelopmentModeMappingAction
+from digitalkin.utils.env_manager import EnvManager
 
 
 class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
@@ -54,9 +55,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         parser.add_argument(
             "-d",
             "--dev-mode",
-            env_var="SERVICE_MODE",
             choices=ServicesMode.__members__,
-            default="local",
             action=DevelopmentModeMappingAction,
             dest="services_mode",
             help="Define Module Service configurations for endpoints",
@@ -69,13 +68,13 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             module_class: The module type to serve.
 
         Raises:
-            RuntimeError: If DIGITALKIN_REDIS_URL is not set.
+            RuntimeError: If DIGITALKIN_REDIS_URL resolves to an empty URL.
         """
         super().__init__()
         module_class.discover()
         self.module_class = module_class
 
-        redis_url = os.environ.get("DIGITALKIN_REDIS_URL")
+        redis_url = get_redis_settings().pool.url.get_secret_value()
         if not redis_url:
             msg = "DIGITALKIN_REDIS_URL is required"
             raise RuntimeError(msg)
@@ -89,10 +88,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         # Access-control client gating the setup cache. Always built, always called (fail-closed).
         if self.args.services_mode == ServicesMode.REMOTE:
             up_cfg = self.module_class.services_config_params.get("user_profile") or {}
-            up_client_config = up_cfg.get("client_config")
-            if not up_client_config:
-                msg = "user_profile client_config is required for setup access control"
-                raise RuntimeError(msg)
+            up_client_config = up_cfg.get("client_config") or EnvManager.client_config()
             self.user_profile = GrpcUserProfile("", "", "", up_client_config)
         else:
             self.user_profile = DefaultUserProfile("", "", "")
