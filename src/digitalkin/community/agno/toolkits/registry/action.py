@@ -169,6 +169,12 @@ class UpdateAction(RegistryAction):
         "without changing what the instance currently serves, then activate it later with "
         "``set_version``.",
     )
+    documentation: str | None = Field(
+        default=None,
+        description="Free text describing what this instance is for, indexed by ``search``. "
+        "Omit to keep the text the instance already has; pass a string to replace it, or an "
+        "empty string to clear it.",
+    )
     structure: dict[str, str] | None = Field(
         default=None,
         description="Refreshed map of key path -> one-line summary of what lives at it, "
@@ -196,6 +202,9 @@ class UpdateAction(RegistryAction):
             "name": self.name,
             "content": self.content,
             "set_as_current": self.set_as_current,
+            "documentation": (
+                setup.current_setup_version.documentation if self.documentation is None else self.documentation
+            ),
             "structure": self.structure,
         })
 

@@ -50,6 +50,12 @@ class CreateServiceAction(RegistryAction):
         description="The service configuration (a non-empty JSON object). "
         "Note: JSON numbers round-trip as floats over the wire.",
     )
+    documentation: str = Field(
+        default="",
+        description="Free text describing what this service is for and when to use it. It is "
+        "what ``search`` matches on and previews back, so a service created without it is "
+        "findable only by name.",
+    )
     structure: dict[str, str] = Field(
         ...,
         description="Map of key path -> one-line summary of what lives at it. This is what "
@@ -63,12 +69,14 @@ class CreateServiceAction(RegistryAction):
     )
 
     async def execute(self, ctx: RegistryActionCtx) -> Any:
-        """Create the service setup from its name, content and authored key map.
+        """Create the service setup from its name, content, documentation and authored key map.
 
         Returns:
             The created service setup.
         """
-        return await ctx.setup.create_service_setup(self.name, self.content, structure=self.structure)
+        return await ctx.setup.create_service_setup(
+            self.name, self.content, documentation=self.documentation, structure=self.structure
+        )
 
 
 class StructureServiceAction(RegistryAction):

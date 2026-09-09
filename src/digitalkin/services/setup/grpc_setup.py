@@ -229,7 +229,7 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
             request = setup_pb2.CreateSetupRequest(
                 name=setup_dict["name"],
                 content=content_struct,
-                documentation=setup_dict.get("documentation", ""),
+                documentation=setup_dict.get("documentation") or "",
                 structure=structure_struct,
             )
             response = await self.exec_grpc_query("CreateSetup", request)
@@ -282,7 +282,7 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
                 name=setup_dict["name"],
                 content=content_struct,
                 set_as_current=bool(setup_dict.get("set_as_current", True)),
-                documentation=setup_dict.get("documentation", ""),
+                documentation=setup_dict.get("documentation") or "",
                 structure=structure_struct,
             )
             response = await self.exec_grpc_query("UpdateSetup", request)

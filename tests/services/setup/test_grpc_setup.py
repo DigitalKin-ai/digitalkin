@@ -30,6 +30,11 @@ from tests.fixtures.grpc_fixtures import AsyncStubWrapper, FakeContext
 
 service_name = setup_service_pb2.DESCRIPTOR.services_by_name["SetupService"]
 
+# The readable half of `documentation` lands on SetupVersion in a protocol release later than
+# the pinned 1.0.2.dev1; probe the descriptor so the round-trip test arms itself on upgrade
+# instead of sitting red (or being forgotten) in the meantime.
+_VERSION_CARRIES_DOCUMENTATION = any(f.name == "documentation" for f in setup_pb2.SetupVersion.DESCRIPTOR.fields)
+
 
 @pytest.fixture
 def thread_pool():
@@ -83,9 +88,13 @@ def client(test_channel: grpc_testing.Channel) -> GrpcSetup:
     return client
 
 
-def _seed_setup(mock_servicer: MockSetupServicer, name: str = "seeded") -> setup_pb2.Setup:
+def _seed_setup(
+    mock_servicer: MockSetupServicer, name: str = "seeded", documentation: str = ""
+) -> setup_pb2.Setup:
     """Create a setup directly in the mock servicer's store."""
-    response = mock_servicer.CreateSetup(setup_pb2.CreateSetupRequest(name=name, content={"k": "v"}), FakeContext())
+    response = mock_servicer.CreateSetup(
+        setup_pb2.CreateSetupRequest(name=name, content={"k": "v"}, documentation=documentation), FakeContext()
+    )
     return mock_servicer.setups[response.setup.id]
 
 
@@ -131,6 +140,46 @@ class TestCreateSetup:
         # Version arrived via the response-level sibling (fallback merge path).
         assert result.current_setup_version.content == {"a": 1}
         assert result.current_setup_version.setup_id == result.id
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    def test_create_setup_sends_documentation(
+        self,
+        client: GrpcSetup,
+        test_channel: grpc_testing.Channel,
+        mock_servicer: MockSetupServicer,
+        thread_pool: futures.ThreadPoolExecutor,
+    ) -> None:
+        future = thread_pool.submit(
+            asyncio.run,
+            client.create_setup({"name": "s", "content": {}, "documentation": "what it does"}),
+        )
+        request = _exchange(future, test_channel, "CreateSetup", mock_servicer.CreateSetup)
+
+        assert request.documentation == "what it does"
+        future.result()
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    @pytest.mark.skipif(
+        not _VERSION_CARRIES_DOCUMENTATION,
+        reason="SetupVersion.documentation ships after agentic-mesh-protocol 1.0.2.dev1",
+    )
+    def test_create_setup_reads_documentation_back_off_the_version(
+        self,
+        client: GrpcSetup,
+        test_channel: grpc_testing.Channel,
+        mock_servicer: MockSetupServicer,
+        thread_pool: futures.ThreadPoolExecutor,
+    ) -> None:
+        """The text round-trips on the version that was cut with it."""
+        future = thread_pool.submit(
+            asyncio.run,
+            client.create_setup({"name": "s", "content": {}, "documentation": "what it does"}),
+        )
+        _exchange(future, test_channel, "CreateSetup", mock_servicer.CreateSetup)
+
+        assert future.result().current_setup_version.documentation == "what it does"
 
     @pytest.mark.grpc
     @pytest.mark.validation
@@ -195,6 +244,27 @@ class TestGetSetup:
         assert result.name == "seeded"
         # Embedded current_setup_version wins (preferred merge path).
         assert result.current_setup_version.content == {"k": "v"}
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    @pytest.mark.skipif(
+        not _VERSION_CARRIES_DOCUMENTATION,
+        reason="SetupVersion.documentation ships after agentic-mesh-protocol 1.0.2.dev1",
+    )
+    def test_get_setup_reads_documentation_off_the_version(
+        self,
+        client: GrpcSetup,
+        test_channel: grpc_testing.Channel,
+        mock_servicer: MockSetupServicer,
+        thread_pool: futures.ThreadPoolExecutor,
+    ) -> None:
+        """A get surfaces the text stored with the setup's active version."""
+        seeded = _seed_setup(mock_servicer, documentation="the house voice")
+
+        future = thread_pool.submit(asyncio.run, client.get_setup({"setup_id": seeded.id}))
+        _exchange(future, test_channel, "GetSetup", mock_servicer.GetSetup)
+
+        assert future.result().current_setup_version.documentation == "the house voice"
 
     @pytest.mark.grpc
     @pytest.mark.integration
@@ -265,6 +335,28 @@ class TestUpdateSetup:
         result = future.result()
         assert result.name == "renamed"
         assert result.current_setup_version.content == {"a": 2}
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    def test_update_setup_sends_documentation(
+        self,
+        client: GrpcSetup,
+        test_channel: grpc_testing.Channel,
+        mock_servicer: MockSetupServicer,
+        thread_pool: futures.ThreadPoolExecutor,
+    ) -> None:
+        seeded = _seed_setup(mock_servicer)
+
+        future = thread_pool.submit(
+            asyncio.run,
+            client.update_setup(
+                {"setup_id": seeded.id, "name": "n", "content": {}, "documentation": "revised"}
+            ),
+        )
+        request = _exchange(future, test_channel, "UpdateSetup", mock_servicer.UpdateSetup)
+
+        assert request.documentation == "revised"
+        future.result()
 
     @pytest.mark.grpc
     @pytest.mark.edge_case
@@ -379,22 +471,24 @@ class TestResponseMerging:
         with pytest.raises(SetupServiceError, match="without a setup version"):
             GrpcSetup._to_setup_data(setup, setup_pb2.SetupVersion())
 
-    def test_embedded_version_wins_over_sibling(self) -> None:
+    def test_sibling_version_is_the_source(self) -> None:
+        """The response-level setup_version fills the model when the Setup embeds none.
+
+        Not "whatever the Setup carries": an embedded ``current_setup_version`` still wins.
+        ``TestMissingContentDiagnostic`` covers what that precedence costs when the two
+        disagree.
+        """
         now = datetime.datetime.now(datetime.timezone.utc)
-        setup = setup_pb2.Setup(
-            id="s1",
-            name="n",
-            organisation_id="o",
-            owner_id="u",
-            module_id="m",
-            current_setup_version=setup_pb2.SetupVersion(
-                id="v-embedded", setup_id="s1", version="2.0.0", content={"a": 1}, creation_date=now
-            ),
+        setup = setup_pb2.Setup(id="s1", name="n", organisation_id="o", owner_id="u", module_id="m")
+        sibling = setup_pb2.SetupVersion(
+            id="v-sibling", setup_id="s1", version="1.0.0", content={"a": 1}, creation_date=now
         )
-        sibling = setup_pb2.SetupVersion(id="v-sibling", setup_id="s1", version="1.0.0", content={}, creation_date=now)
+
         result = GrpcSetup._to_setup_data(setup, sibling)
-        assert result.current_setup_version.id == "v-embedded"
-        assert result.current_setup_version.version == "2.0.0"
+
+        assert result.current_setup_version.id == "v-sibling"
+        assert result.current_setup_version.version == "1.0.0"
+        assert result.current_setup_version.content == {"a": 1}
 
 
 class TestSetupVersions:

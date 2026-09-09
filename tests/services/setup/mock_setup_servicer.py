@@ -39,7 +39,6 @@ class MockSetupServicer(setup_service_pb2_grpc.SetupServiceServicer):
         self.versions = {}
         # What the client sent on the last write, so tests can assert the SDK derived it.
         self.structures = {}
-        self.documentations = {}
 
     @staticmethod
     def _sibling_response_pair(setup: setup_pb2.Setup) -> tuple[setup_pb2.Setup, setup_pb2.SetupVersion]:
@@ -75,13 +74,13 @@ class MockSetupServicer(setup_service_pb2_grpc.SetupServiceServicer):
                 id=self._generate_id(),
                 setup_id=setup_id,
                 version="1.0.0",
+                documentation=request.documentation,
                 content=request.content,
                 creation_date=datetime.datetime.now(datetime.timezone.utc),
             ),
         )
         self.setups[setup_id] = setup
         self.structures[setup_id] = request.structure
-        self.documentations[setup_id] = request.documentation
         # Snapshot, not the live message: current_setup_version gets CopyFrom'd on every
         # update, which would rewrite this history entry in place if it were aliased.
         seed = setup_pb2.SetupVersion()
@@ -128,6 +127,7 @@ class MockSetupServicer(setup_service_pb2_grpc.SetupServiceServicer):
             id=self._generate_id(),
             setup_id=request.setup_id,
             version=f"1.0.{len(history)}",
+            documentation=request.documentation,
             content=request.content,
         )
         version.creation_date.FromDatetime(datetime.datetime.now(datetime.timezone.utc))
@@ -135,7 +135,6 @@ class MockSetupServicer(setup_service_pb2_grpc.SetupServiceServicer):
         if request.set_as_current:
             setup.current_setup_version.CopyFrom(version)
         self.structures[request.setup_id] = request.structure
-        self.documentations[request.setup_id] = request.documentation
         return setup_pb2.UpdateSetupResponse(
             success=True, setup=setup, setup_version=setup.current_setup_version,
             structure=request.structure,

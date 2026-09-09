@@ -821,6 +821,44 @@ class TestVersionHistory:
         env = _env(await manager.kins_manager(GetAction(setup_id=setup_id)))
         return env["output"]["current_setup_version"]["content"]
 
+    @staticmethod
+    async def _documentation(manager: KinsManager, setup_id: str) -> Any:
+        env = _env(await manager.kins_manager(GetAction(setup_id=setup_id)))
+        return env["output"]["current_setup_version"]["documentation"]
+
+    async def test_update_carries_documentation_over_when_omitted(self) -> None:
+        """A content-only update must not blank the text the instance is searchable by."""
+        setup, registry = DefaultSetup(), DefaultRegistry("", "", "")
+        created = await setup.create_setup(
+            {"name": "isaac", "content": {"tone": "good"}, "documentation": "the house voice"}
+        )
+        registry._modules["local"] = ModuleInfo(module_id="local", module_type=RegistryModuleType.ARCHETYPE)
+        manager = KinsManager(setup, registry)
+
+        await manager.kins_manager(UpdateAction(setup_id=created.id, name="isaac", content={"tone": "loud"}))
+        assert await self._documentation(manager, created.id) == "the house voice"
+
+    async def test_update_replaces_documentation_when_given(self) -> None:
+        manager, setup_id = await self._kin()
+        await manager.kins_manager(
+            UpdateAction(setup_id=setup_id, name="isaac", content={"tone": "loud"}, documentation="new text")
+        )
+        assert await self._documentation(manager, setup_id) == "new text"
+
+    async def test_update_clears_documentation_on_an_explicit_empty_string(self) -> None:
+        """Empty string is a deliberate clear, distinct from omitting the field."""
+        setup, registry = DefaultSetup(), DefaultRegistry("", "", "")
+        created = await setup.create_setup(
+            {"name": "isaac", "content": {"tone": "good"}, "documentation": "the house voice"}
+        )
+        registry._modules["local"] = ModuleInfo(module_id="local", module_type=RegistryModuleType.ARCHETYPE)
+        manager = KinsManager(setup, registry)
+
+        await manager.kins_manager(
+            UpdateAction(setup_id=created.id, name="isaac", content={"tone": "loud"}, documentation="")
+        )
+        assert await self._documentation(manager, created.id) == ""
+
     async def test_update_activates_the_new_version_by_default(self) -> None:
         manager, setup_id = await self._kin()
         await manager.kins_manager(UpdateAction(setup_id=setup_id, name="isaac", content={"tone": "loud"}))

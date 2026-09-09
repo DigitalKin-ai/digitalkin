@@ -46,6 +46,9 @@ class SetupData(BaseModel):
     (``READY``, ``VISIBILITY_PRIVATE``) or any-case string maps to the matching
     member, and an empty value (backends that predate the fields) becomes
     ``UNSPECIFIED``.
+
+    The setup's documentation lives on the version that carries it — read it at
+    ``current_setup_version.documentation``.
     """
 
     id: str
@@ -111,8 +114,8 @@ class SetupStrategy(ABC):
         return await self.create_setup({
             "name": name,
             "content": content,
-            "structure": structure,
             "documentation": documentation,
+            "structure": structure,
         })
 
     @abstractmethod
@@ -120,9 +123,10 @@ class SetupStrategy(ABC):
         """Create a new setup; owner/organisation/module derive from the request context.
 
         Args:
-            setup_dict: Dictionary with 'name', 'content' and optional 'structure' — the
-                authored ``{key path: summary}`` map. Entries whose paths do not resolve
-                in ``content`` are dropped; an absent map is derived from the values.
+            setup_dict: Dictionary with 'name', 'content', optional 'documentation' and
+                optional 'structure' — the authored ``{key path: summary}`` map. Entries
+                whose paths do not resolve in ``content`` are dropped; an absent map is
+                derived from the values.
 
         Returns:
             The created setup with its initial version.
@@ -134,6 +138,7 @@ class SetupStrategy(ABC):
 
         Args:
             setup_dict: Dictionary with 'setup_id', 'name', 'content' and optional
+                'documentation' (cut onto the new version, like 'content') and optional
                 'structure'. The map is always rewritten from what this call carries, so
                 omitting it replaces an authored map with a derived one.
 
