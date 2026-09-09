@@ -68,7 +68,7 @@ class CreateServiceAction(RegistryAction):
         Returns:
             The created service setup.
         """
-        return await ctx.setup.create_service_setup(self.name, self.content, self.structure)
+        return await ctx.setup.create_service_setup(self.name, self.content, structure=self.structure)
 
 
 class StructureServiceAction(RegistryAction):

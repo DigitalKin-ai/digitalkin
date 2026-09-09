@@ -23,7 +23,7 @@ wheels = [
 
 [[package]]
 name = "agentic-mesh-protocol"
-version = "1.0.2.dev1"
+version = "1.0.2.dev2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "bump-my-version" },
@@ -33,9 +33,9 @@ dependencies = [
     { name = "protobuf" },
     { name = "protovalidate" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/60/27/d9253ecaa8698433bf4c439608e2baebf298443cc759ee2d7dc2f6b9ce6d/agentic_mesh_protocol-1.0.2.dev1.tar.gz", hash = "sha256:a5a4678b60e622099ae503d7ceb6de51cabbaa1619eea6fcb75ad612e791260e", size = 76617, upload-time = "2026-09-03T07:50:16.017Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/86/21/5fa2191ab313e15a9d987110adec3594ce5e8cbbbf36bc02b6968253945f/agentic_mesh_protocol-1.0.2.dev2.tar.gz", hash = "sha256:11cfbd08cfc81a7eb40507c1625aa7339fc2ee074d3e6f0e5311a6f5ef209d24", size = 76630, upload-time = "2026-09-09T07:36:05.096Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/65/4d/6f996954a3158676a2744050550c9a5e737921334735d0e48bdadad90c17/agentic_mesh_protocol-1.0.2.dev1-py3-none-any.whl", hash = "sha256:08d0aae20df8c81ae6c0b748604d3931f419e928243c7a328ae43ea235b3aa35", size = 105826, upload-time = "2026-09-03T07:50:14.625Z" },
+    { url = "https://files.pythonhosted.org/packages/ec/35/ce0394a19833b267dc856f21e0d4000f3fff62d56f69ed2f1a46c5b0af94/agentic_mesh_protocol-1.0.2.dev2-py3-none-any.whl", hash = "sha256:49b46b4523668b8268dd52bf085693111b9a89a8bcf86c744624ce2ec8954d12", size = 105860, upload-time = "2026-09-09T07:36:03.808Z" },
 ]
 
 [[package]]
@@ -940,7 +940,7 @@ tests = [
 [package.metadata]
 requires-dist = [
     { name = "ag-ui-protocol", specifier = "==0.1.21.dev1787220377" },
-    { name = "agentic-mesh-protocol", specifier = "==1.0.2.dev1" },
+    { name = "agentic-mesh-protocol", specifier = "==1.0.2.dev2" },
     { name = "agno", specifier = ">=2.8.0,<3" },
     { name = "agno", marker = "extra == 'agno'", specifier = ">=2.6" },
     { name = "anyio", specifier = ">=4.13.0" },

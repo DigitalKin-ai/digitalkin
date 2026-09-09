@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, Mock
 import grpc
 import grpc_testing
 import pytest
+from pydantic import ValidationError
 from agentic_mesh_protocol.setup.v1 import (
     setup_pb2,
     setup_service_pb2,
@@ -285,9 +286,7 @@ class TestUpdateSetup:
     @pytest.mark.validation
     async def test_update_setup_oversized_output_format_spec_no_rpc(self, client: GrpcSetup) -> None:
         with pytest.raises(ValueError, match="must stay under 4096"):
-            await client.update_setup(
-                {"setup_id": "s1", "name": "x", "content": {"output_format_spec": "x" * 4096}}
-            )
+            await client.update_setup({"setup_id": "s1", "name": "x", "content": {"output_format_spec": "x" * 4096}})
 
 
 class TestDeleteSetup:
@@ -777,3 +776,70 @@ class TestLocalRemoteParity:
         local = asyncio.run(local_strategy.get_setup({"setup_id": local_created.id, "structure_key": key}))
 
         assert local.current_setup_version.content == remote.current_setup_version.content
+
+
+@pytest.mark.regression
+class TestMissingContentDiagnostic:
+    """A version arriving without content must say which of the two fields was read.
+
+    Production (archetype-ada, 2026-09-08/09) failed here with a bare pydantic
+    "current_setup_version.content Field required", which named neither the setup nor
+    which SetupVersion the SDK had taken — the response carries the version twice.
+    """
+
+    @staticmethod
+    def _stub() -> setup_pb2.SetupVersion:
+        """A SetupVersion with identity but no content Struct — the shape production returned."""
+        return setup_pb2.SetupVersion(id="setup_versions:01ABC", setup_id="setups:01X", version="1.0.0")
+
+    def test_names_the_sibling_when_only_it_has_content(self) -> None:
+        """The actionable case: the payload was in the field the SDK did not read."""
+        full = self._stub()
+        full.content.update({"a": 1})
+        setup = setup_pb2.Setup(id="setups:01X", name="n", module_id="m")
+        setup.current_setup_version.CopyFrom(self._stub())
+
+        with pytest.raises(SetupServiceError) as excinfo:
+            GrpcSetup._to_setup_data(setup, full)
+
+        assert "read from setup.current_setup_version" in str(excinfo.value)
+        assert "sibling setup_version carries content" in str(excinfo.value)
+        assert "setups:01X" in str(excinfo.value)
+
+    def test_says_so_when_neither_carries_content(self) -> None:
+        """The backend-side case: nothing to read anywhere."""
+        setup = setup_pb2.Setup(id="setups:01X", name="n", module_id="m")
+        setup.current_setup_version.CopyFrom(self._stub())
+
+        with pytest.raises(SetupServiceError, match="sibling setup_version empty too"):
+            GrpcSetup._to_setup_data(setup, setup_pb2.SetupVersion())
+
+    def test_reports_the_sibling_as_the_source_when_no_embedded_version(self) -> None:
+        setup = setup_pb2.Setup(id="setups:01X", name="n", module_id="m")
+
+        with pytest.raises(SetupServiceError, match=r"read from setup_version; sibling setup_version not populated"):
+            GrpcSetup._to_setup_data(setup, self._stub())
+
+    def test_an_empty_but_present_content_is_accepted(self) -> None:
+        """{} is a legitimate configuration; only an unset Struct is the failure."""
+        version = self._stub()
+        version.content.SetInParent()
+        version.creation_date.FromDatetime(datetime.datetime.now(datetime.timezone.utc))
+        setup = setup_pb2.Setup(id="setups:01X", name="n", module_id="m")
+        setup.current_setup_version.CopyFrom(version)
+
+        assert GrpcSetup._to_setup_data(setup, version).current_setup_version.content == {}
+
+    def test_creation_date_is_the_same_trap_one_field_over(self) -> None:
+        """An unset Timestamp is dropped like an unset Struct, and the model requires it too.
+
+        Production always sent it (as epoch), so this is latent rather than live — but it
+        fails with the same opaque "Field required" the content check was added to replace.
+        """
+        version = self._stub()
+        version.content.SetInParent()
+        setup = setup_pb2.Setup(id="setups:01X", name="n", module_id="m")
+        setup.current_setup_version.CopyFrom(version)
+
+        with pytest.raises(ValidationError, match="creation_date"):
+            GrpcSetup._to_setup_data(setup, version)

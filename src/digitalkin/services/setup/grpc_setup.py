@@ -134,15 +134,30 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
             The validated ``SetupData``.
 
         Raises:
-            SetupServiceError: If neither carries a setup version.
+            SetupServiceError: Neither field carries a setup version, or the one that does
+                carries no content.
         """
-        if setup_msg.HasField("current_setup_version"):
-            version_msg = setup_msg.current_setup_version
-        elif not version_msg.id:
+        embedded = setup_msg.current_setup_version if setup_msg.HasField("current_setup_version") else None
+        chosen = version_msg if embedded is None else embedded
+        if not chosen.id:
             msg = f"setup '{setup_msg.id}' returned without a setup version"
             raise SetupServiceError(msg)
         data = ProtoUtils.proto_to_dict(setup_msg, with_defaults=True)
-        data["current_setup_version"] = ProtoUtils.proto_to_dict(version_msg, with_defaults=True)
+        version = ProtoUtils.proto_to_dict(chosen, with_defaults=True)
+        # An unset content Struct is dropped by proto_to_dict rather than rendered as {},
+        # so SetupData would fail with a bare "Field required" naming neither the setup nor
+        # which of the response's two SetupVersion fields was read. Say both instead: the
+        # message carries the version twice and only one of them may hold the payload.
+        if "content" not in version:
+            source = "setup.current_setup_version" if embedded is not None else "setup_version"
+            other = version_msg if embedded is not None else None
+            sibling = "not populated" if other is None else ("carries content" if other.content.fields else "empty too")
+            msg = (
+                f"setup '{setup_msg.id}' version '{chosen.id}' arrived with no content "
+                f"(read from {source}; sibling setup_version {sibling})"
+            )
+            raise SetupServiceError(msg)
+        data["current_setup_version"] = version
         if structure is not None:
             data["current_setup_version"]["structure"] = dict(structure)
         return SetupData(**data)

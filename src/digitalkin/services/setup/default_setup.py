@@ -92,9 +92,10 @@ class DefaultSetup(SetupStrategy):
         """Create a new setup; identifiers are generated locally.
 
         Args:
-            setup_dict: Dictionary with 'name', 'content' and optional 'structure' — the
-                authored ``{key path: summary}`` map, filtered to the paths that resolve
-                in ``content``. Absent, it is derived from ``content``.
+            setup_dict: Dictionary with 'name', 'content', optional 'documentation' and
+                optional 'structure' — the authored ``{key path: summary}`` map, filtered
+                to the paths that resolve in ``content``. Absent, it is derived from
+                ``content``.
 
         Returns:
             The created setup with its initial version.
@@ -117,6 +118,7 @@ class DefaultSetup(SetupStrategy):
                     id=self._new_id(),
                     setup_id=setup_id,
                     version="1.0.0",
+                    documentation=setup_dict.get("documentation") or "",
                     content=setup_dict.get("content") or {},
                     structure=(
                         JsonStructure.check(setup_dict.get("content") or {}, setup_dict["structure"])
@@ -143,9 +145,10 @@ class DefaultSetup(SetupStrategy):
 
         Args:
             setup_dict: Dictionary with 'setup_id', 'name', 'content', optional
-                'set_as_current' (defaults to True) and optional 'structure' — the authored
-                ``{key path: summary}`` map for the new content. Omitting it falls back to
-                a derived map, discarding any authored summaries.
+                'set_as_current' (defaults to True), optional 'documentation' and optional
+                'structure' — the authored ``{key path: summary}`` map for the new content.
+                Omitting the map falls back to a derived one, discarding any authored
+                summaries; omitting the documentation clears it, matching the wire.
 
         Returns:
             The updated setup with its current version.
@@ -168,6 +171,9 @@ class DefaultSetup(SetupStrategy):
             id=self._new_id(),
             setup_id=setup.id,
             version=f"1.0.{len(history)}",
+            # No presence on UpdateSetupRequest, so an omitted value clears it server-side.
+            # Mirror that rather than preserving the old text: same input, same result.
+            documentation=setup_dict.get("documentation") or "",
             content=content,
             structure=(
                 JsonStructure.check(content, setup_dict["structure"])

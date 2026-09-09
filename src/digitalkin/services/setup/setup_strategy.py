@@ -16,11 +16,16 @@ class SetupVersionData(BaseModel):
     ``structure`` maps a key path in ``content`` to a short summary of what is there (see
     :class:`~digitalkin.utils.json_structure.JsonStructure`), written by whoever created or
     updated the setup. Empty means none was stored.
+
+    ``documentation`` is free text indexed by the registry search. It is cut with the version
+    that carries it, and ``SetupVersion`` returns it as of protocol 1.0.2.dev2 — before that
+    the field existed only on the write requests and always read back empty.
     """
 
     id: str
     setup_id: str
     version: str
+    documentation: str = ""
     content: dict[str, Any]
     structure: dict[str, str] = {}
     creation_date: datetime.datetime
@@ -82,7 +87,11 @@ class SetupStrategy(ABC):
         """
 
     async def create_service_setup(
-        self, name: str, content: dict[str, Any], structure: dict[str, str] | None = None
+        self,
+        name: str,
+        content: dict[str, Any],
+        documentation: str = "",
+        structure: dict[str, str] | None = None,
     ) -> SetupData:
         """Create a service setup — a shareable configuration document.
 
@@ -92,13 +101,19 @@ class SetupStrategy(ABC):
         Args:
             name: Human-readable service name.
             content: The service configuration JSON.
+            documentation: Free text describing the service, indexed by the registry search.
             structure: The authored ``{key path: summary}`` map for ``content``. Omit to
                 have one derived from the values instead.
 
         Returns:
             The created setup with its initial version.
         """
-        return await self.create_setup({"name": name, "content": content, "structure": structure})
+        return await self.create_setup({
+            "name": name,
+            "content": content,
+            "structure": structure,
+            "documentation": documentation,
+        })
 
     @abstractmethod
     async def create_setup(self, setup_dict: dict[str, Any]) -> SetupData:

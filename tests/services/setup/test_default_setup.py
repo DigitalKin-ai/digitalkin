@@ -152,7 +152,7 @@ class TestAuthoredStructure:
         assert updated.current_setup_version.structure == {"a": "two"}
 
     async def test_create_service_setup_forwards_the_map(self) -> None:
-        setup = await DefaultSetup().create_service_setup("n", {"a": 1}, {"a": "the a knob"})
+        setup = await DefaultSetup().create_service_setup("n", {"a": 1}, structure={"a": "the a knob"})
 
         assert setup.current_setup_version.structure == {"a": "the a knob"}
 
@@ -248,3 +248,41 @@ class TestStructure:
         for key in keys:
             fetched = await strategy.get_setup({"setup_id": setup.id, "structure_key": key})
             assert list(fetched.current_setup_version.content) == [key]
+
+
+class TestDocumentation:
+    """``documentation`` is cut with the version, and readable back as of 1.0.2.dev2."""
+
+    async def test_create_stores_the_documentation(self) -> None:
+        setup = await DefaultSetup().create_setup({"name": "n", "content": {"a": 1}, "documentation": "what it does"})
+
+        assert setup.current_setup_version.documentation == "what it does"
+
+    async def test_create_service_setup_forwards_it(self) -> None:
+        setup = await DefaultSetup().create_service_setup("n", {"a": 1}, documentation="what it does")
+
+        assert setup.current_setup_version.documentation == "what it does"
+
+    async def test_update_without_it_clears_it(self) -> None:
+        """No presence on UpdateSetupRequest, so omitting it clears server-side — mirrored here."""
+        strategy = DefaultSetup()
+        setup = await strategy.create_setup({"name": "n", "content": {"a": 1}, "documentation": "original"})
+
+        updated = await strategy.update_setup({"setup_id": setup.id, "name": "n", "content": {"a": 2}})
+
+        assert updated.current_setup_version.documentation == ""
+
+    async def test_each_version_keeps_its_own_documentation(self) -> None:
+        strategy = DefaultSetup()
+        setup = await strategy.create_setup({"name": "n", "content": {"a": 1}, "documentation": "first"})
+        first = setup.current_setup_version
+
+        await strategy.update_setup({
+            "setup_id": setup.id,
+            "name": "n",
+            "content": {"a": 2},
+            "documentation": "second",
+        })
+
+        assert first.documentation == "first"
+        assert strategy.setups[setup.id].current_setup_version.documentation == "second"
