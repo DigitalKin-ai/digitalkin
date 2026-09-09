@@ -23,6 +23,7 @@ from digitalkin.models.services.registry import (
 
 if TYPE_CHECKING:
     from digitalkin.community.agno.toolkits.registry.base import RegistryActionCtx
+    from digitalkin.models.services.registry import SetupSummary
 
 
 class GetAction(RegistryAction):
@@ -124,25 +125,35 @@ class SearchAction(RegistryAction):
         # would both contradict ``total_returned`` and, at exactly ``cap`` rows, promise an empty
         # next page.
         truncated = len(usable) > cap
-        rows = [
-            {
-                "setup_id": setup.setup_id,
-                "name": setup.name,
-                "module_name": setup.module_name,
-                "version": setup.setup_version,
-                # Echoed because they are filterable: a caller cannot use the ``tags``,
-                # ``visibilities`` or ``statuses`` filters without first seeing the values in use.
-                "tags": setup.tags,
-                "visibility": setup.visibility.value if setup.visibility else None,
-                "status": setup.status.value if setup.status else None,
-                "description": (setup.documentation or "")[: self._DOC_PREVIEW_CHARS],
-                # The shape of the configuration, so choosing a scope needs no second call:
-                # read a key from here and pass it to ``load``.
-                "structure": setup.structure,
-            }
-            for setup in usable[:cap]
-        ]
+        rows = [self._row(setup) for setup in usable[:cap]]
         return {"total_returned": len(rows), "truncated": truncated, "offset": self.offset, "setups": rows}
+
+    def _row(self, setup: SetupSummary) -> dict[str, Any]:
+        """Trim one search hit to the fields a caller can act on.
+
+        Args:
+            setup: The summary returned by the registry.
+
+        Returns:
+            The rendered row.
+        """
+        row: dict[str, Any] = {
+            "setup_id": setup.setup_id,
+            "name": setup.name,
+            "module_name": setup.module_name,
+            "version": setup.setup_version,
+            # Echoed because they are filterable: a caller cannot use the ``tags``,
+            # ``visibilities`` or ``statuses`` filters without first seeing the values in use.
+            "tags": setup.tags,
+            "visibility": setup.visibility.value if setup.visibility else None,
+            "status": setup.status.value if setup.status else None,
+            "description": (setup.documentation or "")[: self._DOC_PREVIEW_CHARS],
+        }
+        # Only service setups carry a map. Omitting the key rather than rendering an empty
+        # one keeps the feature out of the tools and kins surfaces entirely.
+        if setup.structure:
+            row["structure"] = setup.structure
+        return row
 
 
 class UpdateAction(RegistryAction):
@@ -175,15 +186,14 @@ class UpdateAction(RegistryAction):
         "Omit to keep the text the instance already has; pass a string to replace it, or an "
         "empty string to clear it.",
     )
-    structure: dict[str, str] | None = Field(
-        default=None,
-        description="Refreshed map of key path -> one-line summary of what lives at it, "
-        "describing the content this call carries. Same form as on create: summarise what each "
-        'key is FOR, join nested keys with "." (llm.model), bracket-quote a key containing '
-        '. [ ] " or \\ (limits["max.tokens"]), index a list element (tools[0]). Omitting it '
-        "replaces the stored map with one derived from the raw values, losing every written "
-        "summary — supply it whenever the instance had one.",
-    )
+
+    def _type_payload(self) -> dict[str, Any]:  # ruff: ignore[no-self-use]
+        """Fields this object type adds to the update.
+
+        Returns:
+            Nothing by default; ``services_manager`` overrides it to refresh the structure map.
+        """
+        return {}
 
     async def execute(self, ctx: RegistryActionCtx) -> Any:
         """Cut a new version of the setup's content and rename it.
@@ -205,7 +215,7 @@ class UpdateAction(RegistryAction):
             "documentation": (
                 setup.current_setup_version.documentation if self.documentation is None else self.documentation
             ),
-            "structure": self.structure,
+            **self._type_payload(),
         })
 
 

@@ -964,11 +964,7 @@ class TestTagsAndSorting:
         rpc.send_initial_metadata(())
         rpc.terminate(
             registry_requests_pb2.SearchModulesResponse(
-                modules=[
-                    registry_models_pb2.ModuleSummary(
-                        id="modules:1", name="M", tags=["rag", "ocr"]
-                    )
-                ],
+                modules=[registry_models_pb2.ModuleSummary(id="modules:1", name="M", tags=["rag", "ocr"])],
                 total=1,
             ),
             (),
@@ -995,9 +991,7 @@ class TestTagsAndSorting:
         rpc.send_initial_metadata(())
         rpc.terminate(
             registry_requests_pb2.SearchSetupsResponse(
-                setups=[
-                    registry_models_pb2.SetupSummary(id="setups:1", name="S", tags=["billing"])
-                ],
+                setups=[registry_models_pb2.SetupSummary(id="setups:1", name="S", tags=["billing"])],
                 total=1,
             ),
             (),
@@ -1025,9 +1019,7 @@ class TestTagsAndSorting:
         rpc.send_initial_metadata(())
         rpc.terminate(
             registry_requests_pb2.SearchSetupsResponse(
-                setups=[
-                    registry_models_pb2.SetupSummary(id="setups:1", name="S", structure=structure)
-                ],
+                setups=[registry_models_pb2.SetupSummary(id="setups:1", name="S", structure=structure)],
                 total=1,
             ),
             (),
@@ -1038,6 +1030,42 @@ class TestTagsAndSorting:
         assert future.result(timeout=1.0)[0].structure == {
             "llm.provider": "litellm",
             "region": "eu-west",
+        }
+
+    def test_setup_summary_structure_coerces_non_string_values(
+        self,
+        client: GrpcRegistry,
+        test_channel: grpc_testing.Channel,
+        thread_pool: futures.ThreadPoolExecutor,
+    ) -> None:
+        """A Struct holds any JSON value, but the map is declared ``dict[str, str]``.
+
+        The decoder coerces rather than trusting the sender, so a backend writing a number
+        or a bool into a summary cannot fail the model at the boundary.
+        """
+        method_desc = registry_service_pb2.DESCRIPTOR.services_by_name["RegistryService"].methods_by_name[
+            "SearchSetups"
+        ]
+        future = thread_pool.submit(asyncio.run, client.search_setups())
+        _, _request, rpc = test_channel.take_unary_unary(method_desc)
+
+        structure = Struct()
+        structure.update({"llm.temperature": 0.2, "llm.stream": True, "llm.model": "gpt-4o"})
+        rpc.send_initial_metadata(())
+        rpc.terminate(
+            registry_requests_pb2.SearchSetupsResponse(
+                setups=[registry_models_pb2.SetupSummary(id="setups:1", name="S", structure=structure)],
+                total=1,
+            ),
+            (),
+            grpc.StatusCode.OK,
+            "",
+        )
+
+        assert future.result(timeout=1.0)[0].structure == {
+            "llm.temperature": "0.2",
+            "llm.stream": "True",
+            "llm.model": "gpt-4o",
         }
 
     def test_setup_summary_without_structure_is_empty(

@@ -199,9 +199,9 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
 
         Args:
             setup_dict: Dictionary with 'name', 'content', optional 'documentation' and
-                optional 'structure' — the authored ``{key path: summary}`` map, filtered
-                to the paths that resolve in ``content``. Absent, it is derived from
-                ``content`` so a writer with no author still stores one.
+                optional 'structure' — the ``{key path: description}`` map the agent
+                wrote for ``content``, stored as written with only each description's
+                length bounded.
 
         Returns:
             The created setup with its initial version and structure.
@@ -221,11 +221,7 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
             content_struct = Struct()
             content_struct.update(setup_dict["content"])
             structure_struct = Struct()
-            structure_struct.update(
-                JsonStructure.check(setup_dict["content"], setup_dict["structure"])
-                if setup_dict.get("structure")
-                else JsonStructure.describe(setup_dict["content"])
-            )
+            structure_struct.update(JsonStructure.clip(setup_dict.get("structure") or {}))
             request = setup_pb2.CreateSetupRequest(
                 name=setup_dict["name"],
                 content=content_struct,
@@ -245,10 +241,9 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
         Args:
             setup_dict: Dictionary with 'setup_id', 'name', 'content', optional
                 'set_as_current' (defaults to True), optional 'documentation' and optional
-                'structure' — the authored ``{key path: summary}`` map for the new content.
-                It is always rewritten, so it cannot drift from what is stored; omitting it
-                falls back to a derived map, which discards any authored summaries the
-                previous version carried.
+                'structure'. The map belongs to the content it describes, so a revision
+                carries only the map its own call supplied; omitting it leaves the new
+                revision without one.
 
         Returns:
             The updated setup with its current version and structure.
@@ -270,11 +265,7 @@ class GrpcSetup(SetupStrategy, GrpcClientWrapper):
             content_struct = Struct()
             content_struct.update(setup_dict["content"])
             structure_struct = Struct()
-            structure_struct.update(
-                JsonStructure.check(setup_dict["content"], setup_dict["structure"])
-                if setup_dict.get("structure")
-                else JsonStructure.describe(setup_dict["content"])
-            )
+            structure_struct.update(JsonStructure.clip(setup_dict.get("structure") or {}))
             # UpdateSetup cuts a new version rather than editing in place; without
             # set_as_current the setup would keep serving the old content.
             request = setup_pb2.UpdateSetupRequest(

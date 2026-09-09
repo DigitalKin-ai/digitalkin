@@ -13,9 +13,10 @@ from digitalkin.models.services.storage import Visibility
 class SetupVersionData(BaseModel):
     """Pydantic model for SetupVersion data validation.
 
-    ``structure`` maps a key path in ``content`` to a short summary of what is there (see
-    :class:`~digitalkin.utils.json_structure.JsonStructure`), written by whoever created or
-    updated the setup. Empty means none was stored.
+    ``structure`` maps a leaf key path in ``content`` to a description of what is there,
+    written by the agent that created or updated the setup and used to fetch one key of a
+    large configuration (see :class:`~digitalkin.utils.json_structure.JsonStructure`). It
+    belongs to the services surface; other setup kinds leave it empty.
 
     ``documentation`` is free text indexed by the registry search. It is cut with the version
     that carries it, and ``SetupVersion`` returns it as of protocol 1.0.2.dev2 — before that
@@ -105,8 +106,7 @@ class SetupStrategy(ABC):
             name: Human-readable service name.
             content: The service configuration JSON.
             documentation: Free text describing the service, indexed by the registry search.
-            structure: The authored ``{key path: summary}`` map for ``content``. Omit to
-                have one derived from the values instead.
+            structure: The ``{key path: description}`` map the agent wrote for ``content``.
 
         Returns:
             The created setup with its initial version.
@@ -124,9 +124,8 @@ class SetupStrategy(ABC):
 
         Args:
             setup_dict: Dictionary with 'name', 'content', optional 'documentation' and
-                optional 'structure' — the authored ``{key path: summary}`` map. Entries
-                whose paths do not resolve in ``content`` are dropped; an absent map is
-                derived from the values.
+                optional 'structure' — the ``{key path: description}`` map the agent
+                wrote, stored as written with only each description's length bounded.
 
         Returns:
             The created setup with its initial version.
@@ -139,8 +138,9 @@ class SetupStrategy(ABC):
         Args:
             setup_dict: Dictionary with 'setup_id', 'name', 'content' and optional
                 'documentation' (cut onto the new version, like 'content') and optional
-                'structure'. The map is always rewritten from what this call carries, so
-                omitting it replaces an authored map with a derived one.
+                'structure'. The map belongs to the content it describes, so a revision
+                carries only the map its own call supplied; omitting it leaves the new
+                revision without one.
 
         Returns:
             The updated setup with its current version.

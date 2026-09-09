@@ -24,7 +24,6 @@ from digitalkin.community.agno.toolkits.registry.action import (
     UpdateAction,
 )
 from digitalkin.community.agno.toolkits.registry.base import RegistryAction
-from digitalkin.utils.json_structure import JsonStructure
 
 if TYPE_CHECKING:
     from digitalkin.community.agno.toolkits.registry.base import RegistryActionCtx
@@ -64,8 +63,8 @@ class CreateServiceAction(RegistryAction):
         "content it describes. Cover each key worth finding on its own; point at a whole "
         "section instead when it is only ever read as a unit. Path syntax: join nested keys "
         'with "." (llm.model); bracket-quote a key containing . [ ] " or \\ '
-        '(limits["max.tokens"]); index a list element (tools[0]). Paths that do not exist in '
-        "content are dropped.",
+        '(limits["max.tokens"]); index a list element (tools[0]). Keep each description under '
+        "512 characters — longer ones are trimmed.",
     )
 
     async def execute(self, ctx: RegistryActionCtx) -> Any:
@@ -114,8 +113,9 @@ class LoadServiceAction(RegistryAction):
     key: str | None = Field(
         default=None,
         description="One key path copied verbatim from the service's structure map, to read just "
-        "that part of the configuration. Omit to load the whole document — do that only when the "
-        "configuration is small or genuinely needed in full.",
+        "that part of the configuration. Copy it, do not compose it: a key the configuration "
+        "does not have is not an error, it returns the whole document. Omit the key to load "
+        "everything deliberately, when the configuration is small or genuinely needed in full.",
     )
 
     async def execute(self, ctx: RegistryActionCtx) -> Any:
@@ -123,25 +123,41 @@ class LoadServiceAction(RegistryAction):
 
         Guards the object type first: without it ``load`` would happily return a tool's
         internal configuration — the most dangerous type-confusion, since the response
-        carries no field the caller could use to notice it read the wrong kind. That guard
-        already reads the whole setup, so the key is applied to the content in hand rather
-        than costing a second scoped fetch.
+        carries no field the caller could use to notice it read the wrong kind. The read
+        itself passes ``key`` to the setup service, so the narrowing happens where the
+        document lives; a key the configuration does not have returns the whole document
+        rather than an error, which is what the wire does.
 
         Returns:
-            The value at ``key``, or the whole configuration JSON object when no key is given.
-
-        Raises:
-            ValueError: ``key`` names a path the configuration does not have.
+            ``{key: value}`` for a key that resolves, otherwise the whole configuration.
         """
-        setup = await ctx.ensure_kind(self.setup_id)
-        content = setup.current_setup_version.content
-        if self.key is None:
-            return content
-        found = JsonStructure.resolve(content, [self.key])
-        if self.key not in found:
-            msg = f"{self.key!r} is not a key of this configuration; copy one from its structure"
-            raise ValueError(msg)
-        return found[self.key]
+        await ctx.ensure_kind(self.setup_id)
+        setup = await ctx.setup.get_setup({"setup_id": self.setup_id, "structure_key": self.key or ""})
+        return setup.current_setup_version.content
+
+
+class UpdateServiceAction(UpdateAction):
+    """Update a service, refreshing the key map alongside the configuration.
+
+    The map belongs to the content it describes, so a new revision needs a new one; the
+    stored map is replaced by whatever this call carries.
+    """
+
+    structure: dict[str, str] | None = Field(
+        default=None,
+        description="Refreshed map of key path -> one-line description of what lives at that "
+        "leaf, describing the content this call carries. Same form and same 512-character limit "
+        "as on create. Omitting it leaves the new revision without a map, so other agents can no "
+        "longer see the service's shape — resupply it whenever the service had one.",
+    )
+
+    def _type_payload(self) -> dict[str, Any]:
+        """Carry the refreshed map onto the new revision.
+
+        Returns:
+            The ``structure`` entry for the update payload.
+        """
+        return {"structure": self.structure}
 
 
 ServiceActions = Annotated[
@@ -150,7 +166,7 @@ ServiceActions = Annotated[
     | SearchAction
     | StructureServiceAction
     | LoadServiceAction
-    | UpdateAction
+    | UpdateServiceAction
     | DeleteAction
     | ChangeVisibilityAction
     | ListVersionsAction

@@ -43,8 +43,10 @@ class ServicesManager(RegistryObjectToolKit):
                 "Configurations can be large, so read them in two steps: 'search' returns each "
                 "result with a 'structure' map of key path -> what lives there ('structure' fetches "
                 "the same map for an id you already hold), then 'load' with a key copied verbatim "
-                "from it returns just that part. Load without a key only when the whole document is "
-                "genuinely needed. On create and update you write that map yourself, describing what "
+                "from it returns just that part. Copy the key, never invent one: a key the "
+                "configuration does not have quietly returns everything. Load without a key only when "
+                "the whole document is genuinely needed. On create and update you write that map "
+                "yourself, describing what "
                 "each key is for — it is how other agents find their way around the configuration."
             ),
             entrypoint=self.services_manager,

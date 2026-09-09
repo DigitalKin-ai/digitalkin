@@ -23,6 +23,7 @@ from digitalkin.community.agno.toolkits.registry.services.action import (
     CreateServiceAction,
     LoadServiceAction,
     StructureServiceAction,
+    UpdateServiceAction,
 )
 from digitalkin.grpc_servers.exceptions import PermissionDeniedError
 from digitalkin.services.registry.exceptions import RegistryServiceError
@@ -266,7 +267,9 @@ class TestCrudRoundTrip:
         )
         setup_id = created["output"]["id"]
 
-        updated = _env(await svc.services_manager(UpdateAction(setup_id=setup_id, name="renamed", content={"a": 2})))
+        updated = _env(
+            await svc.services_manager(UpdateServiceAction(setup_id=setup_id, name="renamed", content={"a": 2}))
+        )
         assert updated["metadata"]["tool"] == "update"
         assert updated["output"]["name"] == "renamed"
 
@@ -593,7 +596,7 @@ class TestDeletedResourceIsFrozen:
         svc = ServicesManager(*_stores())
         assert _env(await svc.services_manager(DeleteAction(setup_id="setups:nikita")))["output"] is True
         env = _env(
-            await svc.services_manager(UpdateAction(setup_id="setups:nikita", name="zombie", content={"k": "v"}))
+            await svc.services_manager(UpdateServiceAction(setup_id="setups:nikita", name="zombie", content={"k": "v"}))
         )
         assert env["metadata"]["success"] is False
         assert env["metadata"]["tool"] == "update"
@@ -829,9 +832,11 @@ class TestVersionHistory:
     async def test_update_carries_documentation_over_when_omitted(self) -> None:
         """A content-only update must not blank the text the instance is searchable by."""
         setup, registry = DefaultSetup(), DefaultRegistry("", "", "")
-        created = await setup.create_setup(
-            {"name": "isaac", "content": {"tone": "good"}, "documentation": "the house voice"}
-        )
+        created = await setup.create_setup({
+            "name": "isaac",
+            "content": {"tone": "good"},
+            "documentation": "the house voice",
+        })
         registry._modules["local"] = ModuleInfo(module_id="local", module_type=RegistryModuleType.ARCHETYPE)
         manager = KinsManager(setup, registry)
 
@@ -848,9 +853,11 @@ class TestVersionHistory:
     async def test_update_clears_documentation_on_an_explicit_empty_string(self) -> None:
         """Empty string is a deliberate clear, distinct from omitting the field."""
         setup, registry = DefaultSetup(), DefaultRegistry("", "", "")
-        created = await setup.create_setup(
-            {"name": "isaac", "content": {"tone": "good"}, "documentation": "the house voice"}
-        )
+        created = await setup.create_setup({
+            "name": "isaac",
+            "content": {"tone": "good"},
+            "documentation": "the house voice",
+        })
         registry._modules["local"] = ModuleInfo(module_id="local", module_type=RegistryModuleType.ARCHETYPE)
         manager = KinsManager(setup, registry)
 
@@ -1089,7 +1096,7 @@ class TestOrphanedSetups:
 
 
 class TestAuthoredStructure:
-    """The agent writes the key map on create/update; the SDK only filters it."""
+    """The agent writes the key map; the SDK stores it verbatim and judges nothing."""
 
     async def test_create_stores_the_authored_summaries(self) -> None:
         svc = ServicesManager(*_stores())
@@ -1107,20 +1114,16 @@ class TestAuthoredStructure:
 
         assert env["output"]["current_setup_version"]["structure"] == authored
 
-    async def test_create_drops_an_entry_the_content_does_not_have(self) -> None:
+    async def test_a_map_is_stored_unjudged(self) -> None:
+        """An entry naming a key the content lacks is still stored — we do not vet the map."""
         svc = ServicesManager(*_stores())
+        authored = {"region": "where it runs", "llm.provider": "not in this document"}
 
         env = _env(
-            await svc.services_manager(
-                CreateServiceAction(
-                    name="N",
-                    content={"region": "eu-west"},
-                    structure={"region": "where it runs", "llm.provider": "not in this document"},
-                )
-            )
+            await svc.services_manager(CreateServiceAction(name="N", content={"region": "eu-west"}, structure=authored))
         )
 
-        assert env["output"]["current_setup_version"]["structure"] == {"region": "where it runs"}
+        assert env["output"]["current_setup_version"]["structure"] == authored
 
     async def test_update_replaces_the_map_with_the_one_supplied(self) -> None:
         svc = ServicesManager(*_stores())
@@ -1132,7 +1135,7 @@ class TestAuthoredStructure:
 
         updated = _env(
             await svc.services_manager(
-                UpdateAction(
+                UpdateServiceAction(
                     setup_id=created["output"]["id"],
                     name="N",
                     content={"a": "two", "b": "new"},
@@ -1146,8 +1149,8 @@ class TestAuthoredStructure:
             "b": "the b knob",
         }
 
-    async def test_update_without_a_map_downgrades_to_derived(self) -> None:
-        """Documented consequence of leaving ``structure`` off an update: summaries are lost."""
+    async def test_update_without_a_map_leaves_the_new_revision_without_one(self) -> None:
+        """The map belongs to the content, so a revision carries only what its call supplied."""
         svc = ServicesManager(*_stores())
         created = _env(
             await svc.services_manager(
@@ -1156,18 +1159,21 @@ class TestAuthoredStructure:
         )
 
         updated = _env(
-            await svc.services_manager(UpdateAction(setup_id=created["output"]["id"], name="N", content={"a": "two"}))
+            await svc.services_manager(
+                UpdateServiceAction(setup_id=created["output"]["id"], name="N", content={"a": "two"})
+            )
         )
 
-        assert updated["output"]["current_setup_version"]["structure"] == {"a": "two"}
+        assert updated["output"]["current_setup_version"]["structure"] == {}
 
     def test_create_requires_a_structure(self) -> None:
         with pytest.raises(ValidationError):
             CreateServiceAction(name="x", content={"a": 1})  # type: ignore[call-arg]
 
-    def test_update_does_not_require_a_structure(self) -> None:
-        """Shared with kins_manager / tools_manager, so it stays optional there."""
-        assert UpdateAction(setup_id="s", name="n", content={"a": 1}).structure is None
+    def test_structure_is_a_services_only_field(self) -> None:
+        """It describes a service's configuration; kins and tools never see it."""
+        assert "structure" in UpdateServiceAction.model_fields
+        assert "structure" not in UpdateAction.model_fields
 
 
 class TestScopedRead:
@@ -1188,12 +1194,14 @@ class TestScopedRead:
         )
         return svc, created["output"]["id"]
 
-    async def test_load_with_a_key_returns_only_that_value(self) -> None:
+    async def test_load_with_a_key_returns_only_that_key(self) -> None:
+        """The read is narrowed at the setup service, so the response carries just the key."""
         svc, setup_id = await self._service()
 
         env = _env(await svc.services_manager(LoadServiceAction(setup_id=setup_id, key="llm.model")))
 
-        assert env["output"] == "gpt-4o"
+        assert env["output"] == {"llm.model": "gpt-4o"}
+        assert "litellm" not in json.dumps(env["output"])
 
     async def test_load_without_a_key_returns_the_whole_document(self) -> None:
         svc, setup_id = await self._service()
@@ -1202,13 +1210,18 @@ class TestScopedRead:
 
         assert env["output"] == {"llm": {"provider": "litellm", "model": "gpt-4o"}, "region": "eu-west"}
 
-    async def test_load_with_an_unknown_key_fails_correctably(self) -> None:
+    async def test_load_with_an_unknown_key_returns_the_whole_document(self) -> None:
+        """The wire has no way to say "no such key": an unresolvable one sends everything.
+
+        So a mistyped key is not an error, it is a silently expensive read — the reason the
+        key must be copied from the structure map rather than composed.
+        """
         svc, setup_id = await self._service()
 
-        raw = await svc.services_manager(LoadServiceAction(setup_id=setup_id, key="llm.nope"))
+        env = _env(await svc.services_manager(LoadServiceAction(setup_id=setup_id, key="llm.nope")))
 
-        assert json.loads(raw)["metadata"]["success"] is False
-        assert "structure" in json.loads(raw)["error"]
+        assert env["metadata"]["success"] is True
+        assert env["output"] == {"llm": {"provider": "litellm", "model": "gpt-4o"}, "region": "eu-west"}
 
     async def test_structure_returns_the_stored_map_and_no_content(self) -> None:
         setup, registry = _stores()
@@ -1285,13 +1298,13 @@ class TestSearchRowsCarryTheStructure:
 
         assert env["output"]["setups"][0]["structure"] == {"llm.model": "which model answers"}
 
-    async def test_a_row_without_a_stored_map_carries_an_empty_one(self) -> None:
-        """Backfill-pending setups render a present-but-empty field, not a missing key."""
+    async def test_a_row_without_a_stored_map_omits_the_key(self) -> None:
+        """Only service setups carry a map, so an empty one is left out rather than rendered."""
         setup, _ = _stores()
 
         env = _env(await ServicesManager(setup, self._registry_returning({})).services_manager(SearchAction(query="")))
 
-        assert env["output"]["setups"][0]["structure"] == {}
+        assert "structure" not in env["output"]["setups"][0]
 
     @pytest.mark.regression
     async def test_a_row_never_carries_configuration_values(self) -> None:
@@ -1304,7 +1317,7 @@ class TestSearchRowsCarryTheStructure:
         raw = await ToolsManager(*_stores()).tools_manager(SearchAction(query="duda"))
 
         assert "MUST-NOT-LEAK" not in raw
-        assert json.loads(raw)["output"]["setups"][0]["structure"] == {}
+        assert "structure" not in json.loads(raw)["output"]["setups"][0]
 
 
 @pytest.mark.validation
@@ -1347,7 +1360,7 @@ class TestScopedReadBoundaries:
 
         env = _env(await svc.services_manager(LoadServiceAction(setup_id=setup_id, key="llm")))
 
-        assert env["output"] == {"model": "gpt-4o", "temp": 0.2}
+        assert env["output"] == {"llm": {"model": "gpt-4o", "temp": 0.2}}
 
     async def test_a_quoted_key_survives_the_round_trip(self) -> None:
         """The one real interop risk: a dotted key must not be split naively."""
@@ -1355,16 +1368,23 @@ class TestScopedReadBoundaries:
 
         env = _env(await svc.services_manager(LoadServiceAction(setup_id=setup_id, key='limits["max.tokens"]')))
 
-        assert env["output"] == 8000
+        assert env["output"] == {'limits["max.tokens"]': 8000}
 
     async def test_a_malformed_key_fails_instead_of_returning_everything(self) -> None:
-        """The wire falls back to the whole document on a bad key; the toolkit refuses instead."""
+        """An unparseable path is a caller bug, so it is refused rather than read.
+
+        Distinct from a merely *unresolvable* key, which the wire answers with the whole
+        document. Here the path cannot be decoded at all.
+        """
         svc, setup_id = await self._service({"a": 1}, {"a": "the a knob"})
 
-        raw = await svc.services_manager(LoadServiceAction(setup_id=setup_id, key='a["'))
+        envelope = json.loads(await svc.services_manager(LoadServiceAction(setup_id=setup_id, key='a["')))
 
-        assert json.loads(raw)["metadata"]["success"] is False
-        assert "1" not in json.loads(raw).get("output", "")
+        assert envelope["metadata"]["success"] is False
+        assert "malformed path" in envelope["error"]
+        # A fail envelope carries no output key at all — asserting on its contents would
+        # pass no matter what the action did.
+        assert "output" not in envelope
 
     async def test_a_key_resolving_to_null_is_not_confused_with_a_miss(self) -> None:
         """A stored null is a real value; only an absent path is an error."""
@@ -1373,11 +1393,60 @@ class TestScopedReadBoundaries:
         env = _env(await svc.services_manager(LoadServiceAction(setup_id=setup_id, key="proxy")))
 
         assert env["metadata"]["success"] is True
-        assert env["output"] is None
+        assert env["output"] == {"proxy": None}
 
-    async def test_an_explicitly_empty_map_falls_back_to_derived(self) -> None:
-        """``structure={}`` reads as "no map supplied", so the setup still gets a shape."""
-        svc, setup_id = await self._service({"a": "one"}, {})
-        stored = _env(await svc.services_manager(GetAction(setup_id=setup_id)))
+    async def test_an_empty_map_is_stored_as_empty(self) -> None:
+        """Nothing is derived on the agent's behalf: an empty map stays empty.
 
-        assert stored["output"]["current_setup_version"]["structure"] == {"a": "one"}
+        Asserted on the create response, which carries the stored map. A later ``get``
+        cannot show it: GetSetupResponse has no structure field, and both strategies
+        mirror that — ``structure`` is the action for reading it back.
+        """
+        svc = ServicesManager(*_stores())
+
+        created = _env(await svc.services_manager(CreateServiceAction(name="N", content={"a": "one"}, structure={})))
+
+        assert created["output"]["current_setup_version"]["structure"] == {}
+
+
+class TestConfigurationIsNotRewritten:
+    """A service's own data must survive the envelope untouched.
+
+    ``_jsonable`` rewrites ``visibility`` from the proto spelling (``VISIBILITY_INTERNAL``)
+    to the caller's (``internal``) so a round-trip matches. That is right for a setup, and
+    wrong for a *configuration*: ``load`` and ``structure`` return the service's own JSON,
+    where a key called ``visibility`` belongs to the service and means whatever it says.
+    The rewrite is confined to the model branch for that reason; these pin it.
+    """
+
+    @staticmethod
+    async def _service_with(content: dict[str, Any], structure: dict[str, str]) -> tuple[ServicesManager, str]:
+        """A services manager over one setup carrying the given configuration."""
+        svc = ServicesManager(*_stores())
+        created = _env(await svc.services_manager(CreateServiceAction(name="N", content=content, structure=structure)))
+        return svc, created["output"]["id"]
+
+    async def test_load_returns_a_visibility_key_verbatim(self) -> None:
+        content = {"visibility": "VISIBILITY_PRIVATE", "region": "eu"}
+        svc, setup_id = await self._service_with(content, {"visibility": "who may call the upstream"})
+
+        env = _env(await svc.services_manager(LoadServiceAction(setup_id=setup_id)))
+
+        assert env["output"]["visibility"] == "VISIBILITY_PRIVATE"
+
+    async def test_a_scoped_load_returns_a_visibility_key_verbatim(self) -> None:
+        content = {"visibility": "VISIBILITY_INTERNAL"}
+        svc, setup_id = await self._service_with(content, {"visibility": "who may call the upstream"})
+
+        env = _env(await svc.services_manager(LoadServiceAction(setup_id=setup_id, key="visibility")))
+
+        assert env["output"] == {"visibility": "VISIBILITY_INTERNAL"}
+
+    async def test_a_setup_visibility_is_still_normalised(self) -> None:
+        """The rewrite the configuration must escape is the one a setup still needs."""
+        svc, setup_id = await self._service_with({"a": 1}, {"a": "knob"})
+        await svc.services_manager(ChangeVisibilityAction(setup_id=setup_id, visibility="internal"))
+
+        env = _env(await svc.services_manager(GetAction(setup_id=setup_id)))
+
+        assert env["output"]["visibility"] == "internal"

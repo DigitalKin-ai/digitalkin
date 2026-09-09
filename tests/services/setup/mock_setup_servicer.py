@@ -103,12 +103,13 @@ class MockSetupServicer(setup_service_pb2_grpc.SetupServiceServicer):
         if not request.structure_key:
             # Embedded current_setup_version populated: exercises the client's preferred path.
             return setup_pb2.GetSetupResponse(setup=setup, setup_version=setup.current_setup_version)
-        # Server-side projection: one key path, resolved against the stored document.
+        # Server-side projection: one key path, resolved against the stored document. A key
+        # that does not resolve sends the setup entirely — the wire has no way to report
+        # "no such key", and DefaultSetup mirrors the same rule.
+        content = ProtoUtils.proto_to_dict(setup.current_setup_version.content)
+        values = JsonStructure.resolve(content, [request.structure_key]) or content
         projected = setup_pb2.Setup()
         projected.CopyFrom(setup)
-        values = JsonStructure.resolve(
-            ProtoUtils.proto_to_dict(setup.current_setup_version.content), [request.structure_key]
-        )
         projected.current_setup_version.content.Clear()
         projected.current_setup_version.content.update(values)
         return setup_pb2.GetSetupResponse(setup=projected, setup_version=projected.current_setup_version)
