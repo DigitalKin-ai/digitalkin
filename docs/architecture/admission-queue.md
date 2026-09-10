@@ -16,7 +16,7 @@ The core mismatch: a 30-second timeout waiting for a slot that won't free up for
 
 ## Two-Phase Admission
 
-When `DIGITALKIN_MAX_QUEUED_TASKS > 0`, the task manager uses a two-phase admission model:
+When `DIGITALKIN_TASK_MANAGER_MAX_QUEUED_TASKS > 0`, the task manager uses a two-phase admission model:
 
 ```mermaid
 flowchart TB
@@ -70,14 +70,14 @@ finally:
 
 ## Legacy vs Queue Mode
 
-| Aspect | Legacy (`MAX_QUEUED_TASKS=0`) | Queue Mode (`MAX_QUEUED_TASKS>0`) |
-|--------|-------------------------------|-----------------------------------|
-| Semaphores | 1 (`task_slot` only) | 2 (`system_gate` + `task_slot`) |
-| At capacity | Waits `TASK_WAIT_TIMEOUT` (30s), then rejects | Phase 1 fast-rejects if system full; otherwise queues patiently |
-| Under burst | Most tasks rejected (timeout << task duration) | Tasks queue and execute as slots free |
-| Timeout model | Single timeout for everything | Fast admission timeout + unlimited execution wait |
-| Capacity | `MAX_CONCURRENT_TASKS` | `MAX_CONCURRENT_TASKS` + `MAX_QUEUED_TASKS` |
-| Config | `DIGITALKIN_TASK_WAIT_TIMEOUT=30` | `DIGITALKIN_ADMISSION_TIMEOUT=5.0` |
+| Aspect        | Legacy (`MAX_QUEUED_TASKS=0`)                  | Queue Mode (`MAX_QUEUED_TASKS>0`)                               |
+|---------------|------------------------------------------------|-----------------------------------------------------------------|
+| Semaphores    | 1 (`task_slot` only)                           | 2 (`system_gate` + `task_slot`)                                 |
+| At capacity   | Waits `TASK_WAIT_TIMEOUT` (30s), then rejects  | Phase 1 fast-rejects if system full; otherwise queues patiently |
+| Under burst   | Most tasks rejected (timeout << task duration) | Tasks queue and execute as slots free                           |
+| Timeout model | Single timeout for everything                  | Fast admission timeout + unlimited execution wait               |
+| Capacity      | `MAX_CONCURRENT_TASKS`                         | `MAX_CONCURRENT_TASKS` + `MAX_QUEUED_TASKS`                     |
+| Config        | `DIGITALKIN_TASK_MANAGER_TASK_WAIT_TIMEOUT=30` | `DIGITALKIN_TASK_MANAGER_ADMISSION_TIMEOUT=5.0`                 |
 
 ---
 
@@ -141,12 +141,12 @@ Analysis of the burst load incident revealed a critical insight about task durat
 
 ## Environment Variables
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `DIGITALKIN_MAX_CONCURRENT_TASKS` | `100` | Execution slots — how many tasks run simultaneously |
-| `DIGITALKIN_MAX_QUEUED_TASKS` | `0` | Queue depth — `0` disables the admission queue (legacy mode) |
-| `DIGITALKIN_ADMISSION_TIMEOUT` | `5.0` | Seconds to wait for system gate admission before rejecting |
-| `DIGITALKIN_TASK_WAIT_TIMEOUT` | `30` | Legacy: slot wait timeout when queue disabled. Ignored when queue enabled |
+| Variable                                       | Default | Description                                                               |
+|------------------------------------------------|---------|---------------------------------------------------------------------------|
+| `DIGITALKIN_TASK_MANAGER_MAX_CONCURRENT_TASKS` | `100`   | Execution slots — how many tasks run simultaneously                       |
+| `DIGITALKIN_TASK_MANAGER_MAX_QUEUED_TASKS`     | `0`     | Queue depth — `0` disables the admission queue (legacy mode)              |
+| `DIGITALKIN_TASK_MANAGER_ADMISSION_TIMEOUT`    | `5.0`   | Seconds to wait for system gate admission before rejecting                |
+| `DIGITALKIN_TASK_MANAGER_TASK_WAIT_TIMEOUT`    | `30`    | Legacy: slot wait timeout when queue disabled. Ignored when queue enabled |
 
 ---
 

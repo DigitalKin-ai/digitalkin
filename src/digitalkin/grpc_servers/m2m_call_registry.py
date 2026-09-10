@@ -82,7 +82,7 @@ class M2MCallRegistry:
             reset_timeout=m2m.call_breaker_reset_timeout_s,
         )
         self._breakers[target_key] = breaker
-        if len(self._breakers) > 256:  # noqa: PLR2004
+        if len(self._breakers) > 256:  # ruff: ignore[magic-value-comparison]
             self._breakers.popitem(last=False)
         return breaker
 
@@ -110,7 +110,7 @@ class M2MCallRegistry:
         """Release one outbound concurrency slot."""
         self._semaphore.release()
 
-    def effective_advertise_address(self) -> str:  # noqa: PLR6301
+    def effective_advertise_address(self) -> str:  # ruff: ignore[no-self-use]
         """``host:port`` the local gateway advertises as its dial-back target.
 
         Returns:

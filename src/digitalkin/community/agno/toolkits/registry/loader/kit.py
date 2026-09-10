@@ -63,7 +63,7 @@ class LoadManager(DkToolkit):
         """
         self._base_tools = base_tools
 
-    async def load_manager(self, action: LoadActions) -> str:  # noqa: ARG002 — schema-only stub, never run
+    async def load_manager(self, action: LoadActions) -> str:  # ruff: ignore[unused-method-argument] — schema-only stub, never run
         """Load a discovered object into the agent so it becomes usable right now.
 
         Loading is a two-step flow, and this is step two: first DISCOVER the object with its

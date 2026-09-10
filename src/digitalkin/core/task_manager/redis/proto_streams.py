@@ -43,7 +43,7 @@ class ProtoStreamReader:
         """Initialize proto stream reader.
 
         Cursor TTL comes from ``GatewayStreamSettings.redis_cursor_ttl`` (env
-        ``DIGITALKIN_REDIS_CURSOR_TTL``).
+        ``DIGITALKIN_GATEWAY_STREAM_REDIS_CURSOR_TTL``).
 
         Args:
             task_id: Unique task identifier.
@@ -69,7 +69,7 @@ class ProtoStreamReader:
         """Persist the current cursor to Redis."""
         await self._redis_client.set(self._cursor_key, self._last_id, ex=get_gateway_settings().stream.redis_cursor_ttl)
 
-    async def read_structs(  # noqa: C901
+    async def read_structs(  # ruff: ignore[complex-structure]
         self,
         count: int = 50,
         cursor_save_interval: int = 100,
