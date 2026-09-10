@@ -38,7 +38,7 @@ class DefaultUserProfile(UserProfileStrategy):
         logger.debug("Retrieved user profile for mission_id: %s", self.mission_id)
         return self.db[self.mission_id]
 
-    async def check_resource_access(self, resource_type: int, resource_id: str) -> bool:  # noqa: ARG002, PLR6301
+    async def check_resource_access(self, resource_type: int, resource_id: str) -> bool:  # ruff: ignore[unused-method-argument, no-self-use]
         """Local strategy: grant access (no access backend in local mode).
 
         Args:

@@ -111,7 +111,7 @@ class ModuleServer(BaseServer):
 
         redis_client = RedisClient(redis_url)
         self._gateway_redis_client = redis_client  # owner closes it in stop_async; the gateway only borrows
-        assert self.module_servicer is not None  # noqa: S101 — set during registration before this runs
+        assert self.module_servicer is not None  # ruff: ignore[assert] — set during registration before this runs
         module_runner = ModuleRunner(redis_client=redis_client, servicer=self.module_servicer)
 
         self._gateway_servicer = GatewayServicer(
@@ -182,8 +182,8 @@ class ModuleServer(BaseServer):
         if not setup_id:
             logger.warning("INVALIDATE_SETUP received without setup_id — skipping (scoped-only policy)")
             return
-        self.module_servicer._setup_cache.pop(setup_id, None)  # noqa: SLF001
-        self.module_servicer._setup_inflight.pop(setup_id, None)  # noqa: SLF001
+        self.module_servicer._setup_cache.pop(setup_id, None)  # ruff: ignore[private-member-access]
+        self.module_servicer._setup_inflight.pop(setup_id, None)  # ruff: ignore[private-member-access]
 
     async def _invalidate_tools(self, setup_id: str = "") -> None:
         if self.module_servicer is None:
@@ -191,17 +191,17 @@ class ModuleServer(BaseServer):
         if not setup_id:
             logger.warning("INVALIDATE_TOOLS received without setup_id — skipping (scoped-only policy)")
             return
-        self.module_servicer._tool_cache_by_setup.pop(setup_id, None)  # noqa: SLF001
+        self.module_servicer._tool_cache_by_setup.pop(setup_id, None)  # ruff: ignore[private-member-access]
 
     async def _invalidate_shared(self) -> None:
         self.module_class.clear_shared()
 
-    async def _invalidate_models(self) -> None:  # noqa: PLR6301
+    async def _invalidate_models(self) -> None:  # ruff: ignore[no-self-use]
         from digitalkin.models.module.setup_types import SetupModel
 
         SetupModel.clear_clean_model_cache()
 
-    async def _invalidate_channels(self) -> None:  # noqa: PLR6301
+    async def _invalidate_channels(self) -> None:  # ruff: ignore[no-self-use]
         from digitalkin.core.resilience.bulkhead import Bulkhead
         from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
 

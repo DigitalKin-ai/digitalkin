@@ -125,7 +125,7 @@ class BaseServer(abc.ABC):
         if not get_server_settings().reflection or self.server is None or not self._service_names:
             return
 
-        try:  # noqa: PLW0717
+        try:  # ruff: ignore[too-many-statements-in-try-clause]
             import grpc
             from grpc_reflection.v1alpha import reflection as reflection_v1alpha
             from grpc_reflection.v1alpha import reflection_pb2 as reflection_pb2_v1alpha
@@ -161,7 +161,7 @@ class BaseServer(abc.ABC):
         if self.server is None:
             return
 
-        try:  # noqa: PLW0717
+        try:  # ruff: ignore[too-many-statements-in-try-clause]
             from grpc_health.v1 import health_pb2, health_pb2_grpc
             from grpc_health.v1.health import HealthServicer
 
@@ -195,7 +195,7 @@ class BaseServer(abc.ABC):
         Raises:
             ConfigurationError: If the server settings are invalid.
         """
-        try:  # noqa: PLW0717
+        try:  # ruff: ignore[too-many-statements-in-try-clause]
             grpc_compression = get_server_settings().grpc.compression.to_grpc()
 
             # sched_getaffinity is Linux-only; the sys.platform guard lets mypy skip
@@ -249,7 +249,7 @@ class BaseServer(abc.ABC):
         else:
             return server
 
-    def _add_secure_port(self, server: GrpcServer) -> None:  # noqa: PLR6301
+    def _add_secure_port(self, server: GrpcServer) -> None:  # ruff: ignore[no-self-use]
         """Add a secure port using credentials from settings.
 
         Args:
@@ -262,7 +262,7 @@ class BaseServer(abc.ABC):
         # directory; the resolution itself raises when the key or certificate is absent.
         creds = EnvManager.server_credentials()
 
-        try:  # noqa: PLW0717
+        try:  # ruff: ignore[too-many-statements-in-try-clause]
             if creds.key_path and creds.cert_path:
                 private_key = Path(creds.key_path).read_bytes()
                 certificate_chain = Path(creds.cert_path).read_bytes()
@@ -277,7 +277,7 @@ class BaseServer(abc.ABC):
             msg = f"Failed to read credential files: {e}"
             raise SecurityError(msg) from e
 
-        try:  # noqa: PLW0717
+        try:  # ruff: ignore[too-many-statements-in-try-clause]
             server_credentials = grpc.ssl_server_credentials(
                 [(private_key, certificate_chain)],
                 root_certificates=root_certificates,
@@ -296,7 +296,7 @@ class BaseServer(abc.ABC):
             msg = f"Failed to configure with actual settings secure port: {e}"
             raise SecurityError(msg) from e
 
-    def _add_insecure_port(self, server: GrpcServer) -> None:  # noqa: PLR6301
+    def _add_insecure_port(self, server: GrpcServer) -> None:  # ruff: ignore[no-self-use]
         """Add an insecure port.
 
         Args:
@@ -305,7 +305,7 @@ class BaseServer(abc.ABC):
         Raises:
             ConfigurationError: If adding the insecure port fails.
         """
-        try:  # noqa: PLW0717
+        try:  # ruff: ignore[too-many-statements-in-try-clause]
             if get_server_settings().channel.communication_mode == ControlFlow.ASYNC:
                 async_server = cast("grpc_aio.Server", server)
                 async_server.add_insecure_port(get_server_settings().channel.address)
@@ -330,7 +330,7 @@ class BaseServer(abc.ABC):
         self._add_reflection()
 
         logger.debug("Starting gRPC server on %s", get_server_settings().channel.address)
-        try:  # noqa: PLW0717
+        try:  # ruff: ignore[too-many-statements-in-try-clause]
             if get_server_settings().channel.communication_mode == ControlFlow.ASYNC:
                 loop = asyncio.get_event_loop()
                 if loop.is_closed():
@@ -371,7 +371,7 @@ class BaseServer(abc.ABC):
         self._add_reflection()
 
         logger.debug("Starting gRPC server on %s", get_server_settings().channel.address)
-        try:  # noqa: PLW0717
+        try:  # ruff: ignore[too-many-statements-in-try-clause]
             if get_server_settings().channel.communication_mode == ControlFlow.ASYNC:
                 await self._start_async()
             else:
@@ -395,7 +395,7 @@ class BaseServer(abc.ABC):
 
         logger.debug("Stopping gRPC server...")
         if get_server_settings().channel.communication_mode == ControlFlow.ASYNC:
-            try:  # noqa: PLW0717
+            try:  # ruff: ignore[too-many-statements-in-try-clause]
                 loop = asyncio.get_event_loop()
 
                 if loop.is_running():

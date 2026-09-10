@@ -225,7 +225,7 @@ class GrpcClientWrapper:
         cls._stub_cache.clear()
         CircuitBreaker.clear_all()
 
-    async def exec_grpc_query(  # noqa: PLR0914
+    async def exec_grpc_query(  # ruff: ignore[too-many-locals]
         self,
         query_endpoint: str,
         request: Any,

@@ -26,10 +26,10 @@ class HealthcheckServicesTrigger(TriggerHandler, BaseMixin):
         """Initialize the handler."""
         super().__init__(context)
 
-    async def handle(  # noqa: PLR6301
+    async def handle(  # ruff: ignore[no-self-use]
         self,
-        input_data: HealthcheckServicesInput,  # Healthcheck needs no input data # noqa: ARG002
-        setup_data: Any,  # Module-agnostic setup; healthcheck ignores it # noqa: ARG002
+        input_data: HealthcheckServicesInput,  # Healthcheck needs no input data # ruff: ignore[unused-method-argument]
+        setup_data: Any,  # Module-agnostic setup; healthcheck ignores it # ruff: ignore[unused-method-argument]
         context: ModuleContext,
     ) -> None:
         """Handle services healthcheck request.

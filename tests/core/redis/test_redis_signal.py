@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 if TYPE_CHECKING:
-    from collections.abc import Generator
+    from collections.abc import Coroutine, Generator
 
 pytestmark = pytest.mark.timeout(10)
 
@@ -516,19 +516,30 @@ class TestSharedRedisListenerRegisterIsFast:
     """register() must not be on a slow path — guards against re-introducing per-task subscribe."""
 
     async def test_register_unaffected_by_slow_psubscribe(self) -> None:
-        """A 2s slow PSUBSCRIBE happens once in start(); register() runs sub-millisecond afterwards."""
+        """A 2s slow PSUBSCRIBE happens once in start(); register() never subscribes again."""
         import time as _time
 
         from digitalkin.core.task_manager.redis.redis_signal import SharedRedisListener
         from digitalkin.models.settings.redis import get_redis_settings
 
         class _SlowPubSub(_FakePubSub):
-            async def psubscribe(self, *patterns: str) -> None:
+            def __init__(self) -> None:
+                super().__init__()
+                self.psubscribe_calls = 0
+
+            # Sync def returning the coroutine, so the counter ticks when psubscribe is
+            # *called* — an unawaited fire-and-forget re-subscribe is caught too.
+            def psubscribe(self, *patterns: str) -> Coroutine[Any, Any, None]:
+                self.psubscribe_calls += 1
+                return self._slow_psubscribe(*patterns)
+
+            async def _slow_psubscribe(self, *patterns: str) -> None:
                 await asyncio.sleep(2.0)
-                await super().psubscribe(*patterns)
+                await _FakePubSub.psubscribe(self, *patterns)
 
         client = MagicMock()
-        client.pubsub.return_value = _SlowPubSub()
+        pubsub = _SlowPubSub()
+        client.pubsub.return_value = pubsub
         listener = SharedRedisListener(client)
         session = _make_fake_session()
 
@@ -545,7 +556,13 @@ class TestSharedRedisListenerRegisterIsFast:
             t0 = _time.perf_counter_ns()
             listener.register("t1", session, task)
             elapsed_ms = (_time.perf_counter_ns() - t0) / 1e6
-            assert elapsed_ms < 5.0, f"register() blocked {elapsed_ms:.1f}ms — perf regression"
+
+            # The actual invariant: a per-task subscribe must never come back.
+            assert pubsub.psubscribe_calls == 1, "register() must not subscribe per task"
+            # Wall-clock backstop for a *blocking* re-subscribe, which the injected pubsub
+            # makes cost 2s. Sized to separate that from three dict writes without making
+            # CI machine speed the thing under test.
+            assert elapsed_ms < 100.0, f"register() blocked {elapsed_ms:.1f}ms — perf regression"
         finally:
             task.cancel()
             with pytest.raises(asyncio.CancelledError):
