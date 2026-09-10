@@ -1,43 +1,15 @@
 """Data models for gRPC server configurations."""
 
-from enum import Enum
 from pathlib import Path
 from typing import Any
 
-import grpc
 from pydantic import BaseModel, Field, ValidationInfo, field_validator
 
 from digitalkin.grpc_servers.exceptions import ConfigurationError, SecurityError
-from digitalkin.models.settings.grpc_client import get_grpc_channel_settings, get_grpc_retry_settings
-from digitalkin.models.settings.utils.channel import ControlFlow, SecurityMode
+from digitalkin.models.settings.client.client import get_client_settings
+from digitalkin.models.settings.utils.channel import ControlFlow, GrpcCompression, SecurityMode
 
-
-class GrpcCompression(str, Enum):
-    """gRPC compression algorithm.
-
-    Attributes:
-        NONE: No compression
-        GZIP: Gzip compression
-        DEFLATE: Deflate compression
-    """
-
-    NONE = "none"
-    GZIP = "gzip"
-    DEFLATE = "deflate"
-
-    def to_grpc(self) -> grpc.Compression:
-        """Convert to grpc.Compression enum.
-
-        Returns:
-            The corresponding grpc.Compression value.
-        """
-        match self:
-            case GrpcCompression.NONE:
-                return grpc.Compression.NoCompression
-            case GrpcCompression.GZIP:
-                return grpc.Compression.Gzip
-            case GrpcCompression.DEFLATE:
-                return grpc.Compression.Deflate
+__all__ = ["ChannelConfig", "ClientConfig", "ClientCredentials", "GrpcCompression", "RetryPolicy"]
 
 
 class RetryPolicy(BaseModel):
@@ -82,9 +54,9 @@ class RetryPolicy(BaseModel):
         """Build a retry policy with backoff values sourced from the environment.
 
         Returns:
-            Retry policy populated from ``GrpcRetrySettings``.
+            Retry policy populated from ``GrpcClientRetrySettings``.
         """
-        settings = get_grpc_retry_settings()
+        settings = get_client_settings().retry
         return cls(
             max_attempts=settings.max_attempts,
             initial_backoff=settings.initial_backoff,
@@ -205,9 +177,13 @@ class ChannelConfig(BaseModel):
 class ClientConfig(ChannelConfig):
     """Base configuration for gRPC clients.
 
+    Every default is sourced from ``ClientSettings`` (env prefixes ``CLIENT_``,
+    ``CLIENT_CHANNEL_``, ``CLIENT_GRPC_``), so a deployment configures its
+    clients through the environment and only overrides per-target values here.
+
     Attributes:
-        host: Host address to bind the client to
-        port: Port to listen on
+        host: Host address the client dials
+        port: Port the client dials
         mode: Client operation mode (sync/async)
         security: Security mode (secure/insecure)
         credentials: Client credentials for secure mode
@@ -216,13 +192,28 @@ class ClientConfig(ChannelConfig):
         compression: gRPC compression algorithm for channel-level compression
     """
 
+    host: str = Field(
+        default_factory=lambda: get_client_settings().channel.host,
+        description="Host address the client dials",
+    )
+    port: int = Field(default_factory=lambda: get_client_settings().channel.port, description="Port the client dials")
+    mode: ControlFlow = Field(
+        default_factory=lambda: get_client_settings().channel.communication_mode,
+        description="Client operation mode (sync/async)",
+    )
+    security: SecurityMode = Field(
+        default_factory=lambda: get_client_settings().channel.security,
+        description="Security mode (secure/insecure)",
+    )
     credentials: ClientCredentials | None = Field(None, description="Client credentials for secure mode")
     retry_policy: RetryPolicy = Field(
         default_factory=RetryPolicy.from_settings, description="Retry policy for failed RPCs"
     )
-    compression: GrpcCompression = Field(GrpcCompression.GZIP, description="gRPC compression algorithm")
+    compression: GrpcCompression = Field(
+        default_factory=lambda: get_client_settings().grpc.compression, description="gRPC compression algorithm"
+    )
     channel_options: list[tuple[str, Any]] = Field(
-        default_factory=lambda: get_grpc_channel_settings().to_channel_options(),
+        default_factory=lambda: get_client_settings().grpc.options,
         description="Resilient gRPC channel options with DNS re-resolution, keepalive, and retries",
     )
 

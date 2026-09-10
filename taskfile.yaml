@@ -84,6 +84,18 @@ tasks:
         uv run ruff format . && uv run ruff check --select I --fix . && uv run ruff check . --fix
       - uv run mypy src/{{.PACKAGE_NAME}}
 
+  env-template:
+    desc: "Regenerate .env.exemple and .env.minimum from the settings classes"
+    cmds:
+      - uv run python -m digitalkin.utils.env_template --package digitalkin.models.settings --output .env.exemple
+      - uv run python -m digitalkin.utils.env_template --package digitalkin.models.settings --minimum --output .env.minimum
+
+  env-template-check:
+    desc: "Fail when the .env templates no longer match the settings classes"
+    cmds:
+      - uv run python -m digitalkin.utils.env_template --package digitalkin.models.settings --check --output .env.exemple
+      - uv run python -m digitalkin.utils.env_template --package digitalkin.models.settings --minimum --check --output .env.minimum
+
   clean:
     desc: "Remove build artifacts and cache directories"
     cmds:

@@ -43,7 +43,7 @@ class ProtoStreamReader:
         """Initialize proto stream reader.
 
         Cursor TTL comes from ``GatewayStreamSettings.redis_cursor_ttl`` (env
-        ``DIGITALKIN_REDIS_CURSOR_TTL``).
+        ``DIGITALKIN_GATEWAY_STREAM_REDIS_CURSOR_TTL``).
 
         Args:
             task_id: Unique task identifier.

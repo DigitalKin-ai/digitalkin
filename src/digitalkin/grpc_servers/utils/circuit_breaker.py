@@ -15,7 +15,7 @@ from typing import ClassVar
 from digitalkin.grpc_servers.exceptions import CircuitOpenError
 from digitalkin.logger import logger
 from digitalkin.models.grpc_servers.circuit_breaker import CBState
-from digitalkin.models.settings.grpc_client import get_circuit_breaker_settings
+from digitalkin.models.settings.client.client import get_client_settings
 
 
 class CircuitBreaker:
@@ -45,7 +45,7 @@ class CircuitBreaker:
         """Get existing circuit breaker for a service or create one.
 
         Thresholds come from ``CircuitBreakerSettings`` (env
-        ``DIGITALKIN_CB_FAIL_MAX``, ``DIGITALKIN_CB_RESET_TIMEOUT``).
+        ``CLIENT_CIRCUIT_BREAKER_FAIL_MAX``, ``CLIENT_CIRCUIT_BREAKER_RESET_TIMEOUT``).
 
         Args:
             service_id: Service identifier.
@@ -54,7 +54,7 @@ class CircuitBreaker:
             Circuit breaker for this service.
         """
         if service_id not in cls._instances:
-            settings = get_circuit_breaker_settings()
+            settings = get_client_settings().circuit_breaker
             cls._instances[service_id] = cls(service_id, settings.fail_max, settings.reset_timeout)
         return cls._instances[service_id]
 
