@@ -11,12 +11,26 @@ from digitalkin.models.services.storage import Visibility
 
 
 class SetupVersionData(BaseModel):
-    """Pydantic model for SetupVersion data validation."""
+    """Pydantic model for SetupVersion data validation.
+
+    ``structure`` maps a leaf key path in ``content`` to a description of what is there,
+    written by the agent that created or updated the setup and used to fetch one key of a
+    large configuration (see :class:`~digitalkin.utils.json_structure.JsonStructure`). It
+    belongs to the services surface; other setup kinds leave it empty. ``None`` means the
+    read that produced this version cannot carry the map (GetSetup, SetCurrentSetupVersion
+    and ListSetupVersions have no field for it), as opposed to ``{}``, a carried empty map.
+
+    ``documentation`` is free text indexed by the registry search. It is cut with the version
+    that carries it, and ``SetupVersion`` returns it as of protocol 1.0.2.dev2 — before that
+    the field existed only on the write requests and always read back empty.
+    """
 
     id: str
     setup_id: str
     version: str
+    documentation: str = ""
     content: dict[str, Any]
+    structure: dict[str, str] | None = None
     creation_date: datetime.datetime
 
 
@@ -35,6 +49,9 @@ class SetupData(BaseModel):
     (``READY``, ``VISIBILITY_PRIVATE``) or any-case string maps to the matching
     member, and an empty value (backends that predate the fields) becomes
     ``UNSPECIFIED``.
+
+    The setup's documentation lives on the version that carries it — read it at
+    ``current_setup_version.documentation``.
     """
 
     id: str
@@ -66,13 +83,23 @@ class SetupStrategy(ABC):
         """Retrieve a setup by its unique identifier.
 
         Args:
-            setup_dict: Dictionary with 'setup_id' and optional 'version'.
+            setup_dict: Dictionary with 'setup_id', optional 'version', and optional
+                'structure_key'. One key path projects the version content down to that
+                path, and a path the content does not have is refused as not found;
+                omitting it (or passing an empty string, which the wire cannot tell
+                apart) returns the whole document.
 
         Returns:
             The setup with its current version populated.
         """
 
-    async def create_service_setup(self, name: str, content: dict[str, Any]) -> SetupData:
+    async def create_service_setup(
+        self,
+        name: str,
+        content: dict[str, Any],
+        documentation: str = "",
+        structure: dict[str, str] | None = None,
+    ) -> SetupData:
         """Create a service setup — a shareable configuration document.
 
         Only a name and the content JSON are needed; everything else (owner,
@@ -81,18 +108,27 @@ class SetupStrategy(ABC):
         Args:
             name: Human-readable service name.
             content: The service configuration JSON.
+            documentation: Free text describing the service, indexed by the registry search.
+            structure: The ``{key path: description}`` map the agent wrote for ``content``.
 
         Returns:
             The created setup with its initial version.
         """
-        return await self.create_setup({"name": name, "content": content})
+        return await self.create_setup({
+            "name": name,
+            "content": content,
+            "documentation": documentation,
+            "structure": structure,
+        })
 
     @abstractmethod
     async def create_setup(self, setup_dict: dict[str, Any]) -> SetupData:
         """Create a new setup; owner/organisation/module derive from the request context.
 
         Args:
-            setup_dict: Dictionary with 'name' and 'content'.
+            setup_dict: Dictionary with 'name', 'content', optional 'documentation' and
+                optional 'structure' — the ``{key path: description}`` map the agent
+                wrote, stored as written with only each description's length bounded.
 
         Returns:
             The created setup with its initial version.
@@ -103,7 +139,11 @@ class SetupStrategy(ABC):
         """Update a setup's name and current version content.
 
         Args:
-            setup_dict: Dictionary with 'setup_id', 'name' and 'content'.
+            setup_dict: Dictionary with 'setup_id', 'name', 'content' and optional
+                'documentation' (cut onto the new version, like 'content') and optional
+                'structure'. The map belongs to the content it describes, so a revision
+                carries only the map its own call supplied; omitting it leaves the new
+                revision without one.
 
         Returns:
             The updated setup with its current version.

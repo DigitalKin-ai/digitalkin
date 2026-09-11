@@ -491,10 +491,11 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
             module_type=RegistryModuleType[type_name],
             setup_version_id=summary.setup_version_id or None,
             setup_version=summary.setup_version or None,
+            structure={key: str(value) for key, value in summary.structure.items()},
             tags=list(summary.tags),
         )
 
-    async def search_setups(  # Filter surface mirrors SearchSetupsRequest 1:1 # noqa: PLR0913
+    async def search_setups(  # Filter surface mirrors SearchSetupsRequest 1:1 # ruff: ignore[too-many-arguments]
         self,
         query: str | None = None,
         setup_ids: list[str] | None = None,
@@ -574,7 +575,7 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
 
             return [self._summary_to_setup_summary(s) for s in response.setups]
 
-    async def deregister(  # noqa: PLR6301
+    async def deregister(  # ruff: ignore[no-self-use]
         self, module_id: str
     ) -> bool:  # Protocol uses heartbeat expiration; self available for future override
         """Deregister a module from the registry.

@@ -26,6 +26,7 @@ from pydantic import BaseModel, TypeAdapter, ValidationError, create_model, fiel
 from digitalkin.community.agno.toolkits.base import DkToolkit
 from digitalkin.grpc_servers.exceptions import PermissionDeniedError, ServerError
 from digitalkin.logger import logger
+from digitalkin.models.services.registry import RegistryModuleType
 from digitalkin.services.registry.exceptions import RegistryModuleNotFoundError, RegistryServiceError
 from digitalkin.services.setup.exceptions import SetupServiceError
 from digitalkin.utils.proto_utils import ProtoUtils
@@ -35,7 +36,6 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable
 
     from digitalkin.models.module import ModuleContext
-    from digitalkin.models.services.registry import RegistryModuleType
     from digitalkin.services.registry.registry_strategy import RegistryStrategy
     from digitalkin.services.setup.setup_strategy import SetupData, SetupStrategy
 
@@ -158,6 +158,43 @@ class RegistryActionCtx(BaseActionCtx):
             raise ValueError(msg)
         return setup
 
+    async def structure_of(self, setup_id: str) -> dict[str, str]:
+        """Read a setup's stored key map from the registry search, the only read that carries it.
+
+        Like every search, it follows the index, which may briefly lag right after a write.
+
+        Args:
+            setup_id: The setup whose map to read.
+
+        Returns:
+            The map, or ``{}`` when the search summary carries none.
+        """
+        found = await self.registry.search_setups(setup_ids=[setup_id], module_types=[self.module_type], limit=1)
+        return found[0].structure if found else {}
+
+    async def with_structure(self, setup: SetupData) -> SetupData:
+        """Fill a service read's key map when the setup service could not carry it.
+
+        GetSetup and SetCurrentSetupVersion have no structure field, so their version arrives
+        with ``None``. A service fills it from :meth:`structure_of`, so ``get`` and ``structure``
+        agree; tools and kins have no map and keep ``None``, which the envelope omits.
+
+        Args:
+            setup: The setup as the setup service returned it.
+
+        Returns:
+            The setup with its map filled, or unchanged when it is not a service or already
+            carries one.
+        """
+        version = setup.current_setup_version
+        if self.module_type != RegistryModuleType.SERVICE or version.structure is not None:
+            return setup
+        structure = await self.structure_of(setup.id)
+        logger.info(
+            "[VALIDATE STRUCTFILL] service read map filled from search: setup_id=%s keys=%d", setup.id, len(structure)
+        )  # TODO(validate): remove after prod validation
+        return setup.model_copy(update={"current_setup_version": version.model_copy(update={"structure": structure})})
+
 
 class RegistryAction(BaseAction[RegistryActionCtx], ABC):
     """Base for the discriminated registry actions shared across the three CRUD managers.
@@ -171,22 +208,23 @@ class RegistryAction(BaseAction[RegistryActionCtx], ABC):
 
     writes: ClassVar[bool] = False
 
-    @field_validator("name", check_fields=False)
+    @field_validator("name", "documentation", check_fields=False)
     @classmethod
-    def _name_has_no_control_chars(cls, value: str) -> str:
-        """Reject control characters in a user-facing ``name`` so it fails loudly, not silently.
+    def _text_has_no_control_chars(cls, value: str | None) -> str | None:
+        """Reject control characters in user-facing free text so it fails loudly, not silently.
 
-        The action's ``name`` bypasses the content validator, so without this a NUL byte or ANSI
-        escape would reach persistence and be stripped there, altering the value without telling
-        the caller. Applies to any action declaring ``name`` (update, service create).
+        ``name`` and ``documentation`` bypass the content validator, so without this a NUL byte
+        or ANSI escape would reach persistence and be stripped there, altering the value without
+        telling the caller. Applies to any action declaring either (update, service create).
+        ``None`` is the "leave unchanged" marker on update and has nothing to check.
 
         Returns:
-            The name unchanged when clean.
+            The value unchanged when clean.
 
         Raises:
-            ValueError: The name carries a control character.
+            ValueError: The value carries a control character.
         """
-        return SetupContentValidator.reject_control_chars(value)
+        return value if value is None else SetupContentValidator.reject_control_chars(value)
 
     @field_validator("content", check_fields=False)
     @classmethod
@@ -346,7 +384,11 @@ class RegistryObjectToolKit(DkToolkit):
         Also echoes ``visibility`` back in the caller's vocabulary — the input enum is
         ``public``/``private``/``internal`` but the backend returns the proto name
         ``VISIBILITY_INTERNAL``, so a naive round-trip fails. Strip the prefix and
-        lower-case it so the field read back matches the field written.
+        lower-case it so the field read back matches the field written. Confined to the
+        model branch on purpose: every action carrying a real setup visibility returns a
+        ``SetupData``, while the actions returning a plain dict return a *configuration*
+        (``load``) or its key map (``structure``), where a key called ``visibility`` is the
+        service's own data and rewriting it would corrupt what the caller asked for.
 
         Args:
             value: A Pydantic model, proto message, or plain scalar/collection.
@@ -359,6 +401,14 @@ class RegistryObjectToolKit(DkToolkit):
             visibility = data.get("visibility")
             if isinstance(visibility, str) and visibility.startswith("VISIBILITY_"):
                 data["visibility"] = visibility.removeprefix("VISIBILITY_").lower()
+            # A None map is left only on tools and kins reads, which have no map at all — services
+            # fill theirs through ``with_structure``. Rendering it would put the feature on their surface.
+            version = data.get("current_setup_version")
+            if isinstance(version, dict) and "structure" in version and version["structure"] is None:
+                logger.info(
+                    "[VALIDATE STRUCTREAD] uncarried structure omitted: setup_id=%s", data.get("id")
+                )  # TODO(validate): remove after prod validation
+                del version["structure"]
             return data
         if isinstance(value, ProtoMessage):
             return ProtoUtils.proto_to_dict(value)

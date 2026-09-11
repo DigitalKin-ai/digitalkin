@@ -136,15 +136,15 @@ class TestCircuitBreakerIntegrationWithWrapper:
     ) -> None:
         """Ensure exec_grpc_query calls CB check/record_success on happy path."""
         from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
-        from digitalkin.models.settings.grpc_client import get_circuit_breaker_settings
+        from digitalkin.models.settings.client.client import get_client_settings
 
         wrapper = object.__new__(GrpcClientWrapper)
         wrapper.service_name = "TestService"
         wrapper.stub = type("Stub", (), {"Query": lambda _self, req, _timeout, _metadata=None: req})()
 
         # Pre-open the circuit (fail_max=1 → single failure opens it)
-        monkeypatch.setenv("DIGITALKIN_CB_FAIL_MAX", "1")
-        get_circuit_breaker_settings.cache_clear()
+        monkeypatch.setenv("CLIENT_CIRCUIT_BREAKER_FAIL_MAX", "1")
+        get_client_settings.cache_clear()
         cb = CircuitBreaker.get_or_create("TestService")
         cb.record_failure()
 
@@ -184,15 +184,11 @@ class TestCircuitBreakerIntegrationWithWrapper:
         """
         from digitalkin.grpc_servers.exceptions import ServerError
         from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
-        from digitalkin.models.settings.grpc_client import (
-            get_circuit_breaker_settings,
-            get_grpc_client_settings,
-        )
+        from digitalkin.models.settings.client.client import get_client_settings
 
-        monkeypatch.setenv("DIGITALKIN_CB_FAIL_MAX", "3")
-        monkeypatch.setenv("DIGITALKIN_GRPC_QUERY_MAX_RETRIES", "0")
-        get_circuit_breaker_settings.cache_clear()
-        get_grpc_client_settings.cache_clear()
+        monkeypatch.setenv("CLIENT_CIRCUIT_BREAKER_FAIL_MAX", "3")
+        monkeypatch.setenv("CLIENT_MAX_RETRIES", "0")
+        get_client_settings.cache_clear()
 
         wrapper = object.__new__(GrpcClientWrapper)
         wrapper.service_name = "StorageService"
@@ -217,15 +213,11 @@ class TestCircuitBreakerIntegrationWithWrapper:
         """Real service-health failures (UNAVAILABLE) still open the breaker."""
         from digitalkin.grpc_servers.exceptions import ServerError
         from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
-        from digitalkin.models.settings.grpc_client import (
-            get_circuit_breaker_settings,
-            get_grpc_client_settings,
-        )
+        from digitalkin.models.settings.client.client import get_client_settings
 
-        monkeypatch.setenv("DIGITALKIN_CB_FAIL_MAX", "3")
-        monkeypatch.setenv("DIGITALKIN_GRPC_QUERY_MAX_RETRIES", "0")
-        get_circuit_breaker_settings.cache_clear()
-        get_grpc_client_settings.cache_clear()
+        monkeypatch.setenv("CLIENT_CIRCUIT_BREAKER_FAIL_MAX", "3")
+        monkeypatch.setenv("CLIENT_MAX_RETRIES", "0")
+        get_client_settings.cache_clear()
 
         wrapper = object.__new__(GrpcClientWrapper)
         wrapper.service_name = "StorageService"

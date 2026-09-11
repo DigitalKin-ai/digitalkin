@@ -32,13 +32,13 @@ class _DeniedUnaryUnaryCall(grpc.aio.UnaryUnaryCall):
         self._message = f"[{method}] {details or 'permission denied'}"
         self._details = details
 
-    def cancel(self) -> bool:  # noqa: PLR6301
+    def cancel(self) -> bool:  # ruff: ignore[no-self-use]
         return False
 
-    def cancelled(self) -> bool:  # noqa: PLR6301
+    def cancelled(self) -> bool:  # ruff: ignore[no-self-use]
         return False
 
-    def done(self) -> bool:  # noqa: PLR6301
+    def done(self) -> bool:  # ruff: ignore[no-self-use]
         return True
 
     def add_done_callback(self, unused_callback: Any) -> None:
@@ -48,22 +48,22 @@ class _DeniedUnaryUnaryCall(grpc.aio.UnaryUnaryCall):
             unused_callback: Ignored; present to satisfy the call interface.
         """
 
-    def time_remaining(self) -> float | None:  # noqa: PLR6301
+    def time_remaining(self) -> float | None:  # ruff: ignore[no-self-use]
         return None
 
-    async def initial_metadata(self) -> grpc.aio.Metadata:  # noqa: PLR6301
+    async def initial_metadata(self) -> grpc.aio.Metadata:  # ruff: ignore[no-self-use]
         return grpc.aio.Metadata()
 
-    async def trailing_metadata(self) -> grpc.aio.Metadata:  # noqa: PLR6301
+    async def trailing_metadata(self) -> grpc.aio.Metadata:  # ruff: ignore[no-self-use]
         return grpc.aio.Metadata()
 
-    async def code(self) -> grpc.StatusCode:  # noqa: PLR6301
+    async def code(self) -> grpc.StatusCode:  # ruff: ignore[no-self-use]
         return grpc.StatusCode.PERMISSION_DENIED
 
     async def details(self) -> str:
         return self._details
 
-    async def debug_error_string(self) -> None:  # noqa: PLR6301
+    async def debug_error_string(self) -> None:  # ruff: ignore[no-self-use]
         return None
 
     async def wait_for_connection(self) -> None:
@@ -77,7 +77,7 @@ class _DeniedUnaryUnaryCall(grpc.aio.UnaryUnaryCall):
 class PermissionClientInterceptor(grpc.aio.UnaryUnaryClientInterceptor):
     """Map a ``PERMISSION_DENIED`` unary reply to ``PermissionDeniedError``."""
 
-    async def intercept_unary_unary(  # noqa: PLR6301
+    async def intercept_unary_unary(  # ruff: ignore[no-self-use]
         self,
         continuation: Callable[[grpc.aio.ClientCallDetails, Any], Awaitable[Any]],
         client_call_details: grpc.aio.ClientCallDetails,

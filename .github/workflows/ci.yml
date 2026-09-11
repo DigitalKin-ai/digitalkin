@@ -74,6 +74,9 @@ jobs:
       - name: Format check with Ruff
         run: uv run ruff format --check .
 
+      - name: Check .env templates are up to date
+        run: task env-template-check
+
       - name: Build package
         run: task build-package
 

@@ -14,6 +14,8 @@ from typing import Annotated, Any, ClassVar, Literal
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, ValidationError, create_model
 
+from digitalkin.logger import logger
+
 
 class SetupContentValidator:
     """Compile a Pydantic model from a config-setup JSON schema and validate content against it.
@@ -41,6 +43,7 @@ class SetupContentValidator:
     _LAST_BMP: ClassVar[int] = 0xFFFF  # code points above this are astral (non-BMP, e.g. emoji).
     _OUTPUT_FORMAT_SPEC_KEY: ClassVar[str] = "output_format_spec"
     _OUTPUT_FORMAT_SPEC_MAX: ClassVar[int] = 4096  # at or past this the written setup is unusable.
+    _DOCUMENTATION_MAX: ClassVar[int] = 300  # the protocol's max_len on setup documentation.
     _NUMERIC_CONSTRAINTS: ClassVar[dict[str, str]] = {
         "minimum": "ge",
         "maximum": "le",
@@ -153,6 +156,27 @@ class SetupContentValidator:
             elif isinstance(node, list):
                 stack.extend((path, item) for item in node)
         return content
+
+    @classmethod
+    def reject_oversized_documentation(cls, documentation: str) -> None:
+        """Refuse a setup documentation longer than the protocol carries.
+
+        ``documentation`` is ``max_len: 300`` on the setup requests, versions and registry
+        summaries. Reject before the write, with the actual size, rather than leave the backend
+        to refuse it with an error that names neither the field nor the limit.
+
+        Args:
+            documentation: The documentation about to be written.
+
+        Raises:
+            ValueError: It is over 300 characters.
+        """
+        if len(documentation) > cls._DOCUMENTATION_MAX:
+            logger.info(
+                "[VALIDATE DOCMAX] oversized documentation refused: %d characters", len(documentation)
+            )  # TODO(validate): remove after prod validation
+            msg = f"documentation is {len(documentation)} characters; the protocol caps it at {cls._DOCUMENTATION_MAX}"
+            raise ValueError(msg)
 
     @classmethod
     def validate(cls, content: dict[str, Any], schema: dict[str, Any]) -> None:

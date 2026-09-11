@@ -17,6 +17,7 @@ from digitalkin.services.setup.setup_strategy import (
     SetupVersionData,
     SetupVersionPage,
 )
+from digitalkin.utils.json_structure import JsonStructure
 from digitalkin.utils.setup_content_validator import SetupContentValidator
 
 
@@ -66,29 +67,71 @@ class DefaultSetup(SetupStrategy):
         """Retrieve a setup by its unique identifier.
 
         Args:
-            setup_dict: Dictionary with 'setup_id' and optional 'version'.
+            setup_dict: Dictionary with 'setup_id', optional 'version' and optional
+                'structure_key'.
 
         Returns:
-            The setup with its current version populated.
+            The setup shaped as ``GetSetupResponse`` would carry it — see
+            :meth:`_as_wire_read` for the two ways that differs from the stored record.
 
         Raises:
-            SetupServiceError: setup_id does not exist.
+            SetupServiceError: setup_id does not exist, or structure_key names a path the
+                content does not have.
         """
-        return self._get_or_raise(setup_dict.get("setup_id", ""))
+        setup = self._get_or_raise(setup_dict.get("setup_id", ""))
+        return self._as_wire_read(setup, setup_dict.get("structure_key") or "")
+
+    @staticmethod
+    def _as_wire_read(setup: SetupData, key: str) -> SetupData:
+        """Copy a stored setup down to what a read can actually return.
+
+        Two ways a read differs from the record, both forced by the protocol:
+        the content is projected to ``key``, and the structure map is dropped because
+        ``SetupVersion`` has no field to carry it. Mirroring the second matters as much
+        as the first — serving a map here that the gRPC strategy cannot would let code work
+        locally and lose the map in production.
+
+        Args:
+            setup: The stored setup.
+            key: The requested key path; empty means the whole document, which is all
+                ``structure_key``'s lack of proto3 presence can express.
+
+        Returns:
+            A copy safe to hand back; the stored record is untouched.
+
+        Raises:
+            SetupServiceError: ``key`` names a path the content does not have — the backend
+                answers NOT_FOUND there rather than the whole document.
+        """
+        version = setup.current_setup_version
+        content = JsonStructure.resolve(version.content, [key]) if key else version.content
+        if key and not content:
+            logger.info(
+                "[VALIDATE STRUCTKEY] unresolved structure_key refused: setup_id=%s key=%s", setup.id, key
+            )  # TODO(validate): remove after prod validation
+            msg = f"setup_id = {setup.id}: no path {key} in the configuration"
+            raise SetupServiceError(msg)
+        return setup.model_copy(
+            update={"current_setup_version": version.model_copy(update={"content": content, "structure": None})}
+        )
 
     async def create_setup(self, setup_dict: dict[str, Any]) -> SetupData:
         """Create a new setup; identifiers are generated locally.
 
         Args:
-            setup_dict: Dictionary with 'name' and 'content'.
+            setup_dict: Dictionary with 'name', 'content', optional 'documentation' and
+                optional 'structure' — the ``{key path: description}`` map the agent
+                wrote for ``content``, stored as written with only each description's
+                length bounded.
 
         Returns:
             The created setup with its initial version.
 
         Raises:
-            ValueError: If name or content is invalid.
+            ValueError: If name or content is invalid, or documentation is over 300 characters.
         """
         SetupContentValidator.reject_oversized_output_format_spec(setup_dict.get("content") or {})
+        SetupContentValidator.reject_oversized_documentation(setup_dict.get("documentation") or "")
         setup_id = self._new_id()
         try:
             setup = SetupData(
@@ -103,7 +146,9 @@ class DefaultSetup(SetupStrategy):
                     id=self._new_id(),
                     setup_id=setup_id,
                     version="1.0.0",
+                    documentation=setup_dict.get("documentation") or "",
                     content=setup_dict.get("content") or {},
+                    structure=JsonStructure.clip(setup_dict.get("structure") or {}),
                     creation_date=datetime.datetime.now(datetime.timezone.utc),
                 ),
             )
@@ -123,15 +168,19 @@ class DefaultSetup(SetupStrategy):
         """Update a setup's name and current version content.
 
         Args:
-            setup_dict: Dictionary with 'setup_id', 'name', 'content' and optional
-                'set_as_current' (defaults to True).
+            setup_dict: Dictionary with 'setup_id', 'name', 'content', optional
+                'set_as_current' (defaults to True), optional 'documentation' and optional
+                'structure'. The map belongs to the content it describes, so a revision
+                carries only the map its own call supplied; omitting it leaves the new
+                revision without one. Omitting the documentation clears
+                it, matching the wire.
 
         Returns:
             The updated setup with its current version.
 
         Raises:
             SetupServiceError: setup_id does not exist.
-            ValueError: If the update payload is invalid.
+            ValueError: If the update payload is invalid, or documentation is over 300 characters.
         """
         setup = self._get_or_raise(setup_dict.get("setup_id", ""))
         name = setup_dict.get("name", "")
@@ -140,6 +189,7 @@ class DefaultSetup(SetupStrategy):
             msg = "setup_id, name and content (object) are required"
             raise ValueError(msg)
         SetupContentValidator.reject_oversized_output_format_spec(content)
+        SetupContentValidator.reject_oversized_documentation(setup_dict.get("documentation") or "")
         setup.name = name
         # A new revision rather than an in-place edit, matching UpdateSetup on the wire.
         history = self.versions.setdefault(setup.id, [setup.current_setup_version])
@@ -147,7 +197,11 @@ class DefaultSetup(SetupStrategy):
             id=self._new_id(),
             setup_id=setup.id,
             version=f"1.0.{len(history)}",
+            # No presence on UpdateSetupRequest, so an omitted value clears it server-side.
+            # Mirror that rather than preserving the old text: same input, same result.
+            documentation=setup_dict.get("documentation") or "",
             content=content,
+            structure=JsonStructure.clip(setup_dict.get("structure") or {}),
             creation_date=datetime.datetime.now(datetime.timezone.utc),
         )
         history.append(version)
@@ -223,7 +277,8 @@ class DefaultSetup(SetupStrategy):
             setup_dict: Dictionary with 'setup_id' and 'setup_version_id'.
 
         Returns:
-            The setup with its newly activated version.
+            The setup with its newly activated version, without the structure map —
+            SetCurrentSetupVersionResponse has no field to carry it.
 
         Raises:
             SetupServiceError: setup_id does not exist, or the version does not belong to it.
@@ -236,4 +291,4 @@ class DefaultSetup(SetupStrategy):
             msg = f"setup version '{setup_version_id}' not found on setup '{setup.id}'"
             raise SetupServiceError(msg)
         setup.current_setup_version = version
-        return setup
+        return self._as_wire_read(setup, "")
