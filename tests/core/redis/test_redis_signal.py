@@ -382,7 +382,7 @@ class TestSharedRedisListenerLifecycle:
         assert isinstance(pid, str)
         assert len(pid) == 32
         assert all(c in "0123456789abcdef" for c in pid)
-        assert SharedRedisListener.PROCESS_ID == pid
+        assert pid == SharedRedisListener.PROCESS_ID
         a = SharedRedisListener(_make_mock_client())
         b = SharedRedisListener(_make_mock_client())
         assert a.PROCESS_ID == b.PROCESS_ID == pid
@@ -459,7 +459,7 @@ class TestSharedRedisListenerInvalidate:
         listener = SharedRedisListener(_make_mock_client())
         calls: list[tuple[str, str]] = []
 
-        async def fake_invalidator(action: str, setup_id: str) -> None:
+        async def fake_invalidator(action: str, setup_id: str) -> None:  # noqa: RUF029
             calls.append((action, setup_id))
 
         listener.set_cache_invalidator(fake_invalidator)
@@ -487,7 +487,7 @@ class TestSharedRedisListenerInvalidate:
             listener.dispatch_signal("_global_", data, json.dumps(data))
             await asyncio.sleep(0)
             assert not task.done()
-            assert "t1" in listener._task_refs  # noqa: SLF001
+            assert "t1" in listener._task_refs
         finally:
             task.cancel()
             with pytest.raises(asyncio.CancelledError):
@@ -501,7 +501,7 @@ class TestSharedRedisListenerInvalidate:
         listener = SharedRedisListener(_make_mock_client())
         calls: list[tuple[str, str]] = []
 
-        async def fake_invalidator(action: str, setup_id: str) -> None:
+        async def fake_invalidator(action: str, setup_id: str) -> None:  # noqa: RUF029
             calls.append((action, setup_id))
 
         listener.set_cache_invalidator(fake_invalidator)
