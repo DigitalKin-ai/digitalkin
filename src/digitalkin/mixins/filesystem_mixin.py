@@ -71,10 +71,10 @@ class FilesystemMixin:
                 )
             ])
         except Exception:
-            logger.exception("Failed to upload file '%s' (%s)", name, content_type)
+            logger.exception("Failed to upload file '%s' (%s)", name, content_type, extra=context.session.current_ids())
             return None
         if failed or not records:
-            logger.error("Upload rejected for file '%s' (%s)", name, content_type)
+            logger.error("Upload rejected for file '%s' (%s)", name, content_type, extra=context.session.current_ids())
             return None
         return records[0]
 
@@ -122,7 +122,7 @@ class FilesystemMixin:
         try:
             records, _total = await context.filesystem.get_files(filters, include_content=include_content)
         except Exception:
-            logger.exception("Failed to list files")
+            logger.exception("Failed to list files", extra=context.session.current_ids())
             return []
         return records
 
@@ -151,7 +151,7 @@ class FilesystemMixin:
                 permanent=permanent,
             )
         except Exception:
-            logger.exception("Failed to delete file '%s'", file_id)
+            logger.exception("Failed to delete file '%s'", file_id, extra=context.session.current_ids())
             return False
         return results.get(file_id, False)
 
@@ -181,7 +181,12 @@ class FilesystemMixin:
             try:
                 record = await context.filesystem.get_file(file.id, context=file_context, include_content=False)
             except Exception:
-                logger.warning("Could not resolve file '%s'; keeping it as submitted", file.id, exc_info=True)
+                logger.warning(
+                    "Could not resolve file '%s'; keeping it as submitted",
+                    file.id,
+                    exc_info=True,
+                    extra=context.session.current_ids(),
+                )
                 resolved.append(file)
                 continue
             resolved.append(

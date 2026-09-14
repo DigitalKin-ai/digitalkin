@@ -152,6 +152,8 @@ class DefaultFilesystem(FilesystemStrategy):
                 uploaded_files.append(file_data)
                 total_uploaded += 1
                 logger.debug("Uploaded file %s", file_data)
+                # TODO(validate): remove after prod validation
+                logger.info("[VALIDATE FSCTX] local upload stamped context=%s", file_data.context)
             except Exception as e:  # Exception in loop: per-file error isolation in batch upload # ruff: ignore[try-except-in-loop]
                 logger.exception("Error uploading file %s: %s", file.name, e)
                 total_failed += 1
@@ -303,8 +305,12 @@ class DefaultFilesystem(FilesystemStrategy):
 
         try:  # ruff: ignore[too-many-statements-in-try-clause]
             context_dir = self._get_context_temp_dir(self.mission_id)
-            file_path = os.path.join(context_dir, file_id)
             existing_file = self.db[file_id]
+            # TODO(validate): remove after prod validation
+            # [VALIDATE FSPATH] uploads store under the file name, so a path rebuilt from the
+            # id missed the bytes: content updates landed in an orphan and reads stayed stale.
+            file_path = existing_file.storage_uri or os.path.join(context_dir, existing_file.name)
+            logger.info("[VALIDATE FSPATH] update targeting %s", file_path)
 
             if content is not None:
                 await AsyncPath(file_path).write_bytes(content)
@@ -331,9 +337,11 @@ class DefaultFilesystem(FilesystemStrategy):
                 await AsyncPath(file_path).rename(new_path)
                 existing_file.name = new_name
                 existing_file.storage_uri = str(await AsyncPath(new_path).resolve())
+                existing_file.file_url = existing_file.storage_uri
                 # TODO(validate): remove after prod validation
                 # [VALIDATE FSURL] file_url used to keep pointing at the pre-rename path
-                existing_file.file_url = existing_file.storage_uri
+                # TODO(validate): remove after prod validation
+                logger.info("[VALIDATE FSURL] rename refreshed file_url to %s", existing_file.file_url)
 
             self.db[file_id] = existing_file
 

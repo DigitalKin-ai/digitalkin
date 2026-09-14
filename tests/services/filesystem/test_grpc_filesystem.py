@@ -25,6 +25,8 @@ from tests.fixtures.grpc_fixtures import FakeContext
 
 from digitalkin.grpc_servers.exceptions import PermissionDeniedError
 from digitalkin.models.grpc_servers.models import ClientConfig
+from pydantic import BaseModel, ConfigDict
+
 from digitalkin.models.services.filesystem import FileType
 from digitalkin.models.services.services import Context
 from digitalkin.models.services.storage import Visibility
@@ -1318,3 +1320,104 @@ class TestVisibilityOnTheWire:
         )
 
         assert future.result(timeout=1.0).visibility is Visibility.INTERNAL
+
+
+class TestMutatingRpcsForwardContext:
+    """`update_file` and `delete_files` used to hardcode CONTEXT_MISSIONS.
+
+    Every other test in this file discards the outgoing request and hand-builds one
+    to feed the mock servicer, so the old hardcoded context went unnoticed. These
+    capture the real request and assert on it, the way TestContextScopes does.
+    """
+
+    def test_update_file_forwards_the_caller_context(
+        self,
+        client: GrpcFilesystem,
+        test_channel: grpc_testing.Channel,
+        mock_servicer: MockFilesystemServicer,
+    ) -> None:
+        """A SETUP-scoped update must not be sent as CONTEXT_MISSIONS."""
+        future = client_execution_thread_pool.submit(
+            asyncio.run,
+            client.update_file("file_x", new_name="b.txt", context=Context.SETUP),
+        )
+
+        method_desc = service_name.methods_by_name["UpdateFile"]
+        _, request, rpc = test_channel.take_unary_unary(method_desc)
+
+        assert request.context == filesystem_pb2.CONTEXT_SETUP
+
+        rpc.send_initial_metadata(())
+        rpc.terminate(mock_servicer.UpdateFile(request, FakeContext()), (), grpc.StatusCode.OK, "")
+        future.result(timeout=5.0)
+
+    def test_delete_files_forwards_the_filter_context(
+        self,
+        client: GrpcFilesystem,
+        test_channel: grpc_testing.Channel,
+        mock_servicer: MockFilesystemServicer,
+    ) -> None:
+        """The filter's context must reach both the request and its filter."""
+        future = client_execution_thread_pool.submit(
+            asyncio.run,
+            client.delete_files(FileFilter(context=Context.SETUP, file_ids=["file_x"])),
+        )
+
+        method_desc = service_name.methods_by_name["DeleteFiles"]
+        _, request, rpc = test_channel.take_unary_unary(method_desc)
+
+        assert request.context == filesystem_pb2.CONTEXT_SETUP
+        assert request.filters.context == filesystem_pb2.CONTEXT_SETUP
+
+        rpc.send_initial_metadata(())
+        rpc.terminate(mock_servicer.DeleteFiles(request, FakeContext()), (), grpc.StatusCode.OK, "")
+        future.result(timeout=5.0)
+
+
+class TestGrpcMetadataValidation:
+    """The registered metadata_model contract must hold on the wire path too."""
+
+    def test_registered_model_rejects_bad_metadata_before_dispatch(
+        self,
+        client: GrpcFilesystem,
+        sample_file_data: bytes,
+    ) -> None:
+        """A refused upload must never reach the server."""
+
+        class ReportMetadata(BaseModel):
+            model_config = ConfigDict(extra="forbid")
+
+            author: str
+
+        client.config = {"metadata_model": ReportMetadata}
+        upload = UploadFileData(
+            content=sample_file_data, name="bad.txt", type=FileType.DOCUMENT, metadata={"nope": 1}
+        )
+
+        with pytest.raises(FilesystemServiceError, match="Invalid metadata for file 'bad.txt'"):
+            asyncio.run(client.upload_files([upload]))
+
+    def test_absent_metadata_still_sends_an_empty_struct(
+        self,
+        client: GrpcFilesystem,
+        test_channel: grpc_testing.Channel,
+        mock_servicer: MockFilesystemServicer,
+        sample_file_data: bytes,
+    ) -> None:
+        """metadata=None is now always materialised as an empty Struct."""
+        future = client_execution_thread_pool.submit(
+            asyncio.run,
+            client.upload_files([
+                UploadFileData(content=sample_file_data, name="a.txt", type=FileType.DOCUMENT, metadata=None)
+            ]),
+        )
+
+        method_desc = service_name.methods_by_name["UploadFiles"]
+        _, request, rpc = test_channel.take_unary_unary(method_desc)
+
+        assert len(request.files) == 1
+        assert not dict(request.files[0].metadata)
+
+        rpc.send_initial_metadata(())
+        rpc.terminate(mock_servicer.UploadFiles(request, FakeContext()), (), grpc.StatusCode.OK, "")
+        future.result(timeout=5.0)
