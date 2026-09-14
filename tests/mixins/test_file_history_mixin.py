@@ -8,7 +8,8 @@ import pytest
 
 from digitalkin.mixins.file_history_mixin import FileHistoryMixin
 from digitalkin.models.module.module_context import ModuleContext
-from digitalkin.models.services.storage import FileHistory, FileModel
+from digitalkin.models.services.filesystem import FileMetadata
+from digitalkin.models.services.storage import FileHistory
 from digitalkin.modules.trigger_handler import TriggerHandler
 from digitalkin.services.storage.storage_strategy import StorageRecord
 
@@ -28,15 +29,15 @@ def _make_context(mission_id: str = "test_mission") -> MagicMock:
     return ctx
 
 
-def _make_files(count: int = 1, prefix: str = "file") -> list[FileModel]:
-    """Create a list of FileModel instances."""
-    return [FileModel(file_id=f"{prefix}_{i}", name=f"{prefix}_{i}.txt", metadata={}) for i in range(count)]
+def _make_files(count: int = 1, prefix: str = "file") -> list[FileMetadata]:
+    """Create a list of FileMetadata instances."""
+    return [FileMetadata(id=f"{prefix}_{i}", name=f"{prefix}_{i}.txt") for i in range(count)]
 
 
 def _storage_record_with_history(files: list[dict[str, Any]]) -> MagicMock:
     """Create a mock StorageRecord whose .data looks like a FileHistory."""
     record = MagicMock(spec=StorageRecord)
-    record.data = FileHistory(files=[FileModel(**{**{"metadata": {}}, **f}) for f in files])
+    record.data = FileHistory(files=[FileMetadata(**f) for f in files])
     return record
 
 
@@ -389,5 +390,5 @@ class TestFhConcurrentOperations:
         history_b = await mixin.load_file_history(ctx_b)
         assert len(history_a.files) == 10
         assert len(history_b.files) == 10
-        assert all(f.file_id.startswith("a_") for f in history_a.files)
-        assert all(f.file_id.startswith("b_") for f in history_b.files)
+        assert all(f.id.startswith("a_") for f in history_a.files)
+        assert all(f.id.startswith("b_") for f in history_b.files)

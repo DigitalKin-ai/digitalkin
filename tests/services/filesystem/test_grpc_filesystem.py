@@ -25,6 +25,7 @@ from tests.fixtures.grpc_fixtures import FakeContext
 
 from digitalkin.grpc_servers.exceptions import PermissionDeniedError
 from digitalkin.models.grpc_servers.models import ClientConfig
+from digitalkin.models.services.filesystem import FileType
 from digitalkin.models.services.services import Context
 from digitalkin.models.services.storage import Visibility
 from digitalkin.models.settings.utils.channel import ControlFlow, SecurityMode
@@ -133,7 +134,7 @@ def file_metadata() -> dict:
         "id": f"file_{secrets.token_hex(8)}",
         "context": "setup",
         "name": name,
-        "file_type": "DOCUMENT",
+        "type": FileType.DOCUMENT,
         "content_type": "text/plain",
         "size_bytes": 40,
         "checksum": "a1b2c3d4e5f6",
@@ -173,7 +174,7 @@ class TestUploadFiles:
         upload_file = UploadFileData(
             content=sample_file_data,
             name=file_metadata["name"],
-            file_type=file_metadata["file_type"],
+            type=file_metadata["type"],
             content_type=file_metadata["content_type"],
             metadata=file_metadata["metadata"],
             replace_if_exists=False,
@@ -202,7 +203,7 @@ class TestUploadFiles:
                 file_id=file_metadata["id"],
                 context=file_metadata["context"],
                 name=file_metadata["name"],
-                file_type=GrpcFilesystem._file_type_to_enum(file_metadata["file_type"]),
+                file_type=filesystem_pb2.FileType.Value(file_metadata["type"].value),
                 content_type=file_metadata["content_type"],
                 size_bytes=file_metadata["size_bytes"],
                 checksum=file_metadata["checksum"],
@@ -238,11 +239,7 @@ class TestUploadFiles:
         assert file_data.id == file_metadata["id"]
         assert file_data.context == file_metadata["context"]
         assert file_data.name == file_metadata["name"]
-        # Accept either enum-prefixed or plain values depending on transport layer
-        assert file_data.file_type in {
-            file_metadata["file_type"],
-            "FILE_TYPE_" + file_metadata["file_type"],
-        }
+        assert file_data.type is file_metadata["type"]
         assert file_data.content_type == file_metadata["content_type"]
         assert file_data.size_bytes == file_metadata["size_bytes"]
         assert file_data.checksum == file_metadata["checksum"]
@@ -282,7 +279,7 @@ class TestUploadFiles:
         upload_file = UploadFileData(
             content=sample_file_data,
             name=file_metadata["name"],
-            file_type=file_metadata["file_type"],
+            type=file_metadata["type"],
             content_type=file_metadata["content_type"],
             metadata=file_metadata["metadata"],
             replace_if_exists=False,
@@ -300,7 +297,7 @@ class TestUploadFiles:
                 filesystem_pb2.UploadFileData(
                     context=filesystem_pb2.CONTEXT_SETUP,
                     name=file_metadata["name"],
-                    file_type=GrpcFilesystem._file_type_to_enum(file_metadata["file_type"]),
+                    file_type=filesystem_pb2.FileType.Value(file_metadata["type"].value),
                     content_type=file_metadata["content_type"],
                     content=sample_file_data,
                     metadata=metadata_struct,
@@ -360,7 +357,7 @@ class TestGetFile:
                 filesystem_pb2.UploadFileData(
                     context=filesystem_pb2.CONTEXT_SETUP,
                     name=file_metadata["name"],
-                    file_type=GrpcFilesystem._file_type_to_enum(file_metadata["file_type"]),
+                    file_type=filesystem_pb2.FileType.Value(file_metadata["type"].value),
                     content_type=file_metadata["content_type"],
                     content=sample_file_data,
                     metadata=metadata_struct,
@@ -399,7 +396,7 @@ class TestGetFile:
         assert result.id == file_id
         assert result.context == file_metadata["context"]
         assert result.name == file_metadata["name"]
-        assert result.file_type == "FILE_TYPE_" + file_metadata["file_type"]
+        assert result.type is file_metadata["type"]
         assert result.content_type == file_metadata["content_type"]
         assert result.metadata == file_metadata["metadata"]
         assert result.status == "FILE_STATUS_" + file_metadata["status"]
@@ -469,7 +466,7 @@ class TestGetFiles:
             filesystem_pb2.UploadFileData(
                 context=filesystem_pb2.CONTEXT_SETUP,
                 name=name,
-                file_type=GrpcFilesystem._file_type_to_enum(file_metadata["file_type"]),
+                file_type=filesystem_pb2.FileType.Value(file_metadata["type"].value),
                 content_type=file_metadata["content_type"],
                 content=sample_file_data,
                 metadata=metadata_struct,
@@ -510,7 +507,7 @@ class TestGetFiles:
             context=filesystem_pb2.CONTEXT_SETUP,
             filters=filesystem_pb2.FileFilter(
                 context=filesystem_pb2.CONTEXT_SETUP,
-                file_types=[GrpcFilesystem._file_type_to_enum(file_metadata["file_type"])],
+                file_types=[filesystem_pb2.FileType.Value(file_metadata["type"].value)],
                 status=GrpcFilesystem._file_status_to_enum(file_metadata["status"]),
             ),
             list_size=10,
@@ -534,7 +531,7 @@ class TestGetFiles:
             assert isinstance(file_data, FilesystemRecord)
             assert file_data.context == file_metadata["context"]
             assert file_data.name in file_names
-            assert file_data.file_type == "FILE_TYPE_" + file_metadata["file_type"]
+            assert file_data.type is file_metadata["type"]
             assert file_data.content_type == file_metadata["content_type"]
             assert file_data.metadata == file_metadata["metadata"]
             assert file_data.status == "FILE_STATUS_" + file_metadata["status"]
@@ -546,7 +543,7 @@ class TestGetFiles:
 
         # Test empty context case
         empty_filters = FileFilter(
-            file_types=[file_metadata["file_type"]],
+            file_types=[file_metadata["type"]],
             status="UPLOADING",
         )
 
@@ -606,7 +603,7 @@ class TestUpdateFile:
                 filesystem_pb2.UploadFileData(
                     context=filesystem_pb2.CONTEXT_SETUP,
                     name=file_metadata["name"],
-                    file_type=GrpcFilesystem._file_type_to_enum(file_metadata["file_type"]),
+                    file_type=filesystem_pb2.FileType.Value(file_metadata["type"].value),
                     content_type=file_metadata["content_type"],
                     content=sample_file_data,
                     metadata=metadata_struct,
@@ -625,7 +622,7 @@ class TestUpdateFile:
             client.update_file(
                 file_id,
                 content=updated_content,
-                file_type="DOCUMENT",
+                type=FileType.DOCUMENT,
                 content_type="text/plain",
                 metadata={"new_key": "new_value"},
                 new_name="updated_file.txt",
@@ -645,7 +642,7 @@ class TestUpdateFile:
             context=filesystem_pb2.CONTEXT_SETUP,
             file_id=file_id,
             content=updated_content,
-            file_type=GrpcFilesystem._file_type_to_enum("DOCUMENT"),
+            file_type=filesystem_pb2.FileType.Value(FileType.DOCUMENT.value),
             content_type="text/plain",
             metadata=struct_pb2.Struct(fields={"new_key": struct_pb2.Value(string_value="new_value")}),
             new_name="updated_file.txt",
@@ -665,7 +662,7 @@ class TestUpdateFile:
         assert result.id == file_id
         assert result.context == file_metadata["context"]
         assert result.name == "updated_file.txt"
-        assert result.file_type == "FILE_TYPE_DOCUMENT"
+        assert result.type is FileType.DOCUMENT
         assert result.content_type == "text/plain"
         assert result.metadata == {"new_key": "new_value"}
         assert result.status == "FILE_STATUS_ACTIVE"
@@ -691,7 +688,7 @@ class TestUpdateFile:
             client.update_file(
                 "nonexistent_file_id",
                 content=b"new content",
-                file_type="DOCUMENT",
+                type=FileType.DOCUMENT,
                 content_type="text/plain",
             ),
         )
@@ -741,7 +738,7 @@ class TestDeleteFiles:
             filesystem_pb2.UploadFileData(
                 context=filesystem_pb2.CONTEXT_SETUP,
                 name=name,
-                file_type=GrpcFilesystem._file_type_to_enum(file_metadata["file_type"]),
+                file_type=filesystem_pb2.FileType.Value(file_metadata["type"].value),
                 content_type=file_metadata["content_type"],
                 content=sample_file_data,
                 metadata=metadata_struct,
@@ -757,7 +754,7 @@ class TestDeleteFiles:
 
         # Create filter criteria
         filters = FileFilter(
-            file_types=[file_metadata["file_type"]],
+            file_types=[file_metadata["type"]],
         )
 
         # Start the client call to delete files
@@ -782,7 +779,7 @@ class TestDeleteFiles:
             context=filesystem_pb2.CONTEXT_SETUP,
             filters=filesystem_pb2.FileFilter(
                 context=filesystem_pb2.CONTEXT_SETUP,
-                file_types=[GrpcFilesystem._file_type_to_enum(file_metadata["file_type"])],
+                file_types=[filesystem_pb2.FileType.Value(file_metadata["type"].value)],
                 status=GrpcFilesystem._file_status_to_enum(file_metadata["status"]),
             ),
             permanent=True,
@@ -822,7 +819,7 @@ class TestDeleteFiles:
             test_channel: Mock gRPC channel
         """
         filters = FileFilter(
-            file_types=["DOCUMENT"],
+            file_types=[FileType.DOCUMENT],
             status="ACTIVE",
         )
 
@@ -877,7 +874,7 @@ class TestFilesystemEdgeCases:
         upload_file = UploadFileData(
             content=b"Sample content",
             name=file_metadata["name"],
-            file_type=file_metadata["file_type"],
+            type=file_metadata["type"],
             content_type=file_metadata["content_type"],
             metadata=file_metadata["metadata"],
             replace_if_exists=False,
@@ -930,7 +927,7 @@ class TestFilesystemEdgeCases:
         upload_file = UploadFileData(
             content=sample_file_data,
             name=file_metadata["name"],
-            file_type=file_metadata["file_type"],
+            type=file_metadata["type"],
             content_type=file_metadata["content_type"],
             metadata=file_metadata["metadata"],
             replace_if_exists=False,
@@ -950,7 +947,7 @@ class TestFilesystemEdgeCases:
                 filesystem_pb2.UploadFileData(
                     context=filesystem_pb2.CONTEXT_SETUP,
                     name=file_metadata["name"],
-                    file_type=GrpcFilesystem._file_type_to_enum(file_metadata["file_type"]),
+                    file_type=filesystem_pb2.FileType.Value(file_metadata["type"].value),
                     content_type=file_metadata["content_type"],
                     content=sample_file_data,
                     metadata=metadata_struct,
@@ -1016,7 +1013,7 @@ class TestFilesystemEdgeCases:
         # Delete the file (soft delete)
         filters = FileFilter(
             context="setup",
-            file_types=[file_metadata["file_type"]],
+            file_types=[file_metadata["type"]],
             status="ACTIVE",
         )
 
@@ -1031,7 +1028,7 @@ class TestFilesystemEdgeCases:
 
         filters_proto = filesystem_pb2.FileFilter(
             context=filesystem_pb2.CONTEXT_SETUP,
-            file_types=[GrpcFilesystem._file_type_to_enum(file_metadata["file_type"])],
+            file_types=[filesystem_pb2.FileType.Value(file_metadata["type"].value)],
             status=GrpcFilesystem._file_status_to_enum("ACTIVE"),
         )
 
@@ -1205,7 +1202,7 @@ class TestVisibilityOnTheWire:
         upload = UploadFileData(
             content=b"x",
             name="f.txt",
-            file_type="DOCUMENT",
+            type=FileType.DOCUMENT,
             visibility=Visibility.INTERNAL,
         )
         future = client_execution_thread_pool.submit(asyncio.run, client.upload_files([upload]))
@@ -1231,7 +1228,7 @@ class TestVisibilityOnTheWire:
         test_channel: grpc_testing.Channel,
     ) -> None:
         """Unspecified means "let the service decide", so it must go out as the zero enum."""
-        upload = UploadFileData(content=b"x", name="f.txt", file_type="DOCUMENT")
+        upload = UploadFileData(content=b"x", name="f.txt", type=FileType.DOCUMENT)
         future = client_execution_thread_pool.submit(asyncio.run, client.upload_files([upload]))
         _, request, rpc = test_channel.take_unary_unary(service_name.methods_by_name["UploadFiles"])
 

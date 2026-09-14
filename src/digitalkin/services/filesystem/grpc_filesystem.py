@@ -1,6 +1,6 @@
 """gRPC filesystem implementation."""
 
-from typing import Any, Literal
+from typing import Any
 
 from agentic_mesh_protocol.filesystem.v1 import filesystem_pb2, filesystem_service_pb2_grpc
 from google.protobuf import struct_pb2
@@ -10,6 +10,7 @@ from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
 from digitalkin.grpc_servers.utils.grpc_error_handler import GrpcErrorHandlerMixin
 from digitalkin.logger import logger
 from digitalkin.models.grpc_servers.models import ClientConfig
+from digitalkin.models.services.filesystem import FileType
 from digitalkin.models.services.services import Context
 from digitalkin.models.services.storage import Visibility
 from digitalkin.services.filesystem.exceptions import FilesystemServiceError
@@ -25,21 +26,6 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper, GrpcErrorHandlerMixi
     """gRPC client implementation for the Filesystem service."""
 
     service_name: str = "FilesystemService"
-
-    @staticmethod
-    def _file_type_to_enum(file_type: str) -> filesystem_pb2.FileType:
-        """Convert a file type string to a FileType enum.
-
-        Args:
-            file_type: The file type string to convert
-
-        Returns:
-            filesystem_pb2.FileType: The converted file type enum
-        """
-        if not file_type.upper().startswith("FILE_TYPE_"):
-            file_type = f"FILE_TYPE_{file_type.upper()}"
-        mapping: dict[str, filesystem_pb2.FileType] = dict[str, Any](filesystem_pb2.FileType.items())
-        return mapping.get(file_type.upper(), filesystem_pb2.FileType.FILE_TYPE_UNSPECIFIED)
 
     @staticmethod
     def _file_status_to_enum(file_status: str) -> filesystem_pb2.FileStatus:
@@ -70,7 +56,7 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper, GrpcErrorHandlerMixi
             id=file.file_id,
             context=file.context,
             name=file.name,
-            file_type=filesystem_pb2.FileType.Name(file.file_type),
+            type=FileType(filesystem_pb2.FileType.Name(file.file_type)),
             content_type=file.content_type,
             size_bytes=file.size_bytes,
             checksum=file.checksum,
@@ -142,9 +128,7 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper, GrpcErrorHandlerMixi
         """
         return filesystem_pb2.FileFilter(
             **filters.model_dump(exclude={"file_types", "status", "context", "visibilities"}),
-            file_types=[self._file_type_to_enum(file_type) for file_type in filters.file_types]
-            if filters.file_types
-            else None,
+            file_types=[file_type.value for file_type in filters.file_types] if filters.file_types else None,
             status=self._file_status_to_enum(filters.status) if filters.status else None,
             context=self._context_enum(filters.context),
             visibilities=[self._visibility_enum(v) for v in filters.visibilities or []],
@@ -193,15 +177,13 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper, GrpcErrorHandlerMixi
         async with self.handle_grpc_errors("UploadFiles", FilesystemServiceError):
             upload_files: list[filesystem_pb2.UploadFileData] = []
             for file in files:
-                metadata_struct: struct_pb2.Struct | None = None
-                if file.metadata:
-                    metadata_struct = struct_pb2.Struct()
-                    metadata_struct.update(file.metadata)
+                metadata_struct = struct_pb2.Struct()
+                metadata_struct.update(self._validate_metadata(file))
                 upload_files.append(
                     filesystem_pb2.UploadFileData(
                         context=filesystem_pb2.CONTEXT_MISSIONS,
                         name=file.name,
-                        file_type=self._file_type_to_enum(file.file_type),
+                        file_type=file.type.value,
                         content_type=file.content_type or "application/octet-stream",
                         content=file.content,
                         metadata=metadata_struct,
@@ -252,34 +234,26 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper, GrpcErrorHandlerMixi
         self,
         file_id: str,
         content: bytes | None = None,
-        file_type: Literal[
-            "UNSPECIFIED",
-            "DOCUMENT",
-            "IMAGE",
-            "VIDEO",
-            "AUDIO",
-            "ARCHIVE",
-            "CODE",
-            "OTHER",
-        ]
-        | None = None,
+        type: FileType | None = None,  # Matches the canonical field name # noqa: A002
         content_type: str | None = None,
         metadata: dict[str, Any] | None = None,
         new_name: str | None = None,
         status: str | None = None,
         visibility: Visibility = Visibility.UNSPECIFIED,
+        context: Context = Context.MISSIONS,
     ) -> FilesystemRecord:
         """Update a file in the filesystem.
 
         Args:
             file_id: The id of the file to be updated
             content: Optional new content of the file
-            file_type: Optional new type of data
+            type: Optional new type of data
             content_type: Optional new MIME type
             metadata: Optional new metadata (will merge with existing)
             new_name: Optional new name for the file
             status: Optional new status for the file
             visibility: Optional new read-access scope; UNSPECIFIED leaves it unchanged
+            context: The owner context of the file
 
         Returns:
             FilesystemRecord: Metadata about the updated file
@@ -289,10 +263,12 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper, GrpcErrorHandlerMixi
         """
         async with self.handle_grpc_errors("UpdateFile", FilesystemServiceError):
             request = filesystem_pb2.UpdateFileRequest(
-                context=filesystem_pb2.CONTEXT_MISSIONS,
+                # TODO(validate): remove after prod validation
+                # [VALIDATE FSCTX] update/delete now honour the caller's context instead of forcing MISSIONS
+                context=self._context_enum(context),
                 file_id=file_id,
                 content=content,
-                file_type=self._file_type_to_enum(file_type) if file_type else None,
+                file_type=type.value if type else None,
                 content_type=content_type,
                 new_name=new_name,
                 status=self._file_status_to_enum(status) if status else None,
@@ -325,7 +301,9 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper, GrpcErrorHandlerMixi
         logger.debug("debug:delete_files permanent=%s force=%s", permanent, force)
         async with self.handle_grpc_errors("DeleteFiles", FilesystemServiceError):
             request = filesystem_pb2.DeleteFilesRequest(
-                context=filesystem_pb2.CONTEXT_MISSIONS,
+                # TODO(validate): remove after prod validation
+                # [VALIDATE FSCTX] update/delete now honour the caller's context instead of forcing MISSIONS
+                context=self._context_enum(filters.context),
                 filters=self._filter_to_proto(filters),
                 permanent=permanent,
                 force=force,

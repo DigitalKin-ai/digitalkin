@@ -15,6 +15,7 @@ from google.protobuf.json_format import MessageToDict
 from pydantic import ValidationError
 
 from digitalkin.logger import logger
+from digitalkin.models.services.filesystem import FileType
 from digitalkin.services.filesystem.filesystem_strategy import (
     FileFilter,
     FilesystemRecord,
@@ -40,7 +41,7 @@ class MockFilesystemServicer(filesystem_service_pb2_grpc.FilesystemServiceServic
         Returns:
             File: The proto message
         """
-        file_type = getattr(filesystem_pb2.FileType, model["file_type"], filesystem_pb2.FileType.FILE_TYPE_UNSPECIFIED)
+        file_type = filesystem_pb2.FileType.Value(FileType(model["type"]).value)
         status = getattr(filesystem_pb2.FileStatus, model["status"], filesystem_pb2.FileStatus.FILE_STATUS_UNSPECIFIED)
 
         metadata = struct_pb2.Struct()
@@ -132,7 +133,7 @@ class MockFilesystemServicer(filesystem_service_pb2_grpc.FilesystemServiceServic
                         id=file_id,
                         context=context,
                         name=name,
-                        file_type=filesystem_pb2.FileType.Name(file_data.file_type),
+                        type=FileType(filesystem_pb2.FileType.Name(file_data.file_type)),
                         content_type=file_data.content_type or "application/octet-stream",
                         size_bytes=len(file_data.content),
                         checksum=secrets.token_hex(32),  # Mock checksum
@@ -279,11 +280,8 @@ class MockFilesystemServicer(filesystem_service_pb2_grpc.FilesystemServiceServic
             return False
         if filters.file_ids and file_data.id not in filters.file_ids:
             return False
-        # Handle both prefixed (FILE_TYPE_X) and non-prefixed (X) file types
-        if filters.file_types:
-            prefixed_types = [f"FILE_TYPE_{ft}" if not ft.startswith("FILE_TYPE_") else ft for ft in filters.file_types]
-            if file_data.file_type not in filters.file_types and file_data.file_type not in prefixed_types:
-                return False
+        if filters.file_types and file_data.type not in filters.file_types:
+            return False
         # Handle both prefixed (FILE_STATUS_X) and non-prefixed (X) status
         if filters.status:
             prefixed_status = f"FILE_STATUS_{filters.status}" if not filters.status.startswith("FILE_STATUS_") else filters.status
@@ -336,7 +334,7 @@ class MockFilesystemServicer(filesystem_service_pb2_grpc.FilesystemServiceServic
                 file_data.size_bytes = len(request.content)
                 file_data.checksum = secrets.token_hex(32)  # Mock checksum
             if request.file_type:
-                file_data.file_type = filesystem_pb2.FileType.Name(request.file_type)
+                file_data.type = FileType(filesystem_pb2.FileType.Name(request.file_type))
             if request.content_type:
                 file_data.content_type = request.content_type
             if request.metadata:

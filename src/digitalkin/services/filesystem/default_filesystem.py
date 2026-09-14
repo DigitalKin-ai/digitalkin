@@ -4,11 +4,12 @@ import hashlib
 import os
 import tempfile
 import uuid
-from typing import Any, Literal
+from typing import Any
 
 from anyio import Path as AsyncPath
 
 from digitalkin.logger import logger
+from digitalkin.models.services.filesystem import FileType
 from digitalkin.models.services.services import Context
 from digitalkin.models.services.storage import Visibility
 from digitalkin.services.filesystem.exceptions import FilesystemServiceError
@@ -85,7 +86,7 @@ class DefaultFilesystem(FilesystemStrategy):
             for f in self.db.values()
             if (not filters.names or f.name in filters.names)
             and (not filters.file_ids or f.id in filters.file_ids)
-            and (not filters.file_types or f.file_type in filters.file_types)
+            and (not filters.file_types or f.type in filters.file_types)
             and (not filters.status or f.status == filters.status)
             and (not filters.content_type_prefix or f.content_type.startswith(filters.content_type_prefix))
             and (not filters.min_size_bytes or f.size_bytes >= filters.min_size_bytes)
@@ -120,7 +121,8 @@ class DefaultFilesystem(FilesystemStrategy):
 
         for file in files:
             try:  # noqa: PLW0717
-                context_dir = self._get_context_temp_dir(self.setup_id)
+                metadata = self._validate_metadata(file)
+                context_dir = self._get_context_temp_dir(self.mission_id)
                 file_path = os.path.join(context_dir, file.name)
                 if await AsyncPath(file_path).exists() and not file.replace_if_exists:
                     msg = f"File with name {file.name} already exists."
@@ -131,13 +133,15 @@ class DefaultFilesystem(FilesystemStrategy):
                 storage_uri = str(await AsyncPath(file_path).resolve())
                 file_data = FilesystemRecord(
                     id=str(uuid.uuid4()),
-                    context=self.setup_id,
+                    # TODO(validate): remove after prod validation
+                    # [VALIDATE FSCTX] local uploads now stamp the mission context, like the gRPC path
+                    context=self.mission_id,
                     name=file.name,
-                    file_type=file.file_type,
+                    type=file.type,
                     content_type=file.content_type or "application/octet-stream",
                     size_bytes=len(file.content),
                     checksum=self._calculate_checksum(file.content),
-                    metadata=file.metadata,
+                    metadata=metadata,
                     storage_uri=storage_uri,
                     file_url=storage_uri,
                     status="ACTIVE",
@@ -258,22 +262,13 @@ class DefaultFilesystem(FilesystemStrategy):
         self,
         file_id: str,
         content: bytes | None = None,
-        file_type: Literal[
-            "UNSPECIFIED",
-            "DOCUMENT",
-            "IMAGE",
-            "VIDEO",
-            "AUDIO",
-            "ARCHIVE",
-            "CODE",
-            "OTHER",
-        ]
-        | None = None,
+        type: FileType | None = None,  # Matches the canonical field name # noqa: A002
         content_type: str | None = None,
         metadata: dict[str, Any] | None = None,
         new_name: str | None = None,
         status: str | None = None,
         visibility: Visibility = Visibility.UNSPECIFIED,
+        context: Context = Context.MISSIONS,  # API interface parameter, the local db is single-context # noqa: ARG002
     ) -> FilesystemRecord:
         """Update file metadata, content, or both.
 
@@ -286,12 +281,13 @@ class DefaultFilesystem(FilesystemStrategy):
         Args:
             file_id: The id of the file to be updated
             content: Optional new content of the file
-            file_type: Optional new type of data
+            type: Optional new type of data
             content_type: Optional new MIME type
             metadata: Optional new metadata (will merge with existing)
             new_name: Optional new name for the file
             status: Optional new status for the file
             visibility: Optional new read-access scope; UNSPECIFIED leaves it unchanged
+            context: The owner context of the file
 
         Returns:
             FilesystemRecord: Metadata about the updated file
@@ -306,7 +302,7 @@ class DefaultFilesystem(FilesystemStrategy):
             raise FilesystemServiceError(msg)
 
         try:  # noqa: PLW0717
-            context_dir = self._get_context_temp_dir(self.setup_id)
+            context_dir = self._get_context_temp_dir(self.mission_id)
             file_path = os.path.join(context_dir, file_id)
             existing_file = self.db[file_id]
 
@@ -315,8 +311,8 @@ class DefaultFilesystem(FilesystemStrategy):
                 existing_file.size_bytes = len(content)
                 existing_file.checksum = self._calculate_checksum(content)
 
-            if file_type is not None:
-                existing_file.file_type = file_type
+            if type is not None:
+                existing_file.type = type
 
             if content_type is not None:
                 existing_file.content_type = content_type
@@ -335,6 +331,9 @@ class DefaultFilesystem(FilesystemStrategy):
                 await AsyncPath(file_path).rename(new_path)
                 existing_file.name = new_name
                 existing_file.storage_uri = str(await AsyncPath(new_path).resolve())
+                # TODO(validate): remove after prod validation
+                # [VALIDATE FSURL] file_url used to keep pointing at the pre-rename path
+                existing_file.file_url = existing_file.storage_uri
 
             self.db[file_id] = existing_file
 

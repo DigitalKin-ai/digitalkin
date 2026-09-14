@@ -2,28 +2,24 @@
 
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
+from digitalkin.models.services.filesystem import FileMetadata, FileType, FileUploadMetadata
 from digitalkin.models.services.services import Context
 from digitalkin.models.services.storage import Visibility
 from digitalkin.services.base_strategy import BaseStrategy
+from digitalkin.services.filesystem.exceptions import FilesystemServiceError
 
 
-class FilesystemRecord(BaseModel):
-    """Data model for filesystem operations."""
+class FilesystemRecord(FileMetadata):
+    """A stored file: the canonical `FileMetadata` plus the service-only fields."""
 
-    id: str = Field(description="Unique identifier for the file (UUID)")
     context: str = Field(description="The context of the file in the filesystem")
-    name: str = Field(description="The name of the file")
-    file_type: str = Field(default="UNSPECIFIED", description="The type of data stored")
-    content_type: str = Field(default="application/octet-stream", description="The MIME type of the file")
-    size_bytes: int = Field(default=0, description="Size of the file in bytes")
     checksum: str = Field(default="", description="SHA-256 checksum of the file content")
     metadata: dict[str, Any] | None = Field(default=None, description="Additional metadata for the file")
-    storage_uri: str = Field(description="Internal URI for accessing the file content")
-    file_url: str = Field(description="Public URL for accessing the file content")
+    storage_uri: str = Field(default="", description="Internal URI for accessing the file content")
     status: str = Field(default="UNSPECIFIED", description="Current status of the file")
     content: bytes | None = Field(default=None, description="The content of the file")
     visibility: Visibility = Field(default=Visibility.UNSPECIFIED, description="Read-access scope of the file")
@@ -38,21 +34,7 @@ class FileFilter(BaseModel):
     )
     names: list[str] | None = Field(default=None, description="Filter by file names (exact matches)")
     file_ids: list[str] | None = Field(default=None, description="Filter by file IDs")
-    file_types: (
-        list[
-            Literal[
-                "UNSPECIFIED",
-                "DOCUMENT",
-                "IMAGE",
-                "AUDIO",
-                "VIDEO",
-                "ARCHIVE",
-                "CODE",
-                "OTHER",
-            ]
-        ]
-        | None
-    ) = Field(default=None, description="Filter by file types")
+    file_types: list[FileType] | None = Field(default=None, description="Filter by file types")
     created_after: datetime | None = Field(default=None, description="Filter files created after this timestamp")
     created_before: datetime | None = Field(default=None, description="Filter files created before this timestamp")
     updated_after: datetime | None = Field(default=None, description="Filter files updated after this timestamp")
@@ -73,22 +55,23 @@ class UploadFileData(BaseModel):
 
     content: bytes = Field(description="The content of the file")
     name: str = Field(description="The name of the file")
-    file_type: Literal[
-        "UNSPECIFIED",
-        "DOCUMENT",
-        "IMAGE",
-        "AUDIO",
-        "VIDEO",
-        "ARCHIVE",
-        "CODE",
-        "OTHER",
-    ] = Field(description="The type of the file")
+    type: FileType = Field(description="The type of the file")
     content_type: str | None = Field(default=None, description="The content type of the file")
-    metadata: dict[str, Any] | None = Field(default=None, description="The metadata of the file")
+    metadata: dict[str, Any] | BaseModel | None = Field(default=None, description="The metadata of the file")
     replace_if_exists: bool = Field(default=False, description="Whether to replace the file if it already exists")
     visibility: Visibility = Field(
         default=Visibility.UNSPECIFIED, description="Read-access scope; UNSPECIFIED lets the service default it"
     )
+
+    @field_validator("metadata", mode="before")
+    @classmethod
+    def _accept_model(cls, value: object) -> object:
+        """Accept either a pydantic model or a plain mapping.
+
+        Returns:
+            The value as a mapping.
+        """
+        return value.model_dump() if isinstance(value, BaseModel) else value
 
 
 class FilesystemStrategy(BaseStrategy, ABC):
@@ -116,6 +99,31 @@ class FilesystemStrategy(BaseStrategy, ABC):
         """
         super().__init__(mission_id, setup_id, setup_version_id)
         self.config = config
+
+    def _validate_metadata(self, file: "UploadFileData") -> dict[str, Any]:
+        """Validate an upload's metadata against the registered schema.
+
+        The model is registered per module as
+        ``services_config_params["filesystem"]["config"]["metadata_model"]``,
+        mirroring how storage collections register theirs; ``FileUploadMetadata``
+        applies when none is.
+
+        Args:
+            file: The upload whose metadata to validate.
+
+        Returns:
+            The validated metadata as a plain dict, ready for the wire. Only keys the
+            caller actually set are kept, so validating adds nothing to the payload.
+
+        Raises:
+            FilesystemServiceError: If the metadata does not match the schema.
+        """
+        model_cls = (self.config or {}).get("metadata_model") or FileUploadMetadata
+        try:
+            return model_cls.model_validate(file.metadata or {}).model_dump(mode="json", exclude_unset=True)
+        except Exception as e:
+            msg = f"Invalid metadata for file '{file.name}': {e!s}"
+            raise FilesystemServiceError(msg) from e
 
     @abstractmethod
     async def upload_files(
@@ -195,22 +203,13 @@ class FilesystemStrategy(BaseStrategy, ABC):
         self,
         file_id: str,
         content: bytes | None = None,
-        file_type: Literal[
-            "UNSPECIFIED",
-            "DOCUMENT",
-            "IMAGE",
-            "VIDEO",
-            "AUDIO",
-            "ARCHIVE",
-            "CODE",
-            "OTHER",
-        ]
-        | None = None,
+        type: FileType | None = None,  # Matches the canonical field name # noqa: A002
         content_type: str | None = None,
         metadata: dict[str, Any] | None = None,
         new_name: str | None = None,
         status: str | None = None,
         visibility: Visibility = Visibility.UNSPECIFIED,
+        context: Context = Context.MISSIONS,
     ) -> FilesystemRecord:
         """Update file metadata, content, or both.
 
@@ -223,12 +222,13 @@ class FilesystemStrategy(BaseStrategy, ABC):
         Args:
             file_id: The ID of the file to be updated
             content: Optional new content of the file
-            file_type: Optional new type of data
+            type: Optional new type of data
             content_type: Optional new MIME type
             metadata: Optional new metadata (will merge with existing)
             new_name: Optional new name for the file
             status: Optional new status for the file
             visibility: Optional new read-access scope; UNSPECIFIED leaves it unchanged
+            context: The owner context of the file
 
         Returns:
             FilesystemRecord: Metadata about the updated file
