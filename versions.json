@@ -7,11 +7,6 @@
     ]
   },
   {
-    "version": "feat-normalization",
-    "title": "feat-normalization",
-    "aliases": []
-  },
-  {
     "version": "dev",
     "title": "dev",
     "aliases": [
