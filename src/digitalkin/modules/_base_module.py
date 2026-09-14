@@ -34,7 +34,7 @@ from digitalkin.utils.schema_splitter import SchemaSplitter
 _EndOfStreamDataModel: type[DataModel] = DataModel[EndOfStreamOutput]
 
 
-class BaseModule(  # Module SDK base class requires many public methods # noqa: PLR0904
+class BaseModule(  # Module SDK base class requires many public methods # ruff: ignore[too-many-public-methods]
     ABC,
     Generic[
         InputModelT,
@@ -155,7 +155,7 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
                 "setup_version_id": setup_version_id,
                 "job_id": job_id,
             },
-            borrowed=self.services_config._stateless_strategies,  # noqa: SLF001
+            borrowed=self.services_config._stateless_strategies,  # ruff: ignore[private-member-access]
             callbacks={"logger": logger},
             request_metadata=request_metadata,
             shared=self._shared,
@@ -537,9 +537,9 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
         """Run the module."""
         ...
 
-    async def run_config_setup(  # Default implementation; subclasses may use self # noqa: PLR6301
+    async def run_config_setup(  # Default implementation; subclasses may use self # ruff: ignore[no-self-use]
         self,
-        context: ModuleContext,  # Available for subclass overrides # noqa: ARG002
+        context: ModuleContext,  # Available for subclass overrides # ruff: ignore[unused-method-argument]
         config_setup_data: SetupModelT,
     ) -> SetupModelT:
         """Run config setup the module.
@@ -722,12 +722,12 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
         t0 = time.perf_counter_ns()
         if self._status in {ModuleStatus.STOPPED, ModuleStatus.FAILED}:
             return
-        try:  # noqa: PLW0717
+        try:  # ruff: ignore[too-many-statements-in-try-clause]
             self._status = ModuleStatus.STOPPING
             await self.cleanup()
             t1 = time.perf_counter_ns()
             cleanup_ms = (t1 - t0) / 1e6
-            if cleanup_ms > 1000:  # noqa: PLR2004 — one-off log threshold, not a tunable
+            if cleanup_ms > 1000:  # ruff: ignore[magic-value-comparison] — one-off log threshold, not a tunable
                 # A blocking cleanup hook freezes the loop and the damage lands elsewhere — in-flight
                 # gateway streams fail with a bogus REDIS_UNAVAILABLE. Name the culprit here.
                 logger.warning(
@@ -805,7 +805,7 @@ class BaseModule(  # Module SDK base class requires many public methods # noqa: 
             config_setup_data: Initial setup data to configure.
             callback: Callback to send the configured setup model.
         """
-        try:  # noqa: PLW0717
+        try:  # ruff: ignore[too-many-statements-in-try-clause]
             logger.debug("Run Config Setup lifecycle", extra=self.context.session.current_ids())
             self._status = ModuleStatus.RUNNING
             self.context.callbacks.set_config_setup = callback

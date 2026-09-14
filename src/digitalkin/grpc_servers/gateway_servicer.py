@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any
 import grpc
 from agentic_mesh_protocol.gateway.v1 import gateway_pb2
 from google.protobuf import struct_pb2
-from grpc._cython.cygrpc import UsageError as _GrpcUsageError  # noqa: PLC2701
+from grpc._cython.cygrpc import UsageError as _GrpcUsageError  # ruff: ignore[import-private-name]
 from redis.exceptions import RedisError
 
 from digitalkin.core.exceptions import RedisUnreachableError
@@ -158,7 +158,7 @@ class GatewayServicer:
         await self._m2m.stop()
         await self._registry.shutdown()
 
-    async def AssociateTask(self, request: Any, context: grpc.aio.ServicerContext) -> Any:  # noqa: ARG002, PLR6301
+    async def AssociateTask(self, request: Any, context: grpc.aio.ServicerContext) -> Any:  # ruff: ignore[unused-method-argument, no-self-use]
         """Not served by the SDK — the backend mints sub-tasks.
 
         Present only so the generated ``add_GatewayServiceServicer_to_server`` finds all
@@ -166,7 +166,7 @@ class GatewayServicer:
         """
         await context.abort(grpc.StatusCode.UNIMPLEMENTED, "AssociateTask is served by the backend")
 
-    async def StartStream(  # noqa: PLR0911
+    async def StartStream(  # ruff: ignore[too-many-return-statements]
         self,
         request: Any,
         context: grpc.aio.ServicerContext,
@@ -341,10 +341,10 @@ class GatewayServicer:
                 extra=log_extra,
             )
 
-    async def Stream(  # noqa: C901, PLR0911, PLR0912
+    async def Stream(  # ruff: ignore[complex-structure, too-many-return-statements, too-many-branches]
         self,
         request_iterator: AsyncIterator[Any],
-        context: grpc.aio.ServicerContext,  # noqa: ARG002
+        context: grpc.aio.ServicerContext,  # ruff: ignore[unused-method-argument]
     ) -> AsyncGenerator[Any, None]:
         """BiDi: receive StreamServer from client, yield StreamClient back.
 
@@ -464,7 +464,7 @@ class GatewayServicer:
         input_key = f"task:{task_id}:input"
         try:
             async for msg in request_iterator:
-                if session._stop_event.is_set():  # noqa: SLF001
+                if session._stop_event.is_set():  # ruff: ignore[private-member-access]
                     break
                 if msg.data and len(msg.data.fields) > 0:
                     await self._redis_client.xadd(
@@ -479,7 +479,7 @@ class GatewayServicer:
     async def SendSignal(
         self,
         request: Any,
-        context: grpc.aio.ServicerContext,  # noqa: ARG002
+        context: grpc.aio.ServicerContext,  # ruff: ignore[unused-method-argument]
     ) -> Any:
         """Forward control signal via Redis pub/sub or dispatch cache invalidation.
 
@@ -496,7 +496,7 @@ class GatewayServicer:
         last_mark = "init"
         log_extra = {"task_id": task_id, "action": action_name}
 
-        try:  # noqa: PLW0717
+        try:  # ruff: ignore[too-many-statements-in-try-clause]
             if action_name.startswith("INVALIDATE_"):
                 setup_id_for_invalidate = task_id
                 if self._cache_handler is not None:
@@ -633,12 +633,12 @@ class GatewayServicer:
                     task_id,
                 )
                 first = False
-            seq = reader._last_seq + 1 if resume else seq + 1  # noqa: SLF001
+            seq = reader._last_seq + 1 if resume else seq + 1  # ruff: ignore[private-member-access]
             yield gateway_pb2.StreamClient(from_seq=seq, task_id=task_id, data=struct_data)
 
         # Reader EOS — emit an explicit stream.end so every stream ends uniformly.
         t_after_reader = time.perf_counter_ns()
-        seq = reader._last_seq + 2 if resume else seq + 1  # noqa: SLF001
+        seq = reader._last_seq + 2 if resume else seq + 1  # ruff: ignore[private-member-access]
         yield self._sentinel(seq, task_id, "stream.end")
         t_after_yield = time.perf_counter_ns()
         logger.info(
@@ -709,7 +709,7 @@ class GatewayServicer:
                 return
             yield resp
 
-    async def _dial_consumer(  # noqa: C901
+    async def _dial_consumer(  # ruff: ignore[complex-structure]
         self,
         task_id: str,
         mission_id: str,
@@ -765,7 +765,7 @@ class GatewayServicer:
                 if not module_spawned:
                     break
                 session = self._registry.get(task_id)
-                if session is None or session._stop_event.is_set():  # noqa: SLF001
+                if session is None or session._stop_event.is_set():  # ruff: ignore[private-member-access]
                     break
                 try:
                     stream_len = await self._redis_client.xlen(f"task:{task_id}:stream")
@@ -779,7 +779,7 @@ class GatewayServicer:
                 if now >= deadline:
                     break
                 attempt += 1
-                delay = min(random.uniform(reconnect.backoff_base_s, reconnect.backoff_max_s), deadline - now)  # noqa: S311
+                delay = min(random.uniform(reconnect.backoff_base_s, reconnect.backoff_max_s), deadline - now)  # ruff: ignore[suspicious-non-cryptographic-random-usage]
                 await asyncio.sleep(max(0.0, delay))
                 resume = True
         finally:
@@ -791,7 +791,7 @@ class GatewayServicer:
             except Exception:
                 logger.exception("end-of-stream unregister failed", extra=log_extra)
 
-    async def _run_dial_attempt(  # noqa: C901, PLR0912, PLR0914, PLR0915
+    async def _run_dial_attempt(  # ruff: ignore[complex-structure, too-many-branches, too-many-locals, too-many-statements]
         self,
         *,
         task_id: str,
@@ -896,10 +896,10 @@ class GatewayServicer:
         logger.info(
             "[dial-debug] channel_ready dt_init=%.3fms ch_state=%s channel_id=%s ref_count=%d cache_keys=%d",
             (t_stub - t_dial0) / 1e6,
-            _ch_state(comm._channel),  # noqa: SLF001
-            id(comm._channel),  # noqa: SLF001
-            GrpcClientWrapper._ref_counts.get(comm._channel_cache_key or "", 0),  # noqa: SLF001
-            len(GrpcClientWrapper._channel_cache),  # noqa: SLF001
+            _ch_state(comm._channel),  # ruff: ignore[private-member-access]
+            id(comm._channel),  # ruff: ignore[private-member-access]
+            GrpcClientWrapper._ref_counts.get(comm._channel_cache_key or "", 0),  # ruff: ignore[private-member-access]
+            len(GrpcClientWrapper._channel_cache),  # ruff: ignore[private-member-access]
             extra=log_extra,
         )
 
@@ -1001,10 +1001,10 @@ class GatewayServicer:
         logger.info(
             "[dial-debug] pre_stream dt_since_ready=%.3fms ch_state=%s",
             (t_pre_stream - t_stub) / 1e6,
-            _ch_state(comm._channel),  # noqa: SLF001
+            _ch_state(comm._channel),  # ruff: ignore[private-member-access]
             extra=log_extra,
         )
-        try:  # noqa: PLW0717
+        try:  # ruff: ignore[too-many-statements-in-try-clause]
             logger.info(
                 "→ Opening BiDi to consumer %s (sending %s)",
                 address,
@@ -1122,7 +1122,7 @@ class GatewayServicer:
                 "[dial-debug] UsageError raised dt_total=%.3fms dt_pre_to_call=%.3fms ch_state=%s addr=%s",
                 (t_fail - t_dial0) / 1e6,
                 (t_fail - t_pre_stream) / 1e6,
-                _ch_state(comm._channel),  # noqa: SLF001
+                _ch_state(comm._channel),  # ruff: ignore[private-member-access]
                 address,
                 extra=log_extra,
             )

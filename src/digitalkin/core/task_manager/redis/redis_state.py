@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from digitalkin.core.task_manager.redis.redis_client import RedisClient  # noqa: TC001
+from digitalkin.core.task_manager.redis.redis_client import RedisClient  # ruff: ignore[typing-only-first-party-import]
 from digitalkin.logger import logger
 from digitalkin.models.settings.redis import get_redis_settings
 

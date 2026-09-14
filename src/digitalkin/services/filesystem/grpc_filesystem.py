@@ -234,7 +234,7 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper, GrpcErrorHandlerMixi
         self,
         file_id: str,
         content: bytes | None = None,
-        type: FileType | None = None,  # Matches the canonical field name # noqa: A002
+        type: FileType | None = None,  # Matches the canonical field name # ruff: ignore[builtin-argument-shadowing]
         content_type: str | None = None,
         metadata: dict[str, Any] | None = None,
         new_name: str | None = None,

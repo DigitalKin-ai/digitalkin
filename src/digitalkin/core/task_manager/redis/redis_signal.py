@@ -10,7 +10,7 @@ import uuid
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from digitalkin.core.resilience.task_supervisor import log_unhandled
-from digitalkin.core.task_manager.redis.redis_client import RedisClient  # noqa: TC001
+from digitalkin.core.task_manager.redis.redis_client import RedisClient  # ruff: ignore[typing-only-first-party-import]
 from digitalkin.logger import logger
 from digitalkin.models.settings.redis import get_redis_settings
 
@@ -41,7 +41,7 @@ class SharedRedisListener:
         if key not in cls._instances:
             cls._instances[key] = cls(redis_client)
         inst = cls._instances[key]
-        inst._refcount += 1  # noqa: SLF001
+        inst._refcount += 1  # ruff: ignore[private-member-access]
         return inst
 
     @classmethod
@@ -50,8 +50,8 @@ class SharedRedisListener:
         inst = cls._instances.get(key)
         if inst is None:
             return
-        inst._refcount -= 1  # noqa: SLF001
-        if inst._refcount <= 0:  # noqa: SLF001
+        inst._refcount -= 1  # ruff: ignore[private-member-access]
+        if inst._refcount <= 0:  # ruff: ignore[private-member-access]
             cls._instances.pop(key, None)
             await inst.close()
 
@@ -244,7 +244,7 @@ class SharedRedisListener:
         """Drain PubSub messages; exponential-backoff retry on transient Redis errors."""
         backoff = 0.1
         while not self._stop_event.is_set():
-            try:  # noqa: PLW0717
+            try:  # ruff: ignore[too-many-statements-in-try-clause]
                 if self._pubsub is None:
                     self._pubsub = self._redis_client.pubsub()
                     psub_t0 = time.perf_counter_ns()
@@ -282,7 +282,7 @@ class SharedRedisListener:
                 backoff = min(backoff * 2, 10.0)
 
             now = time.monotonic()
-            if now - self._last_counters_log >= 60.0:  # noqa: PLR2004
+            if now - self._last_counters_log >= 60.0:  # ruff: ignore[magic-value-comparison]
                 c = self._counters
                 logger.debug(
                     "[perf] signal_counters: origin=%s received=%d deduped=%d evicted=%d "

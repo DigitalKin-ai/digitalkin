@@ -629,3 +629,60 @@ class TestVisibility:
 
         updated = await filesystem.update_file(records[0].id, status="ARCHIVED")
         assert updated.visibility is Visibility.INTERNAL
+
+
+class TestUpdateReachesTheStoredBytes:
+    """`update_file` must act on the file the record points at.
+
+    Uploads store under the file *name*; rebuilding the path from the *id* wrote
+    content to an orphan and left reads serving the pre-update bytes. The existing
+    update test passed only because it supplied `content` and `new_name` together —
+    the content write created the id-named file the rename then moved.
+    """
+
+    @pytest.mark.asyncio
+    async def test_content_update_is_read_back(self, filesystem: DefaultFilesystem) -> None:
+        """A content update must be what the next read returns."""
+        records, _uploaded, _failed = await filesystem.upload_files([
+            UploadFileData(content=b"ORIGINAL", name="a.txt", type=FileType.DOCUMENT, content_type="text/plain")
+        ])
+        await filesystem.update_file(records[0].id, content=b"UPDATED")
+
+        assert (await filesystem.get_file(records[0].id, include_content=True)).content == b"UPDATED"
+
+    @pytest.mark.asyncio
+    async def test_content_update_leaves_no_orphan(self, filesystem: DefaultFilesystem) -> None:
+        """The updated bytes replace the stored file rather than landing beside it."""
+        records, _uploaded, _failed = await filesystem.upload_files([
+            UploadFileData(content=b"ORIGINAL", name="a.txt", type=FileType.DOCUMENT, content_type="text/plain")
+        ])
+        await filesystem.update_file(records[0].id, content=b"UPDATED")
+
+        stored = Path(records[0].storage_uri).parent
+        assert sorted(p.name for p in stored.iterdir()) == ["a.txt"]
+
+    @pytest.mark.asyncio
+    async def test_rename_without_content_succeeds(self, filesystem: DefaultFilesystem) -> None:
+        """Renaming on its own used to raise FileNotFoundError."""
+        records, _uploaded, _failed = await filesystem.upload_files([
+            UploadFileData(content=b"ORIGINAL", name="a.txt", type=FileType.DOCUMENT, content_type="text/plain")
+        ])
+        updated = await filesystem.update_file(records[0].id, new_name="b.txt")
+
+        assert updated.name == "b.txt"
+        assert Path(updated.storage_uri).exists()
+        assert (await filesystem.get_file(records[0].id, include_content=True)).content == b"ORIGINAL"
+
+    @pytest.mark.asyncio
+    async def test_record_context_matches_where_the_bytes_live(self, filesystem: DefaultFilesystem) -> None:
+        """The stamped context and the on-disk location must agree.
+
+        They diverged while the record said `mission` and the store keyed on the setup id.
+        """
+        records, _uploaded, _failed = await filesystem.upload_files([
+            UploadFileData(content=b"x", name="a.txt", type=FileType.DOCUMENT, content_type="text/plain")
+        ])
+        record = records[0]
+
+        assert Path(record.storage_uri).parent.name == record.context.replace(":", "_")
+        assert Path(record.storage_uri).exists()

@@ -120,14 +120,14 @@ class DefaultFilesystem(FilesystemStrategy):
         total_failed = 0
 
         for file in files:
-            try:  # noqa: PLW0717
+            try:  # ruff: ignore[too-many-statements-in-try-clause]
                 metadata = self._validate_metadata(file)
                 context_dir = self._get_context_temp_dir(self.mission_id)
                 file_path = os.path.join(context_dir, file.name)
                 if await AsyncPath(file_path).exists() and not file.replace_if_exists:
                     msg = f"File with name {file.name} already exists."
                     logger.error(msg)
-                    raise FilesystemServiceError(msg)  # Intentional: wrap in domain exception for caller # noqa: TRY301
+                    raise FilesystemServiceError(msg)  # Intentional: wrap in domain exception for caller # ruff: ignore[raise-within-try]
 
                 await AsyncPath(file_path).write_bytes(file.content)
                 storage_uri = str(await AsyncPath(file_path).resolve())
@@ -152,7 +152,7 @@ class DefaultFilesystem(FilesystemStrategy):
                 uploaded_files.append(file_data)
                 total_uploaded += 1
                 logger.debug("Uploaded file %s", file_data)
-            except Exception as e:  # Exception in loop: per-file error isolation in batch upload # noqa: PERF203
+            except Exception as e:  # Exception in loop: per-file error isolation in batch upload # ruff: ignore[try-except-in-loop]
                 logger.exception("Error uploading file %s: %s", file.name, e)
                 total_failed += 1
                 if len(files) == 1:
@@ -166,7 +166,7 @@ class DefaultFilesystem(FilesystemStrategy):
         *,
         list_size: int = 100,
         offset: int = 0,
-        order: str | None = None,  # API interface parameter, not implemented in local filesystem # noqa: ARG002
+        order: str | None = None,  # API interface parameter, not implemented in local filesystem # ruff: ignore[unused-method-argument]
         include_content: bool = False,
     ) -> tuple[list[FilesystemRecord], int]:
         """List files with filtering, sorting, and pagination.
@@ -190,7 +190,7 @@ class DefaultFilesystem(FilesystemStrategy):
         Raises:
             FilesystemServiceError: If there is an error listing the files
         """
-        try:  # noqa: PLW0717
+        try:  # ruff: ignore[too-many-statements-in-try-clause]
             logger.debug("Listing files with filters: %s", filters)
             filtered_files = self._filter_db(filters)
             if not filtered_files:
@@ -214,7 +214,7 @@ class DefaultFilesystem(FilesystemStrategy):
     async def get_file(
         self,
         file_id: str,
-        context: Context = Context.MISSIONS,  # noqa: ARG002
+        context: Context = Context.MISSIONS,  # ruff: ignore[unused-method-argument]
         *,
         include_content: bool = False,
     ) -> FilesystemRecord:
@@ -235,7 +235,7 @@ class DefaultFilesystem(FilesystemStrategy):
         Raises:
             FilesystemServiceError: If there is an error retrieving the file
         """
-        try:  # noqa: PLW0717
+        try:  # ruff: ignore[too-many-statements-in-try-clause]
             logger.debug("Getting file with id: %s", file_id)
             file_data: FilesystemRecord | None = None
             if file_id:
@@ -244,7 +244,7 @@ class DefaultFilesystem(FilesystemStrategy):
             if not file_data:
                 msg = f"File not found with id {file_id}"
                 logger.error(msg)
-                raise FilesystemServiceError(msg)  # Intentional: wrap in domain exception for caller # noqa: TRY301
+                raise FilesystemServiceError(msg)  # Intentional: wrap in domain exception for caller # ruff: ignore[raise-within-try]
 
             if include_content:
                 file_path = file_data.storage_uri
@@ -258,17 +258,17 @@ class DefaultFilesystem(FilesystemStrategy):
         else:
             return file_data
 
-    async def update_file(  # Complex: one independent branch per optional field # noqa: C901
+    async def update_file(  # Complex: one independent branch per optional field # ruff: ignore[complex-structure]
         self,
         file_id: str,
         content: bytes | None = None,
-        type: FileType | None = None,  # Matches the canonical field name # noqa: A002
+        type: FileType | None = None,  # Matches the canonical field name # ruff: ignore[builtin-argument-shadowing]
         content_type: str | None = None,
         metadata: dict[str, Any] | None = None,
         new_name: str | None = None,
         status: str | None = None,
         visibility: Visibility = Visibility.UNSPECIFIED,
-        context: Context = Context.MISSIONS,  # API interface parameter, the local db is single-context # noqa: ARG002
+        context: Context = Context.MISSIONS,  # API interface parameter, the local db is single-context # ruff: ignore[unused-method-argument]
     ) -> FilesystemRecord:
         """Update file metadata, content, or both.
 
@@ -301,10 +301,13 @@ class DefaultFilesystem(FilesystemStrategy):
             logger.error(msg)
             raise FilesystemServiceError(msg)
 
-        try:  # noqa: PLW0717
+        try:  # ruff: ignore[too-many-statements-in-try-clause]
             context_dir = self._get_context_temp_dir(self.mission_id)
-            file_path = os.path.join(context_dir, file_id)
             existing_file = self.db[file_id]
+            # TODO(validate): remove after prod validation
+            # [VALIDATE FSPATH] uploads store under the file name, so a path rebuilt from the
+            # id missed the bytes: content updates landed in an orphan and reads stayed stale.
+            file_path = existing_file.storage_uri or os.path.join(context_dir, existing_file.name)
 
             if content is not None:
                 await AsyncPath(file_path).write_bytes(content)
@@ -349,7 +352,7 @@ class DefaultFilesystem(FilesystemStrategy):
         filters: FileFilter,
         *,
         permanent: bool = False,
-        force: bool = False,  # API interface parameter, not used in local filesystem # noqa: ARG002
+        force: bool = False,  # API interface parameter, not used in local filesystem # ruff: ignore[unused-method-argument]
     ) -> tuple[dict[str, bool], int, int]:
         """Delete multiple files.
 
@@ -375,7 +378,7 @@ class DefaultFilesystem(FilesystemStrategy):
         total_deleted = 0
         total_failed = 0
 
-        try:  # noqa: PLW0717
+        try:  # ruff: ignore[too-many-statements-in-try-clause]
             files_to_delete = [f.id for f in self._filter_db(filters)]
 
             if not files_to_delete:
@@ -389,7 +392,7 @@ class DefaultFilesystem(FilesystemStrategy):
                     total_failed += 1
                     continue
 
-                try:  # noqa: PLW0717
+                try:  # ruff: ignore[too-many-statements-in-try-clause]
                     file_path = file_data.storage_uri
                     if await AsyncPath(file_path).exists():
                         if permanent:

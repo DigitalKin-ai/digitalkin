@@ -17,6 +17,7 @@ from digitalkin.services.setup.setup_strategy import (
     SetupVersionData,
     SetupVersionPage,
 )
+from digitalkin.utils.json_structure import JsonStructure
 from digitalkin.utils.setup_content_validator import SetupContentValidator
 
 
@@ -66,21 +67,70 @@ class DefaultSetup(SetupStrategy):
         """Retrieve a setup by its unique identifier.
 
         Args:
-            setup_dict: Dictionary with 'setup_id' and optional 'version'.
+            setup_dict: Dictionary with 'setup_id', optional 'version' and optional
+                'structure_key'.
 
         Returns:
-            The setup with its current version populated.
+            The setup shaped as ``GetSetupResponse`` would carry it — see
+            :meth:`_as_wire_read` for the three ways that differs from the stored record.
 
         Raises:
             SetupServiceError: setup_id does not exist.
         """
-        return self._get_or_raise(setup_dict.get("setup_id", ""))
+        setup = self._get_or_raise(setup_dict.get("setup_id", ""))
+        return self._as_wire_read(setup, setup_dict.get("structure_key") or "")
+
+    @classmethod
+    def _as_wire_read(cls, setup: SetupData, key: str) -> SetupData:
+        """Copy a stored setup down to what a read can actually return.
+
+        Two ways a read differs from the record, both forced by the protocol:
+        the content is projected to ``key``, and the structure map is dropped because
+        ``GetSetupResponse`` has no field to carry it. Mirroring the second matters as much
+        as the first — serving a map here that the gRPC strategy cannot would let code work
+        locally and lose the map in production.
+
+        Args:
+            setup: The stored setup.
+            key: The requested key path; empty means the whole document.
+
+        Returns:
+            A copy safe to hand back; the stored record is untouched.
+        """
+        version = setup.current_setup_version
+        return setup.model_copy(
+            update={
+                "current_setup_version": version.model_copy(
+                    update={"content": cls._project(version.content, key), "structure": {}}
+                )
+            }
+        )
+
+    @staticmethod
+    def _project(content: dict[str, Any], key: str) -> dict[str, Any]:
+        """Narrow a version's content to one key path.
+
+        Args:
+            content: The stored content.
+            key: The requested key path; empty means the whole document.
+
+        Returns:
+            ``{key: value}`` when the path resolves, otherwise the whole document — an
+            empty key and an unresolvable one both return everything, which is what the
+            backend sends and what ``structure_key``'s lack of proto3 presence forces.
+        """
+        if not key:
+            return content
+        return JsonStructure.resolve(content, [key]) or content
 
     async def create_setup(self, setup_dict: dict[str, Any]) -> SetupData:
         """Create a new setup; identifiers are generated locally.
 
         Args:
-            setup_dict: Dictionary with 'name' and 'content'.
+            setup_dict: Dictionary with 'name', 'content', optional 'documentation' and
+                optional 'structure' — the ``{key path: description}`` map the agent
+                wrote for ``content``, stored as written with only each description's
+                length bounded.
 
         Returns:
             The created setup with its initial version.
@@ -103,7 +153,9 @@ class DefaultSetup(SetupStrategy):
                     id=self._new_id(),
                     setup_id=setup_id,
                     version="1.0.0",
+                    documentation=setup_dict.get("documentation") or "",
                     content=setup_dict.get("content") or {},
+                    structure=JsonStructure.clip(setup_dict.get("structure") or {}),
                     creation_date=datetime.datetime.now(datetime.timezone.utc),
                 ),
             )
@@ -123,8 +175,12 @@ class DefaultSetup(SetupStrategy):
         """Update a setup's name and current version content.
 
         Args:
-            setup_dict: Dictionary with 'setup_id', 'name', 'content' and optional
-                'set_as_current' (defaults to True).
+            setup_dict: Dictionary with 'setup_id', 'name', 'content', optional
+                'set_as_current' (defaults to True), optional 'documentation' and optional
+                'structure'. The map belongs to the content it describes, so a revision
+                carries only the map its own call supplied; omitting it leaves the new
+                revision without one. Omitting the documentation clears
+                it, matching the wire.
 
         Returns:
             The updated setup with its current version.
@@ -147,7 +203,11 @@ class DefaultSetup(SetupStrategy):
             id=self._new_id(),
             setup_id=setup.id,
             version=f"1.0.{len(history)}",
+            # No presence on UpdateSetupRequest, so an omitted value clears it server-side.
+            # Mirror that rather than preserving the old text: same input, same result.
+            documentation=setup_dict.get("documentation") or "",
             content=content,
+            structure=JsonStructure.clip(setup_dict.get("structure") or {}),
             creation_date=datetime.datetime.now(datetime.timezone.utc),
         )
         history.append(version)

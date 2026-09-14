@@ -55,7 +55,7 @@ class TaskProfiler:
         for stale in candidates[keep_n:]:
             try:
                 stale.unlink()
-            except OSError:  # noqa: PERF203
+            except OSError:  # ruff: ignore[try-except-in-loop]
                 logger.debug("Profiler rotation: could not delete %s", stale)
 
     def start(self) -> None:
@@ -63,7 +63,7 @@ class TaskProfiler:
         if self._mode == ProfilerMode.NONE:
             return
 
-        try:  # noqa: PLW0717
+        try:  # ruff: ignore[too-many-statements-in-try-clause]
             os.makedirs(self._output_dir, exist_ok=True)
 
             if self._mode == ProfilerMode.VIZTRACER:
@@ -100,7 +100,7 @@ class TaskProfiler:
         if self._profiler is None and not self._yappi_started:
             return
 
-        try:  # noqa: PLW0717
+        try:  # ruff: ignore[too-many-statements-in-try-clause]
             timestamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S%f")
             base = f"{self._task_id}_{timestamp}"
 

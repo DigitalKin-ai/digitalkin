@@ -39,7 +39,7 @@ class FilesystemMixin:
         name: str,
         content: bytes,
         content_type: str,
-        type: FileType | None = None,  # Matches the canonical field name # noqa: A002
+        type: FileType | None = None,  # Matches the canonical field name # ruff: ignore[builtin-argument-shadowing]
         visibility: Visibility = Visibility.UNSPECIFIED,
         *,
         sdk_created: bool = False,

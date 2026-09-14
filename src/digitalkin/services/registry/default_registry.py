@@ -26,7 +26,7 @@ class DefaultRegistry(RegistryStrategy):
         self._modules: dict[str, ModuleInfo] = {}
         self._setups: dict[str, SetupInfo] = {}
 
-    async def wait_for_ready(self, timeout: float = 1.0) -> bool:  # noqa: ARG002, PLR6301
+    async def wait_for_ready(self, timeout: float = 1.0) -> bool:  # ruff: ignore[unused-method-argument, no-self-use]
         """Local registry is always ready (in-memory store).
 
         Args:
@@ -222,7 +222,7 @@ class DefaultRegistry(RegistryStrategy):
         """
         self._setups[setup.setup_id] = setup
 
-    async def search_setups(  # Filter surface mirrors SearchSetupsRequest 1:1 # noqa: PLR0913
+    async def search_setups(  # Filter surface mirrors SearchSetupsRequest 1:1 # ruff: ignore[too-many-arguments]
         self,
         query: str | None = None,
         setup_ids: list[str] | None = None,
@@ -288,6 +288,9 @@ class DefaultRegistry(RegistryStrategy):
                 module_type=s.module_type,
                 setup_version_id=s.setup_version_id,
                 setup_version=s.setup_version,
+                # No structure: this store holds no authored map, and deriving one from
+                # ``config`` would serialize configuration VALUES into a search result —
+                # the one thing SetupSummary exists to prevent.
                 tags=s.tags,
             )
             for s in results[offset : offset + limit]
