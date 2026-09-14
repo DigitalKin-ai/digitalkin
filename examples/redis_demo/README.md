@@ -26,7 +26,7 @@ examples/redis_demo/
 docker compose -f examples/redis_demo/docker-compose.yml up -d
 
 # 2. Start the server
-DIGITALKIN_REDIS_URL=redis://localhost:6379/0 python examples/redis_demo/server.py
+SERVICE_MODE=local DIGITALKIN_REDIS_URL=redis://localhost:6379/0 python examples/redis_demo/server.py
 
 # 3. Test with the client
 python examples/redis_demo/client.py full --prompt "Hello world"

@@ -26,7 +26,7 @@ if TYPE_CHECKING:
     import builtins
 
 
-class RedisClient:  # noqa: PLR0904
+class RedisClient:  # ruff: ignore[too-many-public-methods]
     """Redis connection pool manager with split read/write pools.
 
     Attributes:

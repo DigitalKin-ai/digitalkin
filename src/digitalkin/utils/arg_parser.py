@@ -4,8 +4,8 @@ import logging
 from argparse import (
     ArgumentParser,
     Namespace,
-    _HelpAction,  # noqa: PLC2701
-    _SubParsersAction,  # noqa: PLC2701
+    _HelpAction,  # ruff: ignore[import-private-name]
+    _SubParsersAction,  # ruff: ignore[import-private-name]
 )  # Private argparse API needed for custom help display
 from collections.abc import Sequence
 from typing import Any
@@ -65,15 +65,15 @@ class ArgParser:
         def __call__(
             self,
             parser: ArgumentParser,
-            namespace: Namespace,  # argparse _HelpAction.__call__ signature # noqa: ARG002
-            values: str | Sequence[Any] | None,  # argparse _HelpAction.__call__ signature # noqa: ARG002
-            option_string: str | None = None,  # argparse _HelpAction.__call__ signature # noqa: ARG002
+            namespace: Namespace,  # argparse _HelpAction.__call__ signature # ruff: ignore[unused-method-argument]
+            values: str | Sequence[Any] | None,  # argparse _HelpAction.__call__ signature # ruff: ignore[unused-method-argument]
+            option_string: str | None = None,  # argparse _HelpAction.__call__ signature # ruff: ignore[unused-method-argument]
         ) -> None:
             """Override the HelpActions as it doesn't handle subparser well."""
             parser.print_help()
             subparsers_actions = [
                 action
-                for action in parser._actions  # noqa: SLF001
+                for action in parser._actions  # ruff: ignore[private-member-access]
                 if isinstance(action, _SubParsersAction)
             ]  # Private argparse API needed for subparser enumeration
             for subparsers_action in subparsers_actions:

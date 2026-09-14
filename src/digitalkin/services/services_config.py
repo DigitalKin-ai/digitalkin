@@ -4,6 +4,7 @@ from typing import Any, ClassVar
 
 from pydantic import BaseModel, Field, PrivateAttr
 
+from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
 from digitalkin.models.services.services import ServicesMode
 from digitalkin.services.communication import CommunicationStrategy, DefaultCommunication, GrpcCommunication
 from digitalkin.services.cost import CostStrategy, DefaultCost, GrpcCost
@@ -14,6 +15,7 @@ from digitalkin.services.secret import DefaultSecret, GrpcSecret, SecretStrategy
 from digitalkin.services.services_models import ServicesStrategy
 from digitalkin.services.storage import DefaultStorage, GrpcStorage, StorageStrategy
 from digitalkin.services.user_profile import DefaultUserProfile, GrpcUserProfile, UserProfileStrategy
+from digitalkin.utils.env_manager import EnvManager
 
 
 class ServicesConfig(BaseModel):
@@ -88,8 +90,10 @@ class ServicesConfig(BaseModel):
         # CheckResourceAccess). In REMOTE mode, give the communication client that backend
         # address so it can dial AssociateTask for M2M tool calls. Skipped in LOCAL (no backend,
         # and DefaultCommunication takes no such arg).
-        up_client_config = (self._configs.get("user_profile") or {}).get("client_config")
-        if up_client_config is not None:
+        if self.mode == ServicesMode.REMOTE:
+            up_client_config = (self._configs.get("user_profile") or {}).get("client_config") or (
+                EnvManager.client_config()
+            )
             self._configs["communication"].setdefault("gateway_backend_config", up_client_config)
 
     @classmethod
@@ -134,15 +138,23 @@ class ServicesConfig(BaseModel):
 
         strategy_class = strategy[self.mode.value]
 
+        # Every remote strategy dials the services provider and takes a required
+        # client_config. Modules that registered none get the environment's, so a
+        # deployment configures its clients through CLIENT_* instead of repeating
+        # the same object under each service name.
+        config = self.get_strategy_config(name)
+        if issubclass(strategy_class, GrpcClientWrapper) and "client_config" not in config:
+            config = {**config, "client_config": EnvManager.client_config()}
+
         if name in self._stateless_strategies:
             cached = self._singleton_cache.get(name)
             if cached is not None:
                 return cached
-            instance = strategy_class(mission_id, setup_id, setup_version_id, **self.get_strategy_config(name) or {})
+            instance = strategy_class(mission_id, setup_id, setup_version_id, **config)
             self._singleton_cache[name] = instance
             return instance
 
-        return strategy_class(mission_id, setup_id, setup_version_id, **self.get_strategy_config(name) or {})
+        return strategy_class(mission_id, setup_id, setup_version_id, **config)
 
     @property
     def storage(self) -> type[StorageStrategy]:

@@ -184,7 +184,7 @@ class RequestIdClientInterceptor(
 class RequestIdServerInterceptor(grpc.aio.ServerInterceptor):
     """Bind inbound ``x-*`` request IDs into the ambient context per call."""
 
-    async def intercept_service(  # noqa: C901, PLR6301
+    async def intercept_service(  # ruff: ignore[complex-structure, no-self-use]
         self,
         continuation: Callable[[grpc.HandlerCallDetails], Awaitable[grpc.RpcMethodHandler[Any, Any] | None]],
         handler_call_details: grpc.HandlerCallDetails,

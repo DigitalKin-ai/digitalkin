@@ -6,13 +6,10 @@ import grpc_testing
 import pytest
 from _pytest.fixtures import SubRequest
 
+from digitalkin.models.settings.certificate import get_certificate_settings
 from digitalkin.models.settings.gateway import get_gateway_settings
-from digitalkin.models.settings.grpc_client import (
-    get_circuit_breaker_settings,
-    get_grpc_channel_settings,
-    get_grpc_client_settings,
-    get_grpc_retry_settings,
-)
+from digitalkin.models.settings.client.channel import get_client_channel_settings
+from digitalkin.models.settings.client.client import get_client_settings
 from digitalkin.models.settings.log import get_logging_settings
 from digitalkin.models.settings.module import get_module_settings
 from digitalkin.models.settings.profiling import get_profiling_settings
@@ -23,6 +20,7 @@ from digitalkin.models.settings.server.channel import get_server_channel_setting
 from digitalkin.models.settings.server.server import get_server_settings
 from digitalkin.models.settings.server.servicer import get_module_servicer_settings
 from digitalkin.models.settings.task_manager import get_job_manager_settings, get_task_manager_settings
+from digitalkin.utils.env_manager import EnvManager
 
 # Register fixture plugins
 pytest_plugins = [
@@ -38,11 +36,10 @@ logging.getLogger("grpc").setLevel(logging.WARNING)
 
 _SETTINGS_FACTORIES = (
     get_bulkhead_settings,
-    get_circuit_breaker_settings,
+    get_certificate_settings,
+    get_client_channel_settings,
+    get_client_settings,
     get_gateway_settings,
-    get_grpc_channel_settings,
-    get_grpc_client_settings,
-    get_grpc_retry_settings,
     get_job_manager_settings,
     get_logging_settings,
     get_module_servicer_settings,
@@ -66,6 +63,7 @@ def _clear_settings_cache() -> None:
     """
     for factory in _SETTINGS_FACTORIES:
         factory.cache_clear()
+    EnvManager.reset()
 
 
 @pytest.fixture
@@ -77,6 +75,7 @@ def server_config_sync_insecure(monkeypatch: pytest.MonkeyPatch) -> None:
 
     get_server_settings.cache_clear()
 
+
 @pytest.fixture
 def server_config_async_insecure(monkeypatch: pytest.MonkeyPatch):
     """Create an async insecure server configuration."""
@@ -86,6 +85,7 @@ def server_config_async_insecure(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("SERVER_CHANNEL_SECURITY", "insecure")
 
     get_server_settings.cache_clear()
+
 
 @pytest.fixture
 def dummy_certs(tmp_path, monkeypatch: pytest.MonkeyPatch):

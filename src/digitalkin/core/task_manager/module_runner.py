@@ -43,7 +43,7 @@ class ModuleRunner:
         self._redis_client = redis_client
         self._servicer = servicer
 
-    async def run(  # noqa: C901, PLR0914, PLR0915
+    async def run(  # ruff: ignore[complex-structure, too-many-locals, too-many-statements]
         self,
         query: struct_pb2.Struct,
         *,
@@ -80,11 +80,11 @@ class ModuleRunner:
 
         top_level_keys: list[str] = []
         query_byte_size = 0
-        try:  # noqa: PLW0717
+        try:  # ruff: ignore[too-many-statements-in-try-clause]
             timer.mark("entry")
             profiler.start()
 
-            try:  # noqa: PLW0717
+            try:  # ruff: ignore[too-many-statements-in-try-clause]
                 setup_version = await self._servicer.resolve_setup(setup_id, mission_id)
                 timer.mark("setup_resolve")
 
@@ -93,8 +93,8 @@ class ModuleRunner:
 
                 tool_cache = self._servicer.get_tool_cache(setup_version.setup_id)
                 if tool_cache is None:
-                    registry = self._servicer._get_registry()  # noqa: SLF001
-                    communication = self._servicer._get_communication()  # noqa: SLF001
+                    registry = self._servicer._get_registry()  # ruff: ignore[private-member-access]
+                    communication = self._servicer._get_communication()  # ruff: ignore[private-member-access]
                     if registry is not None and communication is not None:
                         tool_cache = await self._servicer.get_or_build_tool_cache(
                             setup_version.setup_id,
@@ -207,7 +207,7 @@ class ModuleRunner:
 
         except ValidationError as exc:
             input_format_cls = (
-                self._servicer.module_class._extended_input_format  # noqa: SLF001
+                self._servicer.module_class._extended_input_format  # ruff: ignore[private-member-access]
                 or self._servicer.module_class.input_format
             )
             model_name = input_format_cls.__name__ if input_format_cls is not None else "<unknown>"

@@ -456,7 +456,7 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
         logger.info("Tool cache built: %d entries [%s]", len(cache.entries), counts)
         return cache
 
-    async def _collect_tools_recursive(  # noqa: C901
+    async def _collect_tools_recursive(  # ruff: ignore[complex-structure]
         self,
         model_instance: BaseModel,
         cache: ToolCache,

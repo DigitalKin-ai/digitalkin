@@ -161,4 +161,7 @@ class SetupSummary(BaseModel):
     module_type: RegistryModuleType | None = None
     setup_version_id: str | None = None
     setup_version: str | None = None
+    # {key path: summary} for the setup's content, so a search result already shows its
+    # shape. See digitalkin.utils.json_structure.JsonStructure.
+    structure: dict[str, str] = {}
     tags: list[str] = []
