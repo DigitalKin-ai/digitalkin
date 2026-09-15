@@ -7,11 +7,6 @@
     ]
   },
   {
-    "version": "feat-validation-proto",
-    "title": "feat-validation-proto",
-    "aliases": []
-  },
-  {
     "version": "dev",
     "title": "dev",
     "aliases": [
