@@ -21,7 +21,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import grpc.aio
 import pytest
-from agentic_mesh_protocol.gateway.v1 import gateway_pb2, gateway_service_pb2_grpc
+from agentic_mesh_protocol.gateway.v1 import gateway_dto_pb2, gateway_messages_pb2, gateway_service_pb2_grpc
 from google.protobuf import struct_pb2
 
 try:
@@ -111,13 +111,13 @@ class _FakeConsumerServicer(gateway_service_pb2_grpc.GatewayServiceServicer):
         self.hold_open = hold_open
 
     async def StartStream(self, request, context):
-        return gateway_pb2.StartStreamResponse(accepted=False, task_id=request.task_id)
+        return gateway_dto_pb2.StartStreamResponse(accepted=False, task_id=request.task_id)
 
     async def SendSignal(self, request, context):
-        return gateway_pb2.ClientSignalResponse(success=False, task_id=request.task_id)
+        return gateway_dto_pb2.SendSignalResponse(success=False, task_id=request.cancel.task_id)
 
     async def Stream(self, request_iterator, context):
-        # Pull the first incoming StreamClient (must be stream.init).
+        # Pull the first incoming StreamRequest (must be stream.init).
         first = await anext(request_iterator)
         self.received.append(first)
 
@@ -134,13 +134,13 @@ class _FakeConsumerServicer(gateway_service_pb2_grpc.GatewayServiceServicer):
         if self.query_data is not None:
             qstruct = struct_pb2.Struct()
             qstruct.update(self.query_data)
-            yield gateway_pb2.StreamServer(seq=0, task_id=first.task_id, data=qstruct)
+            yield gateway_messages_pb2.StreamResponse(seq=0, task_id=first.task_id, data=qstruct)
 
         # Optional follow-up upstream messages.
         for payload in self.extra_upstream:
             ustruct = struct_pb2.Struct()
             ustruct.update(payload)
-            yield gateway_pb2.StreamServer(seq=0, task_id=first.task_id, data=ustruct)
+            yield gateway_messages_pb2.StreamResponse(seq=0, task_id=first.task_id, data=ustruct)
 
         if self.hold_open:
             # Drain in the background but NEVER close the response stream, even after
@@ -155,7 +155,7 @@ class _FakeConsumerServicer(gateway_service_pb2_grpc.GatewayServiceServicer):
             await asyncio.sleep(3600)
             return
 
-        # Drain any outputs the gateway pushes (it's pushing StreamClients to us).
+        # Drain any outputs the gateway pushes (it's pushing StreamRequests to us).
         try:
             async for msg in request_iterator:
                 self.received.append(msg)
@@ -320,7 +320,7 @@ class TestDialConsumer:
             await server.stop(grace=0.1)
 
     async def test_first_reply_invokes_module_runner(self, gateway) -> None:
-        """The consumer's first StreamServer reply (the query) is handed to ModuleRunner.run."""
+        """The consumer's first StreamResponse reply (the query) is handed to ModuleRunner.run."""
         servicer = _FakeConsumerServicer(
             query_data={"protocol": "agui_stream", "user_prompt": "hello"},
         )
@@ -452,12 +452,12 @@ class TestDialConsumer:
         assert "DIAL_BACK_RPC_ERROR" in codes, f"got: {codes}"
         assert "DIAL_BACK_NO_QUERY" not in codes, f"got: {codes}"
 
-    async def test_dial_consumer_outgoing_yields_streamserver(
+    async def test_dial_consumer_outgoing_yields_stream_request(
         self, gateway, fake_consumer_server, monkeypatch
     ) -> None:
-        """Dial-back contract: gateway emits StreamServer messages.
+        """Dial-back contract: gateway emits StreamRequest messages.
 
-        Pins the wire-direction so a regression to ``StreamClient`` (which
+        Pins the wire-direction so a regression to ``StreamResponse`` (which
         is wire-compatible due to identical proto field tags) is caught.
         """
         from digitalkin.services.communication.grpc_communication import GrpcCommunication
@@ -468,7 +468,7 @@ class TestDialConsumer:
         # Capture every message the gateway yields on the dial-back BiDi.
         class _RecordingStub:
             def Stream(self, outgoing, *, timeout):  # noqa: N802, ARG002
-                async def _drive() -> AsyncIterator[gateway_pb2.StreamServer]:
+                async def _drive() -> AsyncIterator[gateway_messages_pb2.StreamRequest]:
                     async for msg in outgoing:
                         seen_outgoing.append(msg)
                         # Return immediately after the first capture so the
@@ -500,11 +500,11 @@ class TestDialConsumer:
 
         assert seen_outgoing, "gateway emitted nothing on the dial-back outgoing"
         assert all(
-            isinstance(m, gateway_pb2.StreamServer) for m in seen_outgoing
-        ), f"expected only StreamServer, got: {[type(m).__name__ for m in seen_outgoing]}"
+            isinstance(m, gateway_messages_pb2.StreamRequest) for m in seen_outgoing
+        ), f"expected only StreamRequest, got: {[type(m).__name__ for m in seen_outgoing]}"
 
     # The three obsolete ``_DialBackServicer.Stream`` tests that lived here
-    # have been deleted. Their behavior (yield StreamClient with the cached
+    # have been deleted. Their behavior (yield StreamResponse with the cached
     # query, return on stream.end / fatal stream.error) now lives on the
     # unified ``GatewayServicer.Stream`` dial-back-receive branch and is
     # covered by ``tests/gateway/test_gateway_servicer_dialback_branch.py``.

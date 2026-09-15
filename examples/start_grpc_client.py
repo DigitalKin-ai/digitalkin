@@ -24,7 +24,7 @@ from typing import Any
 import grpc
 
 # Import gRPC protobuf generated classes
-from agentic_mesh_protocol.module.v1 import information_pb2, lifecycle_pb2, module_service_pb2_grpc
+from agentic_mesh_protocol.module.v1 import module_dto_pb2, module_service_pb2_grpc
 from agentic_mesh_protocol.module_registry.v1 import discover_pb2, module_registry_service_pb2_grpc
 from google.protobuf import json_format
 from google.protobuf.message import Message
@@ -167,19 +167,19 @@ async def get_module_schemas(
         Tuple of (input_class, output_class, setup_class) Pydantic models
     """
     # Create requests for each schema
-    input_request = information_pb2.GetModuleInputRequest(module_id=module_id)
-    output_request = information_pb2.GetModuleOutputRequest(module_id=module_id)
-    setup_request = information_pb2.GetModuleSetupRequest(module_id=module_id)
+    input_request = module_dto_pb2.GetModuleInputRequest(module_id=module_id)
+    output_request = module_dto_pb2.GetModuleOutputRequest(module_id=module_id)
+    setup_request = module_dto_pb2.GetModuleSetupRequest(module_id=module_id)
 
     # Get schemas from module
     input_response = await module_stub.GetModuleInput(input_request)
     output_response = await module_stub.GetModuleOutput(output_request)
     setup_response = await module_stub.GetModuleSetup(setup_request)
 
-    # Convert schemas to Pydantic models
-    input_class = json_to_pydantic(input_response.input_schema)
-    output_class = json_to_pydantic(output_response.output_schema)
-    setup_class = json_to_pydantic(setup_response.setup_schema)
+    # Convert schemas (carried in each response's ModuleResult) to Pydantic models
+    input_class = json_to_pydantic(input_response.result.input_schema)
+    output_class = json_to_pydantic(output_response.result.output_schema)
+    setup_class = json_to_pydantic(setup_response.result.setup_schema)
 
     return input_class, output_class, setup_class
 
@@ -227,7 +227,7 @@ async def run_client_text_transform() -> None:
             )
 
             # Create start module request
-            request = lifecycle_pb2.StartModuleRequest(
+            request = module_dto_pb2.StartModuleRequest(
                 input=input_data.model_dump(), setup_id=setup_id, mission_id=mission_id
             )
 
@@ -237,10 +237,10 @@ async def run_client_text_transform() -> None:
             try:
                 responses = module_stub.StartModule(request)
                 async for response in responses:
-                    # Process each output message
-                    if response.HasField("output"):
+                    # Process each output message (the ModuleResult holds an output or an OperationError)
+                    if response.result.WhichOneof("outcome") == "output":
                         # Convert output data
-                        output_dict = json_format.MessageToDict(response.output)
+                        output_dict = json_format.MessageToDict(response.result.output)
                         output = output_class(**output_dict)
 
                         logger.info("Received transformation %s: '%s'", output.iteration, output.transformed_text)
@@ -290,17 +290,17 @@ async def run_client_llm() -> None:
             input_data = input_class(prompt="Give me details about agentic mesh current advancement")
 
             # Create start module request
-            lifecycle_pb2.StartModuleRequest(input=input_data.model_dump(), setup_id=setup_id, mission_id=mission_id)
+            module_dto_pb2.StartModuleRequest(input=input_data.model_dump(), setup_id=setup_id, mission_id=mission_id)
 
             logger.info("Starting module with input: %s", input_data.model_dump())
 
             # Start the module and process streaming responses
             try:
                 async for response in responses:
-                    # Process each output message
-                    if response.HasField("output"):
+                    # Process each output message (the ModuleResult holds an output or an OperationError)
+                    if response.result.WhichOneof("outcome") == "output":
                         # Convert output data
-                        output_dict = json_format.MessageToDict(response.output)
+                        output_dict = json_format.MessageToDict(response.result.output)
                         output = output_class(**output_dict)
 
                         logger.info("Received answer %s", output.response)

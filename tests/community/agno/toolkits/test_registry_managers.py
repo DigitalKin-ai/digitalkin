@@ -1231,9 +1231,13 @@ class TestScopedRead:
 
     @staticmethod
     async def _service_indexed(structure: dict[str, str]) -> tuple[ServicesManager, str]:
-        """A services manager whose registry search returns ``structure`` for its one setup."""
+        """A services manager whose one setup carries ``structure``, indexed by the registry search too."""
         setup, registry = _stores()
-        created = await setup.create_setup({"name": "N", "content": {"llm": {"model": "gpt-4o"}}})
+        created = await setup.create_setup({
+            "name": "N",
+            "content": {"llm": {"model": "gpt-4o"}},
+            "structure": structure,
+        })
 
         class _WithMap(DefaultRegistry):
             async def search_setups(self, *args: Any, **kwargs: Any) -> list[SetupSummary]:
@@ -1249,7 +1253,7 @@ class TestScopedRead:
 
     @pytest.mark.regression
     async def test_get_serves_the_structure_the_structure_action_serves(self) -> None:
-        """Regression (QA D1): GetSetup has no structure field, so ``get`` showed ``{}`` over a 7-key map."""
+        """Regression (QA D1): ``get`` showed ``{}`` over a 7-key map; the setup version now carries it."""
         svc, setup_id = await self._service_indexed({"llm.model": "which model answers"})
 
         got = _env(await svc.services_manager(GetAction(setup_id=setup_id)))
@@ -1269,7 +1273,7 @@ class TestScopedRead:
 
     @pytest.mark.regression
     async def test_set_version_serves_the_structure(self) -> None:
-        """Regression (QA D1): SetCurrentSetupVersionResponse has no structure field either."""
+        """Regression (QA D1): the version a SetCurrentSetupVersion returns carries its map too."""
         svc, setup_id = await self._service_indexed({"llm.model": "which model answers"})
         versions = _env(await svc.services_manager(ListVersionsAction(setup_id=setup_id)))["output"]["versions"]
 

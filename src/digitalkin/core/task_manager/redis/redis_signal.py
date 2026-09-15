@@ -96,7 +96,7 @@ class SharedRedisListener:
         self._cache_invalidator: CacheInvalidator | None = None
 
     def set_cache_invalidator(self, handler: CacheInvalidator) -> None:
-        """Register the ``(action_name, setup_id)`` handler invoked for ``invalidate_*`` signals."""
+        """Register the ``(scope_name, setup_id)`` handler invoked for ``invalidate_<scope>`` signals."""
         self._cache_invalidator = handler
 
     async def start(self) -> None:
@@ -187,7 +187,7 @@ class SharedRedisListener:
             )
             if self._cache_invalidator is not None:
                 inv_task: asyncio.Task[None] = asyncio.create_task(
-                    self._cache_invalidator(action.upper(), setup_id),
+                    self._cache_invalidator(action.removeprefix("invalidate_").upper(), setup_id),
                     name=f"invalidate_{action}",
                 )
                 inv_task.add_done_callback(log_unhandled)

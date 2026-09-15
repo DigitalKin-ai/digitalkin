@@ -3,7 +3,7 @@
 from typing import Any
 
 from agentic_mesh_protocol.user_profile.v1 import (
-    user_profile_pb2,
+    user_profile_dto_pb2,
     user_profile_service_pb2_grpc,
 )
 
@@ -55,16 +55,18 @@ class GrpcSecret(SecretStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
             SecretServiceError: If the gRPC operation fails.
         """
         async with self.handle_grpc_errors("GetSetupSecret", SecretServiceError):
-            request = user_profile_pb2.GetSetupSecretRequest(setup_id=self.setup_id, mission_id=self.mission_id)
+            request = user_profile_dto_pb2.GetSetupSecretRequest(setup_id=self.setup_id, mission_id=self.mission_id)
             response = await self.exec_grpc_query("GetSetupSecret", request)
-            if not response.success:
+            if response.result.WhichOneof("outcome") == "error":
                 logger.info(
-                    "[VALIDATE SC1] secret fetch: setup_id=%s mission_id=%s success=False",
+                    "[VALIDATE SC1] secret fetch: setup_id=%s mission_id=%s error=%s %s",
                     self.setup_id,
                     self.mission_id,
+                    response.result.error.code,
+                    response.result.error.message,
                 )  # TODO(validate): remove after prod validation
                 return None
-            secret = ProtoUtils.proto_to_dict(response.secret, with_defaults=True)
+            secret = ProtoUtils.proto_to_dict(response.result.secret, with_defaults=True)
             logger.info(
                 "[VALIDATE SC1] secret fetch: setup_id=%s mission_id=%s success=True keys=%d",
                 self.setup_id,

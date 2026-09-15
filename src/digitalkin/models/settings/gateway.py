@@ -114,8 +114,8 @@ class GatewayQueueSettings(BaseSettings):
         description=(
             "TTL for the per-setup tool cache "
             "(``ModuleServicer._tool_cache_by_setup``). Entries older than "
-            "this are recomputed on next lookup. The INVALIDATE_TOOLS "
-            "SendSignal flushes the whole cache regardless of TTL."
+            "this are recomputed on next lookup. A ``TOOLS`` SendSignal "
+            "invalidation flushes the setup's entry regardless of TTL."
         ),
     )
 

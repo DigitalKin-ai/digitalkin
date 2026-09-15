@@ -87,8 +87,8 @@ Client ── gRPC ──► ModuleServicer.StartModule ──► SingleJobManag
 ```proto
 service GatewayService {
   rpc StartStream(StartStreamRequest) returns (StartStreamResponse);   // unary
-  rpc Stream(stream StreamClient)     returns (stream StreamServer);    // BiDi
-  rpc SendSignal(ClientSignalRequest) returns (ClientSignalResponse);  // unary
+  rpc Stream(stream StreamRequest)    returns (stream StreamResponse);  // BiDi
+  rpc SendSignal(SendSignalRequest)   returns (SendSignalResponse);     // unary
 }
 ```
 
@@ -108,11 +108,11 @@ Source of truth for integrators: **`docs/gateway_protocol.md`** (Python + TS qui
 StartStreamRequest  := { task_id, setup_id, mission_id }
 StartStreamResponse := { accepted, task_id }
 
-StreamClient  := { from_seq, task_id, data: Struct }   // client → gateway
-StreamServer  := { seq,      task_id, data: Struct }   // gateway → client
+StreamRequest   := { from_seq, task_id, data: Struct }   // client → gateway
+StreamResponse  := { seq,      task_id, data: Struct }   // gateway → client
 
-ClientSignalRequest  := { task_id, action: SignalAction }
-ClientSignalResponse := { success, task_id }
+SendSignalRequest  := { oneof signal { cancel: { task_id } | invalidate: { scope: CacheScope } } }
+SendSignalResponse := { success, task_id }
 ```
 
 - No envelopes, no `oneof`. Payload type lives **inside** `data.root.protocol`.
@@ -172,9 +172,10 @@ async for msg in stub.Stream(client_stream()):
 **Cancel** — `SendSignal(action=CANCEL, task_id)` → publishes on `signal_ch:<task_id>`; the
 module shuts down; your `Stream` ends with the usual `stream.end`.
 
-**Invalidate** — `SendSignal(action=INVALIDATE_*)` is **server-wide**, no task_id, does not touch
+**Invalidate** — `SendSignal(invalidate=InvalidateSignal(scope))` is **server-wide**, no task_id (`SETUP`/`TOOLS` read
+`x-setup-id`), does not touch
 in-flight tasks (dict-swap preserves their refs):
-`INVALIDATE_ALL / CHANNELS / MODELS / SETUP / TOOLS / SHARED`.
+`CacheScope`: `ALL / CHANNELS / MODELS / SETUP / TOOLS / SHARED`.
 
 ---
 
@@ -233,10 +234,10 @@ A module can be a **consumer** of another module. The gateway brokers it; the tw
 
 ```
 Gateway (gRPC client)                         Consumer module (gRPC server)
-   │  StreamClient{ data: stream.init } ─────►│
-   │  ◄──── StreamServer{ data: query } ──────│   consumer sends the query
-   │  StreamClient{ seq=N, data: output } ───►│   gateway pushes outputs (from Redis)
-   │  StreamClient{ data: stream.end } ──────►│   terminator
+   │  StreamRequest{ data: stream.init } ────►│
+   │  ◄──── StreamResponse{ data: query } ────│   consumer sends the query
+   │  StreamRequest{ seq=N, data: output } ──►│   gateway pushes outputs (from Redis)
+   │  StreamRequest{ data: stream.end } ─────►│   terminator
 ```
 
 - Opt in with metadata `x-client-address: host:port` on `StartStream` → gateway **dials back**.

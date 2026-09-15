@@ -14,7 +14,6 @@ from digitalkin.models.services.registry import (
     SetupSummary,
 )
 from digitalkin.services.base_strategy import BaseStrategy
-from digitalkin.services.registry.registry_models import ModuleStatusInfo
 
 
 class RegistryStrategy(BaseStrategy, ABC):
@@ -203,11 +202,6 @@ class RegistryStrategy(BaseStrategy, ABC):
         Returns:
             Matching setups as ``SetupSummary`` (no ``config`` field by construction).
         """
-        ...
-
-    @abstractmethod
-    async def get_status(self, module_id: str) -> ModuleStatusInfo:
-        """Get module status."""
         ...
 
     @abstractmethod

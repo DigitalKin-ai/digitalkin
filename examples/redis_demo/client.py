@@ -2,11 +2,10 @@
 """Demo client for the Gateway gRPC service with per-endpoint testing.
 
 Subcommands:
-    full      Full pipeline: StartStream → ConsumeStream → SendSignal
+    full      Full pipeline: StartStream → Stream → SendSignal
     start     StartStream only (unary)
-    consume   ConsumeStream on existing task (requires --task-id)
-    produce   StartStream + ProduceStream (act as Module A)
-    signal    SendSignal on existing task (requires --task-id)
+    consume   Stream on existing task (requires --task-id)
+    signal    SendSignal(cancel) on existing task (requires --task-id)
     inspect   Dump Redis keys for a task (no gRPC)
 
 Usage:
@@ -14,8 +13,7 @@ Usage:
     python client.py full --prompt "Test" --setup '{"uppercase": true, "repeat": 5}'
     python client.py start --prompt "Hello"
     python client.py consume --task-id <uuid>
-    python client.py produce --task-id <uuid> --chunks 3
-    python client.py signal --task-id <uuid> --action cancel
+    python client.py signal --task-id <uuid>
     python client.py inspect --task-id <uuid>
 """
 
@@ -34,7 +32,7 @@ import grpc
 import redis.asyncio as aioredis
 from google.protobuf import json_format, struct_pb2
 
-from agentic_mesh_protocol.gateway.v1 import gateway_pb2, gateway_service_pb2_grpc
+from agentic_mesh_protocol.gateway.v1 import gateway_dto_pb2, gateway_messages_pb2, gateway_service_pb2_grpc
 
 # ── ANSI colors ─────────────────────────────────────────────────────
 
@@ -291,29 +289,18 @@ def _print_diff_report(tracker: RedisTracker, task_id: str) -> None:
 async def cmd_start(
     stub: gateway_service_pb2_grpc.GatewayServiceStub,
     task_id: str,
-    prompt: str,
-    setup: dict[str, Any] | None,
 ) -> bool:
     """StartStream — create a task session.
 
     Returns:
         True if accepted.
     """
-    input_struct = struct_pb2.Struct()
-    payload: dict[str, Any] = {
-        "root": {"protocol": "message", "text": prompt},
-    }
-    if setup:
-        payload["setup"] = setup
-    input_struct.update(payload)
-
     t0 = time.monotonic()
     resp = await stub.StartStream(
-        gateway_pb2.StartStreamRequest(
+        gateway_dto_pb2.StartStreamRequest(
             task_id=task_id,
-            input=input_struct,
-            setup_id="demo-setup",
-            mission_id="demo-mission",
+            setup_id="setups:demo",
+            mission_id="missions:demo",
         ),
     )
     elapsed = (time.monotonic() - t0) * 1000
@@ -327,112 +314,58 @@ async def cmd_start(
 async def cmd_consume(
     stub: gateway_service_pb2_grpc.GatewayServiceStub,
     task_id: str,
+        prompt: str,
+        setup: dict[str, Any] | None,
     verbose: bool,
 ) -> list[dict[str, Any]]:
-    """ConsumeStream — read module output from Redis.
+    """Stream — send the query, then read module output until ``stream.end``.
 
     Returns:
         List of received items.
     """
     received: list[dict[str, Any]] = []
+    query: dict[str, Any] = {"root": {"protocol": "message", "text": prompt}}
+    if setup:
+        query["setup"] = setup
+    query_struct = struct_pb2.Struct()
+    query_struct.update(query)
 
     async def _requests() -> AsyncGenerator:
-        yield gateway_pb2.ConsumeStreamRequest(
-            init=gateway_pb2.ConsumeStreamInit(task_id=task_id, from_seq=0),
-        )
+        yield gateway_messages_pb2.StreamRequest(task_id=task_id, from_seq=0, data=query_struct)
 
     t0 = time.monotonic()
-    resp_stream = stub.ConsumeStream(_requests())
-    async for resp in resp_stream:
-        elapsed = (time.monotonic() - t0) * 1000
-        payload_type = resp.WhichOneof("payload")
-
-        if payload_type == "output":
-            data_dict = json_format.MessageToDict(resp.output.data)
-            text = data_dict.get("root", {}).get("text", data_dict.get("root", {}).get("protocol", ""))
-            received.append({"seq": resp.output.seq, "text": text})
-            print(f"  {GREEN}seq={resp.output.seq:>2}{RESET}  {text}")  # noqa: T201
-            if verbose:
-                print(f"         {DIM}{json.dumps(data_dict, ensure_ascii=False)}{RESET}")  # noqa: T201
-
-        elif payload_type == "status":
-            state_name = gateway_pb2.StreamState.Name(resp.status.state)
-            received.append({"status": state_name})
-            color = GREEN if "COMPLETED" in state_name else YELLOW
-            print(f"  {color}status: {state_name}{RESET}  ({elapsed:.1f}ms total)")  # noqa: T201
+    async for resp in stub.Stream(_requests()):
+        root = json_format.MessageToDict(resp.data).get("root", {})
+        protocol = root.get("protocol", "")
+        if protocol == "stream.error":
+            received.append({"seq": resp.seq, "error": root.get("message", "")})
+            print(f"  {RED}error: code={root.get('code')} msg={root.get('message')}{RESET}")  # noqa: T201
+            continue
+        if protocol == "stream.end":
+            received.append({"seq": resp.seq, "status": "stream.end"})
+            print(f"  {GREEN}stream.end{RESET}  ({(time.monotonic() - t0) * 1000:.1f}ms total)")  # noqa: T201
             break
-
-        elif payload_type == "error":
-            received.append({"error": resp.error.message})
-            print(f"  {RED}error: code={resp.error.code} msg={resp.error.message}{RESET}")  # noqa: T201
-            break
-
-        elif payload_type == "heartbeat":
-            if verbose:
-                print(f"  {DIM}heartbeat{RESET}")  # noqa: T201
+        text = root.get("text", protocol)
+        received.append({"seq": resp.seq, "text": text})
+        print(f"  {GREEN}seq={resp.seq:>2}{RESET}  {text}")  # noqa: T201
+        if verbose:
+            print(f"         {DIM}{json.dumps(root, ensure_ascii=False)}{RESET}")  # noqa: T201
 
     return received
-
-
-async def cmd_produce(
-    stub: gateway_service_pb2_grpc.GatewayServiceStub,
-    task_id: str,
-    prompt: str,
-    num_chunks: int,
-) -> int:
-    """ProduceStream — act as Module A, push output chunks.
-
-    Returns:
-        Number of server responses.
-    """
-    async def _requests() -> AsyncGenerator:
-        yield gateway_pb2.ProduceStreamRequest(
-            init=gateway_pb2.ProduceStreamInit(task_id=task_id),
-        )
-        for i in range(num_chunks):
-            data = struct_pb2.Struct()
-            data.update({
-                "root": {
-                    "protocol": "message",
-                    "text": f"[{i + 1}/{num_chunks}] {prompt}",
-                },
-            })
-            yield gateway_pb2.ProduceStreamRequest(
-                output=gateway_pb2.ProduceStreamOutput(task_id=task_id, data=data),
-            )
-            await asyncio.sleep(0.05)
-
-    t0 = time.monotonic()
-    resp_stream = stub.ProduceStream(_requests())
-    count = 0
-    async for resp in resp_stream:
-        count += 1
-        payload = resp.WhichOneof("payload")
-        print(f"  response #{count}: {payload}")  # noqa: T201
-
-    elapsed = (time.monotonic() - t0) * 1000
-    print(f"  {DIM}stream closed ({count} responses, {elapsed:.1f}ms){RESET}")  # noqa: T201
-    return count
 
 
 async def cmd_signal(
     stub: gateway_service_pb2_grpc.GatewayServiceStub,
     task_id: str,
-    action: str,
 ) -> bool:
-    """SendSignal — send a control signal.
+    """SendSignal — cancel a running task.
 
     Returns:
         True if accepted.
     """
-    action_enum = (
-        gateway_pb2.SIGNAL_ACTION_CANCEL if action == "cancel"
-        else gateway_pb2.SIGNAL_ACTION_PAUSE
-    )
-
     t0 = time.monotonic()
     resp = await stub.SendSignal(
-        gateway_pb2.ClientSignalRequest(task_id=task_id, action=action_enum),
+        gateway_dto_pb2.SendSignalRequest(cancel=gateway_messages_pb2.CancelSignal(task_id=task_id)),
     )
     elapsed = (time.monotonic() - t0) * 1000
 
@@ -447,7 +380,7 @@ async def cmd_signal(
 
 
 async def run_full(args: argparse.Namespace) -> None:
-    """Full pipeline: StartStream → ConsumeStream → SendSignal."""
+    """Full pipeline: StartStream → Stream → SendSignal."""
     task_id = args.task_id or str(uuid.uuid4())
     setup = json.loads(args.setup) if args.setup else None
     tracker = RedisTracker(args.redis) if args.verbose else None
@@ -467,7 +400,7 @@ async def run_full(args: argparse.Namespace) -> None:
 
             # 1. StartStream
             print(f"\n{BOLD}[1] StartStream{RESET}")  # noqa: T201
-            accepted = await cmd_start(stub, task_id, args.prompt, setup)
+            accepted = await cmd_start(stub, task_id)
             if not accepted:
                 print(f"  {RED}Server rejected the task — aborting.{RESET}")  # noqa: T201
                 return
@@ -476,18 +409,17 @@ async def run_full(args: argparse.Namespace) -> None:
                 await asyncio.sleep(0.1)
                 await tracker.snapshot("StartStream", task_id)
 
-            # 2. ConsumeStream — wait for module output
-            print(f"\n{BOLD}[2] ConsumeStream{RESET}")  # noqa: T201
-            await asyncio.sleep(0.2)  # let module start
-            received = await cmd_consume(stub, task_id, args.verbose)
+            # 2. Stream — send the query, read module output
+            print(f"\n{BOLD}[2] Stream{RESET}")  # noqa: T201
+            received = await cmd_consume(stub, task_id, args.prompt, setup, args.verbose)
 
             if tracker:
                 await asyncio.sleep(0.1)
-                await tracker.snapshot("ConsumeStream", task_id)
+                await tracker.snapshot("Stream", task_id)
 
             # 3. SendSignal
             print(f"\n{BOLD}[3] SendSignal (cancel){RESET}")  # noqa: T201
-            await cmd_signal(stub, task_id, "cancel")
+            await cmd_signal(stub, task_id)
 
             if tracker:
                 await asyncio.sleep(0.1)
@@ -513,61 +445,39 @@ async def run_full(args: argparse.Namespace) -> None:
 async def run_start(args: argparse.Namespace) -> None:
     """StartStream only."""
     task_id = args.task_id or str(uuid.uuid4())
-    setup = json.loads(args.setup) if args.setup else None
 
     print(f"\n{BOLD}[StartStream]{RESET}  gateway={args.gateway}  task_id={task_id}")  # noqa: T201
 
     async with grpc.aio.insecure_channel(args.gateway, options=GRPC_OPTIONS) as channel:
         stub = gateway_service_pb2_grpc.GatewayServiceStub(channel)
-        await cmd_start(stub, task_id, args.prompt, setup)
+        await cmd_start(stub, task_id)
 
 
 async def run_consume(args: argparse.Namespace) -> None:
-    """ConsumeStream on existing task."""
+    """Stream on existing task."""
     if not args.task_id:
         print(f"{RED}--task-id is required for consume{RESET}")  # noqa: T201
         sys.exit(1)
 
-    print(f"\n{BOLD}[ConsumeStream]{RESET}  gateway={args.gateway}  task_id={args.task_id}")  # noqa: T201
-
-    async with grpc.aio.insecure_channel(args.gateway, options=GRPC_OPTIONS) as channel:
-        stub = gateway_service_pb2_grpc.GatewayServiceStub(channel)
-        await cmd_consume(stub, args.task_id, args.verbose)
-
-
-async def run_produce(args: argparse.Namespace) -> None:
-    """StartStream + ProduceStream (act as Module A)."""
-    task_id = args.task_id or str(uuid.uuid4())
     setup = json.loads(args.setup) if args.setup else None
-
-    print(f"\n{BOLD}[Produce]{RESET}  gateway={args.gateway}  task_id={task_id}")  # noqa: T201
+    print(f"\n{BOLD}[Stream]{RESET}  gateway={args.gateway}  task_id={args.task_id}")  # noqa: T201
 
     async with grpc.aio.insecure_channel(args.gateway, options=GRPC_OPTIONS) as channel:
         stub = gateway_service_pb2_grpc.GatewayServiceStub(channel)
-
-        # StartStream first (registers the session)
-        print(f"\n  {BOLD}StartStream{RESET}")  # noqa: T201
-        accepted = await cmd_start(stub, task_id, args.prompt, setup)
-        if not accepted:
-            print(f"  {RED}Rejected{RESET}")  # noqa: T201
-            return
-
-        # ProduceStream (act as Module A)
-        print(f"\n  {BOLD}ProduceStream ({args.chunks} chunks){RESET}")  # noqa: T201
-        await cmd_produce(stub, task_id, args.prompt, args.chunks)
+        await cmd_consume(stub, args.task_id, args.prompt, setup, args.verbose)
 
 
 async def run_signal(args: argparse.Namespace) -> None:
-    """SendSignal on existing task."""
+    """SendSignal(cancel) on existing task."""
     if not args.task_id:
         print(f"{RED}--task-id is required for signal{RESET}")  # noqa: T201
         sys.exit(1)
 
-    print(f"\n{BOLD}[SendSignal]{RESET}  gateway={args.gateway}  task_id={args.task_id}  action={args.action}")  # noqa: T201
+    print(f"\n{BOLD}[SendSignal]{RESET}  gateway={args.gateway}  task_id={args.task_id}  signal=cancel")  # noqa: T201
 
     async with grpc.aio.insecure_channel(args.gateway, options=GRPC_OPTIONS) as channel:
         stub = gateway_service_pb2_grpc.GatewayServiceStub(channel)
-        await cmd_signal(stub, args.task_id, args.action)
+        await cmd_signal(stub, args.task_id)
 
 
 async def run_inspect(args: argparse.Namespace) -> None:
@@ -613,8 +523,7 @@ examples:
   %(prog)s full --prompt "Test" --setup '{"uppercase": true, "repeat": 5}'
   %(prog)s start --prompt "Hello"
   %(prog)s consume --task-id <uuid>
-  %(prog)s produce --chunks 5 --prompt "Manual"
-  %(prog)s signal --task-id <uuid> --action cancel
+  %(prog)s signal --task-id <uuid>
   %(prog)s inspect --task-id <uuid>
 """,
     )
@@ -631,21 +540,16 @@ examples:
     sub = p.add_subparsers(dest="command", help="Endpoint to test")
 
     # full (default)
-    sub.add_parser("full", help="Full pipeline: StartStream -> ConsumeStream -> SendSignal")
+    sub.add_parser("full", help="Full pipeline: StartStream -> Stream -> SendSignal")
 
     # start
     sub.add_parser("start", help="StartStream only (unary)")
 
     # consume
-    sub.add_parser("consume", help="ConsumeStream on existing task (requires --task-id)")
-
-    # produce
-    sp_produce = sub.add_parser("produce", help="StartStream + ProduceStream (act as Module A)")
-    sp_produce.add_argument("--chunks", type=int, default=3, help="Number of chunks to produce (default: 3)")
+    sub.add_parser("consume", help="Stream on existing task (requires --task-id)")
 
     # signal
-    sp_signal = sub.add_parser("signal", help="SendSignal on existing task (requires --task-id)")
-    sp_signal.add_argument("--action", choices=["cancel", "pause"], default="cancel", help="Signal action (default: cancel)")
+    sub.add_parser("signal", help="SendSignal(cancel) on existing task (requires --task-id)")
 
     # inspect
     sub.add_parser("inspect", help="Dump Redis keys for a task (no gRPC)")
@@ -662,17 +566,10 @@ async def main() -> None:
     if not args.command:
         args.command = "full"
 
-    # Set defaults for subcommand-specific args
-    if not hasattr(args, "chunks"):
-        args.chunks = 3
-    if not hasattr(args, "action"):
-        args.action = "cancel"
-
     handlers = {
         "full": run_full,
         "start": run_start,
         "consume": run_consume,
-        "produce": run_produce,
         "signal": run_signal,
         "inspect": run_inspect,
     }

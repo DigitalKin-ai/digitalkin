@@ -453,21 +453,21 @@ class TestSharedRedisListenerInvalidate:
     """``invalidate_*`` dispatch routes to the registered cache_invalidator (not task.cancel)."""
 
     async def test_invalidate_signal_invokes_cache_invalidator(self) -> None:
-        """A ``pmessage`` with action=invalidate_tools triggers the registered invalidator."""
+        """A ``pmessage`` with action=invalidate_tools hands the ``TOOLS`` CacheScope name to the invalidator."""
         from digitalkin.core.task_manager.redis.redis_signal import SharedRedisListener
 
         listener = SharedRedisListener(_make_mock_client())
         calls: list[tuple[str, str]] = []
 
-        async def fake_invalidator(action: str, setup_id: str) -> None:
-            calls.append((action, setup_id))
+        async def fake_invalidator(scope: str, setup_id: str) -> None:
+            calls.append((scope, setup_id))
 
         listener.set_cache_invalidator(fake_invalidator)
 
         data = {"action": "invalidate_tools", "setup_id": "s1"}
         assert listener.dispatch_signal("_global_", data, json.dumps(data)) is True
         await asyncio.sleep(0)  # let create_task fire
-        assert calls == [("INVALIDATE_TOOLS", "s1")]
+        assert calls == [("TOOLS", "s1")]
 
     async def test_invalidate_signal_does_not_touch_task_refs(self) -> None:
         """``invalidate_*`` must not cancel any task; ``_task_refs`` unchanged."""

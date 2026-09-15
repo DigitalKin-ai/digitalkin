@@ -67,9 +67,9 @@ class TestStartStreamAddressRejection:
 
     @staticmethod
     def _request(task_id: str = "task_addr_1") -> Any:
-        from agentic_mesh_protocol.gateway.v1 import gateway_pb2
+        from agentic_mesh_protocol.gateway.v1 import gateway_dto_pb2
 
-        return gateway_pb2.StartStreamRequest(
+        return gateway_dto_pb2.StartStreamRequest(
             task_id=task_id, setup_id="setups:s1", mission_id="missions:m1",
         )
 

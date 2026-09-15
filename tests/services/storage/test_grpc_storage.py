@@ -15,8 +15,17 @@ from unittest.mock import AsyncMock, Mock
 
 import grpc
 import grpc_testing
+import protovalidate
 import pytest
-from agentic_mesh_protocol.storage.v1 import data_pb2, storage_service_pb2, storage_service_pb2_grpc
+from agentic_mesh_protocol.common.v1 import common_enums_pb2
+from agentic_mesh_protocol.pagination.v1 import bulk_pb2
+from agentic_mesh_protocol.storage.v1 import (
+    storage_dto_pb2,
+    storage_enums_pb2,
+    storage_messages_pb2,
+    storage_service_pb2,
+    storage_service_pb2_grpc,
+)
 from google.protobuf.struct_pb2 import Struct
 from hypothesis import given
 from hypothesis import strategies as st
@@ -196,7 +205,7 @@ class TestStoreData:
         data = {"mission_id": MISSION_ID, "name": "Test Record", "value": 42, "description": "A test record"}
 
         # Get the method descriptor
-        method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name["StoreRecord"]
+        method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name["CreateRecord"]
 
         # Execute client call in thread pool
         future = thread_pool.submit(asyncio.run, client.store(collection, record_id, data))
@@ -205,14 +214,14 @@ class TestStoreData:
         _, request, rpc = test_channel.take_unary_unary(method_desc)
 
         # Verify request
-        assert request.context == data_pb2.CONTEXT_MISSIONS
+        assert request.context == storage_enums_pb2.MISSIONS
         assert request.collection == collection
         assert request.record_id == record_id
-        assert request.data_type == data_pb2.OUTPUT
+        assert request.data_type == storage_enums_pb2.OUTPUT
 
         # Mock servicer processes the request
         context = FakeContext()
-        response = mock_servicer.StoreRecord(request, context)
+        response = mock_servicer.CreateRecord(request, context)
 
         # Terminate the RPC
         rpc.send_initial_metadata(())
@@ -274,13 +283,13 @@ class TestStoreData:
         record_id = "record_003"
         data = {"mission_id": MISSION_ID, "name": "First Record", "value": 10}
 
-        method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name["StoreRecord"]
+        method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name["CreateRecord"]
 
         # Store first record
         future1 = thread_pool.submit(asyncio.run, client.store(collection, record_id, data))
         _, request1, rpc1 = test_channel.take_unary_unary(method_desc)
         context1 = FakeContext()
-        response1 = mock_servicer.StoreRecord(request1, context1)
+        response1 = mock_servicer.CreateRecord(request1, context1)
         rpc1.send_initial_metadata(())
         rpc1.terminate(response1, (), grpc.StatusCode.OK, "")
         result1 = future1.result(timeout=1.0)
@@ -290,12 +299,14 @@ class TestStoreData:
         future2 = thread_pool.submit(asyncio.run, client.store(collection, record_id, data))
         _, request2, rpc2 = test_channel.take_unary_unary(method_desc)
         context2 = FakeContext()
-        response2 = mock_servicer.StoreRecord(request2, context2)
+        response2 = mock_servicer.CreateRecord(request2, context2)
         rpc2.send_initial_metadata(())
         rpc2.terminate(response2, (), context2._code, context2._details)
 
-        # Verify error is raised
-        with pytest.raises(StorageServiceError):
+        # The duplicate comes back as an OperationError outcome on an OK status
+        assert context2._code == grpc.StatusCode.OK
+        assert response2.result.WhichOneof("outcome") == "error"
+        with pytest.raises(StorageServiceError, match="record_003: ALREADY_EXISTS"):
             future2.result(timeout=1.0)
 
     @pytest.mark.grpc
@@ -318,16 +329,16 @@ class TestStoreData:
         record_id = "output_001"
         data = {"mission_id": MISSION_ID, "result": "Success", "score": 0.95}
 
-        method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name["StoreRecord"]
+        method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name["CreateRecord"]
 
         future = thread_pool.submit(asyncio.run, client.store(collection, record_id, data, data_type=DataType.OUTPUT))
 
         _, request, rpc = test_channel.take_unary_unary(method_desc)
 
-        assert request.data_type == data_pb2.OUTPUT
+        assert request.data_type == storage_enums_pb2.OUTPUT
 
         context = FakeContext()
-        response = mock_servicer.StoreRecord(request, context)
+        response = mock_servicer.CreateRecord(request, context)
         rpc.send_initial_metadata(())
         rpc.terminate(response, (), grpc.StatusCode.OK, "")
 
@@ -359,16 +370,16 @@ class TestStoreData:
             "timestamp": "2024-01-01T00:00:00Z",
         }
 
-        method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name["StoreRecord"]
+        method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name["CreateRecord"]
 
         future = thread_pool.submit(asyncio.run, client.store(collection, record_id, data, data_type=DataType.LOGS))
 
         _, request, rpc = test_channel.take_unary_unary(method_desc)
 
-        assert request.data_type == data_pb2.LOGS
+        assert request.data_type == storage_enums_pb2.LOGS
 
         context = FakeContext()
-        response = mock_servicer.StoreRecord(request, context)
+        response = mock_servicer.CreateRecord(request, context)
         rpc.send_initial_metadata(())
         rpc.terminate(response, (), grpc.StatusCode.OK, "")
 
@@ -395,16 +406,16 @@ class TestStoreData:
         record_id = "view_001"
         data = {"mission_id": MISSION_ID, "name": "View Data", "value": 100}
 
-        method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name["StoreRecord"]
+        method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name["CreateRecord"]
 
         future = thread_pool.submit(asyncio.run, client.store(collection, record_id, data, data_type=DataType.VIEW))
 
         _, request, rpc = test_channel.take_unary_unary(method_desc)
 
-        assert request.data_type == data_pb2.VIEW
+        assert request.data_type == storage_enums_pb2.VIEW
 
         context = FakeContext()
-        response = mock_servicer.StoreRecord(request, context)
+        response = mock_servicer.CreateRecord(request, context)
         rpc.send_initial_metadata(())
         rpc.terminate(response, (), grpc.StatusCode.OK, "")
 
@@ -431,16 +442,16 @@ class TestStoreData:
         record_id = "other_001"
         data = {"mission_id": MISSION_ID, "name": "Other Data", "value": 50}
 
-        method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name["StoreRecord"]
+        method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name["CreateRecord"]
 
         future = thread_pool.submit(asyncio.run, client.store(collection, record_id, data, data_type=DataType.OTHER))
 
         _, request, rpc = test_channel.take_unary_unary(method_desc)
 
-        assert request.data_type == data_pb2.OTHER
+        assert request.data_type == storage_enums_pb2.OTHER
 
         context = FakeContext()
-        response = mock_servicer.StoreRecord(request, context)
+        response = mock_servicer.CreateRecord(request, context)
         rpc.send_initial_metadata(())
         rpc.terminate(response, (), grpc.StatusCode.OK, "")
 
@@ -466,7 +477,7 @@ class TestStoreData:
         collection = "test_collection"
         data = {"mission_id": MISSION_ID, "name": "Auto ID Record", "value": 999}
 
-        method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name["StoreRecord"]
+        method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name["CreateRecord"]
 
         # Pass None for record_id to trigger auto-generation
         future = thread_pool.submit(asyncio.run, client.store(collection, None, data))
@@ -478,7 +489,7 @@ class TestStoreData:
         assert len(request.record_id) > 0
 
         context = FakeContext()
-        response = mock_servicer.StoreRecord(request, context)
+        response = mock_servicer.CreateRecord(request, context)
         rpc.send_initial_metadata(())
         rpc.terminate(response, (), grpc.StatusCode.OK, "")
 
@@ -514,17 +525,17 @@ class TestRetrieveData:
         data = {"mission_id": MISSION_ID, "name": "Read Test", "value": 123}
 
         store_method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name[
-            "StoreRecord"
+            "CreateRecord"
         ]
         read_method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name[
-            "ReadRecord"
+            "GetRecord"
         ]
 
         # Store the record first
         store_future = thread_pool.submit(asyncio.run, client.store(collection, record_id, data))
         _, store_request, store_rpc = test_channel.take_unary_unary(store_method_desc)
         store_context = FakeContext()
-        store_response = mock_servicer.StoreRecord(store_request, store_context)
+        store_response = mock_servicer.CreateRecord(store_request, store_context)
         store_rpc.send_initial_metadata(())
         store_rpc.terminate(store_response, (), grpc.StatusCode.OK, "")
         store_future.result(timeout=1.0)
@@ -533,12 +544,12 @@ class TestRetrieveData:
         read_future = thread_pool.submit(asyncio.run, client.read(collection, record_id))
         _, read_request, read_rpc = test_channel.take_unary_unary(read_method_desc)
 
-        assert read_request.context == data_pb2.CONTEXT_MISSIONS
+        assert read_request.context == storage_enums_pb2.MISSIONS
         assert read_request.collection == collection
         assert read_request.record_id == record_id
 
         read_context = FakeContext()
-        read_response = mock_servicer.ReadRecord(read_request, read_context)
+        read_response = mock_servicer.GetRecord(read_request, read_context)
         read_rpc.send_initial_metadata(())
         read_rpc.terminate(read_response, (), grpc.StatusCode.OK, "")
 
@@ -561,24 +572,26 @@ class TestRetrieveData:
         """Test reading a non-existent record returns None.
 
         Verifies:
-        - Reading non-existent record returns None
+        - A NOT_FOUND OperationError outcome (OK status) reads as None
         - No exception is raised
         """
         collection = "test_collection"
         record_id = "nonexistent_record"
 
         read_method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name[
-            "ReadRecord"
+            "GetRecord"
         ]
 
         read_future = thread_pool.submit(asyncio.run, client.read(collection, record_id))
         _, read_request, read_rpc = test_channel.take_unary_unary(read_method_desc)
 
         read_context = FakeContext()
-        read_response = mock_servicer.ReadRecord(read_request, read_context)
+        read_response = mock_servicer.GetRecord(read_request, read_context)
         read_rpc.send_initial_metadata(())
         read_rpc.terminate(read_response, (), read_context._code, read_context._details)
 
+        assert read_context._code == grpc.StatusCode.OK
+        assert read_response.result.error.code == "NOT_FOUND"
         result = read_future.result(timeout=1.0)
         assert result is None
 
@@ -603,17 +616,17 @@ class TestRetrieveData:
         data2 = {"mission_id": MISSION_ID, "result": "Collection 2", "score": 0.8}
 
         store_method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name[
-            "StoreRecord"
+            "CreateRecord"
         ]
         read_method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name[
-            "ReadRecord"
+            "GetRecord"
         ]
 
         # Store in collection 1
         store_future1 = thread_pool.submit(asyncio.run, client.store("test_collection", record_id, data1))
         _, store_request1, store_rpc1 = test_channel.take_unary_unary(store_method_desc)
         store_context1 = FakeContext()
-        store_response1 = mock_servicer.StoreRecord(store_request1, store_context1)
+        store_response1 = mock_servicer.CreateRecord(store_request1, store_context1)
         store_rpc1.send_initial_metadata(())
         store_rpc1.terminate(store_response1, (), grpc.StatusCode.OK, "")
         store_future1.result(timeout=1.0)
@@ -622,7 +635,7 @@ class TestRetrieveData:
         store_future2 = thread_pool.submit(asyncio.run, client.store("outputs", record_id, data2))
         _, store_request2, store_rpc2 = test_channel.take_unary_unary(store_method_desc)
         store_context2 = FakeContext()
-        store_response2 = mock_servicer.StoreRecord(store_request2, store_context2)
+        store_response2 = mock_servicer.CreateRecord(store_request2, store_context2)
         store_rpc2.send_initial_metadata(())
         store_rpc2.terminate(store_response2, (), grpc.StatusCode.OK, "")
         store_future2.result(timeout=1.0)
@@ -631,7 +644,7 @@ class TestRetrieveData:
         read_future1 = thread_pool.submit(asyncio.run, client.read("test_collection", record_id))
         _, read_request1, read_rpc1 = test_channel.take_unary_unary(read_method_desc)
         read_context1 = FakeContext()
-        read_response1 = mock_servicer.ReadRecord(read_request1, read_context1)
+        read_response1 = mock_servicer.GetRecord(read_request1, read_context1)
         read_rpc1.send_initial_metadata(())
         read_rpc1.terminate(read_response1, (), grpc.StatusCode.OK, "")
         result1 = read_future1.result(timeout=1.0)
@@ -640,7 +653,7 @@ class TestRetrieveData:
         read_future2 = thread_pool.submit(asyncio.run, client.read("outputs", record_id))
         _, read_request2, read_rpc2 = test_channel.take_unary_unary(read_method_desc)
         read_context2 = FakeContext()
-        read_response2 = mock_servicer.ReadRecord(read_request2, read_context2)
+        read_response2 = mock_servicer.GetRecord(read_request2, read_context2)
         read_rpc2.send_initial_metadata(())
         read_rpc2.terminate(read_response2, (), grpc.StatusCode.OK, "")
         result2 = read_future2.result(timeout=1.0)
@@ -682,7 +695,7 @@ class TestUpdateData:
         updated_data = {"mission_id": MISSION_ID, "name": "Updated", "value": 200}
 
         store_method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name[
-            "StoreRecord"
+            "CreateRecord"
         ]
         update_method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name[
             "UpdateRecord"
@@ -692,7 +705,7 @@ class TestUpdateData:
         store_future = thread_pool.submit(asyncio.run, client.store(collection, record_id, original_data))
         _, store_request, store_rpc = test_channel.take_unary_unary(store_method_desc)
         store_context = FakeContext()
-        store_response = mock_servicer.StoreRecord(store_request, store_context)
+        store_response = mock_servicer.CreateRecord(store_request, store_context)
         store_rpc.send_initial_metadata(())
         store_rpc.terminate(store_response, (), grpc.StatusCode.OK, "")
         store_result = store_future.result(timeout=1.0)
@@ -701,7 +714,7 @@ class TestUpdateData:
         update_future = thread_pool.submit(asyncio.run, client.update(collection, record_id, updated_data))
         _, update_request, update_rpc = test_channel.take_unary_unary(update_method_desc)
 
-        assert update_request.context == data_pb2.CONTEXT_MISSIONS
+        assert update_request.context == storage_enums_pb2.MISSIONS
         assert update_request.collection == collection
         assert update_request.record_id == record_id
 
@@ -750,6 +763,7 @@ class TestUpdateData:
         update_rpc.send_initial_metadata(())
         update_rpc.terminate(update_response, (), update_context._code, update_context._details)
 
+        assert update_response.result.error.code == "NOT_FOUND"
         result = update_future.result(timeout=1.0)
         assert result is None
 
@@ -805,20 +819,20 @@ class TestDeleteData:
         data = {"mission_id": MISSION_ID, "name": "To be removed", "value": 999}
 
         store_method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name[
-            "StoreRecord"
+            "CreateRecord"
         ]
         remove_method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name[
-            "RemoveRecord"
+            "DeleteRecord"
         ]
         read_method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name[
-            "ReadRecord"
+            "GetRecord"
         ]
 
         # Store the record first
         store_future = thread_pool.submit(asyncio.run, client.store(collection, record_id, data))
         _, store_request, store_rpc = test_channel.take_unary_unary(store_method_desc)
         store_context = FakeContext()
-        store_response = mock_servicer.StoreRecord(store_request, store_context)
+        store_response = mock_servicer.CreateRecord(store_request, store_context)
         store_rpc.send_initial_metadata(())
         store_rpc.terminate(store_response, (), grpc.StatusCode.OK, "")
         store_future.result(timeout=1.0)
@@ -827,12 +841,12 @@ class TestDeleteData:
         remove_future = thread_pool.submit(asyncio.run, client.remove(collection, record_id))
         _, remove_request, remove_rpc = test_channel.take_unary_unary(remove_method_desc)
 
-        assert remove_request.context == data_pb2.CONTEXT_MISSIONS
+        assert remove_request.context == storage_enums_pb2.MISSIONS
         assert remove_request.collection == collection
         assert remove_request.record_id == record_id
 
         remove_context = FakeContext()
-        remove_response = mock_servicer.RemoveRecord(remove_request, remove_context)
+        remove_response = mock_servicer.DeleteRecord(remove_request, remove_context)
         remove_rpc.send_initial_metadata(())
         remove_rpc.terminate(remove_response, (), grpc.StatusCode.OK, "")
 
@@ -843,7 +857,7 @@ class TestDeleteData:
         read_future = thread_pool.submit(asyncio.run, client.read(collection, record_id))
         _, read_request, read_rpc = test_channel.take_unary_unary(read_method_desc)
         read_context = FakeContext()
-        read_response = mock_servicer.ReadRecord(read_request, read_context)
+        read_response = mock_servicer.GetRecord(read_request, read_context)
         read_rpc.send_initial_metadata(())
         read_rpc.terminate(read_response, (), grpc.StatusCode.NOT_FOUND, "Record not found")
 
@@ -861,30 +875,30 @@ class TestDeleteData:
         mock_servicer: MockStorageServicer,
         thread_pool: futures.ThreadPoolExecutor,
     ) -> None:
-        """Test removing a non-existent record returns True (idempotent).
+        """Test removing a non-existent record returns False.
 
         Verifies:
-        - Removing non-existent record is idempotent
-        - Returns True even if record didn't exist
+        - DeleteRecord answers a NOT_FOUND OperationError (no deleted record to return)
+        - remove() maps the error outcome to False, like DefaultStorage, without raising
         """
         collection = "test_collection"
         record_id = "nonexistent_remove"
 
         remove_method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name[
-            "RemoveRecord"
+            "DeleteRecord"
         ]
 
         remove_future = thread_pool.submit(asyncio.run, client.remove(collection, record_id))
         _, remove_request, remove_rpc = test_channel.take_unary_unary(remove_method_desc)
 
         remove_context = FakeContext()
-        # Mock servicer should return success even if record doesn't exist (idempotent)
-        remove_response = mock_servicer.RemoveRecord(remove_request, remove_context)
+        remove_response = mock_servicer.DeleteRecord(remove_request, remove_context)
         remove_rpc.send_initial_metadata(())
         remove_rpc.terminate(remove_response, (), grpc.StatusCode.OK, "")
 
+        assert remove_response.result.error.code == "NOT_FOUND"
         result = remove_future.result(timeout=1.0)
-        assert result is True
+        assert result is False
 
     @pytest.mark.grpc
     @pytest.mark.integration
@@ -896,28 +910,28 @@ class TestDeleteData:
         mock_servicer: MockStorageServicer,
         thread_pool: futures.ThreadPoolExecutor,
     ) -> None:
-        """Test removing a record twice is idempotent.
+        """Test removing a record twice.
 
         Verifies:
-        - Record can be removed multiple times without error
-        - Second removal still returns True
+        - Record can be removed multiple times without raising
+        - The first removal returns True, the second (record gone) returns False
         """
         collection = "test_collection"
         record_id = "record_remove_twice"
         data = {"mission_id": MISSION_ID, "name": "Remove twice", "value": 888}
 
         store_method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name[
-            "StoreRecord"
+            "CreateRecord"
         ]
         remove_method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name[
-            "RemoveRecord"
+            "DeleteRecord"
         ]
 
         # Store the record
         store_future = thread_pool.submit(asyncio.run, client.store(collection, record_id, data))
         _, store_request, store_rpc = test_channel.take_unary_unary(store_method_desc)
         store_context = FakeContext()
-        store_response = mock_servicer.StoreRecord(store_request, store_context)
+        store_response = mock_servicer.CreateRecord(store_request, store_context)
         store_rpc.send_initial_metadata(())
         store_rpc.terminate(store_response, (), grpc.StatusCode.OK, "")
         store_future.result(timeout=1.0)
@@ -926,7 +940,7 @@ class TestDeleteData:
         remove_future1 = thread_pool.submit(asyncio.run, client.remove(collection, record_id))
         _, remove_request1, remove_rpc1 = test_channel.take_unary_unary(remove_method_desc)
         remove_context1 = FakeContext()
-        remove_response1 = mock_servicer.RemoveRecord(remove_request1, remove_context1)
+        remove_response1 = mock_servicer.DeleteRecord(remove_request1, remove_context1)
         remove_rpc1.send_initial_metadata(())
         remove_rpc1.terminate(remove_response1, (), grpc.StatusCode.OK, "")
         result1 = remove_future1.result(timeout=1.0)
@@ -935,13 +949,13 @@ class TestDeleteData:
         remove_future2 = thread_pool.submit(asyncio.run, client.remove(collection, record_id))
         _, remove_request2, remove_rpc2 = test_channel.take_unary_unary(remove_method_desc)
         remove_context2 = FakeContext()
-        remove_response2 = mock_servicer.RemoveRecord(remove_request2, remove_context2)
+        remove_response2 = mock_servicer.DeleteRecord(remove_request2, remove_context2)
         remove_rpc2.send_initial_metadata(())
         remove_rpc2.terminate(remove_response2, (), grpc.StatusCode.OK, "")
         result2 = remove_future2.result(timeout=1.0)
 
         assert result1 is True
-        assert result2 is True
+        assert result2 is False
 
     @pytest.mark.grpc
     @pytest.mark.integration
@@ -967,10 +981,10 @@ class TestDeleteData:
         ]
 
         store_method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name[
-            "StoreRecord"
+            "CreateRecord"
         ]
         remove_coll_method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name[
-            "RemoveCollection"
+            "DeleteCollection"
         ]
         list_method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name[
             "ListRecords"
@@ -982,7 +996,7 @@ class TestDeleteData:
             store_future = thread_pool.submit(asyncio.run, client.store(collection, record_id, data))
             _, store_request, store_rpc = test_channel.take_unary_unary(store_method_desc)
             store_context = FakeContext()
-            store_response = mock_servicer.StoreRecord(store_request, store_context)
+            store_response = mock_servicer.CreateRecord(store_request, store_context)
             store_rpc.send_initial_metadata(())
             store_rpc.terminate(store_response, (), grpc.StatusCode.OK, "")
             store_future.result(timeout=1.0)
@@ -991,11 +1005,11 @@ class TestDeleteData:
         remove_future = thread_pool.submit(asyncio.run, client.remove_collection(collection))
         _, remove_request, remove_rpc = test_channel.take_unary_unary(remove_coll_method_desc)
 
-        assert remove_request.context == data_pb2.CONTEXT_MISSIONS
+        assert remove_request.context == storage_enums_pb2.MISSIONS
         assert remove_request.collection == collection
 
         remove_context = FakeContext()
-        remove_response = mock_servicer.RemoveCollection(remove_request, remove_context)
+        remove_response = mock_servicer.DeleteCollection(remove_request, remove_context)
         remove_rpc.send_initial_metadata(())
         remove_rpc.terminate(remove_response, (), grpc.StatusCode.OK, "")
 
@@ -1032,14 +1046,14 @@ class TestDeleteData:
         collection = "nonexistent_collection"
 
         remove_coll_method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name[
-            "RemoveCollection"
+            "DeleteCollection"
         ]
 
         remove_future = thread_pool.submit(asyncio.run, client.remove_collection(collection))
         _, remove_request, remove_rpc = test_channel.take_unary_unary(remove_coll_method_desc)
 
         remove_context = FakeContext()
-        remove_response = mock_servicer.RemoveCollection(remove_request, remove_context)
+        remove_response = mock_servicer.DeleteCollection(remove_request, remove_context)
         remove_rpc.send_initial_metadata(())
         remove_rpc.terminate(remove_response, (), grpc.StatusCode.OK, "")
 
@@ -1066,10 +1080,10 @@ class TestDeleteData:
         data2 = {"mission_id": MISSION_ID, "result": "Collection 2", "score": 0.9}
 
         store_method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name[
-            "StoreRecord"
+            "CreateRecord"
         ]
         remove_coll_method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name[
-            "RemoveCollection"
+            "DeleteCollection"
         ]
         list_method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name[
             "ListRecords"
@@ -1079,7 +1093,7 @@ class TestDeleteData:
         store_future1 = thread_pool.submit(asyncio.run, client.store("test_collection", "rec1", data1))
         _, store_request1, store_rpc1 = test_channel.take_unary_unary(store_method_desc)
         store_context1 = FakeContext()
-        store_response1 = mock_servicer.StoreRecord(store_request1, store_context1)
+        store_response1 = mock_servicer.CreateRecord(store_request1, store_context1)
         store_rpc1.send_initial_metadata(())
         store_rpc1.terminate(store_response1, (), grpc.StatusCode.OK, "")
         store_future1.result(timeout=1.0)
@@ -1087,7 +1101,7 @@ class TestDeleteData:
         store_future2 = thread_pool.submit(asyncio.run, client.store("outputs", "rec2", data2))
         _, store_request2, store_rpc2 = test_channel.take_unary_unary(store_method_desc)
         store_context2 = FakeContext()
-        store_response2 = mock_servicer.StoreRecord(store_request2, store_context2)
+        store_response2 = mock_servicer.CreateRecord(store_request2, store_context2)
         store_rpc2.send_initial_metadata(())
         store_rpc2.terminate(store_response2, (), grpc.StatusCode.OK, "")
         store_future2.result(timeout=1.0)
@@ -1096,7 +1110,7 @@ class TestDeleteData:
         remove_future = thread_pool.submit(asyncio.run, client.remove_collection("test_collection"))
         _, remove_request, remove_rpc = test_channel.take_unary_unary(remove_coll_method_desc)
         remove_context = FakeContext()
-        remove_response = mock_servicer.RemoveCollection(remove_request, remove_context)
+        remove_response = mock_servicer.DeleteCollection(remove_request, remove_context)
         remove_rpc.send_initial_metadata(())
         remove_rpc.terminate(remove_response, (), grpc.StatusCode.OK, "")
         remove_future.result(timeout=1.0)
@@ -1146,7 +1160,7 @@ class TestListData:
         ]
 
         store_method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name[
-            "StoreRecord"
+            "CreateRecord"
         ]
         list_method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name[
             "ListRecords"
@@ -1158,7 +1172,7 @@ class TestListData:
             store_future = thread_pool.submit(asyncio.run, client.store(collection, record_id, data))
             _, store_request, store_rpc = test_channel.take_unary_unary(store_method_desc)
             store_context = FakeContext()
-            store_response = mock_servicer.StoreRecord(store_request, store_context)
+            store_response = mock_servicer.CreateRecord(store_request, store_context)
             store_rpc.send_initial_metadata(())
             store_rpc.terminate(store_response, (), grpc.StatusCode.OK, "")
             store_future.result(timeout=1.0)
@@ -1167,7 +1181,7 @@ class TestListData:
         list_future = thread_pool.submit(asyncio.run, client.list(collection))
         _, list_request, list_rpc = test_channel.take_unary_unary(list_method_desc)
 
-        assert list_request.context == data_pb2.CONTEXT_MISSIONS
+        assert list_request.context == storage_enums_pb2.MISSIONS
         assert list_request.collection == collection
 
         list_context = FakeContext()
@@ -1203,9 +1217,9 @@ class TestListData:
         ]
 
         for scope_context, wire in (
-            (Context.USERS, data_pb2.CONTEXT_USERS),
-            (Context.ORGANIZATIONS, data_pb2.CONTEXT_ORGANIZATIONS),
-            (Context.UNSPECIFIED, data_pb2.CONTEXT_UNSPECIFIED),
+                (Context.USERS, storage_enums_pb2.USERS),
+                (Context.ORGANIZATIONS, storage_enums_pb2.ORGANIZATIONS),
+                (Context.UNSPECIFIED, storage_enums_pb2.STORAGE_CONTEXT_UNSPECIFIED),
         ):
             list_future = thread_pool.submit(
                 asyncio.run,
@@ -1215,7 +1229,7 @@ class TestListData:
 
             assert list_request.context == wire
             assert list_request.collection == collection
-            assert list(list_request.visibilities) == [data_pb2.VISIBILITY_PUBLIC, data_pb2.VISIBILITY_INTERNAL]
+            assert list(list_request.visibilities) == [common_enums_pb2.PUBLIC, common_enums_pb2.INTERNAL]
 
             list_context = FakeContext()
             list_response = mock_servicer.ListRecords(list_request, list_context)
@@ -1276,7 +1290,7 @@ class TestListData:
         data2 = {"mission_id": MISSION_ID, "result": "Collection 2", "score": 0.75}
 
         store_method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name[
-            "StoreRecord"
+            "CreateRecord"
         ]
         list_method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name[
             "ListRecords"
@@ -1286,7 +1300,7 @@ class TestListData:
         store_future1 = thread_pool.submit(asyncio.run, client.store("test_collection", "rec1", data1))
         _, store_request1, store_rpc1 = test_channel.take_unary_unary(store_method_desc)
         store_context1 = FakeContext()
-        store_response1 = mock_servicer.StoreRecord(store_request1, store_context1)
+        store_response1 = mock_servicer.CreateRecord(store_request1, store_context1)
         store_rpc1.send_initial_metadata(())
         store_rpc1.terminate(store_response1, (), grpc.StatusCode.OK, "")
         store_future1.result(timeout=1.0)
@@ -1295,7 +1309,7 @@ class TestListData:
         store_future2 = thread_pool.submit(asyncio.run, client.store("outputs", "rec2", data2))
         _, store_request2, store_rpc2 = test_channel.take_unary_unary(store_method_desc)
         store_context2 = FakeContext()
-        store_response2 = mock_servicer.StoreRecord(store_request2, store_context2)
+        store_response2 = mock_servicer.CreateRecord(store_request2, store_context2)
         store_rpc2.send_initial_metadata(())
         store_rpc2.terminate(store_response2, (), grpc.StatusCode.OK, "")
         store_future2.result(timeout=1.0)
@@ -1326,25 +1340,69 @@ class TestListData:
 
         from google.protobuf.struct_pb2 import Struct
 
-        def _record(record_id: str, data: dict) -> data_pb2.StorageRecord:
+        def _record(record_id: str, data: dict) -> storage_messages_pb2.StorageRecord:
             struct = Struct()
             struct.update(data)
-            return data_pb2.StorageRecord(
+            return storage_messages_pb2.StorageRecord(
                 context=MISSION_ID,
                 collection="test_collection",
                 record_id=record_id,
                 data=struct,
-                data_type=data_pb2.DataType.Value("OUTPUT"),
+                data_type=storage_enums_pb2.DataType.Value("OUTPUT"),
             )
 
         valid = _record("valid", {"mission_id": MISSION_ID, "name": "ok", "value": 1})
         invalid = _record("foreign", {"unexpected": "shape"})
         client.exec_grpc_query = AsyncMock(  # type: ignore[method-assign]
-            return_value=data_pb2.ListRecordsResponse(records=[invalid, valid])
+            return_value=storage_dto_pb2.ListRecordsResponse(
+                results=[
+                    storage_messages_pb2.StorageResult(identifier="foreign", record=invalid),
+                    storage_messages_pb2.StorageResult(identifier="valid", record=valid),
+                ]
+            )
         )
 
         results = await client._list("test_collection", MISSION_ID)
         assert [r.record_id for r in results] == ["valid"]
+
+    @pytest.mark.grpc
+    @pytest.mark.edge_case
+    async def test_list_drops_error_results_and_logs_each(
+            self,
+            client: GrpcStorage,
+            monkeypatch: pytest.MonkeyPatch,
+            caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A result holding an OperationError is dropped and logged with its content; the rest is kept."""
+        payload = Struct()
+        payload.update({"mission_id": MISSION_ID, "name": "ok", "value": 1})
+        valid = storage_messages_pb2.StorageResult(
+            identifier="valid",
+            record=storage_messages_pb2.StorageRecord(
+                context=MISSION_ID,
+                collection="test_collection",
+                record_id="valid",
+                data=payload,
+                data_type=storage_enums_pb2.OUTPUT,
+            ),
+        )
+        failed = storage_messages_pb2.StorageResult(
+            identifier="broken", error=bulk_pb2.OperationError(code="INTERNAL", message="decode failed")
+        )
+        client.exec_grpc_query = AsyncMock(  # type: ignore[method-assign]
+            return_value=storage_dto_pb2.ListRecordsResponse(
+                results=[failed, valid], bulk=bulk_pb2.BulkResponse(total_processed=2, total_failed=1)
+            )
+        )
+
+        monkeypatch.setattr(logging.getLogger("digitalkin"), "propagate", True)
+        with caplog.at_level(logging.WARNING, logger="digitalkin"):
+            results = await client.list("test_collection")
+
+        assert [r.record_id for r in results] == ["valid"]
+        assert any(
+            "ListRecords dropped result broken: INTERNAL decode failed" in r.getMessage() for r in caplog.records
+        )
 
 
 class TestStorageEdgeCases:
@@ -1380,13 +1438,13 @@ class TestStorageEdgeCases:
         }
 
         store_method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name[
-            "StoreRecord"
+            "CreateRecord"
         ]
 
         store_future = thread_pool.submit(asyncio.run, client.store(collection, record_id, data))
         _, store_request, store_rpc = test_channel.take_unary_unary(store_method_desc)
         store_context = FakeContext()
-        store_response = mock_servicer.StoreRecord(store_request, store_context)
+        store_response = mock_servicer.CreateRecord(store_request, store_context)
         store_rpc.send_initial_metadata(())
         store_rpc.terminate(store_response, (), grpc.StatusCode.OK, "")
 
@@ -1417,13 +1475,13 @@ class TestStorageEdgeCases:
         data = {"mission_id": MISSION_ID, "name": "Large Data Record", "value": 999, "description": large_description}
 
         store_method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name[
-            "StoreRecord"
+            "CreateRecord"
         ]
 
         store_future = thread_pool.submit(asyncio.run, client.store(collection, record_id, data))
         _, store_request, store_rpc = test_channel.take_unary_unary(store_method_desc)
         store_context = FakeContext()
-        store_response = mock_servicer.StoreRecord(store_request, store_context)
+        store_response = mock_servicer.CreateRecord(store_request, store_context)
         store_rpc.send_initial_metadata(())
         store_rpc.terminate(store_response, (), grpc.StatusCode.OK, "")
 
@@ -1460,13 +1518,13 @@ class TestStorageEdgeCases:
         collection = "test_collection"
 
         store_method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name[
-            "StoreRecord"
+            "CreateRecord"
         ]
 
         data1 = {"mission_id": mission1_id, "name": "Mission 1 Data", "value": 100}
         store_future1 = thread_pool.submit(asyncio.run, client1.store(collection, "record_1", data1))
         _, store_request1, store_rpc1 = test_channel.take_unary_unary(store_method_desc)
-        store_response1 = mock_servicer.StoreRecord(store_request1, FakeContext())
+        store_response1 = mock_servicer.CreateRecord(store_request1, FakeContext())
         store_rpc1.send_initial_metadata(())
         store_rpc1.terminate(store_response1, (), grpc.StatusCode.OK, "")
         result1 = store_future1.result(timeout=1.0)
@@ -1474,13 +1532,13 @@ class TestStorageEdgeCases:
         data2 = {"mission_id": mission2_id, "name": "Mission 2 Data", "value": 200}
         store_future2 = thread_pool.submit(asyncio.run, client2.store(collection, "record_2", data2))
         _, store_request2, store_rpc2 = test_channel.take_unary_unary(store_method_desc)
-        store_response2 = mock_servicer.StoreRecord(store_request2, FakeContext())
+        store_response2 = mock_servicer.CreateRecord(store_request2, FakeContext())
         store_rpc2.send_initial_metadata(())
         store_rpc2.terminate(store_response2, (), grpc.StatusCode.OK, "")
         result2 = store_future2.result(timeout=1.0)
 
-        assert store_request1.context == data_pb2.CONTEXT_MISSIONS
-        assert store_request2.context == data_pb2.CONTEXT_MISSIONS
+        assert store_request1.context == storage_enums_pb2.MISSIONS
+        assert store_request2.context == storage_enums_pb2.MISSIONS
         assert result1.data.value == 100
         assert result2.data.value == 200
 
@@ -1571,7 +1629,7 @@ class TestCircuitBreakerInteraction:
         monkeypatch: pytest.MonkeyPatch,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
-        """Open-circuit StoreRecord raises but logs at DEBUG (no stack trace)."""
+        """Open-circuit CreateRecord raises but logs at DEBUG (no stack trace)."""
         self._open_storage_breaker(monkeypatch)
         data = {"mission_id": MISSION_ID, "name": "x", "value": 1}
 
@@ -1597,7 +1655,7 @@ class TestCircuitBreakerInteraction:
         monkeypatch: pytest.MonkeyPatch,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
-        """Open-circuit ReadRecord returns None and logs at DEBUG only."""
+        """Open-circuit GetRecord returns None and logs at DEBUG only."""
         self._open_storage_breaker(monkeypatch)
 
         monkeypatch.setattr(logging.getLogger("digitalkin"), "propagate", True)
@@ -1626,11 +1684,11 @@ class TestCircuitBreakerInteraction:
         monkeypatch.setenv("CLIENT_MAX_RETRIES", "0")
         get_client_settings.cache_clear()
 
-        method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name["ReadRecord"]
+        method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name["GetRecord"]
         future = thread_pool.submit(asyncio.run, client.read("test_collection", "missing"))
         _meta, _req, rpc = test_channel.take_unary_unary(method_desc)
         rpc.send_initial_metadata(())
-        rpc.terminate(data_pb2.ReadRecordResponse(), (), grpc.StatusCode.NOT_FOUND, "not found")
+        rpc.terminate(storage_dto_pb2.GetRecordResponse(), (), grpc.StatusCode.NOT_FOUND, "not found")
         result = future.result(timeout=2.0)
 
         assert result is None
@@ -1643,7 +1701,7 @@ class TestCircuitBreakerInteraction:
         """A permission error from the channel middleware is re-raised (not swallowed to None); breaker untouched."""
         CircuitBreaker.remove("StorageService")
         client.stub = Mock()
-        client.stub.ReadRecord = AsyncMock(side_effect=PermissionDeniedError("[/StorageService/ReadRecord] denied"))
+        client.stub.GetRecord = AsyncMock(side_effect=PermissionDeniedError("[/StorageService/GetRecord] denied"))
 
         with pytest.raises(PermissionDeniedError):
             await client.read("test_collection", "denied")
@@ -1664,11 +1722,11 @@ class TestCircuitBreakerInteraction:
         monkeypatch.setenv("CLIENT_MAX_RETRIES", "0")
         get_client_settings.cache_clear()
 
-        method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name["ReadRecord"]
+        method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name["GetRecord"]
         future = thread_pool.submit(asyncio.run, client.read("test_collection", "any"))
         _meta, _req, rpc = test_channel.take_unary_unary(method_desc)
         rpc.send_initial_metadata(())
-        rpc.terminate(data_pb2.ReadRecordResponse(), (), grpc.StatusCode.UNAVAILABLE, "down")
+        rpc.terminate(storage_dto_pb2.GetRecordResponse(), (), grpc.StatusCode.UNAVAILABLE, "down")
         result = future.result(timeout=2.0)
 
         assert result is None
@@ -1684,23 +1742,23 @@ class TestVisibilityEnumMapping:
     """SDK ``Visibility`` <-> storage-proto wire enum, both directions."""
 
     _WIRE = (
-        (Visibility.UNSPECIFIED, data_pb2.VISIBILITY_UNSPECIFIED),
-        (Visibility.PUBLIC, data_pb2.VISIBILITY_PUBLIC),
-        (Visibility.PRIVATE, data_pb2.VISIBILITY_PRIVATE),
-        (Visibility.INTERNAL, data_pb2.VISIBILITY_INTERNAL),
+        (Visibility.UNSPECIFIED, common_enums_pb2.VISIBILITY_UNSPECIFIED),
+        (Visibility.PUBLIC, common_enums_pb2.PUBLIC),
+        (Visibility.PRIVATE, common_enums_pb2.PRIVATE),
+        (Visibility.INTERNAL, common_enums_pb2.INTERNAL),
     )
 
     @pytest.mark.unit
     @pytest.mark.parametrize(("vis", "wire"), _WIRE)
     def test_visibility_enum_maps_to_wire(self, vis: Visibility, wire: int) -> None:
-        """Each SDK visibility maps to its proto ``VISIBILITY_*`` constant."""
+        """Each SDK visibility maps to its ``common.v1.Visibility`` constant."""
         assert GrpcStorage._visibility_enum(vis) == wire
 
     @pytest.mark.contract
     def test_sdk_visibility_names_mirror_proto(self) -> None:
-        """Every SDK Visibility has a matching ``VISIBILITY_<NAME>`` in the proto."""
-        proto_names = {v.name for v in data_pb2.Visibility.DESCRIPTOR.values}
-        assert {f"VISIBILITY_{v.name}" for v in Visibility} <= proto_names
+        """SDK Visibility names mirror the proto's (only the zero value keeps its ``VISIBILITY_`` prefix)."""
+        proto_names = {v.name.removeprefix("VISIBILITY_") for v in common_enums_pb2.Visibility.DESCRIPTOR.values}
+        assert {v.name for v in Visibility} == proto_names
 
     @pytest.mark.contract
     def test_visibility_values_are_lowercase_string_names(self) -> None:
@@ -1711,17 +1769,17 @@ class TestVisibilityEnumMapping:
 
     @pytest.mark.regression
     def test_visibility_enum_avoids_uncallable_proto_wrapper(self) -> None:
-        """``data_pb2.Visibility(...)`` is not callable at runtime; the mapper must not rely on it."""
+        """``common_enums_pb2.Visibility(...)`` is not callable at runtime; the mapper must not rely on it."""
         with pytest.raises(TypeError):
-            data_pb2.Visibility(1)
-        assert GrpcStorage._visibility_enum(Visibility.PUBLIC) == data_pb2.VISIBILITY_PUBLIC
+            common_enums_pb2.Visibility(1)
+        assert GrpcStorage._visibility_enum(Visibility.PUBLIC) == common_enums_pb2.PUBLIC
 
     @pytest.mark.property
     @given(vis=st.sampled_from(list(Visibility)))
     def test_visibility_round_trips_through_wire(self, vis: Visibility) -> None:
         """Write mapping -> proto -> read mapping recovers the same member."""
         wire = GrpcStorage._visibility_enum(vis)
-        name = data_pb2.Visibility.Name(wire).removeprefix("VISIBILITY_")
+        name = common_enums_pb2.Visibility.Name(wire).removeprefix("VISIBILITY_")
         assert Visibility[name] is vis
 
     @pytest.mark.validation
@@ -1749,7 +1807,7 @@ class TestVisibilityWire:
     ) -> None:
         """A store carries the chosen visibility as the proto wire enum."""
         data = {"mission_id": MISSION_ID, "name": "vis", "value": 1}
-        method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name["StoreRecord"]
+        method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name["CreateRecord"]
 
         future = thread_pool.submit(asyncio.run, client.store("test_collection", "vis_rec", data, visibility=vis))
         _, request, rpc = test_channel.take_unary_unary(method_desc)
@@ -1757,7 +1815,7 @@ class TestVisibilityWire:
         assert request.visibility == GrpcStorage._visibility_enum(vis)
 
         rpc.send_initial_metadata(())
-        rpc.terminate(mock_servicer.StoreRecord(request, FakeContext()), (), grpc.StatusCode.OK, "")
+        rpc.terminate(mock_servicer.CreateRecord(request, FakeContext()), (), grpc.StatusCode.OK, "")
         assert future.result(timeout=1.0) is not None
 
     @pytest.mark.unit
@@ -1766,12 +1824,12 @@ class TestVisibilityWire:
         """Reading a record reconstructs the SDK visibility from the proto int (string-valued enum)."""
         struct = Struct()
         struct.update({"mission_id": MISSION_ID, "name": "vis", "value": 1})
-        proto = data_pb2.StorageRecord(
+        proto = storage_messages_pb2.StorageRecord(
             context=MISSION_ID,
             collection="test_collection",
             record_id="r",
             data=struct,
-            data_type=data_pb2.OUTPUT,
+            data_type=storage_enums_pb2.OUTPUT,
             visibility=GrpcStorage._visibility_enum(vis),
         )
         assert client._build_record_from_proto(proto).visibility is vis
@@ -1781,12 +1839,12 @@ class TestVisibilityWire:
         """An out-of-range wire visibility makes the record skipped rather than crash a whole list."""
         struct = Struct()
         struct.update({"mission_id": MISSION_ID, "name": "vis", "value": 1})
-        proto = data_pb2.StorageRecord(
+        proto = storage_messages_pb2.StorageRecord(
             context=MISSION_ID,
             collection="test_collection",
             record_id="r",
             data=struct,
-            data_type=data_pb2.OUTPUT,
+            data_type=storage_enums_pb2.OUTPUT,
             visibility=99,
         )
         assert client._build_record_or_skip(proto) is None
@@ -1799,11 +1857,11 @@ class TestContextWireMapping:
     @pytest.mark.parametrize(
         ("ctx", "wire"),
         [
-            (Context.MISSIONS, data_pb2.CONTEXT_MISSIONS),
-            (Context.SETUP, data_pb2.CONTEXT_SETUP_VERSIONS),
-            (Context.USERS, data_pb2.CONTEXT_USERS),
-            (Context.ORGANIZATIONS, data_pb2.CONTEXT_ORGANIZATIONS),
-            (Context.UNSPECIFIED, data_pb2.CONTEXT_UNSPECIFIED),
+            (Context.MISSIONS, storage_enums_pb2.MISSIONS),
+            (Context.SETUP, storage_enums_pb2.SETUP_VERSIONS),
+            (Context.USERS, storage_enums_pb2.USERS),
+            (Context.ORGANIZATIONS, storage_enums_pb2.ORGANIZATIONS),
+            (Context.UNSPECIFIED, storage_enums_pb2.STORAGE_CONTEXT_UNSPECIFIED),
         ],
     )
     def test_context_resolves_to_wire(self, client: GrpcStorage, ctx: Context, wire: int) -> None:
@@ -1854,9 +1912,120 @@ class TestStorageRefusalAndFailures:
         assert await client.list("test_collection") == []
         assert await client.remove_collection("test_collection") is False
 
+    @pytest.mark.grpc
+    @pytest.mark.edge_case
+    async def test_operation_error_outcome_keeps_public_semantics(self, client: GrpcStorage) -> None:
+        """An OperationError result on an OK status: store raises, read/update give None, remove gives False."""
+        result = storage_messages_pb2.StorageResult(
+            identifier="r", error=bulk_pb2.OperationError(code="FAILED_PRECONDITION", message="locked")
+        )
+        client.exec_grpc_query = AsyncMock(  # type: ignore[method-assign]
+            side_effect=[
+                storage_dto_pb2.CreateRecordResponse(result=result),
+                storage_dto_pb2.GetRecordResponse(result=result),
+                storage_dto_pb2.UpdateRecordResponse(result=result),
+                storage_dto_pb2.DeleteRecordResponse(result=result),
+            ]
+        )
+        data = {"mission_id": MISSION_ID, "name": "x", "value": 1}
+
+        with pytest.raises(StorageServiceError, match="r: FAILED_PRECONDITION locked"):
+            await client.store("test_collection", "r", data)
+        assert await client.read("test_collection", "r") is None
+        assert await client.update("test_collection", "r", data) is None
+        assert await client.remove("test_collection", "r") is False
+        assert [c.args[0] for c in client.exec_grpc_query.await_args_list] == [
+            "CreateRecord",
+            "GetRecord",
+            "UpdateRecord",
+            "DeleteRecord",
+        ]
+
+    @pytest.mark.grpc
+    @pytest.mark.edge_case
+    async def test_upsert_creates_when_get_reports_not_found(self, client: GrpcStorage) -> None:
+        """upsert() treats a NOT_FOUND OperationError from GetRecord as absent and creates the record."""
+        payload = Struct()
+        payload.update({"mission_id": MISSION_ID, "name": "x", "value": 1})
+        created = storage_messages_pb2.StorageRecord(
+            context=MISSION_ID, collection="test_collection", record_id="r", data=payload, data_type="OUTPUT"
+        )
+        client.exec_grpc_query = AsyncMock(  # type: ignore[method-assign]
+            side_effect=[
+                storage_dto_pb2.GetRecordResponse(
+                    result=storage_messages_pb2.StorageResult(
+                        identifier="r", error=bulk_pb2.OperationError(code="NOT_FOUND", message="absent")
+                    )
+                ),
+                storage_dto_pb2.CreateRecordResponse(
+                    result=storage_messages_pb2.StorageResult(identifier="r", record=created)
+                ),
+            ]
+        )
+
+        record = await client.upsert("test_collection", "r", {"mission_id": MISSION_ID, "name": "x", "value": 1})
+
+        assert record.record_id == "r"
+        assert [c.args[0] for c in client.exec_grpc_query.await_args_list] == ["GetRecord", "CreateRecord"]
+
+    @pytest.mark.grpc
+    @pytest.mark.edge_case
+    async def test_remove_collection_with_failed_records_returns_false(self, client: GrpcStorage) -> None:
+        """A DeleteCollection bulk reporting failed records is not a success; locks are kept."""
+        client._record_lock(MISSION_ID, "test_collection", "r")
+        client.exec_grpc_query = AsyncMock(  # type: ignore[method-assign]
+            return_value=storage_dto_pb2.DeleteCollectionResponse(
+                bulk=bulk_pb2.BulkResponse(total_processed=3, total_failed=1)
+            )
+        )
+
+        assert await client.remove_collection("test_collection") is False
+        assert f"{MISSION_ID}|test_collection:r" in client._record_locks
+
+
+class TestRequestsPassProtovalidate:
+    """Requests built by GrpcStorage satisfy the proto's buf.validate rules (server interceptor)."""
+
+    @pytest.mark.contract
+    async def test_every_request_is_valid(self, client: GrpcStorage) -> None:
+        """Empty storage_id / record_id and zero pagination stay absent instead of failing validation."""
+        client.exec_grpc_query = AsyncMock(side_effect=RuntimeError("stop"))  # type: ignore[method-assign]
+        data = {"mission_id": MISSION_ID, "name": "x", "value": 1}
+
+        with pytest.raises(StorageServiceError):
+            await client.store("test_collection", "r", data)
+        await client.read("test_collection", "r")
+        await client.read("test_collection", "r", storage_id="storage:abc")
+        await client.update("test_collection", "r", data)
+        await client.remove("test_collection", "r")
+        await client.list("test_collection")
+        await client.list("test_collection", visibilities=[Visibility.PUBLIC], record_id="r", limit=5, offset=10)
+        await client.list("test_collection", offset=10)
+        await client.remove_collection("test_collection")
+
+        requests = [c.args[1] for c in client.exec_grpc_query.await_args_list]
+        assert len(requests) == 9
+        for request in requests:
+            protovalidate.validate(request)
+
+    @pytest.mark.contract
+    @pytest.mark.regression
+    async def test_unspecified_visibility_is_dropped_from_the_filter(self, client: GrpcStorage) -> None:
+        """Regression: UNSPECIFIED went out in the filter and the service refused the whole listing."""
+        client.exec_grpc_query = AsyncMock(side_effect=RuntimeError("stop"))  # type: ignore[method-assign]
+
+        await client.list("test_collection", visibilities=[Visibility.UNSPECIFIED, Visibility.PUBLIC])
+        await client.list("test_collection", visibilities=[Visibility.UNSPECIFIED])
+
+        mixed, only_unspecified = [c.args[1] for c in client.exec_grpc_query.await_args_list]
+        assert list(mixed.visibilities) == [common_enums_pb2.PUBLIC]
+        assert list(only_unspecified.visibilities) == []
+        protovalidate.validate(mixed)
+        protovalidate.validate(only_unspecified)
+
 
 class TestStorageIdAndPagination:
-    """storage_id addressing and the ListRecords/RemoveCollection knobs added with it."""
+    """storage_id addressing and the ListRecords/DeleteCollection knobs."""
 
     @pytest.mark.grpc
     @pytest.mark.integration
@@ -1867,16 +2036,14 @@ class TestStorageIdAndPagination:
         mock_servicer: MockStorageServicer,
         thread_pool: futures.ThreadPoolExecutor,
     ) -> None:
-        method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name["ReadRecord"]
-        future = thread_pool.submit(
-            asyncio.run, client.read("test_collection", "record_001", storage_id="storage:abc")
-        )
+        method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name["GetRecord"]
+        future = thread_pool.submit(asyncio.run, client.read("test_collection", "record_001", storage_id="storage:abc"))
         _, request, rpc = test_channel.take_unary_unary(method_desc)
 
         assert request.storage_id == "storage:abc"
 
         rpc.send_initial_metadata(())
-        rpc.terminate(mock_servicer.ReadRecord(request, FakeContext()), (), grpc.StatusCode.OK, "")
+        rpc.terminate(mock_servicer.GetRecord(request, FakeContext()), (), grpc.StatusCode.OK, "")
         future.result(timeout=1.0)
 
     @pytest.mark.grpc
@@ -1888,15 +2055,15 @@ class TestStorageIdAndPagination:
         mock_servicer: MockStorageServicer,
         thread_pool: futures.ThreadPoolExecutor,
     ) -> None:
-        """Empty means "let the service pick" — it must not become a bogus filter."""
-        method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name["ReadRecord"]
+        """Empty means "let the service pick" — the optional field stays absent, not a bogus filter."""
+        method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name["GetRecord"]
         future = thread_pool.submit(asyncio.run, client.read("test_collection", "record_001"))
         _, request, rpc = test_channel.take_unary_unary(method_desc)
 
-        assert request.storage_id == ""
+        assert not request.HasField("storage_id")
 
         rpc.send_initial_metadata(())
-        rpc.terminate(mock_servicer.ReadRecord(request, FakeContext()), (), grpc.StatusCode.OK, "")
+        rpc.terminate(mock_servicer.GetRecord(request, FakeContext()), (), grpc.StatusCode.OK, "")
         future.result(timeout=1.0)
 
     @pytest.mark.grpc
@@ -1916,33 +2083,56 @@ class TestStorageIdAndPagination:
         _, request, rpc = test_channel.take_unary_unary(method_desc)
 
         assert request.record_id == "r1"
-        assert (request.limit, request.offset) == (5, 10)
-        assert list(request.visibilities) == [data_pb2.VISIBILITY_PRIVATE]
+        assert (request.pagination.limit, request.pagination.offset) == (5, 10)
+        assert list(request.visibilities) == [common_enums_pb2.PRIVATE]
 
         rpc.send_initial_metadata(())
         rpc.terminate(mock_servicer.ListRecords(request, FakeContext()), (), grpc.StatusCode.OK, "")
         future.result(timeout=1.0)
 
     @pytest.mark.grpc
+    @pytest.mark.parametrize(
+        ("limit", "offset", "expected"),
+        [(0, 0, None), (0, 10, (20, 10)), (500, 0, (100, 0)), (7, 0, (7, 0))],
+    )
+    async def test_list_pagination_mapping(
+            self, client: GrpcStorage, limit: int, offset: int, expected: tuple[int, int] | None
+    ) -> None:
+        """limit/offset map onto PaginationRequest: absent when both are 0, default 20, capped at 100."""
+        client.exec_grpc_query = AsyncMock(  # type: ignore[method-assign]
+            return_value=storage_dto_pb2.ListRecordsResponse()
+        )
+
+        await client.list("test_collection", limit=limit, offset=offset)
+
+        request = client.exec_grpc_query.await_args.args[1]
+        assert not request.HasField("record_id")
+        if expected is None:
+            assert not request.HasField("pagination")
+        else:
+            assert (request.pagination.limit, request.pagination.offset) == expected
+
+    @pytest.mark.grpc
     @pytest.mark.integration
-    def test_remove_collection_forwards_record_id(
+    def test_remove_collection_sends_context_and_collection_only(
         self,
         client: GrpcStorage,
         test_channel: grpc_testing.Channel,
         mock_servicer: MockStorageServicer,
         thread_pool: futures.ThreadPoolExecutor,
     ) -> None:
+        """DeleteCollection carries no record_id; the bulk count of deleted records reads as success."""
         method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name[
-            "RemoveCollection"
+            "DeleteCollection"
         ]
-        future = thread_pool.submit(asyncio.run, client.remove_collection("test_collection", record_id="r1"))
+        future = thread_pool.submit(asyncio.run, client.remove_collection("test_collection"))
         _, request, rpc = test_channel.take_unary_unary(method_desc)
 
-        assert request.record_id == "r1"
+        assert [f.name for f, _ in request.ListFields()] == ["context", "collection"]
 
         rpc.send_initial_metadata(())
-        rpc.terminate(mock_servicer.RemoveCollection(request, FakeContext()), (), grpc.StatusCode.OK, "")
-        future.result(timeout=1.0)
+        rpc.terminate(mock_servicer.DeleteCollection(request, FakeContext()), (), grpc.StatusCode.OK, "")
+        assert future.result(timeout=1.0) is True
 
     @pytest.mark.grpc
     @pytest.mark.integration
@@ -1954,24 +2144,29 @@ class TestStorageIdAndPagination:
         storage_config: dict[str, type[BaseModel]],
     ) -> None:
         """A record the service stamped must surface its storage_id on the model."""
-        method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name["ReadRecord"]
+        method_desc = storage_service_pb2.DESCRIPTOR.services_by_name["StorageService"].methods_by_name["GetRecord"]
         future = thread_pool.submit(asyncio.run, client.read("test_collection", "record_001"))
         _, _request, rpc = test_channel.take_unary_unary(method_desc)
 
         payload = Struct()
         payload.update({"mission_id": MISSION_ID, "name": "n", "value": 1, "description": "d"})
-        record = data_pb2.StorageRecord(
+        record = storage_messages_pb2.StorageRecord(
             data=payload,
             context=MISSION_ID,
             collection="test_collection",
             record_id="record_001",
-            data_type=data_pb2.OUTPUT,
-            visibility=data_pb2.VISIBILITY_PRIVATE,
+            data_type=storage_enums_pb2.OUTPUT,
+            visibility=common_enums_pb2.PRIVATE,
             storage_id="storage:xyz",
         )
         rpc.send_initial_metadata(())
         rpc.terminate(
-            data_pb2.ReadRecordResponse(success=True, stored_data=record), (), grpc.StatusCode.OK, ""
+            storage_dto_pb2.GetRecordResponse(
+                result=storage_messages_pb2.StorageResult(identifier="record_001", record=record)
+            ),
+            (),
+            grpc.StatusCode.OK,
+            "",
         )
 
         result = future.result(timeout=1.0)

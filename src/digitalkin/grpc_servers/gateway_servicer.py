@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 import grpc
-from agentic_mesh_protocol.gateway.v1 import gateway_pb2
+from agentic_mesh_protocol.gateway.v1 import gateway_dto_pb2, gateway_enums_pb2, gateway_messages_pb2
 from google.protobuf import struct_pb2
 from grpc._cython.cygrpc import UsageError as _GrpcUsageError  # ruff: ignore[import-private-name]
 from redis.exceptions import RedisError
@@ -49,7 +49,7 @@ class GatewayServicer:
 
     @staticmethod
     def _sentinel(seq: int, task_id: str, protocol: str, **fields: Any) -> Any:
-        """Build a StreamClient carrying a control sentinel.
+        """Build a StreamResponse carrying a control sentinel.
 
         ``seq=0`` marks gateway-emitted control entries; Redis-replayed
         entries start at 1.
@@ -61,11 +61,11 @@ class GatewayServicer:
             fields: Additional Struct fields under ``data.root``.
 
         Returns:
-            StreamClient proto.
+            StreamResponse proto.
         """
         s = struct_pb2.Struct()
         s.update({"root": {"protocol": protocol, **fields}})
-        return gateway_pb2.StreamClient(from_seq=seq, task_id=task_id, data=s)
+        return gateway_messages_pb2.StreamResponse(seq=seq, task_id=task_id, data=s)
 
     async def _fatal_close(self, task_id: str, code: str, message: str) -> AsyncGenerator:
         """Yield ``stream.error(fatal=true)`` then ``stream.end``.
@@ -76,7 +76,7 @@ class GatewayServicer:
             message: Human-readable detail.
 
         Yields:
-            StreamClient sentinels.
+            StreamResponse sentinels.
         """
         yield self._sentinel(
             0,
@@ -198,7 +198,7 @@ class GatewayServicer:
         timer.mark("validate_ids")
         if err is not None:
             logger.warning("Invalid ID in StartStream: %s", err, extra=log_extra)
-            return gateway_pb2.StartStreamResponse(accepted=False, task_id=task_id)
+            return gateway_dto_pb2.StartStreamResponse(accepted=False, task_id=task_id)
 
         md = dict(context.invocation_metadata() or [])
         raw_address = md.get("x-client-address", "")
@@ -214,10 +214,10 @@ class GatewayServicer:
                 client_address,
                 extra=log_extra,
             )
-            return gateway_pb2.StartStreamResponse(accepted=False, task_id=task_id)
+            return gateway_dto_pb2.StartStreamResponse(accepted=False, task_id=task_id)
 
         if self._registry.get(task_id) is not None:
-            return gateway_pb2.StartStreamResponse(accepted=False, task_id=task_id)
+            return gateway_dto_pb2.StartStreamResponse(accepted=False, task_id=task_id)
         timer.mark("dedup_check")
 
         # Durable at-most-once guard: survives session teardown and spans replicas.
@@ -227,10 +227,10 @@ class GatewayServicer:
         try:
             claim = await self._idempotency.claim(task_id, SharedRedisListener.PROCESS_ID)
         except RedisError:
-            return gateway_pb2.StartStreamResponse(accepted=False, task_id=task_id)
+            return gateway_dto_pb2.StartStreamResponse(accepted=False, task_id=task_id)
         timer.mark("idempotency_claim")
         if claim is not ClaimResult.CLAIMED:
-            return gateway_pb2.StartStreamResponse(accepted=False, task_id=task_id)
+            return gateway_dto_pb2.StartStreamResponse(accepted=False, task_id=task_id)
 
         session = StreamSession(task_id=task_id)
         accepted = await self._registry.register(
@@ -244,7 +244,7 @@ class GatewayServicer:
             # Release the claim so this task can be retried once capacity frees up.
             with contextlib.suppress(RedisError):
                 await self._idempotency.release(task_id)
-            return gateway_pb2.StartStreamResponse(accepted=False, task_id=task_id)
+            return gateway_dto_pb2.StartStreamResponse(accepted=False, task_id=task_id)
 
         # Seed stream.start so the consumer's first XREAD finds data immediately.
         start_info = struct_pb2.Struct()
@@ -268,7 +268,7 @@ class GatewayServicer:
             with contextlib.suppress(RedisError):
                 await self._idempotency.release(task_id)
             await self._registry.unregister(task_id)
-            return gateway_pb2.StartStreamResponse(accepted=False, task_id=task_id)
+            return gateway_dto_pb2.StartStreamResponse(accepted=False, task_id=task_id)
         timer.mark("xadd_stream_start")
 
         logger.info("→ Dial-back scheduled to consumer %s", client_address, extra=log_extra)
@@ -289,7 +289,7 @@ class GatewayServicer:
             self._registry.active_count,
             extra=log_extra,
         )
-        return gateway_pb2.StartStreamResponse(accepted=True, task_id=task_id)
+        return gateway_dto_pb2.StartStreamResponse(accepted=True, task_id=task_id)
 
     async def _emit_fatal_to_redis(
         self,
@@ -346,18 +346,18 @@ class GatewayServicer:
         request_iterator: AsyncIterator[Any],
         context: grpc.aio.ServicerContext,  # ruff: ignore[unused-method-argument]
     ) -> AsyncGenerator[Any, None]:
-        """BiDi: receive StreamServer from client, yield StreamClient back.
+        """BiDi: receive StreamRequest from the client, yield StreamResponse back.
 
-        First StreamServer carries ``task_id``, resume cursor in ``seq``,
+        First StreamRequest carries ``task_id``, resume cursor in ``from_seq``,
         and the query in ``data``. Errors flow as ``stream.error`` +
         ``stream.end`` sentinels — never via ``context.abort``.
 
         Args:
-            request_iterator: BiDi stream of StreamServer from the client.
+            request_iterator: BiDi stream of StreamRequest from the client.
             context: gRPC service context.
 
         Yields:
-            StreamClient — sentinels and module output.
+            StreamResponse — sentinels and module output.
         """
         try:
             first_msg = await anext(request_iterator)
@@ -365,7 +365,7 @@ class GatewayServicer:
             return
 
         task_id = first_msg.task_id
-        from_seq = first_msg.seq
+        from_seq = first_msg.from_seq
 
         if GatewayValidator.validate_id(task_id, "task_id") is not None:
             async for out in self._fatal_close(task_id, "INVALID_ARGUMENT", "invalid task_id"):
@@ -481,31 +481,34 @@ class GatewayServicer:
         request: Any,
         context: grpc.aio.ServicerContext,  # ruff: ignore[unused-method-argument]
     ) -> Any:
-        """Forward control signal via Redis pub/sub or dispatch cache invalidation.
+        """Forward a cancel via Redis pub/sub or dispatch a cache invalidation.
+
+        A ``SETUP`` / ``TOOLS`` invalidation targets the caller's ``x-setup-id``.
 
         Args:
-            request: ClientSignalRequest proto.
+            request: SendSignalRequest proto.
             context: gRPC service context.
 
         Returns:
-            ClientSignalResponse proto.
+            SendSignalResponse proto.
         """
         timer = StepTimer()
-        action_name = gateway_pb2.SignalAction.Name(request.action)
-        task_id = request.task_id
+        signal = request.WhichOneof("signal")
+        task_id = request.cancel.task_id
         last_mark = "init"
-        log_extra = {"task_id": task_id, "action": action_name}
+        log_extra = {"task_id": task_id}
 
         try:  # ruff: ignore[too-many-statements-in-try-clause]
-            if action_name.startswith("INVALIDATE_"):
-                setup_id_for_invalidate = task_id
+            if signal == "invalidate":
+                scope = gateway_enums_pb2.CacheScope.Name(request.invalidate.scope)
+                setup_id = RequestContext.current().get("setup_id", "")
                 if self._cache_handler is not None:
-                    await self._cache_handler(action_name, setup_id_for_invalidate)
+                    await self._cache_handler(scope, setup_id)
                     timer.mark("cache_handler")
                     last_mark = "cache_handler"
                 payload = json.dumps({
-                    "action": action_name.lower(),
-                    "setup_id": setup_id_for_invalidate,
+                    "action": f"invalidate_{scope.lower()}",
+                    "setup_id": setup_id,
                     "published_at_ns": time.time_ns(),
                     # Tag origin so this process skips its own fan-out (no double invalidate).
                     "origin": SharedRedisListener.PROCESS_ID,
@@ -521,26 +524,26 @@ class GatewayServicer:
                         exc_info=True,
                     )
                 logger.debug(
-                    "[perf] SendSignal: %s path=cache total=%.2fms action=%s setup_id=%s",
+                    "[perf] SendSignal: %s path=cache total=%.2fms scope=%s setup_id=%s",
                     timer.format_steps(),
                     timer.total_ms(),
-                    action_name,
-                    setup_id_for_invalidate,
+                    scope,
+                    setup_id,
                     extra=log_extra,
                 )
-                return gateway_pb2.ClientSignalResponse(success=True, task_id=setup_id_for_invalidate)
+                return gateway_dto_pb2.SendSignalResponse(success=True)
 
             if GatewayValidator.validate_id(task_id, "task_id") is not None:
                 logger.warning(
                     "[gateway] SendSignal_failed: failure=InvalidTaskId at_step=%s "
-                    "elapsed_ms=%.2f action=%s task_id=%s",
+                    "elapsed_ms=%.2f signal=%s task_id=%s",
                     last_mark,
                     timer.elapsed_now_ms(),
-                    action_name,
+                    signal,
                     task_id,
                     extra=log_extra,
                 )
-                return gateway_pb2.ClientSignalResponse(success=False, task_id=task_id)
+                return gateway_dto_pb2.SendSignalResponse(success=False, task_id=task_id)
             timer.mark("validate_task_id")
             last_mark = "validate_task_id"
 
@@ -549,18 +552,17 @@ class GatewayServicer:
             last_mark = "registry_lookup"
             if session is None:
                 logger.warning(
-                    "[gateway] SendSignal_failed: failure=TaskNotFound at_step=%s elapsed_ms=%.2f action=%s task_id=%s",
+                    "[gateway] SendSignal_failed: failure=TaskNotFound at_step=%s elapsed_ms=%.2f signal=%s task_id=%s",
                     last_mark,
                     timer.elapsed_now_ms(),
-                    action_name,
+                    signal,
                     task_id,
                     extra=log_extra,
                 )
-                return gateway_pb2.ClientSignalResponse(success=False, task_id=task_id)
+                return gateway_dto_pb2.SendSignalResponse(success=False, task_id=task_id)
 
-            action_lower = action_name.lower()
             payload = json.dumps({
-                "action": action_lower,
+                "action": "cancel",
                 "task_id": task_id,
                 "published_at_ns": time.time_ns(),
             })
@@ -568,26 +570,26 @@ class GatewayServicer:
             timer.mark("redis_publish")
             last_mark = "redis_publish"
             logger.debug(
-                "[perf] SendSignal: %s path=redis total=%.2fms action=%s task_id=%s",
+                "[perf] SendSignal: %s path=redis total=%.2fms signal=%s task_id=%s",
                 timer.format_steps(),
                 timer.total_ms(),
-                action_name,
+                signal,
                 task_id,
                 extra=log_extra,
             )
-            return gateway_pb2.ClientSignalResponse(success=True, task_id=task_id)
+            return gateway_dto_pb2.SendSignalResponse(success=True, task_id=task_id)
 
         except Exception as exc:
             logger.warning(
-                "[gateway] SendSignal_failed: failure=%s at_step=%s elapsed_ms=%.2f action=%s task_id=%s",
+                "[gateway] SendSignal_failed: failure=%s at_step=%s elapsed_ms=%.2f signal=%s task_id=%s",
                 type(exc).__name__,
                 last_mark,
                 timer.elapsed_now_ms(),
-                action_name,
+                signal,
                 task_id,
                 extra=log_extra,
             )
-            return gateway_pb2.ClientSignalResponse(success=False, task_id=task_id)
+            return gateway_dto_pb2.SendSignalResponse(success=False, task_id=task_id)
 
     async def _consume_from_redis(
         self,
@@ -596,7 +598,7 @@ class GatewayServicer:
         *,
         resume: bool = False,
     ) -> AsyncGenerator:
-        """Zero-copy read from Redis Stream into ``StreamClient`` messages.
+        """Zero-copy read from Redis Stream into ``StreamResponse`` messages.
 
         Always terminates with an explicit ``stream.end`` sentinel.
 
@@ -608,7 +610,7 @@ class GatewayServicer:
                 cursor, and label frames from the stored seq so trim gaps surface.
 
         Yields:
-            StreamClient messages.
+            StreamResponse messages.
         """
         t0 = time.perf_counter_ns()
         reader = ProtoStreamReader(task_id, self._redis_client)
@@ -634,7 +636,7 @@ class GatewayServicer:
                 )
                 first = False
             seq = reader._last_seq + 1 if resume else seq + 1  # ruff: ignore[private-member-access]
-            yield gateway_pb2.StreamClient(from_seq=seq, task_id=task_id, data=struct_data)
+            yield gateway_messages_pb2.StreamResponse(seq=seq, task_id=task_id, data=struct_data)
 
         # Reader EOS — emit an explicit stream.end so every stream ends uniformly.
         t_after_reader = time.perf_counter_ns()
@@ -667,7 +669,7 @@ class GatewayServicer:
             from_seq: Resume point.
 
         Yields:
-            StreamClient messages, then a terminal sentinel on idle timeout.
+            StreamResponse messages, then a terminal sentinel on idle timeout.
         """
         idle = get_gateway_settings().stream.read_idle_timeout_s
         reader = aiter(self._consume_from_redis(task_id, from_seq))
@@ -722,7 +724,7 @@ class GatewayServicer:
         ``ModuleRunner`` → drain from seq 0). If the BiDi dies before the stream
         is fully delivered and the module is still producing, re-dial the SAME
         address in resume mode (``stream.resume`` → consumer replies with its
-        ``from_seq`` → drain from that cursor, deduping the Redis queue) with
+        cursor in ``seq`` → drain from that cursor, deduping the Redis queue) with
         jittered backoff until the client returns or the reconnect window
         (``DIGITALKIN_GATEWAY_DIAL_BACK_RECONNECT_WINDOW_S``) elapses. The module
         runs as a separate task, spawned exactly once, so it keeps writing to
@@ -806,7 +808,7 @@ class GatewayServicer:
         Fresh (``resume=False``): sends ``stream.init``, spawns the
         ``ModuleRunner`` on the consumer's first reply (calling
         ``on_runner_spawn``), drains from seq 0. Resume: sends ``stream.resume``,
-        reads the consumer's cursor from the first reply's ``from_seq``, skips
+        reads the consumer's cursor from the first reply's ``seq``, skips
         the runner, drains from that cursor. Releases the channel before
         returning; does NOT unregister the session (the caller owns lifecycle).
 
@@ -912,18 +914,18 @@ class GatewayServicer:
             await release()
             return False
 
-        # Outbound is StreamServer, inbound is StreamClient — both share
-        # field tags so re-wrapping ``_consume_from_redis`` output is a rename.
+        # Dialing out, this gateway is the gRPC client: outbound is StreamRequest, inbound
+        # StreamResponse — both share field tags so re-wrapping ``_consume_from_redis`` output is a rename.
         handshake = "stream.resume" if resume else "stream.init"
         init_struct = struct_pb2.Struct()
         init_struct.update({"root": {"protocol": handshake}})
-        init_server = gateway_pb2.StreamServer(seq=0, task_id=task_id, data=init_struct)
+        init_request = gateway_messages_pb2.StreamRequest(from_seq=0, task_id=task_id, data=init_struct)
 
         # Gate the output drain on the consumer's first reply (query, or cursor on resume).
         output_started = asyncio.Event()
         # Set when ``_outgoing()`` exits; bounds the inbound close wait.
         outgoing_done = asyncio.Event()
-        # Consumer's resume cursor, captured from the first reply's ``from_seq``.
+        # Consumer's resume cursor, captured from the first reply's ``seq``.
         resume_cursor = 0
         # Set once the reader reaches EOS and stream.end is delivered to the consumer.
         delivered_eos = False
@@ -931,7 +933,7 @@ class GatewayServicer:
         async def _outgoing() -> AsyncGenerator:
             nonlocal delivered_eos
             try:
-                yield init_server
+                yield init_request
                 logger.info(
                     "→ %s sent, waiting for consumer reply before draining outputs",
                     handshake,
@@ -983,11 +985,11 @@ class GatewayServicer:
                             ),
                             self._sentinel(0, task_id, "stream.end"),
                         ):
-                            yield gateway_pb2.StreamServer(task_id=task_id, seq=sc.from_seq, data=sc.data)
+                            yield gateway_messages_pb2.StreamRequest(task_id=task_id, from_seq=sc.seq, data=sc.data)
                         return
-                    yield gateway_pb2.StreamServer(
+                    yield gateway_messages_pb2.StreamRequest(
                         task_id=task_id,
-                        seq=cli_msg.from_seq,
+                        from_seq=cli_msg.seq,
                         data=cli_msg.data,
                     )
             finally:
@@ -1041,11 +1043,11 @@ class GatewayServicer:
                     )
                     break
 
-                # Resume: first reply carries the cursor in ``from_seq`` (empty
+                # Resume: first reply carries the cursor in ``seq`` (empty
                 # data), so it must be handled before the data gate below.
                 if first and resume:
                     limit = get_gateway_settings().stream.from_seq_limit
-                    resume_cursor = min(upstream.from_seq, limit)
+                    resume_cursor = min(upstream.seq, limit)
                     logger.info(
                         "← Consumer resume cursor=%d received — resuming output (no re-run)",
                         resume_cursor,

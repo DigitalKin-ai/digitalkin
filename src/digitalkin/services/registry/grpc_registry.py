@@ -8,12 +8,15 @@ from enum import Enum
 from typing import Any
 
 import grpc
+from agentic_mesh_protocol.common.v1 import common_enums_pb2
+from agentic_mesh_protocol.module.v1 import module_enums_pb2
+from agentic_mesh_protocol.pagination.v1 import pagination_pb2
 from agentic_mesh_protocol.registry.v1 import (
-    registry_enums_pb2,
-    registry_models_pb2,
-    registry_requests_pb2,
+    registry_dto_pb2,
+    registry_messages_pb2,
     registry_service_pb2_grpc,
 )
+from agentic_mesh_protocol.setup.v1 import setup_enums_pb2
 from google.protobuf.internal.enum_type_wrapper import EnumTypeWrapper
 from grpc_health.v1 import health_pb2, health_pb2_grpc
 
@@ -37,7 +40,6 @@ from digitalkin.services.registry.exceptions import (
     RegistryModuleNotFoundError,
     RegistryServiceError,
 )
-from digitalkin.services.registry.registry_models import ModuleStatusInfo
 from digitalkin.services.registry.registry_strategy import RegistryStrategy
 
 
@@ -90,7 +92,7 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
 
     @staticmethod
     def _proto_to_module_info(
-        descriptor: registry_models_pb2.ModuleDescriptor,
+        descriptor: registry_messages_pb2.ModuleDescriptor,
     ) -> ModuleInfo:
         """Convert proto ModuleDescriptor to ModuleInfo.
 
@@ -100,7 +102,7 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
         Returns:
             ModuleInfo with mapped fields.
         """
-        type_name = registry_enums_pb2.ModuleType.Name(descriptor.module_type).removeprefix("MODULE_TYPE_")
+        type_name = module_enums_pb2.ModuleType.Name(descriptor.type).removeprefix("MODULE_TYPE_")
         return ModuleInfo(
             module_id=descriptor.id,
             module_type=RegistryModuleType[type_name],
@@ -113,19 +115,19 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
         )
 
     @staticmethod
-    def _proto_to_setup_info(descriptor: registry_models_pb2.SetupDescriptor) -> SetupInfo | None:
+    def _proto_to_setup_info(descriptor: registry_messages_pb2.SetupDescriptor) -> SetupInfo:
         """Convert proto SetupDescriptor to SetupInfo.
+
+        The descriptor no longer carries a ``module_id``: it is read from the resolved ``module``.
 
         Args:
             descriptor: Proto SetupDescriptor message.
 
         Returns:
-            SetupInfo with mapped fields, or None if descriptor is empty.
+            SetupInfo with mapped fields.
         """
-        if not descriptor.id:
-            return None
-        status_name = registry_enums_pb2.SetupStatus.Name(descriptor.status).removeprefix("SETUP_STATUS_")
-        visibility_name = registry_enums_pb2.Visibility.Name(descriptor.visibility).removeprefix("VISIBILITY_")
+        status_name = setup_enums_pb2.SetupStatus.Name(descriptor.status).removeprefix("SETUP_STATUS_")
+        visibility_name = common_enums_pb2.Visibility.Name(descriptor.visibility).removeprefix("VISIBILITY_")
         return SetupInfo(
             setup_id=descriptor.id,
             name=descriptor.name,
@@ -135,10 +137,10 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
             organization_id=descriptor.organization_id or None,
             owner_id=descriptor.owner_id or None,
             card_id=descriptor.card_id or None,
-            module_id=descriptor.module_id or None,
+            module_id=descriptor.module.id or None,
             module_name=descriptor.module.name or None,
             module_type=RegistryModuleType[
-                registry_enums_pb2.ModuleType.Name(descriptor.module.module_type).removeprefix("MODULE_TYPE_")
+                module_enums_pb2.ModuleType.Name(descriptor.module.type).removeprefix("MODULE_TYPE_")
             ]
             if descriptor.HasField("module")
             else None,
@@ -158,9 +160,9 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
             ModuleInfo with module details.
 
         Raises:
-            RegistryModuleNotFoundError: If module not found.
+            RegistryModuleNotFoundError: If the registry answers ``NOT_FOUND``.
             PermissionDeniedError: If the caller is not permitted.
-            RegistryServiceError: If gRPC call fails.
+            RegistryServiceError: If gRPC call fails or the registry answers another error.
         """
         logger.debug("Discovering module by ID: %s", module_id)
 
@@ -168,7 +170,7 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
             try:
                 response = await self.exec_grpc_query(
                     "GetModule",
-                    registry_requests_pb2.GetModuleRequest(module_id=module_id),
+                    registry_dto_pb2.GetModuleRequest(module_id=module_id),
                 )
             except PermissionDeniedError:
                 raise
@@ -177,15 +179,17 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
                 logger.error(msg)
                 raise RegistryServiceError(msg) from e
 
-            if not response.id:
+            if response.result.WhichOneof("outcome") == "error" and response.result.error.code == "NOT_FOUND":
                 logger.warning("Module not found in registry: %s", module_id)
                 raise RegistryModuleNotFoundError(module_id)
+            self.raise_on_error(response.result, RegistryServiceError)
 
-            logger.debug("Module discovered: module_id=%s at %s:%d", response.id, response.address, response.port)
-            return self._proto_to_module_info(response)
+            descriptor = response.result.module_descriptor
+            logger.debug("Module discovered: module_id=%s at %s:%d", descriptor.id, descriptor.address, descriptor.port)
+            return self._proto_to_module_info(descriptor)
 
     @staticmethod
-    def _module_summary_to_module_info(summary: registry_models_pb2.ModuleSummary) -> ModuleInfo:
+    def _module_summary_to_module_info(summary: registry_messages_pb2.ModuleSummary) -> ModuleInfo:
         """Convert proto ModuleSummary to ModuleInfo (address/port are never populated).
 
         Args:
@@ -194,8 +198,8 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
         Returns:
             ModuleInfo with mapped fields.
         """
-        type_name = registry_enums_pb2.ModuleType.Name(summary.module_type).removeprefix("MODULE_TYPE_")
-        status_name = registry_enums_pb2.ModuleStatus.Name(summary.status).removeprefix("MODULE_STATUS_")
+        type_name = module_enums_pb2.ModuleType.Name(summary.type).removeprefix("MODULE_TYPE_")
+        status_name = module_enums_pb2.ModuleStatus.Name(summary.status).removeprefix("MODULE_STATUS_")
         return ModuleInfo(
             module_id=summary.id,
             module_type=RegistryModuleType[type_name],
@@ -240,24 +244,26 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
 
         # Encoded before the error-handler scope: an enum-drift ValueError must reach
         # the caller as-is (permanent condition), not wrapped as a retryable service error.
-        module_types: list[str] = []
-        if module_type:
-            enum_val = RegistryModuleType[module_type.upper()]
-            module_types.append(self._encode_enum(registry_enums_pb2.ModuleType, "MODULE_TYPE", enum_val))
-        encoded_sort = self._encode_enum(registry_enums_pb2.SortBy, "SORT_BY", sort_by)
+        module_types = (
+            [self._encode_enum(module_enums_pb2.ModuleType, RegistryModuleType[module_type.upper()])]
+            if module_type
+            else []
+        )
 
         async with self.handle_grpc_errors("SearchModules", RegistryServiceError):
             try:
                 response = await self.exec_grpc_query(
                     "SearchModules",
-                    registry_requests_pb2.SearchModulesRequest(
+                    registry_dto_pb2.SearchModulesRequest(
                         query=name or "",
                         module_types=module_types,
                         tags=tags or [],
-                        sort_by=encoded_sort,
-                        descending=descending,
-                        limit=limit,
-                        offset=offset,
+                        pagination=pagination_pb2.PaginationRequest(
+                            order="" if sort_by is RegistrySortBy.UNSPECIFIED else sort_by.value,
+                            descending=descending,
+                            limit=limit,
+                            offset=offset,
+                        ),
                     ),
                     # TODO(validate): tightened agent-facing search deadline (was global 30s)
                     timeout=get_registry_settings().search_timeout_s,
@@ -269,48 +275,9 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
                 logger.error(msg)
                 raise RegistryServiceError(msg) from e
 
-            logger.debug("Search returned %d of %d modules", len(response.modules), response.total)
-            return [self._module_summary_to_module_info(m) for m in response.modules]
-
-    async def get_status(self, module_id: str) -> ModuleStatusInfo:
-        """Get module status by fetching the module.
-
-        Args:
-            module_id: The module identifier.
-
-        Returns:
-            ModuleStatusInfo with current status.
-
-        Raises:
-            RegistryModuleNotFoundError: If module not found.
-            PermissionDeniedError: If the caller is not permitted.
-            RegistryServiceError: If gRPC call fails.
-        """
-        logger.debug("Getting module status: %s", module_id)
-
-        async with self.handle_grpc_errors("GetModule", RegistryServiceError):
-            try:
-                response = await self.exec_grpc_query(
-                    "GetModule",
-                    registry_requests_pb2.GetModuleRequest(module_id=module_id),
-                )
-            except PermissionDeniedError:
-                raise
-            except ServerError as e:
-                msg = f"Failed to get module status for '{module_id}': {e}"
-                logger.error(msg)
-                raise RegistryServiceError(msg) from e
-
-            if not response.id:
-                logger.warning("Module not found in registry: %s", module_id)
-                raise RegistryModuleNotFoundError(module_id)
-
-            status_name = registry_enums_pb2.ModuleStatus.Name(response.status).removeprefix("MODULE_STATUS_")
-            logger.debug("Module status retrieved: module_id=%s status=%s", response.id, status_name)
-            return ModuleStatusInfo(
-                module_id=response.id,
-                status=RegistryModuleStatus[status_name],
-            )
+            results = self.successful_results("SearchModules", response.results)
+            logger.debug("Search returned %d of %d modules", len(results), response.bulk.pagination.total_count)
+            return [self._module_summary_to_module_info(result.module_summary) for result in results]
 
     async def register(
         self,
@@ -335,9 +302,10 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
             documentation: Internal documentation for registry index search.
 
         Returns:
-            ModuleInfo if successful, None if module not found.
+            ModuleInfo if successful, None if the registry answers with an error (e.g. module not found).
 
         Raises:
+            ValueError: If ``module_type`` has no proto counterpart; the registry refuses UNSPECIFIED.
             PermissionDeniedError: If the caller is not permitted.
             RegistryServiceError: If gRPC call fails.
         """
@@ -349,17 +317,19 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
             version,
             module_type.value,
         )
+        # Encoded before the error-handler scope, like the search filters: a permanent condition.
+        encoded_type = self._encode_enum(module_enums_pb2.ModuleType, module_type)
 
         async with self.handle_grpc_errors("RegisterModule", RegistryServiceError):
             try:
                 response = await self.exec_grpc_query(
                     "RegisterModule",
-                    registry_requests_pb2.RegisterModuleRequest(
+                    registry_dto_pb2.RegisterModuleRequest(
                         module_id=module_id,
                         address=address,
                         port=port,
                         version=version,
-                        module_type=self._encode_enum(registry_enums_pb2.ModuleType, "MODULE_TYPE", module_type),
+                        type=encoded_type,
                         documentation=documentation,
                     ),
                 )
@@ -370,17 +340,23 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
                 logger.error(msg)
                 raise RegistryServiceError(msg) from e
 
-            if not response.module or not response.module.id:
-                logger.warning("Registry returned empty response for module registration: module_id=%s", module_id)
+            if response.result.WhichOneof("outcome") == "error":
+                logger.warning(
+                    "Registry refused module registration: module_id=%s %s %s",
+                    module_id,
+                    response.result.error.code,
+                    response.result.error.message,
+                )
                 return None
 
+            descriptor = response.result.module_descriptor
             logger.info(
                 "Module registered successfully: module_id=%s at %s:%d",
-                response.module.id,
-                response.module.address,
-                response.module.port,
+                descriptor.id,
+                descriptor.address,
+                descriptor.port,
             )
-            return self._proto_to_module_info(response.module)
+            return self._proto_to_module_info(descriptor)
 
     async def heartbeat(self, module_id: str) -> RegistryModuleStatus:
         """Send heartbeat to keep module active.
@@ -401,7 +377,7 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
             try:
                 response = await self.exec_grpc_query(
                     "Heartbeat",
-                    registry_requests_pb2.HeartbeatRequest(module_id=module_id),
+                    registry_dto_pb2.HeartbeatRequest(module_id=module_id),
                 )
             except PermissionDeniedError:
                 raise
@@ -410,7 +386,7 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
                 logger.error(msg)
                 raise RegistryServiceError(msg) from e
 
-            status_name = registry_enums_pb2.ModuleStatus.Name(response.status).removeprefix("MODULE_STATUS_")
+            status_name = module_enums_pb2.ModuleStatus.Name(response.status).removeprefix("MODULE_STATUS_")
             logger.debug("Heartbeat response: module_id=%s status=%s", module_id, status_name)
             return RegistryModuleStatus[status_name]
 
@@ -421,18 +397,18 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
             setup_id: The setup identifier.
 
         Returns:
-            SetupInfo if successful, None otherwise.
+            SetupInfo if successful, None if the registry answers ``NOT_FOUND``.
 
         Raises:
             PermissionDeniedError: If the caller is not permitted.
-            RegistryServiceError: If gRPC call fails.
+            RegistryServiceError: If gRPC call fails or the registry answers another error.
         """
         logger.debug("Getting setup", extra={"setup_id": setup_id})
         async with self.handle_grpc_errors("GetSetup", RegistryServiceError):
             try:
                 response = await self.exec_grpc_query(
                     "GetSetup",
-                    registry_requests_pb2.GetSetupRequest(setup_id=setup_id),
+                    registry_dto_pb2.GetSetupRequest(setup_id=setup_id),
                 )
             except PermissionDeniedError:
                 raise
@@ -440,34 +416,38 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
                 msg = f"Failed to get setup '{setup_id}': {e}"
                 logger.error(msg)
                 raise RegistryServiceError(msg) from e
-            return self._proto_to_setup_info(response)
+            if response.result.WhichOneof("outcome") == "error" and response.result.error.code == "NOT_FOUND":
+                return None
+            self.raise_on_error(response.result, RegistryServiceError)
+            return self._proto_to_setup_info(response.result.setup_descriptor)
 
     @staticmethod
-    def _encode_enum(proto_enum: EnumTypeWrapper, prefix: str, member: Enum) -> str:
+    def _encode_enum(proto_enum: EnumTypeWrapper, member: Enum) -> str:
         """Encode a Python registry enum to its proto name, validated against the proto.
 
+        Proto members carry no prefix except the zero value (``<ENUM>_UNSPECIFIED``), which
+        the registry refuses on every field encoded here: ``UNSPECIFIED`` fails closed too.
+
         Args:
-            proto_enum: The proto ``EnumTypeWrapper`` (e.g. ``registry_enums_pb2.SetupStatus``).
-            prefix: The proto name prefix (e.g. ``"SETUP_STATUS"``).
+            proto_enum: The proto ``EnumTypeWrapper`` (e.g. ``setup_enums_pb2.SetupStatus``).
             member: The Python enum member to encode.
 
         Returns:
             The validated proto enum name.
 
         Raises:
-            ValueError: If ``member`` has no matching proto member (Python/proto drift).
+            ValueError: If ``member`` has no matching proto member (Python/proto drift, or UNSPECIFIED).
         """
-        name = f"{prefix}_{member.name}"
         try:
-            proto_enum.Value(name)  # fail closed: never send a filter the server would ignore
+            proto_enum.Value(member.name)
         except ValueError:
             # TODO(validate): remove marker once enum encoding is validated in prod
-            logger.error("[VALIDATE ENUMENC] no proto member %s — registry filter would silently drop", name)
+            logger.error("[VALIDATE ENUMENC] no proto member %s — refused before reaching the registry", member.name)
             raise
-        return name
+        return member.name
 
     @staticmethod
-    def _summary_to_setup_summary(summary: registry_models_pb2.SetupSummary) -> SetupSummary:
+    def _summary_to_setup_summary(summary: registry_messages_pb2.SetupSummary) -> SetupSummary:
         """Convert proto SetupSummary to the search-safe SetupSummary (never carries config).
 
         Args:
@@ -476,9 +456,9 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
         Returns:
             SetupSummary with mapped fields.
         """
-        status_name = registry_enums_pb2.SetupStatus.Name(summary.status).removeprefix("SETUP_STATUS_")
-        visibility_name = registry_enums_pb2.Visibility.Name(summary.visibility).removeprefix("VISIBILITY_")
-        type_name = registry_enums_pb2.ModuleType.Name(summary.module_type).removeprefix("MODULE_TYPE_")
+        status_name = setup_enums_pb2.SetupStatus.Name(summary.status).removeprefix("SETUP_STATUS_")
+        visibility_name = common_enums_pb2.Visibility.Name(summary.visibility).removeprefix("VISIBILITY_")
+        type_name = module_enums_pb2.ModuleType.Name(summary.module_type).removeprefix("MODULE_TYPE_")
         return SetupSummary(
             setup_id=summary.id,
             name=summary.name,
@@ -537,20 +517,15 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
 
         # Encoded before the error-handler scope: an enum-drift ValueError must reach
         # the caller as-is (permanent condition), not wrapped as a retryable service error.
-        encoded_types = [self._encode_enum(registry_enums_pb2.ModuleType, "MODULE_TYPE", t) for t in module_types or []]
-        encoded_statuses = [
-            self._encode_enum(registry_enums_pb2.SetupStatus, "SETUP_STATUS", s) for s in statuses or []
-        ]
-        encoded_visibilities = [
-            self._encode_enum(registry_enums_pb2.Visibility, "VISIBILITY", v) for v in visibilities or []
-        ]
-        encoded_sort = self._encode_enum(registry_enums_pb2.SortBy, "SORT_BY", sort_by)
+        encoded_types = [self._encode_enum(module_enums_pb2.ModuleType, t) for t in module_types or []]
+        encoded_statuses = [self._encode_enum(setup_enums_pb2.SetupStatus, s) for s in statuses or []]
+        encoded_visibilities = [self._encode_enum(common_enums_pb2.Visibility, v) for v in visibilities or []]
 
         async with self.handle_grpc_errors("SearchSetups", RegistryServiceError):
             try:
                 response = await self.exec_grpc_query(
                     "SearchSetups",
-                    registry_requests_pb2.SearchSetupsRequest(
+                    registry_dto_pb2.SearchSetupsRequest(
                         query=query or "",
                         setup_ids=setup_ids or [],
                         module_ids=module_ids or [],
@@ -558,10 +533,12 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
                         statuses=encoded_statuses,
                         visibilities=encoded_visibilities,
                         tags=tags or [],
-                        sort_by=encoded_sort,
-                        descending=descending,
-                        limit=limit,
-                        offset=offset,
+                        pagination=pagination_pb2.PaginationRequest(
+                            order="" if sort_by is RegistrySortBy.UNSPECIFIED else sort_by.value,
+                            descending=descending,
+                            limit=limit,
+                            offset=offset,
+                        ),
                     ),
                     # TODO(validate): tightened agent-facing search deadline (was global 30s)
                     timeout=get_registry_settings().search_timeout_s,
@@ -573,7 +550,10 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
                 logger.error(msg)
                 raise RegistryServiceError(msg) from e
 
-            return [self._summary_to_setup_summary(s) for s in response.setups]
+            return [
+                self._summary_to_setup_summary(result.setup_summary)
+                for result in self.successful_results("SearchSetups", response.results)
+            ]
 
     async def deregister(  # ruff: ignore[no-self-use]
         self, module_id: str

@@ -70,20 +70,20 @@ async def test_consume_guarded_redis_error_is_logged_with_traceback(caplog: pyte
 
 
 async def test_startstream_claim_redis_error_returns_not_accepted() -> None:
-    from agentic_mesh_protocol.gateway.v1 import gateway_pb2
+    from agentic_mesh_protocol.gateway.v1 import gateway_dto_pb2
 
     redis_client = MagicMock()
     redis_client.eval = AsyncMock(side_effect=RedisConnectionError("down"))
     servicer = GatewayServicer(redis_client=redis_client)
 
-    req = gateway_pb2.StartStreamRequest(task_id="task_r2", setup_id="setups:s", mission_id="missions:m")
+    req = gateway_dto_pb2.StartStreamRequest(task_id="task_r2", setup_id="setups:s", mission_id="missions:m")
     resp = await servicer.StartStream(req, _ctx())
     assert resp.accepted is False
     assert resp.task_id == "task_r2"
 
 
 async def test_startstream_seed_xadd_redis_error_releases_claim_and_rejects() -> None:
-    from agentic_mesh_protocol.gateway.v1 import gateway_pb2
+    from agentic_mesh_protocol.gateway.v1 import gateway_dto_pb2
 
     redis_client = MagicMock()
     redis_client.eval = AsyncMock(return_value=1)  # ClaimResult.CLAIMED → fresh-dial path
@@ -91,7 +91,7 @@ async def test_startstream_seed_xadd_redis_error_releases_claim_and_rejects() ->
     redis_client.delete = AsyncMock(return_value=1)  # idempotency.release
     servicer = GatewayServicer(redis_client=redis_client)
 
-    req = gateway_pb2.StartStreamRequest(task_id="task_r2b", setup_id="setups:s", mission_id="missions:m")
+    req = gateway_dto_pb2.StartStreamRequest(task_id="task_r2b", setup_id="setups:s", mission_id="missions:m")
     resp = await servicer.StartStream(req, _ctx())
     assert resp.accepted is False
     # The claim is released so a retry can re-run.

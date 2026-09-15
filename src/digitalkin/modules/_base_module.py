@@ -817,6 +817,13 @@ class BaseModule(  # Module SDK base class requires many public methods # ruff: 
             setup_model = await self.create_setup_model(updated_config.model_dump())
             await callback(setup_model)
             self._status = ModuleStatus.STOPPING
-        except Exception:
+        except Exception as e:
             self._status = ModuleStatus.FAILED
             logger.exception("Error during config setup lifecycle", extra=self.context.session.current_ids())
+            # Without a reply the servicer waits out the whole config-setup timeout.
+            await callback(ModuleCodeModel(code="INTERNAL", message=f"config setup failed: {e}"))
+            logger.info(
+                "[VALIDATE CFGFAIL] config setup failure reported to the caller: %s",
+                e,
+                extra=self.context.session.current_ids(),
+            )  # TODO(validate): remove after prod validation

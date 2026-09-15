@@ -8,7 +8,7 @@ import time
 from collections import OrderedDict
 from typing import TYPE_CHECKING, Any
 
-from agentic_mesh_protocol.gateway.v1 import gateway_pb2
+from agentic_mesh_protocol.gateway.v1 import gateway_messages_pb2
 
 from digitalkin.grpc_servers.exceptions import M2MAtCapacityError
 from digitalkin.grpc_servers.utils.circuit_breaker import CircuitBreaker
@@ -179,7 +179,7 @@ class M2MCallRegistry:
         ``stream.error``.
 
         Yields:
-            StreamClient (the cached query).
+            StreamResponse (the cached query).
         """
         handle = self._entries[task_id]
         log_extra = {
@@ -189,7 +189,7 @@ class M2MCallRegistry:
             "target_key": handle.target_key,
         }
         logger.info("[m2m-dialback] dial-back received, replying with query", extra=log_extra)
-        yield gateway_pb2.StreamClient(from_seq=0, task_id=task_id, data=handle.query)
+        yield gateway_messages_pb2.StreamResponse(seq=0, task_id=task_id, data=handle.query)
 
         try:
             async for upstream in request_iterator:

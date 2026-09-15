@@ -2,15 +2,22 @@ exclude: |
   (?x)^(
       .gitignore
   )$
+# Every hook runs at commit time; only the template check also guards the push.
+default_stages: [ pre-commit ]
+# `pre-commit install` sets up both git hooks at once.
+default_install_hook_types: [ pre-commit, pre-push ]
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
     hooks:
       - id: trailing-whitespace
+        stages: [ pre-commit ]
       - id: end-of-file-fixer
+        stages: [ pre-commit ]
       - id: check-yaml
         exclude: mkdocs.yml
       - id: check-added-large-files
+        stages: [ pre-commit ]
         args: ['--maxkb=1024']  # 1 MB
 
       - id: check-toml
@@ -46,8 +53,10 @@ repos:
         types: [python]
         files: ^src/digitalkin/.*\.py$
 
-  # The .env templates are generated from the settings classes: regenerate them
-  # here so a new or renamed field can never ship without its documentation.
+  # The .env templates are generated from the settings classes. They also render
+  # values defined outside models/settings (enums in models/services and
+  # models/core) and depend on pydantic's version, so no file pattern covers
+  # every source: the hook runs on every commit (~1 s).
   - repo: local
     hooks:
       - id: env-template
@@ -58,7 +67,16 @@ repos:
         entry: bash -c 'uv run task env-template && git add -- .env.exemple .env.minimum'
         language: system
         pass_filenames: false
-        files: ^src/digitalkin/(models/settings/.*|utils/env_template)\.py$
+        always_run: true
+      # Safety net for commits made with --no-verify or from a clone without
+      # hooks: refuse to push templates that no longer match the code.
+      - id: env-template-check
+        name: env-template-check
+        entry: uv run task env-template-check
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [ pre-push ]
 
   # Add pytest as a local hook
   - repo: local

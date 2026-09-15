@@ -8,14 +8,17 @@ from typing import Any
 import grpc
 import grpc_testing
 import pytest
+from agentic_mesh_protocol.pagination.v1 import bulk_pb2
 from agentic_mesh_protocol.user_profile.v1 import (
-    user_profile_pb2,
+    user_profile_dto_pb2,
+    user_profile_messages_pb2,
     user_profile_service_pb2,
     user_profile_service_pb2_grpc,
 )
 from google.protobuf import struct_pb2
 
 from digitalkin.models.grpc_servers.models import ClientConfig
+from digitalkin.services.secret.exceptions import SecretServiceError
 from digitalkin.services.secret.grpc_secret import GrpcSecret
 
 pytestmark = pytest.mark.timeout(20)
@@ -81,8 +84,38 @@ class TestGrpcSecret:
 
         secret = struct_pb2.Struct()
         secret.update({"api_key": "xyz"})
-        rpc.terminate(user_profile_pb2.GetSetupSecretResponse(success=True, secret=secret), (), grpc.StatusCode.OK, "")
+        rpc.terminate(
+            user_profile_dto_pb2.GetSetupSecretResponse(
+                result=user_profile_messages_pb2.UserProfileResult(identifier=SETUP_ID, secret=secret)
+            ),
+            (),
+            grpc.StatusCode.OK,
+            "",
+        )
         assert future.result(timeout=5.0) == {"api_key": "xyz"}
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    @pytest.mark.edge_case
+    def test_get_secret_empty_struct_returns_empty_dict(
+            self,
+            client: GrpcSecret,
+            test_channel: grpc_testing.Channel,
+            thread_pool: futures.ThreadPoolExecutor,
+    ) -> None:
+        """A resolved but empty secret is an empty dict, not None."""
+        method_desc = _service.methods_by_name["GetSetupSecret"]
+        future = thread_pool.submit(asyncio.run, client.get_secret())
+        _, _request, rpc = test_channel.take_unary_unary(method_desc)
+        rpc.terminate(
+            user_profile_dto_pb2.GetSetupSecretResponse(
+                result=user_profile_messages_pb2.UserProfileResult(identifier=SETUP_ID, secret=struct_pb2.Struct())
+            ),
+            (),
+            grpc.StatusCode.OK,
+            "",
+        )
+        assert future.result(timeout=5.0) == {}
 
     @pytest.mark.grpc
     @pytest.mark.integration
@@ -93,9 +126,37 @@ class TestGrpcSecret:
         test_channel: grpc_testing.Channel,
         thread_pool: futures.ThreadPoolExecutor,
     ) -> None:
-        """success=False resolves to None."""
+        """A result holding an OperationError resolves to None, as success=False used to."""
         method_desc = _service.methods_by_name["GetSetupSecret"]
         future = thread_pool.submit(asyncio.run, client.get_secret())
         _, _request, rpc = test_channel.take_unary_unary(method_desc)
-        rpc.terminate(user_profile_pb2.GetSetupSecretResponse(success=False), (), grpc.StatusCode.OK, "")
+        rpc.terminate(
+            user_profile_dto_pb2.GetSetupSecretResponse(
+                result=user_profile_messages_pb2.UserProfileResult(
+                    identifier=SETUP_ID,
+                    error=bulk_pb2.OperationError(code="NOT_FOUND", message="no secret for setup"),
+                )
+            ),
+            (),
+            grpc.StatusCode.OK,
+            "",
+        )
         assert future.result(timeout=5.0) is None
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    @pytest.mark.validation
+    def test_get_secret_rpc_failure_raises(
+            self,
+            client: GrpcSecret,
+            test_channel: grpc_testing.Channel,
+            thread_pool: futures.ThreadPoolExecutor,
+    ) -> None:
+        """A non-OK status surfaces as SecretServiceError, not as a missing secret."""
+        method_desc = _service.methods_by_name["GetSetupSecret"]
+        future = thread_pool.submit(asyncio.run, client.get_secret())
+        _, _request, rpc = test_channel.take_unary_unary(method_desc)
+        rpc.terminate(user_profile_dto_pb2.GetSetupSecretResponse(), (), grpc.StatusCode.UNAVAILABLE, "down")
+
+        with pytest.raises(SecretServiceError):
+            future.result(timeout=5.0)

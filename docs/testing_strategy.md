@@ -112,13 +112,13 @@ Tests for each phase of the scaling plan. Every new component must have tests be
 
 ## 3. Contract Tests
 
-| Test | Category |
-|------|----------|
-| `StartStreamRequest` → `StartStreamResponse(accepted, task_id)` | proto |
-| `ConsumeStreamInit(task_id, from_seq)` → `GatewayResponse(output\|status\|error\|heartbeat)` | proto |
-| `ClientSignalRequest(task_id, action)` → `ClientSignalResponse(success)` | proto |
-| `ModuleOutput` Pydantic model parses all protocol types from gateway response | compat |
-| Proto `Struct` round-trip: write → Redis → read → identical content | serde |
+| Test                                                                                         | Category |
+|----------------------------------------------------------------------------------------------|----------|
+| `StartStreamRequest` → `StartStreamResponse(accepted, task_id)`                              | proto    |
+| `ConsumeStreamInit(task_id, from_seq)` → `GatewayResponse(output\|status\|error\|heartbeat)` | proto    |
+| `SendSignalRequest(cancel \| invalidate)` → `SendSignalResponse(success, task_id)`           | proto    |
+| `ModuleOutput` Pydantic model parses all protocol types from gateway response                | compat   |
+| Proto `Struct` round-trip: write → Redis → read → identical content                          | serde    |
 
 ---
 

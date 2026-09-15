@@ -39,7 +39,7 @@ class GetAction(RegistryAction):
         Returns:
             The setup with its current version, status and visibility, and a service's key map.
         """
-        return await ctx.with_structure(await ctx.ensure_kind(self.setup_id))
+        return await ctx.ensure_kind(self.setup_id)
 
 
 class SearchAction(RegistryAction):
@@ -287,7 +287,7 @@ class ChangeVisibilityAction(RegistryAction):
         # change_visibility composes its response from a snapshot read before the write, so a
         # concurrent update makes it echo a stale version/content. Re-read the committed state so the
         # response reflects the write (and any concurrent one), not a pre-write in-memory object.
-        return await ctx.with_structure(await ctx.setup.get_setup({"setup_id": self.setup_id}))
+        return await ctx.setup.get_setup({"setup_id": self.setup_id})
 
 
 class ListVersionsAction(RegistryAction):
@@ -373,9 +373,7 @@ class SetVersionAction(RegistryAction):
             The setup with its newly activated version.
         """
         await ctx.ensure_kind(self.setup_id)
-        return await ctx.with_structure(
-            await ctx.setup.set_current_setup_version({
-                "setup_id": self.setup_id,
-                "setup_version_id": self.setup_version_id,
-            })
-        )
+        return await ctx.setup.set_current_setup_version({
+            "setup_id": self.setup_id,
+            "setup_version_id": self.setup_version_id,
+        })

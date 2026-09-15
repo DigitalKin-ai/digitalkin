@@ -28,14 +28,10 @@ class _InMemoryStorage(StorageStrategy):
         self._store_data[self._key(record.context, record.collection, record.record_id)] = record
         return record
 
-    async def _read(
-        self, collection: str, record_id: str, context: str, storage_id: str = ""
-    ) -> StorageRecord | None:
+    async def _read(self, collection: str, record_id: str, context: str, storage_id: str = "") -> StorageRecord | None:
         return self._store_data.get(self._key(context, collection, record_id))
 
-    async def _update(
-        self, collection: str, record_id: str, data: BaseModel, context: str
-    ) -> StorageRecord | None:
+    async def _update(self, collection: str, record_id: str, data: BaseModel, context: str) -> StorageRecord | None:
         key = self._key(context, collection, record_id)
         rec = self._store_data.get(key)
         if rec is None:
@@ -58,7 +54,7 @@ class _InMemoryStorage(StorageStrategy):
         prefix = f"{context}|{collection}:"
         return [r for k, r in self._store_data.items() if k.startswith(prefix)]
 
-    async def _remove_collection(self, collection: str, context: str, record_id: str = "") -> bool:
+    async def _remove_collection(self, collection: str, context: str) -> bool:
         prefix = f"{context}|{collection}:"
         keys = [k for k in self._store_data if k.startswith(prefix)]
         for k in keys:

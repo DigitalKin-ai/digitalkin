@@ -11,9 +11,11 @@ from digitalkin.core.task_manager.redis import RedisClient
 from digitalkin.core.task_manager.redis.redis_signal import SharedRedisListener
 from digitalkin.grpc_servers._base_server import BaseServer
 from digitalkin.grpc_servers.gateway_servicer import GatewayServicer
+from digitalkin.grpc_servers.interceptors.validation import ValidationServerInterceptor
 from digitalkin.grpc_servers.module_servicer import ModuleServicer
 from digitalkin.logger import logger
 from digitalkin.models.grpc_servers.models import ClientConfig
+from digitalkin.models.services.registry import RegistryModuleType
 from digitalkin.models.services.services import ServicesMode
 from digitalkin.models.settings.redis import get_redis_settings
 from digitalkin.models.settings.server.server import get_server_settings
@@ -52,9 +54,7 @@ class ModuleServer(BaseServer):
             client_config: Client configuration for services and registry.
             interceptors: Optional gRPC server interceptors.
         """
-        all_interceptors = list(interceptors) if interceptors else []
-
-        super().__init__(interceptors=all_interceptors or None)
+        super().__init__(interceptors=[ValidationServerInterceptor(), *(interceptors or ())])
         self.module_class = module_class
         if client_config is None and EnvManager.services_mode() == ServicesMode.REMOTE:
             client_config = EnvManager.client_config()
@@ -139,34 +139,33 @@ class ModuleServer(BaseServer):
         if listener is not None:
             listener.set_cache_invalidator(self._handle_cache_invalidation)
 
-    async def _handle_cache_invalidation(self, action: str, setup_id: str = "") -> None:
-        """Dispatch cache invalidation by action name.
+    async def _handle_cache_invalidation(self, scope: str, setup_id: str = "") -> None:
+        """Dispatch a cache invalidation by ``CacheScope`` name.
 
-        ``INVALIDATE_SETUP`` and ``INVALIDATE_TOOLS`` require a ``setup_id`` —
-        without one they log a warning and skip. ``INVALIDATE_ALL`` is the only
-        full-wipe path.
+        ``SETUP`` and ``TOOLS`` require a ``setup_id`` — without one they log a
+        warning and skip. ``ALL`` is the only full-wipe path.
 
         Args:
-            action: SignalAction enum name (e.g. ``INVALIDATE_SETUP``).
-            setup_id: Setup identifier for scoped invalidation; ignored by full-wipe actions.
+            scope: ``CacheScope`` value name (e.g. ``SETUP``).
+            setup_id: Setup identifier for scoped invalidation; ignored by full-wipe scopes.
         """
-        handlers: dict[str, Any] = {
-            "INVALIDATE_ALL": self._invalidate_all,
-            "INVALIDATE_CHANNELS": self._invalidate_channels,
-            "INVALIDATE_MODELS": self._invalidate_models,
-            "INVALIDATE_SETUP": self._invalidate_setup,
-            "INVALIDATE_TOOLS": self._invalidate_tools,
-            "INVALIDATE_SHARED": self._invalidate_shared,
-        }
-        handler = handlers.get(action)
-        if handler is None:
-            logger.warning("Unknown invalidation action: %s", action)
-            return
-        if action in {"INVALIDATE_SETUP", "INVALIDATE_TOOLS"}:
-            await handler(setup_id)
-        else:
-            await handler()
-        logger.info("Cache invalidated: %s setup_id=%s", action, setup_id or "<all>")
+        match scope:
+            case "ALL":
+                await self._invalidate_all()
+            case "CHANNELS":
+                await self._invalidate_channels()
+            case "MODELS":
+                await self._invalidate_models()
+            case "SETUP":
+                await self._invalidate_setup(setup_id)
+            case "TOOLS":
+                await self._invalidate_tools(setup_id)
+            case "SHARED":
+                await self._invalidate_shared()
+            case _:
+                logger.warning("Unknown cache scope: %s", scope)
+                return
+        logger.info("Cache invalidated: %s setup_id=%s", scope, setup_id or "<all>")
 
     async def _invalidate_all(self) -> None:
         if self.module_servicer is not None:
@@ -180,7 +179,7 @@ class ModuleServer(BaseServer):
         if self.module_servicer is None:
             return
         if not setup_id:
-            logger.warning("INVALIDATE_SETUP received without setup_id — skipping (scoped-only policy)")
+            logger.warning("SETUP invalidation received without setup_id — skipping (scoped-only policy)")
             return
         self.module_servicer._setup_cache.pop(setup_id, None)  # ruff: ignore[private-member-access]
         self.module_servicer._setup_inflight.pop(setup_id, None)  # ruff: ignore[private-member-access]
@@ -189,7 +188,7 @@ class ModuleServer(BaseServer):
         if self.module_servicer is None:
             return
         if not setup_id:
-            logger.warning("INVALIDATE_TOOLS received without setup_id — skipping (scoped-only policy)")
+            logger.warning("TOOLS invalidation received without setup_id — skipping (scoped-only policy)")
             return
         self.module_servicer._tool_cache_by_setup.pop(setup_id, None)  # ruff: ignore[private-member-access]
 
@@ -222,11 +221,19 @@ class ModuleServer(BaseServer):
         """Initialize registry client, health-check, and register.
 
         Raises:
-            RuntimeError: If client_config is missing, module_id is invalid,
-                registry is unreachable, or registration fails.
+            RuntimeError: If client_config is missing, the module declares no registry_type,
+                module_id is invalid, registry is unreachable, or registration fails.
         """
         if not self.client_config:
             msg = "client_config is required for registry registration"
+            raise RuntimeError(msg)
+
+        if self.module_class.registry_type is RegistryModuleType.UNSPECIFIED:
+            # The registry refuses an UNSPECIFIED type; fail here, naming the fix, not deep in register().
+            msg = (
+                f"Module {self.module_class.__name__} declares no registry_type. "
+                "Subclass ToolModule or ArchetypeModule, or set registry_type = RegistryModuleType.SERVICE."
+            )
             raise RuntimeError(msg)
 
         self.registry = GrpcRegistry("", "", "", self.client_config)

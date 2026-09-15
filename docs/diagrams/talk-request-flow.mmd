@@ -15,6 +15,6 @@ sequenceDiagram
     Note over M: resolve setup → input model → run
     M->>R: XADD task:{id}:stream {pb, seq=1..N}
     GW->>R: XREAD task:{id}:stream (ProtoStreamReader)
-    GW-->>C: StreamServer{seq, data}  (repeats)
+    GW -->> C: StreamResponse{seq, data} (repeats)
     M->>R: XADD {eos:true}
-    GW-->>C: StreamServer{stream.end}
+    GW -->> C: StreamResponse{stream.end}

@@ -24,7 +24,7 @@ class _CountingProfile(UserProfileStrategy):
             raise UserProfileServiceError(msg)
         return self._profile
 
-    async def check_resource_access(self, resource_type: int, resource_id: str) -> bool:
+    async def check_resource_access(self, resource: str, resource_id: str) -> bool:
         return True
 
 

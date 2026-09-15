@@ -3,10 +3,10 @@
 The dial-back BiDi handles both directions concurrently for the lifetime
 of the task:
 
-- Consumer → Gateway: unlimited follow-up `StreamServer` messages land
+- Consumer → Gateway: unlimited follow-up `StreamResponse` messages land
   on `session.input_queue` after the first reply (which goes to the
   ModuleRunner).
-- Gateway → Consumer: unlimited `StreamClient` messages drain from
+- Gateway → Consumer: unlimited `StreamRequest` messages drain from
   `task:{task_id}:stream` until the EOS marker.
 
 Both sides use the same in-process gRPC + fakeredis fixtures already
@@ -68,7 +68,7 @@ async def gateway_with_runner():
 @SKIP_NO_FAKEREDIS
 class TestFullDuplex:
     async def test_unbounded_upstream_inputs(self, gateway_with_runner) -> None:
-        """5 follow-up StreamServer messages all XADD on Redis input stream."""
+        """5 follow-up StreamResponse messages all XADD on Redis input stream."""
         gateway, redis = gateway_with_runner
         n_followups = 5
         servicer = _FakeConsumerServicer(

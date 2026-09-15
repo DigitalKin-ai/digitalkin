@@ -1,9 +1,9 @@
 """Digital Kin UserProfile Service gRPC Client."""
 
-from typing import Any, cast
+from typing import Any, Literal
 
 from agentic_mesh_protocol.user_profile.v1 import (
-    user_profile_pb2,
+    user_profile_dto_pb2,
     user_profile_service_pb2_grpc,
 )
 
@@ -55,14 +55,19 @@ class GrpcUserProfile(UserProfileStrategy, GrpcClientWrapper, GrpcErrorHandlerMi
             UserProfileServiceError: If the gRPC operation fails.
         """
         async with self.handle_grpc_errors("GetUserProfile", UserProfileServiceError):
-            request = user_profile_pb2.GetUserProfileRequest(mission_id=self.mission_id)
+            request = user_profile_dto_pb2.GetUserProfileRequest(mission_id=self.mission_id)
             response = await self.exec_grpc_query("GetUserProfile", request)
 
-            if not response.success:
-                logger.warning("No user profile found for mission_id: %s", self.mission_id)
+            if response.result.WhichOneof("outcome") == "error":
+                logger.warning(
+                    "No user profile found for mission_id: %s (%s %s)",
+                    self.mission_id,
+                    response.result.error.code,
+                    response.result.error.message,
+                )
                 return None
 
-            user_profile_dict = ProtoUtils.proto_to_dict(response.user_profile, with_defaults=True)
+            user_profile_dict = ProtoUtils.proto_to_dict(response.result.profile, with_defaults=True)
             # mission_cost rides on the response, not on the profile: the running total the
             # mission has spent so far. Folded in here so callers keep a single dict to read.
             user_profile_dict["mission_cost"] = response.mission_cost
@@ -70,11 +75,15 @@ class GrpcUserProfile(UserProfileStrategy, GrpcClientWrapper, GrpcErrorHandlerMi
             logger.debug("Retrieved user profile for mission_id: %s", self.mission_id)
             return user_profile_dict
 
-    async def check_resource_access(self, resource_type: int, resource_id: str) -> bool:
+    async def check_resource_access(
+        self,
+        resource: Literal["setup_id", "module_id", "mission_id", "storage_id", "file_id"],
+        resource_id: str,
+    ) -> bool:
         """Check whether the caller may access a resource (e.g. a setup).
 
         Args:
-            resource_type: The ResourceType enum value (e.g. RESOURCE_TYPE_SETUP).
+            resource: The ``CheckResourceAccessRequest.resource`` oneof field naming the resource kind.
             resource_id: The resource identifier (e.g. the setup_id).
 
         Returns:
@@ -84,9 +93,6 @@ class GrpcUserProfile(UserProfileStrategy, GrpcClientWrapper, GrpcErrorHandlerMi
             UserProfileServiceError: If the gRPC operation fails.
         """
         async with self.handle_grpc_errors("CheckResourceAccess", UserProfileServiceError):
-            request = user_profile_pb2.CheckResourceAccessRequest(
-                resource_type=cast("user_profile_pb2.ResourceType", resource_type),
-                resource_id=resource_id,
-            )
+            request = user_profile_dto_pb2.CheckResourceAccessRequest(**{resource: resource_id})
             response = await self.exec_grpc_query("CheckResourceAccess", request)
             return response.allowed

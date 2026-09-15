@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
+from digitalkin.logger import logger
 from digitalkin.models.services.services import Context
 from digitalkin.models.services.storage import DataType, Visibility
 from digitalkin.services.base_strategy import BaseStrategy
@@ -215,13 +216,12 @@ class StorageStrategy(BaseStrategy, ABC):
         """
 
     @abstractmethod
-    async def _remove_collection(self, collection: str, context: str, record_id: str = "") -> bool:
+    async def _remove_collection(self, collection: str, context: str) -> bool:
         """Delete all records in a collection scoped to a specific context.
 
         Args:
             collection: The unique name for the record type
             context: Owner context for which to wipe records.
-            record_id: Restrict removal to this record id; empty wipes the whole collection.
 
         Returns:
             True if the deletion was successful, False otherwise
@@ -377,7 +377,8 @@ class StorageStrategy(BaseStrategy, ABC):
             collection: The unique name for the record type
             context: Which context to list (default: "mission"). "user"/"organization"
                 list across an owner and require `owner_id`.
-            visibilities: Optional read-access scopes to filter by (None = no filter).
+            visibilities: Optional read-access scopes to filter by (None = no filter). ``UNSPECIFIED``
+                constrains nothing — every stored record carries a concrete scope — so it is dropped.
             record_id: Restrict to this record id; empty means no filter.
             limit: Max records to return; 0 means the service default (20, capped at 100).
             offset: Records to skip before returning results.
@@ -385,32 +386,34 @@ class StorageStrategy(BaseStrategy, ABC):
         Returns:
             A list of storage records under the resolved context.
         """
+        if visibilities and Visibility.UNSPECIFIED in visibilities:
+            # The storage service refuses UNSPECIFIED in a visibility filter (INVALID_ARGUMENT).
+            logger.info(
+                "[VALIDATE VISFILTER] UNSPECIFIED dropped from the visibility filter: collection=%s filter=%s",
+                collection,
+                visibilities,
+            )  # TODO(validate): remove after prod validation
+            visibilities = [v for v in visibilities if v is not Visibility.UNSPECIFIED]
         return await self._list(collection, self._resolve_context(context), visibilities, record_id, limit, offset)
 
-    async def remove_collection(
-        self, collection: str, context: Context = Context.MISSIONS, record_id: str = ""
-    ) -> bool:
+    async def remove_collection(self, collection: str, context: Context = Context.MISSIONS) -> bool:
         """Wipe a collection clean under the given scope.
+
+        Use ``remove`` to delete a single record.
 
         Args:
             collection: The unique name for the record type
             context: Which context the records live under (default: "mission").
-            record_id: Restrict removal to this record id; empty wipes the whole collection.
 
         Returns:
             True if the deletion was successful, False otherwise
         """
         ctx = self._resolve_context(context)
-        result = await self._remove_collection(collection, ctx, record_id)
+        result = await self._remove_collection(collection, ctx)
         if result:
-            # A record_id names one exact lock; without it the whole collection's locks go.
-            # Not a startswith sweep in the first case, or "rec1" would evict "rec10" too.
-            if record_id:
-                self._record_locks.pop(f"{ctx}|{collection}:{record_id}", None)
-            else:
-                prefix = f"{ctx}|{collection}:"
-                for key in [k for k in self._record_locks if k.startswith(prefix)]:
-                    self._record_locks.pop(key, None)
+            prefix = f"{ctx}|{collection}:"
+            for key in [k for k in self._record_locks if k.startswith(prefix)]:
+                self._record_locks.pop(key, None)
         return result
 
     async def upsert(

@@ -32,7 +32,7 @@ import logging
 import sys
 
 import grpc
-from agentic_mesh_protocol.module.v1 import lifecycle_pb2, module_service_pb2_grpc
+from agentic_mesh_protocol.module.v1 import module_dto_pb2, module_service_pb2_grpc
 from google.protobuf import struct_pb2
 
 from digitalkin.grpc_servers.module_server import ModuleServer
@@ -112,7 +112,7 @@ async def call_module_with_headers() -> None:
         input_struct = struct_pb2.Struct()
         input_struct.update({"root": {"protocol": "search", "query": "Hello from client with headers!"}})
 
-        request = lifecycle_pb2.StartModuleRequest(
+        request = module_dto_pb2.StartModuleRequest(
             input=input_struct,
             setup_id="setups:0",
             mission_id="missions:0",
@@ -124,9 +124,12 @@ async def call_module_with_headers() -> None:
         responses = stub.StartModule(request, metadata=metadata)
 
         async for response in responses:
-            if response.HasField("output"):
-                output_dict = dict(response.output)
+            # Each StartModuleResponse carries one job output, or an OperationError, in `result`.
+            if response.result.WhichOneof("outcome") == "output":
+                output_dict = dict(response.result.output)
                 logger.info("Response: %s", json.dumps(output_dict, indent=2))
+            elif response.result.WhichOneof("outcome") == "error":
+                logger.error("Job %s failed: %s", response.job_id, response.result.error.message)
 
     logger.info("Done.")
 

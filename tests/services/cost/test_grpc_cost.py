@@ -7,22 +7,33 @@ edge cases, and various cost types.
 import asyncio
 import logging
 import secrets
+from collections.abc import Callable
 from concurrent import futures
+from typing import Any
+from unittest.mock import patch
 
 import grpc
 import grpc_testing
 import pytest
-from agentic_mesh_protocol.cost.v1 import cost_service_pb2, cost_service_pb2_grpc
+from agentic_mesh_protocol.cost.v1 import (
+    cost_dto_pb2,
+    cost_enums_pb2,
+    cost_messages_pb2,
+    cost_service_pb2,
+    cost_service_pb2_grpc,
+)
+from agentic_mesh_protocol.pagination.v1 import bulk_pb2, pagination_pb2
+from mock_cost_servicer import MockCostServicer
+from tests.fixtures.grpc_fixtures import AsyncStubWrapper, FakeContext
 
 from digitalkin.grpc_servers.exceptions import ServerError
+from digitalkin.logger import logger
 from digitalkin.models.grpc_servers.models import ClientConfig
-from digitalkin.models.settings.utils.channel import ControlFlow, SecurityMode
 from digitalkin.models.services.cost import CostType
+from digitalkin.models.settings.utils.channel import ControlFlow, SecurityMode
 from digitalkin.services.cost.cost_strategy import CostConfig, CostData
 from digitalkin.services.cost.exceptions import CostServiceError
 from digitalkin.services.cost.grpc_cost import GrpcCost
-from mock_cost_servicer import MockCostServicer
-from tests.fixtures.grpc_fixtures import AsyncStubWrapper, FakeContext
 
 service_instance = MockCostServicer()
 service_name = cost_service_pb2.DESCRIPTOR.services_by_name["CostService"]
@@ -34,7 +45,7 @@ test_logger = logging.getLogger(__name__)
 def thread_pool():
     """Create thread pool and ensure cleanup.
 
-    Returns:
+    Yields:
         ThreadPoolExecutor instance
     """
     test_logger.info("Creating thread pool...")
@@ -141,15 +152,33 @@ def client(test_channel: grpc_testing.Channel, cost_config: dict[str, CostConfig
         credentials=None,
     )
 
-    mission_id = "mission_test"
-    setup_id = "setup:1"
-    setup_version_id = "setup_version:1"
+    mission_id = "missions:test"
+    setup_id = "setups:1"
+    setup_version_id = "setup_versions:1"
     client = GrpcCost(mission_id, setup_id, setup_version_id, cost_config, dummy_config)
 
     # Override the channel and stub to use our test channel
     client.stub = AsyncStubWrapper(cost_service_pb2_grpc.CostServiceStub(test_channel))
     test_logger.info("Client created")
     return client
+
+
+@pytest.fixture
+def serve(test_channel: grpc_testing.Channel) -> Callable[[str, Callable[[Any], Any]], Any]:
+    """Answer the next pending call of an RPC with the response built by a handler.
+
+    Returns:
+        Callable taking the RPC name and a request-to-response handler, returning the request.
+    """
+
+    def _serve(rpc_name: str, handler: Callable[[Any], Any]) -> Any:
+        method_desc = cost_service_pb2.DESCRIPTOR.services_by_name["CostService"].methods_by_name[rpc_name]
+        _, request, rpc = test_channel.take_unary_unary(method_desc)
+        rpc.send_initial_metadata(())
+        rpc.terminate(handler(request), (), grpc.StatusCode.OK, "")
+        return request
+
+    return _serve
 
 
 # ============================================================================
@@ -190,14 +219,14 @@ class TestAddCost:
 
         # Get the method descriptor
         service_desc = cost_service_pb2.DESCRIPTOR.services_by_name["CostService"]
-        method_desc = service_desc.methods_by_name["AddCost"]
+        method_desc = service_desc.methods_by_name["CreateCost"]
 
         # Intercept the pending unary-unary call
         _invocation_metadata, request, rpc = test_channel.take_unary_unary(method_desc)
 
         # Process with mock servicer
         context = FakeContext()
-        response = mock_servicer.AddCost(request, context)
+        response = mock_servicer.CreateCost(request, context)
 
         # Send response back to client
         rpc.send_initial_metadata(())
@@ -213,7 +242,7 @@ class TestAddCost:
         assert len(stored_costs) == 1
         assert stored_costs[0]["name"] == name
         assert stored_costs[0]["quantity"] == quantity
-        assert stored_costs[0]["cost"] == 0.00003 * quantity  # rate * quantity
+        assert stored_costs[0]["cost"] == pytest.approx(0.00003 * quantity)  # rate * quantity
 
     @pytest.mark.grpc
     @pytest.mark.integration
@@ -234,7 +263,7 @@ class TestAddCost:
         quantity = 100.0
 
         # Try to add cost with invalid config name
-        with pytest.raises(CostServiceError, match="Cost config .* not found"):
+        with pytest.raises(CostServiceError, match=r"Cost config .* not found"):
             await client.add(name, "nonexistent_config", quantity)
 
     @pytest.mark.grpc
@@ -271,11 +300,11 @@ class TestAddCost:
 
             # Intercept and process
             service_desc = cost_service_pb2.DESCRIPTOR.services_by_name["CostService"]
-            method_desc = service_desc.methods_by_name["AddCost"]
+            method_desc = service_desc.methods_by_name["CreateCost"]
             _, request, rpc = test_channel.take_unary_unary(method_desc)
 
             context = FakeContext()
-            response = mock_servicer.AddCost(request, context)
+            response = mock_servicer.CreateCost(request, context)
 
             rpc.send_initial_metadata(())
             rpc.terminate(response, (), grpc.StatusCode.OK, "")
@@ -322,11 +351,11 @@ class TestAddCost:
             future = thread_pool.submit(asyncio.run, client.add(name, config_name, quantity))
 
             service_desc = cost_service_pb2.DESCRIPTOR.services_by_name["CostService"]
-            method_desc = service_desc.methods_by_name["AddCost"]
+            method_desc = service_desc.methods_by_name["CreateCost"]
             _, request, rpc = test_channel.take_unary_unary(method_desc)
 
             context = FakeContext()
-            response = mock_servicer.AddCost(request, context)
+            response = mock_servicer.CreateCost(request, context)
 
             rpc.send_initial_metadata(())
             rpc.terminate(response, (), grpc.StatusCode.OK, "")
@@ -348,7 +377,7 @@ class TestAddCost:
         mock_servicer: MockCostServicer,
         thread_pool: futures.ThreadPoolExecutor,
     ) -> None:
-        """Test adding cost with zero quantity (edge case).
+        """Test adding cost with zero quantity: a free usage is valid in the protocol.
 
         Args:
             client: GrpcCost client for testing
@@ -360,19 +389,20 @@ class TestAddCost:
         future = thread_pool.submit(asyncio.run, client.add(name, "gpt4_input", 0.0))
 
         service_desc = cost_service_pb2.DESCRIPTOR.services_by_name["CostService"]
-        method_desc = service_desc.methods_by_name["AddCost"]
+        method_desc = service_desc.methods_by_name["CreateCost"]
         _, request, rpc = test_channel.take_unary_unary(method_desc)
 
         context = FakeContext()
-        response = mock_servicer.AddCost(request, context)
+        response = mock_servicer.CreateCost(request, context)
 
-        # Zero quantity should be rejected
         rpc.send_initial_metadata(())
         rpc.terminate(response, (), context._code, context._details)
 
-        # Should fail - zero quantity not allowed
-        with pytest.raises(ServerError):
-            future.result(timeout=5.0)
+        assert future.result(timeout=5.0) is None
+        assert context._code == grpc.StatusCode.OK
+        stored = mock_servicer.costs[client.mission_id]
+        assert stored[0]["quantity"] == pytest.approx(0.0)
+        assert stored[0]["cost"] == pytest.approx(0.0)
 
     @pytest.mark.grpc
     @pytest.mark.integration
@@ -396,18 +426,20 @@ class TestAddCost:
         future = thread_pool.submit(asyncio.run, client.add(name, "gpt4_input", -100.0))
 
         service_desc = cost_service_pb2.DESCRIPTOR.services_by_name["CostService"]
-        method_desc = service_desc.methods_by_name["AddCost"]
+        method_desc = service_desc.methods_by_name["CreateCost"]
         _, request, rpc = test_channel.take_unary_unary(method_desc)
 
         context = FakeContext()
-        response = mock_servicer.AddCost(request, context)
+        response = mock_servicer.CreateCost(request, context)
 
         rpc.send_initial_metadata(())
         rpc.terminate(response, (), context._code, context._details)
 
         # Should fail with validation error - negative quantity not allowed
-        with pytest.raises(ServerError):
+        assert context._code == grpc.StatusCode.INVALID_ARGUMENT
+        with pytest.raises(ServerError, match="INVALID_ARGUMENT"):
             future.result(timeout=5.0)
+        assert client.mission_id not in mock_servicer.costs
 
     @pytest.mark.grpc
     @pytest.mark.integration
@@ -431,11 +463,11 @@ class TestAddCost:
         future = thread_pool.submit(asyncio.run, client.add(name, "gpt4_input", 100.0))
 
         service_desc = cost_service_pb2.DESCRIPTOR.services_by_name["CostService"]
-        method_desc = service_desc.methods_by_name["AddCost"]
+        method_desc = service_desc.methods_by_name["CreateCost"]
         _, request, rpc = test_channel.take_unary_unary(method_desc)
 
         context = FakeContext()
-        response = mock_servicer.AddCost(request, context)
+        response = mock_servicer.CreateCost(request, context)
 
         rpc.send_initial_metadata(())
         rpc.terminate(response, (), grpc.StatusCode.OK, "")
@@ -484,10 +516,10 @@ class TestGetCost:
         # Add cost
         future_add = thread_pool.submit(asyncio.run, client.add(name, "gpt4_input", quantity))
         service_desc = cost_service_pb2.DESCRIPTOR.services_by_name["CostService"]
-        method_desc = service_desc.methods_by_name["AddCost"]
+        method_desc = service_desc.methods_by_name["CreateCost"]
         _, request, rpc = test_channel.take_unary_unary(method_desc)
         context = FakeContext()
-        response = mock_servicer.AddCost(request, context)
+        response = mock_servicer.CreateCost(request, context)
         rpc.send_initial_metadata(())
         rpc.terminate(response, (), grpc.StatusCode.OK, "")
         future_add.result(timeout=5.0)
@@ -495,11 +527,15 @@ class TestGetCost:
         # Now get the cost
         future_get = thread_pool.submit(asyncio.run, client.get(name))
 
-        method_desc = service_desc.methods_by_name["GetCost"]
+        method_desc = service_desc.methods_by_name["ListCosts"]
         _, request, rpc = test_channel.take_unary_unary(method_desc)
+        assert request.mission_id == client.mission_id
+        assert list(request.filter.names) == [name]
+        assert request.pagination.limit == 100
+        assert request.pagination.offset == 0
 
         context = FakeContext()
-        response = mock_servicer.GetCost(request, context)
+        response = mock_servicer.ListCosts(request, context)
 
         rpc.send_initial_metadata(())
         rpc.terminate(response, (), grpc.StatusCode.OK, "")
@@ -533,11 +569,11 @@ class TestGetCost:
         future = thread_pool.submit(asyncio.run, client.get(name))
 
         service_desc = cost_service_pb2.DESCRIPTOR.services_by_name["CostService"]
-        method_desc = service_desc.methods_by_name["GetCost"]
+        method_desc = service_desc.methods_by_name["ListCosts"]
         _, request, rpc = test_channel.take_unary_unary(method_desc)
 
         context = FakeContext()
-        response = mock_servicer.GetCost(request, context)
+        response = mock_servicer.ListCosts(request, context)
 
         rpc.send_initial_metadata(())
         rpc.terminate(response, (), grpc.StatusCode.OK, "")
@@ -571,10 +607,10 @@ class TestGetCost:
 
         for quantity in quantities:
             future_add = thread_pool.submit(asyncio.run, client.add(name, "gpt4_input", quantity))
-            method_desc = service_desc.methods_by_name["AddCost"]
+            method_desc = service_desc.methods_by_name["CreateCost"]
             _, request, rpc = test_channel.take_unary_unary(method_desc)
             context = FakeContext()
-            response = mock_servicer.AddCost(request, context)
+            response = mock_servicer.CreateCost(request, context)
             rpc.send_initial_metadata(())
             rpc.terminate(response, (), grpc.StatusCode.OK, "")
             future_add.result(timeout=5.0)
@@ -582,11 +618,11 @@ class TestGetCost:
         # Get all costs with this name
         future_get = thread_pool.submit(asyncio.run, client.get(name))
 
-        method_desc = service_desc.methods_by_name["GetCost"]
+        method_desc = service_desc.methods_by_name["ListCosts"]
         _, request, rpc = test_channel.take_unary_unary(method_desc)
 
         context = FakeContext()
-        response = mock_servicer.GetCost(request, context)
+        response = mock_servicer.ListCosts(request, context)
 
         rpc.send_initial_metadata(())
         rpc.terminate(response, (), grpc.StatusCode.OK, "")
@@ -637,10 +673,10 @@ class TestGetFilteredCost:
 
         for name in names:
             future_add = thread_pool.submit(asyncio.run, client.add(name, "gpt4_input", 100.0))
-            method_desc = service_desc.methods_by_name["AddCost"]
+            method_desc = service_desc.methods_by_name["CreateCost"]
             _, request, rpc = test_channel.take_unary_unary(method_desc)
             context = FakeContext()
-            response = mock_servicer.AddCost(request, context)
+            response = mock_servicer.CreateCost(request, context)
             rpc.send_initial_metadata(())
             rpc.terminate(response, (), grpc.StatusCode.OK, "")
             future_add.result(timeout=5.0)
@@ -649,11 +685,11 @@ class TestGetFilteredCost:
         filter_names = names[:3]
         future_get = thread_pool.submit(asyncio.run, client.get_filtered(names=filter_names))
 
-        method_desc = service_desc.methods_by_name["GetCosts"]
+        method_desc = service_desc.methods_by_name["ListCosts"]
         _, request, rpc = test_channel.take_unary_unary(method_desc)
 
         context = FakeContext()
-        response = mock_servicer.GetCosts(request, context)
+        response = mock_servicer.ListCosts(request, context)
 
         rpc.send_initial_metadata(())
         rpc.terminate(response, (), grpc.StatusCode.OK, "")
@@ -692,10 +728,10 @@ class TestGetFilteredCost:
         for config_name, _ in configs:
             name = f"test_{config_name}_{secrets.token_hex(4)}"
             future_add = thread_pool.submit(asyncio.run, client.add(name, config_name, 100.0))
-            method_desc = service_desc.methods_by_name["AddCost"]
+            method_desc = service_desc.methods_by_name["CreateCost"]
             _, request, rpc = test_channel.take_unary_unary(method_desc)
             context = FakeContext()
-            response = mock_servicer.AddCost(request, context)
+            response = mock_servicer.CreateCost(request, context)
             rpc.send_initial_metadata(())
             rpc.terminate(response, (), grpc.StatusCode.OK, "")
             future_add.result(timeout=5.0)
@@ -703,11 +739,12 @@ class TestGetFilteredCost:
         # Filter by token types only
         future_get = thread_pool.submit(asyncio.run, client.get_filtered(cost_types=["TOKEN_INPUT", "TOKEN_OUTPUT"]))
 
-        method_desc = service_desc.methods_by_name["GetCosts"]
+        method_desc = service_desc.methods_by_name["ListCosts"]
         _, request, rpc = test_channel.take_unary_unary(method_desc)
+        assert list(request.filter.types) == [cost_enums_pb2.TOKEN_INPUT, cost_enums_pb2.TOKEN_OUTPUT]
 
         context = FakeContext()
-        response = mock_servicer.GetCosts(request, context)
+        response = mock_servicer.ListCosts(request, context)
 
         rpc.send_initial_metadata(())
         rpc.terminate(response, (), grpc.StatusCode.OK, "")
@@ -745,22 +782,24 @@ class TestGetFilteredCost:
 
         for name, config, _ in test_data:
             future_add = thread_pool.submit(asyncio.run, client.add(name, config, 100.0))
-            method_desc = service_desc.methods_by_name["AddCost"]
+            method_desc = service_desc.methods_by_name["CreateCost"]
             _, request, rpc = test_channel.take_unary_unary(method_desc)
             context = FakeContext()
-            response = mock_servicer.AddCost(request, context)
+            response = mock_servicer.CreateCost(request, context)
             rpc.send_initial_metadata(())
             rpc.terminate(response, (), grpc.StatusCode.OK, "")
             future_add.result(timeout=5.0)
 
         # Filter by names and token input type
-        future_get = thread_pool.submit(asyncio.run, client.get_filtered(names=["cost_a", "cost_d"], cost_types=["TOKEN_INPUT"]))
+        future_get = thread_pool.submit(
+            asyncio.run, client.get_filtered(names=["cost_a", "cost_d"], cost_types=["TOKEN_INPUT"])
+        )
 
-        method_desc = service_desc.methods_by_name["GetCosts"]
+        method_desc = service_desc.methods_by_name["ListCosts"]
         _, request, rpc = test_channel.take_unary_unary(method_desc)
 
         context = FakeContext()
-        response = mock_servicer.GetCosts(request, context)
+        response = mock_servicer.ListCosts(request, context)
 
         rpc.send_initial_metadata(())
         rpc.terminate(response, (), grpc.StatusCode.OK, "")
@@ -792,11 +831,11 @@ class TestGetFilteredCost:
         future = thread_pool.submit(asyncio.run, client.get_filtered(names=["nonexistent"]))
 
         service_desc = cost_service_pb2.DESCRIPTOR.services_by_name["CostService"]
-        method_desc = service_desc.methods_by_name["GetCosts"]
+        method_desc = service_desc.methods_by_name["ListCosts"]
         _, request, rpc = test_channel.take_unary_unary(method_desc)
 
         context = FakeContext()
-        response = mock_servicer.GetCosts(request, context)
+        response = mock_servicer.ListCosts(request, context)
 
         rpc.send_initial_metadata(())
         rpc.terminate(response, (), grpc.StatusCode.OK, "")
@@ -828,10 +867,10 @@ class TestGetFilteredCost:
         for i in range(3):
             name = f"cost_{i}"
             future_add = thread_pool.submit(asyncio.run, client.add(name, "gpt4_input", 100.0))
-            method_desc = service_desc.methods_by_name["AddCost"]
+            method_desc = service_desc.methods_by_name["CreateCost"]
             _, request, rpc = test_channel.take_unary_unary(method_desc)
             context = FakeContext()
-            response = mock_servicer.AddCost(request, context)
+            response = mock_servicer.CreateCost(request, context)
             rpc.send_initial_metadata(())
             rpc.terminate(response, (), grpc.StatusCode.OK, "")
             future_add.result(timeout=5.0)
@@ -839,11 +878,11 @@ class TestGetFilteredCost:
         # Get all costs (no filter)
         future_get = thread_pool.submit(asyncio.run, client.get_filtered())
 
-        method_desc = service_desc.methods_by_name["GetCosts"]
+        method_desc = service_desc.methods_by_name["ListCosts"]
         _, request, rpc = test_channel.take_unary_unary(method_desc)
 
         context = FakeContext()
-        response = mock_servicer.GetCosts(request, context)
+        response = mock_servicer.ListCosts(request, context)
 
         rpc.send_initial_metadata(())
         rpc.terminate(response, (), grpc.StatusCode.OK, "")
@@ -888,11 +927,11 @@ class TestCostEdgeCases:
         future = thread_pool.submit(asyncio.run, client.add(name, "gpt4_input", quantity))
 
         service_desc = cost_service_pb2.DESCRIPTOR.services_by_name["CostService"]
-        method_desc = service_desc.methods_by_name["AddCost"]
+        method_desc = service_desc.methods_by_name["CreateCost"]
         _, request, rpc = test_channel.take_unary_unary(method_desc)
 
         context = FakeContext()
-        response = mock_servicer.AddCost(request, context)
+        response = mock_servicer.CreateCost(request, context)
 
         rpc.send_initial_metadata(())
         rpc.terminate(response, (), grpc.StatusCode.OK, "")
@@ -903,7 +942,7 @@ class TestCostEdgeCases:
         # Verify calculation
         stored_costs = mock_servicer.costs[client.mission_id]
         assert stored_costs[0]["quantity"] == quantity
-        assert stored_costs[0]["cost"] == 0.00003 * quantity
+        assert stored_costs[0]["cost"] == pytest.approx(0.00003 * quantity)
 
     @pytest.mark.grpc
     @pytest.mark.integration
@@ -928,11 +967,11 @@ class TestCostEdgeCases:
         future = thread_pool.submit(asyncio.run, client.add(name, "gpt4_input", quantity))
 
         service_desc = cost_service_pb2.DESCRIPTOR.services_by_name["CostService"]
-        method_desc = service_desc.methods_by_name["AddCost"]
+        method_desc = service_desc.methods_by_name["CreateCost"]
         _, request, rpc = test_channel.take_unary_unary(method_desc)
 
         context = FakeContext()
-        response = mock_servicer.AddCost(request, context)
+        response = mock_servicer.CreateCost(request, context)
 
         rpc.send_initial_metadata(())
         rpc.terminate(response, (), grpc.StatusCode.OK, "")
@@ -966,11 +1005,11 @@ class TestCostEdgeCases:
         future = thread_pool.submit(asyncio.run, client.add(name1, "gpt4_input", 100.0))
 
         service_desc = cost_service_pb2.DESCRIPTOR.services_by_name["CostService"]
-        method_desc = service_desc.methods_by_name["AddCost"]
+        method_desc = service_desc.methods_by_name["CreateCost"]
         _, request, rpc = test_channel.take_unary_unary(method_desc)
 
         context = FakeContext()
-        response = mock_servicer.AddCost(request, context)
+        response = mock_servicer.CreateCost(request, context)
 
         rpc.send_initial_metadata(())
         rpc.terminate(response, (), grpc.StatusCode.OK, "")
@@ -982,21 +1021,21 @@ class TestCostEdgeCases:
             "name": "mission2_cost",
             "unit": "tokens",
             "cost_type": CostType.TOKEN_INPUT,
-            "mission_id": "different_mission",
+            "mission_id": "missions:different",
             "rate": 0.00003,
             "quantity": 1000.0,
-            "setup_version_id": "setup:2",
+            "setup_version_id": "setup_versions:2",
         }
         mock_servicer._validate_and_store_cost(different_mission_cost)
 
         # Get costs for original mission
         future_get = thread_pool.submit(asyncio.run, client.get_filtered())
 
-        method_desc = service_desc.methods_by_name["GetCosts"]
+        method_desc = service_desc.methods_by_name["ListCosts"]
         _, request, rpc = test_channel.take_unary_unary(method_desc)
 
         context = FakeContext()
-        response = mock_servicer.GetCosts(request, context)
+        response = mock_servicer.ListCosts(request, context)
 
         rpc.send_initial_metadata(())
         rpc.terminate(response, (), grpc.StatusCode.OK, "")
@@ -1007,6 +1046,280 @@ class TestCostEdgeCases:
         assert len(result) == 1
         assert result[0].name == name1
         assert result[0].mission_id == client.mission_id
+
+
+# ============================================================================
+# Test: OperationError outcomes and pagination
+# ============================================================================
+
+
+class TestResultOutcomes:
+    """Tests for ``CostResult`` outcomes holding an ``OperationError`` and for listing pagination."""
+
+    @pytest.mark.grpc
+    @pytest.mark.validation
+    def test_add_cost_operation_error_raises(
+            self,
+            client: GrpcCost,
+            serve: Callable[[str, Callable[[Any], Any]], Any],
+            thread_pool: futures.ThreadPoolExecutor,
+    ) -> None:
+        """A CreateCost result holding an OperationError raises CostServiceError."""
+        future = thread_pool.submit(asyncio.run, client.add("dup_cost", "gpt4_input", 10.0))
+
+        serve(
+            "CreateCost",
+            lambda request: cost_dto_pb2.CreateCostResponse(
+                result=cost_messages_pb2.CostResult(
+                    identifier=request.name,
+                    error=bulk_pb2.OperationError(code="ALREADY_EXISTS", message="cost already recorded"),
+                )
+            ),
+        )
+
+        with pytest.raises(CostServiceError, match="dup_cost: ALREADY_EXISTS cost already recorded"):
+            future.result(timeout=5.0)
+
+    @pytest.mark.grpc
+    @pytest.mark.edge_case
+    def test_get_filtered_drops_error_results(
+            self,
+            client: GrpcCost,
+            serve: Callable[[str, Callable[[Any], Any]], Any],
+            thread_pool: futures.ThreadPoolExecutor,
+    ) -> None:
+        """A ListCosts result holding an OperationError is dropped and logged, the others are kept."""
+        kept = cost_messages_pb2.Cost(
+            mission_id=client.mission_id,
+            setup_version_id=client.setup_version_id,
+            name="kept",
+            cost=0.3,
+            quantity=10.0,
+            rate=0.03,
+            unit="tokens",
+            type=cost_enums_pb2.TOKEN_INPUT,
+        )
+        response = cost_dto_pb2.ListCostsResponse(
+            results=[
+                cost_messages_pb2.CostResult(identifier="kept", cost=kept),
+                cost_messages_pb2.CostResult(
+                    identifier="broken",
+                    error=bulk_pb2.OperationError(code="INTERNAL", message="corrupted row"),
+                ),
+            ],
+            bulk=bulk_pb2.BulkResponse(
+                total_processed=2,
+                total_failed=1,
+                pagination=pagination_pb2.PaginationResponse(total_count=2),
+            ),
+            total_cost=0.3,
+        )
+
+        with patch.object(logger, "warning") as warning:
+            future = thread_pool.submit(asyncio.run, client.get_filtered())
+            serve("ListCosts", lambda _request: response)
+            result = future.result(timeout=5.0)
+
+        assert [cost.name for cost in result] == ["kept"]
+        assert result[0].cost_type == CostType.TOKEN_INPUT
+        assert result[0].quantity == pytest.approx(10.0)
+        assert any("broken" in call.args and "corrupted row" in call.args for call in warning.call_args_list)
+
+    @pytest.mark.grpc
+    @pytest.mark.edge_case
+    def test_get_filtered_reads_every_page(
+            self,
+            client: GrpcCost,
+            serve: Callable[[str, Callable[[Any], Any]], Any],
+            mock_servicer: MockCostServicer,
+            thread_pool: futures.ThreadPoolExecutor,
+    ) -> None:
+        """Listings over 100 items are read page by page until total_count is reached."""
+        for i in range(150):
+            mock_servicer._validate_and_store_cost({
+                "cost": 0.03,
+                "name": f"page_cost_{i}",
+                "unit": "tokens",
+                "cost_type": CostType.TOKEN_INPUT,
+                "mission_id": client.mission_id,
+                "rate": 0.00003,
+                "quantity": 1000.0,
+                "setup_version_id": client.setup_version_id,
+            })
+
+        pages: list[tuple[int, int]] = []
+
+        def list_page(request: cost_dto_pb2.ListCostsRequest) -> cost_dto_pb2.ListCostsResponse:
+            pages.append((request.pagination.limit, request.pagination.offset))
+            return mock_servicer.ListCosts(request, FakeContext())
+
+        future = thread_pool.submit(asyncio.run, client.get_filtered())
+        serve("ListCosts", list_page)
+        serve("ListCosts", list_page)
+        result = future.result(timeout=5.0)
+
+        assert pages == [(100, 0), (100, 100)]
+        assert [cost.name for cost in result] == [f"page_cost_{i}" for i in range(150)]
+
+    @pytest.mark.grpc
+    @pytest.mark.validation
+    def test_get_empty_name_rejected(
+            self,
+            client: GrpcCost,
+            test_channel: grpc_testing.Channel,
+            mock_servicer: MockCostServicer,
+            thread_pool: futures.ThreadPoolExecutor,
+    ) -> None:
+        """An empty name breaks the CostFilter rules and surfaces INVALID_ARGUMENT."""
+        future = thread_pool.submit(asyncio.run, client.get(""))
+
+        method_desc = cost_service_pb2.DESCRIPTOR.services_by_name["CostService"].methods_by_name["ListCosts"]
+        _, request, rpc = test_channel.take_unary_unary(method_desc)
+        context = FakeContext()
+        response = mock_servicer.ListCosts(request, context)
+        rpc.send_initial_metadata(())
+        rpc.terminate(response, (), context._code, context._details)
+
+        assert context._code == grpc.StatusCode.INVALID_ARGUMENT
+        with pytest.raises(ServerError, match="INVALID_ARGUMENT"):
+            future.result(timeout=5.0)
+
+
+# ============================================================================
+# Test: get_cost_config() / set_cost_config() Methods
+# ============================================================================
+
+
+class TestCostConfig:
+    """Tests for ListCostConfigs and SetCostConfig through GrpcCost."""
+
+    @pytest.mark.grpc
+    @pytest.mark.smoke
+    def test_set_cost_config_success(
+            self,
+            client: GrpcCost,
+            cost_config: dict[str, CostConfig],
+            serve: Callable[[str, Callable[[Any], Any]], Any],
+            mock_servicer: MockCostServicer,
+            thread_pool: futures.ThreadPoolExecutor,
+    ) -> None:
+        """Every configuration stored returns True and sends the types by name."""
+        future = thread_pool.submit(asyncio.run, client.set_cost_config(list(cost_config.values())))
+        request = serve("SetCostConfig", lambda request: mock_servicer.SetCostConfig(request, FakeContext()))
+
+        assert future.result(timeout=5.0) is True
+        assert request.setup_version_id == client.setup_version_id
+        assert [(config.name, cost_enums_pb2.CostType.Name(config.type)) for config in request.configs] == [
+            (config.cost_name, config.cost_type) for config in cost_config.values()
+        ]
+        assert len(mock_servicer.configs[client.setup_version_id]) == len(cost_config)
+
+    @pytest.mark.grpc
+    @pytest.mark.edge_case
+    def test_set_cost_config_failed_item_returns_false(
+            self,
+            client: GrpcCost,
+            cost_config: dict[str, CostConfig],
+            serve: Callable[[str, Callable[[Any], Any]], Any],
+            thread_pool: futures.ThreadPoolExecutor,
+    ) -> None:
+        """A configuration ending in an OperationError makes set_cost_config return False."""
+        response = cost_dto_pb2.SetCostConfigResponse(
+            results=[
+                cost_messages_pb2.CostResult(
+                    identifier="gpt4_input",
+                    config=cost_messages_pb2.CostConfig(
+                        name="gpt4_input", type=cost_enums_pb2.TOKEN_INPUT, unit="tokens", rate=0.00003
+                    ),
+                ),
+                cost_messages_pb2.CostResult(
+                    identifier="gpt4_output",
+                    error=bulk_pb2.OperationError(code="FAILED_PRECONDITION", message="rate locked"),
+                ),
+            ],
+            bulk=bulk_pb2.BulkResponse(total_processed=2, total_failed=1),
+        )
+        configs = [cost_config["gpt4_input"], cost_config["gpt4_output"]]
+
+        with patch.object(logger, "warning") as warning:
+            future = thread_pool.submit(asyncio.run, client.set_cost_config(configs))
+            serve("SetCostConfig", lambda _request: response)
+            stored = future.result(timeout=5.0)
+
+        assert stored is False
+        assert any("gpt4_output" in call.args and "rate locked" in call.args for call in warning.call_args_list)
+
+    @pytest.mark.grpc
+    @pytest.mark.smoke
+    def test_get_cost_config_success(
+            self,
+            client: GrpcCost,
+            serve: Callable[[str, Callable[[Any], Any]], Any],
+            mock_servicer: MockCostServicer,
+            thread_pool: futures.ThreadPoolExecutor,
+    ) -> None:
+        """Stored configurations come back as SDK CostConfig models."""
+        mock_servicer.configs[client.setup_version_id] = [
+            cost_messages_pb2.CostConfig(
+                name="gpt4_input",
+                type=cost_enums_pb2.TOKEN_INPUT,
+                description="GPT-4 input tokens",
+                unit="tokens",
+                rate=0.00003,
+            )
+        ]
+
+        future = thread_pool.submit(asyncio.run, client.get_cost_config())
+        request = serve("ListCostConfigs", lambda request: mock_servicer.ListCostConfigs(request, FakeContext()))
+
+        assert request.setup_version_id == client.setup_version_id
+        assert (request.pagination.limit, request.pagination.offset) == (100, 0)
+        assert future.result(timeout=5.0) == [
+            CostConfig(
+                cost_name="gpt4_input",
+                cost_type="TOKEN_INPUT",
+                description="GPT-4 input tokens",
+                unit="tokens",
+                rate=0.00003,
+            )
+        ]
+
+    @pytest.mark.grpc
+    @pytest.mark.edge_case
+    def test_get_cost_config_drops_error_results(
+            self,
+            client: GrpcCost,
+            serve: Callable[[str, Callable[[Any], Any]], Any],
+            thread_pool: futures.ThreadPoolExecutor,
+    ) -> None:
+        """A ListCostConfigs result holding an OperationError is dropped."""
+        response = cost_dto_pb2.ListCostConfigsResponse(
+            results=[
+                cost_messages_pb2.CostResult(
+                    identifier="api_call",
+                    config=cost_messages_pb2.CostConfig(
+                        name="api_call", type=cost_enums_pb2.API_CALL, unit="calls", rate=0.001
+                    ),
+                ),
+                cost_messages_pb2.CostResult(
+                    identifier="legacy",
+                    error=bulk_pb2.OperationError(code="DATA_LOSS", message="unreadable config"),
+                ),
+            ],
+            bulk=bulk_pb2.BulkResponse(
+                total_processed=2,
+                total_failed=1,
+                pagination=pagination_pb2.PaginationResponse(total_count=2),
+            ),
+        )
+
+        future = thread_pool.submit(asyncio.run, client.get_cost_config())
+        serve("ListCostConfigs", lambda _request: response)
+        result = future.result(timeout=5.0)
+
+        assert [(config.cost_name, config.cost_type, config.rate) for config in result] == [
+            ("api_call", "API_CALL", 0.001)
+        ]
 
 
 # ============================================================================

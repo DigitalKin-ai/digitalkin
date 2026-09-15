@@ -26,7 +26,6 @@ from pydantic import BaseModel, TypeAdapter, ValidationError, create_model, fiel
 from digitalkin.community.agno.toolkits.base import DkToolkit
 from digitalkin.grpc_servers.exceptions import PermissionDeniedError, ServerError
 from digitalkin.logger import logger
-from digitalkin.models.services.registry import RegistryModuleType
 from digitalkin.services.registry.exceptions import RegistryModuleNotFoundError, RegistryServiceError
 from digitalkin.services.setup.exceptions import SetupServiceError
 from digitalkin.utils.proto_utils import ProtoUtils
@@ -36,6 +35,7 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable
 
     from digitalkin.models.module import ModuleContext
+    from digitalkin.models.services.registry import RegistryModuleType
     from digitalkin.services.registry.registry_strategy import RegistryStrategy
     from digitalkin.services.setup.setup_strategy import SetupData, SetupStrategy
 
@@ -159,7 +159,7 @@ class RegistryActionCtx(BaseActionCtx):
         return setup
 
     async def structure_of(self, setup_id: str) -> dict[str, str]:
-        """Read a setup's stored key map from the registry search, the only read that carries it.
+        """Read a setup's stored key map from the registry search.
 
         Like every search, it follows the index, which may briefly lag right after a write.
 
@@ -171,29 +171,6 @@ class RegistryActionCtx(BaseActionCtx):
         """
         found = await self.registry.search_setups(setup_ids=[setup_id], module_types=[self.module_type], limit=1)
         return found[0].structure if found else {}
-
-    async def with_structure(self, setup: SetupData) -> SetupData:
-        """Fill a service read's key map when the setup service could not carry it.
-
-        GetSetup and SetCurrentSetupVersion have no structure field, so their version arrives
-        with ``None``. A service fills it from :meth:`structure_of`, so ``get`` and ``structure``
-        agree; tools and kins have no map and keep ``None``, which the envelope omits.
-
-        Args:
-            setup: The setup as the setup service returned it.
-
-        Returns:
-            The setup with its map filled, or unchanged when it is not a service or already
-            carries one.
-        """
-        version = setup.current_setup_version
-        if self.module_type != RegistryModuleType.SERVICE or version.structure is not None:
-            return setup
-        structure = await self.structure_of(setup.id)
-        logger.info(
-            "[VALIDATE STRUCTFILL] service read map filled from search: setup_id=%s keys=%d", setup.id, len(structure)
-        )  # TODO(validate): remove after prod validation
-        return setup.model_copy(update={"current_setup_version": version.model_copy(update={"structure": structure})})
 
 
 class RegistryAction(BaseAction[RegistryActionCtx], ABC):
@@ -401,8 +378,8 @@ class RegistryObjectToolKit(DkToolkit):
             visibility = data.get("visibility")
             if isinstance(visibility, str) and visibility.startswith("VISIBILITY_"):
                 data["visibility"] = visibility.removeprefix("VISIBILITY_").lower()
-            # A None map is left only on tools and kins reads, which have no map at all — services
-            # fill theirs through ``with_structure``. Rendering it would put the feature on their surface.
+            # A None map means the version carries none, as on every tools and kins read.
+            # Rendering it would put the feature on their surface.
             version = data.get("current_setup_version")
             if isinstance(version, dict) and "structure" in version and version["structure"] is None:
                 logger.info(

@@ -6,24 +6,30 @@ This test suite validates the GrpcRegistry service implementation, including:
 - Registering modules
 - Getting module status
 - Sending heartbeats
+- Getting setups
 """
 
 import asyncio
+import logging
 import types
 from concurrent import futures
-from enum import Enum
 
 import grpc
 import grpc_testing
-from google.protobuf.struct_pb2 import Struct
 import pytest
+from agentic_mesh_protocol.common.v1 import common_enums_pb2
+from agentic_mesh_protocol.module.v1 import module_enums_pb2
+from agentic_mesh_protocol.pagination.v1 import bulk_pb2
 from agentic_mesh_protocol.registry.v1 import (
-    registry_enums_pb2,
-    registry_models_pb2,
-    registry_requests_pb2,
+    registry_dto_pb2,
+    registry_messages_pb2,
     registry_service_pb2,
     registry_service_pb2_grpc,
 )
+from agentic_mesh_protocol.setup.v1 import setup_enums_pb2
+from google.protobuf.struct_pb2 import Struct
+from tests.fixtures.grpc_fixtures import AsyncStubWrapper, FakeContext
+from tests.services.registry.mock_registry_servicer import MockRegistryServicer
 
 from digitalkin.models.grpc_servers.models import ClientConfig
 from digitalkin.models.services.registry import (
@@ -35,11 +41,10 @@ from digitalkin.models.services.registry import (
 )
 from digitalkin.models.settings.utils.channel import ControlFlow, SecurityMode
 from digitalkin.services.registry.exceptions import (
+    RegistryModuleNotFoundError,
     RegistryServiceError,
 )
 from digitalkin.services.registry.grpc_registry import GrpcRegistry
-from tests.fixtures.grpc_fixtures import AsyncStubWrapper, FakeContext
-from tests.services.registry.mock_registry_servicer import MockRegistryServicer
 
 # Set timeout for all tests in this file (20 seconds)
 pytestmark = pytest.mark.timeout(20)
@@ -55,7 +60,7 @@ SETUP_VERSION_ID = "setup_versions:test_version"
 def thread_pool():
     """Create thread pool and ensure cleanup.
 
-    Returns:
+    Yields:
         ThreadPoolExecutor instance
     """
     pool = futures.ThreadPoolExecutor(max_workers=1)
@@ -119,7 +124,7 @@ def client(
     registry_client = GrpcRegistry(MISSION_ID, SETUP_ID, SETUP_VERSION_ID, dummy_client_config)
     registry_client.stub = AsyncStubWrapper(registry_service_pb2_grpc.RegistryServiceStub(test_channel))
 
-    async def _test_exec_grpc_query(self, query_endpoint, request, timeout=None, metadata=None):
+    async def _test_exec_grpc_query(self, query_endpoint, request, timeout=None, metadata=None) -> object:
         response = getattr(self.stub, query_endpoint)(request)
         return await response if asyncio.iscoroutine(response) else response
 
@@ -157,7 +162,7 @@ class TestDiscoverById:
             "address": "localhost",
             "port": 50051,
             "version": "1.0.0",
-            "status": registry_enums_pb2.MODULE_STATUS_READY,
+            "status": module_enums_pb2.READY,
         }
 
         # Get the method descriptor
@@ -212,8 +217,9 @@ class TestDiscoverById:
 
         context = FakeContext()
         response = mock_servicer.GetModule(request, context)
+        assert response.result.error.code == "NOT_FOUND"
 
-        # Return empty response with OK status - the client detects empty id
+        # In-band NOT_FOUND outcome with OK status
         rpc.send_initial_metadata(())
         rpc.terminate(response, (), grpc.StatusCode.OK, "")
 
@@ -221,6 +227,39 @@ class TestDiscoverById:
         with pytest.raises(RegistryServiceError) as exc_info:
             future.result(timeout=1.0)
         assert module_id in str(exc_info.value)
+        assert isinstance(exc_info.value.__cause__, RegistryModuleNotFoundError)
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    @pytest.mark.edge_case
+    def test_discover_by_id_operation_error(
+            self,
+            client: GrpcRegistry,
+            test_channel: grpc_testing.Channel,
+            thread_pool: futures.ThreadPoolExecutor,
+    ) -> None:
+        """An OperationError other than NOT_FOUND raises a plain RegistryServiceError."""
+        method_desc = registry_service_pb2.DESCRIPTOR.services_by_name["RegistryService"].methods_by_name["GetModule"]
+
+        future = thread_pool.submit(asyncio.run, client.discover_by_id("modules:broken"))
+
+        _, _request, rpc = test_channel.take_unary_unary(method_desc)
+        rpc.send_initial_metadata(())
+        rpc.terminate(
+            registry_dto_pb2.GetModuleResponse(
+                result=registry_messages_pb2.RegistryResult(
+                    identifier="modules:broken",
+                    error=bulk_pb2.OperationError(code="INTERNAL", message="index unavailable"),
+                )
+            ),
+            (),
+            grpc.StatusCode.OK,
+            "",
+        )
+
+        with pytest.raises(RegistryServiceError, match="modules:broken: INTERNAL index unavailable") as exc_info:
+            future.result(timeout=1.0)
+        assert not isinstance(exc_info.value.__cause__, RegistryModuleNotFoundError)
 
 
 class TestSearch:
@@ -245,7 +284,7 @@ class TestSearch:
             "address": "localhost",
             "port": 50051,
             "version": "1.0.0",
-            "status": registry_enums_pb2.MODULE_STATUS_READY,
+            "status": module_enums_pb2.READY,
         }
         mock_servicer.registered_modules["mod2"] = {
             "module_id": "mod2",
@@ -254,7 +293,7 @@ class TestSearch:
             "address": "localhost",
             "port": 50052,
             "version": "1.0.0",
-            "status": registry_enums_pb2.MODULE_STATUS_READY,
+            "status": module_enums_pb2.READY,
         }
 
         method_desc = registry_service_pb2.DESCRIPTOR.services_by_name["RegistryService"].methods_by_name[
@@ -294,7 +333,7 @@ class TestSearch:
             "address": "localhost",
             "port": 50051,
             "version": "1.0.0",
-            "status": registry_enums_pb2.MODULE_STATUS_READY,
+            "status": module_enums_pb2.READY,
         }
         mock_servicer.registered_modules["mod2"] = {
             "module_id": "mod2",
@@ -303,7 +342,7 @@ class TestSearch:
             "address": "localhost",
             "port": 50052,
             "version": "1.0.0",
-            "status": registry_enums_pb2.MODULE_STATUS_READY,
+            "status": module_enums_pb2.READY,
         }
 
         method_desc = registry_service_pb2.DESCRIPTOR.services_by_name["RegistryService"].methods_by_name[
@@ -342,7 +381,7 @@ class TestSearch:
             "address": "localhost",
             "port": 50051,
             "version": "1.0.0",
-            "status": registry_enums_pb2.MODULE_STATUS_READY,
+            "status": module_enums_pb2.READY,
         }
 
         method_desc = registry_service_pb2.DESCRIPTOR.services_by_name["RegistryService"].methods_by_name[
@@ -353,7 +392,8 @@ class TestSearch:
 
         _, request, rpc = test_channel.take_unary_unary(method_desc)
 
-        assert request.limit == 5
+        assert request.pagination.limit == 5
+        assert request.pagination.offset == 0
 
         context = FakeContext()
         response = mock_servicer.SearchModules(request, context)
@@ -365,7 +405,7 @@ class TestSearch:
 
         assert len(results) == 1
         # ModuleSummary is trimmed: network location never crosses the search surface
-        assert results[0].address == ""
+        assert not results[0].address
         assert results[0].port == 0
         assert results[0].status == RegistryModuleStatus.READY
         assert results[0].version == "1.0.0"
@@ -397,7 +437,7 @@ class TestSearch:
             "address": "localhost",
             "port": 50051,
             "version": "1.0.0",
-            "status": registry_enums_pb2.MODULE_STATUS_READY,
+            "status": module_enums_pb2.READY,
         }
         mock_servicer.registered_modules["mod2"] = {
             "module_id": "mod2",
@@ -406,7 +446,7 @@ class TestSearch:
             "address": "localhost",
             "port": 50052,
             "version": "1.0.0",
-            "status": registry_enums_pb2.MODULE_STATUS_READY,
+            "status": module_enums_pb2.READY,
         }
 
         method_desc = registry_service_pb2.DESCRIPTOR.services_by_name["RegistryService"].methods_by_name[
@@ -458,6 +498,50 @@ class TestSearch:
 
         assert len(results) == 0
 
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    @pytest.mark.edge_case
+    def test_search_drops_error_results(
+            self,
+            client: GrpcRegistry,
+            test_channel: grpc_testing.Channel,
+            thread_pool: futures.ThreadPoolExecutor,
+            monkeypatch: pytest.MonkeyPatch,
+            caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A result holding an OperationError is dropped and logged with its content."""
+        method_desc = registry_service_pb2.DESCRIPTOR.services_by_name["RegistryService"].methods_by_name[
+            "SearchModules"
+        ]
+        monkeypatch.setattr(logging.getLogger("digitalkin"), "propagate", True)
+        caplog.set_level(logging.WARNING, logger="digitalkin")
+        future = thread_pool.submit(asyncio.run, client.search())
+        _, _request, rpc = test_channel.take_unary_unary(method_desc)
+
+        rpc.send_initial_metadata(())
+        rpc.terminate(
+            registry_dto_pb2.SearchModulesResponse(
+                results=[
+                    registry_messages_pb2.RegistryResult(
+                        identifier="modules:ok",
+                        module_summary=registry_messages_pb2.ModuleSummary(id="modules:ok", name="Ok"),
+                    ),
+                    registry_messages_pb2.RegistryResult(
+                        identifier="modules:bad",
+                        error=bulk_pb2.OperationError(code="PERMISSION_DENIED", message="hidden module"),
+                    ),
+                ],
+            ),
+            (),
+            grpc.StatusCode.OK,
+            "",
+        )
+
+        results = future.result(timeout=1.0)
+
+        assert [m.module_id for m in results] == ["modules:ok"]
+        assert "SearchModules dropped result modules:bad: PERMISSION_DENIED hidden module" in caplog.text
+
 
 class TestRegister:
     """Tests for the register() method."""
@@ -483,7 +567,7 @@ class TestRegister:
             "address": "old-host",
             "port": 50050,
             "version": "0.9.0",
-            "status": registry_enums_pb2.MODULE_STATUS_READY,
+            "status": module_enums_pb2.READY,
         }
 
         method_desc = registry_service_pb2.DESCRIPTOR.services_by_name["RegistryService"].methods_by_name[
@@ -497,6 +581,7 @@ class TestRegister:
                 address="localhost",
                 port=50053,
                 version="1.0.0",
+                module_type=RegistryModuleType.TOOL_MODULE,
             ),
         )
 
@@ -540,7 +625,7 @@ class TestRegister:
             "address": "old-host",
             "port": 50050,
             "version": "0.9.0",
-            "status": registry_enums_pb2.MODULE_STATUS_READY,
+            "status": module_enums_pb2.READY,
         }
 
         method_desc = registry_service_pb2.DESCRIPTOR.services_by_name["RegistryService"].methods_by_name[
@@ -560,7 +645,7 @@ class TestRegister:
 
         _, request, rpc = test_channel.take_unary_unary(method_desc)
 
-        assert request.module_type == registry_enums_pb2.MODULE_TYPE_TOOL_MODULE
+        assert request.type == module_enums_pb2.TOOL_MODULE
 
         context = FakeContext()
         response = mock_servicer.RegisterModule(request, context)
@@ -583,7 +668,7 @@ class TestRegister:
         mock_servicer: MockRegistryServicer,
         thread_pool: futures.ThreadPoolExecutor,
     ) -> None:
-        """Test registering a non-existent module returns None."""
+        """Test registering a non-existent module (NOT_FOUND outcome) returns None."""
         module_id = "new_module"
 
         method_desc = registry_service_pb2.DESCRIPTOR.services_by_name["RegistryService"].methods_by_name[
@@ -597,6 +682,7 @@ class TestRegister:
                 address="localhost",
                 port=50053,
                 version="1.0.0",
+                module_type=RegistryModuleType.ARCHETYPE,
             ),
         )
 
@@ -604,58 +690,20 @@ class TestRegister:
 
         context = FakeContext()
         response = mock_servicer.RegisterModule(request, context)
+        assert response.result.error.code == "NOT_FOUND"
 
         rpc.send_initial_metadata(())
         rpc.terminate(response, (), grpc.StatusCode.OK, "")
 
         result = future.result(timeout=1.0)
 
-        # New proto returns None if module doesn't exist
         assert result is None
 
-
-class TestGetStatus:
-    """Tests for the get_status() method."""
-
-    @pytest.mark.grpc
-    @pytest.mark.integration
-    @pytest.mark.smoke
-    def test_get_status_success(
-        self,
-        client: GrpcRegistry,
-        test_channel: grpc_testing.Channel,
-        mock_servicer: MockRegistryServicer,
-        thread_pool: futures.ThreadPoolExecutor,
-    ) -> None:
-        """Test successfully getting module status."""
-        module_id = "module_001"
-
-        mock_servicer.registered_modules[module_id] = {
-            "module_id": module_id,
-            "module_type": "tool_module",
-            "name": "TestModule",
-            "address": "localhost",
-            "port": 50051,
-            "version": "1.0.0",
-            "status": registry_enums_pb2.MODULE_STATUS_READY,
-        }
-
-        method_desc = registry_service_pb2.DESCRIPTOR.services_by_name["RegistryService"].methods_by_name["GetModule"]
-
-        future = thread_pool.submit(asyncio.run, client.get_status(module_id))
-
-        _, request, rpc = test_channel.take_unary_unary(method_desc)
-
-        context = FakeContext()
-        response = mock_servicer.GetModule(request, context)
-
-        rpc.send_initial_metadata(())
-        rpc.terminate(response, (), grpc.StatusCode.OK, "")
-
-        result = future.result(timeout=1.0)
-
-        assert result.module_id == module_id
-        assert result.status == RegistryModuleStatus.READY
+    @pytest.mark.edge_case
+    def test_register_unspecified_type_fails_closed(self, client: GrpcRegistry) -> None:
+        """The registry refuses an undeclared type: it raises before any RPC is sent."""
+        with pytest.raises(ValueError, match="UNSPECIFIED"):
+            asyncio.run(client.register(module_id="modules:x", address="localhost", port=50053, version="1.0.0"))
 
 
 class TestHeartbeat:
@@ -681,7 +729,7 @@ class TestHeartbeat:
             "address": "localhost",
             "port": 50051,
             "version": "1.0.0",
-            "status": registry_enums_pb2.MODULE_STATUS_READY,
+            "status": module_enums_pb2.READY,
         }
 
         method_desc = registry_service_pb2.DESCRIPTOR.services_by_name["RegistryService"].methods_by_name["Heartbeat"]
@@ -743,8 +791,8 @@ class TestSearchSetups:
             "setup_id": "setups:duda",
             "name": "Duda Builder",
             "documentation": "Builds websites on the Duda platform",
-            "status": registry_enums_pb2.SETUP_STATUS_READY,
-            "visibility": registry_enums_pb2.VISIBILITY_PUBLIC,
+            "status": setup_enums_pb2.READY,
+            "visibility": common_enums_pb2.PUBLIC,
             "organization_id": "organizations:dk",
             "module_id": "modules:duda",
             "module_name": "tool-duda",
@@ -756,8 +804,8 @@ class TestSearchSetups:
             "setup_id": "setups:isaac",
             "name": "Isaac",
             "documentation": "Multi-agent orchestration kin",
-            "status": registry_enums_pb2.SETUP_STATUS_DRAFT,
-            "visibility": registry_enums_pb2.VISIBILITY_PRIVATE,
+            "status": setup_enums_pb2.DRAFT,
+            "visibility": common_enums_pb2.PRIVATE,
             "organization_id": "organizations:dk",
             "module_id": "modules:isaac",
             "module_name": "archetype-isaac",
@@ -849,7 +897,7 @@ class TestSearchSetups:
             statuses=[RegistrySetupStatus.READY],
         )
 
-        assert list(request.statuses) == [registry_enums_pb2.SETUP_STATUS_READY]
+        assert list(request.statuses) == [setup_enums_pb2.READY]
         assert len(results) == 1
         assert results[0].setup_id == "setups:duda"
 
@@ -867,6 +915,56 @@ class TestSearchSetups:
         _, results = self._run_search(client, test_channel, mock_servicer, thread_pool, query="nothing")
 
         assert results == []
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    @pytest.mark.edge_case
+    def test_search_setups_drops_error_results(
+            self,
+            client: GrpcRegistry,
+            test_channel: grpc_testing.Channel,
+            thread_pool: futures.ThreadPoolExecutor,
+            monkeypatch: pytest.MonkeyPatch,
+            caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A result holding an OperationError is dropped and logged with its content."""
+        method_desc = registry_service_pb2.DESCRIPTOR.services_by_name["RegistryService"].methods_by_name[
+            "SearchSetups"
+        ]
+        monkeypatch.setattr(logging.getLogger("digitalkin"), "propagate", True)
+        caplog.set_level(logging.WARNING, logger="digitalkin")
+        future = thread_pool.submit(asyncio.run, client.search_setups())
+        _, _request, rpc = test_channel.take_unary_unary(method_desc)
+
+        rpc.send_initial_metadata(())
+        rpc.terminate(
+            registry_dto_pb2.SearchSetupsResponse(
+                results=[
+                    registry_messages_pb2.RegistryResult(
+                        identifier="setups:bad",
+                        error=bulk_pb2.OperationError(code="INTERNAL", message="summary unreadable"),
+                    ),
+                    registry_messages_pb2.RegistryResult(
+                        identifier="setups:ok",
+                        setup_summary=registry_messages_pb2.SetupSummary(id="setups:ok", name="Ok"),
+                    ),
+                ],
+            ),
+            (),
+            grpc.StatusCode.OK,
+            "",
+        )
+
+        results = future.result(timeout=1.0)
+
+        assert [s.setup_id for s in results] == ["setups:ok"]
+        assert "SearchSetups dropped result setups:bad: INTERNAL summary unreadable" in caplog.text
+
+    @pytest.mark.edge_case
+    def test_search_setups_unspecified_filter_fails_closed(self, client: GrpcRegistry) -> None:
+        """The registry refuses the zero value in filters: it raises before any RPC is sent."""
+        with pytest.raises(ValueError, match="UNSPECIFIED"):
+            asyncio.run(client.search_setups(statuses=[RegistrySetupStatus.UNSPECIFIED]))
 
 
 class TestTagsAndSorting:
@@ -891,8 +989,8 @@ class TestTagsAndSorting:
         _, request, rpc = test_channel.take_unary_unary(method_desc)
 
         assert list(request.tags) == ["rag", "ocr"]
-        assert request.sort_by == registry_enums_pb2.SORT_BY_NAME
-        assert request.descending is True
+        assert request.pagination.order == "name"
+        assert request.pagination.descending is True
 
         rpc.send_initial_metadata(())
         rpc.terminate(mock_servicer.SearchModules(request, FakeContext()), (), grpc.StatusCode.OK, "")
@@ -914,8 +1012,9 @@ class TestTagsAndSorting:
         _, request, rpc = test_channel.take_unary_unary(method_desc)
 
         assert list(request.tags) == []
-        assert request.sort_by == registry_enums_pb2.SORT_BY_UNSPECIFIED
-        assert request.descending is False
+        assert not request.pagination.order
+        assert request.pagination.descending is False
+        assert request.pagination.limit == 20
 
         rpc.send_initial_metadata(())
         rpc.terminate(mock_servicer.SearchModules(request, FakeContext()), (), grpc.StatusCode.OK, "")
@@ -940,8 +1039,8 @@ class TestTagsAndSorting:
         _, request, rpc = test_channel.take_unary_unary(method_desc)
 
         assert list(request.tags) == ["billing"]
-        assert request.sort_by == registry_enums_pb2.SORT_BY_CREATED_AT
-        assert request.descending is False
+        assert request.pagination.order == "created_at"
+        assert request.pagination.descending is False
 
         rpc.send_initial_metadata(())
         rpc.terminate(mock_servicer.SearchSetups(request, FakeContext()), (), grpc.StatusCode.OK, "")
@@ -963,9 +1062,15 @@ class TestTagsAndSorting:
 
         rpc.send_initial_metadata(())
         rpc.terminate(
-            registry_requests_pb2.SearchModulesResponse(
-                modules=[registry_models_pb2.ModuleSummary(id="modules:1", name="M", tags=["rag", "ocr"])],
-                total=1,
+            registry_dto_pb2.SearchModulesResponse(
+                results=[
+                    registry_messages_pb2.RegistryResult(
+                        identifier="modules:1",
+                        module_summary=registry_messages_pb2.ModuleSummary(
+                            id="modules:1", name="M", tags=["rag", "ocr"]
+                        ),
+                    )
+                ],
             ),
             (),
             grpc.StatusCode.OK,
@@ -990,9 +1095,13 @@ class TestTagsAndSorting:
 
         rpc.send_initial_metadata(())
         rpc.terminate(
-            registry_requests_pb2.SearchSetupsResponse(
-                setups=[registry_models_pb2.SetupSummary(id="setups:1", name="S", tags=["billing"])],
-                total=1,
+            registry_dto_pb2.SearchSetupsResponse(
+                results=[
+                    registry_messages_pb2.RegistryResult(
+                        identifier="setups:1",
+                        setup_summary=registry_messages_pb2.SetupSummary(id="setups:1", name="S", tags=["billing"]),
+                    )
+                ],
             ),
             (),
             grpc.StatusCode.OK,
@@ -1018,9 +1127,13 @@ class TestTagsAndSorting:
         structure.update({"llm.provider": "litellm", "region": "eu-west"})
         rpc.send_initial_metadata(())
         rpc.terminate(
-            registry_requests_pb2.SearchSetupsResponse(
-                setups=[registry_models_pb2.SetupSummary(id="setups:1", name="S", structure=structure)],
-                total=1,
+            registry_dto_pb2.SearchSetupsResponse(
+                results=[
+                    registry_messages_pb2.RegistryResult(
+                        identifier="setups:1",
+                        setup_summary=registry_messages_pb2.SetupSummary(id="setups:1", name="S", structure=structure),
+                    )
+                ],
             ),
             (),
             grpc.StatusCode.OK,
@@ -1053,9 +1166,13 @@ class TestTagsAndSorting:
         structure.update({"llm.temperature": 0.2, "llm.stream": True, "llm.model": "gpt-4o"})
         rpc.send_initial_metadata(())
         rpc.terminate(
-            registry_requests_pb2.SearchSetupsResponse(
-                setups=[registry_models_pb2.SetupSummary(id="setups:1", name="S", structure=structure)],
-                total=1,
+            registry_dto_pb2.SearchSetupsResponse(
+                results=[
+                    registry_messages_pb2.RegistryResult(
+                        identifier="setups:1",
+                        setup_summary=registry_messages_pb2.SetupSummary(id="setups:1", name="S", structure=structure),
+                    )
+                ],
             ),
             (),
             grpc.StatusCode.OK,
@@ -1083,8 +1200,13 @@ class TestTagsAndSorting:
 
         rpc.send_initial_metadata(())
         rpc.terminate(
-            registry_requests_pb2.SearchSetupsResponse(
-                setups=[registry_models_pb2.SetupSummary(id="setups:1", name="S")], total=1
+            registry_dto_pb2.SearchSetupsResponse(
+                results=[
+                    registry_messages_pb2.RegistryResult(
+                        identifier="setups:1",
+                        setup_summary=registry_messages_pb2.SetupSummary(id="setups:1", name="S"),
+                    )
+                ],
             ),
             (),
             grpc.StatusCode.OK,
@@ -1092,12 +1214,3 @@ class TestTagsAndSorting:
         )
 
         assert future.result(timeout=1.0)[0].structure == {}
-
-    def test_an_unknown_sort_key_fails_closed(self, client: GrpcRegistry) -> None:
-        """Enum drift must raise rather than silently ship a filter the server ignores."""
-
-        class _Rogue(Enum):
-            NOT_A_SORT_KEY = "nope"
-
-        with pytest.raises(ValueError, match="SORT_BY_NOT_A_SORT_KEY"):
-            asyncio.run(client.search(sort_by=_Rogue.NOT_A_SORT_KEY))

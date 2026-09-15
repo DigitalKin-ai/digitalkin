@@ -1,7 +1,7 @@
 """This module contains the abstract base class for UserProfile strategies."""
 
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import Any, Literal
 
 from digitalkin.services.base_strategy import BaseStrategy
 
@@ -24,11 +24,15 @@ class UserProfileStrategy(BaseStrategy, ABC):
         """
 
     @abstractmethod
-    async def check_resource_access(self, resource_type: int, resource_id: str) -> bool:
+    async def check_resource_access(
+        self,
+        resource: Literal["setup_id", "module_id", "mission_id", "storage_id", "file_id"],
+        resource_id: str,
+    ) -> bool:
         """Check whether the caller may access a resource.
 
         Args:
-            resource_type: The ResourceType enum value (e.g. RESOURCE_TYPE_SETUP).
+            resource: The resource kind, named after the ``CheckResourceAccessRequest.resource`` oneof field.
             resource_id: The resource identifier (e.g. the setup_id).
 
         Returns:

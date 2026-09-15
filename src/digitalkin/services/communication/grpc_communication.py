@@ -8,16 +8,14 @@ import uuid
 from typing import TYPE_CHECKING, Any
 
 import grpc.aio
-from agentic_mesh_protocol.gateway.v1 import gateway_pb2, gateway_service_pb2_grpc
-from agentic_mesh_protocol.module.v1 import (
-    information_pb2,
-    module_service_pb2_grpc,
-)
+from agentic_mesh_protocol.gateway.v1 import gateway_dto_pb2, gateway_messages_pb2, gateway_service_pb2_grpc
+from agentic_mesh_protocol.module.v1 import module_dto_pb2, module_service_pb2_grpc
 from google.protobuf import json_format, struct_pb2
 
 from digitalkin.core.profiling.step_timer import StepTimer
 from digitalkin.grpc_servers.interceptors.request_ids import RequestContext
 from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
+from digitalkin.grpc_servers.utils.grpc_error_handler import GrpcErrorHandlerMixin
 from digitalkin.grpc_servers.utils.validators import GatewayValidator
 from digitalkin.logger import logger
 from digitalkin.models.grpc_servers.circuit_breaker import CBState
@@ -26,6 +24,7 @@ from digitalkin.models.settings.gateway import get_gateway_settings
 from digitalkin.services.base_strategy import BaseStrategy
 from digitalkin.services.communication.communication_strategy import CommunicationStrategy
 from digitalkin.services.communication.exceptions import (
+    CommunicationServiceError,
     InvalidConsumerAddressError,
     M2MCallTimeout,
     M2MTargetUnavailable,
@@ -52,7 +51,7 @@ class _GatewayBackendClient(GrpcClientWrapper):
         self.stub = self._get_or_create_stub(gateway_service_pb2_grpc.GatewayServiceStub)
 
 
-class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
+class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
     """gRPC client for module-to-module communication."""
 
     service_name: str = "CommunicationService"
@@ -236,6 +235,7 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
         module_address: str,
         module_port: int,
         *,
+        module_id: str,
         llm_format: bool = False,
     ) -> dict[str, dict]:
         """Get module schemas via gRPC.
@@ -243,27 +243,27 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
         Args:
             module_address: Target module address
             module_port: Target module port
+            module_id: Target module ID (``modules:...``).
             llm_format: Return LLM-friendly format
 
         Returns:
             Dictionary containing schemas: input, output, setup, secret, cost
+
+        Raises:
+            CommunicationServiceError: A schema result holds an ``OperationError``.
         """
         stub = self._create_stub(module_address, module_port)
 
         # Cost always uses llm_format=False — rates/units must come from config.
-        input_request = information_pb2.GetModuleInputRequest(llm_format=llm_format)
-        output_request = information_pb2.GetModuleOutputRequest(llm_format=llm_format)
-        setup_request = information_pb2.GetModuleSetupRequest(llm_format=llm_format)
-        secret_request = information_pb2.GetModuleSecretRequest(llm_format=llm_format)
-        cost_request = information_pb2.GetModuleCostRequest(llm_format=False)
-
         input_response, output_response, setup_response, secret_response, cost_response = await asyncio.gather(
-            stub.GetModuleInput(input_request),
-            stub.GetModuleOutput(output_request),
-            stub.GetModuleSetup(setup_request),
-            stub.GetModuleSecret(secret_request),
-            stub.GetModuleCost(cost_request),
+            stub.GetModuleInput(module_dto_pb2.GetModuleInputRequest(module_id=module_id, llm_format=llm_format)),
+            stub.GetModuleOutput(module_dto_pb2.GetModuleOutputRequest(module_id=module_id, llm_format=llm_format)),
+            stub.GetModuleSetup(module_dto_pb2.GetModuleSetupRequest(module_id=module_id, llm_format=llm_format)),
+            stub.GetModuleSecret(module_dto_pb2.GetModuleSecretRequest(module_id=module_id, llm_format=llm_format)),
+            stub.GetModuleCost(module_dto_pb2.GetModuleCostRequest(module_id=module_id, llm_format=False)),
         )
+        for response in (input_response, output_response, setup_response, secret_response, cost_response):
+            self.raise_on_error(response.result, CommunicationServiceError)
 
         logger.debug(
             "Retrieved module schemas from %s:%d (llm_format=%s)",
@@ -273,11 +273,11 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
         )
 
         return {
-            "input": json_format.MessageToDict(input_response.input_schema),
-            "output": json_format.MessageToDict(output_response.output_schema),
-            "setup": json_format.MessageToDict(setup_response.setup_schema),
-            "secret": json_format.MessageToDict(secret_response.secret_schema),
-            "cost": json_format.MessageToDict(cost_response.cost_schema),
+            "input": json_format.MessageToDict(input_response.result.input_schema),
+            "output": json_format.MessageToDict(output_response.result.output_schema),
+            "setup": json_format.MessageToDict(setup_response.result.setup_schema),
+            "secret": json_format.MessageToDict(secret_response.result.secret_schema),
+            "cost": json_format.MessageToDict(cost_response.result.cost_schema),
         }
 
     async def get_module_config_schema(
@@ -285,6 +285,7 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
         module_address: str,
         module_port: int,
         *,
+        module_id: str,
         llm_format: bool = False,
     ) -> dict[str, Any]:
         """Get the module's config-setup JSON schema via gRPC (``GetConfigSetupModule``).
@@ -292,14 +293,21 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
         Args:
             module_address: Target module address.
             module_port: Target module port.
+            module_id: Target module ID (``modules:...``).
             llm_format: Return the LLM-friendly schema format.
 
         Returns:
             The config-setup JSON schema (the fields a caller fills at setup/update).
+
+        Raises:
+            CommunicationServiceError: The result holds an ``OperationError``.
         """
         stub = self._create_stub(module_address, module_port)
-        response = await stub.GetConfigSetupModule(information_pb2.GetConfigSetupModuleRequest(llm_format=llm_format))
-        return json_format.MessageToDict(response.config_setup_schema)
+        response = await stub.GetConfigSetupModule(
+            module_dto_pb2.GetConfigSetupModuleRequest(module_id=module_id, llm_format=llm_format)
+        )
+        self.raise_on_error(response.result, CommunicationServiceError)
+        return json_format.MessageToDict(response.result.config_setup_schema)
 
     async def call_module(  # ruff: ignore[complex-structure, too-many-branches, too-many-locals, too-many-statements]
         self,
@@ -397,7 +405,7 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
             idem_key = uuid.uuid4().hex  # idempotency nonce, NOT a task_id (backend mints the id)
             assoc = await self._gateway_backend.exec_grpc_query(
                 "AssociateTask",
-                gateway_pb2.AssociateTaskRequest(parent_task_id=parent_task_id),
+                gateway_dto_pb2.AssociateTaskRequest(parent_task_id=parent_task_id),
                 timeout=m2m_settings.call_associate_timeout_s,
                 metadata=(("x-idempotency-key", idem_key),),
             )
@@ -450,7 +458,7 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
 
                 try:
                     start_resp = await stub.StartStream(
-                        gateway_pb2.StartStreamRequest(task_id=task_id, setup_id=setup_id, mission_id=mission_id),
+                        gateway_dto_pb2.StartStreamRequest(task_id=task_id, setup_id=setup_id, mission_id=mission_id),
                         metadata=tuple(grpc_metadata),
                     )
                 except grpc.aio.AioRpcError as exc:
@@ -547,9 +555,8 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
                     try:
                         await asyncio.wait_for(
                             stub.SendSignal(
-                                gateway_pb2.ClientSignalRequest(
-                                    task_id=task_id,
-                                    action=gateway_pb2.SignalAction.CANCEL,
+                                gateway_dto_pb2.SendSignalRequest(
+                                    cancel=gateway_messages_pb2.CancelSignal(task_id=task_id),
                                 ),
                             ),
                             timeout=m2m_settings.call_cancel_signal_timeout_s,

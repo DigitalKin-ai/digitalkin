@@ -105,51 +105,44 @@ class DefaultCost(CostStrategy):
         self.db[cost_data.mission_id].append(cost_data)
 
     async def get(self, name: str) -> list[CostData]:
-        """Get a record from the database.
+        """Get the costs of the mission with this name.
 
         Args:
             name: The name of the cost
 
         Returns:
-            list[CostData]: The cost data
-
-        Raises:
-            CostServiceError: If the cost data is invalid or if the cost does not exist
+            list[CostData]: The matching costs, empty when the mission has none.
         """
-        if self.mission_id not in self.db:
-            msg = f"Mission {self.mission_id} not found in the database."
-            logger.warning(msg)
-            raise CostServiceError(msg)
-
-        return [cost for cost in self.db[self.mission_id] if cost.name == name] or []
+        return await self.get_filtered(names=[name])
 
     async def get_filtered(
         self,
         names: list[str] | None = None,
         cost_types: list[Literal["TOKEN_INPUT", "TOKEN_OUTPUT", "API_CALL", "STORAGE", "TIME", "OTHER"]] | None = None,
     ) -> list[CostData]:
-        """Get records from the database.
+        """Get the costs of the mission matching every given filter, like ``ListCosts``.
+
+        An absent or empty filter does not constrain.
 
         Args:
             names: The names of the costs
             cost_types: The types of the costs
 
         Returns:
-            list[CostData]: The list of records
-
-        Raises:
-            CostServiceError: If the cost data is invalid or if the cost does not exist
+            list[CostData]: The matching costs, empty when the mission has none.
         """
-        if self.mission_id not in self.db:
-            msg = f"Mission {self.mission_id} not found in the database."
-            logger.warning(msg)
-            raise CostServiceError(msg)
-
-        return [
+        costs = [
             cost
-            for cost in self.db[self.mission_id]
-            if (names and cost.name in names) or (cost_types and cost.cost_type in cost_types)
+            for cost in self.db.get(self.mission_id, [])
+            if (not names or cost.name in names) and (not cost_types or cost.cost_type.name in cost_types)
         ]
+        logger.info(
+            "[VALIDATE COSTFILTER] default costs AND-filtered: names=%s types=%s matched=%d",
+            names,
+            cost_types,
+            len(costs),
+        )  # TODO(validate): remove after prod validation
+        return costs
 
     async def get_cost_config(self) -> list[CostConfig]:
         """Get cost configuration from in-memory config.

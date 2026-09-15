@@ -1,10 +1,10 @@
-"""Coverage tests for every SignalAction and every stream.* sentinel.
+"""Coverage tests for every SendSignal branch and every stream.* sentinel.
 
 Verifies:
-- Every SignalAction enum value has a tested handler path:
-  * CANCEL → Redis pub/sub publish on signal_ch:<task_id>
-  * INVALIDATE_* → cache_handler called with action name
-  * UNSPECIFIED → rejected with success=False
+- Every ``SendSignalRequest.signal`` branch has a tested handler path:
+  * cancel → Redis pub/sub publish on signal_ch:<task_id>
+  * invalidate → cache_handler called with the CacheScope name + x-setup-id
+  * no signal set → rejected with success=False
 - Every stream.* sentinel emitter is exercised:
   * stream.start (seeded by StartStream)
   * stream.error (fatal=True) → followed by stream.end
@@ -20,8 +20,20 @@ from collections.abc import Generator
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
+import grpc
 import pytest
+from agentic_mesh_protocol.gateway.v1 import (
+    gateway_dto_pb2,
+    gateway_enums_pb2,
+    gateway_messages_pb2,
+    gateway_service_pb2_grpc,
+)
 from google.protobuf import struct_pb2
+from redis.exceptions import RedisError
+
+from digitalkin.grpc_servers.interceptors.request_ids import RequestContext, RequestIdServerInterceptor
+from digitalkin.grpc_servers.interceptors.validation import ValidationServerInterceptor
+from digitalkin.grpc_servers.stream_session import StreamSession
 
 pytestmark = [pytest.mark.timeout(15)]
 
@@ -49,14 +61,22 @@ class _FakeRequestIterator:
         return msg
 
 
-def _make_first_msg(task_id: str = "t1", seq: int = 0, data_dict: dict | None = None) -> Any:
-    """Build a real Stream first request (dev2: client sends StreamServer)."""
-    from agentic_mesh_protocol.gateway.v1 import gateway_pb2
-
+def _make_first_msg(task_id: str = "t1", from_seq: int = 0, data_dict: dict | None = None) -> Any:
+    """Build a real Stream first request (the client sends StreamRequest)."""
     data = struct_pb2.Struct()
     if data_dict:
         data.update(data_dict)
-    return gateway_pb2.StreamServer(task_id=task_id, seq=seq, data=data)
+    return gateway_messages_pb2.StreamRequest(task_id=task_id, from_seq=from_seq, data=data)
+
+
+def _invalidate(scope: str) -> Any:
+    return gateway_dto_pb2.SendSignalRequest(
+        invalidate=gateway_messages_pb2.InvalidateSignal(scope=gateway_enums_pb2.CacheScope.Value(scope)),
+    )
+
+
+def _cancel(task_id: str) -> Any:
+    return gateway_dto_pb2.SendSignalRequest(cancel=gateway_messages_pb2.CancelSignal(task_id=task_id))
 
 
 def _protocol_of(stream_msg: Any) -> str:
@@ -109,28 +129,16 @@ def _isolate() -> Generator[None]:
 
 
 # ===========================================================================
-# SendSignal — coverage for every SignalAction value
+# SendSignal — coverage for every signal branch and every CacheScope
 # ===========================================================================
 
 
-class TestSignalActionAll:
-    """Every SignalAction enum value has a tested code path."""
+class TestSendSignalAll:
+    """Every SendSignal branch has a tested code path."""
 
-    @pytest.mark.parametrize(
-        "action_name",
-        [
-            "INVALIDATE_ALL",
-            "INVALIDATE_CHANNELS",
-            "INVALIDATE_MODELS",
-            "INVALIDATE_SETUP",
-            "INVALIDATE_TOOLS",
-            "INVALIDATE_SHARED",
-        ],
-    )
-    async def test_invalidate_routes_to_cache_handler(self, action_name: str) -> None:
-        """Every INVALIDATE_* action is forwarded to the cache_handler AND broadcast to ``signal_ch:_global_``."""
-        from agentic_mesh_protocol.gateway.v1 import gateway_pb2
-
+    @pytest.mark.parametrize("scope", ["ALL", "CHANNELS", "MODELS", "SETUP", "TOOLS", "SHARED"])
+    async def test_invalidate_routes_to_cache_handler(self, scope: str) -> None:
+        """Every scope reaches the cache_handler with the caller's x-setup-id AND is broadcast on ``_global_``."""
         seen: list[tuple[str, str]] = []
 
         async def handler(name: str, setup_id: str = "") -> None:
@@ -138,70 +146,80 @@ class TestSignalActionAll:
 
         servicer = _mock_servicer(cache_handler=handler)
 
-        request = MagicMock()
-        request.task_id = "s1" if action_name in {"INVALIDATE_SETUP", "INVALIDATE_TOOLS"} else ""
-        request.action = getattr(gateway_pb2, action_name)
+        token = RequestContext.bind(setup_id="setups:s1")
+        try:
+            response = await servicer.SendSignal(_invalidate(scope), _mock_context())
+        finally:
+            RequestContext.reset(token)
 
-        response = await servicer.SendSignal(request, _mock_context())
         assert response.success is True
-        assert seen == [(action_name, request.task_id)]
-        # Now also broadcasts for cross-process fan-out
+        assert response.task_id == ""
+        assert seen == [(scope, "setups:s1")]
         servicer._redis_client.publish.assert_awaited_once()
-        channel, _payload = servicer._redis_client.publish.await_args.args
+        channel, payload = servicer._redis_client.publish.await_args.args
         assert channel == "signal_ch:_global_"
+        decoded = json.loads(payload)
+        assert decoded["action"] == f"invalidate_{scope.lower()}"
+        assert decoded["setup_id"] == "setups:s1"
+
+    async def test_invalidate_without_setup_id_metadata_passes_empty(self) -> None:
+        """No x-setup-id bound → the handler gets an empty setup_id (scoped scopes then skip)."""
+        seen: list[tuple[str, str]] = []
+
+        async def handler(name: str, setup_id: str = "") -> None:
+            seen.append((name, setup_id))
+
+        servicer = _mock_servicer(cache_handler=handler)
+
+        response = await servicer.SendSignal(_invalidate("TOOLS"), _mock_context())
+
+        assert response.success is True
+        assert seen == [("TOOLS", "")]
 
     async def test_invalidate_without_handler_still_broadcasts(self) -> None:
-        """If no cache_handler is wired, INVALIDATE_* still broadcasts so peers can invalidate."""
-        from agentic_mesh_protocol.gateway.v1 import gateway_pb2
-
+        """If no cache_handler is wired, an invalidation still broadcasts so peers can invalidate."""
         servicer = _mock_servicer(cache_handler=None)
 
-        request = MagicMock()
-        request.task_id = ""
-        request.action = gateway_pb2.INVALIDATE_ALL
-
-        response = await servicer.SendSignal(request, _mock_context())
+        response = await servicer.SendSignal(_invalidate("ALL"), _mock_context())
         assert response.success is True
         servicer._redis_client.publish.assert_awaited_once()
 
     async def test_invalidate_handler_raising_returns_false(self) -> None:
         """Handler exceptions bubble up as success=False, not unhandled."""
-        from agentic_mesh_protocol.gateway.v1 import gateway_pb2
 
         async def boom(_name: str, _setup_id: str = "") -> None:
             raise RuntimeError("handler failed")
 
         servicer = _mock_servicer(cache_handler=boom)
 
-        request = MagicMock()
-        request.task_id = ""
-        request.action = gateway_pb2.INVALIDATE_TOOLS
-
-        response = await servicer.SendSignal(request, _mock_context())
+        response = await servicer.SendSignal(_invalidate("TOOLS"), _mock_context())
         assert response.success is False
+        servicer._redis_client.publish.assert_not_awaited()
+
+    async def test_invalidate_fanout_failure_keeps_local_invalidation(self) -> None:
+        """A failed ``_global_`` publish still reports success: the local invalidation was applied."""
+        handler = AsyncMock()
+        servicer = _mock_servicer(cache_handler=handler)
+        servicer._redis_client.publish = AsyncMock(side_effect=RedisError("redis down"))
+
+        response = await servicer.SendSignal(_invalidate("MODELS"), _mock_context())
+
+        assert response.success is True
+        handler.assert_awaited_once_with("MODELS", "")
 
     async def test_cancel_publishes_to_signal_channel(self) -> None:
-        """CANCEL publishes a JSON message to signal_ch:<task_id>."""
-        from agentic_mesh_protocol.gateway.v1 import gateway_pb2
-
-        from digitalkin.grpc_servers.stream_session import StreamSession
-
+        """cancel publishes a JSON message to signal_ch:<task_id>."""
         servicer = _mock_servicer()
         session = StreamSession(task_id="task_cancel")
         await servicer._registry.register(session)
 
-        request = MagicMock()
-        request.task_id = "task_cancel"
-        request.action = gateway_pb2.CANCEL
-
-        response = await servicer.SendSignal(request, _mock_context())
+        response = await servicer.SendSignal(_cancel("task_cancel"), _mock_context())
 
         assert response.success is True
         assert response.task_id == "task_cancel"
         servicer._redis_client.publish.assert_awaited_once()
         channel, payload = servicer._redis_client.publish.await_args.args
         assert channel == "signal_ch:task_cancel"
-        # Payload is JSON: {action, task_id, published_at_ns}
         decoded = json.loads(payload)
         assert decoded["action"] == "cancel"
         assert decoded["task_id"] == "task_cancel"
@@ -209,82 +227,95 @@ class TestSignalActionAll:
         assert decoded["published_at_ns"] > 0
 
     async def test_cancel_unknown_task_returns_false(self) -> None:
-        """CANCEL for an unknown task returns success=False, no Redis publish."""
-        from agentic_mesh_protocol.gateway.v1 import gateway_pb2
-
+        """cancel for an unknown task returns success=False, no Redis publish."""
         servicer = _mock_servicer()
 
-        request = MagicMock()
-        request.task_id = "task_missing"
-        request.action = gateway_pb2.CANCEL
-
-        response = await servicer.SendSignal(request, _mock_context())
+        response = await servicer.SendSignal(_cancel("task_missing"), _mock_context())
         assert response.success is False
+        assert response.task_id == "task_missing"
         servicer._redis_client.publish.assert_not_awaited()
 
     async def test_cancel_invalid_task_id_returns_false(self) -> None:
-        """CANCEL with a malformed task_id is rejected before reaching Redis."""
-        from agentic_mesh_protocol.gateway.v1 import gateway_pb2
-
+        """cancel with a malformed task_id is rejected before reaching Redis."""
         servicer = _mock_servicer()
 
-        request = MagicMock()
-        request.task_id = ""  # invalid
-        request.action = gateway_pb2.CANCEL
-
-        response = await servicer.SendSignal(request, _mock_context())
+        response = await servicer.SendSignal(_cancel(""), _mock_context())
         assert response.success is False
         servicer._redis_client.publish.assert_not_awaited()
 
     async def test_cancel_redis_publish_failure_returns_false(self) -> None:
         """If Redis publish raises, SendSignal returns success=False."""
-        from agentic_mesh_protocol.gateway.v1 import gateway_pb2
-
-        from digitalkin.grpc_servers.stream_session import StreamSession
-
         servicer = _mock_servicer()
-        from redis.exceptions import RedisError
         servicer._redis_client.publish = AsyncMock(side_effect=RedisError("redis down"))
         session = StreamSession(task_id="task_pub_fail")
         await servicer._registry.register(session)
 
-        request = MagicMock()
-        request.task_id = "task_pub_fail"
-        request.action = gateway_pb2.CANCEL
-
-        response = await servicer.SendSignal(request, _mock_context())
+        response = await servicer.SendSignal(_cancel("task_pub_fail"), _mock_context())
         assert response.success is False
 
-    async def test_unspecified_action_falls_through_as_failure(self) -> None:
-        """UNSPECIFIED is neither INVALIDATE_* nor CANCEL — ends as success=False."""
-        from agentic_mesh_protocol.gateway.v1 import gateway_pb2
-
+    async def test_empty_signal_falls_through_as_failure(self) -> None:
+        """No signal set (the interceptor rejects it on a real server) ends as success=False."""
         servicer = _mock_servicer()
 
-        request = MagicMock()
-        request.task_id = ""  # invalid by design for unspecified
-        request.action = gateway_pb2.UNSPECIFIED
-
-        response = await servicer.SendSignal(request, _mock_context())
-        # Falls through the task-signal branch, fails task_id validation → False
+        response = await servicer.SendSignal(gateway_dto_pb2.SendSignalRequest(), _mock_context())
         assert response.success is False
         servicer._redis_client.publish.assert_not_awaited()
 
-    async def test_signal_action_enum_complete(self) -> None:
-        """The enum has exactly the 8 expected values — no surprises."""
-        from agentic_mesh_protocol.gateway.v1 import gateway_pb2
+    async def test_cache_scope_enum_complete(self) -> None:
+        """The enum has exactly the 7 expected values — no surprises."""
+        names = {v.name for v in gateway_enums_pb2.CacheScope.DESCRIPTOR.values}
+        assert names == {"CACHE_SCOPE_UNSPECIFIED", "ALL", "CHANNELS", "MODELS", "SETUP", "TOOLS", "SHARED"}
 
-        names = {v.name for v in gateway_pb2.SignalAction.DESCRIPTOR.values}
-        assert names == {
-            "UNSPECIFIED",
-            "CANCEL",
-            "INVALIDATE_ALL",
-            "INVALIDATE_CHANNELS",
-            "INVALIDATE_MODELS",
-            "INVALIDATE_SETUP",
-            "INVALIDATE_TOOLS",
-            "INVALIDATE_SHARED",
-        }
+
+@pytest.mark.grpc
+class TestSendSignalOverTheWire:
+    """SendSignal behind the ModuleServer interceptor chain (request IDs + protovalidate)."""
+
+    @pytest.fixture
+    async def stub(self) -> Any:
+        seen: list[tuple[str, str]] = []
+
+        async def handler(name: str, setup_id: str = "") -> None:
+            seen.append((name, setup_id))
+
+        servicer = _mock_servicer(cache_handler=handler)
+        server = grpc.aio.server(interceptors=[RequestIdServerInterceptor(), ValidationServerInterceptor()])
+        gateway_service_pb2_grpc.add_GatewayServiceServicer_to_server(servicer, server)
+        port = server.add_insecure_port("127.0.0.1:0")
+        await server.start()
+        channel = grpc.aio.insecure_channel(f"127.0.0.1:{port}")
+        stub = gateway_service_pb2_grpc.GatewayServiceStub(channel)
+        stub.seen = seen
+        try:
+            yield stub
+        finally:
+            await channel.close()
+            await server.stop(grace=0.1)
+
+    async def test_setup_id_comes_from_x_setup_id_metadata(self, stub: Any) -> None:
+        response = await stub.SendSignal(_invalidate("TOOLS"), metadata=(("x-setup-id", "setups:wire"),))
+
+        assert response.success is True
+        assert stub.seen == [("TOOLS", "setups:wire")]
+
+    async def test_unspecified_scope_is_rejected(self, stub: Any) -> None:
+        with pytest.raises(grpc.aio.AioRpcError) as exc_info:
+            await stub.SendSignal(_invalidate("CACHE_SCOPE_UNSPECIFIED"))
+
+        assert exc_info.value.code() == grpc.StatusCode.INVALID_ARGUMENT
+        assert stub.seen == []
+
+    async def test_missing_signal_is_rejected(self, stub: Any) -> None:
+        with pytest.raises(grpc.aio.AioRpcError) as exc_info:
+            await stub.SendSignal(gateway_dto_pb2.SendSignalRequest())
+
+        assert exc_info.value.code() == grpc.StatusCode.INVALID_ARGUMENT
+
+    async def test_malformed_cancel_task_id_is_rejected(self, stub: Any) -> None:
+        with pytest.raises(grpc.aio.AioRpcError) as exc_info:
+            await stub.SendSignal(_cancel("bad task id!"))
+
+        assert exc_info.value.code() == grpc.StatusCode.INVALID_ARGUMENT
 
 
 # ===========================================================================
@@ -339,7 +370,7 @@ class TestStreamSentinels:
         from digitalkin.models.settings.gateway import GatewaySettings
 
         servicer = _mock_servicer()
-        first = _make_first_msg(task_id="task_oor", seq=GatewaySettings().stream.from_seq_limit + 1)
+        first = _make_first_msg(task_id="task_oor", from_seq=GatewaySettings().stream.from_seq_limit + 1)
         request_iter = _FakeRequestIterator([first])
 
         responses = [r async for r in servicer.Stream(request_iter, _mock_context())]
@@ -390,15 +421,15 @@ class TestStreamSentinels:
         assert _protocol_of(outs[1]) == "stream.end"
 
     async def test_sentinel_helper_seq_zero_for_gateway_control(self) -> None:
-        """Gateway control sentinels (validation errors etc.) carry from_seq=0."""
+        """Gateway control sentinels (validation errors etc.) carry seq=0."""
         servicer = _mock_servicer()
         outs = [out async for out in servicer._fatal_close("t", "BAD", "x")]
-        # Both control entries are from_seq=0 — they're not Redis-replayed
-        assert outs[0].from_seq == 0
-        assert outs[1].from_seq == 0
+        # Both control entries are seq=0 — they're not Redis-replayed
+        assert outs[0].seq == 0
+        assert outs[1].seq == 0
 
-    async def test_stream_client_carries_task_id_on_wire(self) -> None:
-        """Every emitted StreamClient carries task_id on the wire field."""
+    async def test_stream_response_carries_task_id_on_wire(self) -> None:
+        """Every emitted StreamResponse carries task_id on the wire field."""
         servicer = _mock_servicer()
         outs = [out async for out in servicer._fatal_close("task_xyz", "INTERNAL", "x")]
         assert all(out.task_id == "task_xyz" for out in outs)
@@ -436,15 +467,15 @@ class TestStreamSentinels:
             async for out in servicer._consume_from_redis("task_done", from_seq=0):
                 outs.append(out)
 
-        # Expect exactly: domain output (from_seq=1) + stream.end sentinel (from_seq=2)
+        # Expect exactly: domain output (seq=1) + stream.end sentinel (seq=2)
         assert len(outs) == 2
         # First: the domain output
-        assert outs[0].from_seq == 1
+        assert outs[0].seq == 1
         assert outs[0].task_id == "task_done"
         # Domain output has no root.protocol — it's the module's payload directly
         assert "root" not in outs[0].data.fields
         # Second: the gateway-emitted stream.end terminator
-        assert outs[1].from_seq == 2
+        assert outs[1].seq == 2
         assert outs[1].task_id == "task_done"
         assert _protocol_of(outs[1]) == "stream.end"
 

@@ -49,7 +49,7 @@ class TestCacheInvalidationFanOut:
                 await asyncio.sleep(0.05)
                 if calls:
                     break
-            assert calls == [("INVALIDATE_TOOLS", "s1")]
+            assert calls == [("TOOLS", "s1")]
         finally:
             await peer.close()
 
@@ -88,7 +88,7 @@ class TestCacheInvalidationFanOut:
         tool_cache_state = {"s1": "tools_v1", "s2": "tools_v1", "s3": "tools_v1"}
 
         async def scoped_invalidator(action: str, setup_id: str) -> None:
-            if action == "INVALIDATE_TOOLS" and setup_id:
+            if action == "TOOLS" and setup_id:
                 tool_cache_state.pop(setup_id, None)
 
         peer.set_cache_invalidator(scoped_invalidator)

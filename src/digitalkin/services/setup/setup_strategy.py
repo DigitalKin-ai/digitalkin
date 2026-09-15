@@ -4,7 +4,7 @@ import datetime
 from abc import ABC, abstractmethod
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import AliasChoices, BaseModel, Field
 
 from digitalkin.models.services.registry import RegistrySetupStatus
 from digitalkin.models.services.storage import Visibility
@@ -17,12 +17,12 @@ class SetupVersionData(BaseModel):
     written by the agent that created or updated the setup and used to fetch one key of a
     large configuration (see :class:`~digitalkin.utils.json_structure.JsonStructure`). It
     belongs to the services surface; other setup kinds leave it empty. ``None`` means the
-    read that produced this version cannot carry the map (GetSetup, SetCurrentSetupVersion
-    and ListSetupVersions have no field for it), as opposed to ``{}``, a carried empty map.
+    version was cut without one, as opposed to ``{}``, a carried empty map.
 
-    ``documentation`` is free text indexed by the registry search. It is cut with the version
-    that carries it, and ``SetupVersion`` returns it as of protocol 1.0.2.dev2 — before that
-    the field existed only on the write requests and always read back empty.
+    ``documentation`` is free text indexed by the registry search, cut with the version
+    that carries it.
+
+    ``creation_date`` also validates from the wire name ``created_at``.
     """
 
     id: str
@@ -31,7 +31,7 @@ class SetupVersionData(BaseModel):
     documentation: str = ""
     content: dict[str, Any]
     structure: dict[str, str] | None = None
-    creation_date: datetime.datetime
+    creation_date: datetime.datetime = Field(validation_alias=AliasChoices("creation_date", "created_at"))
 
 
 class SetupVersionPage(BaseModel):
@@ -45,18 +45,19 @@ class SetupVersionPage(BaseModel):
 class SetupData(BaseModel):
     """Pydantic model for Setup data validation.
 
-    ``status``/``visibility`` are coerced to their SDK enums: a proto enum name
-    (``READY``, ``VISIBILITY_PRIVATE``) or any-case string maps to the matching
-    member, and an empty value (backends that predate the fields) becomes
-    ``UNSPECIFIED``.
+    ``status``/``visibility`` are coerced to their SDK enums by name: a proto enum name
+    (``READY``, ``PRIVATE``) or any-case string maps to the matching member, and an
+    empty or unmirrored value becomes ``UNSPECIFIED``.
 
     The setup's documentation lives on the version that carries it — read it at
     ``current_setup_version.documentation``.
+
+    ``organisation_id`` also validates from the wire name ``organization_id``.
     """
 
     id: str
     name: str
-    organisation_id: str
+    organisation_id: str = Field(validation_alias=AliasChoices("organisation_id", "organization_id"))
     owner_id: str
     module_id: str
     current_setup_version: SetupVersionData
@@ -64,12 +65,18 @@ class SetupData(BaseModel):
     visibility: Visibility = Visibility.UNSPECIFIED
 
 
+class SetupPage(BaseModel):
+    """A page of setups matching a listing's filters."""
+
+    setups: list[SetupData]
+    total_count: int
+
+
 class SetupStrategy(ABC):
     """Abstract base class for setup strategies.
 
-    Mirrors the SetupService protocol: setup-level CRUD, visibility change, and the
-    two read/activate version RPCs. Versions are still created only as a side effect
-    of ``update_setup`` — there is no standalone create/update/delete for them.
+    Mirrors the SetupService protocol (setup-level CRUD, listing, visibility change) and
+    the SetupVersionService protocol (version CRUD, listing, activation).
     """
 
     def __init__(self) -> None:
@@ -86,8 +93,7 @@ class SetupStrategy(ABC):
             setup_dict: Dictionary with 'setup_id', optional 'version', and optional
                 'structure_key'. One key path projects the version content down to that
                 path, and a path the content does not have is refused as not found;
-                omitting it (or passing an empty string, which the wire cannot tell
-                apart) returns the whole document.
+                omitting it or passing an empty string returns the whole document.
 
         Returns:
             The setup with its current version populated.
@@ -120,6 +126,20 @@ class SetupStrategy(ABC):
             "documentation": documentation,
             "structure": structure,
         })
+
+    @abstractmethod
+    async def list_setups(self, setup_dict: dict[str, Any]) -> SetupPage:
+        """List setups, optionally filtered.
+
+        Args:
+            setup_dict: Dictionary with optional 'organization_id', 'owner_id' and
+                'module_id' filters, optional 'statuses' (``RegistrySetupStatus`` members or
+                their names; UNSPECIFIED is refused) and optional 'limit' (clamped to
+                1..100, default 20) / 'offset'.
+
+        Returns:
+            The requested page and the total count of matching setups.
+        """
 
     @abstractmethod
     async def create_setup(self, setup_dict: dict[str, Any]) -> SetupData:
@@ -157,7 +177,7 @@ class SetupStrategy(ABC):
             setup_dict: Dictionary with the 'setup_id'.
 
         Returns:
-            bool: Success status of deletion.
+            bool: True once deleted, False when the setup could not be deleted (e.g. not found).
         """
 
     @abstractmethod
@@ -170,6 +190,54 @@ class SetupStrategy(ABC):
 
         Returns:
             The setup with its updated visibility.
+        """
+
+    @abstractmethod
+    async def create_setup_version(self, setup_dict: dict[str, Any]) -> SetupVersionData:
+        """Cut a new version of a setup.
+
+        Args:
+            setup_dict: Dictionary with 'setup_id', 'version' (the label), 'content',
+                optional 'structure', optional 'documentation' and optional
+                'set_as_current' (defaults to False: the version is staged).
+
+        Returns:
+            The created version.
+        """
+
+    @abstractmethod
+    async def get_setup_version(self, setup_dict: dict[str, Any]) -> SetupVersionData:
+        """Retrieve a setup version by its unique identifier.
+
+        Args:
+            setup_dict: Dictionary with the 'setup_version_id'.
+
+        Returns:
+            The requested version.
+        """
+
+    @abstractmethod
+    async def update_setup_version(self, setup_dict: dict[str, Any]) -> SetupVersionData:
+        """Edit a setup version in place; only the supplied fields change.
+
+        Args:
+            setup_dict: Dictionary with 'setup_version_id' and at least one of 'version',
+                'content', 'documentation' (``""`` clears it) or 'structure'. A missing or
+                ``None`` field is left unchanged.
+
+        Returns:
+            The updated version.
+        """
+
+    @abstractmethod
+    async def delete_setup_version(self, setup_dict: dict[str, Any]) -> bool:
+        """Delete a setup version by its unique identifier.
+
+        Args:
+            setup_dict: Dictionary with the 'setup_version_id'.
+
+        Returns:
+            bool: True once deleted, False when the version could not be deleted.
         """
 
     @abstractmethod

@@ -20,7 +20,7 @@ from unittest.mock import AsyncMock, MagicMock
 import grpc
 import grpc.aio
 import pytest
-from agentic_mesh_protocol.gateway.v1 import gateway_pb2, gateway_service_pb2_grpc
+from agentic_mesh_protocol.gateway.v1 import gateway_dto_pb2, gateway_messages_pb2, gateway_service_pb2_grpc
 from google.protobuf import struct_pb2
 
 from digitalkin.grpc_servers.exceptions import ServerError
@@ -54,7 +54,7 @@ class _FakeBackendGateway(gateway_service_pb2_grpc.GatewayServiceServicer):
             self.received_metadata[k] = v if isinstance(v, str) else v.decode("utf-8")
         if self._error:
             await context.abort(grpc.StatusCode.INTERNAL, "mint boom")
-        return gateway_pb2.AssociateTaskResponse(task_id=self._child, parent_task_id=request.parent_task_id)
+        return gateway_dto_pb2.AssociateTaskResponse(task_id=self._child, parent_task_id=request.parent_task_id)
 
 
 class _FakeCalleeGatewayServicer(gateway_service_pb2_grpc.GatewayServiceServicer):
@@ -62,7 +62,7 @@ class _FakeCalleeGatewayServicer(gateway_service_pb2_grpc.GatewayServiceServicer
 
     def __init__(self, outputs: list[dict[str, Any]]) -> None:
         self._outputs = outputs
-        self.received_start: gateway_pb2.StartStreamRequest | None = None
+        self.received_start: gateway_dto_pb2.StartStreamRequest | None = None
         self.received_metadata: dict[str, str] = {}
         self._dial_tasks: list[asyncio.Task] = []
 
@@ -77,14 +77,14 @@ class _FakeCalleeGatewayServicer(gateway_service_pb2_grpc.GatewayServiceServicer
         self._dial_tasks.append(
             asyncio.create_task(self._dial_back(dial_back_addr, request.task_id)),
         )
-        return gateway_pb2.StartStreamResponse(accepted=True, task_id=request.task_id)
+        return gateway_dto_pb2.StartStreamResponse(accepted=True, task_id=request.task_id)
 
     async def SendSignal(  # noqa: N802
         self,
         request: Any,
         context: grpc.aio.ServicerContext,  # noqa: ARG002
     ) -> Any:
-        return gateway_pb2.ClientSignalResponse(success=True, task_id=request.task_id)
+        return gateway_dto_pb2.SendSignalResponse(success=True, task_id=request.cancel.task_id)
 
     async def Stream(  # noqa: N802
         self,
@@ -103,19 +103,19 @@ class _FakeCalleeGatewayServicer(gateway_service_pb2_grpc.GatewayServiceServicer
             async def _outgoing() -> AsyncIterator[Any]:
                 init = struct_pb2.Struct()
                 init.update({"root": {"protocol": "stream.init"}})
-                yield gateway_pb2.StreamServer(task_id=task_id, seq=0, data=init)
+                yield gateway_messages_pb2.StreamRequest(task_id=task_id, from_seq=0, data=init)
                 for i, payload in enumerate(self._outputs, start=1):
                     out = struct_pb2.Struct()
                     out.update(payload)
-                    yield gateway_pb2.StreamServer(task_id=task_id, seq=i, data=out)
+                    yield gateway_messages_pb2.StreamRequest(task_id=task_id, from_seq=i, data=out)
                 end = struct_pb2.Struct()
                 end.update({"root": {"protocol": "stream.end"}})
-                yield gateway_pb2.StreamServer(task_id=task_id, seq=len(self._outputs) + 1, data=end)
+                yield gateway_messages_pb2.StreamRequest(task_id=task_id, from_seq=len(self._outputs) + 1, data=end)
 
             responses = stub.Stream(_outgoing(), timeout=10.0)
             try:
                 async for _reply in responses:
-                    pass  # caller's GatewayServicer yields the query as a StreamClient; we don't need it
+                    pass  # caller's GatewayServicer yields the query as a StreamResponse; we don't need it
             except grpc.aio.AioRpcError:
                 pass
 

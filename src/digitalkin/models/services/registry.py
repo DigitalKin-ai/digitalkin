@@ -20,8 +20,8 @@ class RegistryModuleStatus(str, Enum):
 class RegistryModuleType(str, Enum):
     """Module type in the registry.
 
-    Member names mirror the proto ``ModuleType`` enum (minus the ``MODULE_TYPE_``
-    prefix): they are looked up by name from the wire value, so they must match.
+    Member names mirror the proto ``module.v1.ModuleType`` enum: they are looked up by
+    name from the wire value, so they must match.
     """
 
     UNSPECIFIED = "unspecified"
@@ -71,7 +71,11 @@ class ModuleInfo(BaseModel):
 
 
 class RegistrySetupStatus(str, Enum):
-    """Setup status in the registry."""
+    """Setup status in the registry.
+
+    Member names mirror the proto ``setup.v1.SetupStatus`` enum: they are looked up by
+    name from the wire value, so they must match.
+    """
 
     UNSPECIFIED = "unspecified"
     DRAFT = "draft"
@@ -83,14 +87,14 @@ class RegistrySetupStatus(str, Enum):
     NEEDS_CONFIGURATION = "needs_configuration"
     CONFIGURATION_FAILED = "configuration_failed"
     CONFIGURATION_SUCCEEDED = "configuration_succeeded"
+    VALIDATING = "validating"
 
     @classmethod
     def _missing_(cls, value: object) -> "RegistrySetupStatus":
         """Coerce a proto enum name (e.g. ``DRAFT``) or any-case string to a member.
 
-        Lenient by design: the setup proto status can carry states this enum does not
-        mirror (e.g. ``VALIDATING``), and reading a setup must never crash — an empty or
-        unrecognised value falls back to ``UNSPECIFIED``.
+        Lenient by design: reading a setup must never crash — an empty or unrecognised
+        value falls back to ``UNSPECIFIED``.
 
         Returns:
             The matching member, or ``UNSPECIFIED``.
@@ -103,9 +107,9 @@ class RegistrySetupStatus(str, Enum):
 class RegistrySortBy(str, Enum):
     """Sort key for registry searches.
 
-    Member names mirror the proto ``SortBy`` enum (minus the ``SORT_BY_`` prefix):
-    they are encoded by name onto the wire, so they must match. UNSPECIFIED lets the
-    registry apply its own default — relevance when a query is set, updated_at otherwise.
+    Member values are the ``PaginationRequest.order`` keys the registry accepts. UNSPECIFIED
+    sends an empty order, letting the registry apply its own default — relevance when a
+    query is set, updated_at otherwise.
     """
 
     UNSPECIFIED = "unspecified"

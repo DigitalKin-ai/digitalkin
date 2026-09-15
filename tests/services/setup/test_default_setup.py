@@ -2,8 +2,10 @@
 
 import pytest
 
+from digitalkin.models.services.registry import RegistrySetupStatus
 from digitalkin.services.setup.default_setup import DefaultSetup
 from digitalkin.services.setup.exceptions import SetupServiceError
+from digitalkin.services.setup.setup_strategy import SetupPage
 
 
 class TestCreateServiceSetup:
@@ -173,8 +175,8 @@ class TestVersionHistory:
         assert rolled.current_setup_version.id == first
         assert rolled.current_setup_version.content == {"v": 0}
 
-    async def test_set_current_carries_no_structure_but_keeps_it_stored(self) -> None:
-        """SetCurrentSetupVersionResponse has no structure field, so the local reply has none either."""
+    async def test_set_current_carries_the_activated_version_structure(self) -> None:
+        """SetupVersion carries structure, so the rolled-back version brings its own map back."""
         strategy = DefaultSetup()
         setup = await strategy.create_setup({"name": "n", "content": {"v": 0}, "structure": {"v": "the v knob"}})
         first = setup.current_setup_version.id
@@ -182,8 +184,7 @@ class TestVersionHistory:
 
         rolled = await strategy.set_current_setup_version({"setup_id": setup.id, "setup_version_id": first})
 
-        assert rolled.current_setup_version.structure is None
-        assert strategy.setups[setup.id].current_setup_version.structure == {"v": "the v knob"}
+        assert rolled.current_setup_version.structure == {"v": "the v knob"}
 
     async def test_set_current_rejects_a_version_from_another_setup(self) -> None:
         strategy = DefaultSetup()
@@ -202,6 +203,10 @@ class TestVersionHistory:
 
         assert await strategy.delete_setup({"setup_id": setup.id}) is True
         assert setup.id not in strategy.versions
+
+    async def test_delete_an_unknown_setup_is_false(self) -> None:
+        """Mirrors the gRPC strategy, which reads an OperationError result as False."""
+        assert await DefaultSetup().delete_setup({"setup_id": "setups:gone"}) is False
 
 
 class TestAuthoredStructure:
@@ -311,17 +316,19 @@ class TestStructure:
         with pytest.raises(SetupServiceError, match="no path nope"):
             await strategy.get_setup({"setup_id": setup.id, "structure_key": "nope"})
 
-    async def test_get_carries_no_structure(self) -> None:
-        """GetSetupResponse has no structure field: None, not a claimed-empty map."""
+    async def test_get_carries_the_stored_structure(self) -> None:
+        """SetupVersion carries structure, so a read returns the map the version was cut with."""
         strategy = DefaultSetup()
         setup = await strategy.create_setup({"name": "n", "content": {"a": 1}, "structure": {"a": "the a knob"}})
 
         fetched = await strategy.get_setup({"setup_id": setup.id})
+        projected = await strategy.get_setup({"setup_id": setup.id, "structure_key": "a"})
 
-        assert fetched.current_setup_version.structure is None
+        assert fetched.current_setup_version.structure == {"a": "the a knob"}
+        assert projected.current_setup_version.structure == {"a": "the a knob"}
 
     async def test_empty_key_returns_the_whole_document(self) -> None:
-        """structure_key has no proto3 presence, so "" and unset are one request."""
+        """An empty structure_key is sent unset by the gRPC strategy, so it means the whole document."""
         strategy = DefaultSetup()
         setup = await strategy.create_setup({"name": "n", "content": {"a": 1}})
 

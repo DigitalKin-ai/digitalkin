@@ -50,7 +50,7 @@ async def test_resume_drain_dedups_from_cursor_real(redis_client) -> None:
 
     # cursor 4 → skip stored seq <=3 → stored 4,5,6 relabelled off the stored seq
     # as wire 5,6,7; terminal stream.end at 8. No duplicates of what the consumer saw.
-    assert [m.from_seq for m in out] == [5, 6, 7, 8]
+    assert [m.seq for m in out] == [5, 6, 7, 8]
     assert _protocol_of(out[-1]) == "stream.end"
 
 

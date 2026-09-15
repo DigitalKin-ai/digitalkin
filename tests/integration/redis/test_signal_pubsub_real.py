@@ -213,7 +213,7 @@ class TestSharedRedisListenerReal:
                 await asyncio.sleep(0.05)
                 if calls:
                     break
-            assert calls == [("INVALIDATE_TOOLS", "s_churn")]
+            assert calls == [("TOOLS", "s_churn")]
         finally:
             await listener.close()
 
@@ -249,6 +249,6 @@ class TestSharedRedisListenerReal:
                 await asyncio.sleep(0.05)
                 if calls:
                     break
-            assert calls == [("INVALIDATE_SETUP", "s_kill")], "broadcast lost after CLIENT KILL"
+            assert calls == [("SETUP", "s_kill")], "broadcast lost after CLIENT KILL"
         finally:
             await listener.close()

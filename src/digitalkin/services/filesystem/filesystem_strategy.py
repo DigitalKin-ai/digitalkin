@@ -181,9 +181,9 @@ class FilesystemStrategy(BaseStrategy, ABC):
 
         Args:
             filters: Filter criteria for the files
-            list_size: Number of files to return per page
+            list_size: Number of files to return per page (1 to 100)
             offset: Offset to start listing files from
-            order: Field to order results by
+            order: Field to order results by, optionally suffixed ``:desc`` (e.g. ``created_at:desc``)
             include_content: Whether to include file content in response
 
         Returns:

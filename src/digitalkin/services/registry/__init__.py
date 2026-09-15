@@ -11,14 +11,12 @@ from digitalkin.services.registry.exceptions import (
     RegistryServiceError,
 )
 from digitalkin.services.registry.grpc_registry import GrpcRegistry
-from digitalkin.services.registry.registry_models import ModuleStatusInfo
 from digitalkin.services.registry.registry_strategy import RegistryStrategy
 
 __all__ = [
     "DefaultRegistry",
     "GrpcRegistry",
     "ModuleInfo",
-    "ModuleStatusInfo",
     "RegistryModuleNotFoundError",
     "RegistryModuleStatus",
     "RegistryModuleType",

@@ -13,7 +13,6 @@ from digitalkin.models.services.registry import (
     SetupSummary,
 )
 from digitalkin.services.registry.exceptions import RegistryModuleNotFoundError
-from digitalkin.services.registry.registry_models import ModuleStatusInfo
 from digitalkin.services.registry.registry_strategy import RegistryStrategy
 
 
@@ -98,27 +97,6 @@ class DefaultRegistry(RegistryStrategy):
             results.sort(key=lambda m: m.module_name.lower(), reverse=descending)
 
         return results[offset : offset + limit]
-
-    async def get_status(self, module_id: str) -> ModuleStatusInfo:
-        """Get module status.
-
-        Args:
-            module_id: The module identifier.
-
-        Returns:
-            ModuleStatusInfo with current status.
-
-        Raises:
-            RegistryModuleNotFoundError: If module not found.
-        """
-        if module_id not in self._modules:
-            raise RegistryModuleNotFoundError(module_id)
-
-        module = self._modules[module_id]
-        return ModuleStatusInfo(
-            module_id=module_id,
-            status=module.status or RegistryModuleStatus.UNSPECIFIED,
-        )
 
     async def register(
         self,

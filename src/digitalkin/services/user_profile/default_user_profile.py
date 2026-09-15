@@ -1,6 +1,6 @@
 """Default user profile implementation."""
 
-from typing import Any
+from typing import Any, Literal
 
 from digitalkin.logger import logger
 from digitalkin.services.user_profile.user_profile_strategy import UserProfileStrategy
@@ -38,11 +38,17 @@ class DefaultUserProfile(UserProfileStrategy):
         logger.debug("Retrieved user profile for mission_id: %s", self.mission_id)
         return self.db[self.mission_id]
 
-    async def check_resource_access(self, resource_type: int, resource_id: str) -> bool:  # ruff: ignore[unused-method-argument, no-self-use]
+    async def check_resource_access(  # ruff: ignore[no-self-use]
+        self,
+        # ruff: ignore[unused-method-argument]
+        resource: Literal["setup_id", "module_id", "mission_id", "storage_id", "file_id"],
+        # ruff: ignore[unused-method-argument]
+        resource_id: str,
+    ) -> bool:
         """Local strategy: grant access (no access backend in local mode).
 
         Args:
-            resource_type: The ResourceType enum value.
+            resource: The resource kind.
             resource_id: The resource identifier.
 
         Returns:

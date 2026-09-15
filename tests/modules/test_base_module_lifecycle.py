@@ -19,7 +19,6 @@ from digitalkin.models.module.utility import HealthcheckPingInput
 from digitalkin.modules._base_module import BaseModule
 from digitalkin.utils.package_discover import ModuleDiscoverer
 
-
 # ---------------------------------------------------------------------------
 # Test Models
 # ---------------------------------------------------------------------------
@@ -85,7 +84,7 @@ def _make_module_cls() -> type[BaseModule]:
         services_config_params: ClassVar[dict] = {}
         _builds_tool_cache: ClassVar[bool] = True
 
-        async def initialize(self, context, setup_data) -> None:  # noqa: ARG002
+        async def initialize(self, context, setup_data) -> None:
             pass
 
         async def cleanup(self) -> None:
@@ -98,7 +97,7 @@ def _instantiate(cls: type[BaseModule]) -> BaseModule:
     """Instantiate a module class with mocked services."""
     mock_config = Mock()
     mock_config.valid_strategy_names.return_value = _SERVICE_NAMES
-    mock_config.init_strategy.side_effect = lambda *a, **kw: Mock()
+    mock_config.init_strategy.side_effect = lambda *_a, **_kw: Mock()
     mock_config._stateless_strategies = frozenset()
     cls.services_config = mock_config
     return cls(
@@ -162,7 +161,7 @@ class TestInit:
         cls = _make_module_cls()
         mock_config = Mock()
         mock_config.valid_strategy_names.return_value = _SERVICE_NAMES
-        mock_config.init_strategy.side_effect = lambda *a, **kw: Mock()
+        mock_config.init_strategy.side_effect = lambda *_a, **_kw: Mock()
         mock_config._stateless_strategies = frozenset()
         cls.services_config = mock_config
 
@@ -699,6 +698,9 @@ class TestStartConfigSetup:
             await module.start_config_setup(setup_data, callback)
 
         assert module.status == ModuleStatus.FAILED
+        # Regression: nothing was sent, so the servicer waited out the whole config-setup timeout.
+        (reply,) = callback.await_args.args
+        assert reply == ModuleCodeModel(code="INTERNAL", message="config setup failed: resolve fail")
 
 
 class TestTriggerHandlerIsolation:

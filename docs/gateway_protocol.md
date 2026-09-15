@@ -4,7 +4,7 @@ External clients (web UI, modules, any gRPC caller) talk to a producer module th
 
 ## TL;DR
 
-Three RPCs, one BiDi data channel, in-band lifecycle:
+Three client-facing RPCs (plus `AssociateTask` for nested runs), one BiDi data channel, in-band lifecycle:
 
 ```
   Client                      Gateway                       SDK module
@@ -13,16 +13,17 @@ Three RPCs, one BiDi data channel, in-band lifecycle:
    │ ◄────────── ack ────────────│                              │
    │                             │ ── dispatch (Redis) ────────►│
    │                             │                              │
-   │ ── Stream(StreamClient) ───►│                              │
+   │ ── Stream(StreamRequest) ──►│                              │
    │                             │ ◄── output (Redis) ──────────│
-   │ ◄── StreamServer{stream.start}──                            │
-   │ ◄── StreamServer{<output>}──                               │
+   │ ◄── StreamResponse{stream.start}──                          │
+   │ ◄── StreamResponse{<output>}──                             │
    │      ...                    │                              │
-   │ ◄── StreamServer{stream.end}──                              │
+   │ ◄── StreamResponse{stream.end}──                            │
 ```
 
 1. **`StartStream`** — unary. Reserves a task slot and dispatches the module. Returns `{ accepted, task_id }`.
-2. **`Stream`** — BiDi. Client sends `StreamClient` messages (the first carries the **query**, in `data`). Server yields `StreamServer` messages until the stream closes cleanly.
+2. **`Stream`** — BiDi. Client sends `StreamRequest` messages (the first carries the **query**, in `data`). Server
+   yields `StreamResponse` messages until the stream closes cleanly.
 3. **`SendSignal`** — unary. Out-of-band controls: cancel a task, or invalidate caches.
 
 Lifecycle, errors, warnings travel **inside the data channel** as Struct sentinels (`stream.start`, `stream.end`, `stream.error`). gRPC status codes are not used to signal stream-level events on `Stream`.
@@ -33,10 +34,20 @@ Lifecycle, errors, warnings travel **inside the data channel** as Struct sentine
 
 ```proto
 service GatewayService {
+  rpc AssociateTask(AssociateTaskRequest) returns (AssociateTaskResponse);
   rpc StartStream(StartStreamRequest) returns (StartStreamResponse);
-  rpc Stream(stream StreamClient) returns (stream StreamServer);
-  rpc SendSignal(ClientSignalRequest) returns (ClientSignalResponse);
+  rpc Stream(stream StreamRequest) returns (stream StreamResponse);
+  rpc SendSignal(SendSignalRequest) returns (SendSignalResponse);
 }
+```
+
+Messages live in `agentic_mesh_protocol/gateway/v1/`: requests and responses of the unary RPCs in
+`gateway_dto.proto`, the stream frames and signals in `gateway_messages.proto`, `CacheScope` in
+`gateway_enums.proto`. Every field carries `buf.validate` rules; the SDK checks every unary request
+against them and answers `INVALID_ARGUMENT` before the servicer runs. `Stream` frames are not
+rejected that way — a bad frame surfaces in-band as `stream.error`.
+
+```
 ```
 
 ### `StartStream`
@@ -47,9 +58,10 @@ service GatewayService {
 | `setup_id` | `string` | Required. Must start with `setups:`. |
 | `mission_id` | `string` | Required. Must start with `missions:`. |
 
-Returns `{ accepted: bool, task_id: string }`. `accepted=false` means the gateway is at capacity or the IDs are invalid; do not open `Stream`.
+Returns `{ accepted: bool, task_id: string }`. `accepted=false` means the gateway is at capacity; do not open `Stream`.
+Malformed IDs are refused with `INVALID_ARGUMENT`.
 
-### `Stream` — `StreamClient` (client → gateway)
+### `Stream` — `StreamRequest` (client → gateway)
 
 ```
 { uint64 from_seq, string task_id, google.protobuf.Struct data }
@@ -58,10 +70,10 @@ Returns `{ accepted: bool, task_id: string }`. `accepted=false` means the gatewa
 - **First message** (mandatory): `task_id` set, `data` carries the **query** that becomes the SDK module's first input.
 - **Subsequent messages**: `data` carries any additional upstream input (multi-turn, tool responses, …). `task_id` and `from_seq` are ignored after the first.
 
-### `Stream` — `StreamServer` (gateway → client)
+### `Stream` — `StreamResponse` (gateway → client)
 
 ```
-{ uint64 seq, google.protobuf.Struct data }
+{ uint64 seq, string task_id, google.protobuf.Struct data }
 ```
 
 - `seq`: monotonic from 1, assigned by the gateway when persisting to Redis. **Stateful clients** save the highest seq received and pass it back as `from_seq` on reconnect; **stateless clients** ignore it.
@@ -69,27 +81,30 @@ Returns `{ accepted: bool, task_id: string }`. `accepted=false` means the gatewa
 
 ### `SendSignal`
 
-| Field | Type | Notes |
-|---|---|---|
-| `task_id` | `string` | Required for `CANCEL`. Ignored for `INVALIDATE_*`. |
-| `action` | `SignalAction` | Required. See the enum below. |
+`SendSignalRequest` holds exactly one signal (a required `oneof signal`):
 
-Returns `{ success: bool, task_id: string }`.
+| Signal                            | Fields                                            | Effect                 |
+|-----------------------------------|---------------------------------------------------|------------------------|
+| `cancel` — `CancelSignal`         | `task_id` (required)                              | Per-task cancellation. |
+| `invalidate` — `InvalidateSignal` | `scope: CacheScope` (required, not `UNSPECIFIED`) | Cache invalidation.    |
+
+Returns `{ success: bool, task_id: string }` (`task_id` is empty for an invalidation).
 
 ```
-enum SignalAction {
-  UNSPECIFIED = 0;
-  CANCEL              = 1;  // per-task cancellation (requires task_id)
-  INVALIDATE_ALL      = 2;  // wipe all caches
-  INVALIDATE_CHANNELS = 3;  // gRPC channel pool, stubs, CB, bulkhead
-  INVALIDATE_MODELS   = 4;  // Pydantic model class cache
-  INVALIDATE_SETUP    = 5;  // setup JSON cache
-  INVALIDATE_TOOLS    = 6;  // resolved tools
-  INVALIDATE_SHARED   = 7;  // BaseModule._shared (litellm, toolkits, ...)
+enum CacheScope {
+  CACHE_SCOPE_UNSPECIFIED = 0;
+  ALL      = 1;  // wipe all caches
+  CHANNELS = 2;  // gRPC channel pool, stubs, CB, bulkhead
+  MODELS   = 3;  // Pydantic model class cache
+  SETUP    = 4;  // setup JSON cache of one setup
+  TOOLS    = 5;  // resolved tools of one setup
+  SHARED   = 6;  // BaseModule._shared (litellm, toolkits, ...)
 }
 ```
 
-`CANCEL` publishes on the per-task Redis pub/sub channel. `INVALIDATE_*` is a server-wide operation routed to the SDK's cache handler — it does not need a task_id and does not affect any in-flight tasks.
+`cancel` publishes on the per-task Redis pub/sub channel. `invalidate` is a server-wide operation routed to the SDK's
+cache handler — it does not affect any in-flight tasks. `SETUP` and `TOOLS` are scoped to one setup, read from the
+caller's `x-setup-id` metadata header; without it they are skipped with a warning.
 
 ---
 
@@ -123,7 +138,7 @@ Two profiles, no extra fields needed:
 **Stateless** (web UIs, simple callers)
 - Always send `from_seq = 0`.
 - Server replays the full stream from `seq=1`.
-- Ignore `seq` on `StreamServer`.
+- Ignore `seq` on `StreamResponse`.
 - After a disconnect: reconnect with `from_seq=0`. Expect duplicate delivery; that's the cost of being stateless.
 
 **Stateful** (durable consumers)
@@ -158,29 +173,32 @@ Exactly one extra round on the BiDi at startup; everything after is a normal `St
 ```
 Gateway (gRPC client)                              Consumer (gRPC server)
         │                                                  │
-        │ ── StreamClient(data={protocol:"stream.init"}) ─►│
-        │                                                  │
-        │ ◄── StreamServer(data=<query>) ──────────────────│  ← consumer sends the query
-        │                                                  │
-        │ ── StreamClient(from_seq=N, data=<output_N>) ───►│  ← gateway pushes outputs
-        │ ── StreamClient(from_seq=N+1, data=<output_N+1>)►│
-        │      ...                                         │
-        │ ── StreamClient(data={protocol:"stream.end"}) ──►│  ← terminator
+        │ ── StreamRequest(data={protocol:"stream.init"}) ─►│
+        │                                                   │
+        │ ◄── StreamResponse(data=<query>) ─────────────────│  ← consumer sends the query
+        │                                                   │
+        │ ── StreamRequest(from_seq=N, data=<output_N>) ───►│  ← gateway pushes outputs
+        │ ── StreamRequest(from_seq=N+1, data=<output_N+1>)►│
+        │      ...                                          │
+        │ ── StreamRequest(data={protocol:"stream.end"}) ──►│  ← terminator
 ```
 
 The query payload from the consumer is delivered to the SDK module exactly like the first message in the client-initiated `Stream` flow. The dispatcher unblocks on `session.input_queue` once the query lands. From there, the producer's lifecycle is identical to the standard path.
 
 ### Field semantics in the dial-back direction
 
-`StreamClient` and `StreamServer` are reused without proto changes. The semantics on the **gateway → client** push direction:
+The gateway is the gRPC client here, so it sends `StreamRequest` and reads `StreamResponse` — the same messages, no
+extra service definition. The semantics on the **gateway → consumer** push direction:
 
-- `StreamClient.task_id` — repeated on every message; the consumer can multiplex many concurrent pushes by task.
-- `StreamClient.from_seq` — repurposed as the **per-message seq** (the originating `seq` from `_consume_from_redis`). On the M2M flow `from_seq` was the resume point; here it's the per-frame counter.
-- `StreamClient.data` — the actual output payload, identical to what `Stream`'s `StreamServer.data` would carry.
+- `StreamRequest.task_id` — repeated on every message; the consumer can multiplex many concurrent pushes by task.
+- `StreamRequest.from_seq` — repurposed as the **per-message seq** (the originating `seq` from `_consume_from_redis`).
+  On the client-initiated flow `from_seq` is the resume point; here it's the per-frame counter.
+- `StreamRequest.data` — the actual output payload, identical to what `Stream`'s `StreamResponse.data` would carry.
 
-On the **client → gateway** upstream direction:
+On the **consumer → gateway** upstream direction:
 
-- `StreamServer.data` — first message is the query; subsequent messages are additional upstream input (multi-turn turns, tool replies). Both feed the module's `session.input_queue`.
+- `StreamResponse.data` — first message is the query; subsequent messages are additional upstream input (multi-turn
+  turns, tool replies). Both feed the module's `session.input_queue`.
 
 ### Buffer and recovery
 
@@ -195,14 +213,14 @@ Outputs are persisted to the Redis stream `task:<task_id>:stream` with retention
 ```python
 class ConsumerCallback(gateway_service_pb2_grpc.GatewayServiceServicer):
     async def Stream(self, request_iterator, context):
-        # 1. First incoming StreamClient should be stream.init.
+        # 1. First incoming StreamRequest should be stream.init.
         first = await anext(request_iterator)
         # (sanity-check: first.data.fields["root"].struct_value.fields["protocol"] == "stream.init")
 
-        # 2. Send the query as the first StreamServer reply.
+        # 2. Send the query as the first StreamResponse reply.
         query = struct_pb2.Struct()
         query.update({"protocol": "agui_stream", "messages": [...]})
-        yield gateway_pb2.StreamServer(seq=0, task_id=first.task_id, data=query)
+        yield gateway_messages_pb2.StreamResponse(seq=0, task_id=first.task_id, data=query)
 
         # 3. Read pushed outputs.
         async for msg in request_iterator:
@@ -210,7 +228,7 @@ class ConsumerCallback(gateway_service_pb2_grpc.GatewayServiceServicer):
             if proto and proto.struct_value.fields["protocol"].string_value == "stream.end":
                 return
             handle(msg.data)
-            # Optional: yield more StreamServer messages for additional upstream input
+            # Optional: yield more StreamResponse messages for additional upstream input
 ```
 
 The consumer does not implement `StartStream` or `SendSignal` (those are gateway-only); only `Stream` is needed. Most gRPC servers let you implement just one method of a service.
@@ -230,7 +248,7 @@ The two flows coexist on the same gateway. A consumer that doesn't pass `x-clien
 import uuid
 import grpc
 from google.protobuf import struct_pb2
-from agentic_mesh_protocol.gateway.v1 import gateway_pb2, gateway_service_pb2_grpc
+from agentic_mesh_protocol.gateway.v1 import gateway_dto_pb2, gateway_messages_pb2, gateway_service_pb2_grpc
 
 async def call(host, setup_id, mission_id, query):
     channel = grpc.aio.insecure_channel(host)
@@ -239,7 +257,7 @@ async def call(host, setup_id, mission_id, query):
     task_id = str(uuid.uuid4())
 
     # 1. StartStream — get the ack.
-    ack = await stub.StartStream(gateway_pb2.StartStreamRequest(
+    ack = await stub.StartStream(gateway_dto_pb2.StartStreamRequest(
         task_id=task_id, setup_id=setup_id, mission_id=mission_id,
     ))
     if not ack.accepted:
@@ -251,7 +269,7 @@ async def call(host, setup_id, mission_id, query):
 
     # 3. Open Stream BiDi — first message carries the query.
     async def client_stream():
-        yield gateway_pb2.StreamClient(task_id=task_id, from_seq=0, data=data)
+        yield gateway_messages_pb2.StreamRequest(task_id=task_id, from_seq=0, data=data)
 
     async for msg in stub.Stream(client_stream()):
         proto = msg.data.fields["root"].struct_value.fields["protocol"].string_value
@@ -276,7 +294,8 @@ async def call(host, setup_id, mission_id, query):
 import { v4 as uuid } from "uuid";
 import { Struct } from "google-protobuf/google/protobuf/struct_pb";
 import { GatewayServiceClient } from "./gen/gateway_service_grpc_pb";
-import { StartStreamRequest, StreamClient } from "./gen/gateway_pb";
+import { StartStreamRequest } from "./gen/gateway_dto_pb";
+import { StreamRequest } from "./gen/gateway_messages_pb";
 
 async function call(host: string, setupId: string, missionId: string, query: any) {
   const client = new GatewayServiceClient(host, /* credentials */);
@@ -295,7 +314,7 @@ async function call(host: string, setupId: string, missionId: string, query: any
 
   // 3. Open Stream BiDi — first message carries the query
   const call = client.stream();
-  const first = new StreamClient().setTaskId(taskId).setFromSeq(0).setData(data);
+  const first = new StreamRequest().setTaskId(taskId).setFromSeq(0).setData(data);
   call.write(first);
 
   for await (const msg of call) {
@@ -325,21 +344,25 @@ async function call(host: string, setupId: string, missionId: string, query: any
 
 Each task is its own gRPC stream. Don't multiplex multiple tasks onto one `Stream` call — `task_id` is bound on the first message.
 
-### The first `StreamClient` carries the query
+### The first `StreamRequest` carries the query
 
 There is no separate "init" message. The first frame is **both** the registration (task_id + from_seq) **and** the query (data). The server delivers `data` to the SDK module as its first input.
 
 ### Sending more upstream input
 
-After the first message you may keep sending `StreamClient` frames; only `data` is read. Use this for multi-turn conversation, tool responses streamed back, etc.
+After the first message you may keep sending `StreamRequest` frames; only `data` is read. Use this for multi-turn
+conversation, tool responses streamed back, etc.
 
 ### Cancelling
 
-`SendSignal(action=CANCEL, task_id=<tid>)`. The gateway publishes on `signal_ch:<tid>`; the SDK module receives the signal and shuts down. Your `Stream` call ends with the usual `stream.end`.
+`SendSignal(cancel=CancelSignal(task_id=<tid>))`. The gateway publishes on `signal_ch:<tid>`; the SDK module receives
+the signal and shuts down. Your `Stream` call ends with the usual `stream.end`.
 
 ### Cache invalidation
 
-`SendSignal(action=INVALIDATE_*)` is server-wide. Running tasks are not affected — a dict-swap pattern preserves their references. Useful for forcing a re-fetch of setups/tools after a configuration change.
+`SendSignal(invalidate=InvalidateSignal(scope=<CacheScope>))` is server-wide (`SETUP` / `TOOLS` need the `x-setup-id`
+header). Running tasks are not affected — a dict-swap pattern preserves their references. Useful for forcing a re-fetch
+of setups/tools after a configuration change.
 
 ### Errors are NOT `aio.AioRpcError`
 
@@ -351,7 +374,8 @@ A misbehaving `Stream` call **does not** raise `aio.AioRpcError` from the call i
 
 ### Timing
 
-Timestamps are not in `StreamServer` (intentionally minimal). Stamp on receive if you need them. The gateway logs end-to-end latency server-side.
+Timestamps are not in `StreamResponse` (intentionally minimal). Stamp on receive if you need them. The gateway logs
+end-to-end latency server-side.
 
 ---
 
@@ -361,11 +385,11 @@ Timestamps are not in `StreamServer` (intentionally minimal). Stamp on receive i
 StartStreamRequest  := { task_id, setup_id, mission_id }
 StartStreamResponse := { accepted, task_id }
 
-StreamClient  := { from_seq, task_id, data: Struct }    // client → server
-StreamServer  := { seq, data: Struct }                  // server → client
+StreamRequest   := { from_seq, task_id, data: Struct }   // client → server
+StreamResponse  := { seq, task_id, data: Struct }        // server → client
 
-ClientSignalRequest  := { task_id, action: SignalAction }
-ClientSignalResponse := { success, task_id }
+SendSignalRequest  := { oneof signal { cancel: { task_id } | invalidate: { scope: CacheScope } } }
+SendSignalResponse := { success, task_id }
 ```
 
 `data.root.protocol` discriminates payload type. `stream.*` is reserved for gateway-emitted control sentinels. Module-defined protocols (your domain output) use any other string.
@@ -379,5 +403,10 @@ For repos migrating from the previous shape:
 - `ProduceStream` RPC and all `ProduceStream*` messages → **deleted**. Producer modules write directly to Redis; no gRPC connection from module to gateway.
 - `ConsumeStream` → renamed `Stream`.
 - `GatewayResponse` envelope, `StreamStatus`, `StreamError`, `ServerHeartbeat`, `Checkpoint` → **deleted**. Use `stream.*` sentinels instead.
-- `StartStreamRequest.input` field → **deleted**. The query lives on the first `StreamClient.data`.
+- `StartStreamRequest.input` field → **deleted**. The query lives on the first `StreamRequest.data`.
+- `feat/validation-proto`: stream frames renamed after their direction — `StreamClient` → `StreamRequest`,
+  `StreamServer` → `StreamResponse` (same field numbers, wire-compatible).
+  `ClientSignalRequest{task_id, action: SignalAction}` → `SendSignalRequest{oneof cancel | invalidate}`;
+  `SignalAction.INVALIDATE_*` → `CacheScope`. Python imports move from `gateway_pb2` to `gateway_dto_pb2` /
+  `gateway_messages_pb2` / `gateway_enums_pb2`.
 - Sentinel rename: `module_start_info` → `stream.start`; `end_of_stream` → `stream.end`.

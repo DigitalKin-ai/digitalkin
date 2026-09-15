@@ -9,18 +9,17 @@ from typing import Any, cast
 
 import grpc
 from agentic_mesh_protocol.module.v1 import (
-    information_pb2,
-    lifecycle_pb2,
+    module_dto_pb2,
+    module_messages_pb2,
     module_service_pb2_grpc,
 )
-from agentic_mesh_protocol.user_profile.v1 import user_profile_pb2
 from google.protobuf import json_format, struct_pb2
 from pydantic import ValidationError
 
 from digitalkin.core.job_manager.base_job_manager import BaseJobManager
 from digitalkin.core.job_manager.single_job_manager import SingleJobManager
 from digitalkin.core.task_manager.redis.redis_signal import SharedRedisListener
-from digitalkin.grpc_servers.exceptions import PermissionDeniedError, ServicerError
+from digitalkin.grpc_servers.exceptions import PermissionDeniedError
 from digitalkin.grpc_servers.interceptors.request_ids import RequestContext
 from digitalkin.logger import logger
 from digitalkin.models.module.module import ModuleCodeModel
@@ -41,7 +40,12 @@ from digitalkin.utils.env_manager import EnvManager
 
 
 class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
-    """gRPC ModuleService implementation."""
+    """gRPC ModuleService implementation.
+
+    ``ModuleResult.identifier`` is the request ``module_id`` for the schema RPCs and the
+    ``setup_version.id`` for ``ConfigSetupModule``; the request validation bounds both to
+    256 characters. A failure aborts with its ``grpc.StatusCode`` instead of an ``OperationError``.
+    """
 
     args: Namespace
     setup: SetupStrategy
@@ -276,7 +280,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         self._setup_cache[setup_id] = (time.monotonic(), version_data)
 
     async def _check_setup_access(self, setup_id: str) -> None:
-        """Block if the caller may not access the setup (RESOURCE_TYPE_SETUP).
+        """Block if the caller may not access the setup (``CheckResourceAccess`` on ``setup_id``).
 
         Args:
             setup_id: The setup identifier being resolved.
@@ -284,7 +288,7 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
         Raises:
             PermissionDeniedError: If access to the setup is denied.
         """
-        allowed = await self.user_profile.check_resource_access(user_profile_pb2.RESOURCE_TYPE_SETUP, setup_id)
+        allowed = await self.user_profile.check_resource_access("setup_id", setup_id)
         ids = RequestContext.current()
         if not allowed:
             logger.info(
@@ -357,20 +361,22 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
 
     async def ConfigSetupModule(
         self,
-        request: lifecycle_pb2.ConfigSetupModuleRequest,
+        request: module_dto_pb2.ConfigSetupModuleRequest,
         context: grpc.aio.ServicerContext,
-    ) -> lifecycle_pb2.ConfigSetupModuleResponse:
+    ) -> module_dto_pb2.ConfigSetupModuleResponse:
         """Configure the module setup.
+
+        Aborts with PERMISSION_DENIED (setup access refused), INVALID_ARGUMENT (setup content
+        not matching the setup model), the status the failed job names (DEADLINE_EXCEEDED when
+        the module does not answer in time, NOT_FOUND when its session is gone) or INTERNAL
+        (module failed to start, or failed with a free-form code).
 
         Args:
             request: The configuration request.
             context: The gRPC context.
 
         Returns:
-            A response indicating success or failure.
-
-        Raises:
-            ServicerError: if the setup data is not returned or job creation fails.
+            The configured setup version, identified by its ``setup_version.id``.
         """
         logger.info(
             "ConfigSetupVersion called for module '%s' setup_version=%s",
@@ -379,20 +385,16 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             extra={"mission_id": request.mission_id},
         )
         setup_version = request.setup_version
-        if not await self.user_profile.check_resource_access(
-            user_profile_pb2.RESOURCE_TYPE_SETUP, setup_version.setup_id
-        ):
+        if not await self.user_profile.check_resource_access("setup_id", setup_version.setup_id):
             logger.info(
                 "[VALIDATE AC1] setup config access DENIED: setup_id=%s", setup_version.setup_id
             )  # TODO(validate): remove after prod validation
-            context.set_code(grpc.StatusCode.PERMISSION_DENIED)
-            context.set_details(f"access denied to setup {setup_version.setup_id}")
-            return lifecycle_pb2.ConfigSetupModuleResponse(success=False)
+            await context.abort(grpc.StatusCode.PERMISSION_DENIED, f"access denied to setup {setup_version.setup_id}")
         # Invalidate cached setup so concurrent/subsequent starts refetch the reconfigured version
         self._setup_cache.pop(setup_version.setup_id, None)
         try:
             config_setup_data = self.module_class.create_config_setup_model(json_format.MessageToDict(request.content))
-            setup_version_data = await self.module_class.create_setup_model(
+            await self.module_class.create_setup_model(
                 json_format.MessageToDict(request.setup_version.content),
                 config_fields=True,
             )
@@ -410,59 +412,49 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
                 error,
                 extra={"mission_id": request.mission_id},
             )
-            context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
-            context.set_details(msg)
-            return lifecycle_pb2.ConfigSetupModuleResponse(success=False)
-
-        if not setup_version_data:
-            msg = "No setup data returned."
-            raise ServicerError(msg)
-
-        if not config_setup_data:
-            msg = "No config setup data returned."
-            raise ServicerError(msg)
+            await context.abort(grpc.StatusCode.INVALID_ARGUMENT, msg)
 
         request_metadata: dict[str, str] = {
             str(k): str(v) for k, v in cast("list[tuple[str, str]]", context.invocation_metadata() or ())
         }
 
-        job_id = await self.job_manager.create_config_setup_instance_job(
-            config_setup_data,
-            request.mission_id,
-            setup_version.setup_id,
-            setup_version.id,
-            request_metadata=request_metadata,
-        )
-
-        if job_id is None:
-            context.set_code(grpc.StatusCode.NOT_FOUND)
-            context.set_details("Failed to create module instance")
-            return lifecycle_pb2.ConfigSetupModuleResponse(success=False)
+        try:
+            job_id = await self.job_manager.create_config_setup_instance_job(
+                config_setup_data,
+                request.mission_id,
+                setup_version.setup_id,
+                setup_version.id,
+                request_metadata=request_metadata,
+            )
+        except Exception as error:
+            logger.exception(
+                "[VALIDATE CFGSTART] config setup module failed to start: setup_version=%s",
+                setup_version.id,
+                extra={"mission_id": request.mission_id},
+            )  # TODO(validate): remove after prod validation
+            await context.abort(grpc.StatusCode.INTERNAL, f"module failed to start config setup: {error}")
 
         updated_setup_data = await self.job_manager.generate_config_setup_module_response(job_id)
         logger.info("Setup response received", extra={"job_id": job_id})
 
         if isinstance(updated_setup_data, ModuleCodeModel):
-            logger.error(
-                "Config setup failed: code=%s message=%s",
-                updated_setup_data.code,
-                updated_setup_data.message,
-                extra={"job_id": job_id},
-            )
-            context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(updated_setup_data.message or "Config setup failed")
-            return lifecycle_pb2.ConfigSetupModuleResponse(success=False)
-
+            updated_setup_data = updated_setup_data.model_dump()
         if isinstance(updated_setup_data, dict) and "code" in updated_setup_data:
+            # The job manager and modules name the failure with a gRPC status (``DEADLINE_EXCEEDED``,
+            # ``StatusCode.NOT_FOUND``) or a free code; only the latter is INTERNAL.
+            status = grpc.StatusCode.__members__.get(
+                str(updated_setup_data["code"]).removeprefix("StatusCode."), grpc.StatusCode.INTERNAL
+            )
+            if status is grpc.StatusCode.OK:
+                status = grpc.StatusCode.INTERNAL
             logger.error(
-                "Config setup failed: code=%s message=%s",
+                "[VALIDATE CFGCODE] config setup failed: code=%s status=%s message=%s",
                 updated_setup_data["code"],
+                status.name,
                 updated_setup_data.get("message"),
                 extra={"job_id": job_id},
-            )
-            context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(updated_setup_data.get("message") or "Config setup failed")
-            return lifecycle_pb2.ConfigSetupModuleResponse(success=False)
+            )  # TODO(validate): remove after prod validation
+            await context.abort(status, updated_setup_data.get("message") or "Config setup failed")
 
         logger.debug("Updated setup data", extra={"job_id": job_id})
 
@@ -500,14 +492,18 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             struct_pb2.Struct(),
             ignore_unknown_fields=True,
         )
-        return lifecycle_pb2.ConfigSetupModuleResponse(success=True, setup_version=setup_version)
+        return module_dto_pb2.ConfigSetupModuleResponse(
+            result=module_messages_pb2.ModuleResult(identifier=setup_version.id, setup_version=setup_version)
+        )
 
     async def GetModuleInput(
         self,
-        request: information_pb2.GetModuleInputRequest,
-        context: grpc.ServicerContext,
-    ) -> information_pb2.GetModuleInputResponse:
+        request: module_dto_pb2.GetModuleInputRequest,
+        context: grpc.aio.ServicerContext,
+    ) -> module_dto_pb2.GetModuleInputResponse:
         """Get information about the module's expected input.
+
+        Aborts with UNIMPLEMENTED when the module has no input format, INTERNAL on any other failure.
 
         Args:
             request: The get module input request.
@@ -529,26 +525,23 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             )
         except NotImplementedError as e:
             logger.warning(e)
-            context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-            context.set_details(str(e))
-            return information_pb2.GetModuleInputResponse()
+            await context.abort(grpc.StatusCode.UNIMPLEMENTED, str(e))
         except Exception as e:
             logger.exception("Failed to get input format for module '%s'", self.module_class.__name__)
-            context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(f"Failed to get input format: {e}")
-            return information_pb2.GetModuleInputResponse()
+            await context.abort(grpc.StatusCode.INTERNAL, f"Failed to get input format: {e}")
 
-        return information_pb2.GetModuleInputResponse(
-            success=True,
-            input_schema=input_format_struct,
+        return module_dto_pb2.GetModuleInputResponse(
+            result=module_messages_pb2.ModuleResult(identifier=request.module_id, input_schema=input_format_struct)
         )
 
     async def GetModuleSelectInput(
         self,
-        request: information_pb2.GetModuleSelectInputRequest,  # ruff: ignore[unused-method-argument]
-        context: grpc.ServicerContext,
-    ) -> information_pb2.GetModuleSelectInputResponse:
+        request: module_dto_pb2.GetModuleSelectInputRequest,
+        context: grpc.aio.ServicerContext,
+    ) -> module_dto_pb2.GetModuleSelectInputResponse:
         """Get the trigger selection schema for the module.
+
+        Aborts with INTERNAL on failure.
 
         Args:
             request: The get module select input request.
@@ -566,21 +559,22 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             )
         except Exception as e:
             logger.exception("Failed to get select input format for module '%s'", self.module_class.__name__)
-            context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(f"Failed to get select input format: {e}")
-            return information_pb2.GetModuleSelectInputResponse()
+            await context.abort(grpc.StatusCode.INTERNAL, f"Failed to get select input format: {e}")
 
-        return information_pb2.GetModuleSelectInputResponse(
-            success=True,
-            select_input_schema=select_input_format_struct,
+        return module_dto_pb2.GetModuleSelectInputResponse(
+            result=module_messages_pb2.ModuleResult(
+                identifier=request.module_id, select_input_schema=select_input_format_struct
+            )
         )
 
     async def GetModuleOutput(
         self,
-        request: information_pb2.GetModuleOutputRequest,
-        context: grpc.ServicerContext,
-    ) -> information_pb2.GetModuleOutputResponse:
+        request: module_dto_pb2.GetModuleOutputRequest,
+        context: grpc.aio.ServicerContext,
+    ) -> module_dto_pb2.GetModuleOutputResponse:
         """Get information about the module's expected output.
+
+        Aborts with UNIMPLEMENTED when the module has no output format, INTERNAL on any other failure.
 
         Args:
             request: The get module output request.
@@ -602,26 +596,23 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             )
         except NotImplementedError as e:
             logger.warning(e)
-            context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-            context.set_details(str(e))
-            return information_pb2.GetModuleOutputResponse()
+            await context.abort(grpc.StatusCode.UNIMPLEMENTED, str(e))
         except Exception as e:
             logger.exception("Failed to get output format for module '%s'", self.module_class.__name__)
-            context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(f"Failed to get output format: {e}")
-            return information_pb2.GetModuleOutputResponse()
+            await context.abort(grpc.StatusCode.INTERNAL, f"Failed to get output format: {e}")
 
-        return information_pb2.GetModuleOutputResponse(
-            success=True,
-            output_schema=output_format_struct,
+        return module_dto_pb2.GetModuleOutputResponse(
+            result=module_messages_pb2.ModuleResult(identifier=request.module_id, output_schema=output_format_struct)
         )
 
     async def GetModuleSetup(
         self,
-        request: information_pb2.GetModuleSetupRequest,
-        context: grpc.ServicerContext,
-    ) -> information_pb2.GetModuleSetupResponse:
+        request: module_dto_pb2.GetModuleSetupRequest,
+        context: grpc.aio.ServicerContext,
+    ) -> module_dto_pb2.GetModuleSetupResponse:
         """Get information about the module's setup and configuration.
+
+        Aborts with UNIMPLEMENTED when the module has no setup format, INTERNAL on any other failure.
 
         Args:
             request: The get module setup request.
@@ -641,26 +632,23 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             )
         except NotImplementedError as e:
             logger.warning(e)
-            context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-            context.set_details(str(e))
-            return information_pb2.GetModuleSetupResponse()
+            await context.abort(grpc.StatusCode.UNIMPLEMENTED, str(e))
         except Exception as e:
             logger.exception("Failed to get setup format for module '%s'", self.module_class.__name__)
-            context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(f"Failed to get setup format: {e}")
-            return information_pb2.GetModuleSetupResponse()
+            await context.abort(grpc.StatusCode.INTERNAL, f"Failed to get setup format: {e}")
 
-        return information_pb2.GetModuleSetupResponse(
-            success=True,
-            setup_schema=setup_format_struct,
+        return module_dto_pb2.GetModuleSetupResponse(
+            result=module_messages_pb2.ModuleResult(identifier=request.module_id, setup_schema=setup_format_struct)
         )
 
     async def GetModuleSecret(
         self,
-        request: information_pb2.GetModuleSecretRequest,
-        context: grpc.ServicerContext,
-    ) -> information_pb2.GetModuleSecretResponse:
+        request: module_dto_pb2.GetModuleSecretRequest,
+        context: grpc.aio.ServicerContext,
+    ) -> module_dto_pb2.GetModuleSecretResponse:
         """Get information about the module's secrets.
+
+        Aborts with UNIMPLEMENTED when the module has no secret format, INTERNAL on any other failure.
 
         Args:
             request: The get module secret request.
@@ -680,26 +668,23 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             )
         except NotImplementedError as e:
             logger.warning(e)
-            context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-            context.set_details(str(e))
-            return information_pb2.GetModuleSecretResponse()
+            await context.abort(grpc.StatusCode.UNIMPLEMENTED, str(e))
         except Exception as e:
             logger.exception("Failed to get secret format for module '%s'", self.module_class.__name__)
-            context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(f"Failed to get secret format: {e}")
-            return information_pb2.GetModuleSecretResponse()
+            await context.abort(grpc.StatusCode.INTERNAL, f"Failed to get secret format: {e}")
 
-        return information_pb2.GetModuleSecretResponse(
-            success=True,
-            secret_schema=secret_format_struct,
+        return module_dto_pb2.GetModuleSecretResponse(
+            result=module_messages_pb2.ModuleResult(identifier=request.module_id, secret_schema=secret_format_struct)
         )
 
     async def GetConfigSetupModule(
         self,
-        request: information_pb2.GetConfigSetupModuleRequest,
-        context: grpc.ServicerContext,
-    ) -> information_pb2.GetConfigSetupModuleResponse:
+        request: module_dto_pb2.GetConfigSetupModuleRequest,
+        context: grpc.aio.ServicerContext,
+    ) -> module_dto_pb2.GetConfigSetupModuleResponse:
         """Get information about the module's setup and configuration.
+
+        Aborts with UNIMPLEMENTED when the module has no config setup format, INTERNAL on any other failure.
 
         Args:
             request: The get module setup request.
@@ -719,26 +704,25 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             )
         except NotImplementedError as e:
             logger.warning(e)
-            context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-            context.set_details(str(e))
-            return information_pb2.GetConfigSetupModuleResponse()
+            await context.abort(grpc.StatusCode.UNIMPLEMENTED, str(e))
         except Exception as e:
             logger.exception("Failed to get config setup format for module '%s'", self.module_class.__name__)
-            context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(f"Failed to get config setup format: {e}")
-            return information_pb2.GetConfigSetupModuleResponse()
+            await context.abort(grpc.StatusCode.INTERNAL, f"Failed to get config setup format: {e}")
 
-        return information_pb2.GetConfigSetupModuleResponse(
-            success=True,
-            config_setup_schema=config_setup_format_struct,
+        return module_dto_pb2.GetConfigSetupModuleResponse(
+            result=module_messages_pb2.ModuleResult(
+                identifier=request.module_id, config_setup_schema=config_setup_format_struct
+            )
         )
 
     async def GetModuleCost(
         self,
-        request: information_pb2.GetModuleCostRequest,
-        context: grpc.ServicerContext,
-    ) -> information_pb2.GetModuleCostResponse:
+        request: module_dto_pb2.GetModuleCostRequest,
+        context: grpc.aio.ServicerContext,
+    ) -> module_dto_pb2.GetModuleCostResponse:
         """Get information about the module's cost configuration.
+
+        Aborts with UNIMPLEMENTED when the module has no cost format, INTERNAL on any other failure.
 
         Args:
             request: The get module cost request.
@@ -758,16 +742,11 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             )
         except NotImplementedError as e:
             logger.warning(e)
-            context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-            context.set_details(str(e))
-            return information_pb2.GetModuleCostResponse()
+            await context.abort(grpc.StatusCode.UNIMPLEMENTED, str(e))
         except Exception as e:
             logger.exception("Failed to get cost format for module '%s'", self.module_class.__name__)
-            context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(f"Failed to get cost format: {e}")
-            return information_pb2.GetModuleCostResponse()
+            await context.abort(grpc.StatusCode.INTERNAL, f"Failed to get cost format: {e}")
 
-        return information_pb2.GetModuleCostResponse(
-            success=True,
-            cost_schema=cost_format_struct,
+        return module_dto_pb2.GetModuleCostResponse(
+            result=module_messages_pb2.ModuleResult(identifier=request.module_id, cost_schema=cost_format_struct)
         )

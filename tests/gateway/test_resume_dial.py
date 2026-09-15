@@ -19,7 +19,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import grpc.aio
 import pytest
-from agentic_mesh_protocol.gateway.v1 import gateway_pb2, gateway_service_pb2_grpc
+from agentic_mesh_protocol.gateway.v1 import gateway_dto_pb2, gateway_messages_pb2, gateway_service_pb2_grpc
 from google.protobuf import struct_pb2
 
 from digitalkin.grpc_servers.gateway_servicer import GatewayServicer
@@ -165,17 +165,16 @@ class _ResumeConsumerServicer(gateway_service_pb2_grpc.GatewayServiceServicer):
         self.received: list[Any] = []
 
     async def StartStream(self, request, context) -> Any:
-        return gateway_pb2.StartStreamResponse(accepted=False, task_id=request.task_id)
+        return gateway_dto_pb2.StartStreamResponse(accepted=False, task_id=request.task_id)
 
     async def SendSignal(self, request, context) -> Any:
-        return gateway_pb2.ClientSignalResponse(success=False, task_id=request.task_id)
+        return gateway_dto_pb2.SendSignalResponse(success=False, task_id=request.cancel.task_id)
 
     async def Stream(self, request_iterator, context) -> AsyncIterator[Any]:
         first = await anext(request_iterator)
         self.received.append(first)
-        # Reply with the resume cursor in seq (empty data). StreamServer.seq
-        # shares the wire tag with StreamClient.from_seq the gateway reads.
-        yield gateway_pb2.StreamServer(seq=self.cursor, task_id=first.task_id)
+        # Reply with the resume cursor in seq (empty data); the gateway reads StreamResponse.seq.
+        yield gateway_messages_pb2.StreamResponse(seq=self.cursor, task_id=first.task_id)
         async for msg in request_iterator:
             self.received.append(msg)
             if _protocol_of(msg) == "stream.end":
@@ -243,7 +242,7 @@ class TestDialAttemptResume:
         # Drained frames: stored seq 4,5,6 → wire 5,6,7; then stream.end at 8.
         drained = servicer.received[1:]
         assert _protocol_of(drained[-1]) == "stream.end"
-        assert [m.seq for m in drained] == [5, 6, 7, 8]
+        assert [m.from_seq for m in drained] == [5, 6, 7, 8]
 
     async def test_resume_cursor_zero_replays_everything(self, resume_gateway) -> None:
         await self._seed(resume_gateway, "t_full")
@@ -251,7 +250,7 @@ class TestDialAttemptResume:
 
         drained = servicer.received[1:]
         # cursor 0 → skip_to_seq -1 → full replay incl. stream.start (wire 1).
-        assert [m.seq for m in drained] == [1, 2, 3, 4, 5, 6, 7, 8]
+        assert [m.from_seq for m in drained] == [1, 2, 3, 4, 5, 6, 7, 8]
         assert _protocol_of(drained[0]) == "stream.start"
 
 
@@ -303,10 +302,10 @@ class _ReconnectingConsumer(gateway_service_pb2_grpc.GatewayServiceServicer):
         self.last_seq = 0
 
     async def StartStream(self, request, context) -> Any:
-        return gateway_pb2.StartStreamResponse(accepted=False, task_id=request.task_id)
+        return gateway_dto_pb2.StartStreamResponse(accepted=False, task_id=request.task_id)
 
     async def SendSignal(self, request, context) -> Any:
-        return gateway_pb2.ClientSignalResponse(success=False, task_id=request.task_id)
+        return gateway_dto_pb2.SendSignalResponse(success=False, task_id=request.cancel.task_id)
 
     async def Stream(self, request_iterator, context) -> AsyncIterator[Any]:
         self.connections += 1
@@ -316,11 +315,11 @@ class _ReconnectingConsumer(gateway_service_pb2_grpc.GatewayServiceServicer):
             self.fresh_received.append(first)
             query = struct_pb2.Struct()
             query.update({"root": {"protocol": "ask"}})
-            yield gateway_pb2.StreamServer(seq=0, task_id=first.task_id, data=query)
+            yield gateway_messages_pb2.StreamResponse(seq=0, task_id=first.task_id, data=query)
             seen = 0
             async for msg in request_iterator:
                 self.fresh_received.append(msg)
-                self.last_seq = max(self.last_seq, msg.seq)
+                self.last_seq = max(self.last_seq, msg.from_seq)
                 seen += 1
                 if seen >= self.read_limit:
                     # Hard-abort mid-stream (before eos) so the gateway's dial
@@ -329,7 +328,7 @@ class _ReconnectingConsumer(gateway_service_pb2_grpc.GatewayServiceServicer):
         else:
             # Auto re-dial: resume from the last seq the fresh connection saw.
             self.resume_received.append(first)
-            yield gateway_pb2.StreamServer(seq=self.last_seq, task_id=first.task_id)
+            yield gateway_messages_pb2.StreamResponse(seq=self.last_seq, task_id=first.task_id)
             async for msg in request_iterator:
                 self.resume_received.append(msg)
                 if _protocol_of(msg) == "stream.end":
@@ -388,10 +387,10 @@ class TestServerSideReconnect:
             get_gateway_settings.cache_clear()
 
         assert runner.calls == [task_id]  # module ran exactly once (never re-run)
-        seen1 = [m.seq for m in consumer.fresh_received[1:]]  # skip inbound stream.init
+        seen1 = [m.from_seq for m in consumer.fresh_received[1:]]  # skip inbound stream.init
         assert seen1 == [1, 2, 3]
         assert _protocol_of(consumer.resume_received[0]) == "stream.resume"
-        seen2 = [m.seq for m in consumer.resume_received[1:]]
+        seen2 = [m.from_seq for m in consumer.resume_received[1:]]
         assert seen2 == [4, 5, 6, 7, 8]  # continues from cursor 3 through stream.end
         assert sorted(seen1 + seen2) == [1, 2, 3, 4, 5, 6, 7, 8]  # every label once
         for _ in range(40):

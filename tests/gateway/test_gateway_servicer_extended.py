@@ -15,6 +15,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from agentic_mesh_protocol.gateway.v1 import gateway_dto_pb2, gateway_messages_pb2
 
 try:
     import fakeredis.aioredis as fakeredis_aio
@@ -94,13 +95,12 @@ class _FakeRequestIterator:
         return msg
 
 
-def _make_init_msg(task_id: str, seq: int = 0) -> Any:
-    """Build a Stream init request (dev2: client sends StreamServer)."""
-    from agentic_mesh_protocol.gateway.v1 import gateway_pb2
+def _make_init_msg(task_id: str, from_seq: int = 0) -> Any:
+    """Build a Stream init request (the client sends StreamRequest)."""
     from google.protobuf import struct_pb2
 
-    return gateway_pb2.StreamServer(
-        task_id=task_id, seq=seq, data=struct_pb2.Struct(),
+    return gateway_messages_pb2.StreamRequest(
+        task_id=task_id, from_seq=from_seq, data=struct_pb2.Struct(),
     )
 
 
@@ -207,10 +207,6 @@ class TestSendSignalExtended:
 
     async def test_publishes_signal_via_redis(self, redis: Any) -> None:
         """Signal is published to Redis signal channel."""
-        try:
-            from agentic_mesh_protocol.gateway.v1 import gateway_pb2
-        except ImportError:
-            pytest.skip("Gateway proto not installed")
 
         servicer = _mock_servicer(redis_client=redis)
 
@@ -219,19 +215,13 @@ class TestSendSignalExtended:
         session = StreamSession(task_id="task_sig_redis")
         await servicer._registry.register(session)
 
-        request = MagicMock()
-        request.task_id = "task_sig_redis"
-        request.action = gateway_pb2.CANCEL
+        request = gateway_dto_pb2.SendSignalRequest(cancel=gateway_messages_pb2.CancelSignal(task_id="task_sig_redis"))
 
         resp = await servicer.SendSignal(request, MagicMock())
         assert resp.success is True
 
     async def test_returns_false_when_publish_fails(self) -> None:
         """When Redis publish fails, returns success=False."""
-        try:
-            from agentic_mesh_protocol.gateway.v1 import gateway_pb2
-        except ImportError:
-            pytest.skip("Gateway proto not installed")
 
         from redis.exceptions import RedisError
 
@@ -246,9 +236,7 @@ class TestSendSignalExtended:
         session = StreamSession(task_id="task_sig_none")
         await servicer._registry.register(session)
 
-        request = MagicMock()
-        request.task_id = "task_sig_none"
-        request.action = gateway_pb2.CANCEL
+        request = gateway_dto_pb2.SendSignalRequest(cancel=gateway_messages_pb2.CancelSignal(task_id="task_sig_none"))
 
         resp = await servicer.SendSignal(request, MagicMock())
         assert resp.success is False
