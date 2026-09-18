@@ -106,6 +106,7 @@ class DefaultRegistry(RegistryStrategy):
         version: str,
         module_type: RegistryModuleType = RegistryModuleType.UNSPECIFIED,
         documentation: str = "",
+            schemas: dict[str, dict[str, Any]] | None = None,  # ruff: ignore[unused-method-argument]
     ) -> ModuleInfo | None:
         """Register a module with the registry.
 
@@ -118,6 +119,7 @@ class DefaultRegistry(RegistryStrategy):
             version: Module version.
             module_type: Declared module type; UNSPECIFIED preserves the existing record's type.
             documentation: Internal documentation for registry index search.
+            schemas: Ignored — ``ModuleInfo`` holds no schemas; modules serve them directly.
 
         Returns:
             ModuleInfo if successful, None otherwise.

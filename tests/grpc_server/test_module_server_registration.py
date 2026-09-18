@@ -40,3 +40,26 @@ class TestRegistryTypeGuard:
                 await server._init_and_register()
 
         registry_cls.assert_called_once()
+
+
+class TestRegistrationPayload:
+    """Registration carries the module documentation and schemas."""
+
+    async def test_register_receives_the_module_schemas(self) -> None:
+        server = ModuleServer.__new__(ModuleServer)
+        server.client_config = MagicMock()
+        schemas = {"input_schema": {"type": "object"}}
+        module_class = MagicMock(registry_type=RegistryModuleType.SERVICE, metadata={"version": "1.0.0"})
+        module_class.get_module_id.return_value = "modules:x"
+        module_class.build_registry_documentation.return_value = "docs"
+        module_class.build_registry_schemas = AsyncMock(return_value=schemas)
+        server.module_class = module_class
+
+        with patch("digitalkin.grpc_servers.module_server.GrpcRegistry") as registry_cls:
+            registry_cls.return_value.wait_for_ready = AsyncMock(return_value=True)
+            registry_cls.return_value.register = AsyncMock(return_value=MagicMock(module_id="modules:x"))
+            await server._init_and_register()
+
+        register_kwargs = registry_cls.return_value.register.await_args.kwargs
+        assert register_kwargs["schemas"] is schemas
+        assert register_kwargs["documentation"] == "docs"

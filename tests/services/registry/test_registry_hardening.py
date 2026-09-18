@@ -8,6 +8,7 @@ from agentic_mesh_protocol.common.v1 import common_enums_pb2
 from agentic_mesh_protocol.module.v1 import module_enums_pb2
 from agentic_mesh_protocol.registry.v1 import registry_dto_pb2, registry_messages_pb2
 from agentic_mesh_protocol.setup.v1 import setup_enums_pb2
+from google.protobuf import json_format
 
 from digitalkin.models.grpc_servers.models import ClientConfig
 from digitalkin.models.services.registry import (
@@ -128,3 +129,48 @@ async def test_register_forwards_documentation_and_type_to_request() -> None:
     assert request.type == module_enums_pb2.SERVICE
     assert info is not None
     assert info.module_type == RegistryModuleType.SERVICE
+
+
+async def test_register_forwards_schemas_to_request() -> None:
+    """register() merges every schema into its RegisterModuleRequest field, an empty one included."""
+    client = GrpcRegistry(
+        "missions:m", "setups:s", "v1", ClientConfig(host="127.0.0.1", port=1, security=SecurityMode.INSECURE)
+    )
+    client.exec_grpc_query = AsyncMock(
+        return_value=registry_dto_pb2.RegisterModuleResponse(
+            result=registry_messages_pb2.RegistryResult(
+                identifier="modules:x",
+                module_descriptor=registry_messages_pb2.ModuleDescriptor(id="modules:x", type=module_enums_pb2.SERVICE),
+            )
+        )
+    )
+
+    await client.register(
+        "modules:x",
+        "h",
+        1,
+        "1.0.0",
+        RegistryModuleType.SERVICE,
+        schemas={"input_schema": {"type": "object", "title": "In"}, "secret_schema": {}},
+    )
+
+    request = client.exec_grpc_query.await_args.args[1]
+    assert request.input_schema["title"] == "In"
+    assert request.HasField("secret_schema")
+    assert not request.HasField("output_schema")
+    assert request.module_id == "modules:x"
+
+
+async def test_register_refuses_unknown_schema_field_before_the_registry_is_contacted() -> None:
+    """An unknown schema key is a permanent error raised as-is, never sent nor wrapped."""
+    client = GrpcRegistry(
+        "missions:m", "setups:s", "v1", ClientConfig(host="127.0.0.1", port=1, security=SecurityMode.INSECURE)
+    )
+    client.exec_grpc_query = AsyncMock()
+
+    with pytest.raises(json_format.ParseError, match="user_info_schema"):
+        await client.register(
+            "modules:x", "h", 1, "1.0.0", RegistryModuleType.SERVICE, schemas={"user_info_schema": {}}
+        )
+
+    client.exec_grpc_query.assert_not_awaited()

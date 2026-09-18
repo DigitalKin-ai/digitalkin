@@ -17,6 +17,7 @@ from agentic_mesh_protocol.registry.v1 import (
     registry_service_pb2_grpc,
 )
 from agentic_mesh_protocol.setup.v1 import setup_enums_pb2
+from google.protobuf import json_format
 from google.protobuf.internal.enum_type_wrapper import EnumTypeWrapper
 from grpc_health.v1 import health_pb2, health_pb2_grpc
 
@@ -287,6 +288,7 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
         version: str,
         module_type: RegistryModuleType = RegistryModuleType.UNSPECIFIED,
         documentation: str = "",
+            schemas: dict[str, dict[str, Any]] | None = None,
     ) -> ModuleInfo | None:
         """Register a module with the registry.
 
@@ -300,12 +302,14 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
             version: Module version.
             module_type: Declared module type (tool or archetype/kin).
             documentation: Internal documentation for registry index search.
+            schemas: JSON schemas keyed by ``RegisterModuleRequest`` field (``input_schema``, ...).
 
         Returns:
             ModuleInfo if successful, None if the registry answers with an error (e.g. module not found).
 
         Raises:
             ValueError: If ``module_type`` has no proto counterpart; the registry refuses UNSPECIFIED.
+            json_format.ParseError: If a ``schemas`` key is not a ``RegisterModuleRequest`` field.
             PermissionDeniedError: If the caller is not permitted.
             RegistryServiceError: If gRPC call fails.
         """
@@ -317,22 +321,22 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
             version,
             module_type.value,
         )
-        # Encoded before the error-handler scope, like the search filters: a permanent condition.
-        encoded_type = self._encode_enum(module_enums_pb2.ModuleType, module_type)
+        # Built before the error-handler scope, like the search filters: enum drift and an
+        # unknown schema field are permanent conditions.
+        request = registry_dto_pb2.RegisterModuleRequest(
+            module_id=module_id,
+            address=address,
+            port=port,
+            version=version,
+            type=self._encode_enum(module_enums_pb2.ModuleType, module_type),
+            documentation=documentation,
+        )
+        if schemas:
+            json_format.ParseDict(schemas, request)
 
         async with self.handle_grpc_errors("RegisterModule", RegistryServiceError):
             try:
-                response = await self.exec_grpc_query(
-                    "RegisterModule",
-                    registry_dto_pb2.RegisterModuleRequest(
-                        module_id=module_id,
-                        address=address,
-                        port=port,
-                        version=version,
-                        type=encoded_type,
-                        documentation=documentation,
-                    ),
-                )
+                response = await self.exec_grpc_query("RegisterModule", request)
             except PermissionDeniedError:
                 raise
             except ServerError as e:

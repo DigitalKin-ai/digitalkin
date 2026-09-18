@@ -213,6 +213,7 @@ class RegistryStrategy(BaseStrategy, ABC):
         version: str,
         module_type: RegistryModuleType = RegistryModuleType.UNSPECIFIED,
         documentation: str = "",
+            schemas: dict[str, dict[str, Any]] | None = None,
     ) -> ModuleInfo | None:
         """Register a module with the registry.
 
@@ -226,6 +227,7 @@ class RegistryStrategy(BaseStrategy, ABC):
             version: Module version.
             module_type: Declared module type (tool or archetype/kin).
             documentation: Internal documentation for registry index search.
+            schemas: JSON schemas keyed by ``RegisterModuleRequest`` field (``input_schema``, ...).
 
         Returns:
             ModuleInfo if successful, None otherwise.

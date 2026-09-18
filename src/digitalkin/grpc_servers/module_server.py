@@ -269,6 +269,7 @@ class ModuleServer(BaseServer):
             version=version,
             module_type=self.module_class.registry_type,
             documentation=self.module_class.build_registry_documentation(),
+            schemas=await self.module_class.build_registry_schemas(),
         )
 
         if not result:

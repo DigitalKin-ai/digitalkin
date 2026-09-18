@@ -4,6 +4,7 @@ This module contains comprehensive tests for the ModuleServicer class, which han
 module lifecycle, monitoring, and schema introspection operations.
 """
 
+from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -18,6 +19,7 @@ from digitalkin.core.job_manager.base_job_manager import BaseJobManager
 from digitalkin.grpc_servers.exceptions import PermissionDeniedError
 from digitalkin.grpc_servers.module_servicer import ModuleServicer
 from digitalkin.models.module.module import ModuleCodeModel
+from digitalkin.models.settings.module import get_module_settings
 from digitalkin.modules._base_module import BaseModule
 from tests.fixtures.grpc_fixtures import FakeContext
 
@@ -159,6 +161,33 @@ def config_setup_request(content: dict[str, Any] | None = None) -> module_dto_pb
 
 class TestGetModuleInput:
     """Tests for GetModuleInput endpoint."""
+
+    @pytest.fixture(autouse=True)
+    def module_id_env(self, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+        """Serve as ``MODULE_ID``, set the way a deployment sets it: ``DIGITALKIN_MODULE_ID``.
+
+        Yields:
+            Nothing; the settings cache is cleared on both sides so no other test sees the id.
+        """
+        monkeypatch.setenv("DIGITALKIN_MODULE_ID", MODULE_ID)
+        get_module_settings.cache_clear()
+        yield
+        get_module_settings.cache_clear()
+
+    @pytest.mark.validation
+    async def test_get_module_input_other_module_id_is_not_found(self, module_servicer, fake_context):
+        """A request addressed to another module aborts with NOT_FOUND before the input format is built."""
+        request = module_dto_pb2.GetModuleInputRequest(module_id="modules:other")
+
+        with (
+            patch.object(MockModule, "get_input_format", AsyncMock(return_value="{}")) as get_format,
+            pytest.raises(Exception, match="RPC aborted"),
+        ):
+            await module_servicer.GetModuleInput(request, fake_context)
+
+        assert fake_context.get_code() == grpc.StatusCode.NOT_FOUND
+        assert fake_context.get_details() == f"module modules:other is not served here (this module is {MODULE_ID})"
+        get_format.assert_not_awaited()
 
     async def test_get_module_input_success(self, module_servicer, fake_context):
         """The input schema rides in ``result.input_schema``, identified by the module id."""

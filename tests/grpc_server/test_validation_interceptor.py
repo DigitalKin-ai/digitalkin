@@ -9,6 +9,8 @@ import grpc
 import pytest
 from agentic_mesh_protocol.module.v1 import module_dto_pb2
 from google.protobuf import struct_pb2
+from grpc_health.v1 import health_pb2, health_pb2_grpc
+from grpc_health.v1.health import HealthServicer
 
 from digitalkin.grpc_servers.interceptors.validation import ValidationServerInterceptor
 from digitalkin.grpc_servers.module_server import ModuleServer
@@ -105,6 +107,33 @@ class TestValidationServerInterceptor:
     async def test_unknown_method_returns_none(self) -> None:
         assert await self._intercept(None) is None
 
+    @pytest.mark.parametrize(
+        "handler",
+        [
+            grpc.unary_unary_rpc_method_handler(lambda _request, _context: "ok"),
+            grpc.unary_stream_rpc_method_handler(lambda _request, _context: iter(["ok"])),
+        ],
+        ids=["unary_unary", "unary_stream"],
+    )
+    async def test_sync_handler_is_returned_unwrapped(self, handler: Any) -> None:
+        assert await self._intercept(handler) is handler
+
+    async def test_sync_health_check_is_served_through_the_interceptor(self) -> None:
+        """The SDK registers grpc_health's synchronous HealthServicer on the aio server."""
+        server = grpc.aio.server(interceptors=[ValidationServerInterceptor()])
+        servicer = HealthServicer()
+        servicer.set("", health_pb2.HealthCheckResponse.SERVING)
+        health_pb2_grpc.add_HealthServicer_to_server(servicer, server)
+        port = server.add_insecure_port("127.0.0.1:0")
+        await server.start()
+        try:
+            async with grpc.aio.insecure_channel(f"127.0.0.1:{port}") as channel:
+                response = await health_pb2_grpc.HealthStub(channel).Check(health_pb2.HealthCheckRequest(), timeout=5)
+        finally:
+            await server.stop(None)
+
+        assert response.status == health_pb2.HealthCheckResponse.SERVING
+
 
 class TestModuleServerWiring:
     """``ModuleServer`` puts the validation interceptor first, ahead of caller-supplied ones."""
@@ -118,8 +147,9 @@ class TestModuleServerWiring:
         assert isinstance(server._interceptors[0], ValidationServerInterceptor)
         assert server._interceptors[1:] == [custom]
 
-    def test_validation_interceptor_installed_without_caller_interceptors(self,
-                                                                          monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_validation_interceptor_installed_without_caller_interceptors(
+            self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setattr(EnvManager, "services_mode", lambda: ServicesMode.LOCAL)
 
         server = ModuleServer(MagicMock())

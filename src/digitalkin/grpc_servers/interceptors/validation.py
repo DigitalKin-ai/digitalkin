@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from typing import TYPE_CHECKING, Any
 
 import grpc
@@ -12,11 +13,27 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable
 
 
+def _is_async_handler(handler: grpc.RpcMethodHandler[Any, Any]) -> bool:
+    """Tell whether the handler's behavior is a coroutine or async-generator function.
+
+    Args:
+        handler: The resolved method handler.
+
+    Returns:
+        True when the behavior can be awaited (unary) or async-iterated (server stream).
+    """
+    behavior = handler.unary_stream if handler.response_streaming else handler.unary_unary
+    return inspect.iscoroutinefunction(behavior) or inspect.isasyncgenfunction(behavior)
+
+
 class ValidationServerInterceptor(grpc.aio.ServerInterceptor):
     """Reject a unary request that breaks its ``buf.validate`` rules with ``INVALID_ARGUMENT``.
 
     Request-streaming RPCs pass through untouched: the gateway ``Stream`` reports
-    failures in-band as ``stream.error`` and never aborts.
+    failures in-band as ``stream.error`` and never aborts. Synchronous handlers
+    (e.g. the ``grpc_health`` ``HealthServicer``) also pass through untouched:
+    ``grpc.aio`` runs them on its migration thread pool, which an ``async`` wrapper
+    would bypass by awaiting their plain return value.
     """
 
     async def intercept_service(  # ruff: ignore[no-self-use]
@@ -34,7 +51,7 @@ class ValidationServerInterceptor(grpc.aio.ServerInterceptor):
             The handler, wrapped when its request is unary.
         """
         handler = await continuation(handler_call_details)
-        if handler is None or handler.request_streaming:
+        if handler is None or handler.request_streaming or not _is_async_handler(handler):
             return handler
 
         async def _validate(request: Any, context: grpc.aio.ServicerContext) -> None:

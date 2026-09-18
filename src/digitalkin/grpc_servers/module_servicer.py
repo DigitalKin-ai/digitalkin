@@ -503,7 +503,8 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
     ) -> module_dto_pb2.GetModuleInputResponse:
         """Get information about the module's expected input.
 
-        Aborts with UNIMPLEMENTED when the module has no input format, INTERNAL on any other failure.
+        Aborts with NOT_FOUND when ``module_id`` is not this module's id (``DIGITALKIN_MODULE_ID``),
+        UNIMPLEMENTED when the module has no input format, INTERNAL on any other failure.
 
         Args:
             request: The get module input request.
@@ -513,6 +514,16 @@ class ModuleServicer(module_service_pb2_grpc.ModuleServiceServicer, ArgParser):
             A response with the module's input schema.
         """
         logger.debug("GetModuleInput called for module: '%s'", self.module_class.__name__)
+        module_id = self.module_class.get_module_id()
+        if request.module_id != module_id:
+            logger.warning(
+                "[VALIDATE MODID] GetModuleInput refused: requested module_id=%s, this module is %s",
+                request.module_id,
+                module_id,
+            )  # TODO(validate): remove after prod validation
+            await context.abort(
+                grpc.StatusCode.NOT_FOUND, f"module {request.module_id} is not served here (this module is {module_id})"
+            )
 
         try:
             input_schema_proto = await self.module_class.get_input_format(
