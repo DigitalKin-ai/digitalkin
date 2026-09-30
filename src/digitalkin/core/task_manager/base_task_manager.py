@@ -78,7 +78,7 @@ class BaseTaskManager(ABC):
         session = self.tasks_sessions.get(task_id)
         if session is not None:
             # Close stream under the write lock so pending writes see stream_closed.
-            async with session._write_lock:  # noqa: SLF001
+            async with session._write_lock:  # ruff: ignore[private-member-access]
                 session.close_stream()
 
         session = self.tasks_sessions.pop(task_id, None)

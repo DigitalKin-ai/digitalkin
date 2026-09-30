@@ -32,6 +32,37 @@ A module goes through a well-defined lifecycle: `CREATED` -> `STARTING` -> `RUNN
 
 See: [SDK Flow](architecture/sdk-flow.md)
 
+## Files and the Canonical File Format
+
+Every file in the SDK is a `FileMetadata`: six fields, one definition — `id`, `name`, `type`, `content_type`, `size_bytes`, `file_url`. It is the payload the front-end file widget stores in form data, so a file selected in a setup form round-trips: what is submitted is what is persisted, and the widget repopulates itself when the form is reopened. `FilesystemRecord` inherits it and adds only the service-side fields (`checksum`, `storage_uri`, `status`, `visibility`, `content`), so a record placed in a `list[FileMetadata]` still serialises to exactly the six.
+
+`type` is a `FileType` enum whose values are the protocol's own wire names (`FILE_TYPE_DOCUMENT`, `FILE_TYPE_IMAGE`, …). Compare with the enum rather than a string — `record.type is FileType.IMAGE`, never `record.file_type == "FILE_TYPE_IMAGE"`. Use `FileType.from_content_type("application/pdf")` to classify a MIME type instead of writing your own mapping.
+
+See: [`src/digitalkin/models/services/filesystem.py`](https://github.com/DigitalKin-ai/digitalkin/tree/main/src/digitalkin/models/services/filesystem.py)
+
+### Uploading Files
+
+`FilesystemMixin.upload_file()` wraps a single upload and infers the category from the MIME type when you do not pass one. The `metadata` on an upload is validated against a pydantic model rather than being a free-form dict: `FileUploadMetadata` by default, or your own registered per module the same way storage collections are — `services_config_params = {"filesystem": {"config": {"metadata_model": MyFileMeta}}}`. Validation runs before anything reaches disk or the wire, and only the keys you actually set are sent.
+
+See: [`src/digitalkin/mixins/filesystem_mixin.py`](https://github.com/DigitalKin-ai/digitalkin/tree/main/src/digitalkin/mixins/filesystem_mixin.py)
+
+### Accepting Files in a Setup
+
+`knowledge_files_input()` declares a setup field that takes uploaded files, together with the formats the module accepts:
+
+```python
+class MySetup(SetupModel):
+    knowledge_files: knowledge_files_input(extensions=[".json"], config=False) = Field(
+        default_factory=list,
+        title="Knowledge Files",
+        description="Files imported at config-setup time.",
+    )
+```
+
+The allowed formats reach the widget as `ui:options.accept` and are enforced again on submit, since the widget's filter is only a hint. Pass `config=False`: a field marked `config=True` is stripped by `create_setup_model`, so the persisted setup version loses the file list and the form reopens empty. Call `FilesystemMixin.resolve_files()` in `run_config_setup` to backfill entries submitted as a bare id.
+
+See: [`src/digitalkin/models/module/knowledge_files.py`](https://github.com/DigitalKin-ai/digitalkin/tree/main/src/digitalkin/models/module/knowledge_files.py)
+
 ## Architecture: Resilience & Concurrency
 
 In-depth documentation of the SDK's fault tolerance and concurrency control systems, based on real production incident analysis.

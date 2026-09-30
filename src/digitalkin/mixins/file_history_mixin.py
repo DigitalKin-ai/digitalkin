@@ -10,7 +10,8 @@ from digitalkin.logger import logger
 from digitalkin.mixins.logger_mixin import LoggerMixin
 from digitalkin.mixins.storage_mixin import StorageMixin
 from digitalkin.models.module.module_context import ModuleContext
-from digitalkin.models.services.storage import FileHistory, FileModel
+from digitalkin.models.services.filesystem import FileMetadata
+from digitalkin.models.services.storage import FileHistory
 from digitalkin.models.settings.module import get_module_settings
 
 
@@ -84,7 +85,7 @@ class FileHistoryMixin(StorageMixin, LoggerMixin):
         self._fh_cache[history_key] = history
         return history
 
-    async def append_files_history(self, context: ModuleContext, files: list[FileModel]) -> None:
+    async def append_files_history(self, context: ModuleContext, files: list[FileMetadata]) -> None:
         """Append files to file history.
 
         Files are added to the in-memory cache immediately. A storage
@@ -93,7 +94,7 @@ class FileHistoryMixin(StorageMixin, LoggerMixin):
 
         Args:
             context: Module context containing storage strategy.
-            files: List of file models to append.
+            files: Files to append.
         """
         history_key = self._get_fh_history_key(context)
         file_history = await self.load_file_history(context)

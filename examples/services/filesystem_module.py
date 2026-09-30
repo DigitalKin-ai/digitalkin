@@ -10,7 +10,8 @@ from pydantic import BaseModel, Field
 from digitalkin.logger import logger
 from digitalkin.models.module import ModuleStatus
 from digitalkin.modules.archetype_module import ArchetypeModule
-from digitalkin.services.filesystem.filesystem_strategy import FileFilter, UploadFileData
+from digitalkin.models.services.filesystem import FileType
+from digitalkin.services.filesystem import FileFilter, UploadFileData
 from digitalkin.services.services_config import ServicesConfig
 from digitalkin.services.services_models import ServicesMode
 
@@ -118,9 +119,9 @@ class ExampleModule(ArchetypeModule[ExampleInput, ExampleOutput, ExampleSetup, E
         file = UploadFileData(
             content=b"%s\n%s" % (processed_message.encode(), str(processed_number).encode()),
             name="example_output.txt",
-            file_type="text/plain",
+            type=FileType.DOCUMENT,
             content_type="text/plain",
-            metadata={"example_key": "example_value"},
+            metadata={"sdk_created": True},
             replace_if_exists=True,
         )
 
@@ -176,10 +177,10 @@ async def test_module() -> None:
     # Check the storage
     if module.status == ModuleStatus.STOPPED:
         files, _nb_results = await module.filesystem.get_files(
-            filters=FileFilter(name="example_output.txt", context="test-mission-123"),
+            filters=FileFilter(names=["example_output.txt"]),
         )
         for file in files:
-            await module.filesystem.update_file(file.id, file_type="updated")
+            await module.filesystem.update_file(file.id, type=FileType.OTHER)
             # module.filesystem.delete_files(filters=FileFilter(name="example_output.txt", context="test-mission-123"), permanent=True)
 
             logger.info("Retrieved file: %s with ID: %s", file.name, file.id)
@@ -188,7 +189,7 @@ async def test_module() -> None:
                 if file_record:
                     logger.info("File ID: %s", file_record.id)
                     logger.info("File name: %s", file_record.name)
-                    logger.info("File type: %s", file_record.file_type)
+                    logger.info("File type: %s", file_record.type)
                     logger.info("File status: %s", file_record.status)
                     logger.info("File content: %s", file_record.content.decode())
             except Exception:

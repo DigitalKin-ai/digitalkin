@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import grpc
 import pytest
+from pydantic import BaseModel, ValidationError
 from agentic_mesh_protocol.module.v1 import (
     information_pb2,
     lifecycle_pb2,
@@ -351,6 +352,46 @@ class TestConfigSetupModule:
         assert response.success is False
         assert fake_context.get_code() == grpc.StatusCode.NOT_FOUND
         assert "Failed to create module instance" in fake_context.get_details()
+
+    @pytest.mark.asyncio
+    @pytest.mark.regression
+    async def test_a_setup_not_matching_the_model_is_invalid_argument(self, module_servicer, fake_context):
+        """A malformed setup must name its bad fields, not escape as an UNKNOWN servicer crash.
+
+        Production (archetype-ada, 2026-09-09) raised pydantic's ValidationError straight out
+        of the servicer: grpc logged "Unexpected [ValidationError] raised by servicer method"
+        and the caller got UNKNOWN with a stack trace instead of the three missing field names.
+        """
+
+        class _Expected(BaseModel):
+            agent_setup: dict
+            tools: list
+            knowledge: dict
+
+        try:
+            _Expected()
+        except ValidationError as error:
+            mismatch = error
+
+        setup_version = setup_pb2.SetupVersion(
+            id="version-123", setup_id="setup-123", content=json_format.ParseDict({}, struct_pb2.Struct())
+        )
+        request = lifecycle_pb2.ConfigSetupModuleRequest(
+            mission_id="mission-456",
+            setup_version=setup_version,
+            content=json_format.ParseDict({"new": "config"}, struct_pb2.Struct()),
+        )
+
+        with patch.object(MockModule, "create_setup_model", side_effect=mismatch):
+            response = await module_servicer.ConfigSetupModule(request, fake_context)
+
+        assert response.success is False
+        assert fake_context.get_code() == grpc.StatusCode.INVALID_ARGUMENT
+        details = fake_context.get_details()
+        assert "version-123" in details
+        assert "agent_setup" in details
+        assert "tools" in details
+        assert "knowledge" in details
 
     @pytest.mark.asyncio
     async def test_config_setup_module_no_setup_data(self, module_servicer, fake_context):

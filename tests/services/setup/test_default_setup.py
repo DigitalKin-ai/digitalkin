@@ -13,6 +13,67 @@ class TestCreateServiceSetup:
         setup = await DefaultSetup().create_service_setup("Nikita", {"branding": True})
         assert setup.name == "Nikita"
         assert setup.current_setup_version.content == {"branding": True}
+        assert setup.current_setup_version.documentation == ""
+
+    async def test_forwards_documentation(self) -> None:
+        setup = await DefaultSetup().create_service_setup("Nikita", {"branding": True}, "brand voice service")
+        assert setup.current_setup_version.documentation == "brand voice service"
+
+
+class TestDocumentation:
+    """documentation rides on the version it was cut with."""
+
+    async def test_create_stores_documentation(self) -> None:
+        setup = await DefaultSetup().create_setup({"name": "n", "content": {}, "documentation": "what it does"})
+        assert setup.current_setup_version.documentation == "what it does"
+
+    async def test_update_replaces_documentation(self) -> None:
+        strategy = DefaultSetup()
+        setup = await strategy.create_setup({"name": "n", "content": {}, "documentation": "old"})
+
+        await strategy.update_setup({"setup_id": setup.id, "name": "n", "content": {}, "documentation": "new"})
+        assert setup.current_setup_version.documentation == "new"
+
+    async def test_get_reads_the_documentation_back(self) -> None:
+        strategy = DefaultSetup()
+        created = await strategy.create_setup({"name": "n", "content": {}, "documentation": "what it does"})
+
+        fetched = await strategy.get_setup({"setup_id": created.id})
+        assert fetched.current_setup_version.documentation == "what it does"
+
+    async def test_get_reads_back_the_documentation_of_the_active_version(self) -> None:
+        """After an update the read follows the newly activated revision, not the first one."""
+        strategy = DefaultSetup()
+        created = await strategy.create_setup({"name": "n", "content": {}, "documentation": "first"})
+        await strategy.update_setup({"setup_id": created.id, "name": "n", "content": {}, "documentation": "second"})
+
+        fetched = await strategy.get_setup({"setup_id": created.id})
+        assert fetched.current_setup_version.documentation == "second"
+
+    async def test_a_staged_version_does_not_change_what_get_returns(self) -> None:
+        """set_as_current=False stages the text with the version; the active one is unchanged."""
+        strategy = DefaultSetup()
+        created = await strategy.create_setup({"name": "n", "content": {}, "documentation": "live"})
+        await strategy.update_setup({
+            "setup_id": created.id,
+            "name": "n",
+            "content": {},
+            "documentation": "staged",
+            "set_as_current": False,
+        })
+
+        fetched = await strategy.get_setup({"setup_id": created.id})
+        assert fetched.current_setup_version.documentation == "live"
+        page = await strategy.list_setup_versions({"setup_id": created.id})
+        assert [v.documentation for v in page.setup_versions] == ["staged", "live"]
+
+    async def test_update_without_documentation_leaves_the_new_version_empty(self) -> None:
+        """A new revision carries only what the call supplied; it does not inherit."""
+        strategy = DefaultSetup()
+        setup = await strategy.create_setup({"name": "n", "content": {}, "documentation": "old"})
+
+        await strategy.update_setup({"setup_id": setup.id, "name": "n", "content": {}})
+        assert setup.current_setup_version.documentation == ""
 
 
 class TestOutputFormatSpecGuard:
@@ -29,9 +90,11 @@ class TestOutputFormatSpecGuard:
         setup = await strategy.create_setup({"name": "n", "content": {"output_format_spec": "ok"}})
 
         with pytest.raises(ValueError, match="must stay under 4096"):
-            await strategy.update_setup(
-                {"setup_id": setup.id, "name": "n", "content": {"output_format_spec": "x" * 4096}}
-            )
+            await strategy.update_setup({
+                "setup_id": setup.id,
+                "name": "n",
+                "content": {"output_format_spec": "x" * 4096},
+            })
         # The guard runs before the revision is cut, so no half-written version survives.
         assert setup.current_setup_version.content == {"output_format_spec": "ok"}
         assert (await strategy.list_setup_versions({"setup_id": setup.id})).total_count == 1
@@ -56,9 +119,7 @@ class TestVersionHistory:
         setup = await strategy.create_setup({"name": "n", "content": {"v": 1}})
         first = setup.current_setup_version.id
 
-        await strategy.update_setup(
-            {"setup_id": setup.id, "name": "n", "content": {"v": 2}, "set_as_current": False}
-        )
+        await strategy.update_setup({"setup_id": setup.id, "name": "n", "content": {"v": 2}, "set_as_current": False})
 
         assert setup.current_setup_version.id == first
         assert (await strategy.list_setup_versions({"setup_id": setup.id})).total_count == 2
@@ -83,9 +144,7 @@ class TestVersionHistory:
         first = setup.current_setup_version.id
         await strategy.update_setup({"setup_id": setup.id, "name": "n", "content": {"v": 1}})
 
-        rolled = await strategy.set_current_setup_version(
-            {"setup_id": setup.id, "setup_version_id": first}
-        )
+        rolled = await strategy.set_current_setup_version({"setup_id": setup.id, "setup_version_id": first})
 
         assert rolled.current_setup_version.id == first
         assert rolled.current_setup_version.content == {"v": 0}
@@ -96,9 +155,10 @@ class TestVersionHistory:
         theirs = await strategy.create_setup({"name": "theirs", "content": {}})
 
         with pytest.raises(SetupServiceError, match="not found on setup"):
-            await strategy.set_current_setup_version(
-                {"setup_id": mine.id, "setup_version_id": theirs.current_setup_version.id}
-            )
+            await strategy.set_current_setup_version({
+                "setup_id": mine.id,
+                "setup_version_id": theirs.current_setup_version.id,
+            })
 
     async def test_delete_drops_the_history_too(self) -> None:
         strategy = DefaultSetup()
@@ -106,3 +166,131 @@ class TestVersionHistory:
 
         assert await strategy.delete_setup({"setup_id": setup.id}) is True
         assert setup.id not in strategy.versions
+
+
+class TestAuthoredStructure:
+    """A supplied key map is stored exactly as written; the SDK judges none of it."""
+
+    async def test_create_stores_the_authored_map(self) -> None:
+        setup = await DefaultSetup().create_setup({
+            "name": "n",
+            "content": {"llm": {"provider": "litellm"}, "region": "eu-west"},
+            "structure": {"llm.provider": "which backend routes the call", "region": "where it runs"},
+        })
+
+        assert setup.current_setup_version.structure == {
+            "llm.provider": "which backend routes the call",
+            "region": "where it runs",
+        }
+
+    async def test_a_map_is_stored_unjudged(self) -> None:
+        """An entry naming a key the content lacks is kept — the agent owns the map."""
+        authored = {"region": "where it runs", "llm.provider": "not in this document"}
+        setup = await DefaultSetup().create_setup({
+            "name": "n",
+            "content": {"region": "eu-west"},
+            "structure": authored,
+        })
+
+        assert setup.current_setup_version.structure == authored
+
+    async def test_update_replaces_the_map_with_the_one_supplied(self) -> None:
+        strategy = DefaultSetup()
+        setup = await strategy.create_setup({"name": "n", "content": {"a": "one"}, "structure": {"a": "the a knob"}})
+
+        updated = await strategy.update_setup({
+            "setup_id": setup.id,
+            "name": "n",
+            "content": {"a": "two", "b": "new"},
+            "structure": {"a": "the a knob", "b": "the b knob"},
+        })
+
+        assert updated.current_setup_version.structure == {"a": "the a knob", "b": "the b knob"}
+
+    async def test_update_without_a_map_leaves_the_new_revision_without_one(self) -> None:
+        """A revision carries only the map its own call supplied; nothing is derived."""
+        strategy = DefaultSetup()
+        setup = await strategy.create_setup({"name": "n", "content": {"a": "one"}, "structure": {"a": "the a knob"}})
+
+        updated = await strategy.update_setup({"setup_id": setup.id, "name": "n", "content": {"a": "two"}})
+
+        assert updated.current_setup_version.structure == {}
+
+    async def test_create_service_setup_forwards_the_map(self) -> None:
+        setup = await DefaultSetup().create_service_setup("n", {"a": 1}, structure={"a": "the a knob"})
+
+        assert setup.current_setup_version.structure == {"a": "the a knob"}
+
+
+class TestStructure:
+    """With no map supplied none is stored, and reads project content down to a key."""
+
+    async def test_create_without_a_map_stores_none(self) -> None:
+        setup = await DefaultSetup().create_setup({
+            "name": "n",
+            "content": {"llm": {"provider": "litellm"}, "region": "eu-west"},
+        })
+
+        assert setup.current_setup_version.structure == {}
+
+    async def test_get_without_keys_returns_the_whole_document(self) -> None:
+        strategy = DefaultSetup()
+        content = {"llm": {"provider": "litellm", "model": "gpt-4o"}, "region": "eu"}
+        setup = await strategy.create_setup({"name": "n", "content": content})
+
+        fetched = await strategy.get_setup({"setup_id": setup.id})
+
+        assert fetched.current_setup_version.content == content
+
+    async def test_get_with_a_key_projects_content_to_that_path(self) -> None:
+        strategy = DefaultSetup()
+        setup = await strategy.create_setup({
+            "name": "n",
+            "content": {"llm": {"provider": "litellm", "model": "gpt-4o"}, "region": "eu"},
+        })
+
+        fetched = await strategy.get_setup({"setup_id": setup.id, "structure_key": "llm.provider"})
+
+        assert fetched.current_setup_version.content == {"llm.provider": "litellm"}
+
+    async def test_projection_does_not_mutate_the_stored_setup(self) -> None:
+        strategy = DefaultSetup()
+        content = {"llm": {"provider": "litellm"}, "region": "eu"}
+        setup = await strategy.create_setup({"name": "n", "content": content})
+
+        await strategy.get_setup({"setup_id": setup.id, "structure_key": "region"})
+        fetched = await strategy.get_setup({"setup_id": setup.id})
+
+        assert fetched.current_setup_version.content == content
+
+    async def test_unresolvable_key_returns_the_whole_document(self) -> None:
+        """The wire cannot say "no such key" — it sends the setup entirely. Mirror that.
+
+        Returning an empty content instead would make a mistyped key look like an empty
+        configuration locally while production quietly returned everything.
+        """
+        strategy = DefaultSetup()
+        setup = await strategy.create_setup({"name": "n", "content": {"a": 1, "b": 2}})
+
+        fetched = await strategy.get_setup({"setup_id": setup.id, "structure_key": "nope"})
+
+        assert fetched.current_setup_version.content == {"a": 1, "b": 2}
+
+    async def test_empty_key_returns_the_whole_document(self) -> None:
+        """structure_key has no proto3 presence, so "" and unset are one request."""
+        strategy = DefaultSetup()
+        setup = await strategy.create_setup({"name": "n", "content": {"a": 1}})
+
+        fetched = await strategy.get_setup({"setup_id": setup.id, "structure_key": ""})
+
+        assert fetched.current_setup_version.content == {"a": 1}
+
+    async def test_every_stored_key_is_resolvable(self) -> None:
+        strategy = DefaultSetup()
+        content = {"llm": {"provider": "litellm"}, "limits": {"max.tokens": 8000}, "tools": [{"n": 1}]}
+        setup = await strategy.create_setup({"name": "n", "content": content})
+        keys = list(setup.current_setup_version.structure)
+
+        for key in keys:
+            fetched = await strategy.get_setup({"setup_id": setup.id, "structure_key": key})
+            assert list(fetched.current_setup_version.content) == [key]

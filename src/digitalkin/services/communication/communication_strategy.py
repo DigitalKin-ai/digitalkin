@@ -53,7 +53,7 @@ class CommunicationStrategy(BaseStrategy, ABC):
         """
         ...
 
-    async def get_module_config_schema(  # noqa: PLR6301
+    async def get_module_config_schema(  # ruff: ignore[no-self-use]
         self,
         module_address: str,
         module_port: int,

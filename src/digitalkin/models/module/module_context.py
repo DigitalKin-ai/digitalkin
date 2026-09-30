@@ -117,7 +117,7 @@ class ModuleContext:
     tool_cache: ToolCache
     request_metadata: RequestMetadata
 
-    def __init__(  # All service strategies are mandatory constructor args # noqa: PLR0913, PLR0917
+    def __init__(  # All service strategies are mandatory constructor args # ruff: ignore[too-many-arguments, too-many-positional-arguments]
         self,
         communication: CommunicationStrategy,
         cost: CostStrategy,

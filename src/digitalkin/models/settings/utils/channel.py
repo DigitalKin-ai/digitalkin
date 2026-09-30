@@ -4,6 +4,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+import grpc
 from pydantic import BaseModel, ConfigDict, Field, NonNegativeInt, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -22,6 +23,34 @@ class SecurityMode(str, Enum):
 
     SECURE = "secure"
     INSECURE = "insecure"
+
+
+class GrpcCompression(str, Enum):
+    """gRPC compression algorithm.
+
+    Attributes:
+        NONE: No compression
+        GZIP: Gzip compression
+        DEFLATE: Deflate compression
+    """
+
+    NONE = "none"
+    GZIP = "gzip"
+    DEFLATE = "deflate"
+
+    def to_grpc(self) -> grpc.Compression:
+        """Convert to grpc.Compression enum.
+
+        Returns:
+            The corresponding grpc.Compression value.
+        """
+        match self:
+            case GrpcCompression.NONE:
+                return grpc.Compression.NoCompression
+            case GrpcCompression.GZIP:
+                return grpc.Compression.Gzip
+            case GrpcCompression.DEFLATE:
+                return grpc.Compression.Deflate
 
 
 class Credentials(BaseModel):
@@ -64,15 +93,24 @@ class Credentials(BaseModel):
 
 
 class BaseChannelSettings(BaseSettings):
-    """Base settings model for gRPC channel configuration."""
+    """Base settings model for gRPC channel configuration.
 
-    model_config = SettingsConfigDict(extra="forbid", arbitrary_types_allowed=True, validate_assignment=True)
+    Subclasses override ``env_prefix``; the ``CHANNEL_`` default keeps a bare
+    instantiation from capturing generic environment variables such as the
+    ``PORT`` most PaaS runtimes inject.
+    """
 
-    host: str = Field("[::]", description="Host address to bind the client to")
-    port: NonNegativeInt = Field(50055, description="Port to listen on")
-    communication_mode: ControlFlow = Field(ControlFlow.ASYNC, description="Client/Server operation mode (sync/async)")
-    credentials: Credentials | None = Field(None, description="Client credentials for secure mode")
-    security: SecurityMode = Field(SecurityMode.INSECURE, description="Security mode (secure/insecure)")
+    model_config = SettingsConfigDict(
+        env_prefix="CHANNEL_", extra="forbid", arbitrary_types_allowed=True, validate_assignment=True
+    )
+
+    host: str = Field(default="[::]", description="Host address of the channel")
+    port: NonNegativeInt = Field(default=50055, description="Port of the channel")
+    communication_mode: ControlFlow = Field(
+        default=ControlFlow.ASYNC, description="Client/Server operation mode (sync/async)"
+    )
+    credentials: Credentials | None = Field(default=None, description="Credentials for secure mode")
+    security: SecurityMode = Field(default=SecurityMode.INSECURE, description="Security mode (secure/insecure)")
     mtls: bool = Field(default=False, description="Enable mutual TLS")
 
     def __init__(self, **values: Any) -> None:
@@ -118,7 +156,7 @@ class BaseChannelSettings(BaseSettings):
         Raises:
             ConfigurationError: If port is outside valid range
         """
-        if not 0 < v < 65536:  # TCP port range constant # noqa: PLR2004
+        if not 0 < v < 65536:  # TCP port range constant # ruff: ignore[magic-value-comparison]
             msg = f"Port must be between 1 and 65535, got {v}"
             raise ConfigurationError(msg)
         return v

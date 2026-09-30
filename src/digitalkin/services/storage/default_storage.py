@@ -51,7 +51,7 @@ class DefaultStorage(StorageStrategy):
         if not self.storage_file.exists():
             return {}
 
-        try:  # noqa: PLW0717
+        try:  # ruff: ignore[too-many-statements-in-try-clause]
             raw = json.loads(self.storage_file.read_text(encoding="utf-8"))
             out: dict[str, StorageRecord] = {}
 

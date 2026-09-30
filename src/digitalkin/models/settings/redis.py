@@ -11,7 +11,11 @@ class RedisPoolSettings(BaseSettings):
 
     model_config = SettingsConfigDict(env_prefix="DIGITALKIN_REDIS_", case_sensitive=False)
 
-    url: SecretStr = Field(default=SecretStr("redis://localhost:6379/0"), description="Redis connection URL")
+    url: SecretStr = Field(
+        default=SecretStr("redis://localhost:6379/0"),
+        description="Redis connection URL. The gateway needs it for stream persistence.",
+        json_schema_extra={"env_required": True},
+    )
     pool_size: int = Field(default=2000, gt=0, description="Total Redis connection pool size")
     pool_size_default: int = Field(default=0, description="Non-blocking pool size (0 = pool_size // 2)")
     pool_size_blocking: int = Field(default=0, description="Blocking pool size for XREAD (0 = pool_size // 2)")
