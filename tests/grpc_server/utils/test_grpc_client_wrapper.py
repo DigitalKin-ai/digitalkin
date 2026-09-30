@@ -15,10 +15,12 @@ def _clear_channel_cache():
     """Ensure channel and stub caches are clean before and after each test."""
     GrpcClientWrapper._channel_cache.clear()
     GrpcClientWrapper._ref_counts.clear()
+    GrpcClientWrapper._evicted_refs.clear()
     GrpcClientWrapper._stub_cache.clear()
     yield
     GrpcClientWrapper._channel_cache.clear()
     GrpcClientWrapper._ref_counts.clear()
+    GrpcClientWrapper._evicted_refs.clear()
     GrpcClientWrapper._stub_cache.clear()
 
 
@@ -262,3 +264,46 @@ class TestStubCache:
 
         assert stub is not None
         assert not GrpcClientWrapper._stub_cache, "Stub should not be cached when cache_key is None"
+
+
+@pytest.mark.grpc
+class TestEvictKeepsHolders:
+    """Evicting a key swaps the cache entry without closing a channel others still hold."""
+
+    @patch("digitalkin.grpc_servers.utils.grpc_client_wrapper.grpc.aio.insecure_channel")
+    async def test_evict_then_release_by_identity(self, mock_insecure_channel: MagicMock) -> None:
+        old_channel, new_channel = MagicMock(close=AsyncMock()), MagicMock(close=AsyncMock())
+        mock_insecure_channel.side_effect = [old_channel, new_channel]
+        config = _make_config()
+        key = GrpcClientWrapper.channel_cache_key(config)
+
+        GrpcClientWrapper()._init_channel(config)
+        GrpcClientWrapper()._init_channel(config)
+        await GrpcClientWrapper.evict_cached_channel(key)
+        old_channel.close.assert_not_awaited()
+
+        assert GrpcClientWrapper()._init_channel(config) is new_channel
+        assert GrpcClientWrapper._ref_counts[key] == 1
+
+        assert await GrpcClientWrapper.release_cached_channel(key, old_channel) is False
+        assert await GrpcClientWrapper.release_cached_channel(key, old_channel) is True
+        old_channel.close.assert_awaited_once()
+        assert GrpcClientWrapper._ref_counts[key] == 1
+        new_channel.close.assert_not_awaited()
+
+    async def test_evict_missing_key_is_noop(self) -> None:
+        await GrpcClientWrapper.evict_cached_channel("nope")
+        assert not GrpcClientWrapper._evicted_refs
+
+    @patch("digitalkin.grpc_servers.utils.grpc_client_wrapper.grpc.aio.insecure_channel")
+    async def test_close_all_closes_evicted_channels(self, mock_insecure_channel: MagicMock) -> None:
+        old_channel = MagicMock(close=AsyncMock())
+        mock_insecure_channel.return_value = old_channel
+        config = _make_config()
+        GrpcClientWrapper()._init_channel(config)
+        await GrpcClientWrapper.evict_cached_channel(GrpcClientWrapper.channel_cache_key(config))
+
+        await GrpcClientWrapper.close_all_cached_channels()
+
+        old_channel.close.assert_awaited_once()
+        assert not GrpcClientWrapper._evicted_refs

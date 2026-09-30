@@ -12,8 +12,8 @@ The stateful backend authenticates exactly like prod: a task id it did not
 register is rejected ``UNAUTHENTICATED "Invalid or inactive task"`` — the
 regression test reproduces the prod bug that motivated the backend mint.
 
-Assertions are tied to the prod validation markers: ``[VALIDATE AT2]`` (caller
-mint) and ``[VALIDATE AC1]`` (setup access verdict).
+Assertions are tied to the prod validation markers: ``[VALIDATE ASSOCIATE-TASK]`` (caller
+mint) and ``[VALIDATE SETUP-ACCESS]`` (setup access verdict).
 """
 
 from __future__ import annotations
@@ -27,8 +27,8 @@ from unittest.mock import AsyncMock, MagicMock, Mock
 import grpc
 import grpc.aio
 import pytest
-from agentic_mesh_protocol.gateway.v1 import gateway_pb2, gateway_service_pb2_grpc
-from agentic_mesh_protocol.user_profile.v1 import user_profile_pb2, user_profile_service_pb2_grpc
+from agentic_mesh_protocol.gateway.v1 import gateway_dto_pb2, gateway_service_pb2_grpc
+from agentic_mesh_protocol.user_profile.v1 import user_profile_dto_pb2, user_profile_service_pb2_grpc
 from google.protobuf import json_format
 
 from digitalkin.core.job_manager.single_job_manager import SingleJobManager
@@ -193,7 +193,7 @@ class _BackendGateway(gateway_service_pb2_grpc.GatewayServiceServicer):
         child = f"child-{self._state.mint_count}"
         if self._register_on_mint:
             self._state.registered.add(child)
-        return gateway_pb2.AssociateTaskResponse(task_id=child, parent_task_id=request.parent_task_id)
+        return gateway_dto_pb2.AssociateTaskResponse(task_id=child, parent_task_id=request.parent_task_id)
 
 
 class _BackendUserProfile(user_profile_service_pb2_grpc.UserProfileServiceServicer):
@@ -207,11 +207,11 @@ class _BackendUserProfile(user_profile_service_pb2_grpc.UserProfileServiceServic
         md = dict(context.invocation_metadata() or ())
         task_id = str(md.get("x-task-id", ""))
         self._state.access_task_ids.append(task_id)
-        self._state.access_setup_ids.append(request.resource_id)
+        self._state.access_setup_ids.append(request.setup_id)
         if task_id not in self._state.registered:
             # Exactly the prod backend behavior that exposed the bug.
             await context.abort(grpc.StatusCode.UNAUTHENTICATED, "Invalid or inactive task")
-        return user_profile_pb2.CheckResourceAccessResponse(allowed=not self._deny)
+        return user_profile_dto_pb2.CheckResourceAccessResponse(allowed=not self._deny)
 
 
 @pytest.fixture
@@ -296,6 +296,7 @@ class _TargetStack:
 
     async def stop(self) -> None:
         await self.gateway.stop()
+        await self.servicer.job_manager.stop()
         await self.servicer.user_profile.close_channel()
         if self._server is not None:
             await self._server.stop(grace=0.1)
@@ -453,11 +454,11 @@ class TestM2MEndToEnd:
         assert _stream_errors(outputs) == []
 
         # 4. The prod validation markers traced the whole chain.
-        at2 = _marker_lines(digitalkin_records, "[VALIDATE AT2]")
+        at2 = _marker_lines(digitalkin_records, "[VALIDATE ASSOCIATE-TASK]")
         assert len(at2) == 1
         assert f"parent={PARENT_TASK_ID}" in at2[0]
         assert "child=child-1" in at2[0]
-        ac1 = _marker_lines(digitalkin_records, "[VALIDATE AC1]")
+        ac1 = _marker_lines(digitalkin_records, "[VALIDATE SETUP-ACCESS]")
         assert any("setup access granted" in line and SETUP_ID in line for line in ac1)
 
         # 5. Nothing leaked on the caller.
@@ -518,7 +519,7 @@ class TestM2MEndToEnd:
         code, message = errors[0]
         assert code == "SETUP_ACCESS_DENIED"
         assert SETUP_ID in message
-        ac1 = _marker_lines(digitalkin_records, "[VALIDATE AC1]")
+        ac1 = _marker_lines(digitalkin_records, "[VALIDATE SETUP-ACCESS]")
         assert any("setup access DENIED" in line and SETUP_ID in line for line in ac1)
         assert not caller_gw._m2m.entries
 

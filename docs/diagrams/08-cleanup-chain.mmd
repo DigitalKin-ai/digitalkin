@@ -1,19 +1,18 @@
 flowchart TD
-    A["Task completes"] --> B["Supervisor done callback"]
-    B --> C["_deferred_cleanup()"]
-    C --> D{"stream_closed?"}
-    D -->|yes| E["_cleanup_task()"]
-    D -->|"no — 60s timeout"| E
-    E --> F["Cancel pending Redis tasks"]
-    E --> G["Drain output queue"]
-    E --> H["Close module context\n(10 services)"]
-    E --> I["Release semaphore slot"]
-    E --> J["Pop from tasks_sessions"]
-    E --> K["Write EOS to Redis Stream"]
+    A["Task ends\n(completed / failed / cancelled)"] --> B["TaskExecutor._run finally"]
+    A2["Cancelled before first step"] --> B2["done-callback backstop"]
+    B --> C["_cleanup_task (shielded)"]
+    B2 --> C
+    C --> D["close_stream under write lock"]
+    C --> E["Pop from tasks / tasks_sessions"]
+    C --> F["session.cleanup:\ndrain queue → module.stop()\n→ context.cleanup()"]
+    F --> G["stream.cancelled (if cancelled)\n+ stream.end → XADD eos + EXPIRE"]
+    C --> H["Release task_slot + system_gate"]
 
-    L["SessionReaper\n(every 60s)"] -->|"300s TTL expired"| E
+    P["Preloaded instance, task never created"] --> Q["ModuleRunner finally:\nmodule.stop() → context.cleanup()"]
 
-    M["GracefulShutdown\n(SIGTERM)"] --> N["Unregister signal handlers"]
-    N --> O["Checkpoint all sessions"]
-    O --> P["Cancel all tasks\n(10s timeout)"]
-    P --> Q["Close Redis connections"]
+    M["ModuleServer.stop_async"] --> N["1. Stop accepting RPCs"]
+    N --> O["2. job_manager.stop():\ncancel all tasks, release SharedRedisListener"]
+    O --> R["3. gateway.stop()"]
+    R --> S["4. Close Redis clients"]
+    S --> T["5. Close channels"]

@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from digitalkin.mixins.agui_mixin import AgUiMixin
-from digitalkin.models.events import AgentRunEvent, CustomEvent
+from digitalkin.models.events import AgentRunEvent, CustomEvent, SourceCitation, SourceCitationEvent
 from digitalkin.models.module.ag_ui import AgUiCustomEventOutput
 
 
@@ -44,3 +44,41 @@ async def test_send_message_dispatches_custom_event() -> None:
     output = ctx.callbacks.send_message.await_args_list[-1].args[0]
     assert isinstance(output.root, AgUiCustomEventOutput)
     assert output.root.event.name == "my_event"
+
+
+@pytest.mark.asyncio
+async def test_source_citation_wire_frame() -> None:
+    mixin = _Mixin()
+    ctx = _ctx()
+
+    await mixin.send_message(
+        ctx, SourceCitationEvent(value=SourceCitation(url="https://docs.digitalkin.ai/pricing", title="Pricing"))
+    )
+
+    frame = ctx.callbacks.send_message.await_args_list[-1].args[0].model_dump(mode="json")
+    assert frame["root"]["protocol"] == "agui_custom"
+    event = frame["root"]["event"]
+    assert event["type"] == "CUSTOM"
+    assert event["name"] == "source_citation"
+    assert event["value"] == {"url": "https://docs.digitalkin.ai/pricing", "title": "Pricing"}
+    assert "subagentRunId" not in event
+    assert "metadata" not in event
+
+
+@pytest.mark.asyncio
+async def test_custom_event_carries_subagent_attribution() -> None:
+    mixin = _Mixin()
+    ctx = _ctx()
+
+    await mixin.send_message(
+        ctx,
+        SourceCitationEvent(
+            value=SourceCitation(url="https://x.io/a"),
+            subagent_run_id="member-r1",
+            metadata={"name": "Alice"},
+        ),
+    )
+
+    event = ctx.callbacks.send_message.await_args_list[-1].args[0].model_dump(mode="json")["root"]["event"]
+    assert event["subagentRunId"] == "member-r1"
+    assert event["metadata"] == {"digitalkin": {"name": "Alice"}}

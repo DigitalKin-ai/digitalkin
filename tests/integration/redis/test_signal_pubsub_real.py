@@ -26,6 +26,7 @@ def _make_fake_session() -> MagicMock:
     s = MagicMock()
     s.pending_signal_action = ""
     s.last_signal_published_ns = 0
+    s.cancelled = False
     return s
 
 
@@ -213,7 +214,7 @@ class TestSharedRedisListenerReal:
                 await asyncio.sleep(0.05)
                 if calls:
                     break
-            assert calls == [("INVALIDATE_TOOLS", "s_churn")]
+            assert calls == [("TOOLS", "s_churn")]
         finally:
             await listener.close()
 
@@ -249,6 +250,6 @@ class TestSharedRedisListenerReal:
                 await asyncio.sleep(0.05)
                 if calls:
                     break
-            assert calls == [("INVALIDATE_SETUP", "s_kill")], "broadcast lost after CLIENT KILL"
+            assert calls == [("SETUP", "s_kill")], "broadcast lost after CLIENT KILL"
         finally:
             await listener.close()

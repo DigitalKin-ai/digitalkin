@@ -56,10 +56,6 @@ class TestPipelineTtlReal:
 
 
 class TestTtlProductionValuesReal:
-    async def test_task_ttl_24h(self, redis_client) -> None:
-        await redis_client.hset("task:t1", {"status": "pending"})
-        await redis_client.expire("task:t1", 86400)
-        assert await redis_client._client.ttl("task:t1") > 86000
 
     async def test_claim_ttl_1h(self, redis_client) -> None:
         await redis_client.set("idem:task1", b"instance_a", ex=3600)
