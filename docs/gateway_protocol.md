@@ -47,7 +47,7 @@ service GatewayService {
 | `setup_id` | `string` | Required. Must start with `setups:`. |
 | `mission_id` | `string` | Required. Must start with `missions:`. |
 
-Returns `{ accepted: bool, task_id: string }`. `accepted=false` means the gateway is at capacity or the IDs are invalid; do not open `Stream`.
+Returns `{ accepted: bool, task_id: string }`. `accepted=false` means the gateway is at capacity, the IDs are invalid, or the `task_id` is already claimed; do not open `Stream`. If the dial-back fails before the module starts (unreachable consumer, no reply), the gateway writes `stream.error` + `stream.end` and releases the claim, so the same `task_id` can be started again.
 
 ### `Stream` — `StreamClient` (client → gateway)
 
@@ -89,7 +89,7 @@ enum SignalAction {
 }
 ```
 
-`CANCEL` publishes on the per-task Redis pub/sub channel. `INVALIDATE_*` is a server-wide operation routed to the SDK's cache handler — it does not need a task_id and does not affect any in-flight tasks.
+`CANCEL` publishes on the per-task Redis pub/sub channel and leaves a `cancel:{task_id}` tombstone (TTL `redis_stream_initial_ttl`) so a cancel that lands before the task registers is still honoured. The gateway always publishes, whichever replica runs the task; the response is `success=false` only when no `idem:{task_id}` claim exists (unknown task, or finished more than `redis_stream_ttl` ago — the claim TTL is shortened to it at `stream.end`) or the action is `UNSPECIFIED`/unknown. `INVALIDATE_*` is a server-wide operation routed to the SDK's cache handler — it does not need a task_id and does not affect any in-flight tasks.
 
 ---
 
@@ -108,6 +108,7 @@ Domain output from the module uses **non-prefixed** protocols (`text_chunk`, `to
 | `stream.start` | `task_id, mission_id, setup_id, started_at` | First entry on every stream. Seeded by the gateway. |
 | `stream.end` | `task_id` | **Last** entry on every stream. Always present, no exceptions. |
 | `stream.error` | `code, message, fatal, task_id` | Failure event. If `fatal=true`, immediately followed by `stream.end`. |
+| `stream.cancelled` | `reason` | The task was cancelled (`SendSignal(CANCEL)`, server shutdown, …). Emitted by the module, immediately followed by `stream.end`. |
 | `stream.warn` | `code, message` | Recoverable issue. Stream continues. |
 
 **Invariant:** every stream ends with exactly one `stream.end`. Fatal errors are *two* writes — `stream.error(fatal=true)` then `stream.end` — because the diagnostic event and the structural terminator have separate jobs.
@@ -180,7 +181,7 @@ The query payload from the consumer is delivered to the SDK module exactly like 
 
 On the **client → gateway** upstream direction:
 
-- `StreamServer.data` — first message is the query; subsequent messages are additional upstream input (multi-turn turns, tool replies). Both feed the module's `session.input_queue`.
+- `StreamServer.data` — first message is the query, handed to the module by value. Subsequent upstream messages have no consumer: the gateway logs and drops them.
 
 ### Buffer and recovery
 
@@ -335,7 +336,7 @@ After the first message you may keep sending `StreamClient` frames; only `data` 
 
 ### Cancelling
 
-`SendSignal(action=CANCEL, task_id=<tid>)`. The gateway publishes on `signal_ch:<tid>`; the SDK module receives the signal and shuts down. Your `Stream` call ends with the usual `stream.end`.
+`SendSignal(action=CANCEL, task_id=<tid>)`. The gateway publishes on `signal_ch:<tid>`; the SDK module receives the signal and shuts down. Your `Stream` call ends with `stream.cancelled` then `stream.end`, so a cancel is distinguishable from a normal finish. Repeated cancels are no-ops. There is no graceful stop: the SDK's internal `stop` signal is a hard cancel that only records a different reason.
 
 ### Cache invalidation
 

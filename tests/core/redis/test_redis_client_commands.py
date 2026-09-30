@@ -172,7 +172,7 @@ class TestStringOps:
 
 
 class TestHashOps:
-    """HSET/HGETALL round-trip, used by RedisStateManager and checkpoints."""
+    """HSET/HGETALL round-trip."""
 
     async def test_hset_hgetall_roundtrip(self, client: _FakeRedisClient) -> None:
         await client.hset("hash:1", {"field1": "val1", "field2": "val2"})
@@ -447,7 +447,7 @@ class TestPipeline:
         assert results[3] == b"v2"
 
     async def test_pipeline_hset_and_expire(self, client: _FakeRedisClient) -> None:
-        """Atomic HSET + EXPIRE pattern used by RedisStateManager."""
+        """Atomic HSET + EXPIRE pattern."""
         pipe = client.pipeline()
         pipe.hset("pipe:hash", mapping={"status": "running"})
         pipe.expire("pipe:hash", 3600)

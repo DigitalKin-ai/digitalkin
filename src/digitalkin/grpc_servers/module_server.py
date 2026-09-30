@@ -13,6 +13,7 @@ from digitalkin.core.task_manager.redis.redis_signal import SharedRedisListener
 from digitalkin.grpc_servers._base_server import BaseServer
 from digitalkin.grpc_servers.gateway_servicer import GatewayServicer
 from digitalkin.grpc_servers.module_servicer import ModuleServicer
+from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
 from digitalkin.logger import logger
 from digitalkin.models.grpc_servers.models import ClientConfig
 from digitalkin.models.settings.server.server import get_server_settings
@@ -288,21 +289,18 @@ class ModuleServer(BaseServer):
         if self.client_config is not None:
             await self._init_and_register()
 
-    async def _shutdown_servicer(self) -> None:
-        """Shut down the module servicer and its job manager."""
-        if self.module_servicer is None:
-            return
-        try:
-            await self.module_servicer.shutdown()
-        except Exception:
-            logger.exception("Failed to shutdown module servicer resources")
-        try:
-            await self.module_servicer.job_manager.stop()
-        except Exception:
-            logger.exception("Failed to stop job manager during shutdown")
+    async def stop_async(self, grace: float | None = None) -> None:  # noqa: C901, PLR0912
+        """Stop the module server.
 
-    async def stop_async(self, grace: float | None = None) -> None:
-        """Stop the module server with async cleanup."""
+        Order: stop accepting RPCs (health NOT_SERVING, deregister, server stop within ``grace``),
+        cancel running tasks, stop the gateway, close Redis clients, then close channels.
+
+        Args:
+            grace: Seconds in-flight RPCs get before they are aborted.
+        """
+        if self._health_servicer is not None:
+            self._health_servicer.enter_graceful_shutdown()
+
         if self.registry is not None:
             try:
                 module_id = self.module_class.get_module_id()
@@ -312,7 +310,39 @@ class ModuleServer(BaseServer):
             except Exception:
                 logger.exception("Failed to deregister from registry")
 
-        await self._shutdown_servicer()
+        logger.debug("debug:stop_async stopping gRPC server grace=%s", grace)
+        await self._stop_async(grace)
+
+        if self.module_servicer is not None:
+            # TODO(validate): SHUTDOWN-ORDER the gRPC server stops before running tasks are cancelled
+            logger.info(
+                "[VALIDATE SHUTDOWN-ORDER] server stopped; cancelling %d running tasks",
+                len(self.module_servicer.job_manager.tasks),
+            )
+            try:
+                await self.module_servicer.job_manager.stop()
+            except Exception:
+                logger.exception("Failed to stop job manager during shutdown")
+
+        if self._gateway_servicer is not None:
+            try:
+                await self._gateway_servicer.stop()
+            except Exception:
+                logger.exception("Failed to stop gateway servicer")
+
+        if self.module_servicer is not None:
+            try:
+                await self.module_servicer.shutdown()
+            except Exception:
+                logger.exception("Failed to shutdown module servicer resources")
+
+        if self._gateway_redis_client is not None:
+            # This server created the gateway's Redis client, so it closes it; the gateway only borrows.
+            try:
+                await self._gateway_redis_client.close()
+            except Exception:
+                logger.exception("Failed to close gateway Redis client")
+
         self.module_class.clear_shared()
 
         if self.registry is not None:
@@ -321,19 +351,6 @@ class ModuleServer(BaseServer):
             except Exception:
                 logger.exception("Failed to close registry")
 
-        if self._gateway_servicer is not None:
-            try:
-                await self._gateway_servicer.stop()
-            except Exception:
-                logger.exception("Failed to stop gateway servicer")
-
-        if self._gateway_redis_client is not None:
-            # M8: this server created the gateway's Redis client, so it closes it (owner closes;
-            # the gateway only borrows). Pools were leaked on every server stop.
-            try:
-                await self._gateway_redis_client.close()
-            except Exception:
-                logger.exception("Failed to close gateway Redis client")
-
-        logger.debug("debug:stop_async stopping gRPC server grace=%s", grace)
-        await super().stop_async(grace)
+        await GrpcClientWrapper.close_all_cached_channels()
+        self.server = None
+        logger.debug("Module server stopped")

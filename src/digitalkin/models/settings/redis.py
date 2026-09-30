@@ -66,7 +66,6 @@ class RedisSettings(BaseSettings):
 
     pool: RedisPoolSettings = Field(default_factory=RedisPoolSettings)
     signal: RedisSignalSettings = Field(default_factory=RedisSignalSettings)
-    task_ttl: int = Field(default=86400, description="Task state TTL in seconds (1 day)")
     idem_ttl: int = Field(default=3600, description="Idempotency claim TTL in seconds")
 
 

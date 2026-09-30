@@ -1,9 +1,8 @@
 """Per-task session descriptor for Gateway inter-module brokering.
 
 The session is a thin descriptor:
-all stream data (consumer→module input, module→consumer output)
-flows through Redis Streams. The session only carries identity and a
-stop event for graceful cancellation.
+module output flows through the Redis stream ``task:{task_id}:stream``.
+The session only carries identity and a stop event for graceful cancellation.
 """
 
 from __future__ import annotations
@@ -16,8 +15,7 @@ from digitalkin.logger import logger
 class StreamSession:
     """Per-task session descriptor in the Gateway.
 
-    No queues. Input and output both flow through Redis Streams
-    (``task:{task_id}:input`` and ``task:{task_id}:stream``).
+    No queues. Output flows through the Redis stream ``task:{task_id}:stream``.
 
     Attributes:
         task_id: Client-provided reference ID (universal key).

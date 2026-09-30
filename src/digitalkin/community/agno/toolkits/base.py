@@ -15,8 +15,10 @@ from typing import TYPE_CHECKING, Any
 
 from ag_ui.core.events import CustomEvent as AgUiCustomEvent
 from agno.tools import Toolkit
+from pydantic import ValidationError
 
 from digitalkin.logger import logger
+from digitalkin.models.events import SourceCitation
 from digitalkin.models.module.ag_ui import AgUiCustomEventOutput, AgUiOutput
 
 if TYPE_CHECKING:
@@ -128,3 +130,18 @@ class DkToolkit(Toolkit):
             await send_message(AgUiOutput(root=AgUiCustomEventOutput(event=AgUiCustomEvent(name=name, value=value))))
         except Exception:
             logger.exception("Failed to emit custom event '%s' to the agent stream", name)
+
+    async def _cite(self, url: str, title: str | None = None, description: str | None = None) -> None:
+        """Emit a ``source_citation`` custom event for one source the agent used (best-effort).
+
+        Args:
+            url: Link to the source.
+            title: Short label of the source.
+            description: What the source supports in the answer.
+        """
+        try:
+            citation = SourceCitation.model_validate({"url": url, "title": title, "description": description})
+        except ValidationError as exc:
+            logger.warning("Dropped source citation url=%r title=%r description=%r: %s", url, title, description, exc)
+            return
+        await self._notify("source_citation", citation.model_dump(mode="json", exclude_none=True))

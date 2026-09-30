@@ -4,7 +4,7 @@ Verifies:
 - Pipeline batching is measurably faster than individual commands
 - MULTI/EXEC inside pipeline provides atomicity
 - Pipeline error handling (partial failures)
-- Pipeline + EXPIRE atomic pattern used by RedisStateManager
+- Pipeline + EXPIRE atomic pattern
 
 Requires: real Redis via docker-compose --profile redis up -d
 """
@@ -80,7 +80,7 @@ class TestPipelineProductionPatterns:
     """Patterns used by SDK components."""
 
     async def test_hset_expire_atomic(self, redis_client: RedisClient) -> None:
-        """RedisStateManager: HSET + EXPIRE in one pipeline round-trip."""
+        """HSET + EXPIRE in one pipeline round-trip."""
         pipe = redis_client.pipeline()
         pipe.hset("task:state:t1", mapping={"status": "running", "started": "now"})
         pipe.expire("task:state:t1", 86400)

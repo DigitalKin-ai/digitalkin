@@ -14,6 +14,7 @@ import json
 import uuid
 from typing import TYPE_CHECKING, Any, ClassVar
 
+from ag_ui.core.events import CustomEvent as AgUiCustomEvent
 from ag_ui.core.events import ReasoningEndEvent as AgUiReasoningEndEvent
 from ag_ui.core.events import ReasoningMessageContentEvent as AgUiReasoningMessageContentEvent
 from ag_ui.core.events import ReasoningMessageEndEvent as AgUiReasoningMessageEndEvent
@@ -32,6 +33,7 @@ from ag_ui.core.events import ToolCallArgsEvent as AgUiToolCallArgsEvent
 from ag_ui.core.events import ToolCallEndEvent as AgUiToolCallEndEvent
 from ag_ui.core.events import ToolCallResultEvent as AgUiToolCallResultEvent
 from ag_ui.core.events import ToolCallStartEvent as AgUiToolCallStartEvent
+from pydantic import BaseModel
 
 from digitalkin.models.events import (
     AgentRunEvent,
@@ -55,6 +57,7 @@ from digitalkin.models.events import (
     ToolCallStartedEvent,
 )
 from digitalkin.models.module.ag_ui import (
+    AgUiCustomEventOutput,
     AgUiOutput,
     AgUiReasoningEndOutput,
     AgUiReasoningMessageContentOutput,
@@ -512,14 +515,12 @@ class AgUiMixin:
         event: CustomEvent,
     ) -> None:
         """Handle custom event - emit AG-UI CustomEvent."""
-        from ag_ui.core.events import CustomEvent as AgUiCustomEvent  # pylint: disable=C0415
-
-        from digitalkin.models.module.ag_ui import AgUiCustomEventOutput  # pylint: disable=C0415
-
+        value = event.value
         output = AgUiCustomEventOutput(
             event=AgUiCustomEvent(
                 name=event.name,
-                value=event.value,
+                value=value.model_dump(mode="json", exclude_none=True) if isinstance(value, BaseModel) else value,
+                **self._authored(event),
             )
         )
         await self._send_agui(context, output)

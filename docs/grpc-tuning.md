@@ -17,14 +17,11 @@
 │  DIGITALKIN_ADMISSION_TIMEOUT                   │
 │  DIGITALKIN_BACKPRESSURE_STRATEGY / _TIMEOUT    │
 ├─────────────────────────────────────────────────┤
-│  Layer 3: Lifecycle (completion & cleanup)       │
-│  DIGITALKIN_COMPLETION_TIMEOUT                  │
-│  DIGITALKIN_STREAM_DRAIN_TIMEOUT                │
+│  Layer 3: Lifecycle (cleanup)                   │
 │  DIGITALKIN_SETUP_CACHE_MAX                     │
 ├─────────────────────────────────────────────────┤
-│  Layer 4: Signal I/O (gRPC client calls out)    │
-│  DIGITALKIN_GRPC_TIMEOUT                        │
-│  DIGITALKIN_SIGNAL_* (batching, polling, retry) │
+│  Layer 4: gRPC client calls out + Redis signals │
+│  DIGITALKIN_SIGNAL_MAX_TASKS (Redis listener)   │
 │  DIGITALKIN_GRPC_QUERY_MAX_RETRIES / _BACKOFF   │
 │  DIGITALKIN_TOOL_RESOLVE_TIMEOUT                │
 │  DIGITALKIN_CONFIG_SETUP_TIMEOUT                │
@@ -90,34 +87,19 @@ When `DIGITALKIN_MAX_QUEUED_TASKS = 0` (default): legacy single-semaphore behavi
 
 ---
 
-## Layer 3: Signal I/O (Client-Side gRPC)
+## Layer 3: Signals (Redis pub/sub)
 
-### Outbound Signals (SendSignals Batching)
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `DIGITALKIN_GRPC_TIMEOUT` | `30` | Per-RPC timeout (seconds) for SendSignals. Under burst load, the services-provider slows down. Increase to 60s for safety under high concurrency. |
-| `DIGITALKIN_SIGNAL_MAX_BATCH_SIZE` | `50` | Flush trigger. When this many signals accumulate, send immediately. Larger = fewer RPCs but bigger payloads and higher per-signal latency. |
-| `DIGITALKIN_SIGNAL_FLUSH_INTERVAL` | `0.1` | Timer trigger (seconds). If batch doesn't fill in time, flush anyway. Lower = less latency. Higher = more batching efficiency. |
-| `DIGITALKIN_SIGNAL_SEND_RETRIES` | `3` | Retry count for failed batch RPCs. With exponential backoff: 100ms → 200ms → 400ms. |
-| `DIGITALKIN_SIGNAL_SEND_BACKOFF_MS` | `100` | Base backoff (ms) for retries. Doubles each attempt. |
-
-### Inbound Signals (GetSignals Polling)
+Signals no longer travel over gRPC: the gateway's `SendSignal` publishes on `signal_ch:{task_id}` and one `SharedRedisListener` per process PSUBSCRIBEs `signal_ch:*`. There is no send batching, polling or retry to tune. See [architecture/resilience.md](architecture/resilience.md).
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `DIGITALKIN_POLL_TIMEOUT` | `1` | Per-RPC timeout (seconds) for GetSignals. Short because polling is frequent. |
-| `DIGITALKIN_SIGNAL_POLL_INTERVAL` | `1.0` | Max interval (seconds) between polls (ceiling). Exponential backoff caps here. |
-| `DIGITALKIN_SIGNAL_INITIAL_POLL_INTERVAL` | `0.1` | Starting interval. Doubles each empty poll until hitting ceiling. Resets when signals arrive. |
-| `DIGITALKIN_SIGNAL_QUEUE_SIZE` | `512` | Per-task signal buffer. If a task is slow to consume, signals queue here. |
+| `DIGITALKIN_SIGNAL_MAX_TASKS` | `10000` | Max tasks registered on the signal listener per process. |
 
 ### Servicer & Lifecycle
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `DIGITALKIN_SETUP_CACHE_MAX` | `100` | Max cached setup configurations per module servicer. Avoids redundant GetSetup RPCs. |
-| `DIGITALKIN_COMPLETION_TIMEOUT` | `300.0` | Timeout (seconds) waiting for a job to complete after streaming ends. If exceeded, the session is force-cleaned with `TIMEOUT` cancellation reason. |
-| `DIGITALKIN_STREAM_DRAIN_TIMEOUT` | `300.0` | Timeout (seconds) waiting for a task's output stream to fully drain before cleanup. Prevents stale sessions when clients disconnect mid-stream. |
 | `DIGITALKIN_BACKPRESSURE_STRATEGY` | `block` | What to do when all running slots are occupied: `block` (wait up to `BACKPRESSURE_TIMEOUT`) or `reject` (immediate failure). |
 | `DIGITALKIN_BACKPRESSURE_TIMEOUT` | `300.0` | Max wait time (seconds) when `BACKPRESSURE_STRATEGY=block`. After this, the request is rejected. |
 
@@ -169,9 +151,9 @@ When `DIGITALKIN_MAX_QUEUED_TASKS = 0` (default): legacy single-semaphore behavi
 
 ---
 
-## Retry Architecture (Three Independent Layers)
+## Retry Architecture (Two Independent Layers)
 
-> **Full documentation:** [architecture/resilience.md](architecture/resilience.md) — problem statement, sequence diagrams, retryable vs non-retryable errors, before/after comparison.
+> **Full documentation:** [architecture/resilience.md](architecture/resilience.md) — retry layers, retryable vs non-retryable errors, the Redis signal path.
 
 ```
 RPC call
@@ -184,13 +166,9 @@ RPC call
       retryable: UNAVAILABLE, INTERNAL, DEADLINE_EXCEEDED
       max_retries: DIGITALKIN_GRPC_QUERY_MAX_RETRIES (default 2, 3 total)
       backoff: DIGITALKIN_GRPC_QUERY_BACKOFF_BASE_MS (default 50ms, doubles per attempt)
-
-  → Layer C: SendSignals _flush() retry (batch-specific)
-      retryable: DEADLINE_EXCEEDED, UNAVAILABLE, INTERNAL
-      max_retries: 3 (4 total), backoff: 100ms → 800ms
 ```
 
-Layer A retries transparently inside the channel. Layer B catches what A doesn't handle. Layer C is specific to the batched SendSignals path.
+Layer A retries transparently inside the channel. Layer B catches what A doesn't handle.
 
 ---
 
@@ -216,15 +194,7 @@ DIGITALKIN_MAX_CONCURRENT_TASKS=100
 DIGITALKIN_MAX_QUEUED_TASKS=1000
 DIGITALKIN_ADMISSION_TIMEOUT=5.0
 
-# Lifecycle
-DIGITALKIN_COMPLETION_TIMEOUT=300.0
-DIGITALKIN_STREAM_DRAIN_TIMEOUT=300.0
-
-# Signals
-DIGITALKIN_GRPC_TIMEOUT=30
-DIGITALKIN_SIGNAL_MAX_BATCH_SIZE=50
-DIGITALKIN_SIGNAL_FLUSH_INTERVAL=0.1
-DIGITALKIN_SIGNAL_QUEUE_SIZE=512
+# Setup cache
 DIGITALKIN_SETUP_CACHE_MAX=200
 ```
 
@@ -240,15 +210,7 @@ DIGITALKIN_MAX_CONCURRENT_TASKS=200
 DIGITALKIN_MAX_QUEUED_TASKS=3000
 DIGITALKIN_ADMISSION_TIMEOUT=5.0
 
-# Lifecycle
-DIGITALKIN_COMPLETION_TIMEOUT=600.0
-DIGITALKIN_STREAM_DRAIN_TIMEOUT=600.0
-
-# Signals
-DIGITALKIN_GRPC_TIMEOUT=60
-DIGITALKIN_SIGNAL_MAX_BATCH_SIZE=100
-DIGITALKIN_SIGNAL_FLUSH_INTERVAL=0.2
-DIGITALKIN_SIGNAL_QUEUE_SIZE=1024
+# Setup cache
 DIGITALKIN_SETUP_CACHE_MAX=500
 ```
 
@@ -264,15 +226,7 @@ DIGITALKIN_MAX_CONCURRENT_TASKS=400
 DIGITALKIN_MAX_QUEUED_TASKS=5000
 DIGITALKIN_ADMISSION_TIMEOUT=5.0
 
-# Lifecycle
-DIGITALKIN_COMPLETION_TIMEOUT=900.0
-DIGITALKIN_STREAM_DRAIN_TIMEOUT=600.0
-
-# Signals
-DIGITALKIN_GRPC_TIMEOUT=60
-DIGITALKIN_SIGNAL_MAX_BATCH_SIZE=200
-DIGITALKIN_SIGNAL_FLUSH_INTERVAL=0.3
-DIGITALKIN_SIGNAL_QUEUE_SIZE=2048
+# Setup cache
 DIGITALKIN_SETUP_CACHE_MAX=1000
 ```
 
@@ -292,17 +246,7 @@ DIGITALKIN_ADMISSION_TIMEOUT=5.0
 DIGITALKIN_BACKPRESSURE_STRATEGY=block
 DIGITALKIN_BACKPRESSURE_TIMEOUT=120.0
 
-# Lifecycle — shorter timeouts to release resources faster on restart
-DIGITALKIN_COMPLETION_TIMEOUT=180.0
-DIGITALKIN_STREAM_DRAIN_TIMEOUT=120.0
-
-# Signals — tighter batching for lower memory footprint
-DIGITALKIN_GRPC_TIMEOUT=30
-DIGITALKIN_SIGNAL_MAX_BATCH_SIZE=50
-DIGITALKIN_SIGNAL_FLUSH_INTERVAL=0.1
-DIGITALKIN_SIGNAL_QUEUE_SIZE=256
-DIGITALKIN_SIGNAL_SEND_RETRIES=5
-DIGITALKIN_SIGNAL_SEND_BACKOFF_MS=200
+# Setup cache
 DIGITALKIN_SETUP_CACHE_MAX=100
 
 # I/O timing — fail fast on unreachable services
@@ -324,9 +268,6 @@ DIGITALKIN_TIMEZONE=Europe/Paris
 **Railway-specific notes:**
 
 - **DNS re-resolution** is configurable via `DIGITALKIN_GRPC_DNS_RESOLUTION_MS` (default 500ms) — critical when services restart with new IPs.
-- **Lower `SIGNAL_QUEUE_SIZE`** (256 vs 512) reduces per-task memory. Railway charges by memory usage.
-- **Higher `SIGNAL_SEND_RETRIES`** (5 vs 3) with longer backoff absorbs brief connectivity gaps during Railway deploys.
-- **Shorter lifecycle timeouts** prevent orphaned sessions from consuming memory after Railway restarts.
 - Set `DIGITALKIN_MODULE_ID` per service if running multiple modules in the same Railway project.
 
 ---
@@ -343,17 +284,7 @@ DIGITALKIN_TIMEZONE=Europe/Paris
 | `DIGITALKIN_TASK_WAIT_TIMEOUT` | float | 30s | Task Mgr | Legacy slot wait timeout (queue disabled) |
 | `DIGITALKIN_BACKPRESSURE_STRATEGY` | str | block | Task Mgr | `block` or `reject` when slots full |
 | `DIGITALKIN_BACKPRESSURE_TIMEOUT` | float | 300.0s | Task Mgr | Max wait when strategy=block |
-| `DIGITALKIN_COMPLETION_TIMEOUT` | float | 300.0s | Lifecycle | Wait for job completion after stream ends |
-| `DIGITALKIN_STREAM_DRAIN_TIMEOUT` | float | 300.0s | Lifecycle | Wait for output stream to drain before cleanup |
-| `DIGITALKIN_GRPC_TIMEOUT` | float | 30s | Signal I/O | SendSignals RPC timeout |
-| `DIGITALKIN_POLL_TIMEOUT` | float | 1s | Signal I/O | GetSignals RPC timeout |
-| `DIGITALKIN_SIGNAL_POLL_INTERVAL` | float | 1.0s | Signal I/O | Max poll interval (ceiling) |
-| `DIGITALKIN_SIGNAL_INITIAL_POLL_INTERVAL` | float | 0.1s | Signal I/O | Initial poll interval |
-| `DIGITALKIN_SIGNAL_QUEUE_SIZE` | int | 512 | Signal I/O | Per-task signal buffer |
-| `DIGITALKIN_SIGNAL_FLUSH_INTERVAL` | float | 0.1s | Signal I/O | Batch flush timer |
-| `DIGITALKIN_SIGNAL_MAX_BATCH_SIZE` | int | 50 | Signal I/O | Batch flush trigger |
-| `DIGITALKIN_SIGNAL_SEND_RETRIES` | int | 3 | Signal I/O | Batch send retry attempts |
-| `DIGITALKIN_SIGNAL_SEND_BACKOFF_MS` | float | 100ms | Signal I/O | Retry backoff base |
+| `DIGITALKIN_SIGNAL_MAX_TASKS` | int | 10000 | Signals | Max tasks on the Redis signal listener |
 | `DIGITALKIN_GRPC_QUERY_MAX_RETRIES` | int | 2 | App retry | App-level retry count for gRPC client calls |
 | `DIGITALKIN_GRPC_QUERY_BACKOFF_BASE_MS` | float | 50 | App retry | Base backoff (ms), doubles per attempt |
 | `DIGITALKIN_TOOL_RESOLVE_TIMEOUT` | float | 10.0s | Tool init | Per-tool resolution timeout |

@@ -50,14 +50,18 @@ class _FakeHost:
 
     def __init__(self, messages: list[_FakeMessage]) -> None:
         self._messages = messages
+        self.limits: list[int | None] = []
 
     async def aget_session_messages(
         self,
         session_id: str | None,
         skip_roles: list[str],
         skip_history_messages: bool,
+        limit: int | None = None,
     ) -> list[_FakeMessage]:
-        return [m for m in self._messages if m.role not in skip_roles]
+        self.limits.append(limit)
+        kept = [m for m in self._messages if m.role not in skip_roles]
+        return kept if limit is None else kept[-limit:] if limit > 0 else []
 
 
 def _conversation() -> list[_FakeMessage]:
@@ -97,6 +101,51 @@ async def test_outline_last_returns_most_recent() -> None:
     tools = _tools(_conversation())
     result = json.loads(await tools.outline_chat_history(last=1))["output"]
     assert result["messages"][0]["id"] == "m4"
+
+
+async def test_outline_last_asks_agno_for_the_tail_only() -> None:
+    tools = _tools(_conversation())
+    result = json.loads(await tools.outline_chat_history(last=2, offset=1))["output"]
+    assert tools.host.limits == [3]
+    assert [m["id"] for m in result["messages"]] == ["m2", "m3"]
+    assert result["total"] is None
+
+
+async def test_outline_first_loads_without_limit() -> None:
+    tools = _tools(_conversation())
+    await tools.outline_chat_history(first=2)
+    assert tools.host.limits == [None]
+
+
+async def test_outline_default_page_is_50_with_note() -> None:
+    tools = _tools([_FakeMessage("user", f"q{i}", f"m{i}") for i in range(60)])
+    result = json.loads(await tools.outline_chat_history())["output"]
+    assert result["total"] == 60
+    assert result["returned"] == 50
+    assert "50 of 60" in result["note"]
+
+
+async def test_outline_last_is_capped_with_note() -> None:
+    tools = _tools([_FakeMessage("user", f"q{i}", f"m{i}") for i in range(250)])
+    result = json.loads(await tools.outline_chat_history(last=500))["output"]
+    assert result["returned"] == 200
+    assert tools.host.limits == [200]
+    assert "capped at 200" in result["note"]
+
+
+async def test_outline_small_thread_has_no_note() -> None:
+    result = json.loads(await _tools(_conversation()).outline_chat_history())["output"]
+    assert "note" not in result
+
+
+async def test_read_caps_ids_and_content_with_note() -> None:
+    tools = _tools([_FakeMessage("user", "y" * 30000, f"m{i}") for i in range(60)])
+    ids = [f"m{i}" for i in range(60)]
+    result = json.loads(await tools.read_chat_messages(ids=ids, max_content_chars=100000))["output"]
+    assert len(result["messages"]) == 50
+    assert result["messages"][0]["truncated"] is True
+    assert "first 50 of 60 ids" in result["note"]
+    assert "capped at 20000" in result["note"]
 
 
 async def test_outline_role_human_only() -> None:

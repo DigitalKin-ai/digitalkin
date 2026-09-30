@@ -87,7 +87,7 @@ async def test_startstream_seed_xadd_redis_error_releases_claim_and_rejects() ->
 
     redis_client = MagicMock()
     redis_client.eval = AsyncMock(return_value=1)  # ClaimResult.CLAIMED → fresh-dial path
-    redis_client.xadd = AsyncMock(side_effect=RedisConnectionError("down"))
+    redis_client.pipeline.return_value.execute = AsyncMock(side_effect=RedisConnectionError("down"))
     redis_client.delete = AsyncMock(return_value=1)  # idempotency.release
     servicer = GatewayServicer(redis_client=redis_client)
 

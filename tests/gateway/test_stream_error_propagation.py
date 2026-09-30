@@ -160,9 +160,7 @@ class TestDialBackNoQuery:
                 # Pre-register the session so _dial_consumer doesn't bail.
                 from digitalkin.grpc_servers.stream_session import StreamSession
                 session = StreamSession(task_id="task_no_query")
-                await gateway._registry.register(
-                    session, setup_id="setups:s1", mission_id="missions:m1",
-                )
+                await gateway._registry.register(session)
 
                 # Run the dial-back with a tight BiDi timeout (we override
                 # the hardcoded 300s by closing the consumer-side server

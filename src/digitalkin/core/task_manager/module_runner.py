@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from typing import TYPE_CHECKING, Any
@@ -16,9 +17,15 @@ from digitalkin.core.profiling.task_profiler import TaskProfiler
 from digitalkin.grpc_servers.exceptions import PermissionDeniedError
 from digitalkin.grpc_servers.interceptors.request_ids import RequestContext
 from digitalkin.logger import logger
+from digitalkin.models.core.task_monitor import CancellationReason
 from digitalkin.models.grpc_servers.stream_error_codes import StreamErrorCode
+from digitalkin.models.module.base_types import DataModel
+from digitalkin.models.module.module import ModuleStatus
+from digitalkin.models.module.utility import EndOfStreamOutput, StreamCancelledOutput
+from digitalkin.models.services.storage import BaseRole
 from digitalkin.models.settings.gateway import get_gateway_settings
 from digitalkin.models.settings.profiling import ProfilerMode, get_profiling_settings
+from digitalkin.models.settings.redis import get_redis_settings
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -43,7 +50,7 @@ class ModuleRunner:
         self._redis_client = redis_client
         self._servicer = servicer
 
-    async def run(  # noqa: C901, PLR0914, PLR0915
+    async def run(  # noqa: C901, PLR0912, PLR0914, PLR0915
         self,
         query: struct_pb2.Struct,
         *,
@@ -61,6 +68,9 @@ class ModuleRunner:
             mission_id: Mission identifier (logging context).
             on_fatal: Async callback ``(code, message)`` invoked on
                 unhandled exception; the caller writes ``stream.error`` + EOS.
+
+        Raises:
+            asyncio.CancelledError: The runner was cancelled; re-raised after cleanup.
         """
         log_extra = {"task_id": task_id, "setup_id": setup_id, "mission_id": mission_id}
         stream_key = f"task:{task_id}:stream"
@@ -80,6 +90,9 @@ class ModuleRunner:
 
         top_level_keys: list[str] = []
         query_byte_size = 0
+        module: Any = None
+        created = False
+        cancel_reason: str | None = None
         try:  # noqa: PLW0717
             timer.mark("entry")
             profiler.start()
@@ -107,9 +120,9 @@ class ModuleRunner:
                 except (TypeError, ValueError):
                     errors_json = repr(exc.errors())
                 missing_paths = [".".join(str(p) for p in e["loc"]) for e in exc.errors() if e["type"] == "missing"]
-                # TODO(validate): remove marker once setup-phase reporting is validated in prod
+                # TODO(validate): SETUP-VALIDATION setup ValidationError surfaces as SETUP_VALIDATION_ERROR
                 logger.error(
-                    "[VALIDATE SETUPVAL] ValidationError on setup model: module_class=%s missing=%s errors=%s",
+                    "[VALIDATE SETUP-VALIDATION] ValidationError on setup model: module_class=%s missing=%s errors=%s",
                     self._servicer.module_class.__name__,
                     missing_paths,
                     errors_json,
@@ -127,15 +140,31 @@ class ModuleRunner:
             seq = 0
             stream_settings = get_gateway_settings().stream
             stream_maxlen = stream_settings.redis_stream_maxlen
+            idem_key = f"idem:{task_id}"
+            idem_ttl = get_redis_settings().idem_ttl
+            eos_written = False
 
             async def _on_output(output_data: Any) -> None:
-                nonlocal first_logged, seq
+                nonlocal first_logged, seq, eos_written
                 data = output_data.model_dump(mode="json")
                 if data.get("root", {}).get("protocol") == "stream.end":
                     t_eos_write_start = time.perf_counter_ns()
+                    eos_written = True
                     await self._redis_client.xadd(stream_key, {"eos": b"true"})
                     await self._redis_client.expire(stream_key, stream_settings.redis_stream_ttl)
+                    await self._redis_client.expire(idem_key, stream_settings.redis_stream_ttl)
+                    # TODO(validate): IDEM-TTL-EOS idem TTL drops to redis_stream_ttl once EOS is written
+                    logger.info("[VALIDATE IDEM-TTL-EOS] idem TTL shortened after EOS", extra=log_extra)
                     t_eos_write_end = time.perf_counter_ns()
+                    run_s = (t_eos_write_end - runner_start_ns) / 1e9
+                    if run_s > stream_settings.redis_stream_initial_ttl:
+                        # TODO(validate): TTL-REFRESH long task kept its stream + idem alive until EOS
+                        logger.info(
+                            "[VALIDATE TTL-REFRESH] EOS written after %.0fs (> initial TTL %ds); stream + idem kept",
+                            run_s,
+                            stream_settings.redis_stream_initial_ttl,
+                            extra=log_extra,
+                        )
                     logger.info(
                         "[close-debug] producer_eos_write: xadd_expire=%.2fms t_done_ns=%d task_id=%s",
                         (t_eos_write_end - t_eos_write_start) / 1e6,
@@ -147,20 +176,25 @@ class ModuleRunner:
                 seq += 1
                 s = struct_pb2.Struct()
                 s.update(data)
-                # M4: carry seq (enables reader gap-detection) + bound the stream (maxlen).
-                await self._redis_client.xadd(
-                    stream_key, {"pb": s.SerializeToString(), "seq": str(seq)}, maxlen=stream_maxlen
+                # Sliding TTLs: every output re-arms stream + idem in the same round trip until EOS.
+                pipe = self._redis_client.pipeline()
+                pipe.xadd(
+                    stream_key,
+                    {"pb": s.SerializeToString(), "seq": str(seq)},
+                    maxlen=stream_maxlen,
+                    approximate=True,
                 )
-                # Arm a TTL on first XADD; final EXPIRE on stream.end shortens it.
+                if not eos_written:
+                    pipe.expire(stream_key, stream_settings.redis_stream_initial_ttl)
+                    pipe.expire(idem_key, idem_ttl)
+                await pipe.execute()
                 if not first_logged:
-                    elapsed_ms = (time.perf_counter_ns() - runner_start_ns) / 1e6
                     logger.debug(
                         "[perf] producer_first_byte_to_redis: %.1fms task_id=%s",
-                        elapsed_ms,
+                        (time.perf_counter_ns() - runner_start_ns) / 1e6,
                         task_id,
                         extra=log_extra,
                     )
-                    await self._redis_client.expire(stream_key, stream_settings.redis_stream_initial_ttl)
                     first_logged = True
 
             top_level_keys = list(query.fields.keys())
@@ -176,6 +210,19 @@ class ModuleRunner:
 
             input_data = self._servicer.module_class.create_input_model(input_dict)
             timer.mark("pydantic_input")
+
+            cancel_key = f"cancel:{task_id}"
+            if await self._redis_client.exists(cancel_key):
+                # TODO(validate): CANCEL-TOMBSTONE cancel:{id} tombstone stops a task cancelled before registration
+                logger.info("[VALIDATE CANCEL-TOMBSTONE] cancelled before preload; aborting", extra=log_extra)
+                await _on_output(
+                    DataModel[StreamCancelledOutput](
+                        root=StreamCancelledOutput(reason=CancellationReason.SIGNAL_SERVICE_CANCEL.value),
+                        annotations={"role": BaseRole.SYSTEM},
+                    )
+                )
+                await _on_output(DataModel[EndOfStreamOutput](root=EndOfStreamOutput()))
+                return
 
             # Share the servicer's setup service (same instance + channel) so setup-CRUD
             # toolkits can reach it; borrowed, so context cleanup never closes it. Wired
@@ -194,6 +241,12 @@ class ModuleRunner:
             )
             timer.mark("preload_join")
 
+            if await self._redis_client.exists(cancel_key):
+                # TODO(validate): CANCEL-TOMBSTONE cancel:{id} tombstone stops a task cancelled before registration
+                logger.info("[VALIDATE CANCEL-TOMBSTONE] cancelled after preload; stopping instance", extra=log_extra)
+                cancel_reason = CancellationReason.SIGNAL_SERVICE_CANCEL.value
+                return
+
             await self._servicer.job_manager.run_instance(
                 module=module,
                 job_id=job_id,
@@ -202,9 +255,30 @@ class ModuleRunner:
                 setup_data=setup_data,
                 callback=callback,
             )
+            created = True
             timer.mark("create_job")
             timer.log("ModuleRunner", task_id)
 
+            if await self._redis_client.exists(cancel_key):
+                task = self._servicer.job_manager.tasks.get(job_id)
+                session = self._servicer.job_manager.tasks_sessions.get(job_id)
+                if task is not None and session is not None and not task.done() and not session.pending_signal_action:
+                    # TODO(validate): CANCEL-TOMBSTONE cancel:{id} tombstone stops a task cancelled before registration
+                    logger.info(
+                        "[VALIDATE CANCEL-TOMBSTONE] cancelled during registration; cancelling task", extra=log_extra
+                    )
+                    session.pending_signal_action = "cancel"
+                    task.cancel()
+
+        except asyncio.CancelledError:
+            if not created:
+                # TODO(validate): RUNNER-LEAK a preloaded instance is released when its task never starts
+                logger.warning("[VALIDATE RUNNER-LEAK] runner cancelled before the task started", extra=log_extra)
+                await on_fatal(
+                    StreamErrorCode.MODULE_RUNTIME_ERROR.value,
+                    "module runner cancelled before the task started",
+                )
+            raise
         except ValidationError as exc:
             input_format_cls = (
                 self._servicer.module_class._extended_input_format  # noqa: SLF001
@@ -254,5 +328,15 @@ class ModuleRunner:
                 f"module execution failed: {type(exc).__name__}: {exc}",
             )
         finally:
+            if module is not None and not created and module.status not in {ModuleStatus.STOPPED, ModuleStatus.FAILED}:
+                if cancel_reason is None:
+                    # TODO(validate): RUNNER-LEAK a preloaded instance is released when its task never starts
+                    logger.warning(
+                        "[VALIDATE RUNNER-LEAK] task never created; stopping preloaded instance", extra=log_extra
+                    )
+                try:
+                    await module.stop(cancel_reason)
+                finally:
+                    await module.context.cleanup()
             profiler.stop()
             RequestContext.reset(ctx_token)

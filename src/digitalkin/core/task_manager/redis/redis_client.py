@@ -155,6 +155,17 @@ class RedisClient:  # noqa: PLR0904
         """
         return await self._client.delete(*names)
 
+    async def exists(self, *names: str) -> int:
+        """Count how many of the given keys exist.
+
+        Args:
+            *names: Keys to check.
+
+        Returns:
+            Number of existing keys.
+        """
+        return await self._client.exists(*names)
+
     async def expire(self, name: str, seconds: int) -> bool:
         """Set a TTL on a key.
 

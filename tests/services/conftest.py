@@ -28,4 +28,5 @@ def _grpc_service_isolation():
     yield
     GrpcClientWrapper._channel_cache.clear()
     GrpcClientWrapper._ref_counts.clear()
+    GrpcClientWrapper._evicted_refs.clear()
     GrpcClientWrapper._stub_cache.clear()

@@ -32,13 +32,19 @@ A module goes through a well-defined lifecycle: `CREATED` -> `STARTING` -> `RUNN
 
 See: [SDK Flow](architecture/sdk-flow.md)
 
+## Agno Memory Settings
+
+Agents built with Agno pick their own history and storage settings. See the recommended `db`, `num_history_runs`, `store_history_messages` and `max_tool_calls_from_history` values, what the SDK already trims, and the `ChatHistoryTools` limits.
+
+See: [agno_memory.md](agno_memory.md)
+
 ## Architecture: Resilience & Concurrency
 
 In-depth documentation of the SDK's fault tolerance and concurrency control systems, based on real production incident analysis.
 
 ### Retry & Fault Tolerance
 
-Three independent retry layers protect against transient gRPC failures: channel-level service config, application-level `exec_grpc_query()`, and batch-level `_SharedSendBuffer._flush()` with exponential backoff and jitter. Includes retryable vs non-retryable error classification and before/after comparisons.
+Two retry layers protect outbound gRPC calls: channel-level service config and application-level `exec_grpc_query()` with a per-target circuit breaker. Also covers the Redis pub/sub signal path (SendSignal → tombstone + PUBLISH → SharedRedisListener → task.cancel) and the task failure paths.
 
 See: [architecture/resilience.md](architecture/resilience.md)
 
@@ -50,7 +56,7 @@ See: [architecture/admission-queue.md](architecture/admission-queue.md)
 
 ### Concurrency Model
 
-Full system view of the three-layer architecture: gRPC server → Task Manager → Signal I/O. Covers the complete request lifecycle, shared resources (_SharedPoller, _SharedSendBuffer, channel cache), and event loop budget analysis.
+Full system view of the three-layer architecture: gRPC server → Task Manager → Redis I/O. Covers the request lifecycle, shared resources (SharedRedisListener, channel cache), shutdown order and event loop budget analysis.
 
 See: [architecture/concurrency-model.md](architecture/concurrency-model.md)
 

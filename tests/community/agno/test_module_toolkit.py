@@ -2,9 +2,9 @@
 
 Behaviours pinned here:
 
-* Sentinel-protocol parsing: a successful response is the last frame whose
-  ``root.protocol`` is not a lifecycle/error sentinel; ``stream.error`` frames
-  surface as ``[CODE] message``.
+* Sentinel-protocol parsing: only the last domain frame and the last error frame
+  are kept; ``stream.error`` surfaces as ``[CODE] message`` and ``stream.cancelled``
+  as ``[CANCELLED] reason``.
 * A tool that returns images emits OpenAI-style content parts. JSON-serialized into
   the tool message they would reach the model as a URL in text, never as an image.
   They are lifted into `ToolResult.images`, which Agno re-attaches as a user message.
@@ -14,6 +14,7 @@ Behaviours pinned here:
 
 import asyncio
 import json
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -71,50 +72,101 @@ def _screenshot_output(text: str = "1. Clicked at (640, 80).") -> dict:
     }
 
 
-class TestFindSuccessfulResponse:
+def _tool_def() -> MagicMock:
+    return MagicMock(parameter_names=set())
+
+
+def _wrapper(frames: list[dict]) -> Callable[..., Awaitable[str | ToolResult]]:
+    """Build the toolkit's agno wrapper around a fake tool that replays ``frames``."""
+
+    async def fn(**_kwargs: object) -> AsyncGenerator[dict, None]:
+        for frame in frames:
+            await asyncio.sleep(0)
+            yield frame
+
+    toolkit = _toolkit()
+    toolkit._timeout = 5
+    toolkit._tool_module_info.slug = "slug"
+    tool_def = _tool_def()
+    tool_def.name = "search"
+    return toolkit._create_tool_wrapper(tool_def, fn)
+
+
+class TestWrapperKeepsLastFrames:
     def test_returns_last_domain_frame(self):
-        results = [
+        frames = [
             {"root": {"protocol": "stream.start"}},
             {"root": {"protocol": "search", "results": [1]}},
             {"root": {"protocol": "search", "results": [2]}},
             {"root": {"protocol": "stream.end"}},
         ]
-        resp = ModuleToolkit._find_successful_response(results)
-        assert resp == {"root": {"protocol": "search", "results": [2]}}
+        body = json.loads(asyncio.run(_wrapper(frames)()))
+        assert body["output"] == {"root": {"protocol": "search", "results": [2]}}
+        assert "input_kwargs" not in body["metadata"]
 
-    def test_sentinel_only_stream_returns_none(self):
-        results = [
+    def test_body_is_compact_json(self):
+        result = asyncio.run(_wrapper([{"root": {"protocol": "search", "results": [1]}}])())
+        assert "\n" not in result
+
+    def test_sentinel_only_stream_is_a_failure(self):
+        frames = [
             {"root": {"protocol": "stream.start"}},
-            {"root": {"protocol": "stream.error", "code": "X", "fatal": True}},
+            {"root": {"protocol": "stream.error", "code": "X", "message": "boom", "fatal": True}},
             {"root": {"protocol": "stream.end"}},
         ]
-        assert ModuleToolkit._find_successful_response(results) is None
+        body = json.loads(asyncio.run(_wrapper(frames)()))
+        assert body["error"] == "[X] boom"
+        assert body["metadata"]["success"] is False
 
-    def test_frames_without_root_are_skipped(self):
-        results = [{"annotations": {}}, {"root": "not-a-dict"}]
-        assert ModuleToolkit._find_successful_response(results) is None
+    def test_cancelled_sentinel_is_a_failure_not_a_result(self):
+        frames = [
+            {"root": {"protocol": "stream.start"}},
+            {"root": {"protocol": "stream.cancelled", "reason": "user_stop"}},
+            {"root": {"protocol": "stream.end"}},
+        ]
+        body = json.loads(asyncio.run(_wrapper(frames)()))
+        assert body["error"] == "[CANCELLED] user_stop"
 
-    def test_empty_results_returns_none(self):
-        assert ModuleToolkit._find_successful_response([]) is None
+    def test_sentinel_error_outranks_a_later_bare_error_field(self):
+        frames = [
+            {"root": {"protocol": "stream.error", "code": "X", "message": "boom"}},
+            {"error": "later"},
+        ]
+        body = json.loads(asyncio.run(_wrapper(frames)()))
+        assert body["error"] == "[X] boom"
+
+    def test_frames_without_root_fall_back_to_error_field(self):
+        body = json.loads(asyncio.run(_wrapper([{"annotations": {}}, {"error": "quota exceeded"}])()))
+        assert body["error"] == "quota exceeded"
+
+    def test_empty_stream_returns_default_error(self):
+        body = json.loads(asyncio.run(_wrapper([])()))
+        assert body["error"] == "No successful response received from module"
 
 
 class TestExtractErrorMessage:
     def test_stream_error_surfaces_code_and_message(self):
-        results = [
-            {"root": {"protocol": "stream.error", "code": "SETUP_ACCESS_DENIED", "message": "denied", "fatal": True}},
-        ]
-        assert ModuleToolkit._extract_error_message(results) == "[SETUP_ACCESS_DENIED] denied"
+        frame = {
+            "root": {"protocol": "stream.error", "code": "SETUP_ACCESS_DENIED", "message": "denied", "fatal": True}
+        }
+        assert ModuleToolkit._extract_error_message(frame) == "[SETUP_ACCESS_DENIED] denied"
+
+    def test_stream_cancelled_surfaces_reason(self):
+        frame = {"root": {"protocol": "stream.cancelled", "reason": "user_stop"}}
+        assert ModuleToolkit._extract_error_message(frame) == "[CANCELLED] user_stop"
 
     def test_domain_error_field_fallback(self):
-        results = [{"root": {"protocol": "search", "error": "quota exceeded"}}]
-        assert ModuleToolkit._extract_error_message(results) == "quota exceeded"
+        frame = {"root": {"protocol": "stream.end", "error": "quota exceeded"}}
+        assert ModuleToolkit._extract_error_message(frame) == "quota exceeded"
 
-    def test_empty_results_returns_default(self):
-        assert ModuleToolkit._extract_error_message([]) == "No successful response received from module"
+    def test_none_returns_default(self):
+        assert ModuleToolkit._extract_error_message(None) == "No successful response received from module"
 
-    def test_no_error_frames_returns_default(self):
-        results = [{"root": {"protocol": "stream.end"}}]
-        assert ModuleToolkit._extract_error_message(results) == "No successful response received from module"
+    def test_no_error_field_returns_default(self):
+        assert (
+            ModuleToolkit._extract_error_message({"root": {"protocol": "stream.end"}})
+            == "No successful response received from module"
+        )
 
 
 class TestExtractImages:
@@ -167,13 +219,13 @@ class TestExtractImages:
 
 class TestHandleSuccess:
     def test_returns_tool_result_with_images_when_tool_returned_screenshots(self):
-        result = _toolkit()._handle_success("computer_use", _screenshot_output(), 12.0, {})
+        result = _toolkit()._handle_success("computer_use", _screenshot_output(), 12.0)
 
         assert isinstance(result, ToolResult)
         assert [image.url for image in result.images] == ["https://fs/shot.png"]
 
     def test_image_url_is_not_duplicated_into_the_text_body(self):
-        result = _toolkit()._handle_success("computer_use", _screenshot_output(), 12.0, {})
+        result = _toolkit()._handle_success("computer_use", _screenshot_output(), 12.0)
 
         assert isinstance(result, ToolResult)
         assert "https://fs/shot.png" not in result.content
@@ -181,7 +233,7 @@ class TestHandleSuccess:
         assert "Clicked at (640, 80)." in result.content
 
     def test_body_stays_valid_json_with_output_and_metadata(self):
-        result = _toolkit()._handle_success("computer_use", _screenshot_output(), 12.0, {})
+        result = _toolkit()._handle_success("computer_use", _screenshot_output(), 12.0)
 
         assert isinstance(result, ToolResult)
         body = json.loads(result.content)
@@ -190,7 +242,7 @@ class TestHandleSuccess:
 
     def test_returns_a_plain_string_when_there_is_no_image(self):
         output = {"root": {"protocol": "tool_content", "content": "no image here"}}
-        result = _toolkit()._handle_success("some_tool", output, 5.0, {})
+        result = _toolkit()._handle_success("some_tool", output, 5.0)
 
         assert isinstance(result, str)
         assert json.loads(result)["output"] == output
@@ -207,7 +259,7 @@ class TestHandleSuccess:
                 ],
             }
         }
-        result = _toolkit()._handle_success("computer_use", output, 1.0, {})
+        result = _toolkit()._handle_success("computer_use", output, 1.0)
 
         assert isinstance(result, ToolResult)
         assert "X-Amz-Signature" not in result.content

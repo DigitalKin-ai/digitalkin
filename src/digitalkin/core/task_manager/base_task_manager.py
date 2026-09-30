@@ -71,44 +71,60 @@ class BaseTaskManager(ABC):
     async def _cleanup_task(self, task_id: str, mission_id: str) -> None:
         """Drain in-flight writes, pop the session, release slot. Idempotent.
 
+        The body runs shielded: a cancel landing mid-cleanup waits for it to finish, then re-raises.
+
         Args:
             task_id: Task to clean up.
             mission_id: Mission associated with the task.
+
+        Raises:
+            asyncio.CancelledError: The caller was cancelled while cleanup ran.
         """
-        session = self.tasks_sessions.get(task_id)
-        if session is not None:
-            # Close stream under the write lock so pending writes see stream_closed.
-            async with session._write_lock:  # noqa: SLF001
-                session.close_stream()
+        ids = {"mission_id": mission_id, "task_id": task_id}
 
-        session = self.tasks_sessions.pop(task_id, None)
-        self.tasks.pop(task_id, None)
+        async def _body() -> None:
+            session = self.tasks_sessions.get(task_id)
+            if session is not None:
+                # Close stream under the write lock so pending writes see stream_closed.
+                async with session._write_lock:  # noqa: SLF001
+                    session.close_stream()
 
-        if session is None:
-            return
+            session = self.tasks_sessions.pop(task_id, None)
+            self.tasks.pop(task_id, None)
 
-        cancellation_reason = session.cancellation_reason.value
-        final_status = session.status
+            if session is None:
+                return
 
+            cancellation_reason = session.cancellation_reason.value
+            final_status = session.status
+
+            try:
+                await session.cleanup()
+            except Exception:
+                logger.exception("Session cleanup failed", extra=ids)
+            finally:
+                self._active_slots -= 1
+                self._task_slot.release()
+                if get_task_manager_settings().max_queued_tasks > 0:
+                    self._system_gate.release()
+                logger.info(
+                    "Task cleaned up (%d remaining) final_status=%s cancellation_reason=%s",
+                    len(self.tasks_sessions),
+                    final_status,
+                    cancellation_reason,
+                    extra=ids,
+                )
+
+        body = asyncio.create_task(_body(), name=f"{task_id}_cleanup")
         try:
-            await session.cleanup()
-        except Exception:
-            logger.exception(
-                "Session cleanup failed",
-                extra={"mission_id": mission_id, "task_id": task_id},
-            )
-        finally:
-            self._active_slots -= 1
-            self._task_slot.release()
-            if get_task_manager_settings().max_queued_tasks > 0:
-                self._system_gate.release()
-            logger.info(
-                "Task cleaned up (%d remaining) final_status=%s cancellation_reason=%s",
-                len(self.tasks_sessions),
-                final_status,
-                cancellation_reason,
-                extra={"mission_id": mission_id, "task_id": task_id},
-            )
+            await asyncio.shield(body)
+        except asyncio.CancelledError:
+            if body.cancelled():
+                raise
+            # TODO(validate): CLEANUP-SHIELD a cancel during cleanup lets the cleanup finish first
+            logger.warning("[VALIDATE CLEANUP-SHIELD] cancel during cleanup; finishing cleanup first", extra=ids)
+            await asyncio.wait({body})
+            raise
 
     async def _validate_task_creation(self, task_id: str, mission_id: str, coro: Coroutine[Any, Any, None]) -> None:
         """Validate task creation preconditions.

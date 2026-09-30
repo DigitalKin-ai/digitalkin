@@ -14,14 +14,24 @@ from google.protobuf import struct_pb2
 
 from digitalkin.core.task_manager.module_runner import ModuleRunner
 from digitalkin.models.settings.gateway import get_gateway_settings
+from digitalkin.models.settings.redis import get_redis_settings
 
 
 class _RecordingRedis:
     """Minimal async Redis double that records xadd/expire calls."""
 
-    def __init__(self) -> None:
+    def __init__(self, cancel_from_check: int | None = None) -> None:
         self.xadds: list[tuple[str, dict[str, Any], int | None]] = []
         self.expires: list[tuple[str, int]] = []
+        self.cancel_from_check = cancel_from_check
+        self.exists_calls: list[tuple[str, ...]] = []
+        self.executes = 0
+
+    async def exists(self, *names: str) -> int:
+        """Report the ``cancel:`` tombstone present from the ``cancel_from_check``-th check on."""
+        self.exists_calls.append(names)
+        hit = self.cancel_from_check is not None and len(self.exists_calls) >= self.cancel_from_check
+        return int(hit)
 
     async def xadd(self, name: str, fields: dict[str, Any], *, maxlen: int | None = None) -> bytes:
         self.xadds.append((name, fields, maxlen))
@@ -30,6 +40,30 @@ class _RecordingRedis:
     async def expire(self, name: str, seconds: int) -> bool:
         self.expires.append((name, seconds))
         return True
+
+    def pipeline(self) -> _RecordingPipeline:
+        return _RecordingPipeline(self)
+
+
+class _RecordingPipeline:
+    """Queues xadd/expire like a redis pipeline; ``execute`` is the single round trip."""
+
+    def __init__(self, redis: _RecordingRedis) -> None:
+        self._redis = redis
+        self._ops: list[tuple[str, tuple[Any, ...]]] = []
+
+    def xadd(self, name: str, fields: dict[str, Any], *, maxlen: int | None = None, approximate: bool = True) -> None:
+        assert approximate
+        self._ops.append(("xadd", (name, fields, maxlen)))
+
+    def expire(self, name: str, seconds: int) -> None:
+        self._ops.append(("expire", (name, seconds)))
+
+    async def execute(self) -> list[Any]:
+        self._redis.executes += 1
+        for op, args in self._ops:
+            (self._redis.xadds if op == "xadd" else self._redis.expires).append(args)  # type: ignore[arg-type]
+        return [True] * len(self._ops)
 
 
 class _Out:
@@ -89,6 +123,68 @@ async def test_on_output_writes_seq_and_maxlen() -> None:
     eos = [x for x in redis.xadds if x[1].get("eos") == b"true"]
     assert len(eos) == 1
     assert eos[0][2] is None
+
+
+async def test_every_output_refreshes_stream_and_idem_ttl_in_one_round_trip() -> None:
+    """Each data output re-arms stream + idem TTLs in its XADD pipeline; EOS shortens both."""
+    get_gateway_settings.cache_clear()
+    get_redis_settings.cache_clear()
+    redis = _RecordingRedis()
+    stream = get_gateway_settings().stream
+
+    async def _run_instance(*, callback: Any, **_: Any) -> None:
+        await callback(_Out({"root": {"protocol": "data", "value": 1}}))
+        await callback(_Out({"root": {"protocol": "data", "value": 2}}))
+        await callback(_Out({"root": {"protocol": "data", "value": 3}}))
+        await callback(_Out({"root": {"protocol": "stream.end"}}))
+        await callback(_Out({"root": {"protocol": "data", "value": 4}}))
+
+    await _run_with(redis, _run_instance, "t-ttl")
+
+    refresh = [("task:t-ttl:stream", stream.redis_stream_initial_ttl), ("idem:t-ttl", get_redis_settings().idem_ttl)]
+    eos_ttl = [("task:t-ttl:stream", stream.redis_stream_ttl), ("idem:t-ttl", stream.redis_stream_ttl)]
+    assert redis.expires == refresh * 3 + eos_ttl
+    assert redis.executes == 4
+
+
+async def test_long_task_logs_ttl_refresh_marker_once(monkeypatch: Any) -> None:
+    monkeypatch.setenv("DIGITALKIN_GATEWAY_STREAM_REDIS_STREAM_INITIAL_TTL", "0")
+    get_gateway_settings.cache_clear()
+
+    async def _run_instance(*, callback: Any, **_: Any) -> None:
+        await callback(_Out({"root": {"protocol": "data", "value": 1}}))
+        await callback(_Out({"root": {"protocol": "stream.end"}}))
+
+    with patch("digitalkin.core.task_manager.module_runner.logger") as log:
+        await _run_with(_RecordingRedis(), _run_instance, "t-long")
+    get_gateway_settings.cache_clear()
+
+    marks = [c.args[0] for c in log.info.call_args_list if "[VALIDATE TTL-REFRESH]" in c.args[0]]
+    assert len(marks) == 1
+
+
+async def _run_with(redis: _RecordingRedis, run_instance: Any, task_id: str) -> None:
+    setup_version = MagicMock(content={}, setup_id="setups:s1", id="setup_versions:v1")
+    servicer = MagicMock()
+    servicer.resolve_setup = AsyncMock(return_value=setup_version)
+    servicer.module_class.create_setup_model = AsyncMock(return_value=MagicMock())
+    servicer.get_tool_cache = MagicMock(return_value=MagicMock())
+    servicer.module_class.create_input_model = MagicMock(return_value=MagicMock())
+
+    async def _preload(setup_data: Any, **kwargs: Any) -> tuple[Any, str, Any]:  # noqa: ARG001
+        return MagicMock(), kwargs["job_id"], kwargs["callback"]
+
+    servicer.job_manager.preload_instance = _preload
+    servicer.job_manager.run_instance = run_instance
+    runner = ModuleRunner(redis_client=redis, servicer=servicer)  # type: ignore[arg-type]
+
+    async def _on_fatal(code: str, message: str) -> None:
+        raise AssertionError((code, message))
+
+    with patch("digitalkin.core.task_manager.module_runner.TaskProfiler"):
+        await runner.run(
+            struct_pb2.Struct(), task_id=task_id, setup_id="setups:s1", mission_id="missions:m1", on_fatal=_on_fatal
+        )
 
 
 async def test_servicer_setup_is_borrowed_into_module_context() -> None:

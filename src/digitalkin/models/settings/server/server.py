@@ -19,7 +19,6 @@ class ServerSettings(BaseSettings):
         channel (ServerChannelSettings): Settings for the server channel.
         grpc (GrpcServerSettings): Settings for the gRPC server.
         profiling (ProfilingSettings): Profiling and debugging configuration.
-        health_check (bool): Whether to enable the health check service.
         reflection (bool): Whether to enable reflection for the server.
         max_concurrent_rpcs (NonNegativeInt): Maximum number of RPCs handled in parallel by the server.
         max_workers (NonNegativeInt): Maximum number of workers for sync mode.
@@ -35,7 +34,6 @@ class ServerSettings(BaseSettings):
 
     profiling: ProfilingSettings = Field(default_factory=ProfilingSettings)
 
-    health_check: bool = Field(default=True, description="Enable health check service")
     reflection: bool = Field(default=True, description="Enable reflection for the server")
     max_concurrent_rpcs: NonNegativeInt = Field(
         (os.cpu_count() or 1) * 200,

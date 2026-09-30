@@ -1347,6 +1347,52 @@ class TestListData:
         assert [r.record_id for r in results] == ["valid"]
 
 
+class TestUpsertRoundTrips:
+    """Upsert issues UpdateRecord first and never a separate ReadRecord."""
+
+    @pytest.mark.grpc
+    async def test_upsert_existing_is_one_round_trip(self, client: GrpcStorage) -> None:
+        data = {"mission_id": MISSION_ID, "name": "n", "value": 1}
+        struct = Struct()
+        struct.update(data)
+        stored = data_pb2.StorageRecord(
+            context=MISSION_ID,
+            collection="test_collection",
+            record_id="r1",
+            data=struct,
+            data_type=data_pb2.DataType.Value("OUTPUT"),
+        )
+        client.exec_grpc_query = AsyncMock(  # type: ignore[method-assign]
+            return_value=data_pb2.UpdateRecordResponse(stored_data=stored)
+        )
+
+        record = await client.upsert("test_collection", "r1", data)
+
+        assert record.record_id == "r1"
+        assert [c.args[0] for c in client.exec_grpc_query.await_args_list] == ["UpdateRecord"]
+
+    @pytest.mark.grpc
+    async def test_upsert_missing_falls_back_to_store(self, client: GrpcStorage) -> None:
+        data = {"mission_id": MISSION_ID, "name": "n", "value": 1}
+        struct = Struct()
+        struct.update(data)
+        stored = data_pb2.StorageRecord(
+            context=MISSION_ID,
+            collection="test_collection",
+            record_id="r1",
+            data=struct,
+            data_type=data_pb2.DataType.Value("OUTPUT"),
+        )
+        client.exec_grpc_query = AsyncMock(  # type: ignore[method-assign]
+            side_effect=[ServerError("[NOT_FOUND] missing"), data_pb2.StoreRecordResponse(stored_data=stored)]
+        )
+
+        record = await client.upsert("test_collection", "r1", data)
+
+        assert record.record_id == "r1"
+        assert [c.args[0] for c in client.exec_grpc_query.await_args_list] == ["UpdateRecord", "StoreRecord"]
+
+
 class TestStorageEdgeCases:
     """Tests for edge cases and error handling.
 

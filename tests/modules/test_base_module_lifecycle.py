@@ -526,6 +526,48 @@ class TestStop:
         sent = module.context.callbacks.send_message.call_args[0][0]
         assert sent.root.protocol == "stream.end"
 
+    async def test_cancelled_status_emits_stream_cancelled_before_end(self) -> None:
+        """A cancelled module tells the front: ``stream.cancelled`` then ``stream.end``."""
+        cls = _make_module_cls()
+        module = _instantiate(cls)
+        module.context.callbacks.send_message = AsyncMock()
+        module._status = ModuleStatus.CANCELLED
+
+        with patch.object(module, "cleanup", new_callable=AsyncMock):
+            await module.stop()
+
+        sent = [c.args[0] for c in module.context.callbacks.send_message.await_args_list]
+        assert [m.root.protocol for m in sent] == ["stream.cancelled", "stream.end"]
+        assert sent[0].root.reason == "cancelled"
+        root = sent[0].model_dump(mode="json")["root"]
+        assert (root["protocol"], root["reason"]) == ("stream.cancelled", "cancelled")
+        assert module.status == ModuleStatus.STOPPED
+
+    async def test_cancel_reason_argument_emits_stream_cancelled(self) -> None:
+        """A module cancelled before it ran (status not CANCELLED) still reports the given reason."""
+        cls = _make_module_cls()
+        module = _instantiate(cls)
+        module.context.callbacks.send_message = AsyncMock()
+
+        with patch.object(module, "cleanup", new_callable=AsyncMock):
+            await module.stop("signal_service_cancel")
+
+        sent = [c.args[0] for c in module.context.callbacks.send_message.await_args_list]
+        assert [m.root.protocol for m in sent] == ["stream.cancelled", "stream.end"]
+        assert sent[0].root.reason == "signal_service_cancel"
+
+    async def test_second_stop_emits_nothing(self) -> None:
+        cls = _make_module_cls()
+        module = _instantiate(cls)
+        module.context.callbacks.send_message = AsyncMock()
+        module._status = ModuleStatus.CANCELLED
+
+        with patch.object(module, "cleanup", new_callable=AsyncMock):
+            await module.stop()
+            await module.stop("shutdown")
+
+        assert module.context.callbacks.send_message.await_count == 2
+
     async def test_slow_cleanup_is_warned_about(self, caplog: pytest.LogCaptureFixture) -> None:
         """A cleanup hook that blocks the loop must name itself in the logs.
 

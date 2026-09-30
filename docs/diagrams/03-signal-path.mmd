@@ -1,11 +1,13 @@
 flowchart LR
-    A[Client\nSendSignal] --> B[Gateway\nServicer]
-    B --> C[TaskManager\nStrategy]
-    C --> D[RedisSend\nBuffer]
-    D -->|"Pipeline:\nHSET+EXPIRE+PUBLISH"| E[(Redis)]
-    E -->|PubSub| F[SharedRedis\nListener]
-    F --> G[Per-task\nQueue]
-    G --> H[TaskSession\nlisten_signals]
-    H --> I{action?}
-    I -->|cancel| J[_handle_cancel]
-    I -->|stop| K[_handle_stop]
+    A[Client\nSendSignal] --> B[Gateway\nSendSignal]
+    B -->|"Pipeline:\nEXISTS idem:{id}\nSET cancel:{id} EX\nPUBLISH signal_ch:{id}"| E[(Redis)]
+    B -->|"idem missing"| NF[success=false\nnot found]
+    E -->|"PSUBSCRIBE signal_ch:*"| F[SharedRedisListener\ndispatch_signal]
+    F -->|"first cancel/stop only"| G["task.cancel()"]
+    G --> H[TaskExecutor\nexcept CancelledError]
+    H --> I["_handle_cancel\n(stop = hard cancel)"]
+    I --> J["_cleanup_task → session.cleanup\n→ module.stop()"]
+    J -->|"stream.cancelled + stream.end"| K[ModuleRunner._on_output\nXADD eos + EXPIRE]
+    K --> L[Gateway reader\nyields sentinels]
+    E -. "EXISTS cancel:{id}\nbefore/after preload,\nafter run_instance" .-> R[ModuleRunner\ntombstone checks]
+    R -->|hit| J

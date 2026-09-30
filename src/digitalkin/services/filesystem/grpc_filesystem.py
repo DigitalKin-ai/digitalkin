@@ -98,8 +98,6 @@ class GrpcFilesystem(FilesystemStrategy, GrpcClientWrapper, GrpcErrorHandlerMixi
         Returns:
             The matching ``ContextFile`` wire enum, ``CONTEXT_UNSPECIFIED`` otherwise.
         """
-        # TODO(validate): remove after prod validation
-        # [VALIDATE CTXENUM] server resolves the concrete id from metadata
         match context:
             case Context.SETUP:
                 return filesystem_pb2.CONTEXT_SETUP

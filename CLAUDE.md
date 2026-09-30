@@ -116,14 +116,15 @@ uv run mike deploy --push --update-aliases 0.3 latest
 
 **Job Management** (`src/digitalkin/core/job_manager/`)
 - `BaseJobManager`: Abstract base extending TaskManager
-- `SingleJobManager`: In-memory execution for single-server deployments
-- Jobs stream output via asyncio.Queue and callbacks
+- `SingleJobManager`: Runs module instances in-process; `stop()` cancels live tasks (reason `shutdown`) and releases the Redis listener. Config-setup sessions are tracked apart from task slots
+- Task output goes to Redis (see Data Flow); the in-memory session queue is only used by config-setup
 
 **Task Management** (`src/digitalkin/core/task_manager/`)
-- `TaskManager`: Lower-level task lifecycle management with concurrent task limits (semaphore-based waiting pool)
-- `TaskSession`: Represents running task state with signal listening via TaskManagerStrategy
-- Each task runs 2 concurrent sub-tasks: main coroutine and signal listener
-- `TaskExecutor`: Supervisor pattern for task lifecycle (main + signal listener)
+- `BaseTaskManager`: Task lifecycle with concurrent task limits (semaphore-based waiting pool); `_cleanup_task` is shielded so a cancel can't interrupt it
+- `ModuleRunner`: Gateway-side driver of one task — resolves setup, preloads the module, checks the `cancel:{id}` tombstone, writes every output to Redis via `_on_output`
+- `TaskExecutor`: Runs the module coroutine as a single asyncio task; a cancel arrives as `task.cancel()` from `SharedRedisListener` and is handled in its `except CancelledError`
+- `TaskSession`: Per-task state (status, cancellation reason, `pending_signal_action`); `cleanup()` runs `module.stop()` before `context.cleanup()`
+- `redis/`: `RedisClient`, `SharedRedisListener` (one `psubscribe signal_ch:*` per process), `proto_streams` (stream read/write + cursor), `redis_idempotency` (`idem:{id}` claim)
 
 **Service Strategies** (`src/digitalkin/services/`)
 - Strategy pattern with dependency injection
@@ -149,25 +150,32 @@ uv run mike deploy --push --update-aliases 0.3 latest
 ### Data Flow
 
 ```
-gRPC Client
-  → ModuleServicer.StartModule()
-    → JobManager.create_module_instance_job()
-      → TaskManager.create_task()
-        → Module.start()
-          → Module.initialize()
-          → Module.run()
+Client
+  → Gateway StartStream (claim idem:{id}, seed task:{id}:stream)
+    → dial-back → ModuleRunner.run()
+      → resolve setup → preload module → JobManager.run_instance()
+        → TaskManager.create_task() → TaskExecutor
+          → Module.start() → initialize() → run()
             → TriggerHandler.handle()
               → callbacks.send_message(output)
-                → Queue → Stream → gRPC Response
+                → ModuleRunner._on_output → XADD task:{id}:stream
+                  → Gateway Stream reader → StreamClient (+ stream.* sentinels)
 ```
+
+Lifecycle is in-band: `stream.start`, `stream.error`, `stream.cancelled`, `stream.end` travel in the data Struct's `protocol` field (see `docs/gateway_protocol.md`).
 
 ### Signal Flow
 
 ```
-TaskSession
-  → Signal Listener → TaskManagerStrategy (gRPC polling or local)
-  → Status Updates → TaskManager
+Client SendSignal(CANCEL)
+  → Gateway: pipeline EXISTS idem:{id} + SET cancel:{id} (tombstone) + PUBLISH signal_ch:{id}
+    → SharedRedisListener.dispatch_signal (first cancel only)
+      → task.cancel() → TaskExecutor except CancelledError → TaskSession._handle_cancel
+        → Module.stop() emits stream.cancelled + stream.end
+ModuleRunner checks the tombstone before/after preload and after run_instance (cancel sent before the task exists).
 ```
+
+`stop` is a hard cancel that only changes the recorded reason. Server shutdown order: stop accepting RPCs → `job_manager.stop()` → gateway stop → Redis clients → channels.
 
 ## Important Conventions
 
@@ -249,6 +257,9 @@ If no global context is available, omit `extra` entirely and put everything in t
 ### Error Handling
 Exceptions are properly caught and converted to gRPC status codes. Use appropriate error types from `grpc.StatusCode`.
 
+### Validation Markers
+Every behavior-changing fix logs `"[VALIDATE <UPPER-KEBAB-ID>] ..."` next to a `# TODO(validate): <ID> <what to check>` comment. Keep `docs/validation_checklist.md` in sync; remove validated markers with `rg -n "TODO\(validate\)|\[VALIDATE" src`.
+
 ### Resource Cleanup
 All managers implement proper cleanup. Always close DB connections, stop tasks, and clean up resources in finally blocks or context managers.
 
@@ -276,7 +287,7 @@ Use `pytest.mark.asyncio` for async tests. The `asyncio_mode = "auto"` setting i
 
 ## Integration Points
 
-- **Redis**: Durable message passing via Redis Streams, session state, signal pub/sub
+- **Redis**: Output streams (`task:{id}:stream`, `task:{id}:cursor`), idempotency claims (`idem:{id}`), cancel tombstones (`cancel:{id}`), signal pub/sub (`signal_ch:{id}`). Every key carries a TTL
 - **gRPC**: All inter-service communication
 - **Protobuf**: Message definitions from `digitalkin-proto` package
 

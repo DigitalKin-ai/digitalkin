@@ -102,6 +102,7 @@ def _make_fake_session() -> MagicMock:
     session = MagicMock()
     session.pending_signal_action = ""
     session.last_signal_published_ns = 0
+    session.cancelled = False
     return session
 
 
@@ -240,6 +241,61 @@ class TestSharedRedisListenerDispatch:
             with pytest.raises(asyncio.CancelledError):
                 await task
             await listener.close()
+
+
+class TestSharedRedisListenerRepeatedCancel:
+    """Only the first cancel/stop lands; ``_last_seen`` only tracks owned tasks."""
+
+    async def test_second_cancel_is_skipped_while_first_pending(self) -> None:
+        from digitalkin.core.task_manager.redis.redis_signal import SharedRedisListener
+
+        listener = SharedRedisListener(_make_mock_client())
+        session = _make_fake_session()
+        task = MagicMock()
+        task.done.return_value = False
+        await listener.start()
+        try:
+            listener.register("t1", session, task)
+            first = {"action": "cancel", "task_id": "t1", "published_at_ns": 1}
+            second = {"action": "stop", "task_id": "t1", "published_at_ns": 2}
+            assert listener.dispatch_signal("t1", first, json.dumps(first)) is True
+            assert listener.dispatch_signal("t1", second, json.dumps(second)) is False
+            assert session.pending_signal_action == "cancel"
+            assert session.last_signal_published_ns == 1
+            task.cancel.assert_called_once()
+        finally:
+            await listener.close()
+
+    async def test_cancel_skipped_when_session_already_cancelled(self) -> None:
+        from digitalkin.core.task_manager.redis.redis_signal import SharedRedisListener
+
+        listener = SharedRedisListener(_make_mock_client())
+        session = _make_fake_session()
+        session.cancelled = True
+        task = MagicMock()
+        task.done.return_value = False
+        await listener.start()
+        try:
+            listener.register("t1", session, task)
+            data = {"action": "cancel", "task_id": "t1", "published_at_ns": 3}
+            assert listener.dispatch_signal("t1", data, json.dumps(data)) is False
+            assert not session.pending_signal_action
+            task.cancel.assert_not_called()
+        finally:
+            await listener.close()
+
+    async def test_last_seen_only_tracks_owned_tasks_and_global(self) -> None:
+        from digitalkin.core.task_manager.redis.redis_signal import SharedRedisListener
+
+        listener = SharedRedisListener(_make_mock_client())
+        for i in range(50):
+            data = {"action": "cancel", "task_id": f"foreign_{i}", "published_at_ns": i}
+            listener.dispatch_signal(f"foreign_{i}", data, json.dumps(data))
+        assert listener._last_seen == {}
+
+        glob = {"action": "invalidate_tools", "setup_id": "s", "published_at_ns": 1, "origin": "other"}
+        listener.dispatch_signal("_global_", glob, json.dumps(glob))
+        assert list(listener._last_seen) == ["_global_"]
 
 
 class TestSharedRedisListenerLifecycle:
