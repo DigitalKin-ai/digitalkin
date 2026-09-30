@@ -131,8 +131,6 @@ class TestServerConfig:
         assert config.grpc.options == expected_server_options
         # Check enable_reflection
         assert config.reflection is True
-        # Check enable_health_check
-        assert config.health_check is True
 
     def test_server_grpc_options_are_int_typed(self) -> None:
         """Server gRPC channel args must all be int — grpcio silently drops floats."""
@@ -152,7 +150,6 @@ class TestServerConfig:
         monkeypatch.setenv("SERVER_GRPC_OPTIONS_MAX_SEND_MESSAGE_LENGTH", str(expected_message_lenght))
         monkeypatch.setenv("SERVER_MAX_WORKERS", "4")
         monkeypatch.setenv("SERVER_REFLECTION", "false")
-        monkeypatch.setenv("SERVER_HEALTH_CHECK", "false")
 
         config = ServerSettings()
 
@@ -170,8 +167,6 @@ class TestServerConfig:
         assert config.grpc.max_send_message_length == expected_message_lenght
         # Check enable_reflection
         assert config.reflection is False
-        # Check enable_health_check
-        assert config.health_check is False
 
     def test_server_config_secure_without_credentials(self, monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
         """Secure mode without explicit paths is accepted, then fails on an empty volume.

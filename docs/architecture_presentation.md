@@ -37,7 +37,7 @@ Now it's a **platform**: Gateway + Redis + Resilience.
 
 ## Architecture overview
 
-![bg h:100%](diagrams/01-architecture.svg)
+Diagram source: [diagrams/01-architecture.mmd](diagrams/01-architecture.mmd)
 
 ---
 
@@ -100,13 +100,13 @@ Now it's a **platform**: Gateway + Redis + Resilience.
 
 ## Request flow — full sequence
 
-![bg h:500](diagrams/02-request-flow.svg)
+Diagram source: [diagrams/02-request-flow.mmd](diagrams/02-request-flow.mmd)
 
 ---
 
 ## Signal path — batched, no new channels
 
-![h:100](diagrams/03-signal-path.svg)
+Diagram source: [diagrams/03-signal-path.mmd](diagrams/03-signal-path.mmd)
 
 **Batching**: 50 signals OR 100ms (±10% jitter) → 1 pipeline
 **Dedup**: identical JSON payloads skipped
@@ -116,19 +116,19 @@ Now it's a **platform**: Gateway + Redis + Resilience.
 
 ## Redis key patterns
 
-![bg h:700](diagrams/06-redis-keys.svg)
+Diagram source: [diagrams/06-redis-keys.mmd](diagrams/06-redis-keys.mmd)
 
 ---
 
 ## Reconnection via `from_seq`
 
-![bg h:500](diagrams/04-reconnection.svg)
+Diagram source: [diagrams/04-reconnection.mmd](diagrams/04-reconnection.mmd)
 
 ---
 
 ## Circuit breaker — fail fast
 
-![bg right h:70%](diagrams/05-circuit-breaker.svg)
+Diagram source: [diagrams/05-circuit-breaker.mmd](diagrams/05-circuit-breaker.mmd)
 
 **Where**: `exec_grpc_query()`
 Every outbound gRPC call.
@@ -154,7 +154,7 @@ Every outbound gRPC call.
 
 ## Latency — before (SDK v0.3)
 
-![h:350](diagrams/10a-latency-before.svg)
+Diagram source: [diagrams/10a-latency-before.mmd](diagrams/10a-latency-before.mmd)
 
 **~11ms** SDK overhead per request (p50, no tools, idle).
 Bottleneck: `ModuleFactory` initializes 10 service strategies per job (~4ms).
@@ -163,7 +163,7 @@ Bottleneck: `ModuleFactory` initializes 10 service strategies per job (~4ms).
 
 ## Latency — after (SDK v1.0)
 
-![h:350](diagrams/10b-latency-after.svg)
+Diagram source: [diagrams/10b-latency-after.mmd](diagrams/10b-latency-after.mmd)
 
 **~7ms** platform overhead per request (p50, idle).
 No per-job service init (pool reuse). Redis adds ~2ms but enables reconnection + durability.
@@ -194,13 +194,13 @@ No per-job service init (pool reuse). Redis adds ~2ms but enables reconnection +
 
 ## Memory guardrails
 
-![bg h:600](diagrams/07-memory-guardrails.svg)
+Diagram source: [diagrams/07-memory-guardrails.mmd](diagrams/07-memory-guardrails.mmd)
 
 ---
 
 ## Cleanup chain
 
-![h:480](diagrams/08-cleanup-chain.svg)
+Diagram source: [diagrams/08-cleanup-chain.mmd](diagrams/08-cleanup-chain.mmd)
 
 ---
 
@@ -249,7 +249,7 @@ No per-job service init (pool reuse). Redis adds ~2ms but enables reconnection +
 
 ## Test coverage
 
-![bg h:75%](diagrams/09-test-coverage.svg)
+Diagram source: [diagrams/09-test-coverage.mmd](diagrams/09-test-coverage.mmd)
 
 **936 total**
 - 134 new tests
@@ -282,7 +282,6 @@ src/digitalkin/
 │   ├── task_manager/redis/        Infrastructure
 │   │   ├── redis_client.py        Ref-counted pool
 │   │   ├── redis_signal.py        Listener + SendBuffer
-│   │   ├── redis_state.py         Lifecycle state
 │   │   ├── redis_streams.py       XADD + XREAD + cursor
 │   │   ├── redis_checkpoint.py    Checkpoint + index
 │   │   └── redis_idempotency.py   Lua atomic claims

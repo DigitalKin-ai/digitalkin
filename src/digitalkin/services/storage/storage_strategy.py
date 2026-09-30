@@ -8,10 +8,10 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
+from digitalkin.logger import logger
 from digitalkin.models.services.services import Context
 from digitalkin.models.services.storage import DataType, Visibility
 from digitalkin.services.base_strategy import BaseStrategy
-from digitalkin.services.storage.exceptions import StorageServiceError
 
 
 class StorageRecord(BaseModel):
@@ -424,9 +424,8 @@ class StorageStrategy(BaseStrategy, ABC):
     ) -> StorageRecord:
         """Insert or update a record atomically under the given scope.
 
-        If a record with the given collection/record_id exists under that
-        context it is updated; otherwise a new record is created. The operation
-        is protected by a per-record lock to prevent races.
+        The update is tried first; when it finds no record, a new one is created.
+        The operation is protected by a per-record lock to prevent races.
 
         Args:
             collection: The unique name for the record type
@@ -441,7 +440,7 @@ class StorageStrategy(BaseStrategy, ABC):
 
         Raises:
             ValueError: If the data type is invalid or if validation fails
-            StorageServiceError: If update of an existing record fails unexpectedly
+            StorageServiceError: If the create after a missed update fails (gRPC backend).
         """
         if not self._is_valid_data_type_name(data_type.value):
             msg = f"Invalid data type '{data_type}'. Must be one of {list(DataType.__members__.keys())}"
@@ -449,11 +448,10 @@ class StorageStrategy(BaseStrategy, ABC):
         validated_data = self._validate_data(collection, data)
         ctx = self._resolve_context(context)
         async with self._record_lock(ctx, collection, record_id):
-            if await self._read(collection, record_id, ctx):
-                updated = await self._update(collection, record_id, validated_data, ctx, visibility)
-                if updated is None:
-                    msg = f"Update failed for existing record '{collection}:{record_id}'"
-                    raise StorageServiceError(msg)
+            updated = await self._update(collection, record_id, validated_data, ctx, visibility)
+            if updated is not None:
                 return updated
+            # TODO(validate): UPSERT-UPDATE-FIRST upsert updates first and creates only on a miss
+            logger.info("[VALIDATE UPSERT-UPDATE-FIRST] no record to update, creating %s:%s", collection, record_id)
             record = self._create_storage_record(collection, record_id, validated_data, data_type, ctx, visibility)
             return await self._store(record)

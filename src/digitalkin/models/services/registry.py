@@ -60,12 +60,12 @@ class ModuleInfo(BaseModel):
             The normalized enum member, or the value unchanged.
         """
         if value == "tool":
-            # TODO(validate): remove marker once legacy setups are purged in prod
-            logger.warning("[VALIDATE MTYPE] legacy module_type 'tool' normalized to 'tool_module'")
+            # TODO(validate): LEGACY-MODULE-TYPE no legacy module_type values remain in stored setups
+            logger.warning("[VALIDATE LEGACY-MODULE-TYPE] legacy module_type 'tool' normalized to 'tool_module'")
             return RegistryModuleType.TOOL_MODULE
         if value == "kin":
-            # TODO(validate): remove marker once legacy setups are purged in prod
-            logger.warning("[VALIDATE MTYPE] legacy module_type 'kin' normalized to 'archetype'")
+            # TODO(validate): LEGACY-MODULE-TYPE no legacy module_type values remain in stored setups
+            logger.warning("[VALIDATE LEGACY-MODULE-TYPE] legacy module_type 'kin' normalized to 'archetype'")
             return RegistryModuleType.ARCHETYPE
         return value
 

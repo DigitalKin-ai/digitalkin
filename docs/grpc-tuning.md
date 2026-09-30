@@ -17,16 +17,14 @@
 │  DIGITALKIN_TASK_MANAGER_ADMISSION_TIMEOUT                   │
 │  DIGITALKIN_JOB_MANAGER_BACKPRESSURE_STRATEGY / _TIMEOUT    │
 ├─────────────────────────────────────────────────┤
-│  Layer 3: Lifecycle (completion & cleanup)       │
-│  DIGITALKIN_MODULE_SERVICER_COMPLETION_TIMEOUT                  │
-│  DIGITALKIN_TASK_MANAGER_STREAM_DRAIN_TIMEOUT                │
-│  DIGITALKIN_MODULE_SERVICER_SETUP_CACHE_MAX                     │
+│  Layer 3: Lifecycle (cleanup)                   │
+│  DIGITALKIN_SETUP_CACHE_MAX                     │
 ├─────────────────────────────────────────────────┤
-│  Layer 4: Signal I/O (gRPC client calls out)    │
-│  CLIENT_TIMEOUT                        │
-│  CLIENT_MAX_RETRIES / _BACKOFF   │
-│  DIGITALKIN_MODULE_TOOL_RESOLVE_TIMEOUT                │
-│  DIGITALKIN_JOB_MANAGER_CONFIG_SETUP_TIMEOUT                │
+│  Layer 4: gRPC client calls out + Redis signals │
+│  DIGITALKIN_SIGNAL_MAX_TASKS (Redis listener)   │
+│  DIGITALKIN_GRPC_QUERY_MAX_RETRIES / _BACKOFF   │
+│  DIGITALKIN_TOOL_RESOLVE_TIMEOUT                │
+│  DIGITALKIN_CONFIG_SETUP_TIMEOUT                │
 │  Client channel options (keepalive, retry, DNS) │
 │  CLIENT_GRPC_RETRY_* (channel retry policy) │
 │  CLIENT_GRPC_OPTIONS_* (keepalive, reconnect)    │
@@ -90,30 +88,21 @@ When `DIGITALKIN_TASK_MANAGER_MAX_QUEUED_TASKS = 0` (default): legacy single-sem
 
 ---
 
-## Layer 3: Signal I/O (Client-Side gRPC)
+## Layer 3: Signals (Redis pub/sub)
 
-### Outbound gRPC calls
+Signals no longer travel over gRPC: the gateway's `SendSignal` publishes on `signal_ch:{task_id}` and one `SharedRedisListener` per process PSUBSCRIBEs `signal_ch:*`. There is no send batching, polling or retry to tune. See [architecture/resilience.md](architecture/resilience.md).
 
-| Variable         | Default | Description                                                                                                                                                      |
-|------------------|---------|------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `CLIENT_TIMEOUT` | `30`    | Per-query deadline (seconds) for unary gRPC client calls. Under burst load, the services-provider slows down. Increase to 60s for safety under high concurrency. |
-
-### Signals
-
-Signals travel over Redis pub/sub, not over a batched `SendSignals` /
-polled `GetSignals` RPC pair. The only signal knob left is
-`DIGITALKIN_SIGNAL_MAX_TASKS` (max registered signal tasks, default 10000);
-see the Redis settings for delivery tuning.
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DIGITALKIN_SIGNAL_MAX_TASKS` | `10000` | Max tasks registered on the signal listener per process. |
 
 ### Servicer & Lifecycle
 
-| Variable                                        | Default | Description                                                                                                                                         |
-|-------------------------------------------------|---------|-----------------------------------------------------------------------------------------------------------------------------------------------------|
-| `DIGITALKIN_MODULE_SERVICER_SETUP_CACHE_MAX`    | `100`   | Max cached setup configurations per module servicer. Avoids redundant GetSetup RPCs.                                                                |
-| `DIGITALKIN_MODULE_SERVICER_COMPLETION_TIMEOUT` | `300.0` | Timeout (seconds) waiting for a job to complete after streaming ends. If exceeded, the session is force-cleaned with `TIMEOUT` cancellation reason. |
-| `DIGITALKIN_TASK_MANAGER_STREAM_DRAIN_TIMEOUT`  | `300.0` | Timeout (seconds) waiting for a task's output stream to fully drain before cleanup. Prevents stale sessions when clients disconnect mid-stream.     |
-| `DIGITALKIN_JOB_MANAGER_BACKPRESSURE_STRATEGY`  | `block` | What to do when all running slots are occupied: `block` (wait up to `BACKPRESSURE_TIMEOUT`) or `reject` (immediate failure).                        |
-| `DIGITALKIN_JOB_MANAGER_BACKPRESSURE_TIMEOUT`   | `300.0` | Max wait time (seconds) when `BACKPRESSURE_STRATEGY=block`. After this, the request is rejected.                                                    |
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DIGITALKIN_SETUP_CACHE_MAX` | `100` | Max cached setup configurations per module servicer. Avoids redundant GetSetup RPCs. |
+| `DIGITALKIN_BACKPRESSURE_STRATEGY` | `block` | What to do when all running slots are occupied: `block` (wait up to `BACKPRESSURE_TIMEOUT`) or `reject` (immediate failure). |
+| `DIGITALKIN_BACKPRESSURE_TIMEOUT` | `300.0` | Max wait time (seconds) when `BACKPRESSURE_STRATEGY=block`. After this, the request is rejected. |
 
 ---
 
@@ -193,9 +182,9 @@ per-target values in code.
 
 ---
 
-## Retry Architecture (Three Independent Layers)
+## Retry Architecture (Two Independent Layers)
 
-> **Full documentation:** [architecture/resilience.md](architecture/resilience.md) — problem statement, sequence diagrams, retryable vs non-retryable errors, before/after comparison.
+> **Full documentation:** [architecture/resilience.md](architecture/resilience.md) — retry layers, retryable vs non-retryable errors, the Redis signal path.
 
 ```
 RPC call
@@ -206,15 +195,11 @@ RPC call
 
   → Layer B: exec_grpc_query() app-level retry
       retryable: UNAVAILABLE, INTERNAL, DEADLINE_EXCEEDED
-      max_retries: CLIENT_MAX_RETRIES (default 2, 3 total)
-      backoff: CLIENT_BACKOFF_BASE_MS (default 50ms, doubles per attempt)
-
-  → Layer C: SendSignals _flush() retry (batch-specific)
-      retryable: DEADLINE_EXCEEDED, UNAVAILABLE, INTERNAL
-      max_retries: 3 (4 total), backoff: 100ms → 800ms
+      max_retries: DIGITALKIN_GRPC_QUERY_MAX_RETRIES (default 2, 3 total)
+      backoff: DIGITALKIN_GRPC_QUERY_BACKOFF_BASE_MS (default 50ms, doubles per attempt)
 ```
 
-Layer A retries transparently inside the channel. Layer B catches what A doesn't handle. Layer C is specific to the batched SendSignals path.
+Layer A retries transparently inside the channel. Layer B catches what A doesn't handle.
 
 ---
 
@@ -240,13 +225,8 @@ DIGITALKIN_TASK_MANAGER_MAX_CONCURRENT_TASKS=100
 DIGITALKIN_TASK_MANAGER_MAX_QUEUED_TASKS=1000
 DIGITALKIN_TASK_MANAGER_ADMISSION_TIMEOUT=5.0
 
-# Lifecycle
-DIGITALKIN_MODULE_SERVICER_COMPLETION_TIMEOUT=300.0
-DIGITALKIN_TASK_MANAGER_STREAM_DRAIN_TIMEOUT=300.0
-
-# Signals
-CLIENT_TIMEOUT=30
-DIGITALKIN_MODULE_SERVICER_SETUP_CACHE_MAX=200
+# Setup cache
+DIGITALKIN_SETUP_CACHE_MAX=200
 ```
 
 ### Medium Instance (8 vCPU, 32 GB)
@@ -261,13 +241,8 @@ DIGITALKIN_TASK_MANAGER_MAX_CONCURRENT_TASKS=200
 DIGITALKIN_TASK_MANAGER_MAX_QUEUED_TASKS=3000
 DIGITALKIN_TASK_MANAGER_ADMISSION_TIMEOUT=5.0
 
-# Lifecycle
-DIGITALKIN_MODULE_SERVICER_COMPLETION_TIMEOUT=600.0
-DIGITALKIN_TASK_MANAGER_STREAM_DRAIN_TIMEOUT=600.0
-
-# Signals
-CLIENT_TIMEOUT=60
-DIGITALKIN_MODULE_SERVICER_SETUP_CACHE_MAX=500
+# Setup cache
+DIGITALKIN_SETUP_CACHE_MAX=500
 ```
 
 ### Large Instance (32 vCPU, 64 GB)
@@ -282,13 +257,8 @@ DIGITALKIN_TASK_MANAGER_MAX_CONCURRENT_TASKS=400
 DIGITALKIN_TASK_MANAGER_MAX_QUEUED_TASKS=5000
 DIGITALKIN_TASK_MANAGER_ADMISSION_TIMEOUT=5.0
 
-# Lifecycle
-DIGITALKIN_MODULE_SERVICER_COMPLETION_TIMEOUT=900.0
-DIGITALKIN_TASK_MANAGER_STREAM_DRAIN_TIMEOUT=600.0
-
-# Signals
-CLIENT_TIMEOUT=60
-DIGITALKIN_MODULE_SERVICER_SETUP_CACHE_MAX=1000
+# Setup cache
+DIGITALKIN_SETUP_CACHE_MAX=1000
 ```
 
 ### Railway (Container PaaS)
@@ -307,13 +277,8 @@ DIGITALKIN_TASK_MANAGER_ADMISSION_TIMEOUT=5.0
 DIGITALKIN_JOB_MANAGER_BACKPRESSURE_STRATEGY=block
 DIGITALKIN_JOB_MANAGER_BACKPRESSURE_TIMEOUT=120.0
 
-# Lifecycle — shorter timeouts to release resources faster on restart
-DIGITALKIN_MODULE_SERVICER_COMPLETION_TIMEOUT=180.0
-DIGITALKIN_TASK_MANAGER_STREAM_DRAIN_TIMEOUT=120.0
-
-# Signals — tighter batching for lower memory footprint
-CLIENT_TIMEOUT=30
-DIGITALKIN_MODULE_SERVICER_SETUP_CACHE_MAX=100
+# Setup cache
+DIGITALKIN_SETUP_CACHE_MAX=100
 
 # I/O timing — fail fast on unreachable services
 CLIENT_MAX_RETRIES=1
@@ -333,61 +298,45 @@ DIGITALKIN_MODULE_TIMEZONE=Europe/Paris
 
 **Railway-specific notes:**
 
-- **DNS re-resolution** is configurable via `CLIENT_GRPC_OPTIONS_DNS_RESOLUTION_MS` (default 500ms) — critical when
-  services restart with new IPs.
-- **Higher `CLIENT_MAX_RETRIES`** with a longer `CLIENT_BACKOFF_BASE_MS` absorbs brief connectivity gaps during Railway
-  deploys.
-- **Shorter lifecycle timeouts** prevent orphaned sessions from consuming memory after Railway restarts.
+- **DNS re-resolution** is configurable via `DIGITALKIN_GRPC_DNS_RESOLUTION_MS` (default 500ms) — critical when services restart with new IPs.
 - Set `DIGITALKIN_MODULE_ID` per service if running multiple modules in the same Railway project.
 
 ---
 
 ## Complete Environment Variable Reference
 
-| Variable                                             | Type  | Default      | Layer           | Purpose                                                |
-|------------------------------------------------------|-------|--------------|-----------------|--------------------------------------------------------|
-| `SERVER_MAX_CONCURRENT_RPCS`                         | int   | cpu×200      | Server          | Async server concurrent RPCs                           |
-| `SERVER_THREAD_POOL_WORKERS`                         | int   | min(4, cpu)  | Server          | Migration thread pool size                             |
-| `DIGITALKIN_TASK_MANAGER_MAX_CONCURRENT_TASKS`       | int   | 100          | Task Mgr        | Concurrent task execution limit                        |
-| `DIGITALKIN_TASK_MANAGER_MAX_QUEUED_TASKS`           | int   | 0            | Task Mgr        | Admission queue depth (0 = disabled)                   |
-| `DIGITALKIN_TASK_MANAGER_ADMISSION_TIMEOUT`          | float | 5.0s         | Task Mgr        | Fast-fail when queue full                              |
-| `DIGITALKIN_TASK_MANAGER_TASK_WAIT_TIMEOUT`          | float | 30s          | Task Mgr        | Legacy slot wait timeout (queue disabled)              |
-| `DIGITALKIN_JOB_MANAGER_BACKPRESSURE_STRATEGY`       | str   | block        | Task Mgr        | `block` or `reject` when slots full                    |
-| `DIGITALKIN_JOB_MANAGER_BACKPRESSURE_TIMEOUT`        | float | 300.0s       | Task Mgr        | Max wait when strategy=block                           |
-| `DIGITALKIN_MODULE_SERVICER_COMPLETION_TIMEOUT`      | float | 300.0s       | Lifecycle       | Wait for job completion after stream ends              |
-| `DIGITALKIN_TASK_MANAGER_STREAM_DRAIN_TIMEOUT`       | float | 300.0s       | Lifecycle       | Wait for output stream to drain before cleanup         |
-| `CLIENT_TIMEOUT`                                     | float | 30s          | App retry       | Default per-query deadline for unary gRPC client calls |
-| `CLIENT_MAX_RETRIES`                                 | int   | 2            | App retry       | App-level retry count for gRPC client calls            |
-| `CLIENT_BACKOFF_BASE_MS`                             | float | 50           | App retry       | Base backoff (ms), doubles per attempt                 |
-| `DIGITALKIN_MODULE_TOOL_RESOLVE_TIMEOUT`             | float | 10.0s        | Tool init       | Per-tool resolution timeout                            |
-| `DIGITALKIN_JOB_MANAGER_CONFIG_SETUP_TIMEOUT`        | float | 30.0s        | Job Mgr         | Config setup response wait                             |
-| `CLIENT_GRPC_RETRY_MAX_ATTEMPTS`                     | int   | 5            | Channel retry   | Channel-level retry attempts                           |
-| `CLIENT_GRPC_RETRY_INITIAL_BACKOFF`                  | str   | 0.1s         | Channel retry   | Channel retry initial backoff                          |
-| `CLIENT_GRPC_RETRY_MAX_BACKOFF`                      | str   | 10s          | Channel retry   | Channel retry max backoff                              |
-| `CLIENT_GRPC_RETRY_BACKOFF_MULTIPLIER`               | float | 2.0          | Channel retry   | Backoff multiplier                                     |
-| `CLIENT_GRPC_OPTIONS_DNS_RESOLUTION_MS`              | int   | 500          | Channel opts    | DNS re-resolve interval                                |
-| `CLIENT_GRPC_OPTIONS_INITIAL_RECONNECT_MS`           | int   | 1000         | Channel opts    | First reconnect delay                                  |
-| `CLIENT_GRPC_OPTIONS_MAX_RECONNECT_MS`               | int   | 10000        | Channel opts    | Max reconnect backoff                                  |
-| `CLIENT_GRPC_OPTIONS_MIN_RECONNECT_MS`               | int   | 500          | Channel opts    | Min reconnect backoff                                  |
-| `CLIENT_GRPC_OPTIONS_KEEPALIVE_TIME`                 | int   | 15000        | Channel opts    | Keepalive ping interval                                |
-| `CLIENT_GRPC_OPTIONS_KEEPALIVE_TIMEOUT`              | int   | 5000         | Channel opts    | Keepalive pong timeout                                 |
-| `CLIENT_GRPC_OPTIONS_MIN_PING_INTERVAL`              | int   | 10000        | Channel opts    | Min HTTP/2 ping interval                               |
-| `CLIENT_GRPC_OPTIONS_KEEPALIVE_PERMIT_WITHOUT_CALLS` | bool  | true         | Channel opts    | Ping with no RPC in flight                             |
-| `CLIENT_GRPC_OPTIONS_MAX_RECEIVE_MESSAGE_LENGTH`     | int   | 104857600    | Channel opts    | Max response size in bytes                             |
-| `CLIENT_GRPC_OPTIONS_MAX_SEND_MESSAGE_LENGTH`        | int   | 104857600    | Channel opts    | Max request size in bytes                              |
-| `CLIENT_GRPC_OPTIONS_ENABLE_RETRIES`                 | bool  | false        | Channel opts    | gRPC-native retry layer                                |
-| `CLIENT_CHANNEL_HOST`                                | str   | localhost    | Client channel  | Host the client dials                                  |
-| `CLIENT_CHANNEL_PORT`                                | int   | 50051        | Client channel  | Port the client dials                                  |
-| `CLIENT_CHANNEL_COMMUNICATION_MODE`                  | str   | async        | Client channel  | `sync` or `async`                                      |
-| `CLIENT_CHANNEL_SECURITY`                            | str   | insecure     | Client channel  | `secure` or `insecure`                                 |
-| `CLIENT_CHANNEL_MTLS`                                | bool  | false        | Client channel  | Enable mutual TLS                                      |
-| `CLIENT_GRPC_COMPRESSION`                            | str   | gzip         | Client channel  | `none`, `gzip` or `deflate`                            |
-| `CLIENT_CIRCUIT_BREAKER_FAIL_MAX`                    | int   | 5            | Circuit breaker | Failures before the circuit opens                      |
-| `CLIENT_CIRCUIT_BREAKER_RESET_TIMEOUT`               | float | 30s          | Circuit breaker | Open duration before a half-open probe                 |
-| `DIGITALKIN_MODULE_SERVICER_SETUP_CACHE_MAX`         | int   | 100          | Module          | Setup config cache size                                |
-| `DIGITALKIN_MODULE_ID`                               | str   | metadata     | Module          | Override module identity at runtime                    |
-| `DIGITALKIN_MODULE_FILE_HISTORY_FLUSH_THRESHOLD`     | int   | 10           | Module          | Messages buffered before storage write                 |
-| `DIGITALKIN_MODULE_TIMEZONE`                         | str   | Europe/Paris | Module          | Default timezone (IANA zone name)                      |
-| `DIGITALKIN_LOG_DIR`                                 | str   | /app/logs    | Module          | Rotating JSON log file directory                       |
-| `DIGITALKIN_PROFILER`                                | str   | none         | Debug           | Profiler: none, pyinstrument, viztracer, yappi         |
-| `DIGITALKIN_PROFILE_OUTPUT_DIR`                      | str   | ./profiles   | Debug           | Profiler output directory                              |
+| Variable | Type | Default | Layer | Purpose |
+|----------|------|---------|-------|---------|
+| `DIGITALKIN_MAX_CONCURRENT_RPCS` | int | cpu×200 | Server | Async server concurrent RPCs |
+| `DIGITALKIN_THREAD_POOL_WORKERS` | int | min(4, cpu) | Server | Migration thread pool size |
+| `DIGITALKIN_MAX_CONCURRENT_TASKS` | int | 100 | Task Mgr | Concurrent task execution limit |
+| `DIGITALKIN_MAX_QUEUED_TASKS` | int | 0 | Task Mgr | Admission queue depth (0 = disabled) |
+| `DIGITALKIN_ADMISSION_TIMEOUT` | float | 5.0s | Task Mgr | Fast-fail when queue full |
+| `DIGITALKIN_TASK_WAIT_TIMEOUT` | float | 30s | Task Mgr | Legacy slot wait timeout (queue disabled) |
+| `DIGITALKIN_BACKPRESSURE_STRATEGY` | str | block | Task Mgr | `block` or `reject` when slots full |
+| `DIGITALKIN_BACKPRESSURE_TIMEOUT` | float | 300.0s | Task Mgr | Max wait when strategy=block |
+| `DIGITALKIN_SIGNAL_MAX_TASKS` | int | 10000 | Signals | Max tasks on the Redis signal listener |
+| `DIGITALKIN_GRPC_QUERY_MAX_RETRIES` | int | 2 | App retry | App-level retry count for gRPC client calls |
+| `DIGITALKIN_GRPC_QUERY_BACKOFF_BASE_MS` | float | 50 | App retry | Base backoff (ms), doubles per attempt |
+| `DIGITALKIN_TOOL_RESOLVE_TIMEOUT` | float | 10.0s | Tool init | Per-tool resolution timeout |
+| `DIGITALKIN_CONFIG_SETUP_TIMEOUT` | float | 30.0s | Job Mgr | Config setup response wait |
+| `DIGITALKIN_GRPC_RETRY_MAX_ATTEMPTS` | int | 5 | Channel retry | Channel-level retry attempts |
+| `DIGITALKIN_GRPC_RETRY_INITIAL_BACKOFF` | str | 0.1s | Channel retry | Channel retry initial backoff |
+| `DIGITALKIN_GRPC_RETRY_MAX_BACKOFF` | str | 10s | Channel retry | Channel retry max backoff |
+| `DIGITALKIN_GRPC_RETRY_BACKOFF_MULTIPLIER` | float | 2.0 | Channel retry | Backoff multiplier |
+| `DIGITALKIN_GRPC_DNS_RESOLUTION_MS` | int | 500 | Channel opts | DNS re-resolve interval |
+| `DIGITALKIN_GRPC_INITIAL_RECONNECT_MS` | int | 1000 | Channel opts | First reconnect delay |
+| `DIGITALKIN_GRPC_MAX_RECONNECT_MS` | int | 10000 | Channel opts | Max reconnect backoff |
+| `DIGITALKIN_GRPC_MIN_RECONNECT_MS` | int | 500 | Channel opts | Min reconnect backoff |
+| `DIGITALKIN_GRPC_KEEPALIVE_TIME_MS` | int | 60000 | Channel opts | Keepalive ping interval |
+| `DIGITALKIN_GRPC_KEEPALIVE_TIMEOUT_MS` | int | 20000 | Channel opts | Keepalive pong timeout |
+| `DIGITALKIN_GRPC_MIN_PING_INTERVAL_MS` | int | 30000 | Channel opts | Min HTTP/2 ping interval |
+| `DIGITALKIN_SETUP_CACHE_MAX` | int | 100 | Module | Setup config cache size |
+| `DIGITALKIN_MODULE_ID` | str | metadata | Module | Override module identity at runtime |
+| `DIGITALKIN_CHAT_HISTORY_FLUSH_THRESHOLD` | int | 10 | Module | Messages buffered before storage write |
+| `DIGITALKIN_TIMEZONE` | str | Europe/Paris | Module | Default timezone (IANA zone name) |
+| `DIGITALKIN_LOG_DIR` | str | /app/logs | Module | Rotating JSON log file directory |
+| `DIGITALKIN_ASYNCIO_INSPECTOR` | bool | false | Debug | Enable asyncio event loop monitoring |
+| `DIGITALKIN_ASYNCIO_INSPECTOR_PORT` | int | 8765 | Debug | Asyncio inspector port |
+| `DIGITALKIN_PROFILER` | str | none | Debug | Profiler: none, pyinstrument, viztracer, yappi |
+| `DIGITALKIN_PROFILE_OUTPUT_DIR` | str | ./profiles | Debug | Profiler output directory |

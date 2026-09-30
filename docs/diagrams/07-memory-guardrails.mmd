@@ -1,29 +1,25 @@
 flowchart TD
     subgraph "Bounded Resources"
-        Q1["output_queue: 512 max"]
-        Q2["signal_queue: 512 max"]
-        Q3["task_queue: 1000 max"]
-        PB["pending_buffer: 5000 max"]
-        SS["sessions: 2200 max"]
-        LT["listener tasks: 10000 max"]
+        Q1["output queue per task: 1000 max"]
+        Q3["task slots + admission queue"]
+        SS["gateway sessions: max_streams"]
+        LT["listener tasks: DIGITALKIN_SIGNAL_MAX_TASKS"]
+        SM["task:{id}:stream: redis_stream_maxlen"]
     end
 
     subgraph "TTL-Managed — Redis"
-        K1["task state: 24h"]
-        K2["streams: 5min"]
-        K3["checkpoints: 5min"]
-        K4["signals: 1h"]
-        K5["claims: 1h"]
+        K2["task:{id}:stream: 600s, 360s after EOS"]
+        K3["task:{id}:cursor: 360s"]
+        K4["cancel:{id}: 600s"]
+        K5["idem:{id}: 1h, 360s after EOS"]
     end
 
     subgraph "Ref-Counted Singletons"
         R1["RedisClient"]
         R2["SharedRedisListener"]
-        R3["RedisSendBuffer"]
         R4["CircuitBreaker"]
     end
 
     R1 -->|"release on ref=0"| X["close + remove\nfrom _instances"]
     R2 -->|"release on ref=0"| X
-    R3 -->|"release on ref=0"| X
     R4 -->|"remove on channel close"| X

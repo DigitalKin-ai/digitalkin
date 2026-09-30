@@ -67,31 +67,6 @@ class TestCircuitBreakerLogging:
         assert any("HALF_OPEN -> CLOSED" in r.message for r in caplog.records)
 
 
-class TestRedisStateLogging:
-    """RedisStateManager logs status transitions."""
-
-    async def test_set_status_logs_debug(self, caplog: pytest.LogCaptureFixture) -> None:
-        from digitalkin.core.task_manager.redis.redis_state import RedisStateManager
-
-        client = MagicMock()
-        pipe = MagicMock()
-        pipe.hset.return_value = pipe
-        pipe.expire.return_value = pipe
-
-        async def fake_execute() -> list[bool]:
-            return [True, True]
-
-        pipe.execute = fake_execute
-        client.pipeline.return_value = pipe
-
-        mgr = RedisStateManager(client)
-
-        with caplog.at_level(logging.DEBUG):
-            await mgr.set_status("task_log", "running")
-
-        assert any("task_log" in r.message and "running" in r.message for r in caplog.records)
-
-
 class TestStreamSessionLogging:
     """StreamSession logs lifecycle events."""
 

@@ -115,7 +115,7 @@ class TestStreamBenchmarks:
 
 
 class TestHashBenchmarks:
-    """HSET/HGETALL latency — RedisStateManager pattern."""
+    """HSET/HGETALL latency."""
 
     async def test_bench_hset_hgetall(self, redis_client) -> None:
         """HSET + HGETALL round-trip: expect p95 < 5ms."""

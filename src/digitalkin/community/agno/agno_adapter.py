@@ -7,6 +7,8 @@ import logging
 import uuid
 from typing import TYPE_CHECKING, Any, TypeAlias
 
+from pydantic import ValidationError
+
 if TYPE_CHECKING:
     from collections.abc import Callable
 
@@ -54,6 +56,7 @@ if TYPE_CHECKING:
 from digitalkin.models.events import (
     AgentRunEvent,
     BaseAgentRunEvent,
+    CustomEvent,
     ReasoningCompletedEvent,
     ReasoningContentDeltaEvent,
     ReasoningStartedEvent,
@@ -62,6 +65,8 @@ from digitalkin.models.events import (
     RunContentEvent,
     RunErrorEvent,
     RunStartedEvent,
+    SourceCitation,
+    SourceCitationEvent,
     SubagentErrorEvent,
     SubagentFinishedEvent,
     SubagentStartedEvent,
@@ -80,7 +85,9 @@ class AgnoStreamAdapter:
     """Stateful Agno→DigitalKin event converter.
 
     Auto-wraps ``run_content`` deltas in TextMessage/Reasoning lifecycle
-    events and tracks HITL pause state.
+    events and tracks HITL pause state. One adapter serves one stream: its
+    dedup state (citations, closed tool calls, completed runs) is reset on each
+    top-level ``run_started``, so it must not be shared across concurrent streams.
     """
 
     def __init__(self) -> None:
@@ -94,6 +101,8 @@ class AgnoStreamAdapter:
         self._reasonings: dict[str, tuple[str, dict[str, Any] | None]] = {}
 
         self._closed_tool_call_ids: set[str] = set()
+        # Providers repeat the same citations on every delta and again on completion.
+        self._cited_urls: set[str] = set()
 
         self._active_run_id: str | None = None
         self._completed_run_ids: set[str] = set()
@@ -206,6 +215,7 @@ class AgnoStreamAdapter:
             "tool_call_started": self._handle_tool_call_started,
             "tool_call_completed": self._handle_tool_call_completed,
             "tool_call_error": self._handle_tool_call_error,
+            "custom_event": self._handle_custom_event,
         }
         dispatch = {
             enum_cls[name]: handler
@@ -313,6 +323,17 @@ class AgnoStreamAdapter:
             self._active_run_id,
             self._last_metadata,
         )
+        # TODO(validate): ADAPTER-RESET per-run dedup state resets on each new top-level run
+        logger.info(
+            "[VALIDATE ADAPTER-RESET] run_id=%s clearing cited_urls=%d closed_tool_calls=%d completed_runs=%d",
+            run_id,
+            len(self._cited_urls),
+            len(self._closed_tool_call_ids),
+            len(self._completed_run_ids),
+        )
+        self._cited_urls.clear()
+        self._closed_tool_call_ids.clear()
+        self._completed_run_ids.clear()
         self._active_run_id = run_id
         return [
             RunStartedEvent(
@@ -337,11 +358,13 @@ class AgnoStreamAdapter:
         """
         parent_run_id = getattr(agno_event, "parent_run_id", None)
         run_id = agno_event.run_id
+        citations = self._citations(agno_event, timestamp)
 
         if parent_run_id:
             # Close this member's own text/reasoning bubble, then the matching step. Siblings
             # still streaming keep theirs open.
-            events: list[BaseAgentRunEvent] = self._close_content(self._run_key, timestamp)
+            events: list[BaseAgentRunEvent] = citations
+            events.extend(self._close_content(self._run_key, timestamp))
             events.extend(self._close_reasoning(self._run_key, timestamp))
 
             subagent = self._subagents.pop(run_id, None) if run_id else None
@@ -377,7 +400,8 @@ class AgnoStreamAdapter:
 
         # AG-UI refuses RUN_FINISHED while any message, reasoning or step is still open, so
         # everything still running when the top-level run ends is force-closed here.
-        events = self._close_all_content(timestamp)
+        events = citations
+        events.extend(self._close_all_content(timestamp))
         events.extend(self._close_all_reasoning(timestamp))
         events.extend(self._close_subagents(timestamp))
 
@@ -884,6 +908,80 @@ class AgnoStreamAdapter:
             event for run_key in reversed(list(self._messages)) for event in self._close_content(run_key, timestamp)
         ]
 
+    def _source_event(self, payload: Any, timestamp: Any) -> SourceCitationEvent | None:
+        """Validate one source payload into a ``source_citation`` event.
+
+        Args:
+            payload: ``{url, title?, description?}`` as received.
+            timestamp: Event timestamp.
+
+        Returns:
+            The event, or None when the payload is invalid (logged and dropped).
+        """
+        try:
+            citation = SourceCitation.model_validate(payload)
+        except ValidationError as exc:
+            logger.warning("Dropped source citation %r: %s", payload, exc)
+            return None
+        return SourceCitationEvent(
+            event=AgentRunEvent.CUSTOM,
+            name="source_citation",
+            value=citation,
+            subagent_run_id=self._subagent_of(self._run_key),
+            timestamp=timestamp,
+            metadata=self._last_metadata,
+        )
+
+    def _citations(
+        self, agno_event: AgnoRunContentEvent | AgnoRunCompletedEvent, timestamp: Any
+    ) -> list[BaseAgentRunEvent]:
+        """Convert the model-native ``citations.urls`` not yet emitted in this run.
+
+        Returns:
+            One SourceCitationEvent per new URL.
+        """
+        citations = agno_event.citations
+        if citations is None or not citations.urls:
+            return []
+        events: list[BaseAgentRunEvent] = []
+        for cite in citations.urls:
+            if not cite.url:
+                logger.warning("Dropped source citation without url: title=%r", cite.title)
+                continue
+            if cite.url in self._cited_urls:
+                continue
+            self._cited_urls.add(cite.url)
+            event = self._source_event({"url": cite.url, "title": cite.title}, timestamp)
+            if event is not None:
+                events.append(event)
+        return events
+
+    def _handle_custom_event(self, agno_event: AgnoRunEvent, timestamp: Any) -> list[BaseAgentRunEvent]:
+        """Handle RunEvent.custom_event — agno stores the tool's kwargs as attributes.
+
+        Returns:
+            A SourceCitationEvent for ``source_citation``, a generic CustomEvent otherwise,
+            or empty when the event is unnamed or its source is invalid.
+        """
+        data = agno_event.__dict__
+        name = data.get("name")
+        if not name:
+            logger.debug("Skipping unnamed agno custom event: %r", data)
+            return []
+        if name == "source_citation":
+            event = self._source_event(data.get("value"), timestamp)
+            return [event] if event is not None else []
+        return [
+            CustomEvent(
+                event=AgentRunEvent.CUSTOM,
+                name=name,
+                value=data.get("value"),
+                subagent_run_id=self._subagent_of(self._run_key),
+                timestamp=timestamp,
+                metadata=self._last_metadata,
+            )
+        ]
+
     def _handle_run_content(self, agno_event: AgnoRunContentEvent, timestamp: Any) -> list[BaseAgentRunEvent]:
         """Handle RunEvent.run_content — the core state machine.
 
@@ -892,7 +990,7 @@ class AgnoStreamAdapter:
         Returns:
             DigitalKin events for this chunk.
         """
-        events: list[BaseAgentRunEvent] = []
+        events = self._citations(agno_event, timestamp)
 
         reasoning_content = agno_event.reasoning_content
         content = agno_event.content

@@ -15,7 +15,9 @@ class GatewayStreamSettings(BaseSettings):
         default=360,
         description="Stream TTL (s) after EOS; >= reconnect window so a completed stream survives a reboot",
     )
-    redis_stream_initial_ttl: int = Field(default=600, description="Stream TTL in seconds before EOS")
+    redis_stream_initial_ttl: int = Field(
+        default=600, description="Sliding stream TTL (s) before EOS, re-armed on every output"
+    )
     redis_stream_maxlen: int = Field(default=1000, gt=0, description="Approximate max entries before trimming")
     redis_cursor_ttl: int = Field(default=360, description="Cursor key TTL in seconds")
     stream_read_block_ms: int = Field(default=50, description="XREAD block timeout in milliseconds")
@@ -143,7 +145,6 @@ class GatewaySettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="DIGITALKIN_GATEWAY_", case_sensitive=False)
 
     max_streams: int = Field(default=20000, gt=0, description="Max concurrent gateway sessions (per instance)")
-    redis_health_timeout: float = Field(default=5.0, description="Redis health check timeout in seconds")
     dial_back_idle_timeout_s: float = Field(
         default=300.0,
         description=(

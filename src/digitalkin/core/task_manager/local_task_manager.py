@@ -6,14 +6,13 @@ from typing import Any
 from digitalkin.core.task_manager.base_task_manager import BaseTaskManager
 from digitalkin.core.task_manager.task_executor import TaskExecutor
 from digitalkin.logger import logger
-from digitalkin.models.settings.task_manager import get_task_manager_settings
 from digitalkin.modules._base_module import BaseModule
 
 
 class LocalTaskManager(BaseTaskManager):
     """Task manager for local execution in the same process.
 
-    Executes tasks locally using TaskExecutor with the supervisor pattern.
+    Executes each task as a single asyncio task via TaskExecutor.
     Suitable for single-server deployments and development.
     """
 
@@ -67,15 +66,14 @@ class LocalTaskManager(BaseTaskManager):
             async def _finalize() -> None:
                 await self._cleanup_task(task_id, mission_id=mission_id)
 
-            supervisor_task = await self._executor.execute_task(
+            task = await self._executor.execute_task(
                 task_id,
                 mission_id,
                 coro,
                 session,
                 on_finalize=_finalize,
-                stream_drain_timeout=get_task_manager_settings().stream_drain_timeout,
             )
-            self.tasks[task_id] = supervisor_task
+            self.tasks[task_id] = task
 
             logger.info(
                 "Local task created and started: '%s' (total_tasks=%d)",

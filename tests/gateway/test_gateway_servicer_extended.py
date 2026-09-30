@@ -11,6 +11,7 @@ Errors are emitted as ``stream.error`` + ``stream.end`` sentinels — never via
 
 from __future__ import annotations
 
+import json
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -47,6 +48,9 @@ class _FakeRedisClient:
 
     async def xlen(self, name: str) -> int:
         return await self._client.xlen(name)  # type: ignore[return-value]
+
+    async def exists(self, *names: str) -> int:
+        return await self._client.exists(*names)  # type: ignore[return-value]
 
     async def expire(self, name: str, seconds: int) -> bool:
         return await self._client.expire(name, seconds)  # type: ignore[return-value]
@@ -213,11 +217,7 @@ class TestSendSignalExtended:
             pytest.skip("Gateway proto not installed")
 
         servicer = _mock_servicer(redis_client=redis)
-
-        from digitalkin.grpc_servers.stream_session import StreamSession
-
-        session = StreamSession(task_id="task_sig_redis")
-        await servicer._registry.register(session)
+        await redis.set("idem:task_sig_redis", "owner")
 
         request = MagicMock()
         request.task_id = "task_sig_redis"
@@ -225,6 +225,29 @@ class TestSendSignalExtended:
 
         resp = await servicer.SendSignal(request, MagicMock())
         assert resp.success is True
+        assert await redis.get("cancel:task_sig_redis") == b"1"
+        assert 0 < await redis._client.ttl("cancel:task_sig_redis") <= 600
+
+    async def test_no_idem_claim_publishes_but_returns_false(self, redis: Any) -> None:
+        """Without an ``idem:`` claim the signal is still published + tombstoned, but reported not found."""
+        from agentic_mesh_protocol.gateway.v1 import gateway_pb2
+
+        servicer = _mock_servicer(redis_client=redis)
+        pubsub = redis.pubsub()
+        await pubsub.subscribe("signal_ch:task_unknown")
+        await pubsub.get_message(timeout=0.1)
+
+        request = MagicMock()
+        request.task_id = "task_unknown"
+        request.action = gateway_pb2.CANCEL
+
+        resp = await servicer.SendSignal(request, MagicMock())
+        assert resp.success is False
+        assert await redis.get("cancel:task_unknown") == b"1"
+        msg = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
+        assert msg is not None
+        assert json.loads(msg["data"])["action"] == "cancel"
+        await pubsub.aclose()
 
     async def test_returns_false_when_publish_fails(self) -> None:
         """When Redis publish fails, returns success=False."""
@@ -238,13 +261,8 @@ class TestSendSignalExtended:
         mock_redis = MagicMock()
         mock_redis.eval = AsyncMock(return_value=1)
         mock_redis.xadd = AsyncMock(return_value=b"1-0")
-        mock_redis.publish = AsyncMock(side_effect=RedisError("publish failed"))
+        mock_redis.pipeline.return_value.execute = AsyncMock(side_effect=RedisError("publish failed"))
         servicer = _mock_servicer(redis_client=mock_redis)
-
-        from digitalkin.grpc_servers.stream_session import StreamSession
-
-        session = StreamSession(task_id="task_sig_none")
-        await servicer._registry.register(session)
 
         request = MagicMock()
         request.task_id = "task_sig_none"

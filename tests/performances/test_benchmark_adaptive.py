@@ -158,6 +158,7 @@ class TestSignalDispatchPerf:
         session = MagicMock()
         session.pending_signal_action = ""
         session.last_signal_published_ns = 0
+        session.cancelled = False
 
         async def long_running() -> None:
             await asyncio.sleep(60)
@@ -234,16 +235,7 @@ class TestStreamRegistryPerf:
         from digitalkin.grpc_servers.stream_registry import StreamRegistry
         from digitalkin.grpc_servers.stream_session import StreamSession
 
-        redis = MagicMock()
-        redis.eval = AsyncMock(return_value=1)
-        pipe = MagicMock()
-        pipe.decr = MagicMock(return_value=pipe)
-        pipe.zrem = MagicMock(return_value=pipe)
-        pipe.delete = MagicMock(return_value=pipe)
-        pipe.execute = AsyncMock(return_value=[])
-        redis.pipeline = MagicMock(return_value=pipe)
-
-        reg = StreamRegistry(redis)
+        reg = StreamRegistry()
 
         for i in range(WARMUP_ITERATIONS):
             await reg.register(StreamSession(task_id=f"warmup_{i}"))

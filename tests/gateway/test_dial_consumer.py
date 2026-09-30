@@ -58,6 +58,12 @@ class _FakeRedisClient:
     async def xlen(self, name: str) -> int:
         return await self._client.xlen(name)  # type: ignore[return-value]
 
+    async def exists(self, *names: str) -> int:
+        return await self._client.exists(*names)  # type: ignore[return-value]
+
+    async def delete(self, *names: str) -> int:
+        return await self._client.delete(*names)  # type: ignore[return-value]
+
     async def expire(self, name: str, seconds: int) -> bool:
         return await self._client.expire(name, seconds)  # type: ignore[return-value]
 
@@ -284,18 +290,17 @@ class TestDialConsumer:
         try:
             task_id = "task_happy"
 
-            # Pre-populate Redis with two domain outputs + EOS in the production
-            # xadd format ({"pb","seq"} then {"eos"}) so _consume_from_redis drains it.
+            ctx = _mock_context({"x-client-address": f"127.0.0.1:{port}"})
+            # StartStream resets the stream for a fresh claim, so outputs are written after it.
+            await gateway.StartStream(_start_request(task_id), ctx)
+
+            # Two domain outputs + EOS in the production xadd format ({"pb","seq"} then {"eos"}).
             stream_key = f"task:{task_id}:stream"
             for i in range(2):
                 s = struct_pb2.Struct()
                 s.update({"protocol": "healthcheck_ping", "status": "pong", "i": i})
                 await gateway._redis_client.xadd(stream_key, {"pb": s.SerializeToString(), "seq": str(i + 1)})
             await gateway._redis_client.xadd(stream_key, {"eos": b"true"})
-
-            ctx = _mock_context({"x-client-address": f"127.0.0.1:{port}"})
-            # Let StartStream register the session (avoid dedup early-return).
-            await gateway.StartStream(_start_request(task_id), ctx)
 
             # Wait until consumer sees stream.end on the wire.
             for _ in range(80):
@@ -347,7 +352,7 @@ class TestDialConsumer:
             await server.stop(grace=0.1)
 
     async def test_multi_turn_upstream(self, gateway) -> None:
-        """First reply → ModuleRunner; subsequent replies → Redis input stream."""
+        """First reply → ModuleRunner; follow-up replies are dropped, never written to Redis (R1)."""
         servicer = _FakeConsumerServicer(
             query_data={"q": "first"},
             extra_upstream=[{"q": "second"}, {"q": "third"}],
@@ -361,29 +366,17 @@ class TestDialConsumer:
             ctx = _mock_context({"x-client-address": f"127.0.0.1:{port}"})
             await gateway.StartStream(_start_request(task_id), ctx)
 
-            redis = gateway._redis_client
-            input_key = f"task:{task_id}:input"
+            runner = gateway._fake_runner
             for _ in range(80):
-                xlen = await redis.xlen(input_key)
-                if xlen >= 2:
+                if runner.calls:
                     break
                 await asyncio.sleep(0.05)
+            await asyncio.sleep(0.3)
 
             # First reply went to ModuleRunner (in-memory by-value).
-            runner = gateway._fake_runner
             assert len(runner.calls) == 1
             assert runner.calls[0]["query"].fields["q"].string_value == "first"
-
-            # Follow-up replies XADD'd to the Redis input stream as raw bytes.
-            entries = await redis._client.xrange(input_key)  # noqa: SLF001
-            payloads = []
-            for _entry_id, fields in entries:
-                pb = fields.get(b"pb")
-                assert pb is not None
-                s = struct_pb2.Struct()
-                s.ParseFromString(pb)
-                payloads.append(s.fields["q"].string_value)
-            assert payloads == ["second", "third"]
+            assert await gateway._redis_client.exists(f"task:{task_id}:input") == 0
         finally:
             await server.stop(grace=0.1)
 
@@ -535,12 +528,11 @@ class TestDialConsumer:
                 stream_key = f"task:{task_id}:stream"
                 out = struct_pb2.Struct()
                 out.update({"protocol": "healthcheck_ping", "status": "pong"})
-                await gateway._redis_client.xadd(stream_key, {"pb": out.SerializeToString(), "seq": "1"})
-                await gateway._redis_client.xadd(stream_key, {"eos": b"true"})
-
                 ctx = _mock_context({"x-client-address": f"127.0.0.1:{port}"})
                 t0 = asyncio.get_event_loop().time()
                 await gateway.StartStream(_start_request(task_id), ctx)
+                await gateway._redis_client.xadd(stream_key, {"pb": out.SerializeToString(), "seq": "1"})
+                await gateway._redis_client.xadd(stream_key, {"eos": b"true"})
                 # Wait until session is unregistered, which only happens after
                 # the dial-back's finally runs.
                 for _ in range(60):
@@ -598,12 +590,11 @@ class TestDialConsumer:
                         "fatal": True,
                     }
                 })
-                await gateway._redis_client.xadd(stream_key, {"pb": err.SerializeToString(), "seq": "1"})
-                await gateway._redis_client.xadd(stream_key, {"eos": b"true"})
-
                 ctx = _mock_context({"x-client-address": f"127.0.0.1:{port}"})
                 t0 = asyncio.get_event_loop().time()
                 await gateway.StartStream(_start_request(task_id), ctx)
+                await gateway._redis_client.xadd(stream_key, {"pb": err.SerializeToString(), "seq": "1"})
+                await gateway._redis_client.xadd(stream_key, {"eos": b"true"})
                 for _ in range(80):
                     if gateway._registry.get(task_id) is None:
                         break

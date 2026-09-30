@@ -54,8 +54,6 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
         Returns:
             The matching ``CONTEXT_*`` wire enum.
         """
-        # TODO(validate): remove after prod validation
-        # [VALIDATE CTXENUM] server resolves the concrete id (incl. setup->current version) from metadata
         if context == self.setup_version_id or context.startswith("setup_versions:"):
             return data_pb2.CONTEXT_SETUP_VERSIONS
         if context.startswith(f"{Context.USERS.value}:"):
@@ -173,8 +171,8 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
             resp = await self.exec_grpc_query("StoreRecord", req)
             return self._build_record_from_proto(resp.stored_data)
         except PermissionDeniedError:
-            # TODO(validate): remove after prod validation
-            logger.warning("[VALIDATE PD1] storage StoreRecord permission denied")
+            # TODO(validate): STORAGE-PERMISSION-DENIED storage permission denials propagate to the caller
+            logger.warning("[VALIDATE STORAGE-PERMISSION-DENIED] storage StoreRecord permission denied")
             raise
         except Exception as e:
             if self._is_circuit_open(e):
@@ -203,20 +201,14 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
             resp = await self.exec_grpc_query("ReadRecord", req)
             return self._build_record_from_proto(resp.stored_data)
         except PermissionDeniedError:
-            # TODO(validate): remove after prod validation
-            logger.warning("[VALIDATE PD1] storage ReadRecord permission denied")
+            # TODO(validate): STORAGE-PERMISSION-DENIED storage permission denials propagate to the caller
+            logger.warning("[VALIDATE STORAGE-PERMISSION-DENIED] storage ReadRecord permission denied")
             raise
         except Exception as e:
             if self._is_circuit_open(e):
                 logger.debug("gRPC ReadRecord skipped (circuit open) for %s:%s", collection, record_id)
             else:
                 logger.info("gRPC ReadRecord failed for %s:%s: %s", collection, record_id, e)
-            return None
-
-        try:
-            return self._build_record_from_proto(resp.stored_data)
-        except Exception:
-            logger.warning("Invalid record data for %s:%s in ReadRecord", collection, record_id, exc_info=True)
             return None
 
     async def _update(
@@ -249,8 +241,8 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
             resp = await self.exec_grpc_query("UpdateRecord", req)
             return self._build_record_from_proto(resp.stored_data)
         except PermissionDeniedError:
-            # TODO(validate): remove after prod validation
-            logger.warning("[VALIDATE PD1] storage UpdateRecord permission denied")
+            # TODO(validate): STORAGE-PERMISSION-DENIED storage permission denials propagate to the caller
+            logger.warning("[VALIDATE STORAGE-PERMISSION-DENIED] storage UpdateRecord permission denied")
             raise
         except Exception as e:
             if self._is_circuit_open(e):
@@ -277,8 +269,8 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
             )
             await self.exec_grpc_query("RemoveRecord", req)
         except PermissionDeniedError:
-            # TODO(validate): remove after prod validation
-            logger.warning("[VALIDATE PD1] storage RemoveRecord permission denied")
+            # TODO(validate): STORAGE-PERMISSION-DENIED storage permission denials propagate to the caller
+            logger.warning("[VALIDATE STORAGE-PERMISSION-DENIED] storage RemoveRecord permission denied")
             raise
         except Exception as e:
             if self._is_circuit_open(e):
@@ -318,8 +310,8 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
                 req.visibilities.extend(self._visibility_enum(v) for v in visibilities)
             resp = await self.exec_grpc_query("ListRecords", req)
         except PermissionDeniedError:
-            # TODO(validate): remove after prod validation
-            logger.warning("[VALIDATE PD1] storage ListRecords permission denied")
+            # TODO(validate): STORAGE-PERMISSION-DENIED storage permission denials propagate to the caller
+            logger.warning("[VALIDATE STORAGE-PERMISSION-DENIED] storage ListRecords permission denied")
             raise
         except Exception as e:
             if self._is_circuit_open(e):
@@ -347,8 +339,8 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper):
             )
             await self.exec_grpc_query("RemoveCollection", req)
         except PermissionDeniedError:
-            # TODO(validate): remove after prod validation
-            logger.warning("[VALIDATE PD1] storage RemoveCollection permission denied")
+            # TODO(validate): STORAGE-PERMISSION-DENIED storage permission denials propagate to the caller
+            logger.warning("[VALIDATE STORAGE-PERMISSION-DENIED] storage RemoveCollection permission denied")
             raise
         except Exception as e:
             if self._is_circuit_open(e):

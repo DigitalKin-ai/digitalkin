@@ -450,3 +450,87 @@ class TestEdgeCases:
 
         assert task.get_name() == f"{task_id}_main"
         await task
+
+
+# ============================================================================
+# Test: Cancel before the first step
+# ============================================================================
+
+
+class TestCancelBeforeFirstStep:
+    """A task cancelled before ``_run`` starts still finalizes (slot/session released)."""
+
+    @pytest.mark.asyncio
+    async def test_backstop_runs_finalize_and_closes_coro(
+        self,
+        task_executor: TaskExecutor,
+        mock_base_module: Mock,
+    ) -> None:
+        session = TaskSession("early", "missions:early", mock_base_module)
+        started = False
+
+        async def job() -> None:  # noqa: RUF029
+            nonlocal started
+            started = True
+
+        coro = job()
+        finalized = asyncio.Event()
+
+        async def on_finalize() -> None:  # noqa: RUF029
+            finalized.set()
+
+        session.pending_signal_action = "cancel"
+        task = await task_executor.execute_task("early", "missions:early", coro, session, on_finalize=on_finalize)
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+        await asyncio.wait_for(finalized.wait(), timeout=1.0)
+        assert not started
+        assert coro.cr_frame is None  # closed, no "never awaited" warning
+        assert session.cancelled
+        assert session.cancellation_reason.value == "signal_service_cancel"
+        assert session.stream_closed
+        assert not task_executor._backstops
+
+    @pytest.mark.asyncio
+    async def test_backstop_idle_when_task_started(
+        self,
+        task_executor: TaskExecutor,
+        mock_base_module: Mock,
+    ) -> None:
+        session = TaskSession("normal", "missions:n", mock_base_module)
+        calls = 0
+
+        async def on_finalize() -> None:  # noqa: RUF029
+            nonlocal calls
+            calls += 1
+
+        async def job() -> None:
+            await asyncio.sleep(0)
+
+        task = await task_executor.execute_task("normal", "missions:n", job(), session, on_finalize=on_finalize)
+        await task
+        await asyncio.sleep(0)
+        assert calls == 1
+        assert not task_executor._backstops
+
+    @pytest.mark.asyncio
+    async def test_stop_signal_records_stop_reason(
+        self,
+        task_executor: TaskExecutor,
+        mock_base_module: Mock,
+    ) -> None:
+        """``stop`` is a hard cancel: same path, reason SIGNAL_SERVICE_STOP."""
+        session = TaskSession("stopme", "missions:s", mock_base_module)
+
+        async def job() -> None:
+            await asyncio.sleep(10)
+
+        task = await task_executor.execute_task("stopme", "missions:s", job(), session)
+        await asyncio.sleep(0)
+        session.pending_signal_action = "stop"
+        task.cancel()
+        await task
+        assert session.status == "cancelled"
+        assert session.cancellation_reason.value == "signal_service_stop"

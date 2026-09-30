@@ -129,6 +129,7 @@ class TestListenerConcurrency:
         session = MagicMock()
         session.pending_signal_action = ""
         session.last_signal_published_ns = 0
+        session.cancelled = False
 
         async def long_running() -> None:
             await asyncio.sleep(10)
@@ -214,7 +215,7 @@ class TestStreamRegistryConcurrency:
 
         monkeypatch.setenv("DIGITALKIN_GATEWAY_MAX_STREAMS", "10")
         get_gateway_settings.cache_clear()
-        registry = StreamRegistry(MagicMock())
+        registry = StreamRegistry()
 
         for i in range(10):
             accepted = await registry.register(StreamSession(task_id=f"t_{i}"))
@@ -233,7 +234,7 @@ class TestStreamRegistryConcurrency:
 
         monkeypatch.setenv("DIGITALKIN_GATEWAY_MAX_STREAMS", "100")
         get_gateway_settings.cache_clear()
-        registry = StreamRegistry(MagicMock())
+        registry = StreamRegistry()
 
         async def churn(i: int) -> None:
             tid = f"churn_{i}"

@@ -1,4 +1,4 @@
-"""Redis signal transport: SharedRedisListener (pub/sub receive) + RedisSendBuffer (batched publish)."""
+"""Redis signal transport: SharedRedisListener (pub/sub receive and dispatch)."""
 
 from __future__ import annotations
 
@@ -86,8 +86,6 @@ class SharedRedisListener:
         self._counters: dict[str, int] = {
             "received": 0,
             "deduped": 0,
-            "evicted": 0,
-            "dropped": 0,
             "restarts": 0,
             "subscribed": 0,
             "invalidated": 0,
@@ -156,7 +154,7 @@ class SharedRedisListener:
         self._task_sessions.pop(task_id, None)
         self._last_seen.pop(task_id, None)
 
-    def dispatch_signal(self, task_id: str, data: dict[str, Any], raw_json: str) -> bool:
+    def dispatch_signal(self, task_id: str, data: dict[str, Any], raw_json: str) -> bool:  # ruff: ignore[too-many-return-statements]
         """Route a signal: ``cancel``/``stop`` → side channel + ``task.cancel()``; other actions → audit-only.
 
         Returns:
@@ -166,7 +164,8 @@ class SharedRedisListener:
         if raw_json == self._last_seen.get(task_id):
             self._counters["deduped"] += 1
             return False
-        self._last_seen[task_id] = raw_json
+        if task_id == "_global_" or task_id in self._task_refs:
+            self._last_seen[task_id] = raw_json
 
         action = data.get("action", "")
         pub_ns = data.get("published_at_ns") or 0
@@ -211,6 +210,16 @@ class SharedRedisListener:
                 "[signal] dispatch_skipped: action=%s reason=task_already_done task_id=%s",
                 action,
                 task_id,
+            )
+            return False
+        if session.pending_signal_action or session.cancelled:
+            # TODO(validate): REPEAT-CANCEL repeated cancels are suppressed while a cancel is pending
+            logger.info(
+                "[VALIDATE REPEAT-CANCEL] dispatch_skipped: action=%s reason=already_cancelling pending=%s payload=%s",
+                action,
+                session.pending_signal_action,
+                raw_json,
+                extra={"task_id": task_id},
             )
             return False
 
@@ -285,14 +294,12 @@ class SharedRedisListener:
             if now - self._last_counters_log >= 60.0:  # ruff: ignore[magic-value-comparison]
                 c = self._counters
                 logger.debug(
-                    "[perf] signal_counters: origin=%s received=%d deduped=%d evicted=%d "
-                    "dropped=%d listener_restarts=%d active_subs=%d subscribed_total=%d "
+                    "[perf] signal_counters: origin=%s received=%d deduped=%d "
+                    "listener_restarts=%d active_subs=%d subscribed_total=%d "
                     "invalidated=%d",
                     SharedRedisListener.PROCESS_ID,
                     c["received"],
                     c["deduped"],
-                    c["evicted"],
-                    c["dropped"],
                     c["restarts"],
                     len(self._task_refs),
                     c["subscribed"],
