@@ -64,7 +64,7 @@ generated from the classes below.
 
 | Prefix                                                         | Settings class                                         | Configures                                                |
 |----------------------------------------------------------------|--------------------------------------------------------|-----------------------------------------------------------|
-| `SERVER_`                                                      | `ServerSettings`                                       | module gRPC server: concurrency, reflection, health check |
+| `SERVER_`                                                      | `ServerSettings`                                       | module gRPC server: concurrency, workers, reflection, health check |
 | `SERVER_CHANNEL_`                                              | `ServerChannelSettings`                                | listen address, security, advertised host                 |
 | `SERVER_GRPC_`                                                 | `GrpcServerSettings`                                   | compression and `SERVER_GRPC_OPTIONS_*` channel options   |
 | `CLIENT_`                                                      | `ClientSettings`                                       | unary query retries, backoff and deadline                 |
@@ -74,7 +74,7 @@ generated from the classes below.
 | `CLIENT_CIRCUIT_BREAKER_`                                      | `CircuitBreakerSettings`                               | per-service circuit breaker                               |
 | `CERTIFICATE_`                                                 | `CertificateSettings`                                  | certificate volumes                                       |
 | `SERVICE_MODE`, `DIGITALKIN_MODULE_`                           | `ModuleSettings`                                       | services mode, module id, timezone, tool resolution       |
-| `DIGITALKIN_MODULE_SERVICER_`                                  | `ModuleServicerSettings`                               | setup cache, completion timeout                           |
+| `DIGITALKIN_MODULE_SERVICER_`                                  | `ModuleServicerSettings`                               | per-setup-version cache size and TTL                      |
 | `DIGITALKIN_REDIS_`                                            | `RedisSettings`, `RedisPoolSettings`                   | Redis URL, pools and TTLs                                 |
 | `DIGITALKIN_SIGNAL_`                                           | `RedisSignalSettings`                                  | signal delivery                                           |
 | `DIGITALKIN_GATEWAY_`                                          | `GatewaySettings` and its nested classes               | streams, dial-back, queues                                |
@@ -82,6 +82,7 @@ generated from the classes below.
 | `DIGITALKIN_TASK_MANAGER_`, `DIGITALKIN_JOB_MANAGER_`          | `TaskManagerSettings`, `JobManagerSettings`            | admission, concurrency, backpressure                      |
 | `DIGITALKIN_BULKHEAD_`                                         | `BulkheadSettings`, `BulkheadServiceSettings`          | per-service concurrency limits                            |
 | `DIGITALKIN_LOG_`, `DIGITALKIN_QUEUE_`, `DIGITALKIN_REGISTRY_` | `LoggingSettings`, `QueueSettings`, `RegistrySettings` | logging, queue sizes, registry search                     |
+| `DIGITALKIN_AGUI_`                                             | `AgUiSettings`                                         | AG-UI sources caps, inline attachment size                |
 | `DIGITALKIN_`                                                  | `ProfilingSettings`                                    | profiler, uvloop                                          |
 
 ## Adding variables to a module
@@ -146,7 +147,7 @@ class MyModuleEnvManager(EnvManager):
         cls._proxy = None
 ```
 
-The archetype `ada` (`src/archetype_ada/env.py`) is a complete example.
+The `archetype-ada` module repository (`src/archetype_ada/env.py`) is a complete example.
 
 ### Reading a variable
 

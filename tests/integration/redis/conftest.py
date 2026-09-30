@@ -11,7 +11,8 @@ import os
 import pytest
 import pytest_asyncio
 
-# Default matches docker-compose.yml `tests-redis` host port (${REDIS_PORT:-6399}).
+# Default is the first port of the docker-compose.yml `tests-redis` range; when it is taken, use
+# `docker compose port tests-redis 6379`.
 # Override with DIGITALKIN_REDIS_URL to point elsewhere.
 REDIS_URL = os.environ.get("DIGITALKIN_REDIS_URL", "redis://localhost:6399/0")
 
@@ -21,6 +22,9 @@ async def redis_client(monkeypatch: pytest.MonkeyPatch):
     """Function-scoped RedisClient connected to real Redis.
 
     Skips test if Redis is unreachable.
+
+    Yields:
+        A connected RedisClient.
     """
     from digitalkin.core.task_manager.redis.redis_client import RedisClient
     from digitalkin.models.settings.redis import get_redis_settings

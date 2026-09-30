@@ -7,14 +7,35 @@ See ``docs/community/agno.md`` for the full flow.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import logging
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from ag_ui.core.events import Interrupt, RunFinishedInterruptOutcome
+from ag_ui.core.types import (
+    AssistantMessage as AgUiAssistantMessage,
+)
+from ag_ui.core.types import (
+    ContentPart,
+    DataSource,
+    ImagePart,
+    TextPart,
+    ToolMessage,
+    UserMessage,
+)
+from ag_ui.core.types import (
+    FunctionCall as AgUiFunctionCall,
+)
+from ag_ui.core.types import (
+    ToolCall as AgUiToolCall,
+)
+from agno.media import Image
 from pydantic import BaseModel, ConfigDict, Field
 
-from digitalkin.community.agno.models import PauseInfo
+from digitalkin.community.agno.models import AgUiRunInput, PauseInfo
+from digitalkin.models.settings.agui import get_agui_settings
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Coroutine
@@ -22,6 +43,7 @@ if TYPE_CHECKING:
     from ag_ui.core.types import Message as AgUiMessage
     from ag_ui.core.types import Tool as AgUiTool
     from agno.agent import Agent
+    from agno.models.message import Message as AgnoMessage
     from agno.run.agent import RunOutput
 
     from digitalkin.community.agno.toolkits.registry.loader.kit import LoadManager
@@ -147,7 +169,7 @@ class HitlEvents:
     """AG-UI message conversion and event emission for the HITL flow."""
 
     @staticmethod
-    def agno_messages_to_agui(agno_messages: list[Any]) -> list[AgUiMessage]:
+    def agno_messages_to_agui(agno_messages: list[AgnoMessage]) -> list[AgUiMessage]:  # ruff: ignore[complex-structure]
         """Convert Agno messages into AG-UI messages.
 
         Drops system/developer/reasoning; reshapes assistant ``tool_calls``
@@ -159,71 +181,48 @@ class HitlEvents:
         Returns:
             AG-UI :class:`~ag_ui.core.types.Message` instances.
         """
-        from ag_ui.core.types import (
-            AssistantMessage as AgUiAssistantMessage,
-        )
-        from ag_ui.core.types import (
-            FunctionCall as AgUiFunctionCall,
-        )
-        from ag_ui.core.types import (
-            ToolCall as AgUiToolCall,
-        )
-        from ag_ui.core.types import (
-            ToolMessage as AgUiToolMessage,
-        )
-        from ag_ui.core.types import (
-            UserMessage as AgUiUserMessage,
-        )
-
         result: list[AgUiMessage] = []
-        for msg in agno_messages or []:
-            role = getattr(msg, "role", None)
-            msg_id = getattr(msg, "id", None) or ""
-            content = getattr(msg, "content", None)
+        for msg in agno_messages:
+            content = msg.content
             if isinstance(content, list):
-                content = " ".join(str(part) for part in content if part is not None)
+                texts: list[str] = []
+                for part in content:
+                    if isinstance(part, dict) and part.get("type") == "text":
+                        texts.append(part.get("text") or "")
+                    else:
+                        # TODO(validate): AGUI-PART-DROPPED non-text content is logged, never repr'd into text
+                        logger.info(
+                            "[VALIDATE AGUI-PART-DROPPED] agno message %s (%s): non-text part not converted: %.500r",
+                            msg.id,
+                            msg.role,
+                            part,
+                        )
+                content = " ".join(texts)
 
-            if role == "user":
-                result.append(AgUiUserMessage(id=msg_id, role="user", content=content or ""))
-            elif role == "assistant":
-                raw_calls = getattr(msg, "tool_calls", None) or []
+            if msg.role == "user":
+                result.append(UserMessage(id=msg.id, content=content or ""))
+            elif msg.role == "assistant":
                 agui_tool_calls: list[AgUiToolCall] = []
-                for tc in raw_calls:
-                    tc_id = tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", None)
-                    func = tc.get("function") if isinstance(tc, dict) else getattr(tc, "function", None)
-                    if not tc_id or func is None:
+                for tc in msg.tool_calls or []:
+                    tc_id = tc.get("id")
+                    func = tc.get("function")
+                    if not tc_id or not isinstance(func, dict) or not func.get("name"):
+                        logger.info("Dropped agno tool call without id or function name on %s: %.500r", msg.id, tc)
                         continue
-                    func_name = func.get("name") if isinstance(func, dict) else getattr(func, "name", None)
-                    func_args = func.get("arguments") if isinstance(func, dict) else getattr(func, "arguments", None)
+                    func_args = func.get("arguments")
                     if not isinstance(func_args, str):
                         func_args = json.dumps(func_args) if func_args is not None else "{}"
                     agui_tool_calls.append(
-                        AgUiToolCall(
-                            id=tc_id,
-                            type="function",
-                            function=AgUiFunctionCall(name=func_name or "", arguments=func_args),
-                        )
+                        AgUiToolCall(id=tc_id, function=AgUiFunctionCall(name=func["name"], arguments=func_args))
                     )
                 result.append(
-                    AgUiAssistantMessage(
-                        id=msg_id,
-                        role="assistant",
-                        content=content if isinstance(content, str) else None,
-                        tool_calls=agui_tool_calls or None,
-                    )
+                    AgUiAssistantMessage(id=msg.id, content=content or None, tool_calls=agui_tool_calls or None)
                 )
-            elif role == "tool":
-                tool_call_id = getattr(msg, "tool_call_id", None)
-                if not tool_call_id:
+            elif msg.role == "tool":
+                if not msg.tool_call_id:
+                    logger.info("Dropped agno tool message %s without tool_call_id: %.500r", msg.id, content)
                     continue
-                result.append(
-                    AgUiToolMessage(
-                        id=msg_id,
-                        role="tool",
-                        tool_call_id=tool_call_id,
-                        content=content if isinstance(content, str) else "",
-                    )
-                )
+                result.append(ToolMessage(id=msg.id, tool_call_id=msg.tool_call_id, content=content or ""))
         return result
 
     @staticmethod
@@ -527,18 +526,13 @@ class AgnoHitlRunner:
         # Write results onto run_output.tools: after to_dict/from_dict the
         # requirements' ToolExecution instances differ from run_output.tools[].
         for tool in run_output.tools or []:
-            tid = getattr(tool, "tool_call_id", None)
-            if tid and tid in tool_results:
-                tool.result = tool_results[tid]
+            if tool.tool_call_id and tool.tool_call_id in tool_results:
+                tool.result = tool_results[tool.tool_call_id]
 
         # Keep requirements in sync (unused by acontinue_run, useful for debug).
         for req in run_output.requirements or []:
             tool_exec = req.tool_execution
-            if (
-                tool_exec is not None
-                and getattr(req, "needs_external_execution", False)
-                and tool_exec.tool_call_id in tool_results
-            ):
+            if tool_exec is not None and req.needs_external_execution and tool_exec.tool_call_id in tool_results:
                 req.set_external_execution_result(tool_results[tool_exec.tool_call_id])
 
         stream = self._agent.acontinue_run(
@@ -559,7 +553,7 @@ class AgnoHitlRunner:
 
     async def try_resume(
         self,
-        input_data: Any,
+        input_data: AgUiRunInput,
         *,
         send: Callable[[BaseAgentRunEvent], Coroutine[Any, Any, None]],
     ) -> tuple[bool, PauseInfo | None]:
@@ -569,9 +563,7 @@ class AgnoHitlRunner:
             ``(False, None)`` if no resume should happen, ``(True, None)``
             on completion, or ``(True, PauseInfo)`` on re-pause.
         """
-        from ag_ui.core.types import ToolMessage, UserMessage
-
-        thread_id = getattr(input_data, "thread_id", None)
+        thread_id = input_data.thread_id
         if not thread_id:
             return False, None
 
@@ -579,13 +571,13 @@ class AgnoHitlRunner:
         if record is None:
             return False, None
 
-        messages = getattr(input_data, "messages", None) or []
+        messages = input_data.messages
         pending = set(record.pending_tool_call_ids)
 
         tool_results: dict[str, str] = {}
         for msg in messages:
             if isinstance(msg, ToolMessage) and msg.tool_call_id in pending:
-                tool_results[msg.tool_call_id] = msg.content
+                tool_results[msg.tool_call_id] = self._content_text(msg.id, msg.content, None)
 
         if not tool_results:
             last = messages[-1] if messages else None
@@ -603,7 +595,7 @@ class AgnoHitlRunner:
         if missing:
             from digitalkin.models.events import AgentRunEvent, RunErrorEvent, RunStartedEvent
 
-            input_run_id = getattr(input_data, "run_id", None)
+            input_run_id = input_data.run_id
             logger.warning(
                 "try_resume: partial tool results for thread_id=%s — resolved %d/%d, missing=%s",
                 thread_id,
@@ -648,14 +640,14 @@ class AgnoHitlRunner:
             thread_id=thread_id,
             tool_results=tool_results,
             send=send,
-            run_id=getattr(input_data, "run_id", None),
-            agui_tools=getattr(input_data, "tools", None),
+            run_id=input_data.run_id,
+            agui_tools=input_data.tools,
         )
         return True, pause_info
 
     async def handle_agui_input(
         self,
-        input_data: Any,
+        input_data: AgUiRunInput,
         *,
         send: Callable[[BaseAgentRunEvent], Coroutine[Any, Any, None]],
         context: ModuleContext | None = None,
@@ -668,18 +660,17 @@ class AgnoHitlRunner:
         ``RunFinished`` event is emitted automatically.
 
         Args:
-            input_data: Object exposing ``thread_id``, ``messages``, ``tools``.
+            input_data: The run input (``thread_id``, ``run_id``, ``messages``, ``tools``).
             send: Digitalkin-event callback.
             context: If provided, emit the awaiting ``RunFinished`` on pause.
             message: Override the user prompt (default: last ``UserMessage``).
-            images: Optional multimodal inputs.
+            images: Optional multimodal inputs; inline image parts of the last user message
+                are appended to them.
 
         Returns:
             ``None`` on completion or no actionable input; a :class:`PauseInfo`
             on pause.
         """
-        from ag_ui.core.types import UserMessage
-
         resumed, pause_info = await self.try_resume(input_data=input_data, send=send)
         if resumed:
             if pause_info is not None and context is not None:
@@ -692,22 +683,19 @@ class AgnoHitlRunner:
             return pause_info
 
         if message is None:
-            messages = getattr(input_data, "messages", None) or []
-            user_messages = [m for m in messages if isinstance(m, UserMessage)]
+            user_messages = [m for m in input_data.messages if isinstance(m, UserMessage)]
             if not user_messages:
                 logger.warning("handle_agui_input: no user message in input, nothing to do")
                 return None
-            content = user_messages[-1].content
-            if isinstance(content, list):
-                content = " ".join(getattr(p, "text", "") for p in content if hasattr(p, "text"))
-            message = content
+            images = images or []
+            message = self._content_text(user_messages[-1].id, user_messages[-1].content, images)
 
         pause_info = await self.run(
             message=message,
             send=send,
-            thread_id=getattr(input_data, "thread_id", ""),
-            agui_tools=getattr(input_data, "tools", None),
-            images=images,
+            thread_id=input_data.thread_id,
+            agui_tools=input_data.tools,
+            images=images or None,
         )
         if pause_info is not None and context is not None:
             await HitlEvents.emit_awaiting_tool_result(
@@ -717,6 +705,55 @@ class AgnoHitlRunner:
                 pending_tool_call_ids=pause_info.pending_tool_call_ids,
             )
         return pause_info
+
+    @staticmethod
+    def _content_text(message_id: str, content: str | list[ContentPart], images: list[Image] | None) -> str:
+        """Text the model receives from an AG-UI message content.
+
+        Inline (``data``) image parts go to ``images`` when given, bounded before decoding. Every
+        other part is logged and not passed on: the SDK never fetches a ``url`` source and a
+        ``file`` source is a provider handle, never a URL.
+
+        Args:
+            message_id: Id of the message the content belongs to, for the drop log.
+            content: The message content.
+            images: Collects decoded inline images; ``None`` drops them.
+
+        Returns:
+            The text parts joined by a space.
+        """
+        if isinstance(content, str):
+            return content
+        texts: list[str] = []
+        for part in content:
+            if isinstance(part, TextPart):
+                texts.append(part.text)
+                continue
+            source = part.source
+            if (
+                images is not None
+                and isinstance(part, ImagePart)
+                and isinstance(source, DataSource)
+                and len(source.value) <= get_agui_settings().max_inline_b64_chars
+            ):
+                try:
+                    images.append(
+                        Image(content=base64.b64decode(source.value, validate=True), mime_type=source.mime_type)
+                    )
+                    continue
+                except binascii.Error as exc:
+                    logger.info("Inline image %s of message %s is not valid base64: %s", part.id, message_id, exc)
+            # TODO(validate): AGUI-PART-DROPPED parts the model cannot receive are logged, never repr'd
+            logger.info(
+                "[VALIDATE AGUI-PART-DROPPED] message %s: %s part %s (%s source, %s, %d chars) not passed to the model",
+                message_id,
+                part.type,
+                part.id,
+                source.type,
+                source.mime_type,
+                len(source.value),
+            )
+        return " ".join(texts)
 
     async def _drive(
         self,

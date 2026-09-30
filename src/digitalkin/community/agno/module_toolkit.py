@@ -14,16 +14,19 @@ import time
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from typing import Any
 
+from ag_ui.core.events import ActivitySnapshotEvent
 from ag_ui.core.events import CustomEvent as AgUiCustomEvent
 from agno.media import Image
 from agno.tools.function import Function, ToolResult
+from pydantic import ValidationError
 
 from digitalkin.community.agno.models import ToolCallMetadata, ToolOutputMetadata
 from digitalkin.community.agno.toolkits.base import DkToolkit
 from digitalkin.core.profiling.step_timer import StepTimer
 from digitalkin.logger import logger
+from digitalkin.models.events import SourceCitation
 from digitalkin.models.module import ModuleContext
-from digitalkin.models.module.ag_ui import AgUiCustomEventOutput, AgUiOutput
+from digitalkin.models.module.ag_ui import AgUiActivitySnapshotOutput, AgUiCustomEventOutput, AgUiOutput
 from digitalkin.models.module.tool_cache import ToolDefinition, ToolModuleInfo
 from digitalkin.services.communication.exceptions import ToolCallError
 
@@ -239,14 +242,17 @@ class ModuleToolkit(DkToolkit):
 
     @staticmethod
     async def _relay_custom_event(context: ModuleContext, response: dict[str, Any]) -> None:
-        """Relay a tool's AG-UI custom event onto the agent's own output stream.
+        """Relay a tool's AG-UI custom events and sources onto the agent's own output stream.
 
         A called tool streams its AG-UI events on its own gRPC job. The frontend only
         consumes the agent's job stream, and nothing splices the two, so those events
         would be dropped. Custom events carry application payloads the UI needs (e.g.
-        the virtual desktop's live-view URL), so we forward them here.
+        the virtual desktop's live-view URL), so we forward them here, keeping their
+        ``metadata`` but not the tool's ``subagentRunId``, which names an invocation of
+        the tool's stream that was never announced on the agent's. ``sources`` activity
+        snapshots go to :meth:`_relay_sources`.
 
-        Only `agui_custom` is relayed: forwarding the tool's run/text lifecycle events
+        Only these are relayed: forwarding the tool's run/text lifecycle events
         would nest a second run inside the agent's own, which the frontend already tracks.
 
         Relaying is best-effort — a failure here must never fail the tool call.
@@ -256,11 +262,14 @@ class ModuleToolkit(DkToolkit):
             response: One streamed message from the tool, as yielded by `call_module`.
         """
         root = response.get("root", {})
-        if not isinstance(root, dict) or root.get("protocol") != AGUI_CUSTOM_PROTOCOL:
+        protocol = root.get("protocol") if isinstance(root, dict) else None
+        event = root.get("event") if protocol in {AGUI_CUSTOM_PROTOCOL, "agui_activity_snapshot"} else None
+        if not isinstance(event, dict):
             return
-
-        event = root.get("event")
-        if not isinstance(event, dict) or not event.get("name"):
+        if protocol == "agui_activity_snapshot":
+            await ModuleToolkit._relay_sources(context, event)
+            return
+        if not event.get("name"):
             return
 
         # callbacks is a dict-driven SimpleNamespace (module_context.py:168);
@@ -275,6 +284,10 @@ class ModuleToolkit(DkToolkit):
                 url,
             )
             return
+        if "subagentRunId" in event:
+            logger.info(
+                "Relaying custom event '%s' without the tool's subagentRunId=%s", event["name"], event["subagentRunId"]
+            )
 
         try:
             # Rebuilt from name/value rather than model_validate: the dict comes from
@@ -283,7 +296,7 @@ class ModuleToolkit(DkToolkit):
             await send_message(
                 AgUiOutput(
                     root=AgUiCustomEventOutput(
-                        event=AgUiCustomEvent(name=event["name"], value=value),
+                        event=AgUiCustomEvent(name=event["name"], value=value, metadata=event.get("metadata") or None),
                     )
                 )
             )
@@ -294,6 +307,53 @@ class ModuleToolkit(DkToolkit):
             )
         except Exception:
             logger.exception("Failed to relay custom event '%s' to the agent stream", event["name"])
+
+    @staticmethod
+    async def _relay_sources(context: ModuleContext, event: dict[str, Any]) -> None:
+        """Merge a tool's ``sources`` activity into the agent run's own sources list.
+
+        The agent run's list has a single writer, so the tool's snapshot is never forwarded as
+        is. Without an AG-UI run on this side (a tool calling a tool) it is forwarded unchanged
+        for the next relay up. Best-effort: never raises.
+
+        Args:
+            context: The agent's module context.
+            event: The tool's ``ACTIVITY_SNAPSHOT`` event, camelCase as streamed.
+        """
+        content = event.get("content")
+        sources = content.get("sources") if isinstance(content, dict) else None
+        if event.get("activityType") != "sources" or not isinstance(content, dict) or not isinstance(sources, list):
+            logger.info("Dropped relayed activity %.2000r: only sources activities are relayed", event)
+            return
+        run = context.agui_run
+        if run is not None:
+            for source in sources:
+                try:
+                    await run.cite(context, SourceCitation.model_validate(source), None)
+                except ValidationError as exc:  # ruff: ignore[try-except-in-loop]
+                    logger.warning("Dropped relayed source %.2000r: %s", source, exc)
+                except Exception:
+                    logger.exception("Failed to merge relayed source %.2000r", source)
+            return
+        send_message = vars(context.callbacks).get("send_message")
+        if send_message is None:
+            logger.warning("Dropped relayed sources %.2000r: no send_message on the context", sources)
+            return
+        try:
+            await send_message(
+                AgUiOutput(
+                    root=AgUiActivitySnapshotOutput(
+                        event=ActivitySnapshotEvent(
+                            message_id=str(event.get("messageId")),
+                            activity_type="sources",
+                            content=content,
+                            replace=True,
+                        )
+                    )
+                )
+            )
+        except Exception:
+            logger.exception("Failed to forward sources %.2000r", sources)
 
     def _handle_success(
         self,

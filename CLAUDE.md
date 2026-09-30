@@ -2,7 +2,7 @@
 
 DigitalKin is a Python SDK for building and managing agents in multi-agent systems: gRPC transport, Redis Streams for durable messaging, pluggable service strategies.
 
-Detailed conventions live in `.claude/rules/` and load automatically when you touch matching files. Architecture is documented in `docs/architecture/`, `docs/gateway_protocol.md` and `docs/testing_strategy.md` — read those rather than asking for a tour.
+Detailed conventions live in `.claude/rules/` and load automatically when you touch matching files. Architecture is documented in `docs/architecture.md`, `docs/gateway_protocol.md` and `docs/testing.md` — read those rather than asking for a tour.
 
 ## Code philosophy (MANDATORY)
 
@@ -65,13 +65,13 @@ Tests need the docker compose stack (Redis). `uv run pytest` alone will skip or 
 **Service Strategies** (`src/digitalkin/services/`)
 - Strategy pattern with dependency injection
 - `ServicesConfig`: Central configuration for local vs remote service implementations
-- Services include: storage, cost, snapshot, registry, filesystem, agent, identity
+- Services in `ServicesConfig`: storage, cost, registry, filesystem, identity, communication, user_profile, secret. `setup` (chosen by `ModuleServicer`) and `task_manager` (`RedisTaskManager`, injected by `SingleJobManager`) live outside it
 - Each service has local (e.g., `DefaultStorage`) and remote (e.g., `GrpcStorage`) implementations
 
 **Models** (`src/digitalkin/models/`)
 - `DataTrigger`: Base for input/output trigger types with protocol-based discriminated union
 - `DataModel[DataTriggerT]`: Generic wrapper containing trigger + annotations
-- `SetupModel`: Module configuration with field filtering via `json_schema_extra` (`{"config": True}` for initial config, `{"hidden": True}` for runtime-only)
+- `SetupModel`: Module configuration with field filtering via `json_schema_extra` (`{"config": True}` for initial config, `{"ui:widget": "hidden"}` for runtime-only)
 - `ModuleContext`: Context object carrying all dependencies (services, session data, callbacks, metadata)
 
 ### Key Design Patterns
@@ -79,9 +79,9 @@ Tests need the docker compose stack (Redis). `uv run pytest` alone will skip or 
 1. **Generic Type Parameters**: Modules use 4 generic types for type-safe input/output/setup/secret handling
 2. **Protocol-Based Dispatching**: Input protocol field routes to appropriate TriggerHandler
 3. **Streaming via Callbacks**: Modules stream results through `context.callbacks.send_message()`
-4. **Service Strategy Injection**: Services configured at module class level, instantiated per job, passed via ModuleContext
-5. **Lifecycle State Machines**: Clear state transitions (CREATED → STARTING → RUNNING → STOPPING → STOPPED/FAILED/CANCELLED)
-6. **Discovery and Registration**: Automatic discovery of trigger handlers, module registration with registry server
+4. **Service Strategy Injection**: Overrides declared on the module class (`services_config_strategies` / `services_config_params`); `BaseJobManager` builds the `ServicesConfig`; instances are passed via ModuleContext
+5. **Lifecycle**: `prepare()` (idempotent) → `start()` → `run` → `stop()`; `ModuleStatus` goes CREATED → STOPPING → STOPPED/FAILED/CANCELLED on the run path (`STARTING` is never set, `RUNNING` only in config setup)
+6. **Discovery and Registration**: Automatic discovery of trigger handlers; registration with the external registry service at server start
 
 ### Data Flow
 
@@ -104,7 +104,7 @@ Lifecycle is in-band: `stream.start`, `stream.error`, `stream.cancelled`, `strea
 
 ```
 Client SendSignal(CANCEL)
-  → Gateway: pipeline EXISTS idem:{id} + SET cancel:{id} (tombstone) + PUBLISH signal_ch:{id}
+  → Gateway: Lua EVAL — refuse when idem:{id} belongs to another mission (x-mission-id), else SET cancel:{id} EX (tombstone) + PUBLISH signal_ch:{id}
     → SharedRedisListener.dispatch_signal (first cancel only)
       → task.cancel() → TaskExecutor except CancelledError → TaskSession._handle_cancel
         → Module.stop() emits stream.cancelled + stream.end
@@ -212,12 +212,7 @@ Modules expose JSON schemas for all formats. Use `get_clean_model()` on SetupMod
 
 ## Testing Patterns
 
-Tests are organized by component:
-- `tests/core/` - Task and job manager tests
-- `tests/grpc_server/` - Server and servicer tests
-- `tests/modules/` - Module and trigger handler tests
-- `tests/services/` - Service strategy tests
-- `tests/performances/` - Performance benchmarks
+Tests mirror the component they cover; the full layout and marker list is in `.claude/rules/tests.md` and `docs/testing.md`.
 
 Use `pytest.mark.asyncio` for async tests. The `asyncio_mode = "auto"` setting in pyproject.toml enables automatic async test detection.
 
@@ -225,23 +220,19 @@ Use `pytest.mark.asyncio` for async tests. The `asyncio_mode = "auto"` setting i
 
 - **Redis**: Output streams (`task:{id}:stream`, `task:{id}:cursor`), idempotency claims (`idem:{id}`), cancel tombstones (`cancel:{id}`), signal pub/sub (`signal_ch:{id}`). Every key carries a TTL
 - **gRPC**: All inter-service communication
-- **Protobuf**: Message definitions from `digitalkin-proto` package
+- **Protobuf**: Message definitions and stubs from the `agentic-mesh-protocol` package (`agentic_mesh_protocol.<service>.v1`)
 
 ## Examples
 
-See `examples/` directory for:
-- `examples/modules/` - Example module implementations (minimal, llm, google search)
-- `start_grpc_server_module.py` - Start a module server
-- `start_grpc_server_registry.py` - Start a registry server
-- `start_grpc_client.py` - Example client interaction
+See `examples/README.md`: `redis_demo/` (smallest runnable module), `modules/dynamic_setup_module.py`, `bench_module/`, `monitoring/`. The SDK ships no registry server and no client; a consumer hosts its own `GatewayService.Stream` endpoint for the dial-back.
 
 ## Creating New Modules
 
-1. Subclass `BaseModule` or `ToolModule`/`ArchetypeModule`
+1. Subclass `ToolModule` or `ArchetypeModule` (`BaseModule` is private)
 2. Define input/output/setup/secret models as Pydantic classes
 3. Create `TriggerHandler` subclasses with unique `protocol` values
 4. Implement `handle()` method in each trigger handler
-5. Configure services via `ServicesConfig` class attribute
+5. Override services with `services_config_strategies` / `services_config_params` class attributes
 6. Register module with a ModuleServer
 
 ## Version Management

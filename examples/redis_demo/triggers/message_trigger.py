@@ -7,7 +7,7 @@ from digitalkin.models.module import ModuleContext
 from digitalkin.modules.trigger_handler import TriggerHandler
 
 from models.input import MessageInputPayload
-from models.output import MessageOutputPayload
+from models.output import EchoOutput, MessageOutputPayload
 from models.setup import EchoSetup
 from echo_module import EchoToolModule
 
@@ -56,8 +56,8 @@ class MessageTrigger(TriggerHandler):
                 result = f"{setup_data.prefix}{result}"
             chunk = f"[{i + 1}/{repeat}] {result}"
 
-            output = MessageOutputPayload(response=chunk)
-            await self.send_message(context, output)
+            output = EchoOutput(root=MessageOutputPayload(response=chunk))
+            await context.callbacks.send_message(output)
 
             if i < repeat - 1 and delay_s > 0:
                 await asyncio.sleep(delay_s)

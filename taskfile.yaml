@@ -29,11 +29,6 @@ tasks:
     cmds:
       - uv sync --group dev --group docs
 
-  examples-deps:
-    desc: "Install examples dependencies"
-    cmds:
-      - uv sync --group examples
-
   tests-deps:
     desc: "Install tests dependencies"
     cmds:
@@ -48,13 +43,6 @@ tasks:
     desc: "Build the PyPI package (runs your build script)"
     cmds:
       - uv build
-
-  generate-certificates:
-    desc: "Generate certificates"
-    # You can customize the certificate generation with various options:
-    # python generate_certificates.py --output-dir ./my-certs --key-size 4096 --dns-names localhost myserver.example.com --ip-addresses 127.0.0.1 192.168.1.100
-    cmds:
-      - uv run python scripts/generate_certificates.py
 
   publish-package-test:
     desc: "Publish the package to the PyPI's test env"

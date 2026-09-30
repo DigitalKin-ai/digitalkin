@@ -1,9 +1,10 @@
 services:
   tests-redis:
-    container_name: digitalkin-tests-redis
     image: redis:7-alpine
     ports:
-      - "${REDIS_PORT:-6399}:6379"
+      # First free host port in the range, so two checkouts can run side by side;
+      # `docker compose port tests-redis 6379` prints the one taken.
+      - "${REDIS_PORT:-6399-6409}:6379"
     networks:
       - services-network
     command: >
@@ -21,7 +22,6 @@ services:
       retries: 5
 
   tests-toxiproxy:
-    container_name: digitalkin-tests-toxiproxy
     profiles: ["chaos"]
     image: ghcr.io/shopify/toxiproxy:2.9.0
     ports:
@@ -34,7 +34,6 @@ services:
         condition: service_healthy
 
   tests:
-    container_name: digitalkin-tests
     build:
       context: .
       dockerfile: docker/Dockerfile.test

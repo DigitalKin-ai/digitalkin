@@ -40,7 +40,7 @@ async def test_crash_emits_run_error_then_stream_end_and_stays_failed() -> None:
     run_error = send.await_args_list[2].args[0].root
     assert isinstance(run_error, AgUiRunErrorOutput)
     assert run_error.event.code == "module_error"
-    assert run_error.event.message == "RuntimeError: boom"
+    assert run_error.event.message == "module execution failed"
     assert module.status == ModuleStatus.FAILED
 
 

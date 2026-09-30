@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from digitalkin.mixins.agui_mixin import AgUiMixin
+from digitalkin.mixins.agui_mixin import AgUiMixin, AgUiRunState
 from digitalkin.models.events import AgentRunEvent, CustomEvent, SourceCitation, SourceCitationEvent
 from digitalkin.models.module.ag_ui import AgUiCustomEventOutput
 
@@ -47,22 +47,36 @@ async def test_send_message_dispatches_custom_event() -> None:
 
 
 @pytest.mark.asyncio
-async def test_source_citation_wire_frame() -> None:
+async def test_source_citation_becomes_sources_activity() -> None:
+    """``source_citation`` no longer travels as CUSTOM: it feeds the run's ``sources`` activity."""
     mixin = _Mixin()
     ctx = _ctx()
+    ctx.agui_run = AgUiRunState()
 
     await mixin.send_message(
         ctx, SourceCitationEvent(value=SourceCitation(url="https://docs.digitalkin.ai/pricing", title="Pricing"))
     )
 
     frame = ctx.callbacks.send_message.await_args_list[-1].args[0].model_dump(mode="json")
-    assert frame["root"]["protocol"] == "agui_custom"
-    event = frame["root"]["event"]
-    assert event["type"] == "CUSTOM"
-    assert event["name"] == "source_citation"
-    assert event["value"] == {"url": "https://docs.digitalkin.ai/pricing", "title": "Pricing"}
-    assert "subagentRunId" not in event
-    assert "metadata" not in event
+    assert frame["root"]["protocol"] == "agui_activity_snapshot"
+    assert frame["root"]["event"] == {
+        "type": "ACTIVITY_SNAPSHOT",
+        "messageId": f"sources-{ctx.agui_run.sources_id}",
+        "activityType": "sources",
+        "content": {"sources": [{"url": "https://docs.digitalkin.ai/pricing", "title": "Pricing"}]},
+        "replace": True,
+    }
+
+
+@pytest.mark.asyncio
+async def test_source_citation_without_open_run_is_dropped() -> None:
+    mixin = _Mixin()
+    ctx = _ctx()
+    ctx.agui_run = None
+
+    await mixin.send_message(ctx, SourceCitationEvent(value=SourceCitation(url="https://x.io/a")))
+
+    ctx.callbacks.send_message.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -72,10 +86,8 @@ async def test_custom_event_carries_subagent_attribution() -> None:
 
     await mixin.send_message(
         ctx,
-        SourceCitationEvent(
-            value=SourceCitation(url="https://x.io/a"),
-            subagent_run_id="member-r1",
-            metadata={"name": "Alice"},
+        CustomEvent(
+            name="live_view", value={"url": "https://x.io/a"}, subagent_run_id="member-r1", metadata={"name": "Alice"}
         ),
     )
 

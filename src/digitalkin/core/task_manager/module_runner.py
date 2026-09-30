@@ -7,6 +7,7 @@ import json
 import time
 from typing import TYPE_CHECKING, Any
 
+from ag_ui.core import RunErrorEvent
 from google.protobuf import json_format, struct_pb2
 from pydantic import ValidationError
 from redis.exceptions import RedisError
@@ -19,6 +20,7 @@ from digitalkin.grpc_servers.interceptors.request_ids import RequestContext
 from digitalkin.logger import logger
 from digitalkin.models.core.task_monitor import CancellationReason
 from digitalkin.models.grpc_servers.stream_error_codes import StreamErrorCode
+from digitalkin.models.module.ag_ui import AgUiOutput, AgUiRunErrorOutput
 from digitalkin.models.module.base_types import DataModel
 from digitalkin.models.module.module import ModuleStatus
 from digitalkin.models.module.utility import EndOfStreamOutput, StreamCancelledOutput, StreamHeartbeatOutput
@@ -90,6 +92,7 @@ class ModuleRunner:
         profiler = TaskProfiler(task_id=task_id, mode=profiler_mode, output_dir=profiling.profile_output_dir)
 
         top_level_keys: list[str] = []
+        input_dict: dict[str, Any] | None = None
         query_byte_size = 0
         module: Any = None
         created = False
@@ -327,7 +330,7 @@ class ModuleRunner:
                 or self._servicer.module_class.input_format
             )
             model_name = input_format_cls.__name__ if input_format_cls is not None else "<unknown>"
-            dict_repr = repr(input_dict)[:4096] if "input_dict" in locals() else "<unbuilt>"
+            dict_repr = repr(input_dict)[:4096] if input_dict is not None else "<unbuilt>"
             try:
                 errors_json = json.dumps(exc.errors(include_url=False), default=str)
             except (TypeError, ValueError):
@@ -347,6 +350,19 @@ class ModuleRunner:
                 dict_repr,
                 extra=log_extra,
             )
+            output_format = self._servicer.module_class.output_format
+            if input_dict is not None and isinstance(output_format, type) and issubclass(output_format, AgUiOutput):
+                # TODO(validate): AGUI-INPUT-RUN-ERROR an AG-UI client sees RUN_ERROR for an invalid run input
+                logger.info("[VALIDATE AGUI-INPUT-RUN-ERROR] invalid run input; emitting RUN_ERROR", extra=log_extra)
+                await _on_output(
+                    AgUiOutput(
+                        root=AgUiRunErrorOutput(
+                            event=RunErrorEvent(
+                                message="invalid run input", code=StreamErrorCode.INPUT_VALIDATION_ERROR.value
+                            )
+                        )
+                    )
+                )
             missing_summary = f" missing_fields={missing_paths}" if missing_paths else ""
             await on_fatal(
                 StreamErrorCode.INPUT_VALIDATION_ERROR.value,

@@ -51,7 +51,12 @@ def _roots(ctx: MagicMock) -> list[Any]:
 
 
 def _deltas(ctx: MagicMock) -> list[list[dict[str, Any]]]:
-    return [root.event.delta for root in _roots(ctx) if isinstance(root, AgUiStateDeltaOutput)]
+    """Patch ops exactly as they reach the wire (``ModuleRunner._on_output`` dump)."""
+    return [
+        call.args[0].model_dump(mode="json")["root"]["event"]["delta"]
+        for call in ctx.callbacks.send_message.await_args_list
+        if isinstance(call.args[0].root, AgUiStateDeltaOutput)
+    ]
 
 
 def _tool(tool_call_id: str = "call_1", name: str = "search") -> ToolInfo:
@@ -78,6 +83,15 @@ class TestRunStateUpdate:
             [{"op": "add", "path": "/tools/a~1b~0c", "value": {"status": "running"}}],
             [{"op": "replace", "path": "/tools/a~1b~0c/status", "value": "failed"}],
         ]
+
+    async def test_null_value_survives_serialisation(self) -> None:
+        """AG-UI 1.0 types patch ops; ``exclude_none`` must not strip a required ``value: null``."""
+        ctx = _ctx()
+        run = AgUiRunState()
+
+        await run.update(ctx, (("run", "error"), None))
+
+        assert _deltas(ctx) == [[{"op": "replace", "path": "/run/error", "value": None}]]
 
     async def test_fail_closes_once(self) -> None:
         ctx = _ctx()

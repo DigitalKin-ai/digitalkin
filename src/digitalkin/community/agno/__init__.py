@@ -12,6 +12,8 @@ on top of the Agno agent framework. Exports:
   paused Agno run via the module's
   :class:`~digitalkin.services.storage.StorageStrategy` and resumes it
   when the front replies with a ``ToolMessage``.
+- :class:`AgUiStreamInput` — AG-UI 1.0 run input trigger; upgrades legacy
+  ``binary`` attachments to 1.0 media parts.
 - :class:`ToolCallMetadata`, :class:`ToolOutputMetadata` — metadata models
   for module tool calls made through the toolkit.
 
@@ -36,10 +38,18 @@ from digitalkin.community.agno.hitl import (
     PausedRunRecord,
     PausedRunStore,
 )
-from digitalkin.community.agno.models import PauseInfo, ToolCallMetadata, ToolOutputMetadata
+from digitalkin.community.agno.models import (
+    AgUiRunInput,
+    AgUiStreamInput,
+    PauseInfo,
+    ToolCallMetadata,
+    ToolOutputMetadata,
+)
 
 __all__ = [
     "HITL_STORAGE_CONFIG",
+    "AgUiRunInput",
+    "AgUiStreamInput",
     "AgnoHitlRunner",
     "AgnoStreamAdapter",
     "AguiTools",

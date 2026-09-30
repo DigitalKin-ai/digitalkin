@@ -16,7 +16,7 @@ paths:
 - Annotate every parameter and return on new code.
 - Data models are Pydantic. Do not hand-roll validation or serialization.
 - Modules carry all four type params `[InputModelT, OutputModelT, SetupModelT, SecretModelT]`. No `Any` leaking through them.
-- `SetupModel` field visibility goes through `json_schema_extra` (`{"config": True}`, `{"hidden": True}`); filter with `get_clean_model()`, never by stripping fields manually.
+- `SetupModel` field visibility goes through `json_schema_extra` (`{"config": True}`, `{"ui:widget": "hidden"}`); filter with `get_clean_model()`, never by stripping fields manually.
 
 ## Enums
 Enums stay enums, with no parallel mapping dict. By name `MyEnum[name]`, by value `MyEnum(value)`, compare `status == MyEnum.VALUE`, raw via `.value` / `.name`.

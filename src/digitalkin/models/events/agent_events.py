@@ -131,6 +131,9 @@ class SubagentFinishedEvent(BaseAgentRunEvent):
 
     event: AgentRunEvent = Field(AgentRunEvent.SUBAGENT_FINISHED, description="Event type")
     result: str | None = Field(default=None, description="The child agent's final content")
+    outcome: Literal["suspended"] | None = Field(
+        default=None, description="None means success; suspended means paused awaiting outside input (HITL)"
+    )
 
 
 class SubagentErrorEvent(BaseAgentRunEvent):

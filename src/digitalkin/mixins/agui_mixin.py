@@ -16,6 +16,8 @@ import time
 import uuid
 from typing import TYPE_CHECKING, Any, ClassVar
 
+from ag_ui.core import PROTOCOL_VERSION, SubagentFinishedSuspendedOutcome
+from ag_ui.core.events import ActivitySnapshotEvent, StateDeltaEvent, StateSnapshotEvent
 from ag_ui.core.events import CustomEvent as AgUiCustomEvent
 from ag_ui.core.events import ReasoningEndEvent as AgUiReasoningEndEvent
 from ag_ui.core.events import ReasoningMessageContentEvent as AgUiReasoningMessageContentEvent
@@ -25,7 +27,6 @@ from ag_ui.core.events import ReasoningStartEvent as AgUiReasoningStartEvent
 from ag_ui.core.events import RunErrorEvent as AgUiRunErrorEvent
 from ag_ui.core.events import RunFinishedEvent as AgUiRunFinishedEvent
 from ag_ui.core.events import RunStartedEvent as AgUiRunStartedEvent
-from ag_ui.core.events import StateDeltaEvent, StateSnapshotEvent
 from ag_ui.core.events import SubagentErrorEvent as AgUiSubagentErrorEvent
 from ag_ui.core.events import SubagentFinishedEvent as AgUiSubagentFinishedEvent
 from ag_ui.core.events import SubagentStartedEvent as AgUiSubagentStartedEvent
@@ -36,7 +37,7 @@ from ag_ui.core.events import ToolCallArgsEvent as AgUiToolCallArgsEvent
 from ag_ui.core.events import ToolCallEndEvent as AgUiToolCallEndEvent
 from ag_ui.core.events import ToolCallResultEvent as AgUiToolCallResultEvent
 from ag_ui.core.events import ToolCallStartEvent as AgUiToolCallStartEvent
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from digitalkin.logger import logger
 from digitalkin.models.events import (
@@ -51,6 +52,7 @@ from digitalkin.models.events import (
     RunContentEvent,
     RunErrorEvent,
     RunStartedEvent,
+    SourceCitation,
     SubagentErrorEvent,
     SubagentFinishedEvent,
     SubagentStartedEvent,
@@ -61,6 +63,7 @@ from digitalkin.models.events import (
     ToolCallStartedEvent,
 )
 from digitalkin.models.module.ag_ui import (
+    AgUiActivitySnapshotOutput,
     AgUiCustomEventOutput,
     AgUiOutput,
     AgUiReasoningEndOutput,
@@ -84,6 +87,7 @@ from digitalkin.models.module.ag_ui import (
     AgUiToolCallResultOutput,
     AgUiToolCallStartOutput,
 )
+from digitalkin.models.settings.agui import get_agui_settings
 
 if TYPE_CHECKING:
     from digitalkin.models.module.ag_ui import AgUiEventOutput
@@ -96,11 +100,16 @@ class AgUiRunState:
     The front only renders it: ``snapshot`` replaces its state, ``update`` sends the
     matching JSON Patch. Shape: ``run`` (status, error, heartbeatAt), ``tools`` and
     ``subagents`` keyed by id (name, status, startedAt, error), ``interrupts``.
+
+    It is also the single writer of the run's ``sources`` activity messages: one per owner
+    (the agent, or each subagent), so a subagent's list never replaces its parent's.
     """
 
     def __init__(self) -> None:
         """Start a running run with an empty pipeline."""
         self.open = True
+        self.sources_id = str(uuid.uuid4())
+        self.sources: dict[str | None, dict[str, dict[str, str]]] = {}
         self.state: dict[str, Any] = {
             "run": {"status": "running", "error": None, "heartbeatAt": None},
             "tools": {},
@@ -136,7 +145,9 @@ class AgUiRunState:
                 "value": value,
             })
             node[keys[-1]] = value.copy() if isinstance(value, dict | list) else value
-        await context.callbacks.send_message(AgUiOutput(root=AgUiStateDeltaOutput(event=StateDeltaEvent(delta=ops))))
+        await context.callbacks.send_message(
+            AgUiOutput(root=AgUiStateDeltaOutput(event=StateDeltaEvent.model_validate({"delta": ops})))
+        )
 
     async def fail(
         self,
@@ -169,6 +180,67 @@ class AgUiRunState:
         await self.update(context, (("run", "status"), status), (("run", "error"), message))
         await context.callbacks.send_message(
             AgUiOutput(root=AgUiRunErrorOutput(event=AgUiRunErrorEvent(message=message, code=code, **fields)))
+        )
+
+    async def cite(self, context: ModuleContext, citation: SourceCitation, owner: str | None) -> None:
+        """Merge one source into ``owner``'s list and re-snapshot that list when it changed.
+
+        Deduplicated on the URL without fragment; a later citation of a known URL only fills
+        the fields it lacked. Over the per-run cap the source is dropped, overlong text truncated.
+
+        Args:
+            context: Module context whose callbacks carry the event.
+            citation: The validated source (http/https only).
+            owner: ``subagent_run_id`` of the invocation that cited it, None for the agent.
+        """
+        settings = get_agui_settings()
+        url = str(citation.url)
+        key = url.split("#", 1)[0]
+        entries = self.sources.setdefault(owner, {})
+        entry = entries.get(key)
+        changed = entry is None
+        if entry is None:
+            if sum(len(listed) for listed in self.sources.values()) >= settings.max_sources:
+                # TODO(validate): AGUI-SOURCES sources are capped per run, deduplicated, enriched
+                logger.warning(
+                    "[VALIDATE AGUI-SOURCES] dropped source over the per-run cap: %s %.300r %.300r",
+                    url,
+                    citation.title,
+                    citation.description,
+                    extra=context.session.current_ids(),
+                )
+                return
+            entry = entries[key] = {"url": url}
+        for field, limit, value in (
+            ("title", settings.max_source_title_chars, citation.title),
+            ("description", settings.max_source_description_chars, citation.description),
+        ):
+            if value and field not in entry:
+                if len(value) > limit:
+                    logger.info(
+                        "[VALIDATE AGUI-SOURCES] truncated %s of %s to %d chars: %.2000r",
+                        field,
+                        url,
+                        limit,
+                        value,
+                        extra=context.session.current_ids(),
+                    )
+                entry[field] = value[:limit]
+                changed = True
+        if not changed:
+            return
+        await context.callbacks.send_message(
+            AgUiOutput(
+                root=AgUiActivitySnapshotOutput(
+                    event=ActivitySnapshotEvent(
+                        message_id=f"sources-{self.sources_id}-{owner}" if owner else f"sources-{self.sources_id}",
+                        activity_type="sources",
+                        content={"sources": [dict(listed) for listed in entries.values()]},
+                        replace=True,
+                        subagent_run_id=owner,
+                    )
+                )
+            )
         )
 
     @staticmethod
@@ -283,6 +355,25 @@ class AgUiMixin:
             fields["subagent_run_id"] = event.subagent_run_id
         return fields
 
+    @staticmethod
+    def _unidentified(context: ModuleContext, event: BaseAgentRunEvent) -> None:
+        """Log an event dropped because the id its AG-UI counterpart requires is missing.
+
+        An empty or invented id fails the run on an AG-UI 1.x client (a continuation or close
+        for a message that was never opened), so the event is not emitted.
+
+        Args:
+            context: Module context carrying the correlation ids.
+            event: The dropped event.
+        """
+        # TODO(validate): AGUI-EMPTY-ID no AG-UI event leaves with an empty or invented id
+        logger.warning(
+            "[VALIDATE AGUI-EMPTY-ID] dropped %s without id: %.2000s",
+            event.event,
+            event.model_dump_json(exclude_none=True),
+            extra=context.session.current_ids(),
+        )
+
     # ── Private Event Handlers ───────────────────────────────────────────────
 
     async def _handle_run_started(
@@ -310,6 +401,7 @@ class AgUiMixin:
             event=AgUiRunStartedEvent(
                 thread_id=self._thread_id,
                 run_id=self._run_id,
+                protocol_version=PROTOCOL_VERSION,
                 **self._authored(event),
             )
         )
@@ -323,6 +415,9 @@ class AgUiMixin:
         event: TextMessageStartedEvent,
     ) -> None:
         """Handle text message started event - emit AG-UI TextMessageStart."""
+        if not event.message_id:
+            self._unidentified(context, event)
+            return
         # ``name`` labels the bubble with the step that owns it, so a client can attribute a
         # member's message when several stream at once. Typed on TextMessageStartEvent since
         # ag-ui-protocol 0.1.18, which is this package's floor.
@@ -346,11 +441,13 @@ class AgUiMixin:
         if not content:
             return
 
-        message_id = event.message_id or ""
+        if not event.message_id:
+            self._unidentified(context, event)
+            return
 
         output = AgUiTextMessageContentOutput(
             event=AgUiTextMessageContentEvent(
-                message_id=message_id,
+                message_id=event.message_id,
                 delta=content,
                 **self._authored(event),
             )
@@ -363,6 +460,9 @@ class AgUiMixin:
         event: TextMessageCompletedEvent,
     ) -> None:
         """Handle text message completed event - emit AG-UI TextMessageEnd."""
+        if not event.message_id:
+            self._unidentified(context, event)
+            return
         output = AgUiTextMessageEndOutput(
             event=AgUiTextMessageEndEvent(message_id=event.message_id, **self._authored(event)),
         )
@@ -422,9 +522,12 @@ class AgUiMixin:
         event: SubagentStartedEvent,
     ) -> None:
         """Handle subagent started event - emit AG-UI SubagentStarted."""
+        if not event.subagent_run_id:
+            self._unidentified(context, event)
+            return
         output = AgUiSubagentStartedOutput(
             event=AgUiSubagentStartedEvent(
-                subagent_run_id=event.subagent_run_id or "",
+                subagent_run_id=event.subagent_run_id,
                 name=event.name,
                 parent_subagent_run_id=event.parent_subagent_run_id,
                 parent_tool_call_id=event.parent_tool_call_id,
@@ -432,7 +535,7 @@ class AgUiMixin:
             )
         )
         await self._send_agui(context, output)
-        if context.agui_run is not None and event.subagent_run_id:
+        if context.agui_run is not None:
             await context.agui_run.update(
                 context,
                 (
@@ -447,17 +550,21 @@ class AgUiMixin:
         event: SubagentFinishedEvent,
     ) -> None:
         """Handle subagent finished event - emit AG-UI SubagentFinished."""
+        if not event.subagent_run_id:
+            self._unidentified(context, event)
+            return
         output = AgUiSubagentFinishedOutput(
             event=AgUiSubagentFinishedEvent(
-                subagent_run_id=event.subagent_run_id or "",
+                subagent_run_id=event.subagent_run_id,
                 result=event.result,
+                outcome=SubagentFinishedSuspendedOutcome() if event.outcome == "suspended" else None,
                 metadata={"digitalkin": event.metadata} if event.metadata else None,
             )
         )
         await self._send_agui(context, output)
         run = context.agui_run
-        if run is not None and event.subagent_run_id is not None and event.subagent_run_id in run.state["subagents"]:
-            await run.update(context, (("subagents", event.subagent_run_id, "status"), "completed"))
+        if run is not None and event.subagent_run_id in run.state["subagents"]:
+            await run.update(context, (("subagents", event.subagent_run_id, "status"), event.outcome or "completed"))
 
     async def _handle_subagent_error(
         self,
@@ -469,9 +576,12 @@ class AgUiMixin:
         Deliberately not a RUN_ERROR: AG-UI treats that as terminal for the whole stream, and
         one delegated agent failing does not end the parent's run.
         """
+        if not event.subagent_run_id:
+            self._unidentified(context, event)
+            return
         output = AgUiSubagentErrorOutput(
             event=AgUiSubagentErrorEvent(
-                subagent_run_id=event.subagent_run_id or "",
+                subagent_run_id=event.subagent_run_id,
                 message=event.message,
                 code=event.code,
                 metadata={"digitalkin": event.metadata} if event.metadata else None,
@@ -479,7 +589,7 @@ class AgUiMixin:
         )
         await self._send_agui(context, output)
         run = context.agui_run
-        if run is not None and event.subagent_run_id is not None and event.subagent_run_id in run.state["subagents"]:
+        if run is not None and event.subagent_run_id in run.state["subagents"]:
             await run.update(
                 context,
                 (("subagents", event.subagent_run_id, "status"), "failed"),
@@ -495,8 +605,10 @@ class AgUiMixin:
         tool = event.tool
         if not tool or not tool.tool_name:
             return
-
-        tool_call_id = tool.tool_call_id or str(uuid.uuid4())
+        tool_call_id = tool.tool_call_id
+        if not tool_call_id:
+            self._unidentified(context, event)
+            return
 
         start_output = AgUiToolCallStartOutput(
             event=AgUiToolCallStartEvent(
@@ -542,8 +654,10 @@ class AgUiMixin:
         tool = event.tool
         if not tool:
             return
-
-        tool_call_id = tool.tool_call_id or str(uuid.uuid4())
+        tool_call_id = tool.tool_call_id
+        if not tool_call_id:
+            self._unidentified(context, event)
+            return
 
         end_output = AgUiToolCallEndOutput(
             event=AgUiToolCallEndEvent(tool_call_id=tool_call_id, **self._authored(event))
@@ -581,8 +695,10 @@ class AgUiMixin:
         tool = event.tool
         if not tool:
             return
-
-        tool_call_id = tool.tool_call_id or str(uuid.uuid4())
+        tool_call_id = tool.tool_call_id
+        if not tool_call_id:
+            self._unidentified(context, event)
+            return
         error_msg = event.error_message or "Tool call failed"
         output = AgUiToolCallEndOutput(event=AgUiToolCallEndEvent(tool_call_id=tool_call_id, **self._authored(event)))
         await self._send_agui(context, output)
@@ -611,7 +727,10 @@ class AgUiMixin:
         event: ReasoningStartedEvent,
     ) -> None:
         """Handle reasoning started event - emit AG-UI ReasoningStart + ReasoningMessageStart."""
-        reasoning_id = event.reasoning_id or str(uuid.uuid4())
+        reasoning_id = event.reasoning_id
+        if not reasoning_id:
+            self._unidentified(context, event)
+            return
 
         start_output = AgUiReasoningStartOutput(
             event=AgUiReasoningStartEvent(message_id=reasoning_id, **self._authored(event)),
@@ -633,7 +752,10 @@ class AgUiMixin:
         if not delta:
             return
 
-        reasoning_id = event.reasoning_id or ""
+        reasoning_id = event.reasoning_id
+        if not reasoning_id:
+            self._unidentified(context, event)
+            return
 
         output = AgUiReasoningMessageContentOutput(
             event=AgUiReasoningMessageContentEvent(message_id=reasoning_id, delta=delta, **self._authored(event))
@@ -650,7 +772,10 @@ class AgUiMixin:
         if not delta:
             return
 
-        reasoning_id = event.reasoning_id or ""
+        reasoning_id = event.reasoning_id
+        if not reasoning_id:
+            self._unidentified(context, event)
+            return
 
         output = AgUiReasoningMessageContentOutput(
             event=AgUiReasoningMessageContentEvent(message_id=reasoning_id, delta=delta, **self._authored(event))
@@ -663,7 +788,10 @@ class AgUiMixin:
         event: ReasoningCompletedEvent,
     ) -> None:
         """Handle reasoning completed event - emit AG-UI ReasoningMessageEnd + ReasoningEnd."""
-        reasoning_id = event.reasoning_id or ""
+        reasoning_id = event.reasoning_id
+        if not reasoning_id:
+            self._unidentified(context, event)
+            return
 
         message_end_output = AgUiReasoningMessageEndOutput(
             event=AgUiReasoningMessageEndEvent(message_id=reasoning_id, **self._authored(event))
@@ -680,8 +808,22 @@ class AgUiMixin:
         context: ModuleContext,
         event: CustomEvent,
     ) -> None:
-        """Handle custom event - emit AG-UI CustomEvent."""
+        """Handle custom event - emit AG-UI CustomEvent; ``source_citation`` feeds the run's sources activity."""
         value = event.value
+        if event.name == "source_citation":
+            run = context.agui_run
+            try:
+                citation = value if isinstance(value, SourceCitation) else SourceCitation.model_validate(value)
+            except ValidationError as exc:
+                logger.warning("Dropped source citation %.2000r: %s", value, exc, extra=context.session.current_ids())
+                return
+            if run is None:
+                logger.warning(
+                    "Dropped source citation %s: no AG-UI run open", citation.url, extra=context.session.current_ids()
+                )
+                return
+            await run.cite(context, citation, event.subagent_run_id)
+            return
         output = AgUiCustomEventOutput(
             event=AgUiCustomEvent(
                 name=event.name,
