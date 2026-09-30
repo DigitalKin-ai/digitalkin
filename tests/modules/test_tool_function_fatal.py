@@ -96,3 +96,21 @@ async def test_clean_run_yields_all_frames() -> None:
         {"root": {"protocol": "message", "content": "a"}},
         {"root": {"protocol": "message", "content": "b"}},
     ]
+
+
+@pytest.mark.asyncio
+async def test_stream_cancelled_raises_tool_call_error() -> None:
+    fn = _tool_function([
+        _frame({"protocol": "message", "content": "partial"}),
+        _frame({"protocol": "stream.cancelled", "reason": "user_stop"}),
+        _frame({"protocol": "stream.end"}),
+    ])
+    seen: list[dict] = []
+
+    async def _drain() -> None:
+        async for out in fn():
+            seen.append(out)  # noqa: PERF401  # frames before the cancel must survive the raise
+
+    with pytest.raises(ToolCallError, match=r"\[CANCELLED\] user_stop"):
+        await _drain()
+    assert seen == [{"root": {"protocol": "message", "content": "partial"}}]

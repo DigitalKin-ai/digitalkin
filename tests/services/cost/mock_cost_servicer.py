@@ -3,8 +3,10 @@
 from typing import Any
 
 import grpc
-from agentic_mesh_protocol.cost.v1 import cost_pb2, cost_service_pb2_grpc
-from pydantic import ValidationError
+import protovalidate
+from agentic_mesh_protocol.cost.v1 import cost_dto_pb2, cost_enums_pb2, cost_messages_pb2, cost_service_pb2_grpc
+from agentic_mesh_protocol.pagination.v1 import bulk_pb2, pagination_pb2
+from google.protobuf.message import Message
 
 from digitalkin.logger import logger
 from digitalkin.models.services.cost import CostType
@@ -12,13 +14,64 @@ from digitalkin.services.cost.cost_strategy import CostData
 
 
 class MockCostServicer(cost_service_pb2_grpc.CostServiceServicer):
-    """Mock implementation of the Cost Service Servicer for testing."""
+    """Mock implementation of the Cost Service Servicer for testing.
+
+    Requests are checked against their ``buf.validate`` rules first, as the
+    server-side validation interceptor does, and rejected with ``INVALID_ARGUMENT``.
+    Listings honour ``PaginationRequest`` (server default page: 20 items).
+    """
 
     def __init__(self) -> None:
-        """Initialize the mock servicer with empty cost storage."""
+        """Initialize the mock servicer with empty cost and config storage."""
         super().__init__()
-        # mission_id -> list of CostData
+        # mission_id -> list of CostData dumps
         self.costs: dict[str, list[dict[str, Any]]] = {}
+        # setup_version_id -> list of CostConfig protos
+        self.configs: dict[str, list[cost_messages_pb2.CostConfig]] = {}
+
+    @staticmethod
+    def _invalid(request: Message, context: grpc.ServicerContext) -> bool:
+        """Flag a request breaking its ``buf.validate`` rules with ``INVALID_ARGUMENT``.
+
+        Args:
+            request: Incoming request.
+            context: gRPC context
+
+        Returns:
+            True when the request is invalid.
+        """
+        try:
+            protovalidate.validate(request)
+        except protovalidate.ValidationError as e:
+            context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+            context.set_details(f"invalid {request.DESCRIPTOR.name}: {e}")
+            return True
+        return False
+
+    @staticmethod
+    def _page(
+            items: list[Any], pagination: pagination_pb2.PaginationRequest
+    ) -> tuple[list[Any], bulk_pb2.BulkResponse]:
+        """Slice a listing to the requested page.
+
+        Args:
+            items: Every matching item.
+            pagination: Requested page.
+
+        Returns:
+            The page items and the bulk summary describing them.
+        """
+        limit = pagination.limit or 20
+        page = items[pagination.offset: pagination.offset + limit]
+        return page, bulk_pb2.BulkResponse(
+            total_processed=len(page),
+            pagination=pagination_pb2.PaginationResponse(
+                total_count=len(items),
+                page=pagination.offset // limit,
+                per_page=limit,
+                total_pages=-(-len(items) // limit),
+            ),
+        )
 
     def _validate_and_store_cost(self, cost_dict: dict[str, Any]) -> None:
         """Validate cost data using Pydantic and store it.
@@ -29,233 +82,129 @@ class MockCostServicer(cost_service_pb2_grpc.CostServiceServicer):
         Raises:
             ValidationError: If cost data is invalid
         """
-        # Validate using Pydantic
         cost_data = CostData.model_validate(cost_dict)
+        self.costs.setdefault(cost_data.mission_id, []).append(cost_data.model_dump())
+        logger.debug("Stored cost: %s for mission %s", cost_data.name, cost_data.mission_id)
 
-        # Store in mission-specific list
-        mission_id = cost_data.mission_id
-        if mission_id not in self.costs:
-            self.costs[mission_id] = []
-
-        self.costs[mission_id].append(cost_data.model_dump())
-        logger.debug(f"Stored cost: {cost_data.name} for mission {mission_id}")
-
-    def _cost_dict_to_proto(self, cost_dict: dict[str, Any]) -> cost_pb2.Cost:
+    @staticmethod
+    def _cost_dict_to_proto(cost_dict: dict[str, Any]) -> cost_messages_pb2.Cost:
         """Convert a cost dictionary to a proto Cost message.
 
         Args:
             cost_dict: Dictionary containing cost data
 
         Returns:
-            cost_pb2.Cost: Proto cost message
+            Proto cost message
         """
-        # Convert Python CostType enum to protobuf enum
-        python_to_proto_cost_type = {
-            CostType.TOKEN_INPUT: cost_pb2.TOKEN_INPUT,
-            CostType.TOKEN_OUTPUT: cost_pb2.TOKEN_OUTPUT,
-            CostType.API_CALL: cost_pb2.API_CALL,
-            CostType.STORAGE: cost_pb2.STORAGE,
-            CostType.TIME: cost_pb2.TIME,
-            CostType.OTHER: cost_pb2.OTHER,
-        }
-        proto_cost_type = python_to_proto_cost_type.get(cost_dict["cost_type"], cost_pb2.OTHER)
-
-        return cost_pb2.Cost(
-            cost=cost_dict["cost"],
-            name=cost_dict["name"],
-            unit=cost_dict["unit"],
-            cost_type=proto_cost_type,
+        return cost_messages_pb2.Cost(
             mission_id=cost_dict["mission_id"],
-            rate=cost_dict["rate"],
-            quantity=cost_dict["quantity"],
             setup_version_id=cost_dict["setup_version_id"],
+            name=cost_dict["name"],
+            cost=cost_dict["cost"],
+            quantity=cost_dict["quantity"],
+            rate=cost_dict["rate"],
+            unit=cost_dict["unit"],
+            type=cost_dict["cost_type"].name,
         )
 
-    def AddCost(self, request: cost_pb2.AddCostRequest, context: grpc.ServicerContext) -> cost_pb2.AddCostResponse:
-        """Add a cost record to the mock database.
+    def CreateCost(
+            self, request: cost_dto_pb2.CreateCostRequest, context: grpc.ServicerContext
+    ) -> cost_dto_pb2.CreateCostResponse:
+        """Record a cost in the mock database.
 
         Args:
-            request: AddCostRequest containing cost data
+            request: CreateCostRequest containing cost data
             context: gRPC context
 
         Returns:
-            AddCostResponse: Response indicating success or failure
+            CreateCostResponse holding the recorded cost.
         """
-        try:
-            # Validate required fields
-            if not request.name:
-                context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
-                context.set_details("Cost name is required")
-                return cost_pb2.AddCostResponse(success=False)
+        if self._invalid(request, context):
+            return cost_dto_pb2.CreateCostResponse()
+        cost_dict = {
+            "cost": request.cost,
+            "name": request.name,
+            "unit": request.unit,
+            "cost_type": CostType[cost_enums_pb2.CostType.Name(request.type)],
+            "mission_id": request.mission_id,
+            "rate": request.rate,
+            "quantity": request.quantity,
+            "setup_version_id": request.setup_version_id,
+        }
+        self._validate_and_store_cost(cost_dict)
+        return cost_dto_pb2.CreateCostResponse(
+            result=cost_messages_pb2.CostResult(identifier=request.name, cost=self._cost_dict_to_proto(cost_dict))
+        )
 
-            if not request.mission_id:
-                context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
-                context.set_details("Mission ID is required")
-                return cost_pb2.AddCostResponse(success=False)
-
-            if request.quantity <= 0:
-                context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
-                context.set_details("Quantity must be positive")
-                return cost_pb2.AddCostResponse(success=False)
-
-            if request.rate < 0:
-                context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
-                context.set_details("Rate cannot be negative")
-                return cost_pb2.AddCostResponse(success=False)
-
-            # Validate cost type
-            # Note: Protobuf enum values are integers, not strings
-            # Validate that cost_type is one of the valid * enum values
-            valid_values = [
-                cost_pb2.TOKEN_INPUT,
-                cost_pb2.TOKEN_OUTPUT,
-                cost_pb2.API_CALL,
-                cost_pb2.STORAGE,
-                cost_pb2.TIME,
-                cost_pb2.OTHER,
-            ]
-            if request.cost_type not in valid_values:
-                context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
-                context.set_details(f"Invalid cost type: {request.cost_type}")
-                return cost_pb2.AddCostResponse(success=False)
-
-            # Convert protobuf cost_type enum to Python CostType enum
-            # Protobuf enums: TOKEN_INPUT=1, TOKEN_OUTPUT=2, etc.
-            # Python enums: TOKEN_INPUT, TOKEN_OUTPUT, etc.
-            proto_to_python_cost_type = {
-                cost_pb2.TOKEN_INPUT: CostType.TOKEN_INPUT,
-                cost_pb2.TOKEN_OUTPUT: CostType.TOKEN_OUTPUT,
-                cost_pb2.API_CALL: CostType.API_CALL,
-                cost_pb2.STORAGE: CostType.STORAGE,
-                cost_pb2.TIME: CostType.TIME,
-                cost_pb2.OTHER: CostType.OTHER,
-            }
-            python_cost_type = proto_to_python_cost_type.get(request.cost_type, CostType.OTHER)
-
-            # Create cost dictionary
-            cost_dict = {
-                "cost": request.cost,
-                "name": request.name,
-                "unit": request.unit,
-                "cost_type": python_cost_type,
-                "mission_id": request.mission_id,
-                "rate": request.rate,
-                "quantity": request.quantity,
-                "setup_version_id": request.setup_version_id,
-            }
-
-            # Validate and store
-            self._validate_and_store_cost(cost_dict)
-
-            logger.info(f"Added cost: {request.name} for mission {request.mission_id}")
-            return cost_pb2.AddCostResponse(success=True)
-
-        except ValidationError as e:
-            context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
-            context.set_details(f"Validation error: {e!s}")
-            logger.error(f"Validation error in AddCost: {e}")
-            return cost_pb2.AddCostResponse(success=False)
-
-        except Exception as e:
-            context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(f"Internal error: {e!s}")
-            logger.error(f"Error in AddCost: {e}", exc_info=True)
-            return cost_pb2.AddCostResponse(success=False)
-
-    def GetCost(self, request: cost_pb2.GetCostRequest, context: grpc.ServicerContext) -> cost_pb2.GetCostResponse:
-        """Get costs by name for a specific mission.
+    def ListCosts(
+            self, request: cost_dto_pb2.ListCostsRequest, context: grpc.ServicerContext
+    ) -> cost_dto_pb2.ListCostsResponse:
+        """List a page of the costs of a mission matching every filter.
 
         Args:
-            request: GetCostRequest containing name and mission_id
+            request: ListCostsRequest containing mission_id, filter and pagination
             context: gRPC context
 
         Returns:
-            GetCostResponse: Response containing matching costs
+            ListCostsResponse holding the page, its bulk summary and the total cost.
         """
-        try:
-            if not request.name:
-                context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
-                context.set_details("Cost name is required")
-                return cost_pb2.GetCostResponse(costs=[])
-
-            if not request.mission_id:
-                context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
-                context.set_details("Mission ID is required")
-                return cost_pb2.GetCostResponse(costs=[])
-
-            # Get costs for this mission
-            mission_costs = self.costs.get(request.mission_id, [])
-
-            # Filter by name
-            matching_costs = [c for c in mission_costs if c["name"] == request.name]
-
-            if not matching_costs:
-                logger.debug(f"No costs found with name '{request.name}' for mission {request.mission_id}")
-                return cost_pb2.GetCostResponse(costs=[])
-
-            # Convert to proto messages
-            cost_protos = [self._cost_dict_to_proto(cost) for cost in matching_costs]
-
-            logger.info(
-                f"Retrieved {len(matching_costs)} costs with name '{request.name}' for mission {request.mission_id}"
+        if self._invalid(request, context):
+            return cost_dto_pb2.ListCostsResponse()
+        matching = [
+            cost
+            for cost in self.costs.get(request.mission_id, [])
+            if (not request.filter.names or cost["name"] in request.filter.names)
+               and (
+                       not request.filter.types
+                       or cost_enums_pb2.CostType.Value(cost["cost_type"].name) in request.filter.types
             )
-            return cost_pb2.GetCostResponse(costs=cost_protos)
+        ]
+        page, bulk = self._page(matching, request.pagination)
+        return cost_dto_pb2.ListCostsResponse(
+            results=[
+                cost_messages_pb2.CostResult(identifier=cost["name"], cost=self._cost_dict_to_proto(cost))
+                for cost in page
+            ],
+            bulk=bulk,
+            total_cost=sum(cost["cost"] for cost in matching),
+        )
 
-        except Exception as e:
-            context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(f"Internal error: {e!s}")
-            logger.error(f"Error in GetCost: {e}", exc_info=True)
-            return cost_pb2.GetCostResponse(costs=[])
-
-    def GetCosts(self, request: cost_pb2.GetCostsRequest, context: grpc.ServicerContext) -> cost_pb2.GetCostsResponse:
-        """Get costs filtered by names and/or cost types.
+    def ListCostConfigs(
+            self, request: cost_dto_pb2.ListCostConfigsRequest, context: grpc.ServicerContext
+    ) -> cost_dto_pb2.ListCostConfigsResponse:
+        """List a page of the cost configurations of a setup version.
 
         Args:
-            request: GetCostsRequest containing mission_id and filter
+            request: ListCostConfigsRequest containing setup_version_id and pagination
             context: gRPC context
 
         Returns:
-            GetCostsResponse: Response containing filtered costs
+            ListCostConfigsResponse holding the page and its bulk summary.
         """
-        try:
-            if not request.mission_id:
-                context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
-                context.set_details("Mission ID is required")
-                return cost_pb2.GetCostsResponse(costs=[])
+        if self._invalid(request, context):
+            return cost_dto_pb2.ListCostConfigsResponse()
+        page, bulk = self._page(self.configs.get(request.setup_version_id, []), request.pagination)
+        return cost_dto_pb2.ListCostConfigsResponse(
+            results=[cost_messages_pb2.CostResult(identifier=config.name, config=config) for config in page],
+            bulk=bulk,
+        )
 
-            # Get costs for this mission
-            mission_costs = self.costs.get(request.mission_id, [])
+    def SetCostConfig(
+            self, request: cost_dto_pb2.SetCostConfigRequest, context: grpc.ServicerContext
+    ) -> cost_dto_pb2.SetCostConfigResponse:
+        """Replace the cost configurations of a setup version.
 
-            # Apply filters
-            filtered_costs = mission_costs
+        Args:
+            request: SetCostConfigRequest containing setup_version_id and configs
+            context: gRPC context
 
-            # Filter by names if provided
-            if request.filter and request.filter.names:
-                filtered_costs = [c for c in filtered_costs if c["name"] in request.filter.names]
-
-            # Filter by cost types if provided
-            if request.filter and request.filter.cost_types:
-                # Convert protobuf enum integer values to Python CostType enums
-                # Protobuf enum: 1 = TOKEN_INPUT -> Python: CostType.TOKEN_INPUT
-                proto_to_python_cost_type = {
-                    cost_pb2.TOKEN_INPUT: CostType.TOKEN_INPUT,
-                    cost_pb2.TOKEN_OUTPUT: CostType.TOKEN_OUTPUT,
-                    cost_pb2.API_CALL: CostType.API_CALL,
-                    cost_pb2.STORAGE: CostType.STORAGE,
-                    cost_pb2.TIME: CostType.TIME,
-                    cost_pb2.OTHER: CostType.OTHER,
-                }
-                filter_types = [proto_to_python_cost_type.get(ct, CostType.OTHER) for ct in request.filter.cost_types]
-                filtered_costs = [c for c in filtered_costs if c["cost_type"] in filter_types]
-
-            # Convert to proto messages
-            cost_protos = [self._cost_dict_to_proto(cost) for cost in filtered_costs]
-
-            logger.info(f"Retrieved {len(filtered_costs)} filtered costs for mission {request.mission_id}")
-            return cost_pb2.GetCostsResponse(costs=cost_protos)
-
-        except Exception as e:
-            context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details(f"Internal error: {e!s}")
-            logger.error(f"Error in GetCosts: {e}", exc_info=True)
-            return cost_pb2.GetCostsResponse(costs=[])
+        Returns:
+            SetCostConfigResponse holding one result per stored configuration.
+        """
+        if self._invalid(request, context):
+            return cost_dto_pb2.SetCostConfigResponse()
+        self.configs[request.setup_version_id] = list(request.configs)
+        return cost_dto_pb2.SetCostConfigResponse(
+            results=[cost_messages_pb2.CostResult(identifier=config.name, config=config) for config in request.configs],
+            bulk=bulk_pb2.BulkResponse(total_processed=len(request.configs)),
+        )

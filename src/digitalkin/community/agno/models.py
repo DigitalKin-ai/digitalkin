@@ -67,8 +67,6 @@ class ToolCallMetadata(BaseModel):
         duration_ms: Execution time in milliseconds.
         cost_tracked: Whether cost metadata is available from the tool.
         error: Error message if the call failed, None otherwise.
-        input_kwargs: The kwargs passed to the tool (for debugging).
-        output_summary: Brief summary of the output (truncated for logs).
         tool_metadata: Metadata returned by the tool itself (cost, API calls, etc.).
     """
 
@@ -77,14 +75,6 @@ class ToolCallMetadata(BaseModel):
     duration_ms: float = Field(..., description="Execution time in milliseconds")
     cost_tracked: bool = Field(default=False, description="Whether cost metadata is available from tool")
     error: str | None = Field(default=None, description="Error message if failed")
-    input_kwargs: dict[str, Any] | None = Field(
-        default=None,
-        description="Input kwargs passed to the tool for debugging",
-    )
-    output_summary: str | None = Field(
-        default=None,
-        description="Brief summary of the output (truncated)",
-    )
     tool_metadata: ToolOutputMetadata | None = Field(
         default=None,
         description="Metadata returned by the tool module (cost, API calls, etc.)",
@@ -94,7 +84,7 @@ class ToolCallMetadata(BaseModel):
         """Convert metadata to dict for successful responses.
 
         Returns:
-            Dictionary with success-relevant fields (error excluded).
+            Dictionary with success-relevant fields; error is excluded.
         """
         return self.model_dump(exclude={"error"})
 
@@ -105,31 +95,6 @@ class ToolCallMetadata(BaseModel):
             Dictionary with error-relevant fields.
         """
         return self.model_dump(include={"module_id", "success", "duration_ms", "error"})
-
-    def to_log_dict(self) -> dict[str, Any]:
-        """Convert metadata to dict for logging.
-
-        Returns:
-            Dictionary suitable for log extra data, large kwargs truncated.
-        """
-        data: dict[str, Any] = {
-            "module_id": self.module_id,
-            "success": self.success,
-            "duration_ms": self.duration_ms,
-            "cost_tracked": self.cost_tracked,
-        }
-        if self.error:
-            data["error"] = self.error
-        if self.input_kwargs:
-            max_len = 100
-            data["input_kwargs"] = {
-                k: (str(v)[:max_len] + "..." if len(str(v)) > max_len else v) for k, v in self.input_kwargs.items()
-            }
-        if self.output_summary:
-            data["output_summary"] = self.output_summary
-        if self.tool_metadata:
-            data["tool_metadata"] = self.tool_metadata.model_dump(exclude_none=True)
-        return data
 
     @staticmethod
     def extract_tool_metadata(output: dict[str, Any]) -> "ToolOutputMetadata | None":

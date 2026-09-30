@@ -11,20 +11,24 @@ import asyncio
 import logging
 import types
 from concurrent import futures
+from typing import Any
 
 import grpc
 import grpc_testing
 import pytest
+from agentic_mesh_protocol.pagination.v1 import bulk_pb2
 from agentic_mesh_protocol.user_profile.v1 import (
-    user_profile_pb2,
+    user_profile_dto_pb2,
+    user_profile_messages_pb2,
     user_profile_service_pb2,
     user_profile_service_pb2_grpc,
 )
-
-from digitalkin.models.grpc_servers.models import ClientConfig
-from digitalkin.services.user_profile.grpc_user_profile import GrpcUserProfile
 from tests.fixtures.grpc_fixtures import FakeContext
 from tests.services.user_profile.mock_user_profile_servicer import MockUserProfileServicer
+
+from digitalkin.models.grpc_servers.models import ClientConfig
+from digitalkin.services.user_profile.exceptions import UserProfileServiceError
+from digitalkin.services.user_profile.grpc_user_profile import GrpcUserProfile
 
 # Set timeout for all tests in this file (20 seconds)
 pytestmark = pytest.mark.timeout(20)
@@ -32,7 +36,7 @@ pytestmark = pytest.mark.timeout(20)
 # --- Test Constants ---
 MISSION_ID = "missions:test_mission_123"
 USER_ID = "users:test_user_123"
-ORGANISATION_ID = "organisations:test_org_456"
+ORGANIZATION_ID = "organizations:test_org_456"
 
 # Module-level variables required by grpc_test_server fixture
 service_instance = MockUserProfileServicer()
@@ -41,9 +45,18 @@ service_name = user_profile_service_pb2.DESCRIPTOR.services_by_name["UserProfile
 test_logger = logging.getLogger(__name__)
 
 
-async def _test_exec_grpc_query(self, query_endpoint, request):
+async def _test_exec_grpc_query(self, query_endpoint, request) -> Any:
     response = getattr(self.stub, query_endpoint)(request)
     return await response if asyncio.iscoroutine(response) else response
+
+
+def _profile_response(
+        profile: user_profile_messages_pb2.UserProfile, mission_cost: float = 0.0
+) -> user_profile_dto_pb2.GetUserProfileResponse:
+    return user_profile_dto_pb2.GetUserProfileResponse(
+        result=user_profile_messages_pb2.UserProfileResult(identifier=profile.user_id, profile=profile),
+        mission_cost=mission_cost,
+    )
 
 
 # --- Fixtures ---
@@ -53,7 +66,7 @@ async def _test_exec_grpc_query(self, query_endpoint, request):
 def thread_pool():
     """Create thread pool and ensure cleanup.
 
-    Returns:
+    Yields:
         ThreadPoolExecutor instance
     """
     test_logger.info("Creating thread pool...")
@@ -98,8 +111,7 @@ def dummy_client_config() -> ClientConfig:
     Returns:
         ClientConfig instance with test values
     """
-    from digitalkin.models.settings.utils.channel import SecurityMode
-    from digitalkin.models.settings.utils.channel import ControlFlow
+    from digitalkin.models.settings.utils.channel import ControlFlow, SecurityMode
 
     return ClientConfig(
         host="[::]",
@@ -141,33 +153,35 @@ def client(
 
 
 @pytest.fixture
-def sample_user_profile_response() -> user_profile_pb2.GetUserProfileResponse:
+def sample_user_profile_response() -> user_profile_dto_pb2.GetUserProfileResponse:
     """Create a sample user profile response proto for testing.
 
     Returns:
         GetUserProfileResponse proto
     """
-    user_profile = user_profile_pb2.UserProfile(
+    user_profile = user_profile_messages_pb2.UserProfile(
         user_id=USER_ID,
-        organisation_id=ORGANISATION_ID,
+        organization_id=ORGANIZATION_ID,
         email="test.user@example.com",
         first_name="Test",
         last_name="User",
         locale="en_US",
-        subscription=user_profile_pb2.Subscription(
+        subscription=user_profile_messages_pb2.Subscription(
             tier="premium",
             status="active",
         ),
         credits=[
-            user_profile_pb2.CreditLot(
+            user_profile_messages_pb2.CreditLot(
                 source="subscription",
                 total=1000,
                 remaining=750.0,
             )
         ],
         metadata={"security_key": "test_security_key_123"},
+        created_at={"seconds": 1_700_000_000},
+        updated_at={"seconds": 1_700_000_100},
     )
-    return user_profile_pb2.GetUserProfileResponse(success=True, user_profile=user_profile)
+    return _profile_response(user_profile)
 
 
 # ============================================================================
@@ -186,7 +200,7 @@ class TestGetUserProfileSuccess:
         client: GrpcUserProfile,
         test_channel: grpc_testing.Channel,
         mock_servicer: MockUserProfileServicer,
-        sample_user_profile_response: user_profile_pb2.GetUserProfileResponse,
+            sample_user_profile_response: user_profile_dto_pb2.GetUserProfileResponse,
         thread_pool: futures.ThreadPoolExecutor,
     ) -> None:
         """Test successfully retrieving a user profile."""
@@ -209,11 +223,13 @@ class TestGetUserProfileSuccess:
 
         assert result is not None
         assert result["user_id"] == USER_ID
-        assert result["organisation_id"] == ORGANISATION_ID
+        assert result["organization_id"] == ORGANIZATION_ID
         assert result["email"] == "test.user@example.com"
         assert result["first_name"] == "Test"
         assert result["last_name"] == "User"
         assert result["locale"] == "en_US"
+        assert result["created_at"] == "2023-11-14T22:13:20Z"
+        assert result["updated_at"] == "2023-11-14T22:15:00Z"
 
     @pytest.mark.grpc
     @pytest.mark.integration
@@ -223,7 +239,7 @@ class TestGetUserProfileSuccess:
         client: GrpcUserProfile,
         test_channel: grpc_testing.Channel,
         mock_servicer: MockUserProfileServicer,
-        sample_user_profile_response: user_profile_pb2.GetUserProfileResponse,
+            sample_user_profile_response: user_profile_dto_pb2.GetUserProfileResponse,
         thread_pool: futures.ThreadPoolExecutor,
     ) -> None:
         """Test retrieving a user profile with subscription data."""
@@ -256,7 +272,7 @@ class TestGetUserProfileSuccess:
         client: GrpcUserProfile,
         test_channel: grpc_testing.Channel,
         mock_servicer: MockUserProfileServicer,
-        sample_user_profile_response: user_profile_pb2.GetUserProfileResponse,
+            sample_user_profile_response: user_profile_dto_pb2.GetUserProfileResponse,
         thread_pool: futures.ThreadPoolExecutor,
     ) -> None:
         """Test retrieving a user profile with credits data."""
@@ -277,10 +293,10 @@ class TestGetUserProfileSuccess:
         result = future.result(timeout=5.0)
 
         assert "credits" in result
-        credits = result["credits"]
-        assert len(credits) > 0
-        assert credits[0]["total"] == "1000"
-        assert credits[0]["remaining"] == 750.0
+        credit_lots = result["credits"]
+        assert len(credit_lots) > 0
+        assert credit_lots[0]["total"] == "1000"
+        assert credit_lots[0]["remaining"] == pytest.approx(750.0)
 
     @pytest.mark.grpc
     @pytest.mark.integration
@@ -290,7 +306,7 @@ class TestGetUserProfileSuccess:
         client: GrpcUserProfile,
         test_channel: grpc_testing.Channel,
         mock_servicer: MockUserProfileServicer,
-        sample_user_profile_response: user_profile_pb2.GetUserProfileResponse,
+            sample_user_profile_response: user_profile_dto_pb2.GetUserProfileResponse,
         thread_pool: futures.ThreadPoolExecutor,
     ) -> None:
         """Test retrieving a user profile with metadata."""
@@ -329,7 +345,7 @@ class TestGetUserProfileValidation:
         mock_servicer: MockUserProfileServicer,
         thread_pool: futures.ThreadPoolExecutor,
     ) -> None:
-        """Test getting a non-existent user profile raises error."""
+        """A result holding an OperationError resolves to None, as success=False used to."""
         method_desc = user_profile_service_pb2.DESCRIPTOR.services_by_name["UserProfileService"].methods_by_name[
             "GetUserProfile"
         ]
@@ -342,7 +358,28 @@ class TestGetUserProfileValidation:
         rpc.send_initial_metadata(())
         rpc.terminate(response, (), context._code, context._details)
 
-        with pytest.raises(Exception):
+        assert response.result.error.code == "NOT_FOUND"
+        assert future.result(timeout=5.0) is None
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    @pytest.mark.validation
+    def test_get_user_profile_rpc_failure_raises(
+            self,
+            client: GrpcUserProfile,
+            test_channel: grpc_testing.Channel,
+            thread_pool: futures.ThreadPoolExecutor,
+    ) -> None:
+        """A non-OK status surfaces as UserProfileServiceError, not as a missing profile."""
+        method_desc = user_profile_service_pb2.DESCRIPTOR.services_by_name["UserProfileService"].methods_by_name[
+            "GetUserProfile"
+        ]
+
+        future = thread_pool.submit(asyncio.run, client.get_user_profile())
+        _, _request, rpc = test_channel.take_unary_unary(method_desc)
+        rpc.terminate(user_profile_dto_pb2.GetUserProfileResponse(), (), grpc.StatusCode.INTERNAL, "boom")
+
+        with pytest.raises(UserProfileServiceError):
             future.result(timeout=5.0)
 
     @pytest.mark.grpc
@@ -356,12 +393,12 @@ class TestGetUserProfileValidation:
         thread_pool: futures.ThreadPoolExecutor,
     ) -> None:
         """Test retrieving a user profile with minimal required fields."""
-        minimal_profile = user_profile_pb2.UserProfile(
+        minimal_profile = user_profile_messages_pb2.UserProfile(
             user_id=USER_ID,
-            organisation_id=ORGANISATION_ID,
+            organization_id=ORGANIZATION_ID,
             email="minimal@example.com",
         )
-        minimal_response = user_profile_pb2.GetUserProfileResponse(success=True, user_profile=minimal_profile)
+        minimal_response = _profile_response(minimal_profile)
         mock_servicer.add_user_profile(MISSION_ID, minimal_response)
 
         method_desc = user_profile_service_pb2.DESCRIPTOR.services_by_name["UserProfileService"].methods_by_name[
@@ -396,12 +433,12 @@ class TestGetUserProfileEdgeCases:
         thread_pool: futures.ThreadPoolExecutor,
     ) -> None:
         """Test retrieving a user profile with special characters in email."""
-        profile = user_profile_pb2.UserProfile(
+        profile = user_profile_messages_pb2.UserProfile(
             user_id=USER_ID,
-            organisation_id=ORGANISATION_ID,
+            organization_id=ORGANIZATION_ID,
             email="test.user+tag@example.co.uk",
         )
-        response = user_profile_pb2.GetUserProfileResponse(success=True, user_profile=profile)
+        response = _profile_response(profile)
         mock_servicer.add_user_profile(MISSION_ID, response)
 
         method_desc = user_profile_service_pb2.DESCRIPTOR.services_by_name["UserProfileService"].methods_by_name[
@@ -429,14 +466,14 @@ class TestGetUserProfileEdgeCases:
         thread_pool: futures.ThreadPoolExecutor,
     ) -> None:
         """Test retrieving a user profile with Unicode characters in names."""
-        profile = user_profile_pb2.UserProfile(
+        profile = user_profile_messages_pb2.UserProfile(
             user_id=USER_ID,
-            organisation_id=ORGANISATION_ID,
+            organization_id=ORGANIZATION_ID,
             email="test@example.com",
             first_name="José",
             last_name="François-müller",
         )
-        response = user_profile_pb2.GetUserProfileResponse(success=True, user_profile=profile)
+        response = _profile_response(profile)
         mock_servicer.add_user_profile(MISSION_ID, response)
 
         method_desc = user_profile_service_pb2.DESCRIPTOR.services_by_name["UserProfileService"].methods_by_name[
@@ -473,13 +510,13 @@ class TestGetUserProfileEdgeCases:
 
         for i, locale in enumerate(locales):
             mission_id = f"missions:mission_{i}"
-            profile = user_profile_pb2.UserProfile(
+            profile = user_profile_messages_pb2.UserProfile(
                 user_id=f"users:user_{i}",
-                organisation_id=ORGANISATION_ID,
+                organization_id=ORGANIZATION_ID,
                 email=f"user{i}@example.com",
                 locale=locale,
             )
-            response = user_profile_pb2.GetUserProfileResponse(success=True, user_profile=profile)
+            response = _profile_response(profile)
             mock_servicer.add_user_profile(mission_id, response)
 
             test_client = GrpcUserProfile(
@@ -512,19 +549,19 @@ class TestGetUserProfileEdgeCases:
         thread_pool: futures.ThreadPoolExecutor,
     ) -> None:
         """Test retrieving a user profile with zero credits."""
-        profile = user_profile_pb2.UserProfile(
+        profile = user_profile_messages_pb2.UserProfile(
             user_id=USER_ID,
-            organisation_id=ORGANISATION_ID,
+            organization_id=ORGANIZATION_ID,
             email="test@example.com",
             credits=[
-                user_profile_pb2.CreditLot(
+                user_profile_messages_pb2.CreditLot(
                     source="subscription",
                     total=0,
                     remaining=0.0,
                 )
             ],
         )
-        response = user_profile_pb2.GetUserProfileResponse(success=True, user_profile=profile)
+        response = _profile_response(profile)
         mock_servicer.add_user_profile(MISSION_ID, response)
 
         method_desc = user_profile_service_pb2.DESCRIPTOR.services_by_name["UserProfileService"].methods_by_name[
@@ -539,10 +576,10 @@ class TestGetUserProfileEdgeCases:
         rpc.terminate(resp, (), grpc.StatusCode.OK, "")
 
         result = future.result(timeout=5.0)
-        credits = result["credits"]
-        assert len(credits) > 0
-        assert credits[0]["total"] == "0"
-        assert credits[0]["remaining"] == 0.0
+        credit_lots = result["credits"]
+        assert len(credit_lots) > 0
+        assert credit_lots[0]["total"] == "0"
+        assert credit_lots[0]["remaining"] == pytest.approx(0.0)
 
     @pytest.mark.grpc
     @pytest.mark.integration
@@ -555,16 +592,16 @@ class TestGetUserProfileEdgeCases:
         thread_pool: futures.ThreadPoolExecutor,
     ) -> None:
         """Test retrieving a user profile with expired subscription."""
-        profile = user_profile_pb2.UserProfile(
+        profile = user_profile_messages_pb2.UserProfile(
             user_id=USER_ID,
-            organisation_id=ORGANISATION_ID,
+            organization_id=ORGANIZATION_ID,
             email="test@example.com",
-            subscription=user_profile_pb2.Subscription(
+            subscription=user_profile_messages_pb2.Subscription(
                 tier="premium",
                 status="expired",
             ),
         )
-        response = user_profile_pb2.GetUserProfileResponse(success=True, user_profile=profile)
+        response = _profile_response(profile)
         mock_servicer.add_user_profile(MISSION_ID, response)
 
         method_desc = user_profile_service_pb2.DESCRIPTOR.services_by_name["UserProfileService"].methods_by_name[
@@ -596,26 +633,26 @@ class TestGetUserProfileEdgeCases:
         mission1_id = "missions:mission_1"
         mission2_id = "missions:mission_2"
 
-        profile1 = user_profile_pb2.UserProfile(
+        profile1 = user_profile_messages_pb2.UserProfile(
             user_id="users:user_1",
-            organisation_id=ORGANISATION_ID,
+            organization_id=ORGANIZATION_ID,
             email="user1@example.com",
             first_name="User",
             last_name="One",
-            credits=[user_profile_pb2.CreditLot(source="subscription", total=100, remaining=100.0)],
+            credits=[user_profile_messages_pb2.CreditLot(source="subscription", total=100, remaining=100.0)],
         )
-        response1 = user_profile_pb2.GetUserProfileResponse(success=True, user_profile=profile1)
+        response1 = _profile_response(profile1)
         mock_servicer.add_user_profile(mission1_id, response1)
 
-        profile2 = user_profile_pb2.UserProfile(
+        profile2 = user_profile_messages_pb2.UserProfile(
             user_id="users:user_2",
-            organisation_id=ORGANISATION_ID,
+            organization_id=ORGANIZATION_ID,
             email="user2@example.com",
             first_name="User",
             last_name="Two",
-            credits=[user_profile_pb2.CreditLot(source="subscription", total=200, remaining=200.0)],
+            credits=[user_profile_messages_pb2.CreditLot(source="subscription", total=200, remaining=200.0)],
         )
-        response2 = user_profile_pb2.GetUserProfileResponse(success=True, user_profile=profile2)
+        response2 = _profile_response(profile2)
         mock_servicer.add_user_profile(mission2_id, response2)
 
         method_desc = user_profile_service_pb2.DESCRIPTOR.services_by_name["UserProfileService"].methods_by_name[
@@ -677,19 +714,17 @@ class TestCheckResourceAccess:
         test_channel: grpc_testing.Channel,
         thread_pool: futures.ThreadPoolExecutor,
     ) -> None:
-        """An allowed verdict returns True and forwards resource_type + resource_id."""
+        """An allowed verdict returns True and sets the requested member of the resource oneof."""
         method_desc = user_profile_service_pb2.DESCRIPTOR.services_by_name["UserProfileService"].methods_by_name[
             "CheckResourceAccess"
         ]
-        future = thread_pool.submit(
-            asyncio.run, client.check_resource_access(user_profile_pb2.RESOURCE_TYPE_SETUP, "setups:x")
-        )
+        future = thread_pool.submit(asyncio.run, client.check_resource_access("setup_id", "setups:x"))
         _, request, rpc = test_channel.take_unary_unary(method_desc)
 
-        assert request.resource_type == user_profile_pb2.RESOURCE_TYPE_SETUP
-        assert request.resource_id == "setups:x"
+        assert request.WhichOneof("resource") == "setup_id"
+        assert request.setup_id == "setups:x"
 
-        rpc.terminate(user_profile_pb2.CheckResourceAccessResponse(allowed=True), (), grpc.StatusCode.OK, "")
+        rpc.terminate(user_profile_dto_pb2.CheckResourceAccessResponse(allowed=True), (), grpc.StatusCode.OK, "")
         assert future.result(timeout=5.0) is True
 
     @pytest.mark.grpc
@@ -705,12 +740,54 @@ class TestCheckResourceAccess:
         method_desc = user_profile_service_pb2.DESCRIPTOR.services_by_name["UserProfileService"].methods_by_name[
             "CheckResourceAccess"
         ]
-        future = thread_pool.submit(
-            asyncio.run, client.check_resource_access(user_profile_pb2.RESOURCE_TYPE_SETUP, "setups:x")
-        )
+        future = thread_pool.submit(asyncio.run, client.check_resource_access("setup_id", "setups:x"))
         _, _request, rpc = test_channel.take_unary_unary(method_desc)
-        rpc.terminate(user_profile_pb2.CheckResourceAccessResponse(allowed=False), (), grpc.StatusCode.OK, "")
+        rpc.terminate(user_profile_dto_pb2.CheckResourceAccessResponse(allowed=False), (), grpc.StatusCode.OK, "")
         assert future.result(timeout=5.0) is False
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    @pytest.mark.edge_case
+    def test_check_resource_access_other_resource_kind(
+            self,
+            client: GrpcUserProfile,
+            test_channel: grpc_testing.Channel,
+            thread_pool: futures.ThreadPoolExecutor,
+    ) -> None:
+        """Each resource kind lands on its own oneof member."""
+        method_desc = user_profile_service_pb2.DESCRIPTOR.services_by_name["UserProfileService"].methods_by_name[
+            "CheckResourceAccess"
+        ]
+        future = thread_pool.submit(asyncio.run, client.check_resource_access("file_id", "files:abc"))
+        _, request, rpc = test_channel.take_unary_unary(method_desc)
+
+        assert request.WhichOneof("resource") == "file_id"
+        assert request.file_id == "files:abc"
+
+        rpc.terminate(user_profile_dto_pb2.CheckResourceAccessResponse(allowed=True), (), grpc.StatusCode.OK, "")
+        assert future.result(timeout=5.0) is True
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    @pytest.mark.validation
+    def test_check_resource_access_rpc_failure_raises(
+            self,
+            client: GrpcUserProfile,
+            test_channel: grpc_testing.Channel,
+            thread_pool: futures.ThreadPoolExecutor,
+    ) -> None:
+        """A non-OK status (unknown resource, missing task metadata) raises UserProfileServiceError."""
+        method_desc = user_profile_service_pb2.DESCRIPTOR.services_by_name["UserProfileService"].methods_by_name[
+            "CheckResourceAccess"
+        ]
+        future = thread_pool.submit(asyncio.run, client.check_resource_access("setup_id", "setups:x"))
+        _, _request, rpc = test_channel.take_unary_unary(method_desc)
+        rpc.terminate(
+            user_profile_dto_pb2.CheckResourceAccessResponse(), (), grpc.StatusCode.NOT_FOUND, "unknown setup"
+        )
+
+        with pytest.raises(UserProfileServiceError):
+            future.result(timeout=5.0)
 
 
 class TestMissionCost:
@@ -731,18 +808,14 @@ class TestMissionCost:
         _, _request, rpc = test_channel.take_unary_unary(method_desc)
 
         rpc.terminate(
-            user_profile_pb2.GetUserProfileResponse(
-                success=True,
-                user_profile=user_profile_pb2.UserProfile(user_id=USER_ID),
-                mission_cost=12.5,
-            ),
+            _profile_response(user_profile_messages_pb2.UserProfile(user_id=USER_ID), mission_cost=12.5),
             (),
             grpc.StatusCode.OK,
             "",
         )
 
         result = future.result(timeout=5.0)
-        assert result["mission_cost"] == 12.5
+        assert result["mission_cost"] == pytest.approx(12.5)
         assert result["user_id"] == USER_ID
 
     @pytest.mark.grpc
@@ -761,12 +834,45 @@ class TestMissionCost:
         _, _request, rpc = test_channel.take_unary_unary(method_desc)
 
         rpc.terminate(
-            user_profile_pb2.GetUserProfileResponse(
-                success=True, user_profile=user_profile_pb2.UserProfile(user_id=USER_ID)
+            user_profile_dto_pb2.GetUserProfileResponse(
+                result=user_profile_messages_pb2.UserProfileResult(
+                    identifier=USER_ID, profile=user_profile_messages_pb2.UserProfile(user_id=USER_ID)
+                )
             ),
             (),
             grpc.StatusCode.OK,
             "",
         )
 
-        assert future.result(timeout=5.0)["mission_cost"] == 0.0
+        assert future.result(timeout=5.0)["mission_cost"] == pytest.approx(0.0)
+
+    @pytest.mark.grpc
+    @pytest.mark.integration
+    @pytest.mark.edge_case
+    def test_an_error_outcome_drops_the_mission_cost(
+            self,
+            client: GrpcUserProfile,
+            test_channel: grpc_testing.Channel,
+            thread_pool: futures.ThreadPoolExecutor,
+    ) -> None:
+        """An OperationError result yields None even when the response carries a mission_cost."""
+        method_desc = user_profile_service_pb2.DESCRIPTOR.services_by_name["UserProfileService"].methods_by_name[
+            "GetUserProfile"
+        ]
+        future = thread_pool.submit(asyncio.run, client.get_user_profile())
+        _, _request, rpc = test_channel.take_unary_unary(method_desc)
+
+        rpc.terminate(
+            user_profile_dto_pb2.GetUserProfileResponse(
+                result=user_profile_messages_pb2.UserProfileResult(
+                    identifier=MISSION_ID,
+                    error=bulk_pb2.OperationError(code="PERMISSION_DENIED", message="mission not owned"),
+                ),
+                mission_cost=3.0,
+            ),
+            (),
+            grpc.StatusCode.OK,
+            "",
+        )
+
+        assert future.result(timeout=5.0) is None

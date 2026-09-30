@@ -18,7 +18,6 @@ correct under ``from __future__ import annotations``.
 
 from __future__ import annotations
 
-from itertools import starmap
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from digitalkin.community.agno.toolkits.base import DkToolkit
@@ -51,6 +50,9 @@ class ChatHistoryTools(DkToolkit):
         "tool": ["system", "user", "assistant"],
         "system": [],
     }
+
+    _MAX_READ_IDS: ClassVar[int] = 50
+    _MAX_CONTENT_CHARS: ClassVar[int] = 20000
 
     def __init__(self, session_id: str | None = None, context: ModuleContext | None = None) -> None:
         """Register the outline + read tools.
@@ -110,43 +112,51 @@ class ChatHistoryTools(DkToolkit):
         Args:
             role: Filter by message type: "human", "ai", "tool", or "system".
                 Omit to get all messages except the system prompt.
-            first: Return only the first N messages (oldest). Use this to reach the start
-                of the conversation, e.g. the user's first request.
-            last: Return only the last N messages (most recent). Mutually exclusive with first.
+            first: Return only the first N messages (oldest), at most 200. Use this to reach
+                the start of the conversation, e.g. the user's first request.
+            last: Return only the last N messages (most recent), at most 200. Mutually
+                exclusive with first.
             offset: Skip this many messages from the relevant end (for pagination).
 
         Returns:
             JSON string: {"total", "returned", "offset", "messages": [{"ord", "id", "role",
-            "ts", "chars", "preview", ...}]}. "total" is the full count after filtering, so
-            an empty "messages" with "total": 0 means the thread is genuinely empty.
+            "ts", "chars", "preview", ...}]} plus a "note" when the page was capped. "total"
+            is the full count after filtering (null when ``last`` is used, since only the
+            tail is loaded). Without ``first``/``last`` at most 50 messages are returned.
         """
         if role is not None and role not in self._LABEL_TO_SKIP:
             msg = f"invalid role '{role}'; use one of: human, ai, tool, system"
             return self._fail(msg, tool="outline_chat_history")
 
+        offset = max(offset, 0)
+        requested = first if first is not None else last
+        page = 50 if requested is None else min(max(requested, 0), 200)
+        tail = first is None and last is not None
         skip_roles = self._LABEL_TO_SKIP[role] if role is not None else ["system"]
-        messages = await self._fetch(skip_roles)
+        messages = await self._fetch(skip_roles, limit=offset + page if tail else None)
         if messages is None:
             return self._fail("chat history is not available", tool="outline_chat_history")
         if role == "system":
             messages = [m for m in messages if m.role == "system"]
 
-        rows = list(starmap(self._index_row, enumerate(messages)))
-        total = len(rows)
-
-        if first is not None:
-            sliced = rows[offset : offset + max(first, 0)]
-        elif last is not None:
-            end = max(total - offset, 0)
-            start = max(end - max(last, 0), 0)
-            sliced = rows[start:end]
-        else:
-            sliced = rows[offset:]
-
-        return self._ok(
-            {"total": total, "returned": len(sliced), "offset": offset, "messages": sliced},
-            tool="outline_chat_history",
-        )
+        total = len(messages)
+        start = max(total - offset - page, 0) if tail else offset
+        end = max(total - offset, 0) if tail else offset + page
+        rows = [self._index_row(start + i, m) for i, m in enumerate(messages[start:end])]
+        output: dict[str, Any] = {
+            "total": None if tail else total,
+            "returned": len(rows),
+            "offset": offset,
+            "messages": rows,
+        }
+        if requested is not None and requested > page:
+            output["note"] = f"'{'first' if first is not None else 'last'}' was capped at {page}; page with offset."
+        elif requested is None and total > end:
+            output["note"] = f"showing {page} of {total} messages; pass first/last/offset to page."
+        if "note" in output:
+            # TODO(validate): CHAT-HISTORY-CAP chat-history page/read/content caps apply
+            logger.info("[VALIDATE CHAT-HISTORY-CAP] outline_chat_history: %s", output["note"])
+        return self._ok(output, tool="outline_chat_history")
 
     async def read_chat_messages(
         self,
@@ -160,15 +170,35 @@ class ChatHistoryTools(DkToolkit):
         ``max_content_chars``; attached media is returned as a reference, never inlined.
 
         Args:
-            ids: The message ids to read, taken from an earlier ``outline_chat_history`` call.
-            max_content_chars: Truncate each message body to this many characters (default 4000).
+            ids: The message ids to read (at most 50), taken from an earlier
+                ``outline_chat_history`` call.
+            max_content_chars: Truncate each message body to this many characters
+                (default 4000, at most 20000).
 
         Returns:
-            JSON string: {"messages": [{"id", "role", "ts", "content", ...}], "missing": [...]}.
-            Any requested id that no longer exists is listed under "missing".
+            JSON string: {"messages": [{"id", "role", "ts", "content", ...}], "missing": [...]}
+            plus a "note" when a limit was capped. Any requested id that no longer exists is
+            listed under "missing".
         """
         if not ids:
             return self._ok({"messages": [], "missing": []}, tool="read_chat_messages")
+
+        notes: list[str] = []
+        cap = self._MAX_READ_IDS
+        if len(ids) > cap:
+            # TODO(validate): CHAT-HISTORY-CAP chat-history page/read/content caps apply
+            logger.info("[VALIDATE CHAT-HISTORY-CAP] read_chat_messages dropped ids beyond %d: %s", cap, ids[cap:])
+            notes.append(f"only the first {cap} of {len(ids)} ids were read; request the rest separately.")
+            ids = ids[:cap]
+        if max_content_chars > self._MAX_CONTENT_CHARS:
+            # TODO(validate): CHAT-HISTORY-CAP chat-history page/read/content caps apply
+            logger.info(
+                "[VALIDATE CHAT-HISTORY-CAP] max_content_chars %d capped at %d",
+                max_content_chars,
+                self._MAX_CONTENT_CHARS,
+            )
+            notes.append(f"max_content_chars was capped at {self._MAX_CONTENT_CHARS} (asked {max_content_chars}).")
+            max_content_chars = self._MAX_CONTENT_CHARS
 
         messages = await self._fetch(skip_roles=[])
         if messages is None:
@@ -184,13 +214,17 @@ class ChatHistoryTools(DkToolkit):
             else:
                 out.append(self._full_row(message, max_content_chars))
 
-        return self._ok({"messages": out, "missing": missing}, tool="read_chat_messages")
+        output: dict[str, Any] = {"messages": out, "missing": missing}
+        if notes:
+            output["note"] = " ".join(notes)
+        return self._ok(output, tool="read_chat_messages")
 
-    async def _fetch(self, skip_roles: list[str]) -> list[Message] | None:
+    async def _fetch(self, skip_roles: list[str], limit: int | None = None) -> list[Message] | None:
         """Load session messages via the bound agent/team, or None if unavailable.
 
         Args:
             skip_roles: Roles to exclude (passed to Agno's ``aget_session_messages``).
+            limit: Keep only the latest N messages; None loads them all.
 
         Returns:
             The deduplicated session messages, or None if no host is bound or the call fails.
@@ -201,6 +235,7 @@ class ChatHistoryTools(DkToolkit):
         try:
             return await self.host.aget_session_messages(
                 session_id=self._session_id,
+                limit=limit,
                 skip_roles=skip_roles,
                 skip_history_messages=True,
             )

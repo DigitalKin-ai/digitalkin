@@ -37,8 +37,8 @@ class RedisIdempotency:
         """Atomically claim execution of ``task_id``.
 
         ``CLAIMED`` on the first claim; ``RECLAIMED`` if ``instance_id``
-        already owns it (same replica retrying); ``TAKEN`` if another
-        replica owns it. The GET/SET is a single Lua eval so concurrent
+        already owns it (same replica retrying, TTL left untouched); ``TAKEN``
+        if another replica owns it. The GET/SET is a single Lua eval so concurrent
         callers can never both win. The script returns the ``ClaimResult``
         integer value (0/1/2) — a Redis integer reply.
 
@@ -55,7 +55,6 @@ class RedisIdempotency:
             f"    redis.call('SET', KEYS[1], ARGV[1], 'EX', tonumber(ARGV[2]))\n"
             f"    return {ClaimResult.CLAIMED.value}\n"
             f"elseif current == ARGV[1] then\n"
-            f"    redis.call('EXPIRE', KEYS[1], tonumber(ARGV[2]))\n"
             f"    return {ClaimResult.RECLAIMED.value}\n"
             f"else\n"
             f"    return {ClaimResult.TAKEN.value}\n"
@@ -73,9 +72,9 @@ class RedisIdempotency:
     async def release(self, task_id: str) -> None:
         """Drop the claim so the task can be retried immediately.
 
-        Used when a claim was acquired but execution could not start (e.g.
-        the session was rejected at capacity), so the TTL doesn't block a
-        legitimate retry.
+        Used when a claim was acquired but execution never started (capacity
+        rejection, seed failure, dial failed before the runner spawned), so the
+        TTL doesn't block a legitimate retry.
 
         Args:
             task_id: Task whose claim is released.

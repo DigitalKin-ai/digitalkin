@@ -29,6 +29,7 @@ from digitalkin.models.module.tool_reference import (
 )
 from digitalkin.models.module.utility import (
     EndOfStreamOutput,
+    StreamCancelledOutput,
     UtilityProtocol,
     UtilityRegistry,
 )
@@ -45,6 +46,7 @@ __all__ = [
     "RequestMetadata",
     "SelectSchema",
     "SetupModel",
+    "StreamCancelledOutput",
     "ToolCache",
     "ToolDefinition",
     "ToolModuleInfo",

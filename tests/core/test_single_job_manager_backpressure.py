@@ -54,6 +54,7 @@ def _make_manager(
     mock_task_manager = Mock()
     mock_task_manager.tasks_sessions = {}
     mgr._task_manager = mock_task_manager
+    mgr._config_sessions = {}
     return mgr
 
 

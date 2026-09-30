@@ -47,18 +47,31 @@ class TestSingletonStrategies:
             second = config.init_strategy(name, "m2", "s2", "v2")
             assert first is second, f"{name} should be a singleton"
 
-    def test_mode_switch_clears_singletons(self) -> None:
+    async def test_mode_switch_clears_singletons(self) -> None:
         """update_mode clears singleton cache so subsequent calls get fresh instances."""
         config = ServicesConfig(mode=ServicesMode.LOCAL)
 
         reg_before = config.init_strategy("registry", "m1", "s1", "v1")
 
         # Switching mode (even to same) should invalidate cache
-        config.update_mode(ServicesMode.REMOTE)
-        config.update_mode(ServicesMode.LOCAL)
+        await config.update_mode(ServicesMode.REMOTE)
+        await config.update_mode(ServicesMode.LOCAL)
 
         reg_after = config.init_strategy("registry", "m1", "s1", "v1")
         assert reg_before is not reg_after, "Singleton cache should be cleared after mode switch"
+
+    async def test_mode_switch_closes_cached_singletons(self) -> None:
+        """update_mode closes every cached singleton before dropping it, even if one close fails."""
+        config = ServicesConfig(mode=ServicesMode.LOCAL)
+        registry = config.init_strategy("registry", "m1", "s1", "v1")
+        communication = config.init_strategy("communication", "m1", "s1", "v1")
+        registry.close = AsyncMock(side_effect=RuntimeError("boom"))
+        communication.close = AsyncMock()
+
+        await config.update_mode(ServicesMode.LOCAL)
+
+        registry.close.assert_awaited_once()
+        communication.close.assert_awaited_once()
 
 
 class TestSecretConfigInheritance:

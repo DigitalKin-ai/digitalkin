@@ -73,3 +73,11 @@ class TestRedisIdempotency:
         await idem.release("t4")
         assert await client.get("idem:t4") is None
         assert await idem.claim("t4", "inst_b") is ClaimResult.CLAIMED
+
+    async def test_reclaim_does_not_refresh_ttl(self, guard) -> None:
+        """R3: RECLAIMED is refused by StartStream, so it must not extend the claim's TTL."""
+        idem, client = guard
+        await idem.claim("t5", "inst_a")
+        await client._client.expire("idem:t5", 5)
+        assert await idem.claim("t5", "inst_a") is ClaimResult.RECLAIMED
+        assert await client._client.ttl("idem:t5") <= 5
