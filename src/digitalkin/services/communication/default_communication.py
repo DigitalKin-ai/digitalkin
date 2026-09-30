@@ -30,7 +30,7 @@ class DefaultCommunication(CommunicationStrategy):
         super().__init__(mission_id, setup_id, setup_version_id)
         logger.debug("Initialized DefaultCommunication (local)")
 
-    async def get_module_schemas(  # Default stub implementation; self available for subclass overrides # noqa: PLR6301
+    async def get_module_schemas(  # Default stub implementation; self available for subclass overrides # ruff: ignore[no-self-use]
         self,
         module_address: str,
         module_port: int,
@@ -62,15 +62,15 @@ class DefaultCommunication(CommunicationStrategy):
             "secret": {},
         }
 
-    async def call_module(  # Default stub: no-op for local mode  # noqa: PLR6301
+    async def call_module(  # Default stub: no-op for local mode  # ruff: ignore[no-self-use]
         self,
         module_address: str,
         module_port: int,
-        input_data: dict | Any,  # noqa: ARG002
+        input_data: dict | Any,  # ruff: ignore[unused-method-argument]
         setup_id: str,
         mission_id: str,
-        callback: Callable[[Any], Awaitable[None]] | None = None,  # noqa: ARG002
-        metadata: dict[str, str] | None = None,  # noqa: ARG002
+        callback: Callable[[Any], Awaitable[None]] | None = None,  # ruff: ignore[unused-method-argument]
+        metadata: dict[str, str] | None = None,  # ruff: ignore[unused-method-argument]
     ) -> AsyncGenerator[Any, None]:
         """No-op stub for local-mode tests. Yields nothing.
 

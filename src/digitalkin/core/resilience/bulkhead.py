@@ -15,13 +15,12 @@ Usage in ModuleContext or service wrapper::
 from __future__ import annotations
 
 import asyncio
-import os
 from typing import ClassVar
 
 from typing_extensions import Self
 
 from digitalkin.core.exceptions import BulkheadFullError
-from digitalkin.models.settings.resilience import get_bulkhead_settings
+from digitalkin.models.settings.resilience import BulkheadServiceSettings, get_bulkhead_settings
 
 
 class Bulkhead:
@@ -62,10 +61,10 @@ class Bulkhead:
             del cls._instances[oldest]
 
         settings = get_bulkhead_settings()
-        # Per-service override has a dynamic env-var suffix, so it cannot be a
-        # static settings field — read it directly, falling back to the setting.
-        env_max = os.environ.get(f"DIGITALKIN_BULKHEAD_{service_id.upper()}_MAX")
-        max_concurrent = int(env_max) if env_max is not None else settings.default_max
+        # The override carries the service id in the variable name; the settings
+        # class builds that prefix itself, so nothing here touches the environment.
+        override = BulkheadServiceSettings(service_id).max
+        max_concurrent = override if override is not None else settings.default_max
 
         inst = cls(
             service_id=service_id,

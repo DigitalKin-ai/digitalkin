@@ -1,44 +1,36 @@
 """ArgParser and Action classes to ease command lines arguments settings."""
 
 import logging
-import os
 from argparse import Action, ArgumentParser, Namespace
 from collections.abc import Sequence
 from typing import Any
 
 from digitalkin.logger import logger
 from digitalkin.models.services.services import ServicesMode
+from digitalkin.utils.env_manager import EnvManager
 
 logger.setLevel(logging.INFO)
 
 
 class DevelopmentModeMappingAction(Action):
-    """ArgParse Action to map an environment variable to a ServicesMode enum."""
+    """ArgParse Action defaulting to the environment's ServicesMode.
 
-    def __init__(
-        self,
-        env_var: str,
-        required: bool = True,  # argparse Action API convention # noqa: FBT001, FBT002
-        default: str | None = None,
-        **kwargs: Any,
-    ) -> None:
+    The default comes from ``ModuleSettings.services_mode`` (env ``SERVICE_MODE``);
+    the command-line flag overrides it.
+    """
+
+    def __init__(self, **kwargs: Any) -> None:
         """Initialize the DevelopmentModeMappingAction."""
-        default = ServicesMode(os.environ.get(env_var, default))
-
-        if required and default:
-            required = False
-        super().__init__(
-            default=default,
-            required=required,
-            **kwargs,
-        )
+        kwargs.pop("default", None)
+        kwargs.pop("required", None)
+        super().__init__(default=EnvManager.services_mode(), required=False, **kwargs)
 
     def __call__(
         self,
-        parser: ArgumentParser,  # argparse Action.__call__ signature # noqa: ARG002
+        parser: ArgumentParser,  # argparse Action.__call__ signature # ruff: ignore[unused-method-argument]
         namespace: Namespace,
         values: str | Sequence[Any] | None,
-        option_string: str | None = None,  # argparse Action.__call__ signature # noqa: ARG002
+        option_string: str | None = None,  # argparse Action.__call__ signature # ruff: ignore[unused-method-argument]
     ) -> None:
         """Set the attribute to the corresponding class.
 

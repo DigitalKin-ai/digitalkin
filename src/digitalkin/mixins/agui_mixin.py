@@ -102,7 +102,7 @@ class AgUiMixin:
         self._thread_id: str = ""
         self._run_id: str = ""
 
-    async def _send_agui(  # noqa: PLR6301
+    async def _send_agui(  # ruff: ignore[no-self-use]
         self,
         context: ModuleContext,
         output: AgUiEventOutput,

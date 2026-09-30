@@ -1,6 +1,5 @@
 """Module gRPC server implementation for DigitalKin."""
 
-import os
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
@@ -15,9 +14,12 @@ from digitalkin.grpc_servers.gateway_servicer import GatewayServicer
 from digitalkin.grpc_servers.module_servicer import ModuleServicer
 from digitalkin.logger import logger
 from digitalkin.models.grpc_servers.models import ClientConfig
+from digitalkin.models.services.services import ServicesMode
+from digitalkin.models.settings.redis import get_redis_settings
 from digitalkin.models.settings.server.server import get_server_settings
 from digitalkin.modules._base_module import BaseModule
 from digitalkin.services.registry import GrpcRegistry
+from digitalkin.utils.env_manager import EnvManager
 
 if TYPE_CHECKING:
     from digitalkin.services.registry import RegistryStrategy
@@ -40,6 +42,11 @@ class ModuleServer(BaseServer):
     ) -> None:
         """Initialize the module server.
 
+        In remote mode an omitted ``client_config`` is built from the
+        environment, so a module no longer declares one to reach the registry
+        and the services provider. Local mode keeps it unset: there is no
+        registry to register with.
+
         Args:
             module_class: The module class to serve.
             client_config: Client configuration for services and registry.
@@ -49,6 +56,8 @@ class ModuleServer(BaseServer):
 
         super().__init__(interceptors=all_interceptors or None)
         self.module_class = module_class
+        if client_config is None and EnvManager.services_mode() == ServicesMode.REMOTE:
+            client_config = EnvManager.client_config()
         self.client_config = client_config
         self.registry: RegistryStrategy | None = None
         self.module_servicer: ModuleServicer | None = None
@@ -93,16 +102,16 @@ class ModuleServer(BaseServer):
         dispatcher process, queue, or Redis stream for dispatch.
 
         Raises:
-            RuntimeError: If DIGITALKIN_REDIS_URL is not set.
+            RuntimeError: If DIGITALKIN_REDIS_URL resolves to an empty URL.
         """
-        redis_url = os.environ.get("DIGITALKIN_REDIS_URL")
+        redis_url = get_redis_settings().pool.url.get_secret_value()
         if not redis_url:
             msg = "DIGITALKIN_REDIS_URL is required. The gateway needs Redis for stream persistence."
             raise RuntimeError(msg)
 
         redis_client = RedisClient(redis_url)
         self._gateway_redis_client = redis_client  # owner closes it in stop_async; the gateway only borrows
-        assert self.module_servicer is not None  # noqa: S101 — set during registration before this runs
+        assert self.module_servicer is not None  # ruff: ignore[assert] — set during registration before this runs
         module_runner = ModuleRunner(redis_client=redis_client, servicer=self.module_servicer)
 
         self._gateway_servicer = GatewayServicer(
@@ -173,8 +182,8 @@ class ModuleServer(BaseServer):
         if not setup_id:
             logger.warning("INVALIDATE_SETUP received without setup_id — skipping (scoped-only policy)")
             return
-        self.module_servicer._setup_cache.pop(setup_id, None)  # noqa: SLF001
-        self.module_servicer._setup_inflight.pop(setup_id, None)  # noqa: SLF001
+        self.module_servicer._setup_cache.pop(setup_id, None)  # ruff: ignore[private-member-access]
+        self.module_servicer._setup_inflight.pop(setup_id, None)  # ruff: ignore[private-member-access]
 
     async def _invalidate_tools(self, setup_id: str = "") -> None:
         if self.module_servicer is None:
@@ -182,17 +191,17 @@ class ModuleServer(BaseServer):
         if not setup_id:
             logger.warning("INVALIDATE_TOOLS received without setup_id — skipping (scoped-only policy)")
             return
-        self.module_servicer._tool_cache_by_setup.pop(setup_id, None)  # noqa: SLF001
+        self.module_servicer._tool_cache_by_setup.pop(setup_id, None)  # ruff: ignore[private-member-access]
 
     async def _invalidate_shared(self) -> None:
         self.module_class.clear_shared()
 
-    async def _invalidate_models(self) -> None:  # noqa: PLR6301
+    async def _invalidate_models(self) -> None:  # ruff: ignore[no-self-use]
         from digitalkin.models.module.setup_types import SetupModel
 
         SetupModel.clear_clean_model_cache()
 
-    async def _invalidate_channels(self) -> None:  # noqa: PLR6301
+    async def _invalidate_channels(self) -> None:  # ruff: ignore[no-self-use]
         from digitalkin.core.resilience.bulkhead import Bulkhead
         from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
 

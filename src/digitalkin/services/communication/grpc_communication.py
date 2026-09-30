@@ -301,7 +301,7 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
         response = await stub.GetConfigSetupModule(information_pb2.GetConfigSetupModuleRequest(llm_format=llm_format))
         return json_format.MessageToDict(response.config_setup_schema)
 
-    async def call_module(  # noqa: C901, PLR0912, PLR0914, PLR0915
+    async def call_module(  # ruff: ignore[complex-structure, too-many-branches, too-many-locals, too-many-statements]
         self,
         module_address: str,
         module_port: int,
@@ -373,11 +373,11 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
         slot_acquired = False
         stub: Any = None
 
-        try:  # noqa: PLR1702, PLW0717
+        try:  # ruff: ignore[too-many-nested-blocks, too-many-statements-in-try-clause]
             if breaker.state == CBState.OPEN:
                 logger.warning("[m2m] breaker OPEN — fast-failing target=%s", target_key, extra=log_extra)
                 msg = f"circuit breaker open for {target_key}"
-                raise M2MTargetUnavailable(msg)  # noqa: TRY301
+                raise M2MTargetUnavailable(msg)  # ruff: ignore[raise-within-try]
             timer.mark("breaker_check")
             last_mark = "breaker_check"
 
@@ -392,7 +392,7 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
             # because the idempotency nonce dedupes them backend-side. Fail-closed on error.
             if self._gateway_backend is None:
                 msg = "gateway_backend_config is required for M2M AssociateTask"
-                raise RuntimeError(msg)  # noqa: TRY301
+                raise RuntimeError(msg)  # ruff: ignore[raise-within-try]
             parent_task_id = RequestContext.current().get("task_id", "")
             idem_key = uuid.uuid4().hex  # idempotency nonce, NOT a task_id (backend mints the id)
             assoc = await self._gateway_backend.exec_grpc_query(
@@ -404,7 +404,7 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
             task_id = assoc.task_id
             if not task_id:
                 msg = f"backend returned no task_id from AssociateTask (parent={parent_task_id})"
-                raise RuntimeError(msg)  # noqa: TRY301
+                raise RuntimeError(msg)  # ruff: ignore[raise-within-try]
             logger.info(
                 "[VALIDATE AT2] AssociateTask minted: parent=%s child=%s target=%s",
                 parent_task_id,
@@ -442,7 +442,7 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
             timer.mark("register")
             last_mark = "register"
 
-            try:  # noqa: PLW0717
+            try:  # ruff: ignore[too-many-statements-in-try-clause]
                 grpc_metadata: list[tuple[str, str]] = []
                 if metadata:
                     grpc_metadata.extend((k, v) for k, v in metadata.items() if k != "x-client-address")

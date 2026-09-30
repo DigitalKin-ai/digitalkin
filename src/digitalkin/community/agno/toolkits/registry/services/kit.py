@@ -37,11 +37,17 @@ class ServicesManager(RegistryObjectToolKit):
             name="services_manager",
             actions=ServiceActions,
             description=(
-                "Manage Service SETUPS: create, search, load, update, delete, change_visibility, plus "
-                "list_versions / set_version to inspect the configuration history and undo a bad "
-                "update. The "
-                "action discriminator selects the operation; 'load' returns a service's configuration "
-                "content for use."
+                "Manage Service SETUPS: create, search, structure, load, update, delete, "
+                "change_visibility, plus list_versions / set_version to inspect the configuration "
+                "history and undo a bad update. The action discriminator selects the operation. "
+                "Configurations can be large, so read them in two steps: 'search' returns each "
+                "result with a 'structure' map of key path -> what lives there ('structure' fetches "
+                "the same map for an id you already hold), then 'load' with a key copied verbatim "
+                "from it returns just that part. Copy the key, never invent one: a key the "
+                "configuration does not have quietly returns everything. Load without a key only when "
+                "the whole document is genuinely needed. On create and update you write that map "
+                "yourself, describing what "
+                "each key is for — it is how other agents find their way around the configuration."
             ),
             entrypoint=self.services_manager,
         )

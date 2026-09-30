@@ -556,10 +556,10 @@ class TestM2MEndToEnd:
     ) -> None:
         """A dead backend exhausts retries, opens the mint breaker, then fast-fails without I/O."""
         from digitalkin.grpc_servers.exceptions import ServerError
-        from digitalkin.models.settings.grpc_client import get_circuit_breaker_settings
+        from digitalkin.models.settings.client.client import get_client_settings
 
-        monkeypatch.setenv("DIGITALKIN_CB_FAIL_MAX", "1")
-        get_circuit_breaker_settings.cache_clear()
+        monkeypatch.setenv("CLIENT_CIRCUIT_BREAKER_FAIL_MAX", "1")
+        get_client_settings.cache_clear()
         try:
             # A port nothing listens on → UNAVAILABLE after retries.
             dead_backend_port = 1
@@ -579,7 +579,7 @@ class TestM2MEndToEnd:
 
             assert not caller_gw._m2m.entries
         finally:
-            get_circuit_breaker_settings.cache_clear()
+            get_client_settings.cache_clear()
 
     @pytest.mark.grpc
     @pytest.mark.integration

@@ -67,7 +67,7 @@ class UtilitySchemaExtender:
         original_annotation = base_model.model_fields["root"].annotation
         original_types = cls._extract_union_types(original_annotation)  # type: ignore[arg-type]
         extended_types = (*original_types, *cls._output_protocols)
-        union_type = Union[extended_types]  # type: ignore[valid-type]  # noqa: UP007
+        union_type = Union[extended_types]  # type: ignore[valid-type]  # ruff: ignore[non-pep604-annotation-union]
         extended_root = Annotated[union_type, Field(discriminator="protocol")]
         return create_model(
             f"{base_model.__name__}Utilities",
@@ -90,7 +90,7 @@ class UtilitySchemaExtender:
         original_annotation = base_model.model_fields["root"].annotation
         original_types = cls._extract_union_types(original_annotation)  # type: ignore[arg-type]
         extended_types = (*original_types, *cls._input_protocols)
-        union_type = Union[extended_types]  # type: ignore[valid-type]  # noqa: UP007
+        union_type = Union[extended_types]  # type: ignore[valid-type]  # ruff: ignore[non-pep604-annotation-union]
         extended_root = Annotated[union_type, Field(discriminator="protocol")]
         return create_model(
             f"{base_model.__name__}Utilities",

@@ -118,13 +118,13 @@ Client (Chainlit) → StartStream → Gateway (embedded in ModuleServer)
 
 ### gRPC Keepalive
 
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| `DIGITALKIN_GRPC_KEEPALIVE_TIME_MS` | `60000` | Client keepalive interval |
-| `DIGITALKIN_GRPC_KEEPALIVE_TIMEOUT_MS` | `20000` | Keepalive timeout |
-| `DIGITALKIN_GRPC_MIN_PING_INTERVAL_MS` | `30000` | Min time between pings |
-| `DIGITALKIN_GRPC_SERVER_KEEPALIVE_TIME_MS` | `120000` | Server keepalive |
-| `DIGITALKIN_GRPC_SERVER_MIN_PING_INTERVAL_MS` | `10000` | Server min ping interval |
+| Variable                                | Default  | Purpose                   |
+|-----------------------------------------|----------|---------------------------|
+| `CLIENT_GRPC_OPTIONS_KEEPALIVE_TIME`    | `15000`  | Client keepalive interval |
+| `CLIENT_GRPC_OPTIONS_KEEPALIVE_TIMEOUT` | `5000`   | Keepalive timeout         |
+| `CLIENT_GRPC_OPTIONS_MIN_PING_INTERVAL` | `10000`  | Min time between pings    |
+| `SERVER_GRPC_OPTIONS_KEEPALIVE_TIME`    | `120000` | Server keepalive          |
+| `SERVER_GRPC_OPTIONS_MIN_PING_INTERVAL` | `10000`  | Server min ping interval  |
 
 ---
 

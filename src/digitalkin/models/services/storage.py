@@ -5,6 +5,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from digitalkin.models.services.filesystem import FileMetadata
+
 
 class BaseRole(str, Enum):
     """Officially supported Role Enum for chat messages."""
@@ -30,18 +32,10 @@ class ChatHistory(BaseModel):
     messages: list[BaseMessage] = Field(..., description="List of messages in the chat history")
 
 
-class FileModel(BaseModel):
-    """File model."""
-
-    file_id: str = Field(..., description="ID of the file")
-    name: str = Field(..., description="Name of the file")
-    metadata: dict[str, Any] = Field(..., description="Metadata of the file")
-
-
 class FileHistory(BaseModel):
     """File history model."""
 
-    files: list[FileModel] = Field(..., description="List of files")
+    files: list[FileMetadata] = Field(..., description="List of files")
 
 
 class DataType(Enum):

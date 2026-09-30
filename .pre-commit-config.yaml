@@ -46,6 +46,20 @@ repos:
         types: [python]
         files: ^src/digitalkin/.*\.py$
 
+  # The .env templates are generated from the settings classes: regenerate them
+  # here so a new or renamed field can never ship without its documentation.
+  - repo: local
+    hooks:
+      - id: env-template
+        name: env-template
+        # Staged, not just written: pre-commit only reports "files were modified"
+        # for *unstaged* changes, so adding them lets the regenerated templates
+        # ride along in the same commit instead of forcing a second one.
+        entry: bash -c 'uv run task env-template && git add -- .env.exemple .env.minimum'
+        language: system
+        pass_filenames: false
+        files: ^src/digitalkin/(models/settings/.*|utils/env_template)\.py$
+
   # Add pytest as a local hook
   - repo: local
     hooks:

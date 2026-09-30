@@ -178,33 +178,27 @@ The asyncio event loop is the single most constrained resource. Every concurrent
 
 ### Layer 1: gRPC Server
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `DIGITALKIN_MAX_CONCURRENT_RPCS` | `cpu × 200` | Concurrent RPCs accepted |
-| `DIGITALKIN_THREAD_POOL_WORKERS` | `min(4, cpu)` | Sync callback thread pool |
+| Variable                     | Default       | Description               |
+|------------------------------|---------------|---------------------------|
+| `SERVER_MAX_CONCURRENT_RPCS` | `cpu × 200`   | Concurrent RPCs accepted  |
+| `SERVER_THREAD_POOL_WORKERS` | `min(4, cpu)` | Sync callback thread pool |
 
 ### Layer 2: Task Manager
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `DIGITALKIN_MAX_CONCURRENT_TASKS` | `100` | Execution slots |
-| `DIGITALKIN_MAX_QUEUED_TASKS` | `0` | Queue depth (0 = legacy mode) |
-| `DIGITALKIN_ADMISSION_TIMEOUT` | `5.0` | System gate timeout (seconds) |
-| `DIGITALKIN_TASK_WAIT_TIMEOUT` | `30` | Legacy slot timeout (seconds) |
+| Variable                                       | Default | Description                   |
+|------------------------------------------------|---------|-------------------------------|
+| `DIGITALKIN_TASK_MANAGER_MAX_CONCURRENT_TASKS` | `100`   | Execution slots               |
+| `DIGITALKIN_TASK_MANAGER_MAX_QUEUED_TASKS`     | `0`     | Queue depth (0 = legacy mode) |
+| `DIGITALKIN_TASK_MANAGER_ADMISSION_TIMEOUT`    | `5.0`   | System gate timeout (seconds) |
+| `DIGITALKIN_TASK_MANAGER_TASK_WAIT_TIMEOUT`    | `30`    | Legacy slot timeout (seconds) |
 
-### Layer 3: Signal I/O
+### Layer 3: Client gRPC
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `DIGITALKIN_GRPC_TIMEOUT` | `30` | SendSignals RPC timeout |
-| `DIGITALKIN_SIGNAL_MAX_BATCH_SIZE` | `50` | Batch flush trigger |
-| `DIGITALKIN_SIGNAL_FLUSH_INTERVAL` | `0.1` | Timer flush trigger (seconds) |
-| `DIGITALKIN_SIGNAL_SEND_RETRIES` | `3` | Batch retry attempts |
-| `DIGITALKIN_SIGNAL_SEND_BACKOFF_MS` | `100` | Retry backoff base (ms) |
-| `DIGITALKIN_POLL_TIMEOUT` | `1` | GetSignals RPC timeout |
-| `DIGITALKIN_SIGNAL_POLL_INTERVAL` | `1.0` | Max poll interval (seconds) |
-| `DIGITALKIN_SIGNAL_INITIAL_POLL_INTERVAL` | `0.1` | Initial poll interval |
-| `DIGITALKIN_SIGNAL_QUEUE_SIZE` | `512` | Per-task signal buffer |
+| Variable                 | Default | Description                                                      |
+|--------------------------|---------|------------------------------------------------------------------|
+| `CLIENT_TIMEOUT`         | `30`    | Default per-query deadline (seconds) for unary gRPC client calls |
+| `CLIENT_MAX_RETRIES`     | `2`     | Retry attempts for a failed unary query                          |
+| `CLIENT_BACKOFF_BASE_MS` | `50`    | Base backoff (ms), doubles per attempt                           |
 
 ---
 

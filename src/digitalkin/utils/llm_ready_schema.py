@@ -13,7 +13,7 @@ class CustomOrderSchema(GenerateJsonSchema):
     def sort(
         self,
         value: JsonSchemaValue,
-        parent_key: str | None = None,  # noqa: ARG002
+        parent_key: str | None = None,  # ruff: ignore[unused-method-argument]
     ) -> JsonSchemaValue:  # Overrides Pydantic GenerateJsonSchema.sort signature
         """Sort the keys of the schema in a specific order.
 

@@ -11,7 +11,7 @@ class ProfilingSettings(BaseSettings):
     """Profiling and debugging configuration.
 
     Env vars: DIGITALKIN_PROFILER, DIGITALKIN_PROFILE_OUTPUT_DIR,
-    DIGITALKIN_ASYNCIO_INSPECTOR, DIGITALKIN_ASYNCIO_INSPECTOR_PORT.
+    DIGITALKIN_UVLOOP, DIGITALKIN_PROFILER_KEEP_N.
     """
 
     model_config = SettingsConfigDict(env_prefix="DIGITALKIN_", case_sensitive=False)

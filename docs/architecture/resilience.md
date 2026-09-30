@@ -114,13 +114,13 @@ sequenceDiagram
 
 ## Environment Variables
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `DIGITALKIN_SIGNAL_SEND_RETRIES` | `3` | Number of retry attempts after the initial try (4 total attempts) |
-| `DIGITALKIN_SIGNAL_SEND_BACKOFF_MS` | `100` | Base backoff in milliseconds. Doubles each attempt: 100ms → 200ms → 400ms |
-| `DIGITALKIN_GRPC_TIMEOUT` | `30` | Per-RPC timeout in seconds for `SendSignals`. Under burst load, consider increasing to 60s |
-| `DIGITALKIN_SIGNAL_MAX_BATCH_SIZE` | `50` | Signals per batch. Larger = fewer RPCs but higher per-signal latency |
-| `DIGITALKIN_SIGNAL_FLUSH_INTERVAL` | `0.1` | Timer flush trigger in seconds. Lower = less latency, higher = more batching |
+| Variable                               | Default | Description                                                                                                    |
+|----------------------------------------|---------|----------------------------------------------------------------------------------------------------------------|
+| `CLIENT_TIMEOUT`                       | `30`    | Default per-query deadline (seconds) for unary gRPC client calls. Under burst load, consider increasing to 60s |
+| `CLIENT_MAX_RETRIES`                   | `2`     | Retry attempts for a failed unary query                                                                        |
+| `CLIENT_BACKOFF_BASE_MS`               | `50`    | Base backoff (ms), doubles per attempt                                                                         |
+| `CLIENT_CIRCUIT_BREAKER_FAIL_MAX`      | `5`     | Consecutive failures before the per-service circuit opens                                                      |
+| `CLIENT_CIRCUIT_BREAKER_RESET_TIMEOUT` | `30`    | Seconds the circuit stays open before a half-open probe                                                        |
 
 ---
 
