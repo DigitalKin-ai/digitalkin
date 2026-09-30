@@ -21,7 +21,7 @@ from digitalkin.models.module.module_types import (
 )
 from digitalkin.models.module.select_schema import SelectSchema
 from digitalkin.models.module.tool_cache import ToolCache
-from digitalkin.models.module.utility import EndOfStreamOutput, UtilityProtocol
+from digitalkin.models.module.utility import EndOfStreamOutput, StreamCancelledOutput, UtilityProtocol
 from digitalkin.models.services.registry import RegistryModuleType
 from digitalkin.models.services.storage import BaseRole
 from digitalkin.models.settings.module import get_module_settings
@@ -717,12 +717,21 @@ class BaseModule(  # Module SDK base class requires many public methods # ruff: 
             timer.log("module.start", task_id=self.context.session.current_ids().get("job_id", ""))
             await self.stop()
 
-    async def stop(self) -> None:
-        """Stop the module. Idempotent — second call is a no-op."""
+    async def stop(self, cancel_reason: str | None = None) -> None:
+        """Stop the module. Idempotent — second call is a no-op.
+
+        A cancelled module (status ``CANCELLED`` or a ``cancel_reason`` given) emits
+        ``stream.cancelled`` right before ``stream.end``.
+
+        Args:
+            cancel_reason: Cancellation reason carried by ``stream.cancelled``.
+        """
         t0 = time.perf_counter_ns()
         if self._status in {ModuleStatus.STOPPED, ModuleStatus.FAILED}:
             return
-        try:  # ruff: ignore[too-many-statements-in-try-clause]
+        if cancel_reason is None and self._status == ModuleStatus.CANCELLED:
+            cancel_reason = "cancelled"
+        try:  # noqa: PLW0717
             self._status = ModuleStatus.STOPPING
             await self.cleanup()
             t1 = time.perf_counter_ns()
@@ -746,6 +755,19 @@ class BaseModule(  # Module SDK base class requires many public methods # ruff: 
                 logger.warning("Failed to flush handler history during stop", exc_info=True)
             t2 = time.perf_counter_ns()
             if "send_message" in vars(self.context.callbacks):
+                if cancel_reason is not None:
+                    # TODO(validate): CANCEL-SENTINEL stream.cancelled is emitted before stream.end on cancel
+                    logger.info(
+                        "[VALIDATE CANCEL-SENTINEL] emitting stream.cancelled reason=%s before stream.end",
+                        cancel_reason,
+                        extra=self.context.session.current_ids(),
+                    )
+                    await self.context.callbacks.send_message(
+                        DataModel[StreamCancelledOutput](
+                            root=StreamCancelledOutput(reason=cancel_reason),
+                            annotations={"role": BaseRole.SYSTEM},
+                        )
+                    )
                 await self.context.callbacks.send_message(
                     _EndOfStreamDataModel(
                         root=EndOfStreamOutput(),

@@ -1,13 +1,12 @@
 """Unit tests for StreamRegistry.
 
 Covers: capacity enforcement, register/unregister, heartbeat touch,
-zombie reaper, shutdown cleanup. Uses a mock RedisClient for fast unit tests.
+zombie reaper, shutdown cleanup.
 """
 
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -18,18 +17,13 @@ from digitalkin.models.settings.gateway import get_gateway_settings
 pytestmark = [pytest.mark.timeout(15)]
 
 
-def _mock_redis() -> MagicMock:
-    """Placeholder RedisClient — StreamRegistry no longer touches Redis."""
-    return MagicMock()
-
-
 class TestRegistryCapacity:
     """Capacity enforcement via max_streams."""
 
     async def test_register_within_capacity(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("DIGITALKIN_GATEWAY_MAX_STREAMS", "5")
         get_gateway_settings.cache_clear()
-        reg = StreamRegistry(_mock_redis())
+        reg = StreamRegistry()
         for i in range(5):
             await reg.register(StreamSession(task_id=f"t_{i}"))
         assert reg.active_count == 5
@@ -39,7 +33,7 @@ class TestRegistryCapacity:
         # against max_streams — no Redis Lua call.
         monkeypatch.setenv("DIGITALKIN_GATEWAY_MAX_STREAMS", "2")
         get_gateway_settings.cache_clear()
-        reg = StreamRegistry(_mock_redis())
+        reg = StreamRegistry()
         assert await reg.register(StreamSession(task_id="t_0")) is True
         assert await reg.register(StreamSession(task_id="t_1")) is True
         assert await reg.register(StreamSession(task_id="t_overflow")) is False
@@ -47,7 +41,7 @@ class TestRegistryCapacity:
     async def test_unregister_frees_slot(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("DIGITALKIN_GATEWAY_MAX_STREAMS", "1")
         get_gateway_settings.cache_clear()
-        reg = StreamRegistry(_mock_redis())
+        reg = StreamRegistry()
         await reg.register(StreamSession(task_id="t_a"))
         await reg.unregister("t_a")
         await reg.register(StreamSession(task_id="t_b"))
@@ -60,7 +54,7 @@ class TestRegistryLookup:
     async def test_get_returns_session(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("DIGITALKIN_GATEWAY_MAX_STREAMS", "10")
         get_gateway_settings.cache_clear()
-        reg = StreamRegistry(_mock_redis())
+        reg = StreamRegistry()
         s = StreamSession(task_id="t_get")
         await reg.register(s)
         assert reg.get("t_get") is s
@@ -68,13 +62,13 @@ class TestRegistryLookup:
     def test_get_unknown_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("DIGITALKIN_GATEWAY_MAX_STREAMS", "10")
         get_gateway_settings.cache_clear()
-        reg = StreamRegistry(_mock_redis())
+        reg = StreamRegistry()
         assert reg.get("nonexistent") is None
 
     async def test_unregister_returns_session(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("DIGITALKIN_GATEWAY_MAX_STREAMS", "10")
         get_gateway_settings.cache_clear()
-        reg = StreamRegistry(_mock_redis())
+        reg = StreamRegistry()
         s = StreamSession(task_id="t_unreg")
         await reg.register(s)
         removed = await reg.unregister("t_unreg")
@@ -84,7 +78,7 @@ class TestRegistryLookup:
     async def test_unregister_unknown_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("DIGITALKIN_GATEWAY_MAX_STREAMS", "10")
         get_gateway_settings.cache_clear()
-        reg = StreamRegistry(_mock_redis())
+        reg = StreamRegistry()
         result = await reg.unregister("nonexistent")
         assert result is None
 
@@ -95,7 +89,7 @@ class TestRegistryCapacity:
     async def test_rejects_at_capacity_keeps_live_sessions(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("DIGITALKIN_GATEWAY_MAX_STREAMS", "3")
         get_gateway_settings.cache_clear()
-        reg = StreamRegistry(_mock_redis())
+        reg = StreamRegistry()
         for i in range(3):
             assert await reg.register(StreamSession(task_id=f"t_{i}")) is True
         # 4th registration is rejected; no live session is evicted.
@@ -111,7 +105,7 @@ class TestRegistryShutdown:
     async def test_shutdown_tears_down_all_sessions(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("DIGITALKIN_GATEWAY_MAX_STREAMS", "10")
         get_gateway_settings.cache_clear()
-        reg = StreamRegistry(_mock_redis())
+        reg = StreamRegistry()
         for i in range(5):
             await reg.register(StreamSession(task_id=f"t_sd_{i}"))
 
@@ -126,7 +120,7 @@ class TestRegistryTaskMonitoring:
         """The reaper keeps a strong ref so a fire-and-forget task can't be GC'd."""
         monkeypatch.setenv("DIGITALKIN_GATEWAY_MAX_STREAMS", "10")
         get_gateway_settings.cache_clear()
-        reg = StreamRegistry(_mock_redis())
+        reg = StreamRegistry()
         started = asyncio.Event()
         finish = asyncio.Event()
 
@@ -157,7 +151,7 @@ class TestRegistryTaskMonitoring:
 
         monkeypatch.setenv("DIGITALKIN_GATEWAY_MAX_STREAMS", "10")
         get_gateway_settings.cache_clear()
-        reg = StreamRegistry(_mock_redis())
+        reg = StreamRegistry()
 
         async def _boom() -> None:
             raise RuntimeError("kaboom")
@@ -186,7 +180,7 @@ class TestRegistryTaskMonitoring:
 
         monkeypatch.setenv("DIGITALKIN_GATEWAY_MAX_STREAMS", "10")
         get_gateway_settings.cache_clear()
-        reg = StreamRegistry(_mock_redis())
+        reg = StreamRegistry()
 
         async def _wait_forever() -> None:
             await asyncio.Event().wait()
@@ -205,7 +199,7 @@ class TestRegistryTaskMonitoring:
         """shutdown() cancels every still-running monitored task."""
         monkeypatch.setenv("DIGITALKIN_GATEWAY_MAX_STREAMS", "10")
         get_gateway_settings.cache_clear()
-        reg = StreamRegistry(_mock_redis())
+        reg = StreamRegistry()
         started = asyncio.Event()
 
         async def _wait_forever() -> None:
@@ -226,7 +220,7 @@ class TestRegistryTaskMonitoring:
         """A dial_consumer task that finishes without unregistering is reaped."""
         monkeypatch.setenv("DIGITALKIN_GATEWAY_MAX_STREAMS", "10")
         get_gateway_settings.cache_clear()
-        reg = StreamRegistry(_mock_redis())
+        reg = StreamRegistry()
         task_id = "zombie_task"
         session = StreamSession(task_id=task_id)
         await reg.register(session)
@@ -253,7 +247,7 @@ class TestRegistryTaskMonitoring:
         """If the dial-back's finally already unregistered, the callback is a no-op."""
         monkeypatch.setenv("DIGITALKIN_GATEWAY_MAX_STREAMS", "10")
         get_gateway_settings.cache_clear()
-        reg = StreamRegistry(_mock_redis())
+        reg = StreamRegistry()
         task_id = "clean_task"
         session = StreamSession(task_id=task_id)
         await reg.register(session)

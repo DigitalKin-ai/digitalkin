@@ -112,7 +112,7 @@ class TestStartStreamUniqueness:
     async def test_live_session_is_refused(self) -> None:
         gw = _servicer_with_claim(ClaimResult.CLAIMED, xlen=0)
         gw._dial_consumer = AsyncMock()  # type: ignore[method-assign]
-        await gw._registry.register(StreamSession(task_id="t_dup"), setup_id="s", mission_id="m")
+        await gw._registry.register(StreamSession(task_id="t_dup"))
         ctx = _mock_context({"x-client-address": "127.0.0.1:50999"})
 
         resp = await gw.StartStream(_start_request("t_dup"), ctx)
@@ -143,6 +143,15 @@ class _FakeRedisClient:
 
     async def xlen(self, name: str) -> int:
         return await self._client.xlen(name)  # type: ignore[return-value]
+
+    async def exists(self, *names: str) -> int:
+        return await self._client.exists(*names)  # type: ignore[return-value]
+
+    async def delete(self, *names: str) -> int:
+        return await self._client.delete(*names)  # type: ignore[return-value]
+
+    def pipeline(self) -> Any:
+        return self._client.pipeline()
 
     async def expire(self, name: str, seconds: int) -> bool:
         return await self._client.expire(name, seconds)  # type: ignore[return-value]
@@ -219,7 +228,7 @@ class TestDialAttemptResume:
         port = server.add_insecure_port("127.0.0.1:0")
         await server.start()
         try:
-            await gw._registry.register(StreamSession(task_id=task_id), setup_id="setups:t", mission_id="missions:t")
+            await gw._registry.register(StreamSession(task_id=task_id))
             await gw._run_dial_attempt(
                 task_id=task_id,
                 mission_id="missions:t",

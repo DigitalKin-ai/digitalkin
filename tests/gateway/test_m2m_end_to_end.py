@@ -12,8 +12,8 @@ The stateful backend authenticates exactly like prod: a task id it did not
 register is rejected ``UNAUTHENTICATED "Invalid or inactive task"`` — the
 regression test reproduces the prod bug that motivated the backend mint.
 
-Assertions are tied to the prod validation markers: ``[VALIDATE AT2]`` (caller
-mint) and ``[VALIDATE AC1]`` (setup access verdict).
+Assertions are tied to the prod validation markers: ``[VALIDATE ASSOCIATE-TASK]`` (caller
+mint) and ``[VALIDATE SETUP-ACCESS]`` (setup access verdict).
 """
 
 from __future__ import annotations
@@ -453,11 +453,11 @@ class TestM2MEndToEnd:
         assert _stream_errors(outputs) == []
 
         # 4. The prod validation markers traced the whole chain.
-        at2 = _marker_lines(digitalkin_records, "[VALIDATE AT2]")
+        at2 = _marker_lines(digitalkin_records, "[VALIDATE ASSOCIATE-TASK]")
         assert len(at2) == 1
         assert f"parent={PARENT_TASK_ID}" in at2[0]
         assert "child=child-1" in at2[0]
-        ac1 = _marker_lines(digitalkin_records, "[VALIDATE AC1]")
+        ac1 = _marker_lines(digitalkin_records, "[VALIDATE SETUP-ACCESS]")
         assert any("setup access granted" in line and SETUP_ID in line for line in ac1)
 
         # 5. Nothing leaked on the caller.
@@ -518,7 +518,7 @@ class TestM2MEndToEnd:
         code, message = errors[0]
         assert code == "SETUP_ACCESS_DENIED"
         assert SETUP_ID in message
-        ac1 = _marker_lines(digitalkin_records, "[VALIDATE AC1]")
+        ac1 = _marker_lines(digitalkin_records, "[VALIDATE SETUP-ACCESS]")
         assert any("setup access DENIED" in line and SETUP_ID in line for line in ac1)
         assert not caller_gw._m2m.entries
 

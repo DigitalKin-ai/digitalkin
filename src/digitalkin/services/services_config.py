@@ -5,6 +5,7 @@ from typing import Any, ClassVar
 from pydantic import BaseModel, Field, PrivateAttr
 
 from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
+from digitalkin.logger import logger
 from digitalkin.models.services.services import ServicesMode
 from digitalkin.services.communication import CommunicationStrategy, DefaultCommunication, GrpcCommunication
 from digitalkin.services.cost import CostStrategy, DefaultCost, GrpcCost
@@ -196,11 +197,18 @@ class ServicesConfig(BaseModel):
         """The secret service strategy class for the current mode."""
         return self._strategies["secret"][self.mode.value]
 
-    def update_mode(self, mode: ServicesMode) -> None:
-        """Update the strategy mode.
+    async def update_mode(self, mode: ServicesMode) -> None:
+        """Update the strategy mode, closing the cached singletons of the previous mode.
 
         Parameters:
             mode: The new mode to use for all strategies
         """
         self.mode = mode
+        for name, instance in self._singleton_cache.items():
+            # TODO(validate): SVC-MODE-CLOSE cached singletons are closed on a mode switch
+            logger.info("[VALIDATE SVC-MODE-CLOSE] closing cached %s singleton", name)
+            try:
+                await instance.close()
+            except Exception:
+                logger.exception("Error closing cached %s singleton", name)
         self._singleton_cache.clear()

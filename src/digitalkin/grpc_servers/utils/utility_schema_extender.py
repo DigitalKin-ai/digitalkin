@@ -17,6 +17,7 @@ from digitalkin.models.module.utility import (
     HealthcheckServicesOutput,
     HealthcheckStatusInput,
     HealthcheckStatusOutput,
+    StreamCancelledOutput,
 )
 from digitalkin.models.services.cost import CostLimit
 
@@ -30,6 +31,7 @@ class UtilitySchemaExtender:
 
     _output_protocols = (
         EndOfStreamOutput,
+        StreamCancelledOutput,
         HealthcheckPingOutput,
         HealthcheckServicesOutput,
         HealthcheckStatusOutput,

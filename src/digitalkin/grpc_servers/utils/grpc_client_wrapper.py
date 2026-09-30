@@ -42,6 +42,7 @@ class GrpcClientWrapper:
     _channel_cache_key: str | None = None
     _channel_cache: ClassVar[dict[str, grpc.aio.Channel]] = {}
     _ref_counts: ClassVar[dict[str, int]] = {}
+    _evicted_refs: ClassVar[dict[grpc.aio.Channel, int]] = {}
     _stub_cache: ClassVar[dict[tuple[str, type], Any]] = {}
 
     _RETRYABLE_CODES: ClassVar[set[grpc.StatusCode]] = {
@@ -82,6 +83,18 @@ class GrpcClientWrapper:
             private_key=private_key,
         )
 
+    @staticmethod
+    def channel_cache_key(config: ClientConfig) -> str:
+        """Return the channel cache key for a config.
+
+        Args:
+            config: Client configuration for the channel.
+
+        Returns:
+            ``address:security:compression``.
+        """
+        return f"{config.address}:{config.security.value}:{config.compression.value}"
+
     def _init_channel(self, config: ClientConfig) -> grpc.aio.Channel:
         """Get or create a cached async gRPC channel.
 
@@ -94,7 +107,7 @@ class GrpcClientWrapper:
         Returns:
             An async gRPC channel (may be shared with other instances).
         """
-        cache_key = f"{config.address}:{config.security.value}:{config.compression.value}"
+        cache_key = GrpcClientWrapper.channel_cache_key(config)
         if cache_key in GrpcClientWrapper._channel_cache:
             GrpcClientWrapper._ref_counts[cache_key] += 1
             channel = GrpcClientWrapper._channel_cache[cache_key]
@@ -162,52 +175,63 @@ class GrpcClientWrapper:
         """
         if self._channel is None:
             return
-        if (key := self._channel_cache_key) is not None and key in GrpcClientWrapper._ref_counts:
-            GrpcClientWrapper._ref_counts[key] -= 1
-            if GrpcClientWrapper._ref_counts[key] <= 0:
-                GrpcClientWrapper._ref_counts.pop(key, None)
-                GrpcClientWrapper._channel_cache.pop(key, None)
-                GrpcClientWrapper._stub_cache = {k: v for k, v in GrpcClientWrapper._stub_cache.items() if k[0] != key}
-                await self._channel.close()
-                CircuitBreaker.remove(self.service_name)
-                Bulkhead.remove(self.service_name)
-        else:
+        if self._channel_cache_key is None:
             await self._channel.close()
+        elif await GrpcClientWrapper.release_cached_channel(self._channel_cache_key, self._channel):
+            CircuitBreaker.remove(self.service_name)
+            Bulkhead.remove(self.service_name)
         self._channel = None
 
     @classmethod
-    async def release_cached_channel(cls, key: str) -> None:
-        """Decrement refcount for a cache key and close channel when last ref is released.
+    async def release_cached_channel(cls, key: str, channel: grpc.aio.Channel) -> bool:
+        """Release one ref on ``channel`` and close it when the last ref is released.
+
+        The ref is matched by channel identity: a holder of a channel that was evicted
+        (and replaced under the same key) never decrements the replacement's refcount.
 
         Args:
-            key: Channel cache key to release.
+            key: Channel cache key the channel was acquired under.
+            channel: The channel the caller holds.
+
+        Returns:
+            True when this released the last ref and the channel was closed.
         """
-        if key not in cls._ref_counts:
-            return
-        cls._ref_counts[key] -= 1
-        if cls._ref_counts[key] <= 0:
+        if cls._channel_cache.get(key) is channel:
+            cls._ref_counts[key] -= 1
+            if cls._ref_counts[key] > 0:
+                return False
             cls._ref_counts.pop(key, None)
-            channel = cls._channel_cache.pop(key, None)
-            # Purge stubs bound to the closing channel.
+            cls._channel_cache.pop(key, None)
             cls._stub_cache = {k: v for k, v in cls._stub_cache.items() if k[0] != key}
-            if channel is not None:
-                await channel.close()
+        elif channel in cls._evicted_refs:
+            cls._evicted_refs[channel] -= 1
+            if cls._evicted_refs[channel] > 0:
+                return False
+            del cls._evicted_refs[channel]
+        await channel.close()
+        return True
 
     @classmethod
     async def evict_cached_channel(cls, key: str) -> None:
-        """Force-close and remove a cached channel regardless of refcount.
+        """Drop a cached channel so the next dial to ``key`` opens a fresh connection.
 
-        Guarantees a fresh connection on re-dial: a channel left cached after
-        a peer died can be wedged mid-reconnect, so a resume must not reuse it.
-        A missing key is a no-op.
+        A channel left cached after a peer died can be wedged mid-reconnect, so a resume
+        must not reuse it. Current holders keep the evicted channel until they release it;
+        it is closed on their last release. A missing key is a no-op.
 
         Args:
             key: Channel cache key to evict.
         """
-        cls._ref_counts.pop(key, None)
         channel = cls._channel_cache.pop(key, None)
+        refs = cls._ref_counts.pop(key, 0)
         cls._stub_cache = {k: v for k, v in cls._stub_cache.items() if k[0] != key}
-        if channel is not None:
+        if channel is None:
+            return
+        # TODO(validate): CHAN-EVICT evicted channels stay open for holders until the last release
+        logger.info("[VALIDATE CHAN-EVICT] evicted %s with %d holder(s); closed on last release", key, refs)
+        if refs > 0:
+            cls._evicted_refs[channel] = refs
+        else:
             await channel.close()
 
     @classmethod
@@ -218,10 +242,11 @@ class GrpcClientWrapper:
         Clears circuit breaker singletons to prevent unbounded growth
         from dynamically discovered services.
         """
-        for channel in cls._channel_cache.values():
+        for channel in [*cls._channel_cache.values(), *cls._evicted_refs]:
             await channel.close()
         cls._channel_cache.clear()
         cls._ref_counts.clear()
+        cls._evicted_refs.clear()
         cls._stub_cache.clear()
         CircuitBreaker.clear_all()
 

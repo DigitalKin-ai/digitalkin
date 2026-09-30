@@ -287,7 +287,6 @@ class ModuleToolkit(DkToolkit):
         tool_name: str,
         output: dict[str, Any] | str,
         duration_ms: float,
-        input_kwargs: dict[str, Any],
     ) -> str | ToolResult:
         """Handle successful tool execution.
 
@@ -302,7 +301,6 @@ class ModuleToolkit(DkToolkit):
             success=True,
             duration_ms=duration_ms,
             cost_tracked=ModuleToolkit._has_cost_metadata(tool_metadata),
-            input_kwargs=input_kwargs,
             tool_metadata=tool_metadata,
         )
 
@@ -321,7 +319,7 @@ class ModuleToolkit(DkToolkit):
             self._context.session.job_id,
         )
 
-        body = json.dumps({"output": payload, "metadata": metadata.to_success_dict()}, indent=2)
+        body = json.dumps({"output": payload, "metadata": metadata.to_success_dict()})
         if not image_urls:
             return body
         return ToolResult(content=body, images=[Image(url=url) for url in image_urls])
@@ -331,7 +329,6 @@ class ModuleToolkit(DkToolkit):
         tool_name: str,
         error_msg: str,
         duration_ms: float,
-        input_kwargs: dict[str, Any],
     ) -> str:
         """Handle failed tool execution.
 
@@ -343,7 +340,6 @@ class ModuleToolkit(DkToolkit):
             success=False,
             duration_ms=duration_ms,
             error=error_msg,
-            input_kwargs=input_kwargs,
         )
         logger.warning(
             "Tool '%s' failed in %.2fms: %s setup_id=%s task_id=%s",
@@ -353,64 +349,76 @@ class ModuleToolkit(DkToolkit):
             self._tool_module_info.setup_id,
             self._context.session.job_id,
         )
-        return json.dumps({"error": error_msg, "metadata": metadata.to_error_dict()}, indent=2)
+        return json.dumps({"error": error_msg, "metadata": metadata.to_error_dict()})
 
     @staticmethod
-    def _find_successful_response(results: list[dict[str, Any]]) -> dict[str, Any] | None:
-        """Find the last domain output from the streamed SDK responses.
+    def _extract_error_message(frame: dict[str, Any] | None) -> str:
+        """Extract an error message from the last error frame of a tool call.
 
-        Each response is the ``MessageToDict`` of a payload Struct, shape
-        ``{"root": {"protocol": "...", ...}, "annotations": {...}}``. A
-        "successful" response is the most recent one whose ``root.protocol``
-        is *not* a lifecycle/error sentinel.
+        Errors surface in-band as ``stream.error`` (``code``/``message``) or
+        ``stream.cancelled`` (``reason``); a frame may also carry its own ``error`` field.
 
-        Returns:
-            The matching dict, or None if every response was a sentinel.
-        """
-        for resp in reversed(results):
-            root = resp.get("root")
-            if not isinstance(root, dict):
-                continue
-            protocol = root.get("protocol", "")
-            if protocol in {"stream.start", "stream.end", "stream.init", "stream.error"}:
-                continue
-            return resp
-        return None
-
-    @staticmethod
-    def _extract_error_message(results: list[dict[str, Any]]) -> str:
-        """Extract an error message from streamed SDK responses.
-
-        Errors surface in-band as ``root.protocol == "stream.error"`` with
-        ``code`` and ``message`` fields (per the SDK's sentinel protocol).
-        Domain modules may also embed their own ``error`` field on a domain
-        output.
+        Args:
+            frame: The last error frame kept while draining the tool stream.
 
         Returns:
-            The most informative error string, or a default if none found.
+            The error string, or a default if the frame carries none.
         """
         default_error = "No successful response received from module"
-        if not results:
+        if frame is None:
             return default_error
-
-        for resp in reversed(results):
-            root = resp.get("root")
-            if not isinstance(root, dict):
-                continue
-            if root.get("protocol") != "stream.error":
-                continue
-            code = root.get("code", "")
-            message = root.get("message", "") or default_error
-            return f"[{code}] {message}" if code else str(message)
-
-        for resp in reversed(results):
-            root = resp.get("root")
-            if isinstance(root, dict) and root.get("error"):
+        root = frame.get("root")
+        if isinstance(root, dict):
+            protocol = root.get("protocol")
+            if protocol == "stream.cancelled":
+                return f"[CANCELLED] {root.get('reason') or 'cancelled'}"
+            if protocol == "stream.error":
+                code = root.get("code", "")
+                message = root.get("message", "") or default_error
+                return f"[{code}] {message}" if code else str(message)
+            if root.get("error"):
                 return str(root["error"])
-            if isinstance(resp.get("error"), str):
-                return str(resp["error"])
-
+        if isinstance(frame.get("error"), str):
+            return str(frame["error"])
         return default_error
+
+    @staticmethod
+    async def _drain(
+        context: ModuleContext,
+        stream: AsyncGenerator[dict[str, Any], None],
+    ) -> tuple[dict[str, Any] | None, dict[str, Any] | None, int]:
+        """Drain a tool stream, keeping only the last domain frame and the last error frame.
+
+        Each frame is the ``MessageToDict`` of one output Struct (``{"root": {"protocol": ...}}``).
+        Custom events are relayed as they arrive. A ``stream.error``/``stream.cancelled``
+        outranks a bare ``error`` field.
+
+        Args:
+            context: The agent's module context, for relaying custom events.
+            stream: The tool's output stream.
+
+        Returns:
+            ``(last_success, last_error, frame_count)``.
+        """
+        last_success: dict[str, Any] | None = None
+        last_error: dict[str, Any] | None = None
+        sentinel_error_seen = False
+        frames = 0
+        async for response in stream:
+            frames += 1
+            await ModuleToolkit._relay_custom_event(context, response)
+            root = response.get("root")
+            protocol = root.get("protocol", "") if isinstance(root, dict) else ""
+            if protocol in {"stream.error", "stream.cancelled"}:
+                last_error = response
+                sentinel_error_seen = True
+            elif isinstance(root, dict) and protocol not in {"stream.start", "stream.end", "stream.init"}:
+                last_success = response
+            elif not sentinel_error_seen and (
+                isinstance(response.get("error"), str) or (isinstance(root, dict) and root.get("error"))
+            ):
+                last_error = response
+        return last_success, last_error, frames
 
     @staticmethod
     def _unwrap_kwargs(
@@ -491,19 +499,9 @@ class ModuleToolkit(DkToolkit):
                 task_id,
             )
 
-            # Each yielded dict is the MessageToDict of one output Struct,
-            # shape {"root": {"protocol": ...}}. The iterator terminates when
-            # the remote module is done — drain it without an early break.
-            async def consume_generator() -> list[dict[str, Any]]:
-                results: list[dict[str, Any]] = []
-                async for response in fn(**kwargs):
-                    await ModuleToolkit._relay_custom_event(context, response)
-                    results.append(response)
-                return results
-
             try:
-                results = await asyncio.wait_for(
-                    consume_generator(),
+                successful_resp, error_frame, frames = await asyncio.wait_for(
+                    ModuleToolkit._drain(context, fn(**kwargs)),
                     timeout=timeout,
                 )
             except TimeoutError:
@@ -511,26 +509,34 @@ class ModuleToolkit(DkToolkit):
                 duration_ms = round((time.perf_counter() - start_time) * 1000, 2)
                 error_msg = f"Tool '{tool_name}' timed out after {timeout}s"
                 logger.warning("%s task_id=%s", error_msg, task_id)
-                return handle_failure(tool_name, error_msg, duration_ms, kwargs)
+                return handle_failure(tool_name, error_msg, duration_ms)
 
             except Exception as e:
                 outcome = "error"
                 duration_ms = round((time.perf_counter() - start_time) * 1000, 2)
                 error_msg = f"Failed to call tool '{tool_name}': {e!s}"
                 logger.warning("%s task_id=%s", error_msg, task_id, exc_info=True)
-                return handle_failure(tool_name, error_msg, duration_ms, kwargs)
+                return handle_failure(tool_name, error_msg, duration_ms)
 
             else:
                 call_timer.mark("gen_consume")
                 duration_ms = round((time.perf_counter() - start_time) * 1000, 2)
-
-                successful_resp = ModuleToolkit._find_successful_response(results)
+                # TODO(validate): TOOL-LAST-FRAME tool calls buffer only the last success/error frame
+                logger.info(
+                    "[VALIDATE TOOL-LAST-FRAME] tool '%s' drained %d frames, kept success=%s error=%s "
+                    "(input_kwargs not echoed)",
+                    tool_name,
+                    frames,
+                    successful_resp is not None,
+                    error_frame is not None,
+                    extra={"task_id": task_id, "setup_id": setup_id},
+                )
                 if successful_resp:
-                    return handle_success(tool_name, successful_resp, duration_ms, kwargs)
+                    return handle_success(tool_name, successful_resp, duration_ms)
 
                 outcome = "no_success"
-                error_msg = ModuleToolkit._extract_error_message(results)
-                return handle_failure(tool_name, error_msg, duration_ms, kwargs)
+                error_msg = ModuleToolkit._extract_error_message(error_frame)
+                return handle_failure(tool_name, error_msg, duration_ms)
 
             finally:
                 call_timer.mark("respond")

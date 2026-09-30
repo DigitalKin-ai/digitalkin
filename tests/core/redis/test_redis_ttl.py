@@ -1,7 +1,6 @@
 """L0 — TTL lifecycle tests for Redis key expiration.
 
 Tests EXPIRE/PERSIST/TTL patterns used by:
-- RedisStateManager (task_ttl=24h)
 - RedisIdempotency (idem_ttl=1h)
 - proto stream output (stream_ttl=60s after EOS)
 
@@ -111,7 +110,7 @@ class TestPipelineTtl:
     """Atomic HSET + EXPIRE via pipeline — production pattern."""
 
     async def test_hset_expire_pipeline(self, client: _FakeRedisClient) -> None:
-        """RedisStateManager pattern: set fields and TTL atomically."""
+        """Set hash fields and TTL atomically."""
         pipe = client.pipeline()
         pipe.hset("task:abc", mapping={"status": "running", "started_at": "2025-01-01"})
         pipe.expire("task:abc", 86400)
@@ -132,11 +131,6 @@ class TestPipelineTtl:
 class TestTtlProductionValues:
     """Verify SDK-specific TTL constants can be applied."""
 
-    async def test_task_ttl_24h(self, client: _FakeRedisClient) -> None:
-        await client.hset("task:t1", {"status": "pending"})
-        await client.expire("task:t1", 86400)
-        ttl = await client.ttl("task:t1")
-        assert ttl > 86000
 
     async def test_claim_ttl_1h(self, client: _FakeRedisClient) -> None:
         await client.set("idem:task1", b"instance_a", ex=3600)

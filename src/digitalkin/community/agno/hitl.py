@@ -85,11 +85,26 @@ class PausedRunStore:
             if tid and tid not in seen and tool.external_execution_required and tool.result is None:
                 seen.add(tid)
                 pending.append(tid)
+        payload = run_output.to_dict()
+        # History messages are re-fetched from the session by continue_run; events are not replayed.
+        messages = payload.get("messages") or []
+        history = [m for m in messages if m.get("from_history")]
+        if history:
+            payload["messages"] = [m for m in messages if not m.get("from_history")]
+        events = payload.pop("events", None) or []
+        # TODO(validate): HITL-TRIM paused runs stored without history messages/events still resume
+        logger.info(
+            "[VALIDATE HITL-TRIM] thread_id=%s dropped %d history message(s) %s and %d event(s)",
+            thread_id,
+            len(history),
+            [(m.get("id"), m.get("role")) for m in history],
+            len(events),
+        )
         record = PausedRunRecord(
             thread_id=thread_id,
             run_id=run_output.run_id or "",
             pending_tool_call_ids=pending,
-            payload=run_output.to_dict(),
+            payload=payload,
         )
         await self._storage.upsert(
             collection=self.COLLECTION,

@@ -26,6 +26,7 @@ def _make_fake_session() -> MagicMock:
     s = MagicMock()
     s.pending_signal_action = ""
     s.last_signal_published_ns = 0
+    s.cancelled = False
     return s
 
 

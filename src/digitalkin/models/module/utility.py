@@ -27,6 +27,13 @@ class EndOfStreamOutput(UtilityProtocol):
     protocol: Literal["stream.end"] = "stream.end"
 
 
+class StreamCancelledOutput(UtilityProtocol):
+    """Signal that the task was cancelled; always followed by ``stream.end``."""
+
+    protocol: Literal["stream.cancelled"] = "stream.cancelled"
+    reason: str = "cancelled"
+
+
 class HealthcheckPingInput(UtilityProtocol):
     """Input for healthcheck ping request."""
 

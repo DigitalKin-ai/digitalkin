@@ -538,6 +538,16 @@ class ModuleContext:
                 if isinstance(root, dict) and root.get("protocol") == "stream.error" and root.get("fatal"):
                     msg = f"[{root.get('code', '')}] {root.get('message', '')}"
                     raise ToolCallError(msg)
+                if isinstance(root, dict) and root.get("protocol") == "stream.cancelled":
+                    # TODO(validate): TOOL-CANCELLED a cancelled tool call fails instead of returning a result
+                    logger.info(
+                        "[VALIDATE TOOL-CANCELLED] tool '%s' was cancelled: %s",
+                        tool_function.__name__,
+                        root.get("reason", ""),
+                        extra=session.current_ids(),
+                    )
+                    msg = f"[CANCELLED] {root.get('reason') or 'cancelled'}"
+                    raise ToolCallError(msg)
                 yield frame
 
         tool_function.__name__ = tool_module_info.slug + "__" + tool_def.name

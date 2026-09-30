@@ -19,6 +19,7 @@ class _InMemoryStorage(StorageStrategy):
     def __init__(self) -> None:
         super().__init__("missions:m1", "s1", "setup_versions:sv1", {"items": _SimpleModel})
         self._store_data: dict[str, StorageRecord] = {}
+        self.reads = 0
 
     @staticmethod
     def _key(context: str, collection: str, record_id: str) -> str:
@@ -31,10 +32,16 @@ class _InMemoryStorage(StorageStrategy):
     async def _read(
         self, collection: str, record_id: str, context: str, storage_id: str = ""
     ) -> StorageRecord | None:
+        self.reads += 1
         return self._store_data.get(self._key(context, collection, record_id))
 
     async def _update(
-        self, collection: str, record_id: str, data: BaseModel, context: str
+        self,
+        collection: str,
+        record_id: str,
+        data: BaseModel,
+        context: str,
+        visibility: Visibility = Visibility.UNSPECIFIED,
     ) -> StorageRecord | None:
         key = self._key(context, collection, record_id)
         rec = self._store_data.get(key)
@@ -151,3 +158,18 @@ class TestRecordLockCleanup:
 
         assert f"{_MISSION_LOCK_PREFIX}r1" not in storage._record_locks
         assert "missions:m1|other:r1" in storage._record_locks
+
+
+class TestUpsertRoundTrips:
+    """Upsert tries the update first and never issues a separate read."""
+
+    @pytest.mark.asyncio
+    async def test_upsert_creates_then_updates_without_reading(self) -> None:
+        storage = _InMemoryStorage()
+        created = await storage.upsert("items", "r1", {"value": "a"})
+        assert created.data.value == "a"
+        updated = await storage.upsert("items", "r1", {"value": "b"})
+
+        assert updated.data.value == "b"
+        assert len(storage._store_data) == 1
+        assert storage.reads == 0

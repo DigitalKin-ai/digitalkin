@@ -68,7 +68,7 @@ async def gateway_with_runner():
 @SKIP_NO_FAKEREDIS
 class TestFullDuplex:
     async def test_unbounded_upstream_inputs(self, gateway_with_runner) -> None:
-        """5 follow-up StreamServer messages all XADD on Redis input stream."""
+        """5 follow-up StreamServer messages are dropped; nothing lands on a Redis input stream (R1)."""
         gateway, redis = gateway_with_runner
         n_followups = 5
         servicer = _FakeConsumerServicer(
@@ -84,27 +84,16 @@ class TestFullDuplex:
             ctx = _mock_context({"x-client-address": f"127.0.0.1:{port}"})
             await gateway.StartStream(_start_request(task_id), ctx)
 
-            input_key = f"task:{task_id}:input"
             for _ in range(80):
-                xlen = await redis.xlen(input_key)
-                if xlen >= n_followups:
+                if gateway._fake_runner.calls:
                     break
                 await asyncio.sleep(0.05)
+            await asyncio.sleep(0.3)
 
             # First reply went to ModuleRunner (in-memory by-value).
             assert len(gateway._fake_runner.calls) == 1
             assert gateway._fake_runner.calls[0]["query"].fields["q"].string_value == "first"
-
-            # Follow-ups XADD'd to Redis input stream as raw proto bytes.
-            entries = await redis._client.xrange(input_key)  # noqa: SLF001
-            payloads = []
-            for _entry_id, fields in entries:
-                pb = fields.get(b"pb")
-                assert pb is not None
-                s = struct_pb2.Struct()
-                s.ParseFromString(pb)
-                payloads.append(s.fields["q"].string_value)
-            assert payloads == [f"turn-{i}" for i in range(1, n_followups + 1)]
+            assert await redis.exists(f"task:{task_id}:input") == 0
         finally:
             await server.stop(grace=0.1)
 
@@ -120,17 +109,16 @@ class TestFullDuplex:
         try:
             task_id = "task_unbounded_out"
 
-            # Pre-load the Redis stream with outputs + EOS in the production xadd
-            # format, using the canonical `{"root": {"protocol": ...}}` shape.
+            ctx = _mock_context({"x-client-address": f"127.0.0.1:{port}"})
+            await gateway.StartStream(_start_request(task_id), ctx)
+
+            # Outputs + EOS in the production xadd format, after StartStream reset the stream.
             stream_key = f"task:{task_id}:stream"
             for i in range(n_outputs):
                 s = struct_pb2.Struct()
                 s.update({"root": {"protocol": "tick", "i": i}})
                 await redis.xadd(stream_key, {"pb": s.SerializeToString(), "seq": str(i + 1)})
             await redis.xadd(stream_key, {"eos": b"true"})
-
-            ctx = _mock_context({"x-client-address": f"127.0.0.1:{port}"})
-            await gateway.StartStream(_start_request(task_id), ctx)
 
             # Wait until the consumer sees stream.end on the wire.
             for _ in range(200):

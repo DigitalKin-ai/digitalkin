@@ -94,7 +94,7 @@ def _mock_servicer(
         redis_client.set = AsyncMock(return_value=True)
         pipe_mock = MagicMock()
         pipe_mock.xadd = MagicMock(return_value=pipe_mock)
-        pipe_mock.execute = AsyncMock(return_value=[])
+        pipe_mock.execute = AsyncMock(return_value=[0, b"1-0", True])
         redis_client.pipeline = MagicMock(return_value=pipe_mock)
 
     return GatewayServicer(
@@ -247,14 +247,30 @@ class TestStartStream:
         context = _mock_context()
         await servicer.StartStream(request, context)
 
-        # First xadd is the stream.start seed (key = task:<tid>:stream)
-        first_call = servicer._redis_client.xadd.await_args_list[0]
+        pipe = servicer._redis_client.pipeline.return_value
+        pipe.delete.assert_called_once_with("task:task_seed:stream", "task:task_seed:cursor")
+        first_call = pipe.xadd.call_args_list[0]
         assert first_call.args[0] == "task:task_seed:stream"
-        # Decode the seeded Struct: protocol field == "stream.start"
         pb_bytes = first_call.args[1]["pb"]
         seeded = struct_pb2.Struct()
         seeded.ParseFromString(pb_bytes)
         assert seeded.fields["root"].struct_value.fields["protocol"].string_value == "stream.start"
+
+    async def test_seed_arms_initial_ttl_in_same_pipeline(self) -> None:
+        """R2: the stream.start seed is pipelined with EXPIRE redis_stream_initial_ttl."""
+        servicer = _mock_servicer()
+        request = MagicMock()
+        request.task_id = "task_seed_ttl"
+        request.setup_id = "setups:s"
+        request.mission_id = "missions:m"
+
+        response = await servicer.StartStream(request, _mock_context())
+
+        assert response.accepted is True
+        pipe = servicer._redis_client.pipeline.return_value
+        pipe.expire.assert_called_once_with("task:task_seed_ttl:stream", 600)
+        pipe.execute.assert_awaited_once()
+        servicer._redis_client.xadd.assert_not_awaited()
 
 
 # ===========================================================================
@@ -273,11 +289,8 @@ class TestSendSignal:
             pytest.skip("Gateway proto not installed")
 
         servicer = _mock_servicer()
-
-        from digitalkin.grpc_servers.stream_session import StreamSession
-
-        session = StreamSession(task_id="task_sig")
-        await servicer._registry.register(session)
+        pipe = servicer._redis_client.pipeline.return_value
+        pipe.execute = AsyncMock(return_value=[1, True, 1])
 
         request = MagicMock()
         request.task_id = "task_sig"
@@ -287,7 +300,9 @@ class TestSendSignal:
         response = await servicer.SendSignal(request, context)
 
         assert response.success is True
-        servicer._redis_client.publish.assert_awaited_once()
+        pipe.exists.assert_called_once_with("idem:task_sig")
+        pipe.publish.assert_called_once()
+        assert pipe.publish.call_args.args[0] == "signal_ch:task_sig"
 
     async def test_unknown_task_returns_false(self) -> None:
         """SendSignal for unknown task returns success=False."""
@@ -297,6 +312,8 @@ class TestSendSignal:
             pytest.skip("Gateway proto not installed")
 
         servicer = _mock_servicer()
+        pipe = servicer._redis_client.pipeline.return_value
+        pipe.execute = AsyncMock(return_value=[0, True, 0])
 
         request = MagicMock()
         request.task_id = "nonexistent"
@@ -306,6 +323,7 @@ class TestSendSignal:
         response = await servicer.SendSignal(request, context)
 
         assert response.success is False
+        pipe.publish.assert_called_once()
 
 
 # ===========================================================================
@@ -386,8 +404,8 @@ class TestStream:
         assert _protocol_of(responses[0]) == "stream.error"
         assert _protocol_of(responses[1]) == "stream.end"
 
-    async def test_upstream_data_xadds_to_redis_input_stream(self) -> None:
-        """Stream: subsequent messages XADD raw proto bytes onto task:{id}:input."""
+    async def test_upstream_data_is_dropped_not_written(self) -> None:
+        """R1: follow-up upstream data is logged and dropped; nothing is written to Redis."""
         try:
             from agentic_mesh_protocol.gateway.v1 import gateway_pb2  # noqa: F401
         except ImportError:
@@ -403,11 +421,7 @@ class TestStream:
 
         await servicer._read_peer_upstream(request_iter, "task_up", session)  # noqa: SLF001
 
-        # One XADD on the input stream key with raw proto bytes.
-        servicer._redis_client.xadd.assert_awaited_once()  # noqa: SLF001
-        args, kwargs = servicer._redis_client.xadd.call_args  # noqa: SLF001
-        assert args[0] == "task:task_up:input"
-        assert b"pb" in args[1] or "pb" in args[1]
+        servicer._redis_client.xadd.assert_not_awaited()  # noqa: SLF001
 
     async def test_upstream_empty_data_skipped(self) -> None:
         """Empty Struct upstream messages are skipped — no XADD."""

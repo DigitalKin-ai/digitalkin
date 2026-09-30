@@ -47,6 +47,7 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
 
     # Defaults safe when __init__ is bypassed (e.g., object.__new__ in tests).
     _redis_client: RedisClient
+    _config_sessions: dict[str, TaskSession]
 
     def __init__(
         self,
@@ -71,11 +72,20 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
 
         self._lock = asyncio.Lock()
         self._redis_client = redis_client
+        # Config-setup sessions hold no task slot, so they stay out of tasks_sessions/_cleanup_task.
+        self._config_sessions = {}
         # task-id-stateless; safe to share across preload_instance calls.
         self._redis_task_manager = RedisTaskManager(self._redis_client)
 
     async def start(self) -> None:
         """Start manager (no-op, no external connections needed)."""
+
+    async def stop(self) -> None:
+        """Cancel every running task, then release the shared Redis signal listener."""
+        try:
+            await self.shutdown(mission_id="server_shutdown", timeout=10.0)
+        finally:
+            await self._redis_task_manager.close()
 
     async def generate_config_setup_module_response(self, job_id: str) -> SetupModelT | ModuleCodeModel:
         """Generate a stream consumer for a module's output data.
@@ -90,7 +100,7 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         Returns:
             SetupModelT | ModuleCodeModel: the SetupModelT object fully processed.
         """
-        if (session := self.tasks_sessions.get(job_id, None)) is None:
+        if (session := self._config_sessions.get(job_id)) is None:
             return ModuleCodeModel(
                 code=str(grpc.StatusCode.NOT_FOUND),
                 message=f"Module {job_id} not found",
@@ -108,7 +118,7 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
                 message=f"Module {job_id} did not respond within {timeout} seconds",
             )
         finally:
-            self.tasks_sessions.pop(job_id, None)
+            self._config_sessions.pop(job_id, None)
             try:
                 await session.cleanup()
             except Exception:
@@ -141,7 +151,10 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         module = ModuleFactory.create_module_instance(
             self.module_class, job_id, mission_id, setup_id, setup_version_id, request_metadata=request_metadata
         )
-        self.tasks_sessions[job_id] = TaskSession(job_id, mission_id, module)
+        session = TaskSession(job_id, mission_id, module)
+        self._config_sessions[job_id] = session
+        # TODO(validate): CONFIG-SLOT config sessions are tracked outside the task slots
+        logger.info("[VALIDATE CONFIG-SLOT] config session tracked outside task slots", extra={"task_id": job_id})
 
         try:
             await module.start_config_setup(
@@ -149,17 +162,15 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
                 await self.job_specific_callback(self.add_to_queue, job_id),
             )
             logger.debug("Module %s (%s) started successfully", job_id, module.name)
-        except Exception:
-            session = self.tasks_sessions.pop(job_id, None)
-            if session is not None:
-                try:
-                    await session.cleanup()
-                except Exception:
-                    logger.debug("Session cleanup failed during error handling", exc_info=True)
-            logger.exception("Failed to start module", extra={"job_id": job_id})
+        except BaseException:
+            self._config_sessions.pop(job_id, None)
+            try:
+                await session.cleanup()
+            except Exception:
+                logger.debug("Session cleanup failed during error handling", exc_info=True)
+            logger.exception("Failed to start module", extra={"task_id": job_id})
             raise
-        else:
-            return job_id
+        return job_id
 
     async def add_to_queue(self, job_id: str, output_data: DataModel | ModuleCodeModel) -> None:
         """Add output data to the queue for a specific job.
@@ -178,7 +189,7 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         Raises:
             asyncio.TimeoutError: When using BLOCK strategy and the queue remains full past the timeout.
         """
-        session = self.tasks_sessions.get(job_id)
+        session = self.tasks_sessions.get(job_id) or self._config_sessions.get(job_id)
         if session is None:
             logger.debug("Queue write rejected - session not found", extra={"job_id": job_id})
             return
@@ -186,8 +197,8 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
         data = output_data.model_dump(mode="json")
 
         # Lock guards only the session validity check; queue.put() runs outside.
-        async with session._write_lock:  # ruff: ignore[private-member-access]
-            if self.tasks_sessions.get(job_id) is None:
+        async with session._write_lock:  # noqa: SLF001
+            if job_id not in self.tasks_sessions and job_id not in self._config_sessions:
                 logger.debug("Queue write rejected - session removed during lock wait", extra={"job_id": job_id})
                 return
             if session.stream_closed:
@@ -286,7 +297,17 @@ class SingleJobManager(BaseJobManager[InputModelT, OutputModelT, SetupModelT]):
             callback = await self.job_specific_callback(self.add_to_queue, job_id)
             timer.mark("default_callback")
 
-        await module.prepare(setup_data, callback)
+        try:
+            await module.prepare(setup_data, callback)
+        except BaseException:
+            # stop() is skipped: its stream.end would land before the caller's stream.error.
+            # TODO(validate): RUNNER-LEAK a preloaded instance is released when its task never starts
+            logger.warning("[VALIDATE RUNNER-LEAK] prepare failed; releasing instance", extra={"task_id": job_id})
+            try:
+                await module.cleanup()
+            finally:
+                await module.context.cleanup()
+            raise
         timer.mark("prepare")
         timer.log("preload_instance", task_id=job_id)
         return module, job_id, callback

@@ -78,25 +78,25 @@ class TestStartStreamAddressRejection:
         response = await servicer.StartStream(self._request(), _mock_context(client_address=None))
         assert response.accepted is False
         # No XADD on dispatch or stream — we rejected before any side effect.
-        servicer._redis_client.xadd.assert_not_called()
+        servicer._redis_client.pipeline.assert_not_called()
 
     async def test_rejects_empty_metadata(self) -> None:
         servicer = _mock_servicer()
         response = await servicer.StartStream(self._request(), _mock_context(client_address=""))
         assert response.accepted is False
-        servicer._redis_client.xadd.assert_not_called()
+        servicer._redis_client.pipeline.assert_not_called()
 
     async def test_rejects_malformed_no_port(self) -> None:
         servicer = _mock_servicer()
         response = await servicer.StartStream(self._request(), _mock_context(client_address="localhost"))
         assert response.accepted is False
-        servicer._redis_client.xadd.assert_not_called()
+        servicer._redis_client.pipeline.assert_not_called()
 
     async def test_rejects_wildcard(self) -> None:
         servicer = _mock_servicer()
         response = await servicer.StartStream(self._request(), _mock_context(client_address="[::]:50057"))
         assert response.accepted is False
-        servicer._redis_client.xadd.assert_not_called()
+        servicer._redis_client.pipeline.assert_not_called()
 
     async def test_accepts_valid_address(self) -> None:
         servicer = _mock_servicer()
@@ -105,7 +105,7 @@ class TestStartStreamAddressRejection:
         )
         assert response.accepted is True
         # stream.start XADD must have happened.
-        assert servicer._redis_client.xadd.await_count >= 1
+        servicer._redis_client.pipeline.return_value.execute.assert_awaited_once()
 
 
 class TestDialConsumerStreamValidation:

@@ -87,7 +87,7 @@ def _mock_servicer(*, cache_handler: Any = None) -> Any:
     redis_client.set = AsyncMock(return_value=True)
     pipe_mock = MagicMock()
     pipe_mock.xadd = MagicMock(return_value=pipe_mock)
-    pipe_mock.execute = AsyncMock(return_value=[])
+    pipe_mock.execute = AsyncMock(return_value=[0, b"1-0", True])
     redis_client.pipeline = MagicMock(return_value=pipe_mock)
 
     return GatewayServicer(
@@ -184,11 +184,9 @@ class TestSignalActionAll:
         """CANCEL publishes a JSON message to signal_ch:<task_id>."""
         from agentic_mesh_protocol.gateway.v1 import gateway_pb2
 
-        from digitalkin.grpc_servers.stream_session import StreamSession
-
         servicer = _mock_servicer()
-        session = StreamSession(task_id="task_cancel")
-        await servicer._registry.register(session)
+        pipe = servicer._redis_client.pipeline.return_value
+        pipe.execute = AsyncMock(return_value=[1, True, 1])
 
         request = MagicMock()
         request.task_id = "task_cancel"
@@ -198,8 +196,9 @@ class TestSignalActionAll:
 
         assert response.success is True
         assert response.task_id == "task_cancel"
-        servicer._redis_client.publish.assert_awaited_once()
-        channel, payload = servicer._redis_client.publish.await_args.args
+        pipe.set.assert_called_once_with("cancel:task_cancel", "1", ex=600)
+        pipe.publish.assert_called_once()
+        channel, payload = pipe.publish.call_args.args
         assert channel == "signal_ch:task_cancel"
         # Payload is JSON: {action, task_id, published_at_ns}
         decoded = json.loads(payload)
@@ -209,10 +208,12 @@ class TestSignalActionAll:
         assert decoded["published_at_ns"] > 0
 
     async def test_cancel_unknown_task_returns_false(self) -> None:
-        """CANCEL for an unknown task returns success=False, no Redis publish."""
+        """CANCEL with no ``idem:`` claim still publishes (any replica may own it) but reports not found."""
         from agentic_mesh_protocol.gateway.v1 import gateway_pb2
 
         servicer = _mock_servicer()
+        pipe = servicer._redis_client.pipeline.return_value
+        pipe.execute = AsyncMock(return_value=[0, True, 0])
 
         request = MagicMock()
         request.task_id = "task_missing"
@@ -220,6 +221,36 @@ class TestSignalActionAll:
 
         response = await servicer.SendSignal(request, _mock_context())
         assert response.success is False
+        pipe.publish.assert_called_once()
+
+    async def test_cancel_without_local_session_publishes(self) -> None:
+        """No local StreamRegistry session is needed: the task may run on another replica."""
+        from agentic_mesh_protocol.gateway.v1 import gateway_pb2
+
+        servicer = _mock_servicer()
+        pipe = servicer._redis_client.pipeline.return_value
+        pipe.execute = AsyncMock(return_value=[1, True, 0])
+        assert servicer._registry.get("task_remote") is None
+
+        request = MagicMock()
+        request.task_id = "task_remote"
+        request.action = gateway_pb2.CANCEL
+
+        response = await servicer.SendSignal(request, _mock_context())
+        assert response.success is True
+        assert pipe.publish.call_args.args[0] == "signal_ch:task_remote"
+
+    async def test_unknown_action_value_returns_false(self) -> None:
+        """An action outside the SignalAction enum is rejected without touching Redis."""
+        servicer = _mock_servicer()
+
+        request = MagicMock()
+        request.task_id = "task_x"
+        request.action = 99
+
+        response = await servicer.SendSignal(request, _mock_context())
+        assert response.success is False
+        servicer._redis_client.pipeline.assert_not_called()
         servicer._redis_client.publish.assert_not_awaited()
 
     async def test_cancel_invalid_task_id_returns_false(self) -> None:
@@ -240,13 +271,9 @@ class TestSignalActionAll:
         """If Redis publish raises, SendSignal returns success=False."""
         from agentic_mesh_protocol.gateway.v1 import gateway_pb2
 
-        from digitalkin.grpc_servers.stream_session import StreamSession
-
         servicer = _mock_servicer()
         from redis.exceptions import RedisError
-        servicer._redis_client.publish = AsyncMock(side_effect=RedisError("redis down"))
-        session = StreamSession(task_id="task_pub_fail")
-        await servicer._registry.register(session)
+        servicer._redis_client.pipeline.return_value.execute = AsyncMock(side_effect=RedisError("redis down"))
 
         request = MagicMock()
         request.task_id = "task_pub_fail"
@@ -262,12 +289,12 @@ class TestSignalActionAll:
         servicer = _mock_servicer()
 
         request = MagicMock()
-        request.task_id = ""  # invalid by design for unspecified
+        request.task_id = "task_x"
         request.action = gateway_pb2.UNSPECIFIED
 
         response = await servicer.SendSignal(request, _mock_context())
-        # Falls through the task-signal branch, fails task_id validation → False
         assert response.success is False
+        servicer._redis_client.pipeline.assert_not_called()
         servicer._redis_client.publish.assert_not_awaited()
 
     async def test_signal_action_enum_complete(self) -> None:
@@ -306,7 +333,7 @@ class TestStreamSentinels:
 
         await servicer.StartStream(request, _mock_context())
 
-        first_call = servicer._redis_client.xadd.await_args_list[0]
+        first_call = servicer._redis_client.pipeline.return_value.xadd.call_args_list[0]
         assert first_call.args[0] == "task:task_start:stream"
         pb_bytes = first_call.args[1]["pb"]
         s = struct_pb2.Struct()

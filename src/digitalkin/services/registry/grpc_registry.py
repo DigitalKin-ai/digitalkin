@@ -259,14 +259,16 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
                         limit=limit,
                         offset=offset,
                     ),
-                    # TODO(validate): tightened agent-facing search deadline (was global 30s)
                     timeout=get_registry_settings().search_timeout_s,
                 )
             except PermissionDeniedError:
                 raise
             except ServerError as e:
                 msg = f"Failed to search modules: {e}"
-                logger.error(msg)
+                # TODO(validate): SEARCH-DEADLINE tightened registry search deadline does not cause spurious failures
+                logger.error(
+                    "[VALIDATE SEARCH-DEADLINE] %s (deadline %.1fs)", msg, get_registry_settings().search_timeout_s
+                )
                 raise RegistryServiceError(msg) from e
 
             logger.debug("Search returned %d of %d modules", len(response.modules), response.total)
@@ -461,8 +463,8 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
         try:
             proto_enum.Value(name)  # fail closed: never send a filter the server would ignore
         except ValueError:
-            # TODO(validate): remove marker once enum encoding is validated in prod
-            logger.error("[VALIDATE ENUMENC] no proto member %s — registry filter would silently drop", name)
+            # TODO(validate): ENUM-ENCODE registry filter enums always encode to a proto member
+            logger.error("[VALIDATE ENUM-ENCODE] no proto member %s — registry filter would silently drop", name)
             raise
         return name
 
@@ -563,14 +565,16 @@ class GrpcRegistry(RegistryStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
                         limit=limit,
                         offset=offset,
                     ),
-                    # TODO(validate): tightened agent-facing search deadline (was global 30s)
                     timeout=get_registry_settings().search_timeout_s,
                 )
             except PermissionDeniedError:
                 raise
             except ServerError as e:
                 msg = f"Failed to search setups: {e}"
-                logger.error(msg)
+                # TODO(validate): SEARCH-DEADLINE tightened registry search deadline does not cause spurious failures
+                logger.error(
+                    "[VALIDATE SEARCH-DEADLINE] %s (deadline %.1fs)", msg, get_registry_settings().search_timeout_s
+                )
                 raise RegistryServiceError(msg) from e
 
             return [self._summary_to_setup_summary(s) for s in response.setups]
