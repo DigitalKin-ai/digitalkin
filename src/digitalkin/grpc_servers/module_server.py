@@ -298,7 +298,7 @@ class ModuleServer(BaseServer):
         if self.client_config is not None:
             await self._init_and_register()
 
-    async def stop_async(self, grace: float | None = None) -> None:  # noqa: C901, PLR0912
+    async def stop_async(self, grace: float | None = None) -> None:  # ruff: ignore[complex-structure, too-many-branches]
         """Stop the module server.
 
         Order: stop accepting RPCs (health NOT_SERVING, deregister, server stop within ``grace``),

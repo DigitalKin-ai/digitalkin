@@ -50,7 +50,7 @@ class ModuleRunner:
         self._redis_client = redis_client
         self._servicer = servicer
 
-    async def run(  # noqa: C901, PLR0912, PLR0914, PLR0915
+    async def run(  # ruff: ignore[complex-structure, too-many-branches, too-many-locals, too-many-statements]
         self,
         query: struct_pb2.Struct,
         *,
@@ -93,7 +93,7 @@ class ModuleRunner:
         module: Any = None
         created = False
         cancel_reason: str | None = None
-        try:  # noqa: PLW0717
+        try:  # ruff: ignore[too-many-statements-in-try-clause]
             timer.mark("entry")
             profiler.start()
 

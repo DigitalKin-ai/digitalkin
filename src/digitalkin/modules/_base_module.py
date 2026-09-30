@@ -731,7 +731,7 @@ class BaseModule(  # Module SDK base class requires many public methods # ruff: 
             return
         if cancel_reason is None and self._status == ModuleStatus.CANCELLED:
             cancel_reason = "cancelled"
-        try:  # noqa: PLW0717
+        try:  # ruff: ignore[too-many-statements-in-try-clause]
             self._status = ModuleStatus.STOPPING
             await self.cleanup()
             t1 = time.perf_counter_ns()

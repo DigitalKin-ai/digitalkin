@@ -429,7 +429,7 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
             task_id = assoc.task_id
             if not task_id:
                 msg = f"backend returned no task_id from AssociateTask (parent={parent_task_id})"
-                raise RuntimeError(msg)  # noqa: TRY301
+                raise RuntimeError(msg)  # ruff: ignore[raise-within-try]
             # TODO(validate): ASSOCIATE-TASK AssociateTask mints the child task id for M2M calls
             logger.info(
                 "[VALIDATE ASSOCIATE-TASK] AssociateTask minted: parent=%s child=%s target=%s",

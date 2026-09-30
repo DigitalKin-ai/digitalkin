@@ -33,7 +33,7 @@ class TaskExecutor:
         """Initialize the executor."""
         self._backstops = set()
 
-    async def execute_task(  # noqa: C901, PLR0915
+    async def execute_task(  # ruff: ignore[complex-structure, too-many-statements]
         self,
         task_id: str,
         mission_id: str,
@@ -65,11 +65,11 @@ class TaskExecutor:
             action = session.pending_signal_action
             session.pending_signal_action = ""
             if action == "stop":
-                await session._handle_cancel(CancellationReason.SIGNAL_SERVICE_STOP)  # noqa: SLF001
+                await session._handle_cancel(CancellationReason.SIGNAL_SERVICE_STOP)  # ruff: ignore[private-member-access]
                 return
             if session.cancellation_reason == CancellationReason.UNKNOWN:
                 session.cancellation_reason = CancellationReason.SIGNAL_SERVICE_CANCEL
-            await session._handle_cancel(session.cancellation_reason)  # noqa: SLF001
+            await session._handle_cancel(session.cancellation_reason)  # ruff: ignore[private-member-access]
 
         async def _finalize() -> None:
             if on_finalize is None:

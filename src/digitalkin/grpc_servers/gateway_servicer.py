@@ -166,7 +166,7 @@ class GatewayServicer:
         """
         await context.abort(grpc.StatusCode.UNIMPLEMENTED, "AssociateTask is served by the backend")
 
-    async def StartStream(  # noqa: PLR0911, PLR0914, PLR0915
+    async def StartStream(  # ruff: ignore[too-many-return-statements, too-many-locals, too-many-statements]
         self,
         request: Any,
         context: grpc.aio.ServicerContext,
@@ -500,7 +500,7 @@ class GatewayServicer:
         last_mark = "init"
         log_extra = {"task_id": task_id}
 
-        try:  # noqa: PLW0717
+        try:  # ruff: ignore[too-many-statements-in-try-clause]
             if request.action == gateway_pb2.SignalAction.Value("UNSPECIFIED"):
                 logger.warning(
                     "[gateway] SendSignal_failed: failure=UnspecifiedAction action=%d task_id=%s",
@@ -738,7 +738,7 @@ class GatewayServicer:
                 return
             yield resp
 
-    async def _dial_consumer(  # noqa: C901, PLR0912
+    async def _dial_consumer(  # ruff: ignore[complex-structure, too-many-branches]
         self,
         task_id: str,
         mission_id: str,

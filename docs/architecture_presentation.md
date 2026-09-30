@@ -282,7 +282,6 @@ src/digitalkin/
 │   ├── task_manager/redis/        Infrastructure
 │   │   ├── redis_client.py        Ref-counted pool
 │   │   ├── redis_signal.py        Listener + SendBuffer
-│   │   ├── redis_state.py         Lifecycle state
 │   │   ├── redis_streams.py       XADD + XREAD + cursor
 │   │   ├── redis_checkpoint.py    Checkpoint + index
 │   │   └── redis_idempotency.py   Lua atomic claims

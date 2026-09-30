@@ -154,7 +154,7 @@ class SharedRedisListener:
         self._task_sessions.pop(task_id, None)
         self._last_seen.pop(task_id, None)
 
-    def dispatch_signal(self, task_id: str, data: dict[str, Any], raw_json: str) -> bool:  # noqa: PLR0911
+    def dispatch_signal(self, task_id: str, data: dict[str, Any], raw_json: str) -> bool:  # ruff: ignore[too-many-return-statements]
         """Route a signal: ``cancel``/``stop`` → side channel + ``task.cancel()``; other actions → audit-only.
 
         Returns:
