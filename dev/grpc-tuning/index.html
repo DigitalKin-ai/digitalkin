@@ -23,7 +23,7 @@
       
       
       <link rel="icon" href="../assets/logo.png">
-      <meta name="generator" content="mkdocs-ProperDocs 1.6.7, mkdocs-material-9.7.6">
+      <meta name="generator" content="mkdocs-ProperDocs 1.6.7, mkdocs-material-9.7.7">
     
     
       
@@ -31,7 +31,7 @@
       
     
     
-      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
       
         
         <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
@@ -399,6 +399,25 @@
     
   
   Sdk redis platform talk nontech
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../sdk_v1_presentation/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Sdk v1 presentation
 
       </a>
     </li>
@@ -845,10 +864,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#outbound-signals-sendsignals-batching" class="md-nav__link">
+  <a href="#outbound-grpc-calls" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Outbound Signals (SendSignals Batching)
+        Outbound gRPC calls
       
     </span>
   </a>
@@ -856,10 +875,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#inbound-signals-getsignals-polling" class="md-nav__link">
+  <a href="#signals" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Inbound Signals (GetSignals Polling)
+        Signals
       
     </span>
   </a>
@@ -895,10 +914,43 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#address-security" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Address &amp; security
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#circuit-breaker-per-service" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Circuit breaker (per service)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#keepalive" class="md-nav__link">
     <span class="md-ellipsis">
       
         Keepalive
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#message-size" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Message size
       
     </span>
   </a>
@@ -1171,6 +1223,33 @@
   
   
     <li class="md-nav__item">
+      <a href="../sdk_v1_presentation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Sdk v1 presentation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../security_hardening_plan/" class="md-nav__link">
         
   
@@ -1265,7 +1344,7 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_13" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_14" >
         
           
           <div class="md-nav__link md-nav__container">
@@ -1287,14 +1366,14 @@
             </a>
             
               
-              <label class="md-nav__link " for="__nav_13" id="__nav_13_label" tabindex="0">
+              <label class="md-nav__link " for="__nav_14" id="__nav_14_label" tabindex="0">
                 <span class="md-nav__icon md-icon"></span>
               </label>
             
           </div>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_13_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_13">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_14_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_14">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -1359,7 +1438,7 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_14" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_15" >
         
           
           <div class="md-nav__link md-nav__container">
@@ -1381,14 +1460,14 @@
             </a>
             
               
-              <label class="md-nav__link " for="__nav_14" id="__nav_14_label" tabindex="0">
+              <label class="md-nav__link " for="__nav_15" id="__nav_15_label" tabindex="0">
                 <span class="md-nav__icon md-icon"></span>
               </label>
             
           </div>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_14_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_14">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_15_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_15">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -1509,7 +1588,7 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_15" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_16" >
         
           
           <div class="md-nav__link md-nav__container">
@@ -1531,14 +1610,14 @@
             </a>
             
               
-              <label class="md-nav__link " for="__nav_15" id="__nav_15_label" tabindex="0">
+              <label class="md-nav__link " for="__nav_16" id="__nav_16_label" tabindex="0">
                 <span class="md-nav__icon md-icon"></span>
               </label>
             
           </div>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_15_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_15">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_16_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_16">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -1772,6 +1851,34 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../changelog/1.0.4/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    1.0.3 → 1.0.4 — One canonical file format
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -1907,10 +2014,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#outbound-signals-sendsignals-batching" class="md-nav__link">
+  <a href="#outbound-grpc-calls" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Outbound Signals (SendSignals Batching)
+        Outbound gRPC calls
       
     </span>
   </a>
@@ -1918,10 +2025,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#inbound-signals-getsignals-polling" class="md-nav__link">
+  <a href="#signals" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Inbound Signals (GetSignals Polling)
+        Signals
       
     </span>
   </a>
@@ -1957,10 +2064,43 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#address-security" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Address &amp; security
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#circuit-breaker-per-service" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Circuit breaker (per service)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#keepalive" class="md-nav__link">
     <span class="md-ellipsis">
       
         Keepalive
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#message-size" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Message size
       
     </span>
   </a>
@@ -2158,30 +2298,29 @@
 </blockquote>
 <div class="language-text highlight"><pre><span></span><code>┌─────────────────────────────────────────────────┐
 │  Layer 1: gRPC Server (accepts RPCs)            │
-│  DIGITALKIN_MAX_CONCURRENT_RPCS                 │
-│  DIGITALKIN_THREAD_POOL_WORKERS                 │
+│  SERVER_MAX_CONCURRENT_RPCS                 │
+│  SERVER_THREAD_POOL_WORKERS                 │
 │  Server channel options (message size, pings)   │
 ├─────────────────────────────────────────────────┤
 │  Layer 2: Task Manager (executes work)          │
-│  DIGITALKIN_MAX_CONCURRENT_TASKS                │
-│  DIGITALKIN_MAX_QUEUED_TASKS                    │
-│  DIGITALKIN_ADMISSION_TIMEOUT                   │
-│  DIGITALKIN_BACKPRESSURE_STRATEGY / _TIMEOUT    │
+│  DIGITALKIN_TASK_MANAGER_MAX_CONCURRENT_TASKS                │
+│  DIGITALKIN_TASK_MANAGER_MAX_QUEUED_TASKS                    │
+│  DIGITALKIN_TASK_MANAGER_ADMISSION_TIMEOUT                   │
+│  DIGITALKIN_JOB_MANAGER_BACKPRESSURE_STRATEGY / _TIMEOUT    │
 ├─────────────────────────────────────────────────┤
 │  Layer 3: Lifecycle (completion &amp; cleanup)       │
-│  DIGITALKIN_COMPLETION_TIMEOUT                  │
-│  DIGITALKIN_STREAM_DRAIN_TIMEOUT                │
-│  DIGITALKIN_SETUP_CACHE_MAX                     │
+│  DIGITALKIN_MODULE_SERVICER_COMPLETION_TIMEOUT                  │
+│  DIGITALKIN_TASK_MANAGER_STREAM_DRAIN_TIMEOUT                │
+│  DIGITALKIN_MODULE_SERVICER_SETUP_CACHE_MAX                     │
 ├─────────────────────────────────────────────────┤
 │  Layer 4: Signal I/O (gRPC client calls out)    │
-│  DIGITALKIN_GRPC_TIMEOUT                        │
-│  DIGITALKIN_SIGNAL_* (batching, polling, retry) │
-│  DIGITALKIN_GRPC_QUERY_MAX_RETRIES / _BACKOFF   │
-│  DIGITALKIN_TOOL_RESOLVE_TIMEOUT                │
-│  DIGITALKIN_CONFIG_SETUP_TIMEOUT                │
+│  CLIENT_TIMEOUT                        │
+│  CLIENT_MAX_RETRIES / _BACKOFF   │
+│  DIGITALKIN_MODULE_TOOL_RESOLVE_TIMEOUT                │
+│  DIGITALKIN_JOB_MANAGER_CONFIG_SETUP_TIMEOUT                │
 │  Client channel options (keepalive, retry, DNS) │
-│  DIGITALKIN_GRPC_RETRY_* (channel retry policy) │
-│  DIGITALKIN_GRPC_*_MS (keepalive, reconnect)    │
+│  CLIENT_GRPC_RETRY_* (channel retry policy) │
+│  CLIENT_GRPC_OPTIONS_* (keepalive, reconnect)    │
 └─────────────────────────────────────────────────┘
 </code></pre></div>
 <p>Request flow:</p>
@@ -2204,12 +2343,12 @@
 </thead>
 <tbody>
 <tr>
-<td><code>DIGITALKIN_MAX_CONCURRENT_RPCS</code></td>
+<td><code>SERVER_MAX_CONCURRENT_RPCS</code></td>
 <td><code>cpu × 200</code></td>
 <td>How many RPCs the server accepts simultaneously. This is the front door. Each <code>StartModule</code> is a server-streaming RPC that stays open for the entire task duration (potentially minutes). Set this &gt;= <code>MAX_CONCURRENT_TASKS + MAX_QUEUED_TASKS</code> so the server never rejects at the gRPC layer before the task manager can queue it.</td>
 </tr>
 <tr>
-<td><code>DIGITALKIN_THREAD_POOL_WORKERS</code></td>
+<td><code>SERVER_THREAD_POOL_WORKERS</code></td>
 <td><code>min(4, cpu)</code></td>
 <td>Migration thread pool for the async server. Used for running synchronous callbacks. For pure-async modules, 1-2 is enough. Only increase if you have sync blocking code.</td>
 </tr>
@@ -2260,22 +2399,22 @@
 </thead>
 <tbody>
 <tr>
-<td><code>DIGITALKIN_MAX_CONCURRENT_TASKS</code></td>
+<td><code>DIGITALKIN_TASK_MANAGER_MAX_CONCURRENT_TASKS</code></td>
 <td><code>100</code></td>
 <td>How many tasks actually execute simultaneously. Each task consumes event loop time, gRPC client connections, memory. Too high → event loop starvation. Too low → underutilized hardware.</td>
 </tr>
 <tr>
-<td><code>DIGITALKIN_MAX_QUEUED_TASKS</code></td>
+<td><code>DIGITALKIN_TASK_MANAGER_MAX_QUEUED_TASKS</code></td>
 <td><code>0</code></td>
 <td>How many tasks wait in line. When &gt; 0, enables the admission queue: excess tasks queue patiently instead of being rejected. Set this to absorb your expected burst size.</td>
 </tr>
 <tr>
-<td><code>DIGITALKIN_ADMISSION_TIMEOUT</code></td>
+<td><code>DIGITALKIN_TASK_MANAGER_ADMISSION_TIMEOUT</code></td>
 <td><code>5.0</code></td>
 <td>Fast-fail timeout (seconds) when both running and queued slots are full. Keep short (3-5s) — if the queue is full, waiting longer won't help.</td>
 </tr>
 <tr>
-<td><code>DIGITALKIN_TASK_WAIT_TIMEOUT</code></td>
+<td><code>DIGITALKIN_TASK_MANAGER_TASK_WAIT_TIMEOUT</code></td>
 <td><code>30</code></td>
 <td>Legacy: timeout waiting for a slot when queue is disabled (<code>MAX_QUEUED_TASKS=0</code>). With queue enabled, this is ignored.</td>
 </tr>
@@ -2285,15 +2424,16 @@
 <blockquote>
 <p><strong>Full documentation:</strong> <a href="../architecture/admission-queue/">architecture/admission-queue.md</a> — problem statement, two-phase flow diagrams, capacity planning, log analysis findings.</p>
 </blockquote>
-<p>When <code>DIGITALKIN_MAX_QUEUED_TASKS &gt; 0</code>, two-phase admission:</p>
+<p>When <code>DIGITALKIN_TASK_MANAGER_MAX_QUEUED_TASKS &gt; 0</code>, two-phase admission:</p>
 <ol>
 <li><strong>Phase 1 — Enter system gate</strong> (fast reject in <code>ADMISSION_TIMEOUT</code> seconds if <code>running + queued &gt;= total capacity</code>)</li>
 <li><strong>Phase 2 — Wait for execution slot</strong> (patient wait, no timeout — freed by completing tasks)</li>
 </ol>
-<p>When <code>DIGITALKIN_MAX_QUEUED_TASKS = 0</code> (default): legacy single-semaphore behavior with <code>TASK_WAIT_TIMEOUT</code>.</p>
+<p>When <code>DIGITALKIN_TASK_MANAGER_MAX_QUEUED_TASKS = 0</code> (default): legacy single-semaphore behavior with
+<code>TASK_WAIT_TIMEOUT</code>.</p>
 <hr />
 <h2 id="layer-3-signal-io-client-side-grpc">Layer 3: Signal I/O (Client-Side gRPC)<a class="headerlink" href="#layer-3-signal-io-client-side-grpc" title="Permanent link">¤</a></h2>
-<h3 id="outbound-signals-sendsignals-batching">Outbound Signals (SendSignals Batching)<a class="headerlink" href="#outbound-signals-sendsignals-batching" title="Permanent link">¤</a></h3>
+<h3 id="outbound-grpc-calls">Outbound gRPC calls<a class="headerlink" href="#outbound-grpc-calls" title="Permanent link">¤</a></h3>
 <table>
 <thead>
 <tr>
@@ -2304,64 +2444,17 @@
 </thead>
 <tbody>
 <tr>
-<td><code>DIGITALKIN_GRPC_TIMEOUT</code></td>
+<td><code>CLIENT_TIMEOUT</code></td>
 <td><code>30</code></td>
-<td>Per-RPC timeout (seconds) for SendSignals. Under burst load, the services-provider slows down. Increase to 60s for safety under high concurrency.</td>
-</tr>
-<tr>
-<td><code>DIGITALKIN_SIGNAL_MAX_BATCH_SIZE</code></td>
-<td><code>50</code></td>
-<td>Flush trigger. When this many signals accumulate, send immediately. Larger = fewer RPCs but bigger payloads and higher per-signal latency.</td>
-</tr>
-<tr>
-<td><code>DIGITALKIN_SIGNAL_FLUSH_INTERVAL</code></td>
-<td><code>0.1</code></td>
-<td>Timer trigger (seconds). If batch doesn't fill in time, flush anyway. Lower = less latency. Higher = more batching efficiency.</td>
-</tr>
-<tr>
-<td><code>DIGITALKIN_SIGNAL_SEND_RETRIES</code></td>
-<td><code>3</code></td>
-<td>Retry count for failed batch RPCs. With exponential backoff: 100ms → 200ms → 400ms.</td>
-</tr>
-<tr>
-<td><code>DIGITALKIN_SIGNAL_SEND_BACKOFF_MS</code></td>
-<td><code>100</code></td>
-<td>Base backoff (ms) for retries. Doubles each attempt.</td>
+<td>Per-query deadline (seconds) for unary gRPC client calls. Under burst load, the services-provider slows down. Increase to 60s for safety under high concurrency.</td>
 </tr>
 </tbody>
 </table>
-<h3 id="inbound-signals-getsignals-polling">Inbound Signals (GetSignals Polling)<a class="headerlink" href="#inbound-signals-getsignals-polling" title="Permanent link">¤</a></h3>
-<table>
-<thead>
-<tr>
-<th>Variable</th>
-<th>Default</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>DIGITALKIN_POLL_TIMEOUT</code></td>
-<td><code>1</code></td>
-<td>Per-RPC timeout (seconds) for GetSignals. Short because polling is frequent.</td>
-</tr>
-<tr>
-<td><code>DIGITALKIN_SIGNAL_POLL_INTERVAL</code></td>
-<td><code>1.0</code></td>
-<td>Max interval (seconds) between polls (ceiling). Exponential backoff caps here.</td>
-</tr>
-<tr>
-<td><code>DIGITALKIN_SIGNAL_INITIAL_POLL_INTERVAL</code></td>
-<td><code>0.1</code></td>
-<td>Starting interval. Doubles each empty poll until hitting ceiling. Resets when signals arrive.</td>
-</tr>
-<tr>
-<td><code>DIGITALKIN_SIGNAL_QUEUE_SIZE</code></td>
-<td><code>512</code></td>
-<td>Per-task signal buffer. If a task is slow to consume, signals queue here.</td>
-</tr>
-</tbody>
-</table>
+<h3 id="signals">Signals<a class="headerlink" href="#signals" title="Permanent link">¤</a></h3>
+<p>Signals travel over Redis pub/sub, not over a batched <code>SendSignals</code> /
+polled <code>GetSignals</code> RPC pair. The only signal knob left is
+<code>DIGITALKIN_SIGNAL_MAX_TASKS</code> (max registered signal tasks, default 10000);
+see the Redis settings for delivery tuning.</p>
 <h3 id="servicer-lifecycle">Servicer &amp; Lifecycle<a class="headerlink" href="#servicer-lifecycle" title="Permanent link">¤</a></h3>
 <table>
 <thead>
@@ -2373,27 +2466,27 @@
 </thead>
 <tbody>
 <tr>
-<td><code>DIGITALKIN_SETUP_CACHE_MAX</code></td>
+<td><code>DIGITALKIN_MODULE_SERVICER_SETUP_CACHE_MAX</code></td>
 <td><code>100</code></td>
 <td>Max cached setup configurations per module servicer. Avoids redundant GetSetup RPCs.</td>
 </tr>
 <tr>
-<td><code>DIGITALKIN_COMPLETION_TIMEOUT</code></td>
+<td><code>DIGITALKIN_MODULE_SERVICER_COMPLETION_TIMEOUT</code></td>
 <td><code>300.0</code></td>
 <td>Timeout (seconds) waiting for a job to complete after streaming ends. If exceeded, the session is force-cleaned with <code>TIMEOUT</code> cancellation reason.</td>
 </tr>
 <tr>
-<td><code>DIGITALKIN_STREAM_DRAIN_TIMEOUT</code></td>
+<td><code>DIGITALKIN_TASK_MANAGER_STREAM_DRAIN_TIMEOUT</code></td>
 <td><code>300.0</code></td>
 <td>Timeout (seconds) waiting for a task's output stream to fully drain before cleanup. Prevents stale sessions when clients disconnect mid-stream.</td>
 </tr>
 <tr>
-<td><code>DIGITALKIN_BACKPRESSURE_STRATEGY</code></td>
+<td><code>DIGITALKIN_JOB_MANAGER_BACKPRESSURE_STRATEGY</code></td>
 <td><code>block</code></td>
 <td>What to do when all running slots are occupied: <code>block</code> (wait up to <code>BACKPRESSURE_TIMEOUT</code>) or <code>reject</code> (immediate failure).</td>
 </tr>
 <tr>
-<td><code>DIGITALKIN_BACKPRESSURE_TIMEOUT</code></td>
+<td><code>DIGITALKIN_JOB_MANAGER_BACKPRESSURE_TIMEOUT</code></td>
 <td><code>300.0</code></td>
 <td>Max wait time (seconds) when <code>BACKPRESSURE_STRATEGY=block</code>. After this, the request is rejected.</td>
 </tr>
@@ -2401,6 +2494,78 @@
 </table>
 <hr />
 <h2 id="client-channel-options-env-configurable-in-clientconfig">Client Channel Options (env-configurable in <code>ClientConfig</code>)<a class="headerlink" href="#client-channel-options-env-configurable-in-clientconfig" title="Permanent link">¤</a></h2>
+<p>Every <code>ClientConfig</code> default is read from <code>ClientSettings</code>, so a deployment can
+configure its clients purely through the environment and override only the
+per-target values in code.</p>
+<h3 id="address-security">Address &amp; security<a class="headerlink" href="#address-security" title="Permanent link">¤</a></h3>
+<table>
+<thead>
+<tr>
+<th>Env Var</th>
+<th>Default</th>
+<th>Why it matters</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>CLIENT_CHANNEL_HOST</code></td>
+<td><code>localhost</code></td>
+<td>Host the client dials.</td>
+</tr>
+<tr>
+<td><code>CLIENT_CHANNEL_PORT</code></td>
+<td><code>50051</code></td>
+<td>Port the client dials.</td>
+</tr>
+<tr>
+<td><code>CLIENT_CHANNEL_COMMUNICATION_MODE</code></td>
+<td><code>async</code></td>
+<td>Client operation mode (<code>sync</code>/<code>async</code>).</td>
+</tr>
+<tr>
+<td><code>CLIENT_CHANNEL_SECURITY</code></td>
+<td><code>insecure</code></td>
+<td><code>secure</code> requires credentials, otherwise startup fails.</td>
+</tr>
+<tr>
+<td><code>CLIENT_CHANNEL_MTLS</code></td>
+<td><code>false</code></td>
+<td>Enable mutual TLS.</td>
+</tr>
+<tr>
+<td><code>CLIENT_CHANNEL_CREDENTIALS__ROOT_CERT_PATH</code></td>
+<td>—</td>
+<td>Root certificate path (<code>__CERT_PATH</code> / <code>__KEY_PATH</code> for the client pair).</td>
+</tr>
+<tr>
+<td><code>CLIENT_GRPC_COMPRESSION</code></td>
+<td><code>gzip</code></td>
+<td>Channel-level compression (<code>none</code>, <code>gzip</code>, <code>deflate</code>).</td>
+</tr>
+</tbody>
+</table>
+<h3 id="circuit-breaker-per-service">Circuit breaker (per service)<a class="headerlink" href="#circuit-breaker-per-service" title="Permanent link">¤</a></h3>
+<table>
+<thead>
+<tr>
+<th>Env Var</th>
+<th>Default</th>
+<th>Why it matters</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>CLIENT_CIRCUIT_BREAKER_FAIL_MAX</code></td>
+<td><code>5</code></td>
+<td>Consecutive failures before the circuit opens.</td>
+</tr>
+<tr>
+<td><code>CLIENT_CIRCUIT_BREAKER_RESET_TIMEOUT</code></td>
+<td><code>30</code></td>
+<td>Seconds the circuit stays open before a half-open probe.</td>
+</tr>
+</tbody>
+</table>
 <h3 id="keepalive">Keepalive<a class="headerlink" href="#keepalive" title="Permanent link">¤</a></h3>
 <table>
 <thead>
@@ -2413,28 +2578,53 @@
 </thead>
 <tbody>
 <tr>
-<td><code>DIGITALKIN_GRPC_KEEPALIVE_TIME_MS</code></td>
+<td><code>CLIENT_GRPC_OPTIONS_KEEPALIVE_TIME</code></td>
 <td><code>grpc.keepalive_time_ms</code></td>
-<td>60000</td>
+<td>15000</td>
 <td>Ping interval to detect dead connections. Lower for faster detection.</td>
 </tr>
 <tr>
-<td><code>DIGITALKIN_GRPC_KEEPALIVE_TIMEOUT_MS</code></td>
+<td><code>CLIENT_GRPC_OPTIONS_KEEPALIVE_TIMEOUT</code></td>
 <td><code>grpc.keepalive_timeout_ms</code></td>
-<td>20000</td>
+<td>5000</td>
 <td>Pong wait time. No response → connection dead → reconnect.</td>
 </tr>
 <tr>
-<td>—</td>
+<td><code>CLIENT_GRPC_OPTIONS_KEEPALIVE_PERMIT_WITHOUT_CALLS</code></td>
 <td><code>grpc.keepalive_permit_without_calls</code></td>
 <td><code>True</code></td>
-<td>Keep pinging even when no RPCs in flight. Not configurable.</td>
+<td>Keep pinging even when no RPCs in flight.</td>
 </tr>
 <tr>
-<td><code>DIGITALKIN_GRPC_MIN_PING_INTERVAL_MS</code></td>
+<td><code>CLIENT_GRPC_OPTIONS_MIN_PING_INTERVAL</code></td>
 <td><code>grpc.http2.min_time_between_pings_ms</code></td>
-<td>30000</td>
+<td>10000</td>
 <td>Min interval between HTTP/2 pings. Must be &gt;= server's 10s minimum.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="message-size">Message size<a class="headerlink" href="#message-size" title="Permanent link">¤</a></h3>
+<table>
+<thead>
+<tr>
+<th>Env Var</th>
+<th>Option</th>
+<th>Default</th>
+<th>Why it matters</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>CLIENT_GRPC_OPTIONS_MAX_RECEIVE_MESSAGE_LENGTH</code></td>
+<td><code>grpc.max_receive_message_length</code></td>
+<td>104857600</td>
+<td>Largest response the client accepts, in bytes.</td>
+</tr>
+<tr>
+<td><code>CLIENT_GRPC_OPTIONS_MAX_SEND_MESSAGE_LENGTH</code></td>
+<td><code>grpc.max_send_message_length</code></td>
+<td>104857600</td>
+<td>Largest request the client sends, in bytes.</td>
 </tr>
 </tbody>
 </table>
@@ -2450,25 +2640,25 @@
 </thead>
 <tbody>
 <tr>
-<td><code>DIGITALKIN_GRPC_DNS_RESOLUTION_MS</code></td>
+<td><code>CLIENT_GRPC_OPTIONS_DNS_RESOLUTION_MS</code></td>
 <td><code>grpc.dns_min_time_between_resolutions_ms</code></td>
 <td>500</td>
 <td>Critical for Railway/containers. Re-resolve DNS after this interval.</td>
 </tr>
 <tr>
-<td><code>DIGITALKIN_GRPC_INITIAL_RECONNECT_MS</code></td>
+<td><code>CLIENT_GRPC_OPTIONS_INITIAL_RECONNECT_MS</code></td>
 <td><code>grpc.initial_reconnect_backoff_ms</code></td>
 <td>1000</td>
 <td>First reconnect delay.</td>
 </tr>
 <tr>
-<td><code>DIGITALKIN_GRPC_MAX_RECONNECT_MS</code></td>
+<td><code>CLIENT_GRPC_OPTIONS_MAX_RECONNECT_MS</code></td>
 <td><code>grpc.max_reconnect_backoff_ms</code></td>
 <td>10000</td>
 <td>Cap between reconnect attempts.</td>
 </tr>
 <tr>
-<td><code>DIGITALKIN_GRPC_MIN_RECONNECT_MS</code></td>
+<td><code>CLIENT_GRPC_OPTIONS_MIN_RECONNECT_MS</code></td>
 <td><code>grpc.min_reconnect_backoff_ms</code></td>
 <td>500</td>
 <td>Floor for reconnect backoff.</td>
@@ -2487,31 +2677,31 @@
 </thead>
 <tbody>
 <tr>
-<td>—</td>
+<td><code>CLIENT_GRPC_OPTIONS_ENABLE_RETRIES</code></td>
 <td><code>grpc.enable_retries</code></td>
-<td><code>1</code></td>
-<td>Enables gRPC-native retry via service config. Not configurable.</td>
+<td><code>0</code></td>
+<td>gRPC-native retry via service config. Off by default so it does not stack on the app-level retry loop.</td>
 </tr>
 <tr>
-<td><code>DIGITALKIN_GRPC_RETRY_MAX_ATTEMPTS</code></td>
+<td><code>CLIENT_GRPC_RETRY_MAX_ATTEMPTS</code></td>
 <td><code>RetryPolicy.max_attempts</code></td>
 <td>5</td>
 <td>Channel-level retry attempts.</td>
 </tr>
 <tr>
-<td><code>DIGITALKIN_GRPC_RETRY_INITIAL_BACKOFF</code></td>
+<td><code>CLIENT_GRPC_RETRY_INITIAL_BACKOFF</code></td>
 <td><code>RetryPolicy.initial_backoff</code></td>
 <td>0.1s</td>
 <td>Initial retry backoff.</td>
 </tr>
 <tr>
-<td><code>DIGITALKIN_GRPC_RETRY_MAX_BACKOFF</code></td>
+<td><code>CLIENT_GRPC_RETRY_MAX_BACKOFF</code></td>
 <td><code>RetryPolicy.max_backoff</code></td>
 <td>10s</td>
 <td>Max retry backoff.</td>
 </tr>
 <tr>
-<td><code>DIGITALKIN_GRPC_RETRY_BACKOFF_MULTIPLIER</code></td>
+<td><code>CLIENT_GRPC_RETRY_BACKOFF_MULTIPLIER</code></td>
 <td><code>RetryPolicy.backoff_multiplier</code></td>
 <td>2.0</td>
 <td>Backoff multiplier.</td>
@@ -2529,12 +2719,12 @@
 </thead>
 <tbody>
 <tr>
-<td><code>DIGITALKIN_GRPC_QUERY_MAX_RETRIES</code></td>
+<td><code>CLIENT_MAX_RETRIES</code></td>
 <td>2</td>
 <td>App-level retry count for all gRPC client calls.</td>
 </tr>
 <tr>
-<td><code>DIGITALKIN_GRPC_QUERY_BACKOFF_BASE_MS</code></td>
+<td><code>CLIENT_BACKOFF_BASE_MS</code></td>
 <td>50</td>
 <td>Base backoff (ms), doubles per attempt.</td>
 </tr>
@@ -2551,12 +2741,12 @@
 </thead>
 <tbody>
 <tr>
-<td><code>DIGITALKIN_TOOL_RESOLVE_TIMEOUT</code></td>
+<td><code>DIGITALKIN_MODULE_TOOL_RESOLVE_TIMEOUT</code></td>
 <td>10.0</td>
 <td>Per-tool resolution timeout (seconds).</td>
 </tr>
 <tr>
-<td><code>DIGITALKIN_CONFIG_SETUP_TIMEOUT</code></td>
+<td><code>DIGITALKIN_JOB_MANAGER_CONFIG_SETUP_TIMEOUT</code></td>
 <td>30.0</td>
 <td>Config setup response wait (seconds).</td>
 </tr>
@@ -2570,13 +2760,13 @@
 <div class="language-text highlight"><pre><span></span><code>RPC call
   → Layer A: gRPC service config retry (channel level, transparent)
       retryableStatusCodes: UNAVAILABLE, RESOURCE_EXHAUSTED, DEADLINE_EXCEEDED
-      maxAttempts: DIGITALKIN_GRPC_RETRY_MAX_ATTEMPTS (default 5)
-      backoff: DIGITALKIN_GRPC_RETRY_INITIAL_BACKOFF → DIGITALKIN_GRPC_RETRY_MAX_BACKOFF
+      maxAttempts: CLIENT_GRPC_RETRY_MAX_ATTEMPTS (default 5)
+      backoff: CLIENT_GRPC_RETRY_INITIAL_BACKOFF → CLIENT_GRPC_RETRY_MAX_BACKOFF
 
   → Layer B: exec_grpc_query() app-level retry
       retryable: UNAVAILABLE, INTERNAL, DEADLINE_EXCEEDED
-      max_retries: DIGITALKIN_GRPC_QUERY_MAX_RETRIES (default 2, 3 total)
-      backoff: DIGITALKIN_GRPC_QUERY_BACKOFF_BASE_MS (default 50ms, doubles per attempt)
+      max_retries: CLIENT_MAX_RETRIES (default 2, 3 total)
+      backoff: CLIENT_BACKOFF_BASE_MS (default 50ms, doubles per attempt)
 
   → Layer C: SendSignals _flush() retry (batch-specific)
       retryable: DEADLINE_EXCEEDED, UNAVAILABLE, INTERNAL
@@ -2599,113 +2789,100 @@
 </ol>
 <h3 id="small-instance-4-vcpu-8-gb">Small Instance (4 vCPU, 8 GB)<a class="headerlink" href="#small-instance-4-vcpu-8-gb" title="Permanent link">¤</a></h3>
 <div class="language-text highlight"><pre><span></span><code># Server
-DIGITALKIN_MAX_CONCURRENT_RPCS=1000
-DIGITALKIN_THREAD_POOL_WORKERS=2
+SERVER_MAX_CONCURRENT_RPCS=1000
+SERVER_THREAD_POOL_WORKERS=2
 
 # Task management
-DIGITALKIN_MAX_CONCURRENT_TASKS=100
-DIGITALKIN_MAX_QUEUED_TASKS=1000
-DIGITALKIN_ADMISSION_TIMEOUT=5.0
+DIGITALKIN_TASK_MANAGER_MAX_CONCURRENT_TASKS=100
+DIGITALKIN_TASK_MANAGER_MAX_QUEUED_TASKS=1000
+DIGITALKIN_TASK_MANAGER_ADMISSION_TIMEOUT=5.0
 
 # Lifecycle
-DIGITALKIN_COMPLETION_TIMEOUT=300.0
-DIGITALKIN_STREAM_DRAIN_TIMEOUT=300.0
+DIGITALKIN_MODULE_SERVICER_COMPLETION_TIMEOUT=300.0
+DIGITALKIN_TASK_MANAGER_STREAM_DRAIN_TIMEOUT=300.0
 
 # Signals
-DIGITALKIN_GRPC_TIMEOUT=30
-DIGITALKIN_SIGNAL_MAX_BATCH_SIZE=50
-DIGITALKIN_SIGNAL_FLUSH_INTERVAL=0.1
-DIGITALKIN_SIGNAL_QUEUE_SIZE=512
-DIGITALKIN_SETUP_CACHE_MAX=200
+CLIENT_TIMEOUT=30
+DIGITALKIN_MODULE_SERVICER_SETUP_CACHE_MAX=200
 </code></pre></div>
 <h3 id="medium-instance-8-vcpu-32-gb">Medium Instance (8 vCPU, 32 GB)<a class="headerlink" href="#medium-instance-8-vcpu-32-gb" title="Permanent link">¤</a></h3>
 <div class="language-text highlight"><pre><span></span><code># Server
-DIGITALKIN_MAX_CONCURRENT_RPCS=2000
-DIGITALKIN_THREAD_POOL_WORKERS=4
+SERVER_MAX_CONCURRENT_RPCS=2000
+SERVER_THREAD_POOL_WORKERS=4
 
 # Task management
-DIGITALKIN_MAX_CONCURRENT_TASKS=200
-DIGITALKIN_MAX_QUEUED_TASKS=3000
-DIGITALKIN_ADMISSION_TIMEOUT=5.0
+DIGITALKIN_TASK_MANAGER_MAX_CONCURRENT_TASKS=200
+DIGITALKIN_TASK_MANAGER_MAX_QUEUED_TASKS=3000
+DIGITALKIN_TASK_MANAGER_ADMISSION_TIMEOUT=5.0
 
 # Lifecycle
-DIGITALKIN_COMPLETION_TIMEOUT=600.0
-DIGITALKIN_STREAM_DRAIN_TIMEOUT=600.0
+DIGITALKIN_MODULE_SERVICER_COMPLETION_TIMEOUT=600.0
+DIGITALKIN_TASK_MANAGER_STREAM_DRAIN_TIMEOUT=600.0
 
 # Signals
-DIGITALKIN_GRPC_TIMEOUT=60
-DIGITALKIN_SIGNAL_MAX_BATCH_SIZE=100
-DIGITALKIN_SIGNAL_FLUSH_INTERVAL=0.2
-DIGITALKIN_SIGNAL_QUEUE_SIZE=1024
-DIGITALKIN_SETUP_CACHE_MAX=500
+CLIENT_TIMEOUT=60
+DIGITALKIN_MODULE_SERVICER_SETUP_CACHE_MAX=500
 </code></pre></div>
 <h3 id="large-instance-32-vcpu-64-gb">Large Instance (32 vCPU, 64 GB)<a class="headerlink" href="#large-instance-32-vcpu-64-gb" title="Permanent link">¤</a></h3>
 <div class="language-text highlight"><pre><span></span><code># Server
-DIGITALKIN_MAX_CONCURRENT_RPCS=5000
-DIGITALKIN_THREAD_POOL_WORKERS=4
+SERVER_MAX_CONCURRENT_RPCS=5000
+SERVER_THREAD_POOL_WORKERS=4
 
 # Task management
-DIGITALKIN_MAX_CONCURRENT_TASKS=400
-DIGITALKIN_MAX_QUEUED_TASKS=5000
-DIGITALKIN_ADMISSION_TIMEOUT=5.0
+DIGITALKIN_TASK_MANAGER_MAX_CONCURRENT_TASKS=400
+DIGITALKIN_TASK_MANAGER_MAX_QUEUED_TASKS=5000
+DIGITALKIN_TASK_MANAGER_ADMISSION_TIMEOUT=5.0
 
 # Lifecycle
-DIGITALKIN_COMPLETION_TIMEOUT=900.0
-DIGITALKIN_STREAM_DRAIN_TIMEOUT=600.0
+DIGITALKIN_MODULE_SERVICER_COMPLETION_TIMEOUT=900.0
+DIGITALKIN_TASK_MANAGER_STREAM_DRAIN_TIMEOUT=600.0
 
 # Signals
-DIGITALKIN_GRPC_TIMEOUT=60
-DIGITALKIN_SIGNAL_MAX_BATCH_SIZE=200
-DIGITALKIN_SIGNAL_FLUSH_INTERVAL=0.3
-DIGITALKIN_SIGNAL_QUEUE_SIZE=2048
-DIGITALKIN_SETUP_CACHE_MAX=1000
+CLIENT_TIMEOUT=60
+DIGITALKIN_MODULE_SERVICER_SETUP_CACHE_MAX=1000
 </code></pre></div>
 <h3 id="railway-container-paas">Railway (Container PaaS)<a class="headerlink" href="#railway-container-paas" title="Permanent link">¤</a></h3>
 <p>Railway instances have ephemeral IPs and may restart under memory pressure. Optimize for fast recovery and moderate concurrency.</p>
 <div class="language-text highlight"><pre><span></span><code># Server — Railway instances typically have 1-8 vCPU
-DIGITALKIN_MAX_CONCURRENT_RPCS=1500
-DIGITALKIN_THREAD_POOL_WORKERS=2
+SERVER_MAX_CONCURRENT_RPCS=1500
+SERVER_THREAD_POOL_WORKERS=2
 
 # Task management — conservative to avoid OOM kills
-DIGITALKIN_MAX_CONCURRENT_TASKS=50
-DIGITALKIN_MAX_QUEUED_TASKS=500
-DIGITALKIN_ADMISSION_TIMEOUT=5.0
-DIGITALKIN_BACKPRESSURE_STRATEGY=block
-DIGITALKIN_BACKPRESSURE_TIMEOUT=120.0
+DIGITALKIN_TASK_MANAGER_MAX_CONCURRENT_TASKS=50
+DIGITALKIN_TASK_MANAGER_MAX_QUEUED_TASKS=500
+DIGITALKIN_TASK_MANAGER_ADMISSION_TIMEOUT=5.0
+DIGITALKIN_JOB_MANAGER_BACKPRESSURE_STRATEGY=block
+DIGITALKIN_JOB_MANAGER_BACKPRESSURE_TIMEOUT=120.0
 
 # Lifecycle — shorter timeouts to release resources faster on restart
-DIGITALKIN_COMPLETION_TIMEOUT=180.0
-DIGITALKIN_STREAM_DRAIN_TIMEOUT=120.0
+DIGITALKIN_MODULE_SERVICER_COMPLETION_TIMEOUT=180.0
+DIGITALKIN_TASK_MANAGER_STREAM_DRAIN_TIMEOUT=120.0
 
 # Signals — tighter batching for lower memory footprint
-DIGITALKIN_GRPC_TIMEOUT=30
-DIGITALKIN_SIGNAL_MAX_BATCH_SIZE=50
-DIGITALKIN_SIGNAL_FLUSH_INTERVAL=0.1
-DIGITALKIN_SIGNAL_QUEUE_SIZE=256
-DIGITALKIN_SIGNAL_SEND_RETRIES=5
-DIGITALKIN_SIGNAL_SEND_BACKOFF_MS=200
-DIGITALKIN_SETUP_CACHE_MAX=100
+CLIENT_TIMEOUT=30
+DIGITALKIN_MODULE_SERVICER_SETUP_CACHE_MAX=100
 
 # I/O timing — fail fast on unreachable services
-DIGITALKIN_GRPC_QUERY_MAX_RETRIES=1
-DIGITALKIN_GRPC_QUERY_BACKOFF_BASE_MS=25
-DIGITALKIN_TOOL_RESOLVE_TIMEOUT=3.0
-DIGITALKIN_CONFIG_SETUP_TIMEOUT=15.0
-DIGITALKIN_GRPC_RETRY_MAX_ATTEMPTS=3
-DIGITALKIN_GRPC_RETRY_MAX_BACKOFF=3s
-DIGITALKIN_GRPC_KEEPALIVE_TIME_MS=30000
-DIGITALKIN_GRPC_MAX_RECONNECT_MS=5000
+CLIENT_MAX_RETRIES=1
+CLIENT_BACKOFF_BASE_MS=25
+DIGITALKIN_MODULE_TOOL_RESOLVE_TIMEOUT=3.0
+DIGITALKIN_JOB_MANAGER_CONFIG_SETUP_TIMEOUT=15.0
+CLIENT_GRPC_RETRY_MAX_ATTEMPTS=3
+CLIENT_GRPC_RETRY_MAX_BACKOFF=3s
+CLIENT_GRPC_OPTIONS_KEEPALIVE_TIME=30000
+CLIENT_GRPC_OPTIONS_MAX_RECONNECT_MS=5000
 
 # Module
-DIGITALKIN_CHAT_HISTORY_FLUSH_THRESHOLD=5
+DIGITALKIN_MODULE_FILE_HISTORY_FLUSH_THRESHOLD=5
 DIGITALKIN_LOG_DIR=/app/logs
-DIGITALKIN_TIMEZONE=Europe/Paris
+DIGITALKIN_MODULE_TIMEZONE=Europe/Paris
 </code></pre></div>
 <p><strong>Railway-specific notes:</strong></p>
 <ul>
-<li><strong>DNS re-resolution</strong> is configurable via <code>DIGITALKIN_GRPC_DNS_RESOLUTION_MS</code> (default 500ms) — critical when services restart with new IPs.</li>
-<li><strong>Lower <code>SIGNAL_QUEUE_SIZE</code></strong> (256 vs 512) reduces per-task memory. Railway charges by memory usage.</li>
-<li><strong>Higher <code>SIGNAL_SEND_RETRIES</code></strong> (5 vs 3) with longer backoff absorbs brief connectivity gaps during Railway deploys.</li>
+<li><strong>DNS re-resolution</strong> is configurable via <code>CLIENT_GRPC_OPTIONS_DNS_RESOLUTION_MS</code> (default 500ms) — critical when
+  services restart with new IPs.</li>
+<li><strong>Higher <code>CLIENT_MAX_RETRIES</code></strong> with a longer <code>CLIENT_BACKOFF_BASE_MS</code> absorbs brief connectivity gaps during Railway
+  deploys.</li>
 <li><strong>Shorter lifecycle timeouts</strong> prevent orphaned sessions from consuming memory after Railway restarts.</li>
 <li>Set <code>DIGITALKIN_MODULE_ID</code> per service if running multiple modules in the same Railway project.</li>
 </ul>
@@ -2723,245 +2900,273 @@ DIGITALKIN_TIMEZONE=Europe/Paris
 </thead>
 <tbody>
 <tr>
-<td><code>DIGITALKIN_MAX_CONCURRENT_RPCS</code></td>
+<td><code>SERVER_MAX_CONCURRENT_RPCS</code></td>
 <td>int</td>
 <td>cpu×200</td>
 <td>Server</td>
 <td>Async server concurrent RPCs</td>
 </tr>
 <tr>
-<td><code>DIGITALKIN_THREAD_POOL_WORKERS</code></td>
+<td><code>SERVER_THREAD_POOL_WORKERS</code></td>
 <td>int</td>
 <td>min(4, cpu)</td>
 <td>Server</td>
 <td>Migration thread pool size</td>
 </tr>
 <tr>
-<td><code>DIGITALKIN_MAX_CONCURRENT_TASKS</code></td>
+<td><code>DIGITALKIN_TASK_MANAGER_MAX_CONCURRENT_TASKS</code></td>
 <td>int</td>
 <td>100</td>
 <td>Task Mgr</td>
 <td>Concurrent task execution limit</td>
 </tr>
 <tr>
-<td><code>DIGITALKIN_MAX_QUEUED_TASKS</code></td>
+<td><code>DIGITALKIN_TASK_MANAGER_MAX_QUEUED_TASKS</code></td>
 <td>int</td>
 <td>0</td>
 <td>Task Mgr</td>
 <td>Admission queue depth (0 = disabled)</td>
 </tr>
 <tr>
-<td><code>DIGITALKIN_ADMISSION_TIMEOUT</code></td>
+<td><code>DIGITALKIN_TASK_MANAGER_ADMISSION_TIMEOUT</code></td>
 <td>float</td>
 <td>5.0s</td>
 <td>Task Mgr</td>
 <td>Fast-fail when queue full</td>
 </tr>
 <tr>
-<td><code>DIGITALKIN_TASK_WAIT_TIMEOUT</code></td>
+<td><code>DIGITALKIN_TASK_MANAGER_TASK_WAIT_TIMEOUT</code></td>
 <td>float</td>
 <td>30s</td>
 <td>Task Mgr</td>
 <td>Legacy slot wait timeout (queue disabled)</td>
 </tr>
 <tr>
-<td><code>DIGITALKIN_BACKPRESSURE_STRATEGY</code></td>
+<td><code>DIGITALKIN_JOB_MANAGER_BACKPRESSURE_STRATEGY</code></td>
 <td>str</td>
 <td>block</td>
 <td>Task Mgr</td>
 <td><code>block</code> or <code>reject</code> when slots full</td>
 </tr>
 <tr>
-<td><code>DIGITALKIN_BACKPRESSURE_TIMEOUT</code></td>
+<td><code>DIGITALKIN_JOB_MANAGER_BACKPRESSURE_TIMEOUT</code></td>
 <td>float</td>
 <td>300.0s</td>
 <td>Task Mgr</td>
 <td>Max wait when strategy=block</td>
 </tr>
 <tr>
-<td><code>DIGITALKIN_COMPLETION_TIMEOUT</code></td>
+<td><code>DIGITALKIN_MODULE_SERVICER_COMPLETION_TIMEOUT</code></td>
 <td>float</td>
 <td>300.0s</td>
 <td>Lifecycle</td>
 <td>Wait for job completion after stream ends</td>
 </tr>
 <tr>
-<td><code>DIGITALKIN_STREAM_DRAIN_TIMEOUT</code></td>
+<td><code>DIGITALKIN_TASK_MANAGER_STREAM_DRAIN_TIMEOUT</code></td>
 <td>float</td>
 <td>300.0s</td>
 <td>Lifecycle</td>
 <td>Wait for output stream to drain before cleanup</td>
 </tr>
 <tr>
-<td><code>DIGITALKIN_GRPC_TIMEOUT</code></td>
+<td><code>CLIENT_TIMEOUT</code></td>
 <td>float</td>
 <td>30s</td>
-<td>Signal I/O</td>
-<td>SendSignals RPC timeout</td>
+<td>App retry</td>
+<td>Default per-query deadline for unary gRPC client calls</td>
 </tr>
 <tr>
-<td><code>DIGITALKIN_POLL_TIMEOUT</code></td>
-<td>float</td>
-<td>1s</td>
-<td>Signal I/O</td>
-<td>GetSignals RPC timeout</td>
-</tr>
-<tr>
-<td><code>DIGITALKIN_SIGNAL_POLL_INTERVAL</code></td>
-<td>float</td>
-<td>1.0s</td>
-<td>Signal I/O</td>
-<td>Max poll interval (ceiling)</td>
-</tr>
-<tr>
-<td><code>DIGITALKIN_SIGNAL_INITIAL_POLL_INTERVAL</code></td>
-<td>float</td>
-<td>0.1s</td>
-<td>Signal I/O</td>
-<td>Initial poll interval</td>
-</tr>
-<tr>
-<td><code>DIGITALKIN_SIGNAL_QUEUE_SIZE</code></td>
-<td>int</td>
-<td>512</td>
-<td>Signal I/O</td>
-<td>Per-task signal buffer</td>
-</tr>
-<tr>
-<td><code>DIGITALKIN_SIGNAL_FLUSH_INTERVAL</code></td>
-<td>float</td>
-<td>0.1s</td>
-<td>Signal I/O</td>
-<td>Batch flush timer</td>
-</tr>
-<tr>
-<td><code>DIGITALKIN_SIGNAL_MAX_BATCH_SIZE</code></td>
-<td>int</td>
-<td>50</td>
-<td>Signal I/O</td>
-<td>Batch flush trigger</td>
-</tr>
-<tr>
-<td><code>DIGITALKIN_SIGNAL_SEND_RETRIES</code></td>
-<td>int</td>
-<td>3</td>
-<td>Signal I/O</td>
-<td>Batch send retry attempts</td>
-</tr>
-<tr>
-<td><code>DIGITALKIN_SIGNAL_SEND_BACKOFF_MS</code></td>
-<td>float</td>
-<td>100ms</td>
-<td>Signal I/O</td>
-<td>Retry backoff base</td>
-</tr>
-<tr>
-<td><code>DIGITALKIN_GRPC_QUERY_MAX_RETRIES</code></td>
+<td><code>CLIENT_MAX_RETRIES</code></td>
 <td>int</td>
 <td>2</td>
 <td>App retry</td>
 <td>App-level retry count for gRPC client calls</td>
 </tr>
 <tr>
-<td><code>DIGITALKIN_GRPC_QUERY_BACKOFF_BASE_MS</code></td>
+<td><code>CLIENT_BACKOFF_BASE_MS</code></td>
 <td>float</td>
 <td>50</td>
 <td>App retry</td>
 <td>Base backoff (ms), doubles per attempt</td>
 </tr>
 <tr>
-<td><code>DIGITALKIN_TOOL_RESOLVE_TIMEOUT</code></td>
+<td><code>DIGITALKIN_MODULE_TOOL_RESOLVE_TIMEOUT</code></td>
 <td>float</td>
 <td>10.0s</td>
 <td>Tool init</td>
 <td>Per-tool resolution timeout</td>
 </tr>
 <tr>
-<td><code>DIGITALKIN_CONFIG_SETUP_TIMEOUT</code></td>
+<td><code>DIGITALKIN_JOB_MANAGER_CONFIG_SETUP_TIMEOUT</code></td>
 <td>float</td>
 <td>30.0s</td>
 <td>Job Mgr</td>
 <td>Config setup response wait</td>
 </tr>
 <tr>
-<td><code>DIGITALKIN_GRPC_RETRY_MAX_ATTEMPTS</code></td>
+<td><code>CLIENT_GRPC_RETRY_MAX_ATTEMPTS</code></td>
 <td>int</td>
 <td>5</td>
 <td>Channel retry</td>
 <td>Channel-level retry attempts</td>
 </tr>
 <tr>
-<td><code>DIGITALKIN_GRPC_RETRY_INITIAL_BACKOFF</code></td>
+<td><code>CLIENT_GRPC_RETRY_INITIAL_BACKOFF</code></td>
 <td>str</td>
 <td>0.1s</td>
 <td>Channel retry</td>
 <td>Channel retry initial backoff</td>
 </tr>
 <tr>
-<td><code>DIGITALKIN_GRPC_RETRY_MAX_BACKOFF</code></td>
+<td><code>CLIENT_GRPC_RETRY_MAX_BACKOFF</code></td>
 <td>str</td>
 <td>10s</td>
 <td>Channel retry</td>
 <td>Channel retry max backoff</td>
 </tr>
 <tr>
-<td><code>DIGITALKIN_GRPC_RETRY_BACKOFF_MULTIPLIER</code></td>
+<td><code>CLIENT_GRPC_RETRY_BACKOFF_MULTIPLIER</code></td>
 <td>float</td>
 <td>2.0</td>
 <td>Channel retry</td>
 <td>Backoff multiplier</td>
 </tr>
 <tr>
-<td><code>DIGITALKIN_GRPC_DNS_RESOLUTION_MS</code></td>
+<td><code>CLIENT_GRPC_OPTIONS_DNS_RESOLUTION_MS</code></td>
 <td>int</td>
 <td>500</td>
 <td>Channel opts</td>
 <td>DNS re-resolve interval</td>
 </tr>
 <tr>
-<td><code>DIGITALKIN_GRPC_INITIAL_RECONNECT_MS</code></td>
+<td><code>CLIENT_GRPC_OPTIONS_INITIAL_RECONNECT_MS</code></td>
 <td>int</td>
 <td>1000</td>
 <td>Channel opts</td>
 <td>First reconnect delay</td>
 </tr>
 <tr>
-<td><code>DIGITALKIN_GRPC_MAX_RECONNECT_MS</code></td>
+<td><code>CLIENT_GRPC_OPTIONS_MAX_RECONNECT_MS</code></td>
 <td>int</td>
 <td>10000</td>
 <td>Channel opts</td>
 <td>Max reconnect backoff</td>
 </tr>
 <tr>
-<td><code>DIGITALKIN_GRPC_MIN_RECONNECT_MS</code></td>
+<td><code>CLIENT_GRPC_OPTIONS_MIN_RECONNECT_MS</code></td>
 <td>int</td>
 <td>500</td>
 <td>Channel opts</td>
 <td>Min reconnect backoff</td>
 </tr>
 <tr>
-<td><code>DIGITALKIN_GRPC_KEEPALIVE_TIME_MS</code></td>
+<td><code>CLIENT_GRPC_OPTIONS_KEEPALIVE_TIME</code></td>
 <td>int</td>
-<td>60000</td>
+<td>15000</td>
 <td>Channel opts</td>
 <td>Keepalive ping interval</td>
 </tr>
 <tr>
-<td><code>DIGITALKIN_GRPC_KEEPALIVE_TIMEOUT_MS</code></td>
+<td><code>CLIENT_GRPC_OPTIONS_KEEPALIVE_TIMEOUT</code></td>
 <td>int</td>
-<td>20000</td>
+<td>5000</td>
 <td>Channel opts</td>
 <td>Keepalive pong timeout</td>
 </tr>
 <tr>
-<td><code>DIGITALKIN_GRPC_MIN_PING_INTERVAL_MS</code></td>
+<td><code>CLIENT_GRPC_OPTIONS_MIN_PING_INTERVAL</code></td>
 <td>int</td>
-<td>30000</td>
+<td>10000</td>
 <td>Channel opts</td>
 <td>Min HTTP/2 ping interval</td>
 </tr>
 <tr>
-<td><code>DIGITALKIN_SETUP_CACHE_MAX</code></td>
+<td><code>CLIENT_GRPC_OPTIONS_KEEPALIVE_PERMIT_WITHOUT_CALLS</code></td>
+<td>bool</td>
+<td>true</td>
+<td>Channel opts</td>
+<td>Ping with no RPC in flight</td>
+</tr>
+<tr>
+<td><code>CLIENT_GRPC_OPTIONS_MAX_RECEIVE_MESSAGE_LENGTH</code></td>
+<td>int</td>
+<td>104857600</td>
+<td>Channel opts</td>
+<td>Max response size in bytes</td>
+</tr>
+<tr>
+<td><code>CLIENT_GRPC_OPTIONS_MAX_SEND_MESSAGE_LENGTH</code></td>
+<td>int</td>
+<td>104857600</td>
+<td>Channel opts</td>
+<td>Max request size in bytes</td>
+</tr>
+<tr>
+<td><code>CLIENT_GRPC_OPTIONS_ENABLE_RETRIES</code></td>
+<td>bool</td>
+<td>false</td>
+<td>Channel opts</td>
+<td>gRPC-native retry layer</td>
+</tr>
+<tr>
+<td><code>CLIENT_CHANNEL_HOST</code></td>
+<td>str</td>
+<td>localhost</td>
+<td>Client channel</td>
+<td>Host the client dials</td>
+</tr>
+<tr>
+<td><code>CLIENT_CHANNEL_PORT</code></td>
+<td>int</td>
+<td>50051</td>
+<td>Client channel</td>
+<td>Port the client dials</td>
+</tr>
+<tr>
+<td><code>CLIENT_CHANNEL_COMMUNICATION_MODE</code></td>
+<td>str</td>
+<td>async</td>
+<td>Client channel</td>
+<td><code>sync</code> or <code>async</code></td>
+</tr>
+<tr>
+<td><code>CLIENT_CHANNEL_SECURITY</code></td>
+<td>str</td>
+<td>insecure</td>
+<td>Client channel</td>
+<td><code>secure</code> or <code>insecure</code></td>
+</tr>
+<tr>
+<td><code>CLIENT_CHANNEL_MTLS</code></td>
+<td>bool</td>
+<td>false</td>
+<td>Client channel</td>
+<td>Enable mutual TLS</td>
+</tr>
+<tr>
+<td><code>CLIENT_GRPC_COMPRESSION</code></td>
+<td>str</td>
+<td>gzip</td>
+<td>Client channel</td>
+<td><code>none</code>, <code>gzip</code> or <code>deflate</code></td>
+</tr>
+<tr>
+<td><code>CLIENT_CIRCUIT_BREAKER_FAIL_MAX</code></td>
+<td>int</td>
+<td>5</td>
+<td>Circuit breaker</td>
+<td>Failures before the circuit opens</td>
+</tr>
+<tr>
+<td><code>CLIENT_CIRCUIT_BREAKER_RESET_TIMEOUT</code></td>
+<td>float</td>
+<td>30s</td>
+<td>Circuit breaker</td>
+<td>Open duration before a half-open probe</td>
+</tr>
+<tr>
+<td><code>DIGITALKIN_MODULE_SERVICER_SETUP_CACHE_MAX</code></td>
 <td>int</td>
 <td>100</td>
 <td>Module</td>
@@ -2975,14 +3180,14 @@ DIGITALKIN_TIMEZONE=Europe/Paris
 <td>Override module identity at runtime</td>
 </tr>
 <tr>
-<td><code>DIGITALKIN_CHAT_HISTORY_FLUSH_THRESHOLD</code></td>
+<td><code>DIGITALKIN_MODULE_FILE_HISTORY_FLUSH_THRESHOLD</code></td>
 <td>int</td>
 <td>10</td>
 <td>Module</td>
 <td>Messages buffered before storage write</td>
 </tr>
 <tr>
-<td><code>DIGITALKIN_TIMEZONE</code></td>
+<td><code>DIGITALKIN_MODULE_TIMEZONE</code></td>
 <td>str</td>
 <td>Europe/Paris</td>
 <td>Module</td>
@@ -2994,20 +3199,6 @@ DIGITALKIN_TIMEZONE=Europe/Paris
 <td>/app/logs</td>
 <td>Module</td>
 <td>Rotating JSON log file directory</td>
-</tr>
-<tr>
-<td><code>DIGITALKIN_ASYNCIO_INSPECTOR</code></td>
-<td>bool</td>
-<td>false</td>
-<td>Debug</td>
-<td>Enable asyncio event loop monitoring</td>
-</tr>
-<tr>
-<td><code>DIGITALKIN_ASYNCIO_INSPECTOR_PORT</code></td>
-<td>int</td>
-<td>8765</td>
-<td>Debug</td>
-<td>Asyncio inspector port</td>
 </tr>
 <tr>
 <td><code>DIGITALKIN_PROFILER</code></td>
@@ -3154,7 +3345,7 @@ DIGITALKIN_TIMEZONE=Europe/Paris
       <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["announce.dismiss", "content.action.edit", "content.action.view", "content.code.annotate", "content.code.copy", "content.tooltips", "navigation.footer", "navigation.instant.preview", "navigation.path", "navigation.sections", "navigation.tabs", "navigation.tabs.sticky", "navigation.top", "search.highlight", "search.suggest", "toc.follow"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "stable", "provider": "mike"}}</script>
     
     
-      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
       
         <script src="../assets/_markdown_exec_pyodide.js"></script>
       

@@ -23,7 +23,7 @@
       
       
       <link rel="icon" href="../assets/logo.png">
-      <meta name="generator" content="mkdocs-ProperDocs 1.6.7, mkdocs-material-9.7.6">
+      <meta name="generator" content="mkdocs-ProperDocs 1.6.7, mkdocs-material-9.7.7">
     
     
       
@@ -31,7 +31,7 @@
       
     
     
-      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
       
         
         <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
@@ -399,6 +399,25 @@
     
   
   Sdk redis platform talk nontech
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../sdk_v1_presentation/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Sdk v1 presentation
 
       </a>
     </li>
@@ -949,6 +968,33 @@
   
   
     <li class="md-nav__item">
+      <a href="../sdk_v1_presentation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Sdk v1 presentation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../security_hardening_plan/" class="md-nav__link">
         
   
@@ -1043,7 +1089,7 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_13" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_14" >
         
           
           <div class="md-nav__link md-nav__container">
@@ -1065,14 +1111,14 @@
             </a>
             
               
-              <label class="md-nav__link " for="__nav_13" id="__nav_13_label" tabindex="0">
+              <label class="md-nav__link " for="__nav_14" id="__nav_14_label" tabindex="0">
                 <span class="md-nav__icon md-icon"></span>
               </label>
             
           </div>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_13_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_13">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_14_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_14">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -1137,7 +1183,7 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_14" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_15" >
         
           
           <div class="md-nav__link md-nav__container">
@@ -1159,14 +1205,14 @@
             </a>
             
               
-              <label class="md-nav__link " for="__nav_14" id="__nav_14_label" tabindex="0">
+              <label class="md-nav__link " for="__nav_15" id="__nav_15_label" tabindex="0">
                 <span class="md-nav__icon md-icon"></span>
               </label>
             
           </div>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_14_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_14">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_15_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_15">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -1287,7 +1333,7 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_15" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_16" >
         
           
           <div class="md-nav__link md-nav__container">
@@ -1309,14 +1355,14 @@
             </a>
             
               
-              <label class="md-nav__link " for="__nav_15" id="__nav_15_label" tabindex="0">
+              <label class="md-nav__link " for="__nav_16" id="__nav_16_label" tabindex="0">
                 <span class="md-nav__icon md-icon"></span>
               </label>
             
           </div>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_15_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_15">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_16_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_16">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -1550,6 +1596,34 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../changelog/1.0.4/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    1.0.3 → 1.0.4 — One canonical file format
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -1725,42 +1799,42 @@
 
 
 <span class="k">class</span><span class="w"> </span><span class="nc">MessageInput</span><span class="p">(</span><span class="n">DataTrigger</span><span class="p">):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Input trigger for message processing.&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""Input trigger for message processing."""</span>
 
-    <span class="n">protocol</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;message&quot;</span>
-    <span class="n">content</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default</span><span class="o">=</span><span class="s2">&quot;&quot;</span><span class="p">,</span> <span class="n">description</span><span class="o">=</span><span class="s2">&quot;The user message.&quot;</span><span class="p">)</span>
+    <span class="n">protocol</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">"message"</span>
+    <span class="n">content</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default</span><span class="o">=</span><span class="s2">""</span><span class="p">,</span> <span class="n">description</span><span class="o">=</span><span class="s2">"The user message."</span><span class="p">)</span>
 
 
 <span class="k">class</span><span class="w"> </span><span class="nc">ModuleInput</span><span class="p">(</span><span class="n">DataModel</span><span class="p">[</span><span class="n">MessageInput</span><span class="p">]):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Module input wrapping the message trigger.&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""Module input wrapping the message trigger."""</span>
 
     <span class="n">root</span><span class="p">:</span> <span class="n">MessageInput</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="n">MessageInput</span><span class="p">)</span>
 
 
 <span class="k">class</span><span class="w"> </span><span class="nc">MessageOutput</span><span class="p">(</span><span class="n">DataTrigger</span><span class="p">):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Output trigger for message responses.&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""Output trigger for message responses."""</span>
 
-    <span class="n">protocol</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;message&quot;</span>
-    <span class="n">content</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default</span><span class="o">=</span><span class="s2">&quot;&quot;</span><span class="p">,</span> <span class="n">description</span><span class="o">=</span><span class="s2">&quot;The response content.&quot;</span><span class="p">)</span>
+    <span class="n">protocol</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">"message"</span>
+    <span class="n">content</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default</span><span class="o">=</span><span class="s2">""</span><span class="p">,</span> <span class="n">description</span><span class="o">=</span><span class="s2">"The response content."</span><span class="p">)</span>
 
 
 <span class="k">class</span><span class="w"> </span><span class="nc">ModuleOutput</span><span class="p">(</span><span class="n">DataModel</span><span class="p">[</span><span class="n">MessageOutput</span><span class="p">]):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Module output wrapping the message trigger.&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""Module output wrapping the message trigger."""</span>
 
     <span class="n">root</span><span class="p">:</span> <span class="n">MessageOutput</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="n">MessageOutput</span><span class="p">)</span>
 
 
 <span class="k">class</span><span class="w"> </span><span class="nc">ModuleSetup</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Module configuration.&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""Module configuration."""</span>
 
     <span class="n">greeting_prefix</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span>
-        <span class="n">default</span><span class="o">=</span><span class="s2">&quot;Hello&quot;</span><span class="p">,</span>
-        <span class="n">description</span><span class="o">=</span><span class="s2">&quot;Prefix for the greeting response.&quot;</span><span class="p">,</span>
+        <span class="n">default</span><span class="o">=</span><span class="s2">"Hello"</span><span class="p">,</span>
+        <span class="n">description</span><span class="o">=</span><span class="s2">"Prefix for the greeting response."</span><span class="p">,</span>
     <span class="p">)</span>
 
 
 <span class="k">class</span><span class="w"> </span><span class="nc">ModuleSecret</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Module secrets (empty for this example).&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""Module secrets (empty for this example)."""</span>
 </code></pre></div>
 <h3 id="2-create-a-trigger-handler">2. Create a Trigger Handler<a class="headerlink" href="#2-create-a-trigger-handler" title="Permanent link">¤</a></h3>
 <div class="language-python highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">digitalkin.modules.trigger_handler</span><span class="w"> </span><span class="kn">import</span> <span class="n">TriggerHandler</span>
@@ -1768,10 +1842,10 @@
 
 
 <span class="k">class</span><span class="w"> </span><span class="nc">MessageHandler</span><span class="p">(</span><span class="n">TriggerHandler</span><span class="p">[</span><span class="n">ModuleInput</span><span class="p">,</span> <span class="n">ModuleSetup</span><span class="p">,</span> <span class="n">ModuleOutput</span><span class="p">]):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Handles incoming message triggers.&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""Handles incoming message triggers."""</span>
 
-    <span class="n">protocol</span> <span class="o">=</span> <span class="s2">&quot;message&quot;</span>
-    <span class="n">description</span> <span class="o">=</span> <span class="s2">&quot;Processes text messages and returns a greeting.&quot;</span>
+    <span class="n">protocol</span> <span class="o">=</span> <span class="s2">"message"</span>
+    <span class="n">description</span> <span class="o">=</span> <span class="s2">"Processes text messages and returns a greeting."</span>
     <span class="n">input_format</span> <span class="o">=</span> <span class="n">ModuleInput</span>
     <span class="n">output_format</span> <span class="o">=</span> <span class="n">ModuleOutput</span>
 
@@ -1781,10 +1855,10 @@
         <span class="n">setup_data</span><span class="p">:</span> <span class="n">ModuleSetup</span><span class="p">,</span>
         <span class="n">context</span><span class="p">:</span> <span class="n">ModuleContext</span><span class="p">,</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Process the input message and stream a response.&quot;&quot;&quot;</span>
+<span class="w">        </span><span class="sd">"""Process the input message and stream a response."""</span>
         <span class="n">user_message</span> <span class="o">=</span> <span class="n">input_data</span><span class="o">.</span><span class="n">root</span><span class="o">.</span><span class="n">content</span>
         <span class="n">response</span> <span class="o">=</span> <span class="n">MessageOutput</span><span class="p">(</span>
-            <span class="n">content</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">setup_data</span><span class="o">.</span><span class="n">greeting_prefix</span><span class="si">}</span><span class="s2">, you said: </span><span class="si">{</span><span class="n">user_message</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
+            <span class="n">content</span><span class="o">=</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">setup_data</span><span class="o">.</span><span class="n">greeting_prefix</span><span class="si">}</span><span class="s2">, you said: </span><span class="si">{</span><span class="n">user_message</span><span class="si">}</span><span class="s2">"</span><span class="p">,</span>
         <span class="p">)</span>
         <span class="k">await</span> <span class="bp">self</span><span class="o">.</span><span class="n">send_message</span><span class="p">(</span><span class="n">ModuleOutput</span><span class="p">(</span><span class="n">root</span><span class="o">=</span><span class="n">response</span><span class="p">))</span>
 </code></pre></div>
@@ -1797,10 +1871,10 @@
 <span class="k">class</span><span class="w"> </span><span class="nc">GreetingModule</span><span class="p">(</span>
     <span class="n">BaseModule</span><span class="p">[</span><span class="n">ModuleInput</span><span class="p">,</span> <span class="n">ModuleOutput</span><span class="p">,</span> <span class="n">ModuleSetup</span><span class="p">,</span> <span class="n">ModuleSecret</span><span class="p">]</span>
 <span class="p">):</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;A simple greeting module.&quot;&quot;&quot;</span>
+<span class="w">    </span><span class="sd">"""A simple greeting module."""</span>
 
-    <span class="n">name</span> <span class="o">=</span> <span class="s2">&quot;GreetingModule&quot;</span>
-    <span class="n">description</span> <span class="o">=</span> <span class="s2">&quot;Echoes back a greeting with a configurable prefix.&quot;</span>
+    <span class="n">name</span> <span class="o">=</span> <span class="s2">"GreetingModule"</span>
+    <span class="n">description</span> <span class="o">=</span> <span class="s2">"Echoes back a greeting with a configurable prefix."</span>
 
     <span class="n">input_format</span> <span class="o">=</span> <span class="n">ModuleInput</span>
     <span class="n">output_format</span> <span class="o">=</span> <span class="n">ModuleOutput</span>
@@ -1808,16 +1882,16 @@
     <span class="n">secret_format</span> <span class="o">=</span> <span class="n">ModuleSecret</span>
 
     <span class="n">metadata</span><span class="p">:</span> <span class="n">ClassVar</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]]</span> <span class="o">=</span> <span class="p">{</span>
-        <span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;GreetingModule&quot;</span><span class="p">,</span>
-        <span class="s2">&quot;version&quot;</span><span class="p">:</span> <span class="s2">&quot;1.0.0&quot;</span><span class="p">,</span>
-        <span class="s2">&quot;tags&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;example&quot;</span><span class="p">,</span> <span class="s2">&quot;greeting&quot;</span><span class="p">],</span>
+        <span class="s2">"name"</span><span class="p">:</span> <span class="s2">"GreetingModule"</span><span class="p">,</span>
+        <span class="s2">"version"</span><span class="p">:</span> <span class="s2">"1.0.0"</span><span class="p">,</span>
+        <span class="s2">"tags"</span><span class="p">:</span> <span class="p">[</span><span class="s2">"example"</span><span class="p">,</span> <span class="s2">"greeting"</span><span class="p">],</span>
     <span class="p">}</span>
 
     <span class="n">services_config_strategies</span><span class="p">:</span> <span class="n">ClassVar</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">ServicesStrategy</span> <span class="o">|</span> <span class="kc">None</span><span class="p">]]</span> <span class="o">=</span> <span class="p">{}</span>
     <span class="n">services_config_params</span><span class="p">:</span> <span class="n">ClassVar</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span> <span class="o">|</span> <span class="kc">None</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span><span class="p">]]</span> <span class="o">=</span> <span class="p">{}</span>
 
     <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">cleanup</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;Clean up resources.&quot;&quot;&quot;</span>
+<span class="w">        </span><span class="sd">"""Clean up resources."""</span>
 </code></pre></div>
 <h3 id="4-start-the-grpc-server">4. Start the gRPC Server<a class="headerlink" href="#4-start-the-grpc-server" title="Permanent link">¤</a></h3>
 <div class="language-python highlight"><pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn">asyncio</span>
@@ -1831,13 +1905,13 @@
 
 <span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="n">server_config</span> <span class="o">=</span> <span class="n">ModuleServerConfig</span><span class="p">(</span>
-        <span class="n">host</span><span class="o">=</span><span class="s2">&quot;[::]&quot;</span><span class="p">,</span>
+        <span class="n">host</span><span class="o">=</span><span class="s2">"[::]"</span><span class="p">,</span>
         <span class="n">port</span><span class="o">=</span><span class="mi">50055</span><span class="p">,</span>
         <span class="n">mode</span><span class="o">=</span><span class="n">ServerMode</span><span class="o">.</span><span class="n">ASYNC</span><span class="p">,</span>
         <span class="n">security</span><span class="o">=</span><span class="n">SecurityMode</span><span class="o">.</span><span class="n">INSECURE</span><span class="p">,</span>
         <span class="n">max_workers</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span>
         <span class="n">credentials</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
-        <span class="n">registry_address</span><span class="o">=</span><span class="s2">&quot;[::]:50052&quot;</span><span class="p">,</span>
+        <span class="n">registry_address</span><span class="o">=</span><span class="s2">"[::]:50052"</span><span class="p">,</span>
     <span class="p">)</span>
 
     <span class="n">module_server</span> <span class="o">=</span> <span class="n">ModuleServer</span><span class="p">(</span>
@@ -1848,7 +1922,7 @@
     <span class="k">await</span> <span class="n">module_server</span><span class="o">.</span><span class="n">await_termination</span><span class="p">()</span>
 
 
-<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">"__main__"</span><span class="p">:</span>
     <span class="n">asyncio</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">main</span><span class="p">())</span>
 </code></pre></div>
 <h2 id="next-steps">Next Steps<a class="headerlink" href="#next-steps" title="Permanent link">¤</a></h2>
@@ -1987,7 +2061,7 @@
       <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["announce.dismiss", "content.action.edit", "content.action.view", "content.code.annotate", "content.code.copy", "content.tooltips", "navigation.footer", "navigation.instant.preview", "navigation.path", "navigation.sections", "navigation.tabs", "navigation.tabs.sticky", "navigation.top", "search.highlight", "search.suggest", "toc.follow"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "stable", "provider": "mike"}}</script>
     
     
-      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
       
         <script src="../assets/_markdown_exec_pyodide.js"></script>
       

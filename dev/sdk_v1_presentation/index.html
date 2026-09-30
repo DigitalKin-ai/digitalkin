@@ -10,31 +10,31 @@
       
       
       
-        <link rel="canonical" href="https://digitalkin.com/dev/changelog/0.4.2/">
+        <link rel="canonical" href="https://digitalkin.com/dev/sdk_v1_presentation/">
       
       
-        <link rel="prev" href="../0.4.1/">
+        <link rel="prev" href="../sdk_redis_platform_talk_nontech/">
       
       
-        <link rel="next" href="../0.4.3/">
+        <link rel="next" href="../security_hardening_plan/">
       
       
         
       
       
-      <link rel="icon" href="../../assets/logo.png">
+      <link rel="icon" href="../assets/logo.png">
       <meta name="generator" content="mkdocs-ProperDocs 1.6.7, mkdocs-material-9.7.7">
     
     
       
-        <title>0.4.1 → 0.4.2 — Front-end Tools & Custom AG-UI Events - DigitalKin</title>
+        <title>Sdk v1 presentation - DigitalKin</title>
       
     
     
-      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
       
         
-        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
       
       
 
@@ -53,11 +53,11 @@
       
     
     
-      <link rel="stylesheet" href="../../assets/_markdown_exec_pyodide.css">
+      <link rel="stylesheet" href="../assets/_markdown_exec_pyodide.css">
     
-      <link rel="stylesheet" href="../../assets/_mkdocstrings.css">
+      <link rel="stylesheet" href="../assets/_mkdocstrings.css">
     
-    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
 
@@ -82,7 +82,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#041-042-front-end-tools-custom-ag-ui-events" class="md-skip">
+        <a href="#digitalkin-sdk-v1" class="md-skip">
           Skip to content
         </a>
       
@@ -102,9 +102,9 @@
 
 <header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="Header">
-    <a href="../.." title="DigitalKin" class="md-header__button md-logo" aria-label="DigitalKin" data-md-component="logo">
+    <a href=".." title="DigitalKin" class="md-header__button md-logo" aria-label="DigitalKin" data-md-component="logo">
       
-  <img src="../../assets/logo.png" alt="logo">
+  <img src="../assets/logo.png" alt="logo">
 
     </a>
     <label class="md-header__button md-icon" for="__drawer">
@@ -121,7 +121,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              0.4.1 → 0.4.2 — Front-end Tools &amp; Custom AG-UI Events
+              Sdk v1 presentation
             
           </span>
         </div>
@@ -238,7 +238,7 @@
   
   
     <li class="md-tabs__item">
-      <a href="../.." class="md-tabs__link">
+      <a href=".." class="md-tabs__link">
         
   
   
@@ -257,7 +257,7 @@
   
   
     <li class="md-tabs__item">
-      <a href="../../architecture_presentation/" class="md-tabs__link">
+      <a href="../architecture_presentation/" class="md-tabs__link">
         
   
   
@@ -276,7 +276,7 @@
   
   
     <li class="md-tabs__item">
-      <a href="../../gateway_protocol/" class="md-tabs__link">
+      <a href="../gateway_protocol/" class="md-tabs__link">
         
   
   
@@ -295,7 +295,7 @@
   
   
     <li class="md-tabs__item">
-      <a href="../../getting_started/" class="md-tabs__link">
+      <a href="../getting_started/" class="md-tabs__link">
         
   
   
@@ -314,7 +314,7 @@
   
   
     <li class="md-tabs__item">
-      <a href="../../grpc-tuning/" class="md-tabs__link">
+      <a href="../grpc-tuning/" class="md-tabs__link">
         
   
   
@@ -333,7 +333,7 @@
   
   
     <li class="md-tabs__item">
-      <a href="../../guides/" class="md-tabs__link">
+      <a href="../guides/" class="md-tabs__link">
         
   
   
@@ -352,7 +352,7 @@
   
   
     <li class="md-tabs__item">
-      <a href="../../next_steps/" class="md-tabs__link">
+      <a href="../next_steps/" class="md-tabs__link">
         
   
   
@@ -371,7 +371,7 @@
   
   
     <li class="md-tabs__item">
-      <a href="../../sdk_redis_platform_talk/" class="md-tabs__link">
+      <a href="../sdk_redis_platform_talk/" class="md-tabs__link">
         
   
   
@@ -390,7 +390,7 @@
   
   
     <li class="md-tabs__item">
-      <a href="../../sdk_redis_platform_talk_nontech/" class="md-tabs__link">
+      <a href="../sdk_redis_platform_talk_nontech/" class="md-tabs__link">
         
   
   
@@ -407,9 +407,11 @@
   
   
   
+    
   
-    <li class="md-tabs__item">
-      <a href="../../sdk_v1_presentation/" class="md-tabs__link">
+  
+    <li class="md-tabs__item md-tabs__item--active">
+      <a href="./" class="md-tabs__link">
         
   
   
@@ -428,7 +430,7 @@
   
   
     <li class="md-tabs__item">
-      <a href="../../security_hardening_plan/" class="md-tabs__link">
+      <a href="../security_hardening_plan/" class="md-tabs__link">
         
   
   
@@ -447,7 +449,7 @@
   
   
     <li class="md-tabs__item">
-      <a href="../../session_report/" class="md-tabs__link">
+      <a href="../session_report/" class="md-tabs__link">
         
   
   
@@ -466,7 +468,7 @@
   
   
     <li class="md-tabs__item">
-      <a href="../../testing_strategy/" class="md-tabs__link">
+      <a href="../testing_strategy/" class="md-tabs__link">
         
   
   
@@ -485,7 +487,7 @@
   
   
     <li class="md-tabs__item">
-      <a href="../../api/api/" class="md-tabs__link">
+      <a href="../api/api/" class="md-tabs__link">
         
   
   
@@ -504,7 +506,7 @@
   
   
     <li class="md-tabs__item">
-      <a href="../../architecture/admission-queue/" class="md-tabs__link">
+      <a href="../architecture/admission-queue/" class="md-tabs__link">
         
   
   
@@ -521,11 +523,9 @@
   
   
   
-    
   
-  
-    <li class="md-tabs__item md-tabs__item--active">
-      <a href="../0.3.4_to_0.3.5.dev0/" class="md-tabs__link">
+    <li class="md-tabs__item">
+      <a href="../changelog/0.3.4_to_0.3.5.dev0/" class="md-tabs__link">
         
   
   
@@ -566,9 +566,9 @@
 
 <nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href="../.." title="DigitalKin" class="md-nav__button md-logo" aria-label="DigitalKin" data-md-component="logo">
+    <a href=".." title="DigitalKin" class="md-nav__button md-logo" aria-label="DigitalKin" data-md-component="logo">
       
-  <img src="../../assets/logo.png" alt="logo">
+  <img src="../assets/logo.png" alt="logo">
 
     </a>
     DigitalKin
@@ -595,7 +595,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../.." class="md-nav__link">
+      <a href=".." class="md-nav__link">
         
   
   
@@ -622,7 +622,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../architecture_presentation/" class="md-nav__link">
+      <a href="../architecture_presentation/" class="md-nav__link">
         
   
   
@@ -649,7 +649,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../gateway_protocol/" class="md-nav__link">
+      <a href="../gateway_protocol/" class="md-nav__link">
         
   
   
@@ -676,7 +676,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../getting_started/" class="md-nav__link">
+      <a href="../getting_started/" class="md-nav__link">
         
   
   
@@ -703,7 +703,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../grpc-tuning/" class="md-nav__link">
+      <a href="../grpc-tuning/" class="md-nav__link">
         
   
   
@@ -730,7 +730,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../guides/" class="md-nav__link">
+      <a href="../guides/" class="md-nav__link">
         
   
   
@@ -757,7 +757,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../next_steps/" class="md-nav__link">
+      <a href="../next_steps/" class="md-nav__link">
         
   
   
@@ -784,7 +784,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../sdk_redis_platform_talk/" class="md-nav__link">
+      <a href="../sdk_redis_platform_talk/" class="md-nav__link">
         
   
   
@@ -811,7 +811,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../sdk_redis_platform_talk_nontech/" class="md-nav__link">
+      <a href="../sdk_redis_platform_talk_nontech/" class="md-nav__link">
         
   
   
@@ -835,10 +835,37 @@
       
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../../sdk_v1_presentation/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Sdk v1 presentation
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -854,6 +881,213 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#une-plateforme-construite-par-soustraction" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Une plateforme construite par soustraction
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#la-these" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        La thèse
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#le-vocabulaire" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Le vocabulaire
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#larchitecture" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L'architecture
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cinq-changements-structurels" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cinq changements structurels
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#1-le-decouplage" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1 — Le découplage
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-la-durabilite" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2 — La durabilité
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-les-signaux" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3 — Les signaux
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-une-api-moins-de-systemes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4 — Une API, moins de systèmes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#ce-que-larchitecture-garantit" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ce que l'architecture garantit
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#la-mesure" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        La mesure
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#securite-le-modele" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sécurité — le modèle
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#securite-les-regles-par-ressource" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sécurité — les règles par ressource
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#securite-ce-que-le-sdk-prend-en-charge" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sécurité — ce que le SDK prend en charge
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#la-limite-actuelle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        La limite actuelle
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#proposition-la-validation-en-production" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Proposition : la validation en production
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#a-retenir" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        À retenir
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -865,7 +1099,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../security_hardening_plan/" class="md-nav__link">
+      <a href="../security_hardening_plan/" class="md-nav__link">
         
   
   
@@ -892,7 +1126,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../session_report/" class="md-nav__link">
+      <a href="../session_report/" class="md-nav__link">
         
   
   
@@ -919,7 +1153,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../testing_strategy/" class="md-nav__link">
+      <a href="../testing_strategy/" class="md-nav__link">
         
   
   
@@ -963,7 +1197,7 @@
         
           
           <div class="md-nav__link md-nav__container">
-            <a href="../../api/api/" class="md-nav__link ">
+            <a href="../api/api/" class="md-nav__link ">
               
   
   
@@ -1005,7 +1239,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../api/dynamic_schema/" class="md-nav__link">
+      <a href="../api/dynamic_schema/" class="md-nav__link">
         
   
   
@@ -1057,7 +1291,7 @@
         
           
           <div class="md-nav__link md-nav__container">
-            <a href="../../architecture/admission-queue/" class="md-nav__link ">
+            <a href="../architecture/admission-queue/" class="md-nav__link ">
               
   
   
@@ -1099,7 +1333,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../architecture/concurrency-model/" class="md-nav__link">
+      <a href="../architecture/concurrency-model/" class="md-nav__link">
         
   
   
@@ -1127,7 +1361,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../architecture/resilience/" class="md-nav__link">
+      <a href="../architecture/resilience/" class="md-nav__link">
         
   
   
@@ -1155,7 +1389,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../architecture/sdk-flow/" class="md-nav__link">
+      <a href="../architecture/sdk-flow/" class="md-nav__link">
         
   
   
@@ -1187,32 +1421,27 @@
       
   
   
-    
   
   
-  
     
     
     
     
-      
-        
-        
       
       
         
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_16" checked>
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_16" >
         
           
           <div class="md-nav__link md-nav__container">
-            <a href="../0.3.4_to_0.3.5.dev0/" class="md-nav__link ">
+            <a href="../changelog/0.3.4_to_0.3.5.dev0/" class="md-nav__link ">
               
   
   
@@ -1230,13 +1459,13 @@
             </a>
             
               
-              <label class="md-nav__link " for="__nav_16" id="__nav_16_label" tabindex="">
+              <label class="md-nav__link " for="__nav_16" id="__nav_16_label" tabindex="0">
                 <span class="md-nav__icon md-icon"></span>
               </label>
             
           </div>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_16_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_16_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_16">
             <span class="md-nav__icon md-icon"></span>
             
@@ -1254,7 +1483,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../0.3.5_to_0.4.0/" class="md-nav__link">
+      <a href="../changelog/0.3.5_to_0.4.0/" class="md-nav__link">
         
   
   
@@ -1282,7 +1511,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../0.4.1/" class="md-nav__link">
+      <a href="../changelog/0.4.1/" class="md-nav__link">
         
   
   
@@ -1307,37 +1536,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    0.4.1 → 0.4.2 — Front-end Tools &amp; Custom AG-UI Events
-  
-
-    
-  </span>
-  
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../changelog/0.4.2/" class="md-nav__link">
         
   
   
@@ -1353,98 +1555,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#summary" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Summary
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#what-changes" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        What changes
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="What changes">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#1-customevent-and-aguimixin-handler" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        1. CustomEvent and AgUiMixin handler
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#2-front-end-tools-community-agno-integration" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        2. Front-end tools — community Agno integration
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#3-ag-ui-streaming-fixes" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        3. AG-UI streaming fixes
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#migration" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Migration
-      
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -1457,7 +1567,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../0.4.3/" class="md-nav__link">
+      <a href="../changelog/0.4.3/" class="md-nav__link">
         
   
   
@@ -1485,7 +1595,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../0.4.4/" class="md-nav__link">
+      <a href="../changelog/0.4.4/" class="md-nav__link">
         
   
   
@@ -1513,7 +1623,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../1.0.2.dev6/" class="md-nav__link">
+      <a href="../changelog/1.0.2.dev6/" class="md-nav__link">
         
   
   
@@ -1541,7 +1651,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../1.0.2.dev7/" class="md-nav__link">
+      <a href="../changelog/1.0.2.dev7/" class="md-nav__link">
         
   
   
@@ -1569,7 +1679,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../1.0.2/" class="md-nav__link">
+      <a href="../changelog/1.0.2/" class="md-nav__link">
         
   
   
@@ -1597,7 +1707,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../1.0.4/" class="md-nav__link">
+      <a href="../changelog/1.0.4/" class="md-nav__link">
         
   
   
@@ -1652,10 +1762,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#summary" class="md-nav__link">
+  <a href="#une-plateforme-construite-par-soustraction" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Summary
+        Une plateforme construite par soustraction
       
     </span>
   </a>
@@ -1663,60 +1773,175 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#what-changes" class="md-nav__link">
+  <a href="#la-these" class="md-nav__link">
     <span class="md-ellipsis">
       
-        What changes
+        La thèse
       
     </span>
   </a>
-  
-    <nav class="md-nav" aria-label="What changes">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#1-customevent-and-aguimixin-handler" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        1. CustomEvent and AgUiMixin handler
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#2-front-end-tools-community-agno-integration" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        2. Front-end tools — community Agno integration
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#3-ag-ui-streaming-fixes" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        3. AG-UI streaming fixes
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#migration" class="md-nav__link">
+  <a href="#le-vocabulaire" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Migration
+        Le vocabulaire
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#larchitecture" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L'architecture
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cinq-changements-structurels" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cinq changements structurels
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#1-le-decouplage" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1 — Le découplage
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-la-durabilite" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2 — La durabilité
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-les-signaux" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3 — Les signaux
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-une-api-moins-de-systemes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4 — Une API, moins de systèmes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#ce-que-larchitecture-garantit" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ce que l'architecture garantit
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#la-mesure" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        La mesure
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#securite-le-modele" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sécurité — le modèle
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#securite-les-regles-par-ressource" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sécurité — les règles par ressource
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#securite-ce-que-le-sdk-prend-en-charge" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sécurité — ce que le SDK prend en charge
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#la-limite-actuelle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        La limite actuelle
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#proposition-la-validation-en-production" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Proposition : la validation en production
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#a-retenir" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        À retenir
       
     </span>
   </a>
@@ -1741,46 +1966,6 @@
   
 
 
-  <nav class="md-path" aria-label="Navigation" >
-    <ol class="md-path__list">
-      
-        
-  
-  
-    <li class="md-path__item">
-      <a href="../.." class="md-path__link">
-        
-  <span class="md-ellipsis">
-    DigitalKin Python SDK
-  </span>
-
-      </a>
-    </li>
-  
-
-      
-      
-        
-  
-  
-    
-    
-      <li class="md-path__item">
-        <a href="../0.3.5_to_0.4.0/" class="md-path__link">
-          
-  <span class="md-ellipsis">
-    Changelog
-  </span>
-
-        </a>
-      </li>
-    
-  
-
-      
-    </ol>
-  </nav>
-
               
               <article class="md-content__inner md-typeset">
                 
@@ -1788,7 +1973,7 @@
 
 
   
-    <a href="https://github.com/DigitalKin-ai/digitalkin/edit/main/docs/changelog/0.4.2.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+    <a href="https://github.com/DigitalKin-ai/digitalkin/edit/main/docs/sdk_v1_presentation.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
     </a>
@@ -1797,80 +1982,369 @@
     
       
     
-    <a href="https://github.com/DigitalKin-ai/digitalkin/raw/main/docs/changelog/0.4.2.md" title="View source of this page" class="md-content__button md-icon">
+    <a href="https://github.com/DigitalKin-ai/digitalkin/raw/main/docs/sdk_v1_presentation.md" title="View source of this page" class="md-content__button md-icon">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M17 18c.56 0 1 .44 1 1s-.44 1-1 1-1-.44-1-1 .44-1 1-1m0-3c-2.73 0-5.06 1.66-6 4 .94 2.34 3.27 4 6 4s5.06-1.66 6-4c-.94-2.34-3.27-4-6-4m0 6.5a2.5 2.5 0 0 1-2.5-2.5 2.5 2.5 0 0 1 2.5-2.5 2.5 2.5 0 0 1 2.5 2.5 2.5 2.5 0 0 1-2.5 2.5M9.27 20H6V4h7v5h5v4.07c.7.08 1.36.25 2 .49V8l-6-6H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h4.5a8.2 8.2 0 0 1-1.23-2"/></svg>
     </a>
   
 
 
-<h1 id="041-042-front-end-tools-custom-ag-ui-events">0.4.1 → 0.4.2 — Front-end Tools &amp; Custom AG-UI Events<a class="headerlink" href="#041-042-front-end-tools-custom-ag-ui-events" title="Permanent link">¤</a></h1>
-<h2 id="summary">Summary<a class="headerlink" href="#summary" title="Permanent link">¤</a></h2>
-<p>Two additive features for Agno modules using the AG-UI stream:</p>
-<ul>
-<li><strong>Front-end tools</strong> — first-class integration of Agno's community tool helpers,
-  with the <code>tools=</code> factory now able to accept an optional <code>RunContext</code> so per-run
-  state can flow into tool construction without mutating the <code>Agent</code> instance.</li>
-<li><strong>Custom AG-UI events</strong> — a new <code>CustomEvent</code> type and the matching handler in
-  <code>AgUiMixin</code>, so modules can emit arbitrary client-facing events alongside the
-  built-in lifecycle ones.</li>
-</ul>
-<p>A handful of AG-UI streaming fixes ship in the same release (tool-call dedup,
-HITL flow, reasoning update).</p>
-<p>No breaking changes; everything is opt-in.</p>
-<h2 id="what-changes">What changes<a class="headerlink" href="#what-changes" title="Permanent link">¤</a></h2>
-<h3 id="1-customevent-and-aguimixin-handler">1. <code>CustomEvent</code> and <code>AgUiMixin</code> handler<a class="headerlink" href="#1-customevent-and-aguimixin-handler" title="Permanent link">¤</a></h3>
-<p>Modules that need to push protocol-level signals to the front (beyond the
-generic <code>TEXT_MESSAGE_*</code>, <code>TOOL_CALL_*</code>, <code>RUN_*</code> events) can now emit a
-<code>CustomEvent</code>:</p>
-<div class="language-python highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">digitalkin.models.events</span><span class="w"> </span><span class="kn">import</span> <span class="n">CustomEvent</span>
+<!--
+SDK v1 — présentation équipe non technique. ~15 min, 17 diapos.
+Sources : docs/sdk_redis_platform_talk.md (technique, vérifié) +
+~/Downloads/ajout-securite.slides.md (sécurité node-services-provider) +
+src/digitalkin/grpc_servers/interceptors/request_ids.py (permissions SDK).
+Ton : sobre, affirmatif, sans familiarité. Aucune invention.
+-->
 
-<span class="k">await</span> <span class="n">context</span><span class="o">.</span><span class="n">callbacks</span><span class="o">.</span><span class="n">send_message</span><span class="p">(</span>
-    <span class="n">CustomEvent</span><span class="p">(</span><span class="n">name</span><span class="o">=</span><span class="s2">"my_signal"</span><span class="p">,</span> <span class="n">value</span><span class="o">=</span><span class="p">{</span><span class="s2">"foo"</span><span class="p">:</span> <span class="s2">"bar"</span><span class="p">})</span>
-<span class="p">)</span>
+<h1 id="digitalkin-sdk-v1">DigitalKin SDK v1<a class="headerlink" href="#digitalkin-sdk-v1" title="Permanent link">¤</a></h1>
+<h2 id="une-plateforme-construite-par-soustraction">Une plateforme construite par soustraction<a class="headerlink" href="#une-plateforme-construite-par-soustraction" title="Permanent link">¤</a></h2>
+<p><br></p>
+<p>Architecture · Comparaison · Mesures · Sécurité · Validation</p>
+<!-- ~30s -->
+
+<hr />
+<h2 id="la-these">La thèse<a class="headerlink" href="#la-these" title="Permanent link">¤</a></h2>
+<p>La v0.4.5 était une librairie : chaque agent était appelé directement.
+La v1 est une plateforme : un point d'entrée unique — la <strong>Gateway</strong> — et une base
+de données live — <strong>Redis</strong> — entre les clients et les agents.</p>
+<p>Ce résultat n'a pas été obtenu en ajoutant des systèmes, mais en en supprimant.</p>
+<blockquote>
+<p>La simplicité n'est pas un point de départ. C'est un résultat.</p>
+</blockquote>
+<p><strong>La v1 n'est pas compatible avec la v0.4.5.</strong> L'API a entièrement changé :
+tout client existant doit migrer. Il n'existe pas de mode de transition.</p>
+<!-- ~1 min. Thèse + rupture, posées d'entrée. -->
+
+<hr />
+<h2 id="le-vocabulaire">Le vocabulaire<a class="headerlink" href="#le-vocabulaire" title="Permanent link">¤</a></h2>
+<table>
+<thead>
+<tr>
+<th>Composant</th>
+<th>Rôle</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Python / SDK</strong></td>
+<td>Le langage et le kit avec lesquels chaque agent est construit.</td>
+</tr>
+<tr>
+<td><strong>gRPC</strong></td>
+<td>Le protocole d'appel entre applications : rapide, typé, avec <strong>streaming</strong> — les résultats sont transmis au fil de leur production.</td>
+</tr>
+<tr>
+<td><strong>Protobuf</strong></td>
+<td>Le format des messages : binaire, compact, régi par un contrat partagé entre les deux parties.</td>
+</tr>
+<tr>
+<td><strong>Redis</strong></td>
+<td>Base de données en mémoire : le journal des résultats, l'état des tâches, les signaux.</td>
+</tr>
+<tr>
+<td><strong>Gateway</strong></td>
+<td>Notre composant : le point d'entrée unique. Elle oriente, elle ne stocke rien.</td>
+</tr>
+<tr>
+<td><strong>Docker</strong></td>
+<td>L'unité de déploiement standard, identique en local et sur serveur.</td>
+</tr>
+</tbody>
+</table>
+<!-- ~1.5 min -->
+
+<hr />
+<h2 id="larchitecture">L'architecture<a class="headerlink" href="#larchitecture" title="Permanent link">¤</a></h2>
+<div class="language-text highlight"><pre><span></span><code> Client ──────► Gateway ──────► Redis ──────► Agent (module)
+    ▲                             │
+    └──── résultats, en direct ◄──┘
 </code></pre></div>
-<p><code>AgUiMixin</code> ships with the corresponding handler that translates the event into
-an AG-UI <code>CUSTOM</code> frame on the client stream. Existing modules see no change —
-the handler is only invoked when a <code>CustomEvent</code> is produced.</p>
-<h3 id="2-front-end-tools-community-agno-integration">2. Front-end tools — community Agno integration<a class="headerlink" href="#2-front-end-tools-community-agno-integration" title="Permanent link">¤</a></h3>
-<p>Agno's community function helpers (the ones that wrap user-declared tool
-definitions into <code>Function</code> objects) are now integrated into the SDK's tools
-factory. Two practical consequences:</p>
 <ul>
-<li>The factory accepts an optional <code>run_context</code> argument. If provided, it is
-  threaded through tool construction, so tools that need per-run state
-  (storage handles, cost trackers, the AG-UI input itself) can be built
-  inline instead of through <code>dependencies</code>-based indirection.</li>
-<li>The factory no longer assumes the <code>Agent</code> instance is the only source of
-  truth for tools; combined with <code>cache_callables=False</code>, this makes it
-  straightforward to wire dynamic frontend-tool catalogues.</li>
+<li>Le client s'adresse à la Gateway, jamais à un agent.</li>
+<li>Tout ce qui doit survivre — résultats, état, signaux — réside dans Redis.</li>
+<li>Les agents sont invisibles les uns pour les autres.</li>
 </ul>
-<h3 id="3-ag-ui-streaming-fixes">3. AG-UI streaming fixes<a class="headerlink" href="#3-ag-ui-streaming-fixes" title="Permanent link">¤</a></h3>
+<blockquote>
+<p><span class="term">Terme exact :</span> le flux de résultats est un <strong>Redis Stream</strong> —
+un journal ordonné, qui survit aux crashs et se relit depuis n'importe quel point.</p>
+</blockquote>
+<!-- ~1 min -->
+
+<hr />
+<h2 id="cinq-changements-structurels">Cinq changements structurels<a class="headerlink" href="#cinq-changements-structurels" title="Permanent link">¤</a></h2>
+<table>
+<thead>
+<tr>
+<th></th>
+<th><span class="avant">v0.4.5</span></th>
+<th><span class="apres">v1</span></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Communication</strong></td>
+<td>appel direct à l'agent</td>
+<td>tout transite par Gateway + Redis</td>
+</tr>
+<tr>
+<td><strong>Mémoire</strong></td>
+<td>aucune — un crash efface le travail</td>
+<td>journal durable, flux rejouable</td>
+</tr>
+<tr>
+<td><strong>Arrêt</strong></td>
+<td>fonctionnel mais grégaire</td>
+<td>ciblé par tâche, ~2 ms</td>
+</tr>
+<tr>
+<td><strong>API</strong></td>
+<td>une par agent</td>
+<td>une seule, trois actions</td>
+</tr>
+<tr>
+<td><strong>Dépendances</strong></td>
+<td>quatre systèmes lourds</td>
+<td>Redis, seul</td>
+</tr>
+</tbody>
+</table>
+<!-- ~1 min. Chaque ligne est reprise dans les diapos suivantes. -->
+
+<hr />
+<h2 id="1-le-decouplage">1 — Le découplage<a class="headerlink" href="#1-le-decouplage" title="Permanent link">¤</a></h2>
+<p><span class="avant">v0.4.5 :</span> le client appelait l'agent en direct. Agent
+indisponible, connexion interrompue : la requête était perdue.</p>
+<p><span class="apres">v1 :</span> la Gateway écrit la demande dans Redis ; l'agent la
+prend quand il est prêt ; le client lit les résultats quand il le décide.</p>
+<blockquote>
+<p>Deux systèmes qui ne s'attendent pas ne peuvent pas se bloquer mutuellement.</p>
+</blockquote>
+<p><span class="term">Terme exact :</span> <strong>découplage producteur/consommateur</strong>. Il fonde
+l'isolation des agents et la <strong>scalabilité horizontale</strong> — toute Gateway peut servir
+tout client.</p>
+<!-- ~1 min -->
+
+<hr />
+<h2 id="2-la-durabilite">2 — La durabilité<a class="headerlink" href="#2-la-durabilite" title="Permanent link">¤</a></h2>
+<p><span class="avant">v0.4.5 :</span> les résultats partaient directement vers le client.
+Une déconnexion au mauvais moment imposait de tout recommencer.</p>
+<p><span class="apres">v1 :</span> chaque fragment de réponse est écrit dans Redis avant
+d'être lu. Le client peut se déconnecter, puis reprendre le flux où il l'avait laissé.</p>
+<blockquote>
+<p>Ce qui est écrit avant d'être lu ne peut pas être perdu.</p>
+</blockquote>
+<p><span class="term">Terme exact :</span> <strong>resume via <code>from_seq</code></strong> — chaque message est
+numéroté ; le client redemande à partir du n° X. Un numéro manquant est une perte
+<strong>détectée</strong>, jamais silencieuse.</p>
+<!-- ~1 min -->
+
+<hr />
+<h2 id="3-les-signaux">3 — Les signaux<a class="headerlink" href="#3-les-signaux" title="Permanent link">¤</a></h2>
+<p><span class="avant">v0.4.5 :</span> l'arrêt fonctionnait, mais il était grégaire — il ne
+visait pas une tâche précise.</p>
+<p><span class="apres">v1 :</span> l'annulation désigne une tâche, atteint l'agent quelle
+que soit la machine où il s'exécute, en 1 à 2 ms, sur un canal distinct du flux de
+données. Les ordres urgents sont prioritaires.</p>
+<p><span class="term">Terme exact :</span> <strong>pub/sub Redis</strong>, hors du chemin des données —
+le contrôle et les résultats ne se disputent jamais la même voie.</p>
+<!-- ~45s -->
+
+<hr />
+<h2 id="4-une-api-moins-de-systemes">4 — Une API, moins de systèmes<a class="headerlink" href="#4-une-api-moins-de-systemes" title="Permanent link">¤</a></h2>
+<p><span class="avant">v0.4.5 :</span> chaque agent exposait sa propre API — logique métier
+et transport indissociables. La montée en charge exigeait Taskiq, RabbitMQ, SurrealDB
+et un saut réseau interne.</p>
+<p><span class="apres">v1 :</span> la Gateway expose la seule API — trois actions :
+<em>démarrer une tâche, suivre son flux, envoyer un signal</em>. L'agent ne contient que du
+métier. Les quatre systèmes annexes ont été supprimés.</p>
+<blockquote>
+<p>Chaque système supprimé est une panne qui ne se produira pas.</p>
+</blockquote>
+<p><span class="term">Terme exact :</span> <strong>separation of concerns</strong> — le transport évolue
+sans toucher aux agents, et réciproquement.</p>
+<!-- ~1 min -->
+
+<hr />
+<h2 id="ce-que-larchitecture-garantit">Ce que l'architecture garantit<a class="headerlink" href="#ce-que-larchitecture-garantit" title="Permanent link">¤</a></h2>
+<table>
+<thead>
+<tr>
+<th>Garantie</th>
+<th>Mécanisme</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Aucune perte de travail</td>
+<td>journal écrit avant lecture</td>
+</tr>
+<tr>
+<td>Reprise en cours de tâche</td>
+<td>rejeu depuis un numéro de message</td>
+</tr>
+<tr>
+<td>Annulation fiable et ciblée</td>
+<td>signaux inter-machines, ~2 ms</td>
+</tr>
+<tr>
+<td>Agents isolés</td>
+<td>communication exclusivement via la plateforme</td>
+</tr>
+<tr>
+<td>Intégration uniforme</td>
+<td>une porte, trois actions, un format unique</td>
+</tr>
+<tr>
+<td>Tenue sous surcharge</td>
+<td><strong>admission control</strong>, <strong>backpressure</strong>, <strong>circuit breaker</strong>, <strong>bulkhead</strong></td>
+</tr>
+<tr>
+<td>Exploitation allégée</td>
+<td>une seule dépendance externe : Redis</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>Les erreurs sont des messages du flux comme les autres : visibles, enregistrées,
+rejouables.</p>
+</blockquote>
+<!-- ~1.5 min -->
+
+<hr />
+<h2 id="la-mesure">La mesure<a class="headerlink" href="#la-mesure" title="Permanent link">¤</a></h2>
+<p>Plateforme hébergée, 50 utilisateurs simultanés, 20 minutes :</p>
 <ul>
-<li><strong>Tool-call dedup</strong>: in stream sessions where the LLM re-emits the same
-  <code>tool_call_id</code> (Agno retry / re-plan paths), the adapter no longer
-  forwards duplicate <code>TOOL_CALL_START</code> / <code>TOOL_CALL_END</code> events to the
-  front. Only the first occurrence is emitted; later duplicates are
-  silently dropped.</li>
-<li><strong>HITL tool flow</strong>: the resume path correctly threads <code>tool_call_id</code>s
-  through <code>acontinue_run</code>, fixing a case where pending tool results were
-  injected on the wrong <code>ToolExecution</code> instance after a storage
-  round-trip.</li>
-<li><strong>Reasoning update</strong>: the reasoning sequence is closed deterministically
-  by the next non-reasoning event, fixing a class of orphaned
-  <code>REASONING_MESSAGE_CONTENT</code> events that the front could not render.</li>
+<li><strong>2 734 conversations complètes, zéro échec</strong></li>
+<li>Débit et latence stables du début à la fin</li>
+<li>Transport : premier octet en <strong>86 ms</strong> en médiane</li>
 </ul>
-<h2 id="migration">Migration<a class="headerlink" href="#migration" title="Permanent link">¤</a></h2>
-<p>None required. To opt into custom events, import <code>CustomEvent</code> from
-<code>digitalkin.models.events</code> and emit via <code>context.callbacks.send_message</code>. To
-opt into the run-context-aware factory, pass <code>run_context=...</code> to
-<code>make_tools_factory(...)</code> at agent construction.</p>
+<p>Une réponse complète prend ~21 s : l'essentiel est le temps de réflexion du modèle IA
+(~14 s avant son premier mot). La plateforme ajoute moins d'un dixième de seconde.</p>
+<blockquote>
+<p>La latence perçue appartient au modèle. L'infrastructure, elle, est mesurée.</p>
+</blockquote>
+<!-- ~1 min -->
+
+<hr />
+<h2 id="securite-le-modele">Sécurité — le modèle<a class="headerlink" href="#securite-le-modele" title="Permanent link">¤</a></h2>
+<p>Chaque appel aux services répond désormais à deux questions :</p>
+<ul>
+<li><strong>Qui appelle ?</strong> — l'appelant présente son <strong><code>task-id</code></strong> ; le serveur le résout en
+  identité : <code>{ utilisateur, mission, organisation }</code>.</li>
+<li><strong>En a-t-il le droit ?</strong> — vérifié ressource par ressource, avant tout accès.</li>
+</ul>
+<p>La fenêtre est courte : le <code>task-id</code> n'est valide que pendant que la tâche est active.
+Une tâche terminée ne donne plus aucun accès.</p>
+<p><span class="term">Terme exact :</span> décision centralisée, <strong>fail-closed</strong> — tout cas
+inconnu est un refus. Appliqué sur les six services gRPC.</p>
+<!-- ~1.5 min. L'identité vit le temps de la tâche, pas davantage. -->
+
+<hr />
+<h2 id="securite-les-regles-par-ressource">Sécurité — les règles par ressource<a class="headerlink" href="#securite-les-regles-par-ressource" title="Permanent link">¤</a></h2>
+<p>Deux modes de contrôle : <strong>owner</strong> (propriétaire uniquement) et <strong>access</strong>
+(propriétaire, ou même organisation, ou partage explicite).</p>
+<table>
+<thead>
+<tr>
+<th>Ressource</th>
+<th>Règle</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Missions</strong></td>
+<td>strictement privées — owner uniquement</td>
+</tr>
+<tr>
+<td><strong>Setups</strong> (configurations d'agent)</td>
+<td><code>PRIVATE</code> (owner) · <code>INTERNAL</code> (organisation) · <code>PUBLIC</code> (partage explicite)</td>
+</tr>
+<tr>
+<td><strong>Modules</strong> (agents)</td>
+<td>partagés à l'organisation</td>
+</tr>
+<tr>
+<td><strong>Fichiers &amp; storage</strong></td>
+<td>héritent de leur contexte : mission → owner ; setup → règles du setup</td>
+</tr>
+</tbody>
+</table>
+<p>Garanties vérifiées : refus par défaut, requêtes protégées contre l'injection, secrets
+jamais journalisés en clair.</p>
+<!-- ~1.5 min -->
+
+<hr />
+<h2 id="securite-ce-que-le-sdk-prend-en-charge">Sécurité — ce que le SDK prend en charge<a class="headerlink" href="#securite-ce-que-le-sdk-prend-en-charge" title="Permanent link">¤</a></h2>
+<p>Côté agent, la sécurité n'est pas un effort : elle est <strong>automatique</strong>.</p>
+<ul>
+<li>Chaque appel sortant porte l'identité de la tâche — <code>x-task-id</code>, <code>x-setup-id</code>,
+  <code>x-mission-id</code> — injectée par un <strong>interceptor</strong> gRPC. Un développeur ne peut ni
+  l'oublier, ni la contourner : elle accompagne l'appel, systématiquement.</li>
+<li>Un refus du serveur arrive dans le SDK comme une erreur explicite —
+  <code>PermissionDeniedError</code> — jamais masqué, jamais dégradé en silence.</li>
+<li>La visibilité d'un setup (<code>PRIVATE</code> / <code>INTERNAL</code> / <code>PUBLIC</code>) se gère par le SDK ;
+  toute valeur invalide est rejetée.</li>
+</ul>
+<blockquote>
+<p>La règle de droit la plus fiable est celle que personne n'a besoin d'appliquer à la main.</p>
+</blockquote>
+<!-- ~1 min. Le point : la propagation d'identité est structurelle, pas disciplinaire. -->
+
+<hr />
+<h2 id="la-limite-actuelle">La limite actuelle<a class="headerlink" href="#la-limite-actuelle" title="Permanent link">¤</a></h2>
+<p>La vérification s'arrête aujourd'hui à l'équipe technique : tests automatiques,
+intégration sur Redis réel, test de charge. Au-delà, personne ne valide :</p>
+<ul>
+<li>le parcours complet d'un <strong>utilisateur final</strong>, end-to-end</li>
+<li>sur l'<strong>environnement de production</strong></li>
+<li>avec de vrais comptes — donc les permissions décrites ci-dessus</li>
+</ul>
+<p>Certains défauts n'existent que là : configuration réseau du serveur, usages
+simultanés réels, règles de droits. Un incident récent l'a confirmé : deux défauts
+invisibles en local, révélés uniquement par un usage réel.</p>
+<blockquote>
+<p>Un système n'est pas validé par ceux qui l'ont construit.</p>
+</blockquote>
+<!-- ~1.5 min -->
+
+<hr />
+<h2 id="proposition-la-validation-en-production">Proposition : la validation en production<a class="headerlink" href="#proposition-la-validation-en-production" title="Permanent link">¤</a></h2>
+<ol>
+<li>Des <strong>scénarios end-to-end écrits ensemble</strong> : démarrer, se déconnecter et
+   reprendre, annuler, changer de configuration</li>
+<li>Une <strong>passe de permissions</strong> : chaque rôle vérifie ce qu'il voit — et ce qu'il ne
+   doit pas voir</li>
+<li>Une passe <strong>avant chaque release</strong> — courte, systématique, tracée</li>
+</ol>
+<p>Le rôle de l'équipe non technique est central : tester en utilisateur réel, sans
+connaissance du fonctionnement interne — c'est précisément ce regard qui révèle ce que
+les développeurs ne voient plus.</p>
+<!-- ~1 min -->
+
+<hr />
+<h2 id="a-retenir">À retenir<a class="headerlink" href="#a-retenir" title="Permanent link">¤</a></h2>
+<ul>
+<li><strong>v1 est une plateforme</strong> : une porte, trois actions, un journal durable.
+  <strong>Incompatible avec la v0.4.5</strong> — la migration est obligatoire.</li>
+<li>Sa valeur tient à des changements de structure : découplage, durabilité, signaux
+  ciblés, API unique — et à la suppression de quatre systèmes.</li>
+<li><strong>Mesurée</strong> : 2 734 conversations sous charge, zéro échec.</li>
+<li><strong>Sécurisée par tâche</strong> : identité éphémère, refus par défaut, règles par ressource,
+  propagation automatique dans le SDK.</li>
+<li>Il reste une étape, et elle nous concerne tous : la <strong>validation en production</strong>,
+  en utilisateur réel, permissions comprises.</li>
+</ul>
+<!-- ~45s -->
 
 
 
 
 
 
+
+  
+  
 
 
 
@@ -1900,7 +2374,7 @@ opt into the run-context-aware factory, pass <code>run_context=...</code> to
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../0.4.1/" class="md-footer__link md-footer__link--prev" aria-label="Previous: 0.4.0 → 0.4.1 — AG-UI Frontend Tools (HITL)">
+          <a href="../sdk_redis_platform_talk_nontech/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Sdk redis platform talk nontech">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
@@ -1910,20 +2384,20 @@ opt into the run-context-aware factory, pass <code>run_context=...</code> to
                 Previous
               </span>
               <div class="md-ellipsis">
-                0.4.0 → 0.4.1 — AG-UI Frontend Tools (HITL)
+                Sdk redis platform talk nontech
               </div>
             </div>
           </a>
         
         
           
-          <a href="../0.4.3/" class="md-footer__link md-footer__link--next" aria-label="Next: 0.4.2 → 0.4.3 — Live Tool-module Schema Refetching">
+          <a href="../security_hardening_plan/" class="md-footer__link md-footer__link--next" aria-label="Next: Security Hardening Plan — Gateway Architecture">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                0.4.2 → 0.4.3 — Live Tool-module Schema Refetching
+                Security Hardening Plan — Gateway Architecture
               </div>
             </div>
             <div class="md-footer__button md-icon">
@@ -1991,12 +2465,12 @@ opt into the run-context-aware factory, pass <code>run_context=...</code> to
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["announce.dismiss", "content.action.edit", "content.action.view", "content.code.annotate", "content.code.copy", "content.tooltips", "navigation.footer", "navigation.instant.preview", "navigation.path", "navigation.sections", "navigation.tabs", "navigation.tabs.sticky", "navigation.top", "search.highlight", "search.suggest", "toc.follow"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "stable", "provider": "mike"}}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["announce.dismiss", "content.action.edit", "content.action.view", "content.code.annotate", "content.code.copy", "content.tooltips", "navigation.footer", "navigation.instant.preview", "navigation.path", "navigation.sections", "navigation.tabs", "navigation.tabs.sticky", "navigation.top", "search.highlight", "search.suggest", "toc.follow"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "stable", "provider": "mike"}}</script>
     
     
-      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
       
-        <script src="../../assets/_markdown_exec_pyodide.js"></script>
+        <script src="../assets/_markdown_exec_pyodide.js"></script>
       
     
   </body>

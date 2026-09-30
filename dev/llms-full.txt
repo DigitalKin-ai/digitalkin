@@ -1011,7 +1011,7 @@ Execute a gRPC query with circuit breaker protection and retry.
 
 The circuit breaker is per-service (keyed on `service_name`). When the circuit is OPEN, calls fail immediately with `CircuitOpenError` wrapped in `ServerError` — no network round-trip, no timeout wait.
 
-Retries on transient errors (UNAVAILABLE, INTERNAL, DEADLINE_EXCEEDED) with exponential backoff. Retry count and backoff base are configurable via DIGITALKIN_GRPC_QUERY_MAX_RETRIES and DIGITALKIN_GRPC_QUERY_BACKOFF_BASE_MS.
+Retries on transient errors (UNAVAILABLE, INTERNAL, DEADLINE_EXCEEDED) with exponential backoff. Retry count and backoff base are configurable via CLIENT_MAX_RETRIES and CLIENT_BACKOFF_BASE_MS.
 
 Parameters:
 
@@ -2332,7 +2332,7 @@ Parameters:
 ### append_files_history
 
 ```python
-append_files_history(context: ModuleContext, files: list[FileModel]) -> None
+append_files_history(context: ModuleContext, files: list[FileMetadata]) -> None
 ```
 
 Append files to file history.
@@ -2347,7 +2347,7 @@ Parameters:
 
 - #### **`files`**
 
-  (`list[FileModel]`) – List of file models to append.
+  (`list[FileMetadata]`) – Files to append.
 
 ### clear_fh_mission_cache
 
@@ -6040,12 +6040,15 @@ Actions for the `services_manager` dispatcher.
 Adds the two service-specific actions to the shared CRUD + search set:
 
 - `create` — create a shareable service from a name + configuration JSON;
-- `load` — return the service's stored JSON configuration content (distinct from Tool.load, which loads a live tool into the agent).
+- `structure` — show a service's key paths and what lives at each, without its content;
+- `load` — return the service's stored JSON configuration content, whole or one key of it (distinct from Tool.load, which loads a live tool into the agent).
 
 Classes:
 
 - **`CreateServiceAction`** – Create a shareable service other kins can discover.
-- **`LoadServiceAction`** – Load a service: return its stored JSON configuration content.
+- **`LoadServiceAction`** – Load a service's configuration — one key from its structure, or the whole document.
+- **`StructureServiceAction`** – Show a service's shape — key paths and what lives at each — without its content.
+- **`UpdateServiceAction`** – Update a service, refreshing the key map alongside the configuration.
 
 ###### CreateServiceAction
 
@@ -6072,7 +6075,7 @@ Only a name and the configuration JSON are needed — owner, organisation and ki
 
 Methods:
 
-- **`execute`** – Create the service setup from its name and content.
+- **`execute`** – Create the service setup from its name, content, documentation and authored key map.
 
 ###### execute
 
@@ -6080,7 +6083,7 @@ Methods:
 execute(ctx: RegistryActionCtx) -> Any
 ```
 
-Create the service setup from its name and content.
+Create the service setup from its name, content, documentation and authored key map.
 
 Returns:
 
@@ -6105,11 +6108,11 @@ Returns:
               click digitalkin.community.agno.toolkits.registry.base.BaseAction href "" "digitalkin.community.agno.toolkits.registry.base.BaseAction"
 ```
 
-Load a service: return its stored JSON configuration content.
+Load a service's configuration — one key from its structure, or the whole document.
 
 Methods:
 
-- **`execute`** – Return the service's configuration content (latest version).
+- **`execute`** – Return the service's configuration content, or the part key names.
 
 ###### execute
 
@@ -6117,13 +6120,99 @@ Methods:
 execute(ctx: RegistryActionCtx) -> Any
 ```
 
-Return the service's configuration content (latest version).
+Return the service's configuration content, or the part `key` names.
 
-Guards the object type first: without it `load` would happily return a tool's internal configuration — the most dangerous type-confusion, since the response carries no field the caller could use to notice it read the wrong kind.
+Guards the object type first: without it `load` would happily return a tool's internal configuration — the most dangerous type-confusion, since the response carries no field the caller could use to notice it read the wrong kind. The read itself passes `key` to the setup service, so the narrowing happens where the document lives; a key the configuration does not have returns the whole document rather than an error, which is what the wire does.
 
 Returns:
 
-- `Any` – The service configuration JSON object, or None when not found.
+- `Any` – {key: value} for a key that resolves, otherwise the whole configuration.
+
+###### StructureServiceAction
+
+```
+              flowchart TD
+              digitalkin.community.agno.toolkits.registry.services.action.StructureServiceAction[StructureServiceAction]
+              digitalkin.community.agno.toolkits.registry.base.RegistryAction[RegistryAction]
+              digitalkin.community.agno.toolkits.registry.base.BaseAction[BaseAction]
+
+                              digitalkin.community.agno.toolkits.registry.base.RegistryAction --> digitalkin.community.agno.toolkits.registry.services.action.StructureServiceAction
+                                digitalkin.community.agno.toolkits.registry.base.BaseAction --> digitalkin.community.agno.toolkits.registry.base.RegistryAction
+                
+
+
+
+              click digitalkin.community.agno.toolkits.registry.services.action.StructureServiceAction href "" "digitalkin.community.agno.toolkits.registry.services.action.StructureServiceAction"
+              click digitalkin.community.agno.toolkits.registry.base.RegistryAction href "" "digitalkin.community.agno.toolkits.registry.base.RegistryAction"
+              click digitalkin.community.agno.toolkits.registry.base.BaseAction href "" "digitalkin.community.agno.toolkits.registry.base.BaseAction"
+```
+
+Show a service's shape — key paths and what lives at each — without its content.
+
+Use it on a setup id you already hold; `search` already returns the same map on every row, so there is no need to call this straight after a search. Feed a key from it to `load` to read just that part of the configuration.
+
+Methods:
+
+- **`execute`** – Return the stored {key path: summary} map, with no configuration content.
+
+###### execute
+
+```python
+execute(ctx: RegistryActionCtx) -> Any
+```
+
+Return the stored `{key path: summary}` map, with no configuration content.
+
+The map is written by whoever created or updated the setup, and the only read that carries it is the setup search — so this restates a search for one id rather than deriving a map locally, which would discard the written summaries. A setup stored before the map existed returns an empty one.
+
+Returns:
+
+- `Any` – The key map, or an empty dict when the setup carries none.
+
+###### UpdateServiceAction
+
+```
+              flowchart TD
+              digitalkin.community.agno.toolkits.registry.services.action.UpdateServiceAction[UpdateServiceAction]
+              digitalkin.community.agno.toolkits.registry.action.UpdateAction[UpdateAction]
+              digitalkin.community.agno.toolkits.registry.base.RegistryAction[RegistryAction]
+              digitalkin.community.agno.toolkits.registry.base.BaseAction[BaseAction]
+
+                              digitalkin.community.agno.toolkits.registry.action.UpdateAction --> digitalkin.community.agno.toolkits.registry.services.action.UpdateServiceAction
+                                digitalkin.community.agno.toolkits.registry.base.RegistryAction --> digitalkin.community.agno.toolkits.registry.action.UpdateAction
+                                digitalkin.community.agno.toolkits.registry.base.BaseAction --> digitalkin.community.agno.toolkits.registry.base.RegistryAction
+                
+
+
+
+
+              click digitalkin.community.agno.toolkits.registry.services.action.UpdateServiceAction href "" "digitalkin.community.agno.toolkits.registry.services.action.UpdateServiceAction"
+              click digitalkin.community.agno.toolkits.registry.action.UpdateAction href "" "digitalkin.community.agno.toolkits.registry.action.UpdateAction"
+              click digitalkin.community.agno.toolkits.registry.base.RegistryAction href "" "digitalkin.community.agno.toolkits.registry.base.RegistryAction"
+              click digitalkin.community.agno.toolkits.registry.base.BaseAction href "" "digitalkin.community.agno.toolkits.registry.base.BaseAction"
+```
+
+Update a service, refreshing the key map alongside the configuration.
+
+The map belongs to the content it describes, so a new revision needs a new one; the stored map is replaced by whatever this call carries.
+
+Methods:
+
+- **`execute`** – Cut a new version of the setup's content and rename it.
+
+###### execute
+
+```python
+execute(ctx: RegistryActionCtx) -> Any
+```
+
+Cut a new version of the setup's content and rename it.
+
+Guards the object type first (which also refuses a deleted target, since the setup service excludes deleted ids), then validates `content` against the module's config schema so a missing/wrong field is refused with a correctable message before the write.
+
+Returns:
+
+- `Any` – The updated setup.
 
 ###### kit
 
@@ -9540,7 +9629,7 @@ Reads proto Struct binary bytes from a Redis Stream.
 
 Zero-copy read: bytes → `ParseFromString()` → proto Struct. No JSON parsing, no dict intermediate.
 
-Cursor TTL comes from `GatewayStreamSettings.redis_cursor_ttl` (env `DIGITALKIN_REDIS_CURSOR_TTL`).
+Cursor TTL comes from `GatewayStreamSettings.redis_cursor_ttl` (env `DIGITALKIN_GATEWAY_STREAM_REDIS_CURSOR_TTL`).
 
 Parameters:
 
@@ -11891,6 +11980,8 @@ Attributes:
 - **`client_config`** – Client configuration for services and registry.
 - **`module_servicer`** (`ModuleServicer | None`) – The gRPC servicer handling module requests.
 
+In remote mode an omitted `client_config` is built from the environment, so a module no longer declares one to reach the registry and the services provider. Local mode keeps it unset: there is no registry to register with.
+
 Parameters:
 
 - ##### **`module_class`**
@@ -12049,7 +12140,7 @@ Parameters:
 
 Raises:
 
-- `RuntimeError` – If DIGITALKIN_REDIS_URL is not set.
+- `RuntimeError` – If DIGITALKIN_REDIS_URL resolves to an empty URL.
 
 Classes:
 
@@ -12711,7 +12802,7 @@ get_or_create(service_id: str) -> CircuitBreaker
 
 Get existing circuit breaker for a service or create one.
 
-Thresholds come from `CircuitBreakerSettings` (env `DIGITALKIN_CB_FAIL_MAX`, `DIGITALKIN_CB_RESET_TIMEOUT`).
+Thresholds come from `CircuitBreakerSettings` (env `CLIENT_CIRCUIT_BREAKER_FAIL_MAX`, `CLIENT_CIRCUIT_BREAKER_RESET_TIMEOUT`).
 
 Parameters:
 
@@ -12863,7 +12954,7 @@ Execute a gRPC query with circuit breaker protection and retry.
 
 The circuit breaker is per-service (keyed on `service_name`). When the circuit is OPEN, calls fail immediately with `CircuitOpenError` wrapped in `ServerError` — no network round-trip, no timeout wait.
 
-Retries on transient errors (UNAVAILABLE, INTERNAL, DEADLINE_EXCEEDED) with exponential backoff. Retry count and backoff base are configurable via DIGITALKIN_GRPC_QUERY_MAX_RETRIES and DIGITALKIN_GRPC_QUERY_BACKOFF_BASE_MS.
+Retries on transient errors (UNAVAILABLE, INTERNAL, DEADLINE_EXCEEDED) with exponential backoff. Retry count and backoff base are configurable via CLIENT_MAX_RETRIES and CLIENT_BACKOFF_BASE_MS.
 
 Parameters:
 
@@ -13461,7 +13552,7 @@ Parameters:
 #### append_files_history
 
 ```python
-append_files_history(context: ModuleContext, files: list[FileModel]) -> None
+append_files_history(context: ModuleContext, files: list[FileMetadata]) -> None
 ```
 
 Append files to file history.
@@ -13476,7 +13567,7 @@ Parameters:
 
 - ##### **`files`**
 
-  (`list[FileModel]`) – List of file models to append.
+  (`list[FileMetadata]`) – Files to append.
 
 #### clear_fh_mission_cache
 
@@ -13948,16 +14039,27 @@ This mixin wraps filesystem strategy calls to provide a cleaner API for file ope
 
 Methods:
 
-- **`get_file`** – Retrieve a file by ID with the content.
+- **`delete_file`** – Delete a file.
+- **`get_file`** – Retrieve a file by ID, with its content by default.
+- **`get_files`** – List files matching the given filters.
+- **`resolve_files`** – Backfill empty fields from what the filesystem service holds.
+- **`set_visibility`** – Change the read-access scope of an already uploaded file.
+- **`upload_file`** – Upload a single file, inferring its type from the MIME type when not given.
 - **`upload_files`** – Upload files using the filesystem strategy.
 
-#### get_file
+#### delete_file
 
 ```python
-get_file(context: ModuleContext, file_id: str) -> FilesystemRecord
+delete_file(
+    context: ModuleContext,
+    file_id: str,
+    file_context: Context = MISSIONS,
+    *,
+    permanent: bool = False,
+) -> bool
 ```
 
-Retrieve a file by ID with the content.
+Delete a file.
 
 Parameters:
 
@@ -13969,6 +14071,50 @@ Parameters:
 
   (`str`) – Unique identifier for the file
 
+- ##### **`file_context`**
+
+  (`Context`, default: `MISSIONS` ) – The owner context to look the file up in
+
+- ##### **`permanent`**
+
+  (`bool`, default: `False` ) – Whether to permanently delete the file
+
+Returns:
+
+- `bool` – True when the file was deleted.
+
+#### get_file
+
+```python
+get_file(
+    context: ModuleContext,
+    file_id: str,
+    file_context: Context = MISSIONS,
+    *,
+    include_content: bool = True,
+) -> FilesystemRecord
+```
+
+Retrieve a file by ID, with its content by default.
+
+Parameters:
+
+- ##### **`context`**
+
+  (`ModuleContext`) – Module context containing the filesystem strategy
+
+- ##### **`file_id`**
+
+  (`str`) – Unique identifier for the file
+
+- ##### **`file_context`**
+
+  (`Context`, default: `MISSIONS` ) – The owner context to look the file up in
+
+- ##### **`include_content`**
+
+  (`bool`, default: `True` ) – Whether to include file content in the response
+
 Returns:
 
 - `FilesystemRecord` – File object with metadata and optionally content
@@ -13977,11 +14123,150 @@ Raises:
 
 - `FilesystemServiceError` – If file retrieval fails
 
+#### get_files
+
+```python
+get_files(
+    context: ModuleContext, filters: FileFilter, *, include_content: bool = False
+) -> list[FilesystemRecord]
+```
+
+List files matching the given filters.
+
+Parameters:
+
+- ##### **`context`**
+
+  (`ModuleContext`) – Module context containing the filesystem strategy
+
+- ##### **`filters`**
+
+  (`FileFilter`) – Filter criteria for the files
+
+- ##### **`include_content`**
+
+  (`bool`, default: `False` ) – Whether to include file content in the response
+
+Returns:
+
+- `list[FilesystemRecord]` – Matching file records, empty when the lookup fails.
+
+#### resolve_files
+
+```python
+resolve_files(
+    context: ModuleContext, files: list[FileMetadata], file_context: Context = MISSIONS
+) -> list[FileMetadata]
+```
+
+Backfill empty fields from what the filesystem service holds.
+
+A setup form may submit little more than an id; the persisted entry has to stay displayable, so anything the caller left empty is filled from the stored record. A file the service cannot return is kept as submitted rather than dropped.
+
+Parameters:
+
+- ##### **`context`**
+
+  (`ModuleContext`) – Module context containing the filesystem strategy
+
+- ##### **`files`**
+
+  (`list[FileMetadata]`) – The files as submitted
+
+- ##### **`file_context`**
+
+  (`Context`, default: `MISSIONS` ) – The owner context the files live in; setup-time uploads are scoped to the setup, not the mission
+
+Returns:
+
+- `list[FileMetadata]` – The files, with empty fields filled in where the service could resolve them.
+
+#### set_visibility
+
+```python
+set_visibility(
+    context: ModuleContext, file_id: str, visibility: Visibility
+) -> FilesystemRecord
+```
+
+Change the read-access scope of an already uploaded file.
+
+Visibility is otherwise write-once at upload time, so this is the only way to widen or narrow access to a file the module has already produced.
+
+Parameters:
+
+- ##### **`context`**
+
+  (`ModuleContext`) – Module context containing the filesystem strategy
+
+- ##### **`file_id`**
+
+  (`str`) – Unique identifier for the file
+
+- ##### **`visibility`**
+
+  (`Visibility`) – The new read-access scope; UNSPECIFIED leaves it unchanged
+
+Returns:
+
+- `FilesystemRecord` – The updated file record.
+
+#### upload_file
+
+```python
+upload_file(
+    context: ModuleContext,
+    name: str,
+    content: bytes,
+    content_type: str,
+    type: FileType | None = None,
+    visibility: Visibility = UNSPECIFIED,
+    *,
+    sdk_created: bool = False,
+) -> FileMetadata | None
+```
+
+Upload a single file, inferring its type from the MIME type when not given.
+
+Parameters:
+
+- ##### **`context`**
+
+  (`ModuleContext`) – Module context containing the filesystem strategy
+
+- ##### **`name`**
+
+  (`str`) – The name of the file
+
+- ##### **`content`**
+
+  (`bytes`) – The content of the file
+
+- ##### **`content_type`**
+
+  (`str`) – The MIME type of the file
+
+- ##### **`type`**
+
+  (`FileType | None`, default: `None` ) – The category of the file; inferred from content_type when omitted
+
+- ##### **`visibility`**
+
+  (`Visibility`, default: `UNSPECIFIED` ) – Read-access scope; UNSPECIFIED lets the service default it
+
+- ##### **`sdk_created`**
+
+  (`bool`, default: `False` ) – Whether this file is a module deliverable
+
+Returns:
+
+- `FileMetadata | None` – The uploaded file, or None when the upload failed.
+
 #### upload_files
 
 ```python
 upload_files(
-    context: ModuleContext, files: list[Any]
+    context: ModuleContext, files: list[UploadFileData]
 ) -> tuple[list[FilesystemRecord], int, int]
 ```
 
@@ -13995,7 +14280,7 @@ Parameters:
 
 - ##### **`files`**
 
-  (`list[Any]`) – List of files to upload
+  (`list[UploadFileData]`) – List of files to upload
 
 Returns:
 
@@ -14443,7 +14728,7 @@ Parameters:
 ##### append_files_history
 
 ```python
-append_files_history(context: ModuleContext, files: list[FileModel]) -> None
+append_files_history(context: ModuleContext, files: list[FileMetadata]) -> None
 ```
 
 Append files to file history.
@@ -14458,7 +14743,7 @@ Parameters:
 
 - ###### **`files`**
 
-  (`list[FileModel]`) – List of file models to append.
+  (`list[FileMetadata]`) – Files to append.
 
 ##### clear_fh_mission_cache
 
@@ -14987,7 +15272,7 @@ Methods:
 ##### append_files_history
 
 ```python
-append_files_history(context: ModuleContext, files: list[FileModel]) -> None
+append_files_history(context: ModuleContext, files: list[FileMetadata]) -> None
 ```
 
 Append files to file history.
@@ -15002,7 +15287,7 @@ Parameters:
 
 - ###### **`files`**
 
-  (`list[FileModel]`) – List of file models to append.
+  (`list[FileMetadata]`) – Files to append.
 
 ##### clear_fh_mission_cache
 
@@ -15314,16 +15599,27 @@ This mixin wraps filesystem strategy calls to provide a cleaner API for file ope
 
 Methods:
 
-- **`get_file`** – Retrieve a file by ID with the content.
+- **`delete_file`** – Delete a file.
+- **`get_file`** – Retrieve a file by ID, with its content by default.
+- **`get_files`** – List files matching the given filters.
+- **`resolve_files`** – Backfill empty fields from what the filesystem service holds.
+- **`set_visibility`** – Change the read-access scope of an already uploaded file.
+- **`upload_file`** – Upload a single file, inferring its type from the MIME type when not given.
 - **`upload_files`** – Upload files using the filesystem strategy.
 
-##### get_file
+##### delete_file
 
 ```python
-get_file(context: ModuleContext, file_id: str) -> FilesystemRecord
+delete_file(
+    context: ModuleContext,
+    file_id: str,
+    file_context: Context = MISSIONS,
+    *,
+    permanent: bool = False,
+) -> bool
 ```
 
-Retrieve a file by ID with the content.
+Delete a file.
 
 Parameters:
 
@@ -15335,6 +15631,50 @@ Parameters:
 
   (`str`) – Unique identifier for the file
 
+- ###### **`file_context`**
+
+  (`Context`, default: `MISSIONS` ) – The owner context to look the file up in
+
+- ###### **`permanent`**
+
+  (`bool`, default: `False` ) – Whether to permanently delete the file
+
+Returns:
+
+- `bool` – True when the file was deleted.
+
+##### get_file
+
+```python
+get_file(
+    context: ModuleContext,
+    file_id: str,
+    file_context: Context = MISSIONS,
+    *,
+    include_content: bool = True,
+) -> FilesystemRecord
+```
+
+Retrieve a file by ID, with its content by default.
+
+Parameters:
+
+- ###### **`context`**
+
+  (`ModuleContext`) – Module context containing the filesystem strategy
+
+- ###### **`file_id`**
+
+  (`str`) – Unique identifier for the file
+
+- ###### **`file_context`**
+
+  (`Context`, default: `MISSIONS` ) – The owner context to look the file up in
+
+- ###### **`include_content`**
+
+  (`bool`, default: `True` ) – Whether to include file content in the response
+
 Returns:
 
 - `FilesystemRecord` – File object with metadata and optionally content
@@ -15343,11 +15683,150 @@ Raises:
 
 - `FilesystemServiceError` – If file retrieval fails
 
+##### get_files
+
+```python
+get_files(
+    context: ModuleContext, filters: FileFilter, *, include_content: bool = False
+) -> list[FilesystemRecord]
+```
+
+List files matching the given filters.
+
+Parameters:
+
+- ###### **`context`**
+
+  (`ModuleContext`) – Module context containing the filesystem strategy
+
+- ###### **`filters`**
+
+  (`FileFilter`) – Filter criteria for the files
+
+- ###### **`include_content`**
+
+  (`bool`, default: `False` ) – Whether to include file content in the response
+
+Returns:
+
+- `list[FilesystemRecord]` – Matching file records, empty when the lookup fails.
+
+##### resolve_files
+
+```python
+resolve_files(
+    context: ModuleContext, files: list[FileMetadata], file_context: Context = MISSIONS
+) -> list[FileMetadata]
+```
+
+Backfill empty fields from what the filesystem service holds.
+
+A setup form may submit little more than an id; the persisted entry has to stay displayable, so anything the caller left empty is filled from the stored record. A file the service cannot return is kept as submitted rather than dropped.
+
+Parameters:
+
+- ###### **`context`**
+
+  (`ModuleContext`) – Module context containing the filesystem strategy
+
+- ###### **`files`**
+
+  (`list[FileMetadata]`) – The files as submitted
+
+- ###### **`file_context`**
+
+  (`Context`, default: `MISSIONS` ) – The owner context the files live in; setup-time uploads are scoped to the setup, not the mission
+
+Returns:
+
+- `list[FileMetadata]` – The files, with empty fields filled in where the service could resolve them.
+
+##### set_visibility
+
+```python
+set_visibility(
+    context: ModuleContext, file_id: str, visibility: Visibility
+) -> FilesystemRecord
+```
+
+Change the read-access scope of an already uploaded file.
+
+Visibility is otherwise write-once at upload time, so this is the only way to widen or narrow access to a file the module has already produced.
+
+Parameters:
+
+- ###### **`context`**
+
+  (`ModuleContext`) – Module context containing the filesystem strategy
+
+- ###### **`file_id`**
+
+  (`str`) – Unique identifier for the file
+
+- ###### **`visibility`**
+
+  (`Visibility`) – The new read-access scope; UNSPECIFIED leaves it unchanged
+
+Returns:
+
+- `FilesystemRecord` – The updated file record.
+
+##### upload_file
+
+```python
+upload_file(
+    context: ModuleContext,
+    name: str,
+    content: bytes,
+    content_type: str,
+    type: FileType | None = None,
+    visibility: Visibility = UNSPECIFIED,
+    *,
+    sdk_created: bool = False,
+) -> FileMetadata | None
+```
+
+Upload a single file, inferring its type from the MIME type when not given.
+
+Parameters:
+
+- ###### **`context`**
+
+  (`ModuleContext`) – Module context containing the filesystem strategy
+
+- ###### **`name`**
+
+  (`str`) – The name of the file
+
+- ###### **`content`**
+
+  (`bytes`) – The content of the file
+
+- ###### **`content_type`**
+
+  (`str`) – The MIME type of the file
+
+- ###### **`type`**
+
+  (`FileType | None`, default: `None` ) – The category of the file; inferred from content_type when omitted
+
+- ###### **`visibility`**
+
+  (`Visibility`, default: `UNSPECIFIED` ) – Read-access scope; UNSPECIFIED lets the service default it
+
+- ###### **`sdk_created`**
+
+  (`bool`, default: `False` ) – Whether this file is a module deliverable
+
+Returns:
+
+- `FileMetadata | None` – The uploaded file, or None when the upload failed.
+
 ##### upload_files
 
 ```python
 upload_files(
-    context: ModuleContext, files: list[Any]
+    context: ModuleContext, files: list[UploadFileData]
 ) -> tuple[list[FilesystemRecord], int, int]
 ```
 
@@ -15361,7 +15840,7 @@ Parameters:
 
 - ###### **`files`**
 
-  (`list[Any]`) – List of files to upload
+  (`list[UploadFileData]`) – List of files to upload
 
 Returns:
 
@@ -17282,10 +17761,12 @@ Raises:
 
 Base configuration for gRPC clients.
 
+Every default is sourced from `ClientSettings` (env prefixes `CLIENT_`, `CLIENT_CHANNEL_`, `CLIENT_GRPC_`), so a deployment configures its clients through the environment and only overrides per-target values here.
+
 Attributes:
 
-- **`host`** (`str`) – Host address to bind the client to
-- **`port`** (`int`) – Port to listen on
+- **`host`** (`str`) – Host address the client dials
+- **`port`** (`int`) – Port the client dials
 - **`mode`** (`ControlFlow`) – Client operation mode (sync/async)
 - **`security`** (`SecurityMode`) – Security mode (secure/insecure)
 - **`credentials`** (`ClientCredentials | None`) – Client credentials for secure mode
@@ -17488,7 +17969,7 @@ Build a retry policy with backoff values sourced from the environment.
 
 Returns:
 
-- `RetryPolicy` – Retry policy populated from GrpcRetrySettings.
+- `RetryPolicy` – Retry policy populated from GrpcClientRetrySettings.
 
 ###### to_service_config_json
 
@@ -17568,6 +18049,7 @@ Modules:
 
 - **`ag_ui`** – Output model for the Template module.
 - **`base_types`** – Base types for module models.
+- **`knowledge_files`** – Setup field for files a module ingests at config-setup time.
 - **`loaded_tools`** – Mission-scoped persistence for tools the agent loaded at runtime.
 - **`module`** – Module model.
 - **`module_context`** – Define the module context used in the triggers.
@@ -17584,6 +18066,7 @@ Classes:
 - **`DataModel`** – Base definition of input/output model showing mandatory root fields.
 - **`DataTrigger`** – Defines the root input/output model exposing the protocol.
 - **`EndOfStreamOutput`** – Signal that the stream has ended.
+- **`KnowledgeFileFormatError`** – A submitted file is not in a format the module accepts.
 - **`LoadedToolRecord`** – A tool the agent loaded at runtime during this mission.
 - **`LoadedToolStore`** – Storage wrapper for the mission-scoped loaded_tools collection.
 - **`ModuleContext`** – ModuleContext provides a container for strategies and resources used by a module.
@@ -17600,6 +18083,7 @@ Classes:
 
 Functions:
 
+- **`knowledge_files_input`** – Build the annotated type for a setup field holding uploaded files.
 - **`tool_reference_input`** – Create ToolReferenceInput type with schema options and validation.
 
 Attributes:
@@ -17678,6 +18162,19 @@ my_input = MyInput(root=DataTrigger(protocol="message")) print(my_input.root.pro
 ```
 
 Signal that the stream has ended.
+
+#### KnowledgeFileFormatError
+
+```
+              flowchart TD
+              digitalkin.models.module.KnowledgeFileFormatError[KnowledgeFileFormatError]
+
+              
+
+              click digitalkin.models.module.KnowledgeFileFormatError href "" "digitalkin.models.module.KnowledgeFileFormatError"
+```
+
+A submitted file is not in a format the module accepts.
 
 #### LoadedToolRecord
 
@@ -18676,6 +19173,42 @@ Returns:
 
 - `tuple` – Tuple of TriggerHandler subclasses for built-in functionality.
 
+#### knowledge_files_input
+
+```python
+knowledge_files_input(
+    extensions: Sequence[str] = (),
+    file_types: Sequence[FileType] = (),
+    *,
+    multiple: bool = True,
+    config: bool = True,
+) -> Any
+```
+
+Build the annotated type for a setup field holding uploaded files.
+
+Parameters:
+
+- ##### **`extensions`**
+
+  (`Sequence[str]`, default: `()` ) – Accepted file extensions, leading dot included (e.g. .pdf). Empty accepts any extension.
+
+- ##### **`file_types`**
+
+  (`Sequence[FileType]`, default: `()` ) – Accepted categories. Empty accepts any category.
+
+- ##### **`multiple`**
+
+  (`bool`, default: `True` ) – Whether the widget allows selecting more than one file.
+
+- ##### **`config`**
+
+  (`bool`, default: `True` ) – Whether the field belongs to the config-setup schema rather than the runtime setup schema.
+
+Returns:
+
+- `Any` – Annotated type for use in a SetupModel field.
+
 #### tool_reference_input
 
 ```python
@@ -19580,6 +20113,80 @@ class MyInput(DataModel): root: DataTrigger user_define_data: Any
 ###### Usage
 
 my_input = MyInput(root=DataTrigger(protocol="message")) print(my_input.root.protocol) # Output: message
+
+#### knowledge_files
+
+Setup field for files a module ingests at config-setup time.
+
+Declares the pair every file-consuming module needs — the selected files and the formats it accepts — so the field, its widget options and its validation stay identical across modules::
+
+```text
+class MySetup(SetupModel):
+    knowledge_files: knowledge_files_input(extensions=[".json"]) = Field(
+        default_factory=list,
+        title="Knowledge Files",
+        description="Files imported into setup-scoped storage at config-setup time.",
+    )
+```
+
+The allowed formats reach the front-end file widget as `ui:options.accept` and are enforced again on submit, since the widget's filter is only a hint.
+
+Classes:
+
+- **`KnowledgeFileFormatError`** – A submitted file is not in a format the module accepts.
+
+Functions:
+
+- **`knowledge_files_input`** – Build the annotated type for a setup field holding uploaded files.
+
+##### KnowledgeFileFormatError
+
+```
+              flowchart TD
+              digitalkin.models.module.knowledge_files.KnowledgeFileFormatError[KnowledgeFileFormatError]
+
+              
+
+              click digitalkin.models.module.knowledge_files.KnowledgeFileFormatError href "" "digitalkin.models.module.knowledge_files.KnowledgeFileFormatError"
+```
+
+A submitted file is not in a format the module accepts.
+
+##### knowledge_files_input
+
+```python
+knowledge_files_input(
+    extensions: Sequence[str] = (),
+    file_types: Sequence[FileType] = (),
+    *,
+    multiple: bool = True,
+    config: bool = True,
+) -> Any
+```
+
+Build the annotated type for a setup field holding uploaded files.
+
+Parameters:
+
+- ###### **`extensions`**
+
+  (`Sequence[str]`, default: `()` ) – Accepted file extensions, leading dot included (e.g. .pdf). Empty accepts any extension.
+
+- ###### **`file_types`**
+
+  (`Sequence[FileType]`, default: `()` ) – Accepted categories. Empty accepts any category.
+
+- ###### **`multiple`**
+
+  (`bool`, default: `True` ) – Whether the widget allows selecting more than one file.
+
+- ###### **`config`**
+
+  (`bool`, default: `True` ) – Whether the field belongs to the config-setup schema rather than the runtime setup schema.
+
+Returns:
+
+- `Any` – Annotated type for use in a SetupModel field.
 
 #### loaded_tools
 
@@ -21151,6 +21758,7 @@ This module contains the models for the services.
 Modules:
 
 - **`cost`** – Pydantic models for cost service.
+- **`filesystem`** – Canonical file models shared by every producer and consumer of a file.
 - **`registry`** – Registry data models.
 - **`services`** – Service-strategy execution-mode model.
 - **`storage`** – Storage model.
@@ -21160,6 +21768,9 @@ Classes:
 - **`BaseMessage`** – Base Model representing a simple message in the chat history.
 - **`BaseRole`** – Officially supported Role Enum for chat messages.
 - **`ChatHistory`** – Storage chat history model for the OpenAI Archetype module.
+- **`FileMetadata`** – A filesystem-service file, as stored in setup forms and streamed to modules.
+- **`FileType`** – File category, mirroring the filesystem proto FileType by value.
+- **`FileUploadMetadata`** – Default schema for the metadata carried on an upload.
 
 #### BaseMessage
 
@@ -21199,6 +21810,71 @@ Officially supported Role Enum for chat messages.
 ```
 
 Storage chat history model for the OpenAI Archetype module.
+
+#### FileMetadata
+
+```
+              flowchart TD
+              digitalkin.models.services.FileMetadata[FileMetadata]
+
+              
+
+              click digitalkin.models.services.FileMetadata href "" "digitalkin.models.services.FileMetadata"
+```
+
+A filesystem-service file, as stored in setup forms and streamed to modules.
+
+Mirrors the payload the front-end file widget keeps in the form data (the upload response), so the field round-trips: what is submitted is what is persisted in the setup version, and the widget can repopulate itself.
+
+#### FileType
+
+```
+              flowchart TD
+              digitalkin.models.services.FileType[FileType]
+
+              
+
+              click digitalkin.models.services.FileType href "" "digitalkin.models.services.FileType"
+```
+
+File category, mirroring the filesystem proto `FileType` by value.
+
+Methods:
+
+- **`from_content_type`** – Classify a MIME type.
+
+##### from_content_type
+
+```python
+from_content_type(content_type: str) -> FileType
+```
+
+Classify a MIME type.
+
+Parameters:
+
+- ###### **`content_type`**
+
+  (`str`) – A MIME type, with or without parameters.
+
+Returns:
+
+- `FileType` – The matching member, OTHER when nothing matches.
+
+#### FileUploadMetadata
+
+```
+              flowchart TD
+              digitalkin.models.services.FileUploadMetadata[FileUploadMetadata]
+
+              
+
+              click digitalkin.models.services.FileUploadMetadata href "" "digitalkin.models.services.FileUploadMetadata"
+```
+
+Default schema for the `metadata` carried on an upload.
+
+Modules needing a stricter contract register their own model under `services_config_params["filesystem"]["config"]["metadata_model"]`.
 
 #### cost
 
@@ -21296,6 +21972,81 @@ Enumeration of supported cost types.
 ```
 
 Cost limit based on quantity (e.g., max 10000 tokens).
+
+#### filesystem
+
+Canonical file models shared by every producer and consumer of a file.
+
+Classes:
+
+- **`FileMetadata`** – A filesystem-service file, as stored in setup forms and streamed to modules.
+- **`FileType`** – File category, mirroring the filesystem proto FileType by value.
+- **`FileUploadMetadata`** – Default schema for the metadata carried on an upload.
+
+##### FileMetadata
+
+```
+              flowchart TD
+              digitalkin.models.services.filesystem.FileMetadata[FileMetadata]
+
+              
+
+              click digitalkin.models.services.filesystem.FileMetadata href "" "digitalkin.models.services.filesystem.FileMetadata"
+```
+
+A filesystem-service file, as stored in setup forms and streamed to modules.
+
+Mirrors the payload the front-end file widget keeps in the form data (the upload response), so the field round-trips: what is submitted is what is persisted in the setup version, and the widget can repopulate itself.
+
+##### FileType
+
+```
+              flowchart TD
+              digitalkin.models.services.filesystem.FileType[FileType]
+
+              
+
+              click digitalkin.models.services.filesystem.FileType href "" "digitalkin.models.services.filesystem.FileType"
+```
+
+File category, mirroring the filesystem proto `FileType` by value.
+
+Methods:
+
+- **`from_content_type`** – Classify a MIME type.
+
+###### from_content_type
+
+```python
+from_content_type(content_type: str) -> FileType
+```
+
+Classify a MIME type.
+
+Parameters:
+
+- ###### **`content_type`**
+
+  (`str`) – A MIME type, with or without parameters.
+
+Returns:
+
+- `FileType` – The matching member, OTHER when nothing matches.
+
+##### FileUploadMetadata
+
+```
+              flowchart TD
+              digitalkin.models.services.filesystem.FileUploadMetadata[FileUploadMetadata]
+
+              
+
+              click digitalkin.models.services.filesystem.FileUploadMetadata href "" "digitalkin.models.services.filesystem.FileUploadMetadata"
+```
+
+Default schema for the `metadata` carried on an upload.
+
+Modules needing a stricter contract register their own model under `services_config_params["filesystem"]["config"]["metadata_model"]`.
 
 #### registry
 
@@ -21470,7 +22221,6 @@ Classes:
 - **`ChatHistory`** – Storage chat history model for the OpenAI Archetype module.
 - **`DataType`** – Enum defining the types of data that can be stored.
 - **`FileHistory`** – File history model.
-- **`FileModel`** – File model.
 - **`Visibility`** – Read-access scope of a record, mirroring the storage proto kinds by name.
 
 ##### BaseMessage
@@ -21538,19 +22288,6 @@ Enum defining the types of data that can be stored.
 
 File history model.
 
-##### FileModel
-
-```
-              flowchart TD
-              digitalkin.models.services.storage.FileModel[FileModel]
-
-              
-
-              click digitalkin.models.services.storage.FileModel href "" "digitalkin.models.services.storage.FileModel"
-```
-
-File model.
-
 ##### Visibility
 
 ```
@@ -21572,8 +22309,9 @@ This package contain settings of sdk.
 
 Modules:
 
+- **`certificate`** – TLS/mTLS certificate volume settings.
+- **`client`** – Package for client settings.
 - **`gateway`** – Gateway settings — stream management, backpressure, queues, reaper.
-- **`grpc_client`** – gRPC client-side settings — circuit breaker, query retry, channel options.
 - **`log`** – Logging configuration settings.
 - **`module`** – Module-scope runtime settings.
 - **`profiling`** – Profiling settings for task execution and asyncio inspection.
@@ -21584,6 +22322,365 @@ Modules:
 - **`server`** – Package for server settings.
 - **`task_manager`** – Task and job manager settings.
 - **`utils`** – This package contain channel base.
+
+#### certificate
+
+TLS/mTLS certificate volume settings.
+
+Classes:
+
+- **`CertificateSettings`** – Directories holding the certificates a module serves and dials with.
+
+Functions:
+
+- **`get_certificate_settings`** – Process-wide CertificateSettings singleton.
+
+##### CertificateSettings
+
+```
+              flowchart TD
+              digitalkin.models.settings.certificate.CertificateSettings[CertificateSettings]
+
+              
+
+              click digitalkin.models.settings.certificate.CertificateSettings href "" "digitalkin.models.settings.certificate.CertificateSettings"
+```
+
+Directories holding the certificates a module serves and dials with.
+
+Files follow the deployment convention: `server.key` / `server.crt` for the module's own server, `client.key` / `client.crt` for its outgoing calls, and `ca.crt` for the root of trust in both directories.
+
+Attributes:
+
+- **`cert_volume`** (`Path`) – Directory holding the module's server certificates.
+- **`services_provider_cert_volume`** (`Path`) – Directory holding the client certificates used to dial the services provider.
+
+Methods:
+
+- **`get_client_certificate_paths`** – Resolve the client key, certificate and root CA used to dial the services provider.
+- **`get_server_certificate_paths`** – Resolve the module server's key, certificate and root CA.
+
+###### get_client_certificate_paths
+
+```python
+get_client_certificate_paths(
+    *, mtls: bool = False
+) -> tuple[Path | None, Path | None, Path]
+```
+
+Resolve the client key, certificate and root CA used to dial the services provider.
+
+Parameters:
+
+- ###### **`mtls`**
+
+  (`bool`, default: `False` ) – Return the client key and certificate so the module can present them.
+
+Returns:
+
+- `tuple[Path | None, Path | None, Path]` – Tuple of (client key or None, client certificate or None, root CA).
+
+Raises:
+
+- `SecurityError` – If a required file is missing.
+
+###### get_server_certificate_paths
+
+```python
+get_server_certificate_paths(*, mtls: bool = False) -> tuple[Path, Path, Path | None]
+```
+
+Resolve the module server's key, certificate and root CA.
+
+Parameters:
+
+- ###### **`mtls`**
+
+  (`bool`, default: `False` ) – Return the CA certificate so incoming clients can be authenticated.
+
+Returns:
+
+- `tuple[Path, Path, Path | None]` – Tuple of (server key, server certificate, root CA or None).
+
+Raises:
+
+- `SecurityError` – If the server key or certificate is missing.
+
+##### get_certificate_settings
+
+```python
+get_certificate_settings() -> CertificateSettings
+```
+
+Process-wide `CertificateSettings` singleton.
+
+Tests must call `get_certificate_settings.cache_clear()` after mutating env.
+
+Returns:
+
+- `CertificateSettings` – The shared CertificateSettings instance.
+
+#### client
+
+Package for client settings.
+
+Modules:
+
+- **`channel`** – Client channel settings.
+- **`circuit_breaker`** – Client circuit-breaker settings.
+- **`client`** – Client settings for the DigitalKin application.
+- **`grpc`** – gRPC client settings for the SDK.
+
+##### channel
+
+Client channel settings.
+
+Classes:
+
+- **`ClientChannelSettings`** – Settings for a client channel.
+
+Functions:
+
+- **`get_client_channel_settings`** – Process-wide ClientChannelSettings singleton.
+
+###### ClientChannelSettings
+
+```python
+ClientChannelSettings(**values: Any)
+```
+
+```
+              flowchart TD
+              digitalkin.models.settings.client.channel.ClientChannelSettings[ClientChannelSettings]
+              digitalkin.models.settings.utils.channel.BaseChannelSettings[BaseChannelSettings]
+
+                              digitalkin.models.settings.utils.channel.BaseChannelSettings --> digitalkin.models.settings.client.channel.ClientChannelSettings
+                
+
+
+              click digitalkin.models.settings.client.channel.ClientChannelSettings href "" "digitalkin.models.settings.client.channel.ClientChannelSettings"
+              click digitalkin.models.settings.utils.channel.BaseChannelSettings href "" "digitalkin.models.settings.utils.channel.BaseChannelSettings"
+```
+
+Settings for a client channel.
+
+Overrides the bind-oriented defaults of `BaseChannelSettings` with dial defaults: a client connects to a remote address instead of listening on every interface.
+
+Attributes:
+
+- **`host`** (`str`) – Host address the client dials.
+- **`port`** (`NonNegativeInt`) – Port the client dials.
+
+Methods:
+
+- **`validate_credentials`** – Accept secure mode without explicit credential paths.
+- **`validate_port`** – Validate that the port is in a valid range.
+
+###### address
+
+```python
+address: str
+```
+
+The server address.
+
+Returns:
+
+- `str` – The formatted address string
+
+###### validate_credentials
+
+```python
+validate_credentials() -> ClientChannelSettings
+```
+
+Accept secure mode without explicit credential paths.
+
+Unlike the server, a client falls back to the `CERTIFICATE_` volume: `EnvManager.client_config` resolves the pair there and raises `SecurityError` when the root CA is missing, so secure mode still fails closed.
+
+Returns:
+
+- `ClientChannelSettings` – The validated settings.
+
+###### validate_port
+
+```python
+validate_port(v: int) -> int
+```
+
+Validate that the port is in a valid range.
+
+Parameters:
+
+- ###### **`v`**
+
+  (`int`) – Port number to validate
+
+Returns:
+
+- `int` – The validated port number
+
+Raises:
+
+- `ConfigurationError` – If port is outside valid range
+
+###### get_client_channel_settings
+
+```python
+get_client_channel_settings() -> ClientChannelSettings
+```
+
+Process-wide `ClientChannelSettings` singleton.
+
+Tests must call `get_client_channel_settings.cache_clear()` after mutating env.
+
+Returns:
+
+- `ClientChannelSettings` – The shared ClientChannelSettings instance.
+
+##### circuit_breaker
+
+Client circuit-breaker settings.
+
+Classes:
+
+- **`CircuitBreakerSettings`** – Per-service circuit-breaker thresholds.
+
+###### CircuitBreakerSettings
+
+```
+              flowchart TD
+              digitalkin.models.settings.client.circuit_breaker.CircuitBreakerSettings[CircuitBreakerSettings]
+
+              
+
+              click digitalkin.models.settings.client.circuit_breaker.CircuitBreakerSettings href "" "digitalkin.models.settings.client.circuit_breaker.CircuitBreakerSettings"
+```
+
+Per-service circuit-breaker thresholds.
+
+Attributes:
+
+- **`fail_max`** (`int`) – Consecutive failures before the circuit opens.
+- **`reset_timeout`** (`float`) – Seconds the circuit stays open before a half-open probe.
+
+##### client
+
+Client settings for the DigitalKin application.
+
+Classes:
+
+- **`ClientSettings`** – Settings for the DigitalKin gRPC clients.
+
+Functions:
+
+- **`get_client_settings`** – Process-wide ClientSettings singleton.
+
+###### ClientSettings
+
+```
+              flowchart TD
+              digitalkin.models.settings.client.client.ClientSettings[ClientSettings]
+
+              
+
+              click digitalkin.models.settings.client.client.ClientSettings href "" "digitalkin.models.settings.client.client.ClientSettings"
+```
+
+Settings for the DigitalKin gRPC clients.
+
+Attributes:
+
+- **`channel`** (`ClientChannelSettings`) – Settings for the client channel.
+- **`grpc`** (`GrpcClientSettings`) – Settings for the gRPC channel options.
+- **`retry`** (`GrpcClientRetrySettings`) – Channel-level gRPC retry policy.
+- **`circuit_breaker`** (`CircuitBreakerSettings`) – Per-service circuit-breaker thresholds.
+- **`max_retries`** (`NonNegativeInt`) – Retry attempts for a failed unary query.
+- **`backoff_base_ms`** (`NonNegativeFloat`) – Base backoff in milliseconds for query retries.
+- **`timeout`** (`NonNegativeFloat`) – Default per-query deadline in seconds.
+
+###### get_client_settings
+
+```python
+get_client_settings() -> ClientSettings
+```
+
+Process-wide `ClientSettings` singleton.
+
+Nested settings accessed via composition: `.channel`, `.grpc`, `.retry`, `.circuit_breaker`. Tests must call `get_client_settings.cache_clear()` after mutating env.
+
+Returns:
+
+- `ClientSettings` – The shared ClientSettings instance.
+
+##### grpc
+
+gRPC client settings for the SDK.
+
+Classes:
+
+- **`GrpcClientRetrySettings`** – gRPC service-config retry policy (channel-level).
+- **`GrpcClientSettings`** – gRPC tuning settings on the SDK client side.
+
+###### GrpcClientRetrySettings
+
+```
+              flowchart TD
+              digitalkin.models.settings.client.grpc.GrpcClientRetrySettings[GrpcClientRetrySettings]
+
+              
+
+              click digitalkin.models.settings.client.grpc.GrpcClientRetrySettings href "" "digitalkin.models.settings.client.grpc.GrpcClientRetrySettings"
+```
+
+gRPC service-config retry policy (channel-level).
+
+Attributes:
+
+- **`max_attempts`** (`int`) – Max retry attempts including the original call.
+- **`initial_backoff`** (`str`) – Initial backoff duration (e.g. '0.1s').
+- **`max_backoff`** (`str`) – Maximum backoff duration (e.g. '10s').
+- **`backoff_multiplier`** (`float`) – Exponential backoff multiplier.
+
+###### GrpcClientSettings
+
+```
+              flowchart TD
+              digitalkin.models.settings.client.grpc.GrpcClientSettings[GrpcClientSettings]
+
+              
+
+              click digitalkin.models.settings.client.grpc.GrpcClientSettings href "" "digitalkin.models.settings.client.grpc.GrpcClientSettings"
+```
+
+gRPC tuning settings on the SDK client side.
+
+Attributes:
+
+- **`compression`** (`GrpcCompression`) – gRPC compression algorithm to use for client requests.
+- **`keepalive_time`** (`NonNegativeInt`) – Interval for client keepalive pings, in milliseconds.
+- **`keepalive_timeout`** (`NonNegativeInt`) – Timeout for client keepalive pings, in milliseconds.
+- **`min_ping_interval`** (`NonNegativeInt`) – Minimum interval between HTTP/2 pings on the client side, in milliseconds.
+- **`max_receive_message_length`** (`NonNegativeInt`) – Maximum message size the client can receive, in bytes.
+- **`max_send_message_length`** (`NonNegativeInt`) – Maximum message size the client can send, in bytes.
+- **`keepalive_permit_without_calls`** (`bool`) – Send keepalive pings even when there are no active RPCs.
+- **`dns_resolution_ms`** (`NonNegativeInt`) – Minimum interval between DNS re-resolutions, in milliseconds.
+- **`initial_reconnect_ms`** (`NonNegativeInt`) – Initial reconnect backoff, in milliseconds.
+- **`max_reconnect_ms`** (`NonNegativeInt`) – Maximum reconnect backoff, in milliseconds.
+- **`min_reconnect_ms`** (`NonNegativeInt`) – Minimum reconnect backoff, in milliseconds.
+- **`enable_retries`** (`bool`) – Enable the gRPC C++ retry layer on top of the Python-level retry loop.
+
+###### options
+
+```python
+options: list[tuple[str, Any]]
+```
+
+Convert settings to gRPC channel options format.
+
+Returns:
+
+- `list[tuple[str, Any]]` – List of tuples containing gRPC channel options and their corresponding values.
 
 #### gateway
 
@@ -21694,148 +22791,6 @@ Returns:
 
 - `GatewaySettings` – The shared GatewaySettings instance.
 
-#### grpc_client
-
-gRPC client-side settings — circuit breaker, query retry, channel options.
-
-Classes:
-
-- **`CircuitBreakerSettings`** – Per-service circuit-breaker thresholds.
-- **`GrpcChannelSettings`** – gRPC channel keepalive and reconnect tuning.
-- **`GrpcClientSettings`** – Retry/backoff for unary gRPC queries via GrpcClientWrapper.
-- **`GrpcRetrySettings`** – gRPC service-config retry policy (channel-level).
-
-Functions:
-
-- **`get_circuit_breaker_settings`** – Process-wide CircuitBreakerSettings singleton.
-- **`get_grpc_channel_settings`** – Process-wide GrpcChannelSettings singleton.
-- **`get_grpc_client_settings`** – Process-wide GrpcClientSettings singleton.
-- **`get_grpc_retry_settings`** – Process-wide GrpcRetrySettings singleton.
-
-##### CircuitBreakerSettings
-
-```
-              flowchart TD
-              digitalkin.models.settings.grpc_client.CircuitBreakerSettings[CircuitBreakerSettings]
-
-              
-
-              click digitalkin.models.settings.grpc_client.CircuitBreakerSettings href "" "digitalkin.models.settings.grpc_client.CircuitBreakerSettings"
-```
-
-Per-service circuit-breaker thresholds.
-
-##### GrpcChannelSettings
-
-```
-              flowchart TD
-              digitalkin.models.settings.grpc_client.GrpcChannelSettings[GrpcChannelSettings]
-
-              
-
-              click digitalkin.models.settings.grpc_client.GrpcChannelSettings href "" "digitalkin.models.settings.grpc_client.GrpcChannelSettings"
-```
-
-gRPC channel keepalive and reconnect tuning.
-
-Methods:
-
-- **`to_channel_options`** – Build the resilient gRPC channel-options list.
-
-###### to_channel_options
-
-```python
-to_channel_options() -> list[tuple[str, Any]]
-```
-
-Build the resilient gRPC channel-options list.
-
-Returns:
-
-- `list[tuple[str, Any]]` – Channel options with message-size limits, DNS re-resolution, keepalive, and retries.
-
-##### GrpcClientSettings
-
-```
-              flowchart TD
-              digitalkin.models.settings.grpc_client.GrpcClientSettings[GrpcClientSettings]
-
-              
-
-              click digitalkin.models.settings.grpc_client.GrpcClientSettings href "" "digitalkin.models.settings.grpc_client.GrpcClientSettings"
-```
-
-Retry/backoff for unary gRPC queries via GrpcClientWrapper.
-
-##### GrpcRetrySettings
-
-```
-              flowchart TD
-              digitalkin.models.settings.grpc_client.GrpcRetrySettings[GrpcRetrySettings]
-
-              
-
-              click digitalkin.models.settings.grpc_client.GrpcRetrySettings href "" "digitalkin.models.settings.grpc_client.GrpcRetrySettings"
-```
-
-gRPC service-config retry policy (channel-level).
-
-##### get_circuit_breaker_settings
-
-```python
-get_circuit_breaker_settings() -> CircuitBreakerSettings
-```
-
-Process-wide `CircuitBreakerSettings` singleton.
-
-Tests must call `get_circuit_breaker_settings.cache_clear()` after mutating env.
-
-Returns:
-
-- `CircuitBreakerSettings` – The shared CircuitBreakerSettings instance.
-
-##### get_grpc_channel_settings
-
-```python
-get_grpc_channel_settings() -> GrpcChannelSettings
-```
-
-Process-wide `GrpcChannelSettings` singleton.
-
-Tests must call `get_grpc_channel_settings.cache_clear()` after mutating env.
-
-Returns:
-
-- `GrpcChannelSettings` – The shared GrpcChannelSettings instance.
-
-##### get_grpc_client_settings
-
-```python
-get_grpc_client_settings() -> GrpcClientSettings
-```
-
-Process-wide `GrpcClientSettings` singleton.
-
-Tests must call `get_grpc_client_settings.cache_clear()` after mutating env.
-
-Returns:
-
-- `GrpcClientSettings` – The shared GrpcClientSettings instance.
-
-##### get_grpc_retry_settings
-
-```python
-get_grpc_retry_settings() -> GrpcRetrySettings
-```
-
-Process-wide `GrpcRetrySettings` singleton.
-
-Tests must call `get_grpc_retry_settings.cache_clear()` after mutating env.
-
-Returns:
-
-- `GrpcRetrySettings` – The shared GrpcRetrySettings instance.
-
 #### log
 
 Logging configuration settings.
@@ -21902,6 +22857,8 @@ Functions:
 
 Per-module runtime configuration.
 
+Env prefix `DIGITALKIN_MODULE_`; `services_mode` reads the unprefixed `SERVICE_MODE` the deployment and the `--dev-mode` flag share.
+
 ##### get_module_settings
 
 ```python
@@ -21955,7 +22912,7 @@ Profiler backend selection.
 
 Profiling and debugging configuration.
 
-Env vars: DIGITALKIN_PROFILER, DIGITALKIN_PROFILE_OUTPUT_DIR, DIGITALKIN_ASYNCIO_INSPECTOR, DIGITALKIN_ASYNCIO_INSPECTOR_PORT.
+Env vars: DIGITALKIN_PROFILER, DIGITALKIN_PROFILE_OUTPUT_DIR, DIGITALKIN_UVLOOP, DIGITALKIN_PROFILER_KEEP_N.
 
 ##### get_profiling_settings
 
@@ -22151,11 +23108,41 @@ Resilience subsystem settings — bulkhead.
 
 Classes:
 
+- **`BulkheadServiceSettings`** – Per-service bulkhead override, read under a prefix built at runtime.
 - **`BulkheadSettings`** – Per-service concurrency-limiter defaults.
 
 Functions:
 
 - **`get_bulkhead_settings`** – Process-wide BulkheadSettings singleton.
+
+##### BulkheadServiceSettings
+
+```python
+BulkheadServiceSettings(service_id: str)
+```
+
+```
+              flowchart TD
+              digitalkin.models.settings.resilience.BulkheadServiceSettings[BulkheadServiceSettings]
+
+              
+
+              click digitalkin.models.settings.resilience.BulkheadServiceSettings href "" "digitalkin.models.settings.resilience.BulkheadServiceSettings"
+```
+
+Per-service bulkhead override, read under a prefix built at runtime.
+
+`DIGITALKIN_BULKHEAD_{SERVICE_ID}_MAX` carries the service id in the variable name, so the prefix is built from the id at instantiation: `BulkheadServiceSettings("storage")` reads `DIGITALKIN_BULKHEAD_STORAGE_MAX`.
+
+Attributes:
+
+- **`max`** (`int | None`) – Max concurrent calls for this service. None keeps the default.
+
+Parameters:
+
+- ###### **`service_id`**
+
+  (`str`) – Service identifier forming the variable's dynamic segment.
 
 ##### BulkheadSettings
 
@@ -22170,7 +23157,7 @@ Functions:
 
 Per-service concurrency-limiter defaults.
 
-The per-service `DIGITALKIN_BULKHEAD_{SERVICE_ID}_MAX` override has a dynamic suffix and is read directly in `Bulkhead.for_service`.
+The per-service override lives in `BulkheadServiceSettings`, whose prefix is built from the service id.
 
 ##### get_bulkhead_settings
 
@@ -22237,7 +23224,7 @@ Attributes:
 
 Methods:
 
-- **`validate_credentials`** – Validate that credentials are provided when in secure mode.
+- **`validate_credentials`** – Accept secure mode without explicit credential paths.
 - **`validate_port`** – Validate that the port is in a valid range.
 
 ###### address
@@ -22255,18 +23242,16 @@ Returns:
 ###### validate_credentials
 
 ```python
-validate_credentials() -> BaseChannelSettings
+validate_credentials() -> ServerChannelSettings
 ```
 
-Validate that credentials are provided when in secure mode.
+Accept secure mode without explicit credential paths.
+
+`EnvManager.server_credentials` falls back to the `CERTIFICATE_CERT_VOLUME` directory and raises `SecurityError` when the key or certificate is missing there, so secure mode still fails closed.
 
 Returns:
 
-- `BaseChannelSettings` – The validated credentials
-
-Raises:
-
-- `ConfigurationError` – If credentials are missing in secure mode
+- `ServerChannelSettings` – The validated settings.
 
 ###### validate_port
 
@@ -22530,6 +23515,7 @@ Classes:
 - **`BaseChannelSettings`** – Base settings model for gRPC channel configuration.
 - **`ControlFlow`** – Enum for server operation mode.
 - **`Credentials`** – Model for server credentials in secure mode.
+- **`GrpcCompression`** – gRPC compression algorithm.
 - **`SecurityMode`** – Enum for server security mode.
 
 ###### BaseChannelSettings
@@ -22548,6 +23534,8 @@ BaseChannelSettings(**values: Any)
 ```
 
 Base settings model for gRPC channel configuration.
+
+Subclasses override `env_prefix`; the `CHANNEL_` default keeps a bare instantiation from capturing generic environment variables such as the `PORT` most PaaS runtimes inject.
 
 Methods:
 
@@ -22669,6 +23657,41 @@ Returns:
 Raises:
 
 - `SecurityError` – If the path does not exist
+
+###### GrpcCompression
+
+```
+              flowchart TD
+              digitalkin.models.settings.utils.channel.GrpcCompression[GrpcCompression]
+
+              
+
+              click digitalkin.models.settings.utils.channel.GrpcCompression href "" "digitalkin.models.settings.utils.channel.GrpcCompression"
+```
+
+gRPC compression algorithm.
+
+Attributes:
+
+- **`NONE`** – No compression
+- **`GZIP`** – Gzip compression
+- **`DEFLATE`** – Deflate compression
+
+Methods:
+
+- **`to_grpc`** – Convert to grpc.Compression enum.
+
+###### to_grpc
+
+```python
+to_grpc() -> Compression
+```
+
+Convert to grpc.Compression enum.
+
+Returns:
+
+- `Compression` – The corresponding grpc.Compression value.
 
 ###### SecurityMode
 
@@ -24008,7 +25031,7 @@ Parameters:
 #### append_files_history
 
 ```python
-append_files_history(context: ModuleContext, files: list[FileModel]) -> None
+append_files_history(context: ModuleContext, files: list[FileMetadata]) -> None
 ```
 
 Append files to file history.
@@ -24023,7 +25046,7 @@ Parameters:
 
 - ##### **`files`**
 
-  (`list[FileModel]`) – List of file models to append.
+  (`list[FileMetadata]`) – Files to append.
 
 #### clear_fh_mission_cache
 
@@ -25672,7 +26695,7 @@ Parameters:
 ##### append_files_history
 
 ```python
-append_files_history(context: ModuleContext, files: list[FileModel]) -> None
+append_files_history(context: ModuleContext, files: list[FileMetadata]) -> None
 ```
 
 Append files to file history.
@@ -25687,7 +26710,7 @@ Parameters:
 
 - ###### **`files`**
 
-  (`list[FileModel]`) – List of file models to append.
+  (`list[FileMetadata]`) – Files to append.
 
 ##### clear_fh_mission_cache
 
@@ -26235,7 +27258,7 @@ Parameters:
 ###### append_files_history
 
 ```python
-append_files_history(context: ModuleContext, files: list[FileModel]) -> None
+append_files_history(context: ModuleContext, files: list[FileMetadata]) -> None
 ```
 
 Append files to file history.
@@ -26250,7 +27273,7 @@ Parameters:
 
 - ###### **`files`**
 
-  (`list[FileModel]`) – List of file models to append.
+  (`list[FileMetadata]`) – Files to append.
 
 ###### clear_fh_mission_cache
 
@@ -26774,7 +27797,7 @@ Parameters:
 ###### append_files_history
 
 ```python
-append_files_history(context: ModuleContext, files: list[FileModel]) -> None
+append_files_history(context: ModuleContext, files: list[FileMetadata]) -> None
 ```
 
 Append files to file history.
@@ -26789,7 +27812,7 @@ Parameters:
 
 - ###### **`files`**
 
-  (`list[FileModel]`) – List of file models to append.
+  (`list[FileMetadata]`) – Files to append.
 
 ###### clear_fh_mission_cache
 
@@ -27313,7 +28336,7 @@ Parameters:
 ###### append_files_history
 
 ```python
-append_files_history(context: ModuleContext, files: list[FileModel]) -> None
+append_files_history(context: ModuleContext, files: list[FileMetadata]) -> None
 ```
 
 Append files to file history.
@@ -27328,7 +28351,7 @@ Parameters:
 
 - ###### **`files`**
 
-  (`list[FileModel]`) – List of file models to append.
+  (`list[FileMetadata]`) – Files to append.
 
 ###### clear_fh_mission_cache
 
@@ -28643,15 +29666,13 @@ Raises:
 update_file(
     file_id: str,
     content: bytes | None = None,
-    file_type: Literal[
-        "UNSPECIFIED", "DOCUMENT", "IMAGE", "VIDEO", "AUDIO", "ARCHIVE", "CODE", "OTHER"
-    ]
-    | None = None,
+    type: FileType | None = None,
     content_type: str | None = None,
     metadata: dict[str, Any] | None = None,
     new_name: str | None = None,
     status: str | None = None,
     visibility: Visibility = UNSPECIFIED,
+    context: Context = MISSIONS,
 ) -> FilesystemRecord
 ```
 
@@ -28674,9 +29695,9 @@ Parameters:
 
   (`bytes | None`, default: `None` ) – Optional new content of the file
 
-- ##### **`file_type`**
+- ##### **`type`**
 
-  (`Literal['UNSPECIFIED', 'DOCUMENT', 'IMAGE', 'VIDEO', 'AUDIO', 'ARCHIVE', 'CODE', 'OTHER'] | None`, default: `None` ) – Optional new type of data
+  (`FileType | None`, default: `None` ) – Optional new type of data
 
 - ##### **`content_type`**
 
@@ -28697,6 +29718,10 @@ Parameters:
 - ##### **`visibility`**
 
   (`Visibility`, default: `UNSPECIFIED` ) – Optional new read-access scope; UNSPECIFIED leaves it unchanged
+
+- ##### **`context`**
+
+  (`Context`, default: `MISSIONS` ) – The owner context of the file
 
 Returns:
 
@@ -29816,15 +30841,13 @@ Returns:
 update_file(
     file_id: str,
     content: bytes | None = None,
-    file_type: Literal[
-        "UNSPECIFIED", "DOCUMENT", "IMAGE", "VIDEO", "AUDIO", "ARCHIVE", "CODE", "OTHER"
-    ]
-    | None = None,
+    type: FileType | None = None,
     content_type: str | None = None,
     metadata: dict[str, Any] | None = None,
     new_name: str | None = None,
     status: str | None = None,
     visibility: Visibility = UNSPECIFIED,
+    context: Context = MISSIONS,
 ) -> FilesystemRecord
 ```
 
@@ -29847,9 +30870,9 @@ Parameters:
 
   (`bytes | None`, default: `None` ) – Optional new content of the file
 
-- ##### **`file_type`**
+- ##### **`type`**
 
-  (`Literal['UNSPECIFIED', 'DOCUMENT', 'IMAGE', 'VIDEO', 'AUDIO', 'ARCHIVE', 'CODE', 'OTHER'] | None`, default: `None` ) – Optional new type of data
+  (`FileType | None`, default: `None` ) – Optional new type of data
 
 - ##### **`content_type`**
 
@@ -29870,6 +30893,10 @@ Parameters:
 - ##### **`visibility`**
 
   (`Visibility`, default: `UNSPECIFIED` ) – Optional new read-access scope; UNSPECIFIED leaves it unchanged
+
+- ##### **`context`**
+
+  (`Context`, default: `MISSIONS` ) – The owner context of the file
 
 Returns:
 
@@ -30142,7 +31169,7 @@ Execute a gRPC query with circuit breaker protection and retry.
 
 The circuit breaker is per-service (keyed on `service_name`). When the circuit is OPEN, calls fail immediately with `CircuitOpenError` wrapped in `ServerError` — no network round-trip, no timeout wait.
 
-Retries on transient errors (UNAVAILABLE, INTERNAL, DEADLINE_EXCEEDED) with exponential backoff. Retry count and backoff base are configurable via DIGITALKIN_GRPC_QUERY_MAX_RETRIES and DIGITALKIN_GRPC_QUERY_BACKOFF_BASE_MS.
+Retries on transient errors (UNAVAILABLE, INTERNAL, DEADLINE_EXCEEDED) with exponential backoff. Retry count and backoff base are configurable via CLIENT_MAX_RETRIES and CLIENT_BACKOFF_BASE_MS.
 
 Parameters:
 
@@ -31773,7 +32800,7 @@ Execute a gRPC query with circuit breaker protection and retry.
 
 The circuit breaker is per-service (keyed on `service_name`). When the circuit is OPEN, calls fail immediately with `CircuitOpenError` wrapped in `ServerError` — no network round-trip, no timeout wait.
 
-Retries on transient errors (UNAVAILABLE, INTERNAL, DEADLINE_EXCEEDED) with exponential backoff. Retry count and backoff base are configurable via DIGITALKIN_GRPC_QUERY_MAX_RETRIES and DIGITALKIN_GRPC_QUERY_BACKOFF_BASE_MS.
+Retries on transient errors (UNAVAILABLE, INTERNAL, DEADLINE_EXCEEDED) with exponential backoff. Retry count and backoff base are configurable via CLIENT_MAX_RETRIES and CLIENT_BACKOFF_BASE_MS.
 
 Parameters:
 
@@ -32620,7 +33647,7 @@ Execute a gRPC query with circuit breaker protection and retry.
 
 The circuit breaker is per-service (keyed on `service_name`). When the circuit is OPEN, calls fail immediately with `CircuitOpenError` wrapped in `ServerError` — no network round-trip, no timeout wait.
 
-Retries on transient errors (UNAVAILABLE, INTERNAL, DEADLINE_EXCEEDED) with exponential backoff. Retry count and backoff base are configurable via DIGITALKIN_GRPC_QUERY_MAX_RETRIES and DIGITALKIN_GRPC_QUERY_BACKOFF_BASE_MS.
+Retries on transient errors (UNAVAILABLE, INTERNAL, DEADLINE_EXCEEDED) with exponential backoff. Retry count and backoff base are configurable via CLIENT_MAX_RETRIES and CLIENT_BACKOFF_BASE_MS.
 
 Parameters:
 
@@ -33328,7 +34355,7 @@ Execute a gRPC query with circuit breaker protection and retry.
 
 The circuit breaker is per-service (keyed on `service_name`). When the circuit is OPEN, calls fail immediately with `CircuitOpenError` wrapped in `ServerError` — no network round-trip, no timeout wait.
 
-Retries on transient errors (UNAVAILABLE, INTERNAL, DEADLINE_EXCEEDED) with exponential backoff. Retry count and backoff base are configurable via DIGITALKIN_GRPC_QUERY_MAX_RETRIES and DIGITALKIN_GRPC_QUERY_BACKOFF_BASE_MS.
+Retries on transient errors (UNAVAILABLE, INTERNAL, DEADLINE_EXCEEDED) with exponential backoff. Retry count and backoff base are configurable via CLIENT_MAX_RETRIES and CLIENT_BACKOFF_BASE_MS.
 
 Parameters:
 
@@ -34088,7 +35115,7 @@ Execute a gRPC query with circuit breaker protection and retry.
 
 The circuit breaker is per-service (keyed on `service_name`). When the circuit is OPEN, calls fail immediately with `CircuitOpenError` wrapped in `ServerError` — no network round-trip, no timeout wait.
 
-Retries on transient errors (UNAVAILABLE, INTERNAL, DEADLINE_EXCEEDED) with exponential backoff. Retry count and backoff base are configurable via DIGITALKIN_GRPC_QUERY_MAX_RETRIES and DIGITALKIN_GRPC_QUERY_BACKOFF_BASE_MS.
+Retries on transient errors (UNAVAILABLE, INTERNAL, DEADLINE_EXCEEDED) with exponential backoff. Retry count and backoff base are configurable via CLIENT_MAX_RETRIES and CLIENT_BACKOFF_BASE_MS.
 
 Parameters:
 
@@ -34264,8 +35291,11 @@ Modules:
 Classes:
 
 - **`DefaultFilesystem`** – Default filesystem implementation.
+- **`FileFilter`** – Filter criteria for querying files.
+- **`FilesystemRecord`** – A stored file: the canonical FileMetadata plus the service-only fields.
 - **`FilesystemStrategy`** – Abstract base class for filesystem strategies.
 - **`GrpcFilesystem`** – gRPC client implementation for the Filesystem service.
+- **`UploadFileData`** – Data model for uploading a file.
 
 #### DefaultFilesystem
 
@@ -34456,15 +35486,13 @@ Raises:
 update_file(
     file_id: str,
     content: bytes | None = None,
-    file_type: Literal[
-        "UNSPECIFIED", "DOCUMENT", "IMAGE", "VIDEO", "AUDIO", "ARCHIVE", "CODE", "OTHER"
-    ]
-    | None = None,
+    type: FileType | None = None,
     content_type: str | None = None,
     metadata: dict[str, Any] | None = None,
     new_name: str | None = None,
     status: str | None = None,
     visibility: Visibility = UNSPECIFIED,
+    context: Context = MISSIONS,
 ) -> FilesystemRecord
 ```
 
@@ -34487,9 +35515,9 @@ Parameters:
 
   (`bytes | None`, default: `None` ) – Optional new content of the file
 
-- ###### **`file_type`**
+- ###### **`type`**
 
-  (`Literal['UNSPECIFIED', 'DOCUMENT', 'IMAGE', 'VIDEO', 'AUDIO', 'ARCHIVE', 'CODE', 'OTHER'] | None`, default: `None` ) – Optional new type of data
+  (`FileType | None`, default: `None` ) – Optional new type of data
 
 - ###### **`content_type`**
 
@@ -34510,6 +35538,10 @@ Parameters:
 - ###### **`visibility`**
 
   (`Visibility`, default: `UNSPECIFIED` ) – Optional new read-access scope; UNSPECIFIED leaves it unchanged
+
+- ###### **`context`**
+
+  (`Context`, default: `MISSIONS` ) – The owner context of the file
 
 Returns:
 
@@ -34542,6 +35574,36 @@ Returns:
 Raises:
 
 - `FilesystemServiceError` – If there is an error uploading the files
+
+#### FileFilter
+
+```
+              flowchart TD
+              digitalkin.services.filesystem.FileFilter[FileFilter]
+
+              
+
+              click digitalkin.services.filesystem.FileFilter href "" "digitalkin.services.filesystem.FileFilter"
+```
+
+Filter criteria for querying files.
+
+#### FilesystemRecord
+
+```
+              flowchart TD
+              digitalkin.services.filesystem.FilesystemRecord[FilesystemRecord]
+              digitalkin.models.services.filesystem.FileMetadata[FileMetadata]
+
+                              digitalkin.models.services.filesystem.FileMetadata --> digitalkin.services.filesystem.FilesystemRecord
+                
+
+
+              click digitalkin.services.filesystem.FilesystemRecord href "" "digitalkin.services.filesystem.FilesystemRecord"
+              click digitalkin.models.services.filesystem.FileMetadata href "" "digitalkin.models.services.filesystem.FileMetadata"
+```
+
+A stored file: the canonical `FileMetadata` plus the service-only fields.
 
 #### FilesystemStrategy
 
@@ -34727,15 +35789,13 @@ Returns:
 update_file(
     file_id: str,
     content: bytes | None = None,
-    file_type: Literal[
-        "UNSPECIFIED", "DOCUMENT", "IMAGE", "VIDEO", "AUDIO", "ARCHIVE", "CODE", "OTHER"
-    ]
-    | None = None,
+    type: FileType | None = None,
     content_type: str | None = None,
     metadata: dict[str, Any] | None = None,
     new_name: str | None = None,
     status: str | None = None,
     visibility: Visibility = UNSPECIFIED,
+    context: Context = MISSIONS,
 ) -> FilesystemRecord
 ```
 
@@ -34758,9 +35818,9 @@ Parameters:
 
   (`bytes | None`, default: `None` ) – Optional new content of the file
 
-- ###### **`file_type`**
+- ###### **`type`**
 
-  (`Literal['UNSPECIFIED', 'DOCUMENT', 'IMAGE', 'VIDEO', 'AUDIO', 'ARCHIVE', 'CODE', 'OTHER'] | None`, default: `None` ) – Optional new type of data
+  (`FileType | None`, default: `None` ) – Optional new type of data
 
 - ###### **`content_type`**
 
@@ -34781,6 +35841,10 @@ Parameters:
 - ###### **`visibility`**
 
   (`Visibility`, default: `UNSPECIFIED` ) – Optional new read-access scope; UNSPECIFIED leaves it unchanged
+
+- ###### **`context`**
+
+  (`Context`, default: `MISSIONS` ) – The owner context of the file
 
 Returns:
 
@@ -34969,7 +36033,7 @@ Execute a gRPC query with circuit breaker protection and retry.
 
 The circuit breaker is per-service (keyed on `service_name`). When the circuit is OPEN, calls fail immediately with `CircuitOpenError` wrapped in `ServerError` — no network round-trip, no timeout wait.
 
-Retries on transient errors (UNAVAILABLE, INTERNAL, DEADLINE_EXCEEDED) with exponential backoff. Retry count and backoff base are configurable via DIGITALKIN_GRPC_QUERY_MAX_RETRIES and DIGITALKIN_GRPC_QUERY_BACKOFF_BASE_MS.
+Retries on transient errors (UNAVAILABLE, INTERNAL, DEADLINE_EXCEEDED) with exponential backoff. Retry count and backoff base are configurable via CLIENT_MAX_RETRIES and CLIENT_BACKOFF_BASE_MS.
 
 Parameters:
 
@@ -35120,15 +36184,13 @@ Parameters:
 update_file(
     file_id: str,
     content: bytes | None = None,
-    file_type: Literal[
-        "UNSPECIFIED", "DOCUMENT", "IMAGE", "VIDEO", "AUDIO", "ARCHIVE", "CODE", "OTHER"
-    ]
-    | None = None,
+    type: FileType | None = None,
     content_type: str | None = None,
     metadata: dict[str, Any] | None = None,
     new_name: str | None = None,
     status: str | None = None,
     visibility: Visibility = UNSPECIFIED,
+    context: Context = MISSIONS,
 ) -> FilesystemRecord
 ```
 
@@ -35144,9 +36206,9 @@ Parameters:
 
   (`bytes | None`, default: `None` ) – Optional new content of the file
 
-- ###### **`file_type`**
+- ###### **`type`**
 
-  (`Literal['UNSPECIFIED', 'DOCUMENT', 'IMAGE', 'VIDEO', 'AUDIO', 'ARCHIVE', 'CODE', 'OTHER'] | None`, default: `None` ) – Optional new type of data
+  (`FileType | None`, default: `None` ) – Optional new type of data
 
 - ###### **`content_type`**
 
@@ -35167,6 +36229,10 @@ Parameters:
 - ###### **`visibility`**
 
   (`Visibility`, default: `UNSPECIFIED` ) – Optional new read-access scope; UNSPECIFIED leaves it unchanged
+
+- ###### **`context`**
+
+  (`Context`, default: `MISSIONS` ) – The owner context of the file
 
 Returns:
 
@@ -35193,6 +36259,19 @@ Parameters:
 Returns:
 
 - `tuple[list[FilesystemRecord], int, int]` – tuple\[list[FilesystemRecord], int, int\]: List of uploaded files, total uploaded count, total failed count
+
+#### UploadFileData
+
+```
+              flowchart TD
+              digitalkin.services.filesystem.UploadFileData[UploadFileData]
+
+              
+
+              click digitalkin.services.filesystem.UploadFileData href "" "digitalkin.services.filesystem.UploadFileData"
+```
+
+Data model for uploading a file.
 
 #### default_filesystem
 
@@ -35391,15 +36470,13 @@ Raises:
 update_file(
     file_id: str,
     content: bytes | None = None,
-    file_type: Literal[
-        "UNSPECIFIED", "DOCUMENT", "IMAGE", "VIDEO", "AUDIO", "ARCHIVE", "CODE", "OTHER"
-    ]
-    | None = None,
+    type: FileType | None = None,
     content_type: str | None = None,
     metadata: dict[str, Any] | None = None,
     new_name: str | None = None,
     status: str | None = None,
     visibility: Visibility = UNSPECIFIED,
+    context: Context = MISSIONS,
 ) -> FilesystemRecord
 ```
 
@@ -35422,9 +36499,9 @@ Parameters:
 
   (`bytes | None`, default: `None` ) – Optional new content of the file
 
-- ###### **`file_type`**
+- ###### **`type`**
 
-  (`Literal['UNSPECIFIED', 'DOCUMENT', 'IMAGE', 'VIDEO', 'AUDIO', 'ARCHIVE', 'CODE', 'OTHER'] | None`, default: `None` ) – Optional new type of data
+  (`FileType | None`, default: `None` ) – Optional new type of data
 
 - ###### **`content_type`**
 
@@ -35445,6 +36522,10 @@ Parameters:
 - ###### **`visibility`**
 
   (`Visibility`, default: `UNSPECIFIED` ) – Optional new read-access scope; UNSPECIFIED leaves it unchanged
+
+- ###### **`context`**
+
+  (`Context`, default: `MISSIONS` ) – The owner context of the file
 
 Returns:
 
@@ -35506,7 +36587,7 @@ This module contains the abstract base class for filesystem strategies.
 Classes:
 
 - **`FileFilter`** – Filter criteria for querying files.
-- **`FilesystemRecord`** – Data model for filesystem operations.
+- **`FilesystemRecord`** – A stored file: the canonical FileMetadata plus the service-only fields.
 - **`FilesystemStrategy`** – Abstract base class for filesystem strategies.
 - **`UploadFileData`** – Data model for uploading a file.
 
@@ -35528,13 +36609,17 @@ Filter criteria for querying files.
 ```
               flowchart TD
               digitalkin.services.filesystem.filesystem_strategy.FilesystemRecord[FilesystemRecord]
+              digitalkin.models.services.filesystem.FileMetadata[FileMetadata]
 
-              
+                              digitalkin.models.services.filesystem.FileMetadata --> digitalkin.services.filesystem.filesystem_strategy.FilesystemRecord
+                
+
 
               click digitalkin.services.filesystem.filesystem_strategy.FilesystemRecord href "" "digitalkin.services.filesystem.filesystem_strategy.FilesystemRecord"
+              click digitalkin.models.services.filesystem.FileMetadata href "" "digitalkin.models.services.filesystem.FileMetadata"
 ```
 
-Data model for filesystem operations.
+A stored file: the canonical `FileMetadata` plus the service-only fields.
 
 ##### FilesystemStrategy
 
@@ -35720,15 +36805,13 @@ Returns:
 update_file(
     file_id: str,
     content: bytes | None = None,
-    file_type: Literal[
-        "UNSPECIFIED", "DOCUMENT", "IMAGE", "VIDEO", "AUDIO", "ARCHIVE", "CODE", "OTHER"
-    ]
-    | None = None,
+    type: FileType | None = None,
     content_type: str | None = None,
     metadata: dict[str, Any] | None = None,
     new_name: str | None = None,
     status: str | None = None,
     visibility: Visibility = UNSPECIFIED,
+    context: Context = MISSIONS,
 ) -> FilesystemRecord
 ```
 
@@ -35751,9 +36834,9 @@ Parameters:
 
   (`bytes | None`, default: `None` ) – Optional new content of the file
 
-- ###### **`file_type`**
+- ###### **`type`**
 
-  (`Literal['UNSPECIFIED', 'DOCUMENT', 'IMAGE', 'VIDEO', 'AUDIO', 'ARCHIVE', 'CODE', 'OTHER'] | None`, default: `None` ) – Optional new type of data
+  (`FileType | None`, default: `None` ) – Optional new type of data
 
 - ###### **`content_type`**
 
@@ -35774,6 +36857,10 @@ Parameters:
 - ###### **`visibility`**
 
   (`Visibility`, default: `UNSPECIFIED` ) – Optional new read-access scope; UNSPECIFIED leaves it unchanged
+
+- ###### **`context`**
+
+  (`Context`, default: `MISSIONS` ) – The owner context of the file
 
 Returns:
 
@@ -35983,7 +37070,7 @@ Execute a gRPC query with circuit breaker protection and retry.
 
 The circuit breaker is per-service (keyed on `service_name`). When the circuit is OPEN, calls fail immediately with `CircuitOpenError` wrapped in `ServerError` — no network round-trip, no timeout wait.
 
-Retries on transient errors (UNAVAILABLE, INTERNAL, DEADLINE_EXCEEDED) with exponential backoff. Retry count and backoff base are configurable via DIGITALKIN_GRPC_QUERY_MAX_RETRIES and DIGITALKIN_GRPC_QUERY_BACKOFF_BASE_MS.
+Retries on transient errors (UNAVAILABLE, INTERNAL, DEADLINE_EXCEEDED) with exponential backoff. Retry count and backoff base are configurable via CLIENT_MAX_RETRIES and CLIENT_BACKOFF_BASE_MS.
 
 Parameters:
 
@@ -36134,15 +37221,13 @@ Parameters:
 update_file(
     file_id: str,
     content: bytes | None = None,
-    file_type: Literal[
-        "UNSPECIFIED", "DOCUMENT", "IMAGE", "VIDEO", "AUDIO", "ARCHIVE", "CODE", "OTHER"
-    ]
-    | None = None,
+    type: FileType | None = None,
     content_type: str | None = None,
     metadata: dict[str, Any] | None = None,
     new_name: str | None = None,
     status: str | None = None,
     visibility: Visibility = UNSPECIFIED,
+    context: Context = MISSIONS,
 ) -> FilesystemRecord
 ```
 
@@ -36158,9 +37243,9 @@ Parameters:
 
   (`bytes | None`, default: `None` ) – Optional new content of the file
 
-- ###### **`file_type`**
+- ###### **`type`**
 
-  (`Literal['UNSPECIFIED', 'DOCUMENT', 'IMAGE', 'VIDEO', 'AUDIO', 'ARCHIVE', 'CODE', 'OTHER'] | None`, default: `None` ) – Optional new type of data
+  (`FileType | None`, default: `None` ) – Optional new type of data
 
 - ###### **`content_type`**
 
@@ -36181,6 +37266,10 @@ Parameters:
 - ###### **`visibility`**
 
   (`Visibility`, default: `UNSPECIFIED` ) – Optional new read-access scope; UNSPECIFIED leaves it unchanged
+
+- ###### **`context`**
+
+  (`Context`, default: `MISSIONS` ) – The owner context of the file
 
 Returns:
 
@@ -37181,7 +38270,7 @@ Execute a gRPC query with circuit breaker protection and retry.
 
 The circuit breaker is per-service (keyed on `service_name`). When the circuit is OPEN, calls fail immediately with `CircuitOpenError` wrapped in `ServerError` — no network round-trip, no timeout wait.
 
-Retries on transient errors (UNAVAILABLE, INTERNAL, DEADLINE_EXCEEDED) with exponential backoff. Retry count and backoff base are configurable via DIGITALKIN_GRPC_QUERY_MAX_RETRIES and DIGITALKIN_GRPC_QUERY_BACKOFF_BASE_MS.
+Retries on transient errors (UNAVAILABLE, INTERNAL, DEADLINE_EXCEEDED) with exponential backoff. Retry count and backoff base are configurable via CLIENT_MAX_RETRIES and CLIENT_BACKOFF_BASE_MS.
 
 Parameters:
 
@@ -39045,7 +40134,7 @@ Execute a gRPC query with circuit breaker protection and retry.
 
 The circuit breaker is per-service (keyed on `service_name`). When the circuit is OPEN, calls fail immediately with `CircuitOpenError` wrapped in `ServerError` — no network round-trip, no timeout wait.
 
-Retries on transient errors (UNAVAILABLE, INTERNAL, DEADLINE_EXCEEDED) with exponential backoff. Retry count and backoff base are configurable via DIGITALKIN_GRPC_QUERY_MAX_RETRIES and DIGITALKIN_GRPC_QUERY_BACKOFF_BASE_MS.
+Retries on transient errors (UNAVAILABLE, INTERNAL, DEADLINE_EXCEEDED) with exponential backoff. Retry count and backoff base are configurable via CLIENT_MAX_RETRIES and CLIENT_BACKOFF_BASE_MS.
 
 Parameters:
 
@@ -40262,7 +41351,7 @@ Execute a gRPC query with circuit breaker protection and retry.
 
 The circuit breaker is per-service (keyed on `service_name`). When the circuit is OPEN, calls fail immediately with `CircuitOpenError` wrapped in `ServerError` — no network round-trip, no timeout wait.
 
-Retries on transient errors (UNAVAILABLE, INTERNAL, DEADLINE_EXCEEDED) with exponential backoff. Retry count and backoff base are configurable via DIGITALKIN_GRPC_QUERY_MAX_RETRIES and DIGITALKIN_GRPC_QUERY_BACKOFF_BASE_MS.
+Retries on transient errors (UNAVAILABLE, INTERNAL, DEADLINE_EXCEEDED) with exponential backoff. Retry count and backoff base are configurable via CLIENT_MAX_RETRIES and CLIENT_BACKOFF_BASE_MS.
 
 Parameters:
 
@@ -40666,7 +41755,7 @@ Execute a gRPC query with circuit breaker protection and retry.
 
 The circuit breaker is per-service (keyed on `service_name`). When the circuit is OPEN, calls fail immediately with `CircuitOpenError` wrapped in `ServerError` — no network round-trip, no timeout wait.
 
-Retries on transient errors (UNAVAILABLE, INTERNAL, DEADLINE_EXCEEDED) with exponential backoff. Retry count and backoff base are configurable via DIGITALKIN_GRPC_QUERY_MAX_RETRIES and DIGITALKIN_GRPC_QUERY_BACKOFF_BASE_MS.
+Retries on transient errors (UNAVAILABLE, INTERNAL, DEADLINE_EXCEEDED) with exponential backoff. Retry count and backoff base are configurable via CLIENT_MAX_RETRIES and CLIENT_BACKOFF_BASE_MS.
 
 Parameters:
 
@@ -41170,7 +42259,12 @@ Raises:
 ###### create_service_setup
 
 ```python
-create_service_setup(name: str, content: dict[str, Any]) -> SetupData
+create_service_setup(
+    name: str,
+    content: dict[str, Any],
+    documentation: str = "",
+    structure: dict[str, str] | None = None,
+) -> SetupData
 ```
 
 Create a service setup — a shareable configuration document.
@@ -41186,6 +42280,14 @@ Parameters:
 - ###### **`content`**
 
   (`dict[str, Any]`) – The service configuration JSON.
+
+- ###### **`documentation`**
+
+  (`str`, default: `''` ) – Free text describing the service, indexed by the registry search.
+
+- ###### **`structure`**
+
+  (`dict[str, str] | None`, default: `None` ) – The {key path: description} map the agent wrote for content.
 
 Returns:
 
@@ -41203,7 +42305,7 @@ Parameters:
 
 - ###### **`setup_dict`**
 
-  (`dict[str, Any]`) – Dictionary with 'name' and 'content'.
+  (`dict[str, Any]`) – Dictionary with 'name', 'content', optional 'documentation' and optional 'structure' — the {key path: description} map the agent wrote for content, stored as written with only each description's length bounded.
 
 Returns:
 
@@ -41243,11 +42345,12 @@ Parameters:
 
 - ###### **`setup_dict`**
 
-  (`dict[str, Any]`) – Dictionary with 'setup_id' and optional 'version'.
+  (`dict[str, Any]`) – Dictionary with 'setup_id', optional 'version' and optional 'structure_key'.
 
 Returns:
 
-- `SetupData` – The setup with its current version populated.
+- `SetupData` – The setup shaped as GetSetupResponse would carry it — see
+- `SetupData` – meth:\_as_wire_read for the three ways that differs from the stored record.
 
 Raises:
 
@@ -41309,7 +42412,7 @@ Parameters:
 
 - ###### **`setup_dict`**
 
-  (`dict[str, Any]`) – Dictionary with 'setup_id', 'name', 'content' and optional 'set_as_current' (defaults to True).
+  (`dict[str, Any]`) – Dictionary with 'setup_id', 'name', 'content', optional 'set_as_current' (defaults to True), optional 'documentation' and optional 'structure'. The map belongs to the content it describes, so a revision carries only the map its own call supplied; omitting it leaves the new revision without one. Omitting the documentation clears it, matching the wire.
 
 Returns:
 
@@ -41460,7 +42563,12 @@ The underlying channel is only closed when the last ref is released. When the la
 ###### create_service_setup
 
 ```python
-create_service_setup(name: str, content: dict[str, Any]) -> SetupData
+create_service_setup(
+    name: str,
+    content: dict[str, Any],
+    documentation: str = "",
+    structure: dict[str, str] | None = None,
+) -> SetupData
 ```
 
 Create a service setup — a shareable configuration document.
@@ -41476,6 +42584,14 @@ Parameters:
 - ###### **`content`**
 
   (`dict[str, Any]`) – The service configuration JSON.
+
+- ###### **`documentation`**
+
+  (`str`, default: `''` ) – Free text describing the service, indexed by the registry search.
+
+- ###### **`structure`**
+
+  (`dict[str, str] | None`, default: `None` ) – The {key path: description} map the agent wrote for content.
 
 Returns:
 
@@ -41493,11 +42609,11 @@ Parameters:
 
 - ###### **`setup_dict`**
 
-  (`dict[str, Any]`) – Dictionary with 'name' and 'content'.
+  (`dict[str, Any]`) – Dictionary with 'name', 'content', optional 'documentation' and optional 'structure' — the {key path: description} map the agent wrote for content, stored as written with only each description's length bounded.
 
 Returns:
 
-- `SetupData` – The created setup with its initial version.
+- `SetupData` – The created setup with its initial version and structure.
 
 Raises:
 
@@ -41560,7 +42676,7 @@ Execute a gRPC query with circuit breaker protection and retry.
 
 The circuit breaker is per-service (keyed on `service_name`). When the circuit is OPEN, calls fail immediately with `CircuitOpenError` wrapped in `ServerError` — no network round-trip, no timeout wait.
 
-Retries on transient errors (UNAVAILABLE, INTERNAL, DEADLINE_EXCEEDED) with exponential backoff. Retry count and backoff base are configurable via DIGITALKIN_GRPC_QUERY_MAX_RETRIES and DIGITALKIN_GRPC_QUERY_BACKOFF_BASE_MS.
+Retries on transient errors (UNAVAILABLE, INTERNAL, DEADLINE_EXCEEDED) with exponential backoff. Retry count and backoff base are configurable via CLIENT_MAX_RETRIES and CLIENT_BACKOFF_BASE_MS.
 
 Parameters:
 
@@ -41600,11 +42716,12 @@ Parameters:
 
 - ###### **`setup_dict`**
 
-  (`dict[str, Any]`) – Dictionary with 'setup_id' and optional 'version'.
+  (`dict[str, Any]`) – Dictionary with 'setup_id', optional 'version' and optional 'structure_key'. The wire takes one key path; the server projects the version content down to it.
 
 Returns:
 
-- `SetupData` – The setup with its current version populated.
+- `SetupData` – The setup with its current version populated. structure is empty —
+- `SetupData` – GetSetupResponse carries no structure field.
 
 Raises:
 
@@ -41711,11 +42828,11 @@ Parameters:
 
 - ###### **`setup_dict`**
 
-  (`dict[str, Any]`) – Dictionary with 'setup_id', 'name', 'content' and optional 'set_as_current' (defaults to True).
+  (`dict[str, Any]`) – Dictionary with 'setup_id', 'name', 'content', optional 'set_as_current' (defaults to True), optional 'documentation' and optional 'structure'. The map belongs to the content it describes, so a revision carries only the map its own call supplied; omitting it leaves the new revision without one.
 
 Returns:
 
-- `SetupData` – The updated setup with its current version.
+- `SetupData` – The updated setup with its current version and structure.
 
 Raises:
 
@@ -41748,6 +42865,8 @@ Classes:
 Pydantic model for Setup data validation.
 
 `status`/`visibility` are coerced to their SDK enums: a proto enum name (`READY`, `VISIBILITY_PRIVATE`) or any-case string maps to the matching member, and an empty value (backends that predate the fields) becomes `UNSPECIFIED`.
+
+The setup's documentation lives on the version that carries it — read it at `current_setup_version.documentation`.
 
 ##### SetupStrategy
 
@@ -41809,7 +42928,12 @@ Returns:
 ###### create_service_setup
 
 ```python
-create_service_setup(name: str, content: dict[str, Any]) -> SetupData
+create_service_setup(
+    name: str,
+    content: dict[str, Any],
+    documentation: str = "",
+    structure: dict[str, str] | None = None,
+) -> SetupData
 ```
 
 Create a service setup — a shareable configuration document.
@@ -41825,6 +42949,14 @@ Parameters:
 - ###### **`content`**
 
   (`dict[str, Any]`) – The service configuration JSON.
+
+- ###### **`documentation`**
+
+  (`str`, default: `''` ) – Free text describing the service, indexed by the registry search.
+
+- ###### **`structure`**
+
+  (`dict[str, str] | None`, default: `None` ) – The {key path: description} map the agent wrote for content.
 
 Returns:
 
@@ -41842,7 +42974,7 @@ Parameters:
 
 - ###### **`setup_dict`**
 
-  (`dict[str, Any]`) – Dictionary with 'name' and 'content'.
+  (`dict[str, Any]`) – Dictionary with 'name', 'content', optional 'documentation' and optional 'structure' — the {key path: description} map the agent wrote, stored as written with only each description's length bounded.
 
 Returns:
 
@@ -41878,7 +43010,7 @@ Parameters:
 
 - ###### **`setup_dict`**
 
-  (`dict[str, Any]`) – Dictionary with 'setup_id' and optional 'version'.
+  (`dict[str, Any]`) – Dictionary with 'setup_id', optional 'version', and optional 'structure_key'. One key path projects the version content down to that path; omitting it (or passing an empty string, which the wire cannot tell apart) returns the whole document.
 
 Returns:
 
@@ -41932,7 +43064,7 @@ Parameters:
 
 - ###### **`setup_dict`**
 
-  (`dict[str, Any]`) – Dictionary with 'setup_id', 'name' and 'content'.
+  (`dict[str, Any]`) – Dictionary with 'setup_id', 'name', 'content' and optional 'documentation' (cut onto the new version, like 'content') and optional 'structure'. The map belongs to the content it describes, so a revision carries only the map its own call supplied; omitting it leaves the new revision without one.
 
 Returns:
 
@@ -41950,6 +43082,10 @@ Returns:
 ```
 
 Pydantic model for SetupVersion data validation.
+
+`structure` maps a leaf key path in `content` to a description of what is there, written by the agent that created or updated the setup and used to fetch one key of a large configuration (see :class:`~digitalkin.utils.json_structure.JsonStructure`). It belongs to the services surface; other setup kinds leave it empty.
+
+`documentation` is free text indexed by the registry search. It is cut with the version that carries it, and `SetupVersion` returns it as of protocol 1.0.2.dev2 — before that the field existed only on the write requests and always read back empty.
 
 ##### SetupVersionPage
 
@@ -42417,7 +43553,7 @@ Execute a gRPC query with circuit breaker protection and retry.
 
 The circuit breaker is per-service (keyed on `service_name`). When the circuit is OPEN, calls fail immediately with `CircuitOpenError` wrapped in `ServerError` — no network round-trip, no timeout wait.
 
-Retries on transient errors (UNAVAILABLE, INTERNAL, DEADLINE_EXCEEDED) with exponential backoff. Retry count and backoff base are configurable via DIGITALKIN_GRPC_QUERY_MAX_RETRIES and DIGITALKIN_GRPC_QUERY_BACKOFF_BASE_MS.
+Retries on transient errors (UNAVAILABLE, INTERNAL, DEADLINE_EXCEEDED) with exponential backoff. Retry count and backoff base are configurable via CLIENT_MAX_RETRIES and CLIENT_BACKOFF_BASE_MS.
 
 Parameters:
 
@@ -43543,7 +44679,7 @@ Execute a gRPC query with circuit breaker protection and retry.
 
 The circuit breaker is per-service (keyed on `service_name`). When the circuit is OPEN, calls fail immediately with `CircuitOpenError` wrapped in `ServerError` — no network round-trip, no timeout wait.
 
-Retries on transient errors (UNAVAILABLE, INTERNAL, DEADLINE_EXCEEDED) with exponential backoff. Retry count and backoff base are configurable via DIGITALKIN_GRPC_QUERY_MAX_RETRIES and DIGITALKIN_GRPC_QUERY_BACKOFF_BASE_MS.
+Retries on transient errors (UNAVAILABLE, INTERNAL, DEADLINE_EXCEEDED) with exponential backoff. Retry count and backoff base are configurable via CLIENT_MAX_RETRIES and CLIENT_BACKOFF_BASE_MS.
 
 Parameters:
 
@@ -44936,7 +46072,7 @@ Execute a gRPC query with circuit breaker protection and retry.
 
 The circuit breaker is per-service (keyed on `service_name`). When the circuit is OPEN, calls fail immediately with `CircuitOpenError` wrapped in `ServerError` — no network round-trip, no timeout wait.
 
-Retries on transient errors (UNAVAILABLE, INTERNAL, DEADLINE_EXCEEDED) with exponential backoff. Retry count and backoff base are configurable via DIGITALKIN_GRPC_QUERY_MAX_RETRIES and DIGITALKIN_GRPC_QUERY_BACKOFF_BASE_MS.
+Retries on transient errors (UNAVAILABLE, INTERNAL, DEADLINE_EXCEEDED) with exponential backoff. Retry count and backoff base are configurable via CLIENT_MAX_RETRIES and CLIENT_BACKOFF_BASE_MS.
 
 Parameters:
 
@@ -45419,7 +46555,7 @@ Execute a gRPC query with circuit breaker protection and retry.
 
 The circuit breaker is per-service (keyed on `service_name`). When the circuit is OPEN, calls fail immediately with `CircuitOpenError` wrapped in `ServerError` — no network round-trip, no timeout wait.
 
-Retries on transient errors (UNAVAILABLE, INTERNAL, DEADLINE_EXCEEDED) with exponential backoff. Retry count and backoff base are configurable via DIGITALKIN_GRPC_QUERY_MAX_RETRIES and DIGITALKIN_GRPC_QUERY_BACKOFF_BASE_MS.
+Retries on transient errors (UNAVAILABLE, INTERNAL, DEADLINE_EXCEEDED) with exponential backoff. Retry count and backoff base are configurable via CLIENT_MAX_RETRIES and CLIENT_BACKOFF_BASE_MS.
 
 Parameters:
 
@@ -45618,7 +46754,10 @@ Modules:
 - **`conditional_schema`** – Conditional field visibility for react-jsonschema-form.
 - **`development_mode_action`** – ArgParser and Action classes to ease command lines arguments settings.
 - **`dynamic_schema`** – Dynamic schema utilities for runtime value refresh in Pydantic models.
+- **`env_manager`** – Turn a module process's environment into the runtime configuration it needs.
+- **`env_template`** – Render a .env template from the declared settings classes.
 - **`exceptions`** – Exceptions for the DigitalKin utils package.
+- **`json_structure`** – Read a JSON document at the key paths a setup's structure map names.
 - **`llm_ready_schema`** – LLM-ready JSON schema generation for Pydantic models.
 - **`package_discover`** – Secure module discovery and import utility for trigger handlers.
 - **`proto_utils`** – Protobuf conversion utilities.
@@ -46240,14 +47379,12 @@ ArgParser and Action classes to ease command lines arguments settings.
 
 Classes:
 
-- **`DevelopmentModeMappingAction`** – ArgParse Action to map an environment variable to a ServicesMode enum.
+- **`DevelopmentModeMappingAction`** – ArgParse Action defaulting to the environment's ServicesMode.
 
 #### DevelopmentModeMappingAction
 
 ```python
-DevelopmentModeMappingAction(
-    env_var: str, required: bool = True, default: str | None = None, **kwargs: Any
-)
+DevelopmentModeMappingAction(**kwargs: Any)
 ```
 
 ```
@@ -46259,7 +47396,9 @@ DevelopmentModeMappingAction(
               click digitalkin.utils.development_mode_action.DevelopmentModeMappingAction href "" "digitalkin.utils.development_mode_action.DevelopmentModeMappingAction"
 ```
 
-ArgParse Action to map an environment variable to a ServicesMode enum.
+ArgParse Action defaulting to the environment's ServicesMode.
+
+The default comes from `ModuleSettings.services_mode` (env `SERVICE_MODE`); the command-line flag overrides it.
 
 Methods:
 
@@ -46482,6 +47621,170 @@ Returns:
 
 - `ResolveResult` – ResolveResult with values and any errors that occurred.
 
+### env_manager
+
+Turn a module process's environment into the runtime configuration it needs.
+
+Classes:
+
+- **`EnvManager`** – Environment-driven configuration shared by every module.
+
+#### EnvManager
+
+Environment-driven configuration shared by every module.
+
+A module declares nothing: the SDK reads `SERVICE_MODE`, the `CLIENT_*` settings and, in secure mode, the `CERTIFICATE_*` volumes, then hands the resulting :class:`ClientConfig` to the module server and to every remote service strategy that did not receive one explicitly.
+
+The config is built once per process because it reads certificates from disk and is requested on every strategy instantiation.
+
+Methods:
+
+- **`client_config`** – Process-wide ClientConfig built from the environment.
+- **`reset`** – Drop the cached ClientConfig. Tests must call this after mutating env.
+- **`server_credentials`** – Key, certificate and root CA the module serves with in secure mode.
+- **`services_mode`** – Execution mode of the service strategies.
+- **`unset_required`** – Names of the env_required variables left empty in the given settings.
+
+##### client_config
+
+```python
+client_config() -> ClientConfig
+```
+
+Process-wide `ClientConfig` built from the environment.
+
+Host, port, mode, security, compression, channel options and retry policy come from `ClientSettings`. In secure mode the credentials are resolved from the services-provider certificate volume unless `CLIENT_CHANNEL_CREDENTIALS__*` already names them.
+
+Returns:
+
+- `ClientConfig` – The shared ClientConfig instance.
+
+##### reset
+
+```python
+reset() -> None
+```
+
+Drop the cached `ClientConfig`. Tests must call this after mutating env.
+
+##### server_credentials
+
+```python
+server_credentials() -> Credentials
+```
+
+Key, certificate and root CA the module serves with in secure mode.
+
+Mirrors :meth:`client_config`: `SERVER_CHANNEL_CREDENTIALS__*` names the files explicitly, otherwise they are read from the `CERTIFICATE_CERT_VOLUME` directory. The root CA is returned only when `SERVER_CHANNEL_MTLS` is set, because handing it to gRPC turns on client authentication.
+
+Resolved on demand rather than cached: the server reads it once at startup.
+
+Returns:
+
+- `Credentials` – The server credentials.
+
+##### services_mode
+
+```python
+services_mode() -> ServicesMode
+```
+
+Execution mode of the service strategies.
+
+The `-d/--dev-mode` flag wins over `SERVICE_MODE` — a module is usually launched with the flag — so the server and the servicer agree on the mode before the servicer parses its own arguments. An unrecognised flag value falls through to the environment and is reported by the servicer's own `choices` check.
+
+Returns:
+
+- `ServicesMode` – ServicesMode.REMOTE in remote mode, else ServicesMode.LOCAL.
+
+##### unset_required
+
+```python
+unset_required(*settings: BaseSettings) -> list[str]
+```
+
+Names of the `env_required` variables left empty in the given settings.
+
+The same marker drives the minimum `.env` template, so what the template calls required is exactly what a module refuses to boot without.
+
+Parameters:
+
+- ###### **`settings`**
+
+  (`BaseSettings`, default: `()` ) – Settings instances to inspect.
+
+Returns:
+
+- `list[str]` – The environment variable names whose value is empty.
+
+### env_template
+
+Render a `.env` template from the declared settings classes.
+
+The settings models are the single declaration point for every environment variable, so the template is generated from them instead of being maintained by hand — a variable that no field backs cannot appear, and a field that no template documents cannot be forgotten.
+
+Run it over this package, plus a module's own settings package when it has one::
+
+```text
+python -m digitalkin.utils.env_template --package digitalkin.models.settings         --output .env.exemple
+python -m digitalkin.utils.env_template --package digitalkin.models.settings         --minimum --output .env.minimum.exemple
+```
+
+Mark the variables a deployment must set with `Field(..., json_schema_extra={"env_required": True})`; `--minimum` keeps only those. Add `"env_example": "sk-xxx"` to show a placeholder in the template instead of the runtime default, so a secret can default to empty (and fail the boot check) while the template still hints at the expected shape.
+
+Classes:
+
+- **`EnvTemplate`** – Turn BaseSettings declarations into a .env template.
+
+#### EnvTemplate
+
+Turn `BaseSettings` declarations into a `.env` template.
+
+Methods:
+
+- **`main`** – Write the template, or check that the file on disk matches it.
+- **`render`** – Render the whole template.
+
+##### main
+
+```python
+main(argv: Sequence[str] | None = None) -> int
+```
+
+Write the template, or check that the file on disk matches it.
+
+Parameters:
+
+- ###### **`argv`**
+
+  (`Sequence[str] | None`, default: `None` ) – Command-line arguments, defaulting to sys.argv.
+
+Returns:
+
+- `int` – 0 on success, 1 when --check finds the file out of date.
+
+##### render
+
+```python
+render(packages: Sequence[str], *, minimum: bool = False) -> str
+```
+
+Render the whole template.
+
+Parameters:
+
+- ###### **`packages`**
+
+  (`Sequence[str]`) – Importable package or module names to scan.
+
+- ###### **`minimum`**
+
+  (`bool`, default: `False` ) – Keep only the fields marked env_required.
+
+Returns:
+
+- `str` – The template contents.
+
 ### exceptions
 
 Exceptions for the DigitalKin utils package.
@@ -46516,6 +47819,77 @@ Raised when discovery fails due to invalid inputs.
 ```
 
 Raised when security constraints are violated during package discovery.
+
+### json_structure
+
+Read a JSON document at the key paths a setup's structure map names.
+
+The *structure* is `{leaf key path: description}`, written by the agent that creates or updates a service setup and stored by the backend alongside the content. The SDK does not build it and does not judge it: `clip` bounds each description's length and nothing else, and `resolve` reads the paths it names so `DefaultSetup` can project content the way the backend does for `GetSetupRequest.structure_key`.
+
+The path grammar is a cross-repo contract: the agent writes it, the backend resolves it against stored JSON, and this reads it the same way. Three rules, normative:
+
+- a plain object key joins with `.` — `prompts.system`;
+- a key that is empty or carries `.` `[` `]` `"` `\\` is bracket-quoted with `"`, with `"` and `\\` backslash-escaped — `limits["max.tokens"]`;
+- a list element is indexed — `tools[0]`.
+
+A resolver that splits naively on `.` gets the second rule wrong silently, returning the wrong key or nothing. That is the one real interop risk in the design.
+
+Classes:
+
+- **`JsonStructure`** – Length-bounding and path access over the structure map.
+
+#### JsonStructure
+
+Length-bounding and path access over the structure map.
+
+Methods:
+
+- **`clip`** – Bound each description's length, leaving every entry in place.
+- **`resolve`** – Read the values at exactly paths.
+
+##### clip
+
+```python
+clip(structure: dict[str, str]) -> dict[str, str]
+```
+
+Bound each description's length, leaving every entry in place.
+
+The only thing done to an authored map. Which keys it names and whether they are good descriptions is the agent's business; an unbounded description is not, since the map rides on every search result.
+
+Parameters:
+
+- ###### **`structure`**
+
+  (`dict[str, str]`) – The map as the agent wrote it.
+
+Returns:
+
+- `dict[str, str]` – The same entries, each description at most \_DESCRIPTION_CHARS long with a
+- `dict[str, str]` – trailing ellipsis where it was cut.
+
+##### resolve
+
+```python
+resolve(content: dict[str, Any], paths: list[str]) -> dict[str, Any]
+```
+
+Read the values at exactly `paths`.
+
+Parameters:
+
+- ###### **`content`**
+
+  (`dict[str, Any]`) – The JSON document to read.
+
+- ###### **`paths`**
+
+  (`list[str]`) – Key paths from a setup's structure map.
+
+Returns:
+
+- `dict[str, Any]` – Path to value for every path that resolves; unresolvable paths are omitted
+- `dict[str, Any]` – and logged.
 
 ### llm_ready_schema
 
