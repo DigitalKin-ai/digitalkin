@@ -21,7 +21,7 @@ from digitalkin.models.module.module_types import (
 )
 from digitalkin.models.module.select_schema import SelectSchema
 from digitalkin.models.module.tool_cache import ToolCache
-from digitalkin.models.module.utility import EndOfStreamOutput, UtilityProtocol
+from digitalkin.models.module.utility import EndOfStreamOutput, StreamCancelledOutput, UtilityProtocol
 from digitalkin.models.services.registry import RegistryModuleType
 from digitalkin.models.services.storage import BaseRole
 from digitalkin.models.settings.module import get_module_settings
@@ -146,6 +146,8 @@ class BaseModule(  # Module SDK base class requires many public methods # ruff: 
         self.trigger_handlers: dict[str, tuple] = {}
         # Set by idempotent prepare() so start() can short-circuit.
         self._prepared: bool = False
+        # Set on the first stop() so it runs once, whatever the status (FAILED still needs stream.end).
+        self._stopped: bool = False
 
         self.context = ModuleContext(
             **self._init_strategies(mission_id, setup_id, setup_version_id),
@@ -258,6 +260,53 @@ class BaseModule(  # Module SDK base class requires many public methods # ruff: 
         rows = "\n".join(f"| {protocol} | {desc} |" for protocol, desc in sorted(protocols.items()))
         table = f"| Trigger | Description |\n| --- | --- |\n{rows}" if rows else "_No triggers._"
         return f"{description}\n\n## Triggers\n\n{table}"
+
+    @classmethod
+    async def build_registry_schemas(cls) -> dict[str, dict[str, Any]]:
+        """Collect the raw JSON schemas sent at registration, keyed by ``RegisterModuleRequest`` field.
+
+        Covers every schema served by ``ModuleService`` except the user-info one. The registry
+        requires each of them: a schema the module does not declare, or fails to build, is sent
+        as an empty object so registration still goes through.
+
+        Returns:
+            Parsed JSON schema per request field name.
+        """
+        built = await asyncio.gather(
+            cls.get_input_format(llm_format=False),
+            cls.get_select_input_format(),
+            cls.get_output_format(llm_format=False),
+            cls.get_setup_format(llm_format=False),
+            cls.get_secret_format(llm_format=False),
+            cls.get_config_setup_format(llm_format=False),
+            cls.get_cost_format(llm_format=False),
+            return_exceptions=True,
+        )
+        schemas: dict[str, dict[str, Any]] = {}
+        for name, schema in zip(
+            (
+                "input_schema",
+                "select_input_schema",
+                "output_schema",
+                "setup_schema",
+                "secret_schema",
+                "config_setup_schema",
+                "cost_schema",
+            ),
+            built,
+            strict=True,
+        ):
+            if isinstance(schema, str):
+                schemas[name] = json.loads(schema)
+                continue
+            if not isinstance(schema, Exception):
+                raise schema
+            if isinstance(schema, NotImplementedError):
+                logger.info("Registry schema %s sent empty for %s: %s", name, cls.__name__, schema)
+            else:
+                logger.error("Registry schema %s sent empty for %s: build failed: %r", name, cls.__name__, schema)
+            schemas[name] = {}
+        return schemas
 
     @classmethod
     async def get_output_format(cls, *, llm_format: bool) -> str:
@@ -578,9 +627,17 @@ class BaseModule(  # Module SDK base class requires many public methods # ruff: 
             self._status = ModuleStatus.FAILED
             logger.warning("Permission denied in module %s: %s", self.name, e, extra=self.context.session.current_ids())
             await self._notify_permission_denied(self.context.callbacks.send_message, e)
+            if self.context.agui_run is not None:
+                await self.context.agui_run.fail(self.context, "failed", str(e), "permission_denied")
         except Exception as e:
             self._status = ModuleStatus.FAILED
             logger.exception("Error inside module %s", self.name, extra=self.context.session.current_ids())
+            # TODO(validate): MODULE-FAILED-EOS a failed module still writes stream.end instead of idling out
+            logger.info(
+                "[VALIDATE MODULE-FAILED-EOS] module %s failed; stop() still writes stream.end",
+                self.name,
+                extra=self.context.session.current_ids(),
+            )
             try:
                 await self.context.callbacks.send_message(
                     ModuleCodeModel(
@@ -589,6 +646,8 @@ class BaseModule(  # Module SDK base class requires many public methods # ruff: 
                         message=str(e),
                     )
                 )
+                if self.context.agui_run is not None:
+                    await self.context.agui_run.fail(self.context, "failed", f"{type(e).__name__}: {e}", "module_error")
             except Exception:
                 logger.exception("Failed to send error callback", extra=self.context.session.current_ids())
         else:
@@ -717,13 +776,24 @@ class BaseModule(  # Module SDK base class requires many public methods # ruff: 
             timer.log("module.start", task_id=self.context.session.current_ids().get("job_id", ""))
             await self.stop()
 
-    async def stop(self) -> None:
-        """Stop the module. Idempotent — second call is a no-op."""
+    async def stop(self, cancel_reason: str | None = None) -> None:  # ruff: ignore[complex-structure]
+        """Stop the module. Idempotent — second call is a no-op.
+
+        A cancelled module (status ``CANCELLED`` or a ``cancel_reason`` given) emits
+        ``stream.cancelled`` right before ``stream.end``.
+
+        Args:
+            cancel_reason: Cancellation reason carried by ``stream.cancelled``.
+        """
         t0 = time.perf_counter_ns()
-        if self._status in {ModuleStatus.STOPPED, ModuleStatus.FAILED}:
+        if self._stopped:
             return
+        self._stopped = True
+        failed = self._status == ModuleStatus.FAILED
+        if cancel_reason is None and self._status == ModuleStatus.CANCELLED:
+            cancel_reason = "cancelled"
         try:  # ruff: ignore[too-many-statements-in-try-clause]
-            self._status = ModuleStatus.STOPPING
+            self._status = ModuleStatus.FAILED if failed else ModuleStatus.STOPPING
             await self.cleanup()
             t1 = time.perf_counter_ns()
             cleanup_ms = (t1 - t0) / 1e6
@@ -746,6 +816,21 @@ class BaseModule(  # Module SDK base class requires many public methods # ruff: 
                 logger.warning("Failed to flush handler history during stop", exc_info=True)
             t2 = time.perf_counter_ns()
             if "send_message" in vars(self.context.callbacks):
+                if cancel_reason is not None:
+                    if self.context.agui_run is not None:
+                        await self.context.agui_run.fail(self.context, "cancelled", cancel_reason, "cancelled")
+                    # TODO(validate): CANCEL-SENTINEL stream.cancelled is emitted before stream.end on cancel
+                    logger.info(
+                        "[VALIDATE CANCEL-SENTINEL] emitting stream.cancelled reason=%s before stream.end",
+                        cancel_reason,
+                        extra=self.context.session.current_ids(),
+                    )
+                    await self.context.callbacks.send_message(
+                        DataModel[StreamCancelledOutput](
+                            root=StreamCancelledOutput(reason=cancel_reason),
+                            annotations={"role": BaseRole.SYSTEM},
+                        )
+                    )
                 await self.context.callbacks.send_message(
                     _EndOfStreamDataModel(
                         root=EndOfStreamOutput(),
@@ -755,7 +840,7 @@ class BaseModule(  # Module SDK base class requires many public methods # ruff: 
             else:
                 logger.debug("send_message not registered; skipping end-of-stream (config-setup path)")
             t3 = time.perf_counter_ns()
-            self._status = ModuleStatus.STOPPED
+            self._status = ModuleStatus.FAILED if failed else ModuleStatus.STOPPED
             ids = self.context.session.current_ids()
             logger.info(
                 "[close-debug] module.stop: cleanup=%.2fms flush=%.2fms eos=%.2fms "
@@ -817,6 +902,13 @@ class BaseModule(  # Module SDK base class requires many public methods # ruff: 
             setup_model = await self.create_setup_model(updated_config.model_dump())
             await callback(setup_model)
             self._status = ModuleStatus.STOPPING
-        except Exception:
+        except Exception as e:
             self._status = ModuleStatus.FAILED
             logger.exception("Error during config setup lifecycle", extra=self.context.session.current_ids())
+            # Without a reply the servicer waits out the whole config-setup timeout.
+            await callback(ModuleCodeModel(code="INTERNAL", message=f"config setup failed: {e}"))
+            logger.info(
+                "[VALIDATE CFGFAIL] config setup failure reported to the caller: %s",
+                e,
+                extra=self.context.session.current_ids(),
+            )  # TODO(validate): remove after prod validation

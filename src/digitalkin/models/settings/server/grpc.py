@@ -20,6 +20,7 @@ class GrpcServerSettings(BaseSettings):
         max_send_message_length (NonNegativeInt): Maximum message size the server can send, in bytes.
         max_pings_without_data (NonNegativeInt): Maximum number of pings the server allows without receiving any data.
         keepalive_permit_without_calls (bool): Allow clients to send keepalive pings even when there are no active RPCs.
+        validation_offload_bytes (NonNegativeInt): Request size above which ``buf.validate`` runs in a worker thread.
 
     """
 
@@ -73,6 +74,12 @@ class GrpcServerSettings(BaseSettings):
         "This is important for keeping connections "
         "alive through proxies and detecting dead clients.",
         alias="SERVER_GRPC_OPTIONS_KEEPALIVE_PERMIT_WITHOUT_CALLS",
+    )
+    validation_offload_bytes: NonNegativeInt = Field(
+        96 * 1024,
+        description="Request size above which buf.validate runs in a worker thread instead of on the event "
+        "loop. Validation costs ~0.3 ms/KiB, so the default keeps inline validation under ~30 ms.",
+        alias="SERVER_GRPC_VALIDATION_OFFLOAD_BYTES",
     )
 
     @property

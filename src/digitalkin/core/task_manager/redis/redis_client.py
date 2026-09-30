@@ -155,6 +155,17 @@ class RedisClient:  # ruff: ignore[too-many-public-methods]
         """
         return await self._client.delete(*names)
 
+    async def exists(self, *names: str) -> int:
+        """Count how many of the given keys exist.
+
+        Args:
+            *names: Keys to check.
+
+        Returns:
+            Number of existing keys.
+        """
+        return await self._client.exists(*names)
+
     async def expire(self, name: str, seconds: int) -> bool:
         """Set a TTL on a key.
 
@@ -320,7 +331,7 @@ class RedisClient:  # ruff: ignore[too-many-public-methods]
         """
         return await self._client.decr(name)
 
-    async def eval(self, script: str, keys: list[str], args: list[str]) -> int | str | bytes | None:
+    async def eval(self, script: str, keys: list[str], args: list[str]) -> Any:
         """Execute a Lua script on Redis.
 
         Args:

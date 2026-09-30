@@ -54,15 +54,16 @@ def _make_context() -> MagicMock:
     ctx.callbacks.logger = MagicMock()
     ctx.session = MagicMock()
     ctx.session.current_ids = MagicMock(return_value={})
+    ctx.agui_run = None
     return ctx
 
 
 def _emitted_event(ctx: MagicMock, expected_cls: type) -> Any:
-    """Pull the last AG-UI event sent through ``send_message``."""
-    assert ctx.callbacks.send_message.await_count >= 1, "send_message was never awaited"
-    output = ctx.callbacks.send_message.await_args_list[-1].args[0]
-    assert isinstance(output.root, expected_cls), f"expected {expected_cls.__name__}, got {type(output.root).__name__}"
-    return output.root.event
+    """Pull the last AG-UI event of ``expected_cls`` sent through ``send_message``."""
+    roots = [call.args[0].root for call in ctx.callbacks.send_message.await_args_list]
+    matching = [root for root in roots if isinstance(root, expected_cls)]
+    assert matching, f"no {expected_cls.__name__} in {[type(r).__name__ for r in roots]}"
+    return matching[-1].event
 
 
 def _started(*, run_id: str | None, thread_id: str | None) -> RunStartedEvent:
@@ -196,8 +197,8 @@ class TestEndToEndConsistency:
         await mixin._handle_run_started(ctx, _started(run_id=AGNO_RUN_ID, thread_id=AGNO_THREAD_ID))
         await mixin._handle_run_completed(ctx, _completed(run_id=AGNO_RUN_ID))
 
-        started = ctx.callbacks.send_message.await_args_list[0].args[0].root.event
-        finished = ctx.callbacks.send_message.await_args_list[1].args[0].root.event
+        started = _emitted_event(ctx, AgUiRunStartedOutput)
+        finished = _emitted_event(ctx, AgUiRunFinishedOutput)
         assert started.run_id == finished.run_id == CLIENT_RUN_ID
         assert started.thread_id == finished.thread_id == CLIENT_THREAD_ID
 
@@ -210,8 +211,8 @@ class TestEndToEndConsistency:
         await mixin._handle_run_started(ctx, _started(run_id=AGNO_RUN_ID, thread_id=AGNO_THREAD_ID))
         await mixin._handle_run_completed(ctx, _completed(run_id=AGNO_RUN_ID))
 
-        started = ctx.callbacks.send_message.await_args_list[0].args[0].root.event
-        finished = ctx.callbacks.send_message.await_args_list[1].args[0].root.event
+        started = _emitted_event(ctx, AgUiRunStartedOutput)
+        finished = _emitted_event(ctx, AgUiRunFinishedOutput)
         assert started.run_id == finished.run_id == AGNO_RUN_ID
         assert started.thread_id == finished.thread_id == AGNO_THREAD_ID
 

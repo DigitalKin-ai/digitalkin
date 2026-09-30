@@ -7,8 +7,7 @@ bound to the dial-back asyncio task: the task's ``finally`` calls
 force-unregisters as a backstop.
 
 No Redis I/O on register/unregister — the gateway is fully local for
-session lifecycle. The previous Redis session-state mirror had no readers
-once the heartbeat reaper was retired.
+session lifecycle.
 """
 
 from __future__ import annotations
@@ -22,7 +21,6 @@ from digitalkin.logger import logger
 from digitalkin.models.settings.gateway import get_gateway_settings
 
 if TYPE_CHECKING:
-    from digitalkin.core.task_manager.redis.redis_client import RedisClient
     from digitalkin.grpc_servers.stream_session import StreamSession
 
 
@@ -37,17 +35,10 @@ class StreamRegistry:
     _local_cache: OrderedDict[str, StreamSession]
     _monitored_tasks: set[asyncio.Task[Any]]
 
-    def __init__(
-        self,
-        redis_client: RedisClient | None = None,  # ruff: ignore[unused-method-argument] — kept for back-compat with callers
-    ) -> None:
+    def __init__(self) -> None:
         """Initialize the stream registry.
 
         Capacity comes from ``GatewaySettings`` (env ``DIGITALKIN_GATEWAY_MAX_STREAMS``).
-
-        Args:
-            redis_client: Unused (kept for back-compat); the registry no
-                longer touches Redis on register/unregister.
         """
         self._local_cache = OrderedDict()
         self._monitored_tasks = set()
@@ -57,18 +48,11 @@ class StreamRegistry:
         """Number of locally cached sessions."""
         return len(self._local_cache)
 
-    async def register(
-        self,
-        session: StreamSession,
-        setup_id: str = "",  # ruff: ignore[unused-method-argument] — accepted for back-compat with callers
-        mission_id: str = "",  # ruff: ignore[unused-method-argument] — accepted for back-compat with callers
-    ) -> bool:
+    async def register(self, session: StreamSession) -> bool:
         """Register a new session. Capacity is enforced process-locally.
 
         Args:
             session: The stream session to register.
-            setup_id: Accepted for back-compat; no longer persisted to Redis.
-            mission_id: Accepted for back-compat; no longer persisted to Redis.
 
         Returns:
             True if registered, False if at capacity (this instance).

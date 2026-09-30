@@ -7,9 +7,9 @@ used across different AI frameworks (Agno, LangChain, custom agents, etc.).
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, HttpUrl
 
 
 class AgentRunEvent(str, Enum):
@@ -216,3 +216,18 @@ class CustomEvent(BaseAgentRunEvent):
     event: AgentRunEvent = Field(AgentRunEvent.CUSTOM, description="Event type")
     name: str = Field(..., description="Application-defined event name (discriminator)")
     value: Any = Field(..., description="Application-defined payload")
+
+
+class SourceCitation(BaseModel):
+    """A source the agent used to answer; ``url``/``title`` mirror agno's ``UrlCitation``."""
+
+    url: HttpUrl = Field(..., description="Link to the source")
+    title: str | None = Field(default=None, description="Short label of the source")
+    description: str | None = Field(default=None, description="What the source supports in the answer")
+
+
+class SourceCitationEvent(CustomEvent):
+    """Custom event citing one source the agent used."""
+
+    name: Literal["source_citation"] = Field("source_citation", description="Event name (discriminator)")
+    value: SourceCitation = Field(..., description="The cited source")

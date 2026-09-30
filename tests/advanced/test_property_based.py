@@ -114,6 +114,7 @@ class TestListenerDispatchProperties:
         session = MagicMock()
         session.pending_signal_action = ""
         session.last_signal_published_ns = 0
+        session.cancelled = False
 
         async def long_running() -> None:
             await asyncio.sleep(60)

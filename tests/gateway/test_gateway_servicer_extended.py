@@ -11,10 +11,15 @@ Errors are emitted as ``stream.error`` + ``stream.end`` sentinels — never via
 
 from __future__ import annotations
 
+import json
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from agentic_mesh_protocol.gateway.v1 import gateway_dto_pb2, gateway_messages_pb2
+from google.protobuf import struct_pb2
+
+from digitalkin.grpc_servers.interceptors.request_ids import RequestContext
 
 try:
     import fakeredis.aioredis as fakeredis_aio
@@ -47,6 +52,9 @@ class _FakeRedisClient:
 
     async def xlen(self, name: str) -> int:
         return await self._client.xlen(name)  # type: ignore[return-value]
+
+    async def exists(self, *names: str) -> int:
+        return await self._client.exists(*names)  # type: ignore[return-value]
 
     async def expire(self, name: str, seconds: int) -> bool:
         return await self._client.expire(name, seconds)  # type: ignore[return-value]
@@ -94,13 +102,14 @@ class _FakeRequestIterator:
         return msg
 
 
-def _make_init_msg(task_id: str, seq: int = 0) -> Any:
-    """Build a Stream init request (dev2: client sends StreamServer)."""
-    from agentic_mesh_protocol.gateway.v1 import gateway_pb2
+def _make_init_msg(task_id: str, from_seq: int = 0) -> Any:
+    """Build a Stream init request (the client sends StreamRequest)."""
     from google.protobuf import struct_pb2
 
-    return gateway_pb2.StreamServer(
-        task_id=task_id, seq=seq, data=struct_pb2.Struct(),
+    return gateway_messages_pb2.StreamRequest(
+        task_id=task_id,
+        from_seq=from_seq,
+        data=struct_pb2.Struct(),
     )
 
 
@@ -156,9 +165,7 @@ class TestStreamLateConsumer:
         request_iter = _FakeRequestIterator([init_msg])
         ctx = MagicMock()
 
-        responses = []
-        async for resp in servicer.Stream(request_iter, ctx):
-            responses.append(resp)
+        responses = [resp async for resp in servicer.Stream(request_iter, ctx)]
 
         # Should get the persisted output entry, not a fatal error sequence
         assert len(responses) >= 1
@@ -173,9 +180,7 @@ class TestStreamLateConsumer:
         request_iter = _FakeRequestIterator([init_msg])
         ctx = MagicMock()
 
-        responses = []
-        async for resp in servicer.Stream(request_iter, ctx):
-            responses.append(resp)
+        responses = [resp async for resp in servicer.Stream(request_iter, ctx)]
 
         assert len(responses) == 2
         assert _protocol_of(responses[0]) == "stream.error"
@@ -207,48 +212,100 @@ class TestSendSignalExtended:
 
     async def test_publishes_signal_via_redis(self, redis: Any) -> None:
         """Signal is published to Redis signal channel."""
-        try:
-            from agentic_mesh_protocol.gateway.v1 import gateway_pb2
-        except ImportError:
-            pytest.skip("Gateway proto not installed")
-
         servicer = _mock_servicer(redis_client=redis)
+        await redis.set("idem:task_sig_redis", "proc|missions:m")
 
-        from digitalkin.grpc_servers.stream_session import StreamSession
+        request = gateway_dto_pb2.SendSignalRequest(cancel=gateway_messages_pb2.CancelSignal(task_id="task_sig_redis"))
 
-        session = StreamSession(task_id="task_sig_redis")
-        await servicer._registry.register(session)
-
-        request = MagicMock()
-        request.task_id = "task_sig_redis"
-        request.action = gateway_pb2.CANCEL
-
-        resp = await servicer.SendSignal(request, MagicMock())
-        assert resp.success is True
-
-    async def test_returns_false_when_publish_fails(self) -> None:
-        """When Redis publish fails, returns success=False."""
+        token = RequestContext.bind(mission_id="missions:m")
         try:
-            from agentic_mesh_protocol.gateway.v1 import gateway_pb2
-        except ImportError:
-            pytest.skip("Gateway proto not installed")
+            resp = await servicer.SendSignal(request, MagicMock())
+        finally:
+            RequestContext.reset(token)
+        assert resp.success is True
+        assert await redis.get("cancel:task_sig_redis") == b"missions:m"
+        assert 0 < await redis._client.ttl("cancel:task_sig_redis") <= 600
 
-        from redis.exceptions import RedisError
+    async def test_no_idem_claim_publishes_but_returns_false(self, redis: Any) -> None:
+        """Without an ``idem:`` claim the signal is still published + tombstoned, but reported not found."""
+        servicer = _mock_servicer(redis_client=redis)
+        pubsub = redis.pubsub()
+        await pubsub.subscribe("signal_ch:task_unknown")
+        await pubsub.get_message(timeout=0.1)
 
-        mock_redis = MagicMock()
-        mock_redis.eval = AsyncMock(return_value=1)
-        mock_redis.xadd = AsyncMock(return_value=b"1-0")
-        mock_redis.publish = AsyncMock(side_effect=RedisError("publish failed"))
-        servicer = _mock_servicer(redis_client=mock_redis)
-
-        from digitalkin.grpc_servers.stream_session import StreamSession
-
-        session = StreamSession(task_id="task_sig_none")
-        await servicer._registry.register(session)
-
-        request = MagicMock()
-        request.task_id = "task_sig_none"
-        request.action = gateway_pb2.CANCEL
+        request = gateway_dto_pb2.SendSignalRequest(cancel=gateway_messages_pb2.CancelSignal(task_id="task_unknown"))
 
         resp = await servicer.SendSignal(request, MagicMock())
         assert resp.success is False
+        assert await redis.get("cancel:task_unknown") == b""
+        msg = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
+        assert msg is not None
+        assert json.loads(msg["data"])["action"] == "cancel"
+        await pubsub.aclose()
+
+    async def test_foreign_mission_cancel_is_refused(self, redis: Any) -> None:
+        """A cancel from a mission that does not own the claim leaves no tombstone and publishes nothing."""
+        servicer = _mock_servicer(redis_client=redis)
+        await redis.set("idem:task_owned", "proc|missions:owner")
+        pubsub = redis.pubsub()
+        await pubsub.subscribe("signal_ch:task_owned")
+        await pubsub.get_message(timeout=0.1)
+
+        request = gateway_dto_pb2.SendSignalRequest(cancel=gateway_messages_pb2.CancelSignal(task_id="task_owned"))
+        token = RequestContext.bind(mission_id="missions:intruder")
+        try:
+            resp = await servicer.SendSignal(request, MagicMock())
+        finally:
+            RequestContext.reset(token)
+
+        assert resp.success is False
+        assert await redis.get("cancel:task_owned") is None
+        assert await pubsub.get_message(ignore_subscribe_messages=True, timeout=0.2) is None
+        await pubsub.aclose()
+
+    async def test_cancel_without_mission_is_accepted(self, redis: Any) -> None:
+        """A caller without ``x-mission-id`` skips the owner check (logged CANCEL-NO-MISSION)."""
+        servicer = _mock_servicer(redis_client=redis)
+        await redis.set("idem:task_nomission", "proc|missions:owner")
+
+        request = gateway_dto_pb2.SendSignalRequest(cancel=gateway_messages_pb2.CancelSignal(task_id="task_nomission"))
+        resp = await servicer.SendSignal(request, MagicMock())
+
+        assert resp.success is True
+        assert await redis.get("cancel:task_nomission") == b""
+
+    async def test_returns_false_when_publish_fails(self) -> None:
+        """When Redis publish fails, returns success=False."""
+        from redis.exceptions import RedisError
+
+        mock_redis = MagicMock()
+        mock_redis.eval = AsyncMock(side_effect=RedisError("publish failed"))
+        mock_redis.xadd = AsyncMock(return_value=b"1-0")
+        servicer = _mock_servicer(redis_client=mock_redis)
+
+        request = gateway_dto_pb2.SendSignalRequest(cancel=gateway_messages_pb2.CancelSignal(task_id="task_sig_none"))
+
+        resp = await servicer.SendSignal(request, MagicMock())
+        assert resp.success is False
+
+
+class TestDroppedInputLogging:
+    """Unused follow-up input is logged by size and keys, never by content."""
+
+    async def test_follow_up_log_has_no_payload(self) -> None:
+        from digitalkin.grpc_servers.gateway_servicer import GatewayServicer
+        from digitalkin.grpc_servers.stream_session import StreamSession
+
+        data = struct_pb2.Struct()
+        data.update({"query": "my secret token"})
+
+        async def _requests() -> Any:  # ruff: ignore[unused-async]
+            yield gateway_messages_pb2.StreamRequest(data=data)
+
+        with patch("digitalkin.grpc_servers.gateway_servicer.logger") as logger:
+            await GatewayServicer._read_peer_upstream(_requests(), "t-drop", StreamSession(task_id="t-drop"))
+
+        message, size, keys = logger.info.call_args.args
+        assert "not used yet" in message
+        assert (size, keys) == (data.ByteSize(), ["query"])
+        assert "my secret token" not in repr(logger.info.call_args)

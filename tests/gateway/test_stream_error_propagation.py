@@ -20,7 +20,7 @@ from unittest.mock import AsyncMock, MagicMock
 import grpc
 import grpc.aio
 import pytest
-from agentic_mesh_protocol.gateway.v1 import gateway_pb2, gateway_service_pb2_grpc
+from agentic_mesh_protocol.gateway.v1 import gateway_service_pb2_grpc
 from google.protobuf import struct_pb2
 from pydantic import BaseModel, ValidationError
 from redis.exceptions import RedisError
@@ -160,9 +160,7 @@ class TestDialBackNoQuery:
                 # Pre-register the session so _dial_consumer doesn't bail.
                 from digitalkin.grpc_servers.stream_session import StreamSession
                 session = StreamSession(task_id="task_no_query")
-                await gateway._registry.register(
-                    session, setup_id="setups:s1", mission_id="missions:m1",
-                )
+                await gateway._registry.register(session)
 
                 # Run the dial-back with a tight BiDi timeout (we override
                 # the hardcoded 300s by closing the consumer-side server

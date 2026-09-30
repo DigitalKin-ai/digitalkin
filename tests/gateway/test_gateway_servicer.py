@@ -17,7 +17,11 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from agentic_mesh_protocol.gateway.v1 import gateway_dto_pb2, gateway_messages_pb2
 from google.protobuf import struct_pb2
+from redis.exceptions import RedisError
+
+from digitalkin.models.core.redis import ClaimResult
 
 pytestmark = [pytest.mark.timeout(15)]
 
@@ -45,14 +49,12 @@ class _FakeRequestIterator:
         return msg
 
 
-def _make_stream_request(task_id: str = "", seq: int = 0, data_dict: dict | None = None) -> Any:
-    """Build a real Stream request proto (dev2: client sends StreamServer)."""
-    from agentic_mesh_protocol.gateway.v1 import gateway_pb2
-
+def _make_stream_request(task_id: str = "", from_seq: int = 0, data_dict: dict | None = None) -> Any:
+    """Build a real Stream request proto (the client sends StreamRequest)."""
     data = struct_pb2.Struct()
     if data_dict:
         data.update(data_dict)
-    return gateway_pb2.StreamServer(task_id=task_id, seq=seq, data=data)
+    return gateway_messages_pb2.StreamRequest(task_id=task_id, from_seq=from_seq, data=data)
 
 
 def _protocol_of(stream_output: Any) -> str:
@@ -94,7 +96,7 @@ def _mock_servicer(
         redis_client.set = AsyncMock(return_value=True)
         pipe_mock = MagicMock()
         pipe_mock.xadd = MagicMock(return_value=pipe_mock)
-        pipe_mock.execute = AsyncMock(return_value=[])
+        pipe_mock.execute = AsyncMock(return_value=[0, b"1-0", True, None])
         redis_client.pipeline = MagicMock(return_value=pipe_mock)
 
     return GatewayServicer(
@@ -160,10 +162,6 @@ class TestStartStream:
 
     async def test_returns_ack_with_task_id(self) -> None:
         """StartStream returns accepted=True and echoes task_id."""
-        try:
-            from agentic_mesh_protocol.gateway.v1 import gateway_pb2  # noqa: F401
-        except ImportError:
-            pytest.skip("Gateway proto not installed")
 
         servicer = _mock_servicer()
 
@@ -180,10 +178,6 @@ class TestStartStream:
 
     async def test_session_registered(self) -> None:
         """StartStream registers the session for downstream Stream calls."""
-        try:
-            from agentic_mesh_protocol.gateway.v1 import gateway_pb2  # noqa: F401
-        except ImportError:
-            pytest.skip("Gateway proto not installed")
 
         servicer = _mock_servicer()
 
@@ -198,16 +192,31 @@ class TestStartStream:
         assert response.accepted is True
         assert servicer._registry.get("task_registered") is not None
 
+    @pytest.mark.parametrize("release_fails", [False, True], ids=["release-ok", "release-fails"])
+    async def test_seed_failure_undoes_claim_and_session(self, release_fails: bool) -> None:
+        """A Redis error while seeding the stream releases the claim and the session, so a retry can run."""
+        servicer = _mock_servicer()
+        servicer._redis_client.pipeline.return_value.execute = AsyncMock(side_effect=RedisError("down"))
+        servicer._idempotency = MagicMock(
+            claim=AsyncMock(return_value=ClaimResult.CLAIMED),
+            release=AsyncMock(side_effect=RedisError("down") if release_fails else None),
+        )
+        request = gateway_dto_pb2.StartStreamRequest(
+            task_id="task_seed_fail", setup_id="setups:s", mission_id="missions:m"
+        )
+
+        response = await servicer.StartStream(request, _mock_context())
+
+        assert response.accepted is False
+        servicer._idempotency.release.assert_awaited_once_with("task_seed_fail")
+        assert servicer._registry.get("task_seed_fail") is None
+
     async def test_capacity_exceeded_returns_not_accepted(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """When max_streams is exceeded, StartStream returns accepted=False.
 
         Capacity is now enforced process-locally via _local_cache; pre-fill it
         to the max_streams limit so the next register() returns False.
         """
-        try:
-            from agentic_mesh_protocol.gateway.v1 import gateway_pb2  # noqa: F401
-        except ImportError:
-            pytest.skip("Gateway proto not installed")
 
         from digitalkin.grpc_servers.stream_session import StreamSession
 
@@ -232,10 +241,6 @@ class TestStartStream:
 
     async def test_seeds_stream_start_sentinel(self) -> None:
         """StartStream writes a stream.start sentinel as first Redis entry."""
-        try:
-            from agentic_mesh_protocol.gateway.v1 import gateway_pb2  # noqa: F401
-        except ImportError:
-            pytest.skip("Gateway proto not installed")
 
         servicer = _mock_servicer()
 
@@ -247,14 +252,30 @@ class TestStartStream:
         context = _mock_context()
         await servicer.StartStream(request, context)
 
-        # First xadd is the stream.start seed (key = task:<tid>:stream)
-        first_call = servicer._redis_client.xadd.await_args_list[0]
+        pipe = servicer._redis_client.pipeline.return_value
+        pipe.delete.assert_called_once_with("task:task_seed:stream", "task:task_seed:cursor")
+        first_call = pipe.xadd.call_args_list[0]
         assert first_call.args[0] == "task:task_seed:stream"
-        # Decode the seeded Struct: protocol field == "stream.start"
         pb_bytes = first_call.args[1]["pb"]
         seeded = struct_pb2.Struct()
         seeded.ParseFromString(pb_bytes)
         assert seeded.fields["root"].struct_value.fields["protocol"].string_value == "stream.start"
+
+    async def test_seed_arms_initial_ttl_in_same_pipeline(self) -> None:
+        """R2: the stream.start seed is pipelined with EXPIRE redis_stream_initial_ttl."""
+        servicer = _mock_servicer()
+        request = MagicMock()
+        request.task_id = "task_seed_ttl"
+        request.setup_id = "setups:s"
+        request.mission_id = "missions:m"
+
+        response = await servicer.StartStream(request, _mock_context())
+
+        assert response.accepted is True
+        pipe = servicer._redis_client.pipeline.return_value
+        pipe.expire.assert_called_once_with("task:task_seed_ttl:stream", 600)
+        pipe.execute.assert_awaited_once()
+        servicer._redis_client.xadd.assert_not_awaited()
 
 
 # ===========================================================================
@@ -267,45 +288,32 @@ class TestSendSignal:
 
     async def test_forwards_signal_via_redis(self) -> None:
         """SendSignal publishes to Redis signal channel."""
-        try:
-            from agentic_mesh_protocol.gateway.v1 import gateway_pb2
-        except ImportError:
-            pytest.skip("Gateway proto not installed")
 
         servicer = _mock_servicer()
+        servicer._redis_client.eval = AsyncMock(return_value=[1, 1])
 
-        from digitalkin.grpc_servers.stream_session import StreamSession
-
-        session = StreamSession(task_id="task_sig")
-        await servicer._registry.register(session)
-
-        request = MagicMock()
-        request.task_id = "task_sig"
-        request.action = gateway_pb2.CANCEL
+        request = gateway_dto_pb2.SendSignalRequest(cancel=gateway_messages_pb2.CancelSignal(task_id="task_sig"))
 
         context = _mock_context()
         response = await servicer.SendSignal(request, context)
 
         assert response.success is True
-        servicer._redis_client.publish.assert_awaited_once()
+        keys = servicer._redis_client.eval.await_args.args[1]
+        assert keys == ["idem:task_sig", "cancel:task_sig", "signal_ch:task_sig"]
 
     async def test_unknown_task_returns_false(self) -> None:
         """SendSignal for unknown task returns success=False."""
-        try:
-            from agentic_mesh_protocol.gateway.v1 import gateway_pb2
-        except ImportError:
-            pytest.skip("Gateway proto not installed")
 
         servicer = _mock_servicer()
+        servicer._redis_client.eval = AsyncMock(return_value=[0, 0])
 
-        request = MagicMock()
-        request.task_id = "nonexistent"
-        request.action = gateway_pb2.CANCEL
+        request = gateway_dto_pb2.SendSignalRequest(cancel=gateway_messages_pb2.CancelSignal(task_id="nonexistent"))
 
         context = _mock_context()
         response = await servicer.SendSignal(request, context)
 
         assert response.success is False
+        servicer._redis_client.eval.assert_awaited_once()
 
 
 # ===========================================================================
@@ -318,10 +326,6 @@ class TestStream:
 
     async def test_unknown_task_yields_fatal_error_then_end(self) -> None:
         """Stream for unknown task yields stream.error(fatal=true) + stream.end."""
-        try:
-            from agentic_mesh_protocol.gateway.v1 import gateway_pb2  # noqa: F401
-        except ImportError:
-            pytest.skip("Gateway proto not installed")
 
         servicer = _mock_servicer()
 
@@ -341,10 +345,6 @@ class TestStream:
 
     async def test_invalid_task_id_yields_fatal_error_then_end(self) -> None:
         """Stream with an invalid task_id yields the sentinel error sequence."""
-        try:
-            from agentic_mesh_protocol.gateway.v1 import gateway_pb2  # noqa: F401
-        except ImportError:
-            pytest.skip("Gateway proto not installed")
 
         servicer = _mock_servicer()
 
@@ -365,16 +365,12 @@ class TestStream:
 
     async def test_from_seq_out_of_range_yields_fatal_error(self) -> None:
         """Stream with from_seq above ``GatewayStreamSettings.from_seq_limit`` yields the sentinel error sequence."""
-        try:
-            from agentic_mesh_protocol.gateway.v1 import gateway_pb2  # noqa: F401
-        except ImportError:
-            pytest.skip("Gateway proto not installed")
 
         from digitalkin.models.settings.gateway import GatewaySettings
 
         servicer = _mock_servicer()
 
-        init_msg = _make_stream_request(task_id="task_oor", seq=GatewaySettings().stream.from_seq_limit + 1)
+        init_msg = _make_stream_request(task_id="task_oor", from_seq=GatewaySettings().stream.from_seq_limit + 1)
         request_iter = _FakeRequestIterator([init_msg])
 
         context = _mock_context()
@@ -386,13 +382,8 @@ class TestStream:
         assert _protocol_of(responses[0]) == "stream.error"
         assert _protocol_of(responses[1]) == "stream.end"
 
-    async def test_upstream_data_xadds_to_redis_input_stream(self) -> None:
-        """Stream: subsequent messages XADD raw proto bytes onto task:{id}:input."""
-        try:
-            from agentic_mesh_protocol.gateway.v1 import gateway_pb2  # noqa: F401
-        except ImportError:
-            pytest.skip("Gateway proto not installed")
-
+    async def test_upstream_data_is_dropped_not_written(self) -> None:
+        """R1: follow-up upstream data is logged and dropped; nothing is written to Redis."""
         from digitalkin.grpc_servers.stream_session import StreamSession
 
         servicer = _mock_servicer()
@@ -403,18 +394,10 @@ class TestStream:
 
         await servicer._read_peer_upstream(request_iter, "task_up", session)  # noqa: SLF001
 
-        # One XADD on the input stream key with raw proto bytes.
-        servicer._redis_client.xadd.assert_awaited_once()  # noqa: SLF001
-        args, kwargs = servicer._redis_client.xadd.call_args  # noqa: SLF001
-        assert args[0] == "task:task_up:input"
-        assert b"pb" in args[1] or "pb" in args[1]
+        servicer._redis_client.xadd.assert_not_awaited()  # noqa: SLF001
 
     async def test_upstream_empty_data_skipped(self) -> None:
         """Empty Struct upstream messages are skipped — no XADD."""
-        try:
-            from agentic_mesh_protocol.gateway.v1 import gateway_pb2  # noqa: F401
-        except ImportError:
-            pytest.skip("Gateway proto not installed")
 
         from digitalkin.grpc_servers.stream_session import StreamSession
 

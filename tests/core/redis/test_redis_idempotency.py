@@ -55,21 +55,40 @@ class TestRedisIdempotency:
 
     async def test_first_claim_is_claimed(self, guard) -> None:
         idem, _ = guard
-        assert await idem.claim("t1", "inst_a") is ClaimResult.CLAIMED
+        assert await idem.claim("t1", "inst_a", "missions:m") is ClaimResult.CLAIMED
 
     async def test_same_instance_reclaims(self, guard) -> None:
         idem, _ = guard
-        await idem.claim("t2", "inst_a")
-        assert await idem.claim("t2", "inst_a") is ClaimResult.RECLAIMED
+        await idem.claim("t2", "inst_a", "missions:m")
+        assert await idem.claim("t2", "inst_a", "missions:m") is ClaimResult.RECLAIMED
 
     async def test_other_instance_taken(self, guard) -> None:
         idem, _ = guard
-        await idem.claim("t3", "inst_a")
-        assert await idem.claim("t3", "inst_b") is ClaimResult.TAKEN
+        await idem.claim("t3", "inst_a", "missions:m")
+        assert await idem.claim("t3", "inst_b", "missions:m") is ClaimResult.TAKEN
 
     async def test_release_frees_the_claim(self, guard) -> None:
         idem, client = guard
-        await idem.claim("t4", "inst_a")
+        await idem.claim("t4", "inst_a", "missions:m")
         await idem.release("t4")
         assert await client.get("idem:t4") is None
-        assert await idem.claim("t4", "inst_b") is ClaimResult.CLAIMED
+        assert await idem.claim("t4", "inst_b", "missions:m") is ClaimResult.CLAIMED
+
+    async def test_reclaim_does_not_refresh_ttl(self, guard) -> None:
+        """R3: RECLAIMED is refused by StartStream, so it must not extend the claim's TTL."""
+        idem, client = guard
+        await idem.claim("t5", "inst_a", "missions:m")
+        await client._client.expire("idem:t5", 5)
+        assert await idem.claim("t5", "inst_a", "missions:m") is ClaimResult.RECLAIMED
+        assert await client._client.ttl("idem:t5") <= 5
+
+    async def test_claim_records_owning_mission(self, guard) -> None:
+        """The claim value carries ``{instance}|{mission}`` so SendSignal can check the cancel's owner."""
+        idem, client = guard
+        await idem.claim("t6", "inst_a", "missions:owner")
+        assert await client.get("idem:t6") == b"inst_a|missions:owner"
+
+    async def test_same_instance_other_mission_is_taken(self, guard) -> None:
+        idem, _ = guard
+        await idem.claim("t7", "inst_a", "missions:owner")
+        assert await idem.claim("t7", "inst_a", "missions:other") is ClaimResult.TAKEN
