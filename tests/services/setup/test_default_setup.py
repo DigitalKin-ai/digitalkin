@@ -2,8 +2,10 @@
 
 import pytest
 
+from digitalkin.models.services.registry import RegistrySetupStatus
 from digitalkin.services.setup.default_setup import DefaultSetup
 from digitalkin.services.setup.exceptions import SetupServiceError
+from digitalkin.services.setup.setup_strategy import SetupPage
 
 
 class TestCreateServiceSetup:
@@ -13,7 +15,7 @@ class TestCreateServiceSetup:
         setup = await DefaultSetup().create_service_setup("Nikita", {"branding": True})
         assert setup.name == "Nikita"
         assert setup.current_setup_version.content == {"branding": True}
-        assert setup.current_setup_version.documentation == ""
+        assert not setup.current_setup_version.documentation
 
     async def test_forwards_documentation(self) -> None:
         setup = await DefaultSetup().create_service_setup("Nikita", {"branding": True}, "brand voice service")
@@ -73,7 +75,7 @@ class TestDocumentation:
         setup = await strategy.create_setup({"name": "n", "content": {}, "documentation": "old"})
 
         await strategy.update_setup({"setup_id": setup.id, "name": "n", "content": {}})
-        assert setup.current_setup_version.documentation == ""
+        assert not setup.current_setup_version.documentation
 
 
 class TestOutputFormatSpecGuard:
@@ -97,6 +99,30 @@ class TestOutputFormatSpecGuard:
             })
         # The guard runs before the revision is cut, so no half-written version survives.
         assert setup.current_setup_version.content == {"output_format_spec": "ok"}
+        assert (await strategy.list_setup_versions({"setup_id": setup.id})).total_count == 1
+
+
+class TestDocumentationGuard:
+    """Documentation over the protocol's 300-character cap is refused on both write paths."""
+
+    async def test_create_refuses_oversized_documentation(self) -> None:
+        strategy = DefaultSetup()
+        with pytest.raises(ValueError, match="documentation is 301 characters"):
+            await strategy.create_setup({"name": "n", "content": {"a": 1}, "documentation": "x" * 301})
+        assert strategy.setups == {}, "nothing may be stored when the guard trips"
+
+    async def test_update_refuses_oversized_documentation(self) -> None:
+        strategy = DefaultSetup()
+        setup = await strategy.create_setup({"name": "n", "content": {"a": 1}, "documentation": "x" * 300})
+
+        with pytest.raises(ValueError, match="documentation is 301 characters"):
+            await strategy.update_setup({
+                "setup_id": setup.id,
+                "name": "renamed",
+                "content": {"a": 2},
+                "documentation": "x" * 301,
+            })
+        assert setup.name == "n"
         assert (await strategy.list_setup_versions({"setup_id": setup.id})).total_count == 1
 
 
@@ -149,6 +175,17 @@ class TestVersionHistory:
         assert rolled.current_setup_version.id == first
         assert rolled.current_setup_version.content == {"v": 0}
 
+    async def test_set_current_carries_the_activated_version_structure(self) -> None:
+        """SetupVersion carries structure, so the rolled-back version brings its own map back."""
+        strategy = DefaultSetup()
+        setup = await strategy.create_setup({"name": "n", "content": {"v": 0}, "structure": {"v": "the v knob"}})
+        first = setup.current_setup_version.id
+        await strategy.update_setup({"setup_id": setup.id, "name": "n", "content": {"v": 1}})
+
+        rolled = await strategy.set_current_setup_version({"setup_id": setup.id, "setup_version_id": first})
+
+        assert rolled.current_setup_version.structure == {"v": "the v knob"}
+
     async def test_set_current_rejects_a_version_from_another_setup(self) -> None:
         strategy = DefaultSetup()
         mine = await strategy.create_setup({"name": "mine", "content": {}})
@@ -166,6 +203,10 @@ class TestVersionHistory:
 
         assert await strategy.delete_setup({"setup_id": setup.id}) is True
         assert setup.id not in strategy.versions
+
+    async def test_delete_an_unknown_setup_is_false(self) -> None:
+        """Mirrors the gRPC strategy, which reads an OperationError result as False."""
+        assert await DefaultSetup().delete_setup({"setup_id": "setups:gone"}) is False
 
 
 class TestAuthoredStructure:
@@ -263,21 +304,31 @@ class TestStructure:
 
         assert fetched.current_setup_version.content == content
 
-    async def test_unresolvable_key_returns_the_whole_document(self) -> None:
-        """The wire cannot say "no such key" — it sends the setup entirely. Mirror that.
+    async def test_unresolvable_key_is_refused(self) -> None:
+        """The backend answers NOT_FOUND for a key the content does not have. Mirror that.
 
-        Returning an empty content instead would make a mistyped key look like an empty
-        configuration locally while production quietly returned everything.
+        Returning the whole document instead would let a mistyped key pass locally and
+        fail in production.
         """
         strategy = DefaultSetup()
         setup = await strategy.create_setup({"name": "n", "content": {"a": 1, "b": 2}})
 
-        fetched = await strategy.get_setup({"setup_id": setup.id, "structure_key": "nope"})
+        with pytest.raises(SetupServiceError, match="no path nope"):
+            await strategy.get_setup({"setup_id": setup.id, "structure_key": "nope"})
 
-        assert fetched.current_setup_version.content == {"a": 1, "b": 2}
+    async def test_get_carries_the_stored_structure(self) -> None:
+        """SetupVersion carries structure, so a read returns the map the version was cut with."""
+        strategy = DefaultSetup()
+        setup = await strategy.create_setup({"name": "n", "content": {"a": 1}, "structure": {"a": "the a knob"}})
+
+        fetched = await strategy.get_setup({"setup_id": setup.id})
+        projected = await strategy.get_setup({"setup_id": setup.id, "structure_key": "a"})
+
+        assert fetched.current_setup_version.structure == {"a": "the a knob"}
+        assert projected.current_setup_version.structure == {"a": "the a knob"}
 
     async def test_empty_key_returns_the_whole_document(self) -> None:
-        """structure_key has no proto3 presence, so "" and unset are one request."""
+        """An empty structure_key is sent unset by the gRPC strategy, so it means the whole document."""
         strategy = DefaultSetup()
         setup = await strategy.create_setup({"name": "n", "content": {"a": 1}})
 

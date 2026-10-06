@@ -17,6 +17,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from agentic_mesh_protocol.gateway.v1 import gateway_dto_pb2, gateway_messages_pb2
 from google.protobuf import struct_pb2
 
 pytestmark = [pytest.mark.timeout(15)]
@@ -45,14 +46,12 @@ class _FakeRequestIterator:
         return msg
 
 
-def _make_stream_request(task_id: str = "", seq: int = 0, data_dict: dict | None = None) -> Any:
-    """Build a real Stream request proto (dev2: client sends StreamServer)."""
-    from agentic_mesh_protocol.gateway.v1 import gateway_pb2
-
+def _make_stream_request(task_id: str = "", from_seq: int = 0, data_dict: dict | None = None) -> Any:
+    """Build a real Stream request proto (the client sends StreamRequest)."""
     data = struct_pb2.Struct()
     if data_dict:
         data.update(data_dict)
-    return gateway_pb2.StreamServer(task_id=task_id, seq=seq, data=data)
+    return gateway_messages_pb2.StreamRequest(task_id=task_id, from_seq=from_seq, data=data)
 
 
 def _protocol_of(stream_output: Any) -> str:
@@ -160,10 +159,6 @@ class TestStartStream:
 
     async def test_returns_ack_with_task_id(self) -> None:
         """StartStream returns accepted=True and echoes task_id."""
-        try:
-            from agentic_mesh_protocol.gateway.v1 import gateway_pb2  # noqa: F401
-        except ImportError:
-            pytest.skip("Gateway proto not installed")
 
         servicer = _mock_servicer()
 
@@ -180,10 +175,6 @@ class TestStartStream:
 
     async def test_session_registered(self) -> None:
         """StartStream registers the session for downstream Stream calls."""
-        try:
-            from agentic_mesh_protocol.gateway.v1 import gateway_pb2  # noqa: F401
-        except ImportError:
-            pytest.skip("Gateway proto not installed")
 
         servicer = _mock_servicer()
 
@@ -204,10 +195,6 @@ class TestStartStream:
         Capacity is now enforced process-locally via _local_cache; pre-fill it
         to the max_streams limit so the next register() returns False.
         """
-        try:
-            from agentic_mesh_protocol.gateway.v1 import gateway_pb2  # noqa: F401
-        except ImportError:
-            pytest.skip("Gateway proto not installed")
 
         from digitalkin.grpc_servers.stream_session import StreamSession
 
@@ -232,10 +219,6 @@ class TestStartStream:
 
     async def test_seeds_stream_start_sentinel(self) -> None:
         """StartStream writes a stream.start sentinel as first Redis entry."""
-        try:
-            from agentic_mesh_protocol.gateway.v1 import gateway_pb2  # noqa: F401
-        except ImportError:
-            pytest.skip("Gateway proto not installed")
 
         servicer = _mock_servicer()
 
@@ -283,18 +266,12 @@ class TestSendSignal:
 
     async def test_forwards_signal_via_redis(self) -> None:
         """SendSignal publishes to Redis signal channel."""
-        try:
-            from agentic_mesh_protocol.gateway.v1 import gateway_pb2
-        except ImportError:
-            pytest.skip("Gateway proto not installed")
 
         servicer = _mock_servicer()
         pipe = servicer._redis_client.pipeline.return_value
         pipe.execute = AsyncMock(return_value=[1, True, 1])
 
-        request = MagicMock()
-        request.task_id = "task_sig"
-        request.action = gateway_pb2.CANCEL
+        request = gateway_dto_pb2.SendSignalRequest(cancel=gateway_messages_pb2.CancelSignal(task_id="task_sig"))
 
         context = _mock_context()
         response = await servicer.SendSignal(request, context)
@@ -306,18 +283,12 @@ class TestSendSignal:
 
     async def test_unknown_task_returns_false(self) -> None:
         """SendSignal for unknown task returns success=False."""
-        try:
-            from agentic_mesh_protocol.gateway.v1 import gateway_pb2
-        except ImportError:
-            pytest.skip("Gateway proto not installed")
 
         servicer = _mock_servicer()
         pipe = servicer._redis_client.pipeline.return_value
         pipe.execute = AsyncMock(return_value=[0, True, 0])
 
-        request = MagicMock()
-        request.task_id = "nonexistent"
-        request.action = gateway_pb2.CANCEL
+        request = gateway_dto_pb2.SendSignalRequest(cancel=gateway_messages_pb2.CancelSignal(task_id="nonexistent"))
 
         context = _mock_context()
         response = await servicer.SendSignal(request, context)
@@ -336,10 +307,6 @@ class TestStream:
 
     async def test_unknown_task_yields_fatal_error_then_end(self) -> None:
         """Stream for unknown task yields stream.error(fatal=true) + stream.end."""
-        try:
-            from agentic_mesh_protocol.gateway.v1 import gateway_pb2  # noqa: F401
-        except ImportError:
-            pytest.skip("Gateway proto not installed")
 
         servicer = _mock_servicer()
 
@@ -359,10 +326,6 @@ class TestStream:
 
     async def test_invalid_task_id_yields_fatal_error_then_end(self) -> None:
         """Stream with an invalid task_id yields the sentinel error sequence."""
-        try:
-            from agentic_mesh_protocol.gateway.v1 import gateway_pb2  # noqa: F401
-        except ImportError:
-            pytest.skip("Gateway proto not installed")
 
         servicer = _mock_servicer()
 
@@ -383,16 +346,12 @@ class TestStream:
 
     async def test_from_seq_out_of_range_yields_fatal_error(self) -> None:
         """Stream with from_seq above ``GatewayStreamSettings.from_seq_limit`` yields the sentinel error sequence."""
-        try:
-            from agentic_mesh_protocol.gateway.v1 import gateway_pb2  # noqa: F401
-        except ImportError:
-            pytest.skip("Gateway proto not installed")
 
         from digitalkin.models.settings.gateway import GatewaySettings
 
         servicer = _mock_servicer()
 
-        init_msg = _make_stream_request(task_id="task_oor", seq=GatewaySettings().stream.from_seq_limit + 1)
+        init_msg = _make_stream_request(task_id="task_oor", from_seq=GatewaySettings().stream.from_seq_limit + 1)
         request_iter = _FakeRequestIterator([init_msg])
 
         context = _mock_context()
@@ -406,10 +365,6 @@ class TestStream:
 
     async def test_upstream_data_is_dropped_not_written(self) -> None:
         """R1: follow-up upstream data is logged and dropped; nothing is written to Redis."""
-        try:
-            from agentic_mesh_protocol.gateway.v1 import gateway_pb2  # noqa: F401
-        except ImportError:
-            pytest.skip("Gateway proto not installed")
 
         from digitalkin.grpc_servers.stream_session import StreamSession
 
@@ -425,10 +380,6 @@ class TestStream:
 
     async def test_upstream_empty_data_skipped(self) -> None:
         """Empty Struct upstream messages are skipped — no XADD."""
-        try:
-            from agentic_mesh_protocol.gateway.v1 import gateway_pb2  # noqa: F401
-        except ImportError:
-            pytest.skip("Gateway proto not installed")
 
         from digitalkin.grpc_servers.stream_session import StreamSession
 

@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from agentic_mesh_protocol.gateway.v1 import gateway_pb2
+from agentic_mesh_protocol.gateway.v1 import gateway_dto_pb2
 from google.protobuf import struct_pb2
 
 from digitalkin.core.task_manager.redis.redis_idempotency import RedisIdempotency
@@ -37,7 +37,7 @@ def _ctx() -> Any:
 
 
 def _request(task_id: str) -> Any:
-    return gateway_pb2.StartStreamRequest(task_id=task_id, setup_id="setups:s", mission_id="missions:m")
+    return gateway_dto_pb2.StartStreamRequest(task_id=task_id, setup_id="setups:s", mission_id="missions:m")
 
 
 async def test_seed_has_initial_ttl_and_replaces_stale_stream(redis_client: RedisClient) -> None:

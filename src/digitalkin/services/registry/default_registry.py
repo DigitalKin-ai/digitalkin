@@ -13,7 +13,6 @@ from digitalkin.models.services.registry import (
     SetupSummary,
 )
 from digitalkin.services.registry.exceptions import RegistryModuleNotFoundError
-from digitalkin.services.registry.registry_models import ModuleStatusInfo
 from digitalkin.services.registry.registry_strategy import RegistryStrategy
 
 
@@ -99,27 +98,6 @@ class DefaultRegistry(RegistryStrategy):
 
         return results[offset : offset + limit]
 
-    async def get_status(self, module_id: str) -> ModuleStatusInfo:
-        """Get module status.
-
-        Args:
-            module_id: The module identifier.
-
-        Returns:
-            ModuleStatusInfo with current status.
-
-        Raises:
-            RegistryModuleNotFoundError: If module not found.
-        """
-        if module_id not in self._modules:
-            raise RegistryModuleNotFoundError(module_id)
-
-        module = self._modules[module_id]
-        return ModuleStatusInfo(
-            module_id=module_id,
-            status=module.status or RegistryModuleStatus.UNSPECIFIED,
-        )
-
     async def register(
         self,
         module_id: str,
@@ -128,6 +106,7 @@ class DefaultRegistry(RegistryStrategy):
         version: str,
         module_type: RegistryModuleType = RegistryModuleType.UNSPECIFIED,
         documentation: str = "",
+        schemas: dict[str, dict[str, Any]] | None = None,  # ruff: ignore[unused-method-argument]
     ) -> ModuleInfo | None:
         """Register a module with the registry.
 
@@ -140,6 +119,7 @@ class DefaultRegistry(RegistryStrategy):
             version: Module version.
             module_type: Declared module type; UNSPECIFIED preserves the existing record's type.
             documentation: Internal documentation for registry index search.
+            schemas: Ignored — ``ModuleInfo`` holds no schemas; modules serve them directly.
 
         Returns:
             ModuleInfo if successful, None otherwise.

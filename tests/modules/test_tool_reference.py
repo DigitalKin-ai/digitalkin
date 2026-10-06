@@ -62,10 +62,7 @@ class FakeRegistry(RegistryStrategy):
             return self._search_results[name]
         return []
 
-    async def get_status(self, module_id: str) -> None:
-        return None
-
-    async def search_setups(  # noqa: PLR0913
+    async def search_setups(
         self,
         query: str | None = None,
         setup_ids: list[str] | None = None,
@@ -634,8 +631,7 @@ class TestSharedSetupIdAcrossAgents:
         self,
         registry: FakeRegistry,
     ) -> None:
-        """Two ToolReferences sharing a setup_id but enabling different triggers must
-        both see the full tool catalog in the cache.
+        """Two ToolReferences sharing a setup_id and different triggers both see the full catalog.
 
         Before DEV-631, ``_resolve_single`` trimmed ``tool_info.tools`` by the first
         resolver's triggers and the trimmed object was reused for every later agent.
@@ -685,9 +681,10 @@ class TestSharedSetupIdAcrossAgents:
         self,
         registry: FakeRegistry,
     ) -> None:
-        """Calling build_tool_cache twice must not progressively trim the cached
-        ToolModuleInfo. Guards against any future code that mutates tool_info.tools
-        based on per-selection triggers after resolution.
+        """Calling build_tool_cache twice must not progressively trim the cached ToolModuleInfo.
+
+        Guards against any future code that mutates tool_info.tools based on per-selection
+        triggers after resolution.
         """
 
         class ArchetypeSetup(SetupModel):

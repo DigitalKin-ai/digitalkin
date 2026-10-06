@@ -238,21 +238,18 @@ class DefaultStorage(StorageStrategy):
             records = [r for r in records if r.visibility in allowed]
         return records[offset : offset + (limit or 20)]
 
-    async def _remove_collection(self, collection: str, context: str, record_id: str = "") -> bool:
+    async def _remove_collection(self, collection: str, context: str) -> bool:
         """Wipe a collection scoped to a specific context.
 
         Args:
             collection: The unique name to retrieve data for
             context: Resolved owner context scoping the wipe.
-            record_id: Restrict removal to this record id; empty wipes the whole collection.
 
         Returns:
             bool: True if the collection was removed, False otherwise
         """
         prefix = f"{context}|{collection}:"
-        to_delete = [
-            k for k, r in self.storage.items() if k.startswith(prefix) and (not record_id or r.record_id == record_id)
-        ]
+        to_delete = [k for k in self.storage if k.startswith(prefix)]
         for k in to_delete:
             del self.storage[k]
         self._save_to_file()

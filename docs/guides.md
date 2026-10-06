@@ -20,6 +20,14 @@ The SDK uses a strategy pattern for services such as storage, filesystem, cost, 
 
 See: [`examples/services/`](https://github.com/DigitalKin-ai/digitalkin/tree/main/examples/services/)
 
+## Environment Variables
+
+How the SDK and modules declare, read and document environment variables: what `EnvManager` provides so a module no
+longer builds a `ClientConfig`, how to add module-specific variables and refuse to boot without the required ones, when
+a variable belongs in the SDK, and how the `.env` templates are generated.
+
+See: [Environment Variables](environment_variables.md)
+
 ## Dynamic Schema Configuration
 
 Setup models can include fields whose allowed values are fetched at runtime from external sources. Use the `Dynamic` metadata class with async fetcher functions to populate enum values, ranges, or other schema properties dynamically. Call `SetupModel.get_clean_model(force=True)` to trigger resolution.

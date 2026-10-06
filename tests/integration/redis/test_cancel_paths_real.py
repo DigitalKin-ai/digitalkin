@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from agentic_mesh_protocol.gateway.v1 import gateway_pb2
+from agentic_mesh_protocol.gateway.v1 import gateway_dto_pb2, gateway_messages_pb2
 from google.protobuf import struct_pb2
 
 from digitalkin.core.job_manager.single_job_manager import SingleJobManager
@@ -76,9 +76,7 @@ async def _stream_protocols(redis_client: RedisClient, task_id: str) -> list[tup
 
 
 async def _send_cancel(gateway: GatewayServicer, task_id: str) -> Any:
-    request = MagicMock()
-    request.task_id = task_id
-    request.action = gateway_pb2.CANCEL
+    request = gateway_dto_pb2.SendSignalRequest(cancel=gateway_messages_pb2.CancelSignal(task_id=task_id))
     return await gateway.SendSignal(request, MagicMock())
 
 

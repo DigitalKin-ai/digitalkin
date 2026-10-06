@@ -24,9 +24,9 @@ from typing import Any
 import grpc
 
 # Import gRPC protobuf generated classes
-from agentic_mesh_protocol.module.v1 import information_pb2, lifecycle_pb2, module_service_pb2_grpc
+from agentic_mesh_protocol.module.v1 import module_dto_pb2, module_service_pb2_grpc
 from agentic_mesh_protocol.module_registry.v1 import discover_pb2, module_registry_service_pb2_grpc
-from agentic_mesh_protocol.setup.v1 import setup_pb2
+from agentic_mesh_protocol.setup.v1 import setup_messages_pb2
 from google.protobuf import json_format, struct_pb2
 from google.protobuf.message import Message
 from pydantic import BaseModel, create_model
@@ -168,19 +168,19 @@ async def get_module_schemas(
         Tuple of (input_class, output_class, setup_class) Pydantic models
     """
     # Create requests for each schema
-    input_request = information_pb2.GetModuleInputRequest(module_id=module_id)
-    output_request = information_pb2.GetModuleOutputRequest(module_id=module_id)
-    setup_request = information_pb2.GetModuleSetupRequest(module_id=module_id)
+    input_request = module_dto_pb2.GetModuleInputRequest(module_id=module_id)
+    output_request = module_dto_pb2.GetModuleOutputRequest(module_id=module_id)
+    setup_request = module_dto_pb2.GetModuleSetupRequest(module_id=module_id)
 
     # Get schemas from module
     input_response = await module_stub.GetModuleInput(input_request)
     output_response = await module_stub.GetModuleOutput(output_request)
     setup_response = await module_stub.GetModuleSetup(setup_request)
 
-    # Convert schemas to Pydantic models
-    input_class = json_to_pydantic(input_response.input_schema)
-    output_class = json_to_pydantic(output_response.output_schema)
-    setup_class = json_to_pydantic(setup_response.setup_schema)
+    # Convert schemas (carried in each response's ModuleResult) to Pydantic models
+    input_class = json_to_pydantic(input_response.result.input_schema)
+    output_class = json_to_pydantic(output_response.result.output_schema)
+    setup_class = json_to_pydantic(setup_response.result.setup_schema)
 
     return input_class, output_class, setup_class
 
@@ -232,9 +232,9 @@ async def run_client_llm() -> None:
                 max_tokens=1000,
             )
 
-            config_setup_request = information_pb2.GetConfigSetupModuleRequest(module_id=module.module_id)
+            config_setup_request = module_dto_pb2.GetConfigSetupModuleRequest(module_id=module.module_id)
             config_setup_response = await module_stub.GetConfigSetupModule(config_setup_request)
-            config_setup_class = json_to_pydantic(config_setup_response.config_setup_schema)
+            config_setup_class = json_to_pydantic(config_setup_response.result.config_setup_schema)
 
             content = config_setup_class(
                 rag_files=[
@@ -243,8 +243,8 @@ async def run_client_llm() -> None:
                 ]
             ).model_dump()
 
-            request = lifecycle_pb2.ConfigSetupModuleRequest(
-                setup_version=setup_pb2.SetupVersion(
+            request = module_dto_pb2.ConfigSetupModuleRequest(
+                setup_version=setup_messages_pb2.SetupVersion(
                     id="setup_versions:0",
                     setup_id="setups:0",
                     version="0.1.0",
@@ -266,7 +266,7 @@ async def run_client_llm() -> None:
 
             try:
                 response = await module_stub.ConfigSetupModule(request)
-                logger.info("Module response %s", response)
+                logger.info("Configured setup version %s", response.result.setup_version)
             except grpc.RpcError:
                 logger.exception("Error running module:")
 
