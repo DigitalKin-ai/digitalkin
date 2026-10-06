@@ -869,7 +869,7 @@ wheels = [
 
 [[package]]
 name = "digitalkin"
-version = "1.0.5.dev6"
+version = "1.1.0.dev0"
 source = { editable = "." }
 dependencies = [
     { name = "ag-ui-protocol" },

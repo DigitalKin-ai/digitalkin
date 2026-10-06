@@ -30,6 +30,7 @@ def mock_context() -> ModuleContext:
     context.storage = MagicMock()
     context.cost = MagicMock()
     context.filesystem = MagicMock()
+    context.knowledge = MagicMock()
     context.registry = MagicMock()
     context.user_profile = MagicMock()
 
@@ -64,6 +65,7 @@ def mock_context_partial_services() -> ModuleContext:
     context.storage = MagicMock()
     context.cost = MagicMock()
     context.filesystem = None  # Missing
+    context.knowledge = MagicMock()
     context.registry = None  # Missing
     context.user_profile = MagicMock()
 
@@ -153,7 +155,7 @@ class TestHealthcheckServicesTrigger:
 
         assert isinstance(output, HealthcheckServicesOutput)
         assert output.overall_status == "healthy"
-        assert len(output.services) == 5  # All 5 services
+        assert len(output.services) == 6  # All 6 services
 
         # All services should be healthy
         for service in output.services:
@@ -182,6 +184,7 @@ class TestHealthcheckServicesTrigger:
         assert service_map["cost"].status == "healthy"
         assert service_map["filesystem"].status == "unknown"
         assert service_map["registry"].status == "unknown"
+        assert service_map["knowledge"].status == "healthy"
         assert service_map["user_profile"].status == "healthy"
 
     @pytest.mark.asyncio
@@ -197,7 +200,7 @@ class TestHealthcheckServicesTrigger:
         call_args = mock_context.callbacks.send_message.call_args
         output = call_args[0][0]
 
-        expected_services = {"storage", "cost", "filesystem", "registry", "user_profile"}
+        expected_services = {"storage", "cost", "filesystem", "registry", "knowledge", "user_profile"}
         actual_services = {s.name for s in output.services}
 
         assert actual_services == expected_services

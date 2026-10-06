@@ -10,6 +10,7 @@ from digitalkin.services.communication import CommunicationStrategy
 from digitalkin.services.cost import CostStrategy
 from digitalkin.services.filesystem import FilesystemStrategy
 from digitalkin.services.identity import IdentityStrategy
+from digitalkin.services.knowledge import KnowledgeStrategy
 from digitalkin.services.registry import RegistryStrategy
 from digitalkin.services.secret import SecretStrategy
 from digitalkin.services.storage import StorageStrategy
@@ -23,6 +24,7 @@ T = TypeVar(
     | CostStrategy
     | FilesystemStrategy
     | IdentityStrategy
+    | KnowledgeStrategy
     | RegistryStrategy
     | SecretStrategy
     | StorageStrategy
