@@ -40,7 +40,7 @@ wheels = [
 
 [[package]]
 name = "agno"
-version = "2.9.0"
+version = "3.1.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "agnoctl" },
@@ -54,9 +54,9 @@ dependencies = [
     { name = "rich" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/27/aa/6fe38af2242e805b4da1f608f02aaa4aebc97b0f4abd1e62f6128dff0ada/agno-2.9.0.tar.gz", hash = "sha256:7d9c134703e3c2798023cd57dcb9caa8e1174f6914813f9b130becfc3521a46f", size = 2650220, upload-time = "2026-08-13T12:09:13.379Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/d5/40/e91962a2a94d34b7f168528f7479283a75bad899bba518d1b7129f2509d4/agno-3.1.1.tar.gz", hash = "sha256:ffa87212c9e3a0045ddfa6414a2e2c02a4970a8e9060a6f7ba0281071dee18c2", size = 3696946, upload-time = "2026-10-02T12:39:13.609Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/c4/1b/da091bccb467c7ced634225f76b37e5d1da82d32734815264276658281a0/agno-2.9.0-py3-none-any.whl", hash = "sha256:7777674b3931b341fad4fcf02a61b185a08588c509101348facf87feb2144c0c", size = 3078965, upload-time = "2026-08-13T12:09:10.488Z" },
+    { url = "https://files.pythonhosted.org/packages/32/f1/42379b2cd5369d0fe79417fab564395e056026ba5b695fbe1ed6baeadfa4/agno-3.1.1-py3-none-any.whl", hash = "sha256:d158ccd5b4d91b2317e5c1ee748cc29f2c09ce876277db2fdcdc6f5430619e14", size = 4197174, upload-time = "2026-10-02T12:39:10.421Z" },
 ]
 
 [[package]]
@@ -941,8 +941,8 @@ tests = [
 requires-dist = [
     { name = "ag-ui-protocol", specifier = "==0.1.21.dev1787220377" },
     { name = "agentic-mesh-protocol", specifier = "==1.0.2" },
-    { name = "agno", specifier = ">=2.8.0,<3" },
-    { name = "agno", marker = "extra == 'agno'", specifier = ">=2.6" },
+    { name = "agno", specifier = ">=3.1.1,<4" },
+    { name = "agno", marker = "extra == 'agno'", specifier = ">=3.1.1,<4" },
     { name = "anyio", specifier = ">=4.13.0" },
     { name = "grpcio-health-checking", specifier = "==1.82.1" },
     { name = "grpcio-reflection", specifier = "==1.82.1" },
