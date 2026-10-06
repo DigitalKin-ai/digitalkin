@@ -127,6 +127,7 @@ _TOOL_DEFAULTS: dict[str, Any] = {
     "tool_name": None,
     "tool_args": None,
     "result": None,
+    "tool_call_error": None,
 }
 
 _TOOL_EXEC_DEFAULTS: dict[str, Any] = {
@@ -1265,6 +1266,24 @@ def test_tool_call_error_after_completed_is_deduped() -> None:
     duplicate = adapter.to_digitalkin_events(
         _make_event(_FakeRunEvent.tool_call_error, tool=tool, content="boom"),
     )
+    assert duplicate == []
+
+
+@pytest.mark.regression
+def test_flagged_tool_call_completed_becomes_tool_call_error() -> None:
+    """Agno flags a raised tool on the completed event; the later tool_call_error is deduped."""
+    from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
+
+    adapter = AgnoStreamAdapter()
+    tool = _make_tool(tool_call_id="tc1", tool_name="search", result='{"error": "[X] boom"}', tool_call_error=True)
+    result = adapter.to_digitalkin_events(_make_event(_FakeRunEvent.tool_call_completed, tool=tool, content="x"))
+    duplicate = adapter.to_digitalkin_events(_make_event(_FakeRunEvent.tool_call_error, tool=tool, content="x"))
+
+    assert len(result) == 1
+    assert isinstance(result[0], ToolCallErrorEvent)
+    assert result[0].tool is not None
+    assert result[0].tool.tool_call_id == "tc1"
+    assert result[0].error_message == '{"error": "[X] boom"}'
     assert duplicate == []
 
 

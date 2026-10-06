@@ -21,9 +21,10 @@ from digitalkin.models.core.task_monitor import CancellationReason
 from digitalkin.models.grpc_servers.stream_error_codes import StreamErrorCode
 from digitalkin.models.module.base_types import DataModel
 from digitalkin.models.module.module import ModuleStatus
-from digitalkin.models.module.utility import EndOfStreamOutput, StreamCancelledOutput
+from digitalkin.models.module.utility import EndOfStreamOutput, StreamCancelledOutput, StreamHeartbeatOutput
 from digitalkin.models.services.storage import BaseRole
 from digitalkin.models.settings.gateway import get_gateway_settings
+from digitalkin.models.settings.module import get_module_settings
 from digitalkin.models.settings.profiling import ProfilerMode, get_profiling_settings
 from digitalkin.models.settings.redis import get_redis_settings
 
@@ -143,9 +144,11 @@ class ModuleRunner:
             idem_key = f"idem:{task_id}"
             idem_ttl = get_redis_settings().idem_ttl
             eos_written = False
+            last_write_ns = time.monotonic_ns()
 
             async def _on_output(output_data: Any) -> None:
-                nonlocal first_logged, seq, eos_written
+                nonlocal first_logged, seq, eos_written, last_write_ns
+                last_write_ns = time.monotonic_ns()
                 data = output_data.model_dump(mode="json")
                 if data.get("root", {}).get("protocol") == "stream.end":
                     t_eos_write_start = time.perf_counter_ns()
@@ -258,6 +261,41 @@ class ModuleRunner:
             created = True
             timer.mark("create_job")
             timer.log("ModuleRunner", task_id)
+
+            async def _heartbeat() -> None:
+                interval_s = get_module_settings().heartbeat_interval_s
+                while not eos_written:
+                    # Sleep only the rest of the silence window, so no gap exceeds one interval.
+                    remaining_s = interval_s - (time.monotonic_ns() - last_write_ns) / 1e9
+                    if remaining_s > 0:
+                        await asyncio.sleep(remaining_s)
+                        continue
+                    # TODO(validate): TASK-HEARTBEAT a silent running task keeps its stream open
+                    logger.info("[VALIDATE TASK-HEARTBEAT] task silent for %.0fs; beating", interval_s, extra=log_extra)
+                    run = module.context.agui_run
+                    try:
+                        if run is not None and run.open:
+                            await run.update(module.context, (("run", "heartbeatAt"), run.now_ms()))
+                        else:
+                            await _on_output(
+                                DataModel[StreamHeartbeatOutput](
+                                    root=StreamHeartbeatOutput(), annotations={"role": BaseRole.SYSTEM}
+                                )
+                            )
+                    except Exception:
+                        # The beat task is never awaited: log here or the failure is lost.
+                        logger.exception("ModuleRunner: heartbeat stopped", extra=log_extra)
+                        return
+
+            module_task = self._servicer.job_manager.tasks.get(job_id)
+            if module_task is None or eos_written:
+                logger.debug(
+                    "ModuleRunner: no heartbeat (task registered=%s)", module_task is not None, extra=log_extra
+                )
+            else:
+                # The task's done-callback holds the only reference and stops the beat with it.
+                beat = asyncio.create_task(_heartbeat())
+                module_task.add_done_callback(lambda _: beat.cancel())
 
             if await self._redis_client.exists(cancel_key):
                 task = self._servicer.job_manager.tasks.get(job_id)

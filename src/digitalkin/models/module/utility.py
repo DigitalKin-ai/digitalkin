@@ -34,6 +34,12 @@ class StreamCancelledOutput(UtilityProtocol):
     reason: str = "cancelled"
 
 
+class StreamHeartbeatOutput(UtilityProtocol):
+    """Liveness beat from a module that is running but silent; consumers ignore it."""
+
+    protocol: Literal["stream.heartbeat"] = "stream.heartbeat"
+
+
 class HealthcheckPingInput(UtilityProtocol):
     """Input for healthcheck ping request."""
 

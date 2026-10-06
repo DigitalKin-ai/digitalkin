@@ -11,6 +11,7 @@ import json
 import logging
 from typing import TYPE_CHECKING, Any, ClassVar
 
+from ag_ui.core.events import Interrupt, RunFinishedInterruptOutcome
 from pydantic import BaseModel, ConfigDict, Field
 
 from digitalkin.community.agno.models import PauseInfo
@@ -268,13 +269,14 @@ class HitlEvents:
         run_id: str,
         pending_tool_call_ids: list[str],
     ) -> None:
-        """Emit an AG-UI ``RunFinished`` with ``status="awaiting_tool_result"``.
+        """Emit an AG-UI ``RunFinished`` with an interrupt outcome.
 
         This is the protocol signal telling the front "the run paused on a
-        client-side tool; execute it and reply with a ``ToolMessage``". It
-        goes out via ``context.callbacks.send_message`` (bypassing the
-        standard :class:`~digitalkin.mixins.agui_mixin.AgUiMixin` event
-        mapping, which has no notion of an "awaiting" status).
+        client-side tool; execute it and reply with a ``ToolMessage``". The
+        standard ``outcome={type: "interrupt"}`` carries one interrupt per pending
+        tool; the legacy ``result.status="awaiting_tool_result"`` is kept for
+        existing clients. When an AG-UI run is open, its state first moves the
+        tools to ``awaiting_input`` and the run to ``interrupted``.
 
         Args:
             context: Current module context.
@@ -291,11 +293,31 @@ class HitlEvents:
             AgUiRunFinishedOutput,
         )
 
+        run = context.agui_run
+        tools = run.state["tools"] if run is not None else {}
+        interrupts = [
+            Interrupt(
+                id=tool_call_id,
+                reason="tool_call",
+                tool_call_id=tool_call_id,
+                message=f"Waiting for the result of {tools.get(tool_call_id, {}).get('name') or 'a frontend tool'}",
+            )
+            for tool_call_id in pending_tool_call_ids
+        ]
+        if run is not None and run.open:
+            run.open = False
+            await run.update(
+                context,
+                *((("tools", tid, "status"), "awaiting_input") for tid in pending_tool_call_ids if tid in tools),
+                (("interrupts",), [i.model_dump(mode="json", by_alias=True, exclude_none=True) for i in interrupts]),
+                (("run", "status"), "interrupted"),
+            )
         output = AgUiOutput(
             root=AgUiRunFinishedOutput(
                 event=AgUiRunFinishedEvent(
                     thread_id=thread_id,
                     run_id=run_id,
+                    outcome=RunFinishedInterruptOutcome(interrupts=interrupts) if interrupts else None,
                     result={
                         "status": _AWAITING_STATUS,
                         "pending_tool_call_ids": pending_tool_call_ids,

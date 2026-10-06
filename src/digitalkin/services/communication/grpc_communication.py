@@ -398,7 +398,7 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
         slot_acquired = False
         stub: Any = None
 
-        try:  # ruff: ignore[too-many-nested-blocks, too-many-statements-in-try-clause]
+        try:  # ruff: ignore[too-many-statements-in-try-clause]
             if breaker.state == CBState.OPEN:
                 logger.warning("[m2m] breaker OPEN — fast-failing target=%s", target_key, extra=log_extra)
                 msg = f"circuit breaker open for {target_key}"
@@ -516,6 +516,13 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
                     if item is None:
                         break
 
+                    root_field = item.fields.get("root") if item.fields else None
+                    proto_field = root_field.struct_value.fields.get("protocol") if root_field is not None else None
+                    protocol_value = proto_field.string_value if proto_field is not None else ""
+                    if protocol_value == "stream.heartbeat":
+                        # Liveness only: it already re-armed the wait above; callers and metrics never see it.
+                        continue
+
                     now_ns = time.perf_counter_ns()
                     chunks_seen += 1
                     depth = output_queue.qsize()
@@ -528,14 +535,10 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
                         gaps_ns.append(now_ns - last_chunk_ns)
                     last_chunk_ns = now_ns
 
-                    root_field = item.fields.get("root") if item.fields else None
-                    if root_field is not None:
-                        proto_field = root_field.struct_value.fields.get("protocol")
-                        protocol_value = proto_field.string_value if proto_field is not None else ""
-                        if protocol_value == "stream.error":
-                            fatal_field = root_field.struct_value.fields.get("fatal")
-                            if fatal_field is not None and fatal_field.bool_value:
-                                error_observed = True
+                    if protocol_value == "stream.error" and root_field is not None:
+                        fatal_field = root_field.struct_value.fields.get("fatal")
+                        if fatal_field is not None and fatal_field.bool_value:
+                            error_observed = True
                     if callback:
                         await callback(item)
                     yield item

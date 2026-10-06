@@ -241,6 +241,51 @@ class TestM2MCallModule:
         assert not gw._m2m.entries
         assert gw._m2m._semaphore._value == get_gateway_settings().m2m.call_max_concurrent
 
+    async def test_heartbeat_frames_never_reach_the_caller(
+        self,
+        start_gateway: Any,
+        backend_server: tuple[_FakeBackendGateway, str, int],
+        caller_gateway: tuple[GatewayServicer, str, int],
+    ) -> None:
+        _backend, backend_host, backend_port = backend_server
+        gw, _caller_host, _caller_port = caller_gateway
+        callee_port = await start_gateway(
+            _FakeCalleeGatewayServicer(
+                outputs=[
+                    {"root": {"protocol": "stream.heartbeat"}},
+                    {"root": {"protocol": "transform", "value": "hello-1"}},
+                    {"root": {"protocol": "stream.heartbeat"}},
+                ]
+            )
+        )
+        comm = GrpcCommunication(
+            mission_id="missions:test",
+            setup_id="setups:test",
+            setup_version_id="setup_versions:test",
+            client_config=_client("127.0.0.1", callee_port),
+            m2m_calls=gw._m2m,
+            gateway_backend_config=_client(backend_host, backend_port),
+        )
+
+        token = RequestContext.bind(task_id="task:parent")
+        try:
+            protocols = [
+                out.fields["root"].struct_value.fields["protocol"].string_value
+                async for out in comm.call_module(
+                    module_address="127.0.0.1",
+                    module_port=callee_port,
+                    input_data={"root": {"protocol": "transform", "text": "hello"}},
+                    setup_id="setups:test",
+                    mission_id="missions:test",
+                )
+            ]
+        finally:
+            RequestContext.reset(token)
+            await comm.close()
+
+        assert "stream.heartbeat" not in protocols
+        assert "transform" in protocols
+
     async def test_backend_mint_empty_raises(
         self,
         caller_gateway: tuple[GatewayServicer, str, int],

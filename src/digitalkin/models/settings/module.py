@@ -32,6 +32,14 @@ class ModuleSettings(BaseSettings):
     file_history_flush_threshold: int = Field(
         default=10, description="Dirty-entry count that triggers a file-history flush."
     )
+    heartbeat_interval_s: float = Field(
+        default=30.0,
+        gt=0,
+        description=(
+            "Silence after which a running task writes a liveness frame (AG-UI STATE_DELTA or "
+            "stream.heartbeat). Keep it below the gateway read/dial-back idle timeouts."
+        ),
+    )
 
 
 @lru_cache(maxsize=1)

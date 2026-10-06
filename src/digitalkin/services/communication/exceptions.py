@@ -14,4 +14,7 @@ class M2MCallTimeout(RuntimeError):  # ruff: ignore[error-suffix-on-exception-na
 
 
 class ToolCallError(RuntimeError):
-    """A called tool module returned a fatal ``stream.error``; message carries ``[CODE] message``."""
+    """A called tool failed: fatal ``stream.error``/``stream.cancelled`` or a ``ModuleToolkit`` failure.
+
+    Sentinel failures carry ``[CODE] message``; a ``ModuleToolkit`` failure carries the error JSON the model reads.
+    """

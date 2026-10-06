@@ -101,7 +101,7 @@ Every gateway-emitted control entry uses a Struct shaped:
 data = { "root": { "protocol": "stream.<verb>", ... } }
 ```
 
-Domain output from the module uses **non-prefixed** protocols (`text_chunk`, `tool_call`, `agui_event`, …) — they cannot collide with control sentinels.
+Domain output from the module uses **non-prefixed** protocols (`text_chunk`, `tool_call`, `agui_<event>` such as `agui_tool_call_start`, …) — they cannot collide with control sentinels. AG-UI frames and the pipeline state are catalogued in [`agui_events.md`](agui_events.md).
 
 | `protocol` | Fields | Meaning |
 |---|---|---|
@@ -110,6 +110,7 @@ Domain output from the module uses **non-prefixed** protocols (`text_chunk`, `to
 | `stream.error` | `code, message, fatal, task_id` | Failure event. If `fatal=true`, immediately followed by `stream.end`. |
 | `stream.cancelled` | `reason` | The task was cancelled (`SendSignal(CANCEL)`, server shutdown, …). Emitted by the module, immediately followed by `stream.end`. |
 | `stream.warn` | `code, message` | Recoverable issue. Stream continues. |
+| `stream.heartbeat` | — | The task is alive but has been silent for `DIGITALKIN_MODULE_HEARTBEAT_INTERVAL_S` (30s). Keeps the idle guards from closing the stream; **ignore it**. A task with an open AG-UI run beats as a `STATE_DELTA` on `/run/heartbeatAt` instead. Never forwarded to M2M callers. |
 
 **Invariant:** every stream ends with exactly one `stream.end`. Fatal errors are *two* writes — `stream.error(fatal=true)` then `stream.end` — because the diagnostic event and the structural terminator have separate jobs.
 

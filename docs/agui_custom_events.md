@@ -2,6 +2,8 @@
 
 AG-UI has no dedicated event type for application data. Its extension point is `CUSTOM` (`name` + `value`); every AG-UI client receives it and routes on `name`. DigitalKin ships every `CUSTOM` event under the `agui_custom` protocol.
 
+This page covers `CUSTOM` only; every other AG-UI event and the pipeline state are in [`agui_events.md`](agui_events.md).
+
 ## Envelope
 
 ```json

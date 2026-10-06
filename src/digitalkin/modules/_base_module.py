@@ -146,6 +146,8 @@ class BaseModule(  # Module SDK base class requires many public methods # ruff: 
         self.trigger_handlers: dict[str, tuple] = {}
         # Set by idempotent prepare() so start() can short-circuit.
         self._prepared: bool = False
+        # Set on the first stop() so it runs once, whatever the status (FAILED still needs stream.end).
+        self._stopped: bool = False
 
         self.context = ModuleContext(
             **self._init_strategies(mission_id, setup_id, setup_version_id),
@@ -578,9 +580,17 @@ class BaseModule(  # Module SDK base class requires many public methods # ruff: 
             self._status = ModuleStatus.FAILED
             logger.warning("Permission denied in module %s: %s", self.name, e, extra=self.context.session.current_ids())
             await self._notify_permission_denied(self.context.callbacks.send_message, e)
+            if self.context.agui_run is not None:
+                await self.context.agui_run.fail(self.context, "failed", str(e), "permission_denied")
         except Exception as e:
             self._status = ModuleStatus.FAILED
             logger.exception("Error inside module %s", self.name, extra=self.context.session.current_ids())
+            # TODO(validate): MODULE-FAILED-EOS a failed module still writes stream.end instead of idling out
+            logger.info(
+                "[VALIDATE MODULE-FAILED-EOS] module %s failed; stop() still writes stream.end",
+                self.name,
+                extra=self.context.session.current_ids(),
+            )
             try:
                 await self.context.callbacks.send_message(
                     ModuleCodeModel(
@@ -589,6 +599,8 @@ class BaseModule(  # Module SDK base class requires many public methods # ruff: 
                         message=str(e),
                     )
                 )
+                if self.context.agui_run is not None:
+                    await self.context.agui_run.fail(self.context, "failed", f"{type(e).__name__}: {e}", "module_error")
             except Exception:
                 logger.exception("Failed to send error callback", extra=self.context.session.current_ids())
         else:
@@ -717,7 +729,7 @@ class BaseModule(  # Module SDK base class requires many public methods # ruff: 
             timer.log("module.start", task_id=self.context.session.current_ids().get("job_id", ""))
             await self.stop()
 
-    async def stop(self, cancel_reason: str | None = None) -> None:
+    async def stop(self, cancel_reason: str | None = None) -> None:  # ruff: ignore[complex-structure]
         """Stop the module. Idempotent — second call is a no-op.
 
         A cancelled module (status ``CANCELLED`` or a ``cancel_reason`` given) emits
@@ -727,12 +739,14 @@ class BaseModule(  # Module SDK base class requires many public methods # ruff: 
             cancel_reason: Cancellation reason carried by ``stream.cancelled``.
         """
         t0 = time.perf_counter_ns()
-        if self._status in {ModuleStatus.STOPPED, ModuleStatus.FAILED}:
+        if self._stopped:
             return
+        self._stopped = True
+        failed = self._status == ModuleStatus.FAILED
         if cancel_reason is None and self._status == ModuleStatus.CANCELLED:
             cancel_reason = "cancelled"
         try:  # ruff: ignore[too-many-statements-in-try-clause]
-            self._status = ModuleStatus.STOPPING
+            self._status = ModuleStatus.FAILED if failed else ModuleStatus.STOPPING
             await self.cleanup()
             t1 = time.perf_counter_ns()
             cleanup_ms = (t1 - t0) / 1e6
@@ -756,6 +770,8 @@ class BaseModule(  # Module SDK base class requires many public methods # ruff: 
             t2 = time.perf_counter_ns()
             if "send_message" in vars(self.context.callbacks):
                 if cancel_reason is not None:
+                    if self.context.agui_run is not None:
+                        await self.context.agui_run.fail(self.context, "cancelled", cancel_reason, "cancelled")
                     # TODO(validate): CANCEL-SENTINEL stream.cancelled is emitted before stream.end on cancel
                     logger.info(
                         "[VALIDATE CANCEL-SENTINEL] emitting stream.cancelled reason=%s before stream.end",
@@ -777,7 +793,7 @@ class BaseModule(  # Module SDK base class requires many public methods # ruff: 
             else:
                 logger.debug("send_message not registered; skipping end-of-stream (config-setup path)")
             t3 = time.perf_counter_ns()
-            self._status = ModuleStatus.STOPPED
+            self._status = ModuleStatus.FAILED if failed else ModuleStatus.STOPPED
             ids = self.context.session.current_ids()
             logger.info(
                 "[close-debug] module.stop: cleanup=%.2fms flush=%.2fms eos=%.2fms "

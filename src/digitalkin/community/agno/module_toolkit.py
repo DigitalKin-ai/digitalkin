@@ -25,6 +25,7 @@ from digitalkin.logger import logger
 from digitalkin.models.module import ModuleContext
 from digitalkin.models.module.ag_ui import AgUiCustomEventOutput, AgUiOutput
 from digitalkin.models.module.tool_cache import ToolDefinition, ToolModuleInfo
+from digitalkin.services.communication.exceptions import ToolCallError
 
 # Default timeout for tool calls in seconds
 DEFAULT_TOOL_TIMEOUT_SECONDS = 300
@@ -265,7 +266,14 @@ class ModuleToolkit(DkToolkit):
         # callbacks is a dict-driven SimpleNamespace (module_context.py:168);
         # send_message may legitimately be absent outside a running job.
         send_message = vars(context.callbacks).get("send_message")
+        value = event.get("value")
+        url = value.get("url") if isinstance(value, dict) else None
         if send_message is None:
+            logger.warning(
+                "Dropped custom event '%s' url=%s: no send_message on the agent context",
+                event["name"],
+                url,
+            )
             return
 
         try:
@@ -275,9 +283,14 @@ class ModuleToolkit(DkToolkit):
             await send_message(
                 AgUiOutput(
                     root=AgUiCustomEventOutput(
-                        event=AgUiCustomEvent(name=event["name"], value=event.get("value")),
+                        event=AgUiCustomEvent(name=event["name"], value=value),
                     )
                 )
+            )
+            logger.info(
+                "Relayed custom event '%s' url=%s to the agent stream",
+                event["name"],
+                url,
             )
         except Exception:
             logger.exception("Failed to relay custom event '%s' to the agent stream", event["name"])
@@ -467,6 +480,10 @@ class ModuleToolkit(DkToolkit):
         Wraps the SDK module's async generator function into an async function
         that Agno can consume, with proper error handling and response formatting.
 
+        A failure raises ``ToolCallError`` carrying the same JSON body a success-path caller
+        would have read: Agno hands ``str(exc)`` to the model unchanged and flags the call
+        ``tool_call_error``, which is what marks the tool failed for the front.
+
         Returns:
             Async function that calls the SDK tool and returns a JSON result, or a
             ToolResult when the tool returned images alongside its text output.
@@ -509,14 +526,14 @@ class ModuleToolkit(DkToolkit):
                 duration_ms = round((time.perf_counter() - start_time) * 1000, 2)
                 error_msg = f"Tool '{tool_name}' timed out after {timeout}s"
                 logger.warning("%s task_id=%s", error_msg, task_id)
-                return handle_failure(tool_name, error_msg, duration_ms)
+                raise ToolCallError(handle_failure(tool_name, error_msg, duration_ms))
 
             except Exception as e:
                 outcome = "error"
                 duration_ms = round((time.perf_counter() - start_time) * 1000, 2)
                 error_msg = f"Failed to call tool '{tool_name}': {e!s}"
                 logger.warning("%s task_id=%s", error_msg, task_id, exc_info=True)
-                return handle_failure(tool_name, error_msg, duration_ms)
+                raise ToolCallError(handle_failure(tool_name, error_msg, duration_ms))
 
             else:
                 call_timer.mark("gen_consume")
@@ -536,7 +553,7 @@ class ModuleToolkit(DkToolkit):
 
                 outcome = "no_success"
                 error_msg = ModuleToolkit._extract_error_message(error_frame)
-                return handle_failure(tool_name, error_msg, duration_ms)
+                raise ToolCallError(handle_failure(tool_name, error_msg, duration_ms))
 
             finally:
                 call_timer.mark("respond")

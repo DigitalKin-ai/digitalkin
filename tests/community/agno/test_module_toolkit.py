@@ -26,6 +26,7 @@ from agno.tools.function import ToolResult
 
 from digitalkin.community.agno.module_toolkit import ModuleToolkit
 from digitalkin.models.module.ag_ui import AgUiOutput
+from digitalkin.services.communication.exceptions import ToolCallError
 
 
 def _toolkit() -> ModuleToolkit:
@@ -92,6 +93,13 @@ def _wrapper(frames: list[dict]) -> Callable[..., Awaitable[str | ToolResult]]:
     return toolkit._create_tool_wrapper(tool_def, fn)
 
 
+def _failure(frames: list[dict]) -> dict:
+    """Run the wrapper on ``frames``; a failure raises ``ToolCallError`` whose text is the JSON body."""
+    with pytest.raises(ToolCallError) as exc:
+        asyncio.run(_wrapper(frames)())
+    return json.loads(str(exc.value))
+
+
 class TestWrapperKeepsLastFrames:
     def test_returns_last_domain_frame(self):
         frames = [
@@ -114,7 +122,7 @@ class TestWrapperKeepsLastFrames:
             {"root": {"protocol": "stream.error", "code": "X", "message": "boom", "fatal": True}},
             {"root": {"protocol": "stream.end"}},
         ]
-        body = json.loads(asyncio.run(_wrapper(frames)()))
+        body = _failure(frames)
         assert body["error"] == "[X] boom"
         assert body["metadata"]["success"] is False
 
@@ -124,7 +132,7 @@ class TestWrapperKeepsLastFrames:
             {"root": {"protocol": "stream.cancelled", "reason": "user_stop"}},
             {"root": {"protocol": "stream.end"}},
         ]
-        body = json.loads(asyncio.run(_wrapper(frames)()))
+        body = _failure(frames)
         assert body["error"] == "[CANCELLED] user_stop"
 
     def test_sentinel_error_outranks_a_later_bare_error_field(self):
@@ -132,15 +140,15 @@ class TestWrapperKeepsLastFrames:
             {"root": {"protocol": "stream.error", "code": "X", "message": "boom"}},
             {"error": "later"},
         ]
-        body = json.loads(asyncio.run(_wrapper(frames)()))
+        body = _failure(frames)
         assert body["error"] == "[X] boom"
 
     def test_frames_without_root_fall_back_to_error_field(self):
-        body = json.loads(asyncio.run(_wrapper([{"annotations": {}}, {"error": "quota exceeded"}])()))
+        body = _failure([{"annotations": {}}, {"error": "quota exceeded"}])
         assert body["error"] == "quota exceeded"
 
     def test_empty_stream_returns_default_error(self):
-        body = json.loads(asyncio.run(_wrapper([])()))
+        body = _failure([])
         assert body["error"] == "No successful response received from module"
 
 

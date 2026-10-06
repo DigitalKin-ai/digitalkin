@@ -676,6 +676,26 @@ class AgnoStreamAdapter:
             self._closed_tool_call_ids.add(tool_call_id)
 
         content = agno_event.content
+        if tool is not None and tool.tool_call_error:
+            # Agno flags a raised tool on the completed event, then sends a tool_call_error
+            # that the closed-id check drops — so the failure is surfaced here.
+            # TODO(validate): AGUI-TOOL-FAILED-STATUS a raised tool surfaces as ToolCallError, not success
+            logger.info(
+                "[VALIDATE AGUI-TOOL-FAILED-STATUS] tool %s (id=%s) failed: %s",
+                tool.tool_name,
+                tool_call_id,
+                tool.result,
+            )
+            return [
+                ToolCallErrorEvent(
+                    event=AgentRunEvent.TOOL_CALL_ERROR,
+                    tool=tool_info,
+                    error_message=str(tool.result) if tool.result else None,
+                    subagent_run_id=self._subagent_of(self._run_key),
+                    timestamp=timestamp,
+                    metadata=self._last_metadata,
+                )
+            ]
         return [
             ToolCallCompletedEvent(
                 event=AgentRunEvent.TOOL_CALL_COMPLETED,
