@@ -10,6 +10,7 @@ from digitalkin.services.communication import CommunicationStrategy, DefaultComm
 from digitalkin.services.cost import CostStrategy, DefaultCost, GrpcCost
 from digitalkin.services.filesystem import DefaultFilesystem, FilesystemStrategy, GrpcFilesystem
 from digitalkin.services.identity import DefaultIdentity, IdentityStrategy
+from digitalkin.services.knowledge import DefaultKnowledge, GrpcKnowledge, KnowledgeStrategy
 from digitalkin.services.registry import DefaultRegistry, GrpcRegistry, RegistryStrategy
 from digitalkin.services.secret import DefaultSecret, GrpcSecret, SecretStrategy
 from digitalkin.services.services_models import ServicesStrategy
@@ -38,6 +39,7 @@ class ServicesConfig(BaseModel):
         "filesystem",
         "identity",
         "communication",
+        "knowledge",
         "user_profile",
         "secret",
     }
@@ -60,8 +62,9 @@ class ServicesConfig(BaseModel):
         super().__init__(**kwargs)
         self.mode = mode
 
-        # No per-request IDs → safe to share as singletons.
-        self._stateless_strategies: frozenset[str] = frozenset({"registry", "communication"})
+        # No per-request IDs → safe to share as singletons. The knowledge search carries the
+        # mission in the call metadata, not in the strategy, so one client serves every mission.
+        self._stateless_strategies: frozenset[str] = frozenset({"registry", "communication", "knowledge"})
 
         defaults: dict[str, ServicesStrategy] = {
             "storage": ServicesStrategy(local=DefaultStorage, remote=GrpcStorage),
@@ -72,6 +75,7 @@ class ServicesConfig(BaseModel):
             "communication": ServicesStrategy(local=DefaultCommunication, remote=GrpcCommunication),
             "user_profile": ServicesStrategy(local=DefaultUserProfile, remote=GrpcUserProfile),
             "secret": ServicesStrategy(local=DefaultSecret, remote=GrpcSecret),
+            "knowledge": ServicesStrategy(local=DefaultKnowledge, remote=GrpcKnowledge),
         }
 
         # Apply strategy overrides
@@ -195,6 +199,11 @@ class ServicesConfig(BaseModel):
     def secret(self) -> type[SecretStrategy]:
         """The secret service strategy class for the current mode."""
         return self._strategies["secret"][self.mode.value]
+
+    @property
+    def knowledge(self) -> type[KnowledgeStrategy]:
+        """The knowledge service strategy class for the current mode."""
+        return self._strategies["knowledge"][self.mode.value]
 
     def update_mode(self, mode: ServicesMode) -> None:
         """Update the strategy mode.

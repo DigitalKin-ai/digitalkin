@@ -44,6 +44,7 @@ class HealthcheckServicesTrigger(TriggerHandler, BaseMixin):
             "cost": context.cost,
             "filesystem": context.filesystem,
             "registry": context.registry,
+            "knowledge": context.knowledge,
             "user_profile": context.user_profile,
         }
         services_status: list[ServiceHealthStatus] = []

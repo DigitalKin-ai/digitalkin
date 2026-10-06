@@ -10,17 +10,20 @@ from digitalkin.community.agno.toolkits import (
     ServicesManager,
     ToolsManager,
     LoadManager,
+    KnowledgeTools,
     UserProfileTools,
 )
+from digitalkin.services.knowledge import DefaultKnowledge
 from digitalkin.services.registry import DefaultRegistry
 from digitalkin.services.setup.default_setup import DefaultSetup
 from digitalkin.services.user_profile import DefaultUserProfile
 
 
 def _context(setup: Any = None) -> SimpleNamespace:
-    """Fake ModuleContext — build() touches user_profile, registry and setup."""
+    """Fake ModuleContext — build() touches user_profile, knowledge, registry and setup."""
     return SimpleNamespace(
         user_profile=DefaultUserProfile("missions:m1", "", ""),
+        knowledge=DefaultKnowledge("missions:m1", "", ""),
         registry=DefaultRegistry("", "", ""),
         setup=setup,
     )
@@ -28,7 +31,7 @@ def _context(setup: Any = None) -> SimpleNamespace:
 
 def test_build_without_setup_omits_registry_managers() -> None:
     tools = DefaultToolkits.build(_context(), session_id="s1")  # type: ignore[arg-type]
-    assert [type(t) for t in tools] == [ChatHistoryTools, UserProfileTools, LoadManager]
+    assert [type(t) for t in tools] == [ChatHistoryTools, UserProfileTools, KnowledgeTools, LoadManager]
 
 
 def test_build_with_setup_includes_three_managers_before_loader() -> None:
@@ -36,6 +39,7 @@ def test_build_with_setup_includes_three_managers_before_loader() -> None:
     assert [type(t) for t in tools] == [
         ChatHistoryTools,
         UserProfileTools,
+        KnowledgeTools,
         ToolsManager,
         ServicesManager,
         KinsManager,

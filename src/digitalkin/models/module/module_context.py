@@ -20,6 +20,7 @@ from digitalkin.services.communication.exceptions import ToolCallError
 from digitalkin.services.cost.cost_strategy import CostStrategy
 from digitalkin.services.filesystem.filesystem_strategy import FilesystemStrategy
 from digitalkin.services.identity.identity_strategy import IdentityStrategy
+from digitalkin.services.knowledge.knowledge_strategy import KnowledgeStrategy
 from digitalkin.services.registry.exceptions import RegistryModuleNotFoundError
 from digitalkin.services.registry.registry_strategy import RegistryStrategy
 from digitalkin.services.secret.secret_strategy import SecretStrategy
@@ -101,6 +102,7 @@ class ModuleContext:
     cost: CostStrategy
     filesystem: FilesystemStrategy
     identity: IdentityStrategy
+    knowledge: KnowledgeStrategy
     registry: RegistryStrategy
     secret: SecretStrategy
     setup: SetupStrategy | None
@@ -123,6 +125,7 @@ class ModuleContext:
         cost: CostStrategy,
         filesystem: FilesystemStrategy,
         identity: IdentityStrategy,
+        knowledge: KnowledgeStrategy,
         registry: RegistryStrategy,
         secret: SecretStrategy,
         storage: StorageStrategy,
@@ -145,6 +148,7 @@ class ModuleContext:
             cost: CostStrategy.
             filesystem: FilesystemStrategy.
             identity: IdentityStrategy.
+            knowledge: KnowledgeStrategy.
             registry: RegistryStrategy.
             secret: SecretStrategy.
             storage: StorageStrategy.
@@ -165,6 +169,7 @@ class ModuleContext:
         self.cost = cost
         self.filesystem = filesystem
         self.identity = identity
+        self.knowledge = knowledge
         self.registry = registry
         self.secret = secret
         self.setup = setup
@@ -557,6 +562,7 @@ class ModuleContext:
             ("cost", self.cost),
             ("storage", self.storage),
             ("registry", self.registry),
+            ("knowledge", self.knowledge),
             ("filesystem", self.filesystem),
             ("user_profile", self.user_profile),
             ("secret", self.secret),
