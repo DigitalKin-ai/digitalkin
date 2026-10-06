@@ -16,13 +16,20 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | sh && \
 # copy project metadata for dependency caching
 COPY pyproject.toml uv.lock /app/
 
-# copy source & tests BEFORE running pip so editable install can see src
+# Install the versions uv.lock pins, never a fresh resolution of the constraint ranges:
+# otherwise any upstream release can break an unrelated pull request. One did — fakeredis
+# 2.39.0 stopped trimming `XADD MAXLEN ~`, failing test_xadd_with_maxlen on every PR.
+# This layer holds the heavy dependencies and is cached independently of the source.
+RUN uv export --frozen --no-hashes --no-emit-project --group dev --group tests \
+      -o /tmp/requirements.txt && \
+    uv pip install --system -r /tmp/requirements.txt
+
+# copy source & tests AFTER the dependency layer, so editing them reinstalls nothing
 COPY src/ /app/src/
 COPY tests/ /app/tests/
 
-# install project (editable) + extras; this layer installs heavy deps one time
-RUN uv pip install --system -e ".[taskiq]" && \
-    uv pip install --system --group dev --group tests
+# the project itself, editable; --no-deps because the lock already installed them all
+RUN uv pip install --system --no-deps -e "."
 
 # copy entrypoint script
 COPY docker/entrypoint-test.sh /entrypoint-test.sh
