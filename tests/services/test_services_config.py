@@ -42,7 +42,7 @@ class TestSingletonStrategies:
         """All stateless strategies are singletons."""
         config = ServicesConfig(mode=ServicesMode.LOCAL)
 
-        for name in ("registry", "communication"):
+        for name in ("registry", "communication", "knowledge"):
             first = config.init_strategy(name, "m1", "s1", "v1")
             second = config.init_strategy(name, "m2", "s2", "v2")
             assert first is second, f"{name} should be a singleton"
@@ -103,7 +103,7 @@ class TestBorrowedCleanup:
 
         ctx = ModuleContext(
             communication=comm, cost=cost,
-            filesystem=AsyncMock(), identity=AsyncMock(), registry=reg,
+            filesystem=AsyncMock(), identity=AsyncMock(), knowledge=AsyncMock(), registry=reg,
             secret=AsyncMock(),
             storage=AsyncMock(),
             user_profile=AsyncMock(),
@@ -130,7 +130,7 @@ class TestBorrowedCleanup:
 
         ctx = ModuleContext(
             communication=comm, cost=AsyncMock(),
-            filesystem=AsyncMock(), identity=AsyncMock(), registry=reg,
+            filesystem=AsyncMock(), identity=AsyncMock(), knowledge=AsyncMock(), registry=reg,
             secret=AsyncMock(),
             storage=AsyncMock(), task_manager=AsyncMock(),
             user_profile=AsyncMock(),

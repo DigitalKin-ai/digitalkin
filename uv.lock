@@ -23,7 +23,7 @@ wheels = [
 
 [[package]]
 name = "agentic-mesh-protocol"
-version = "1.0.2"
+version = "1.1.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "bump-my-version" },
@@ -33,9 +33,9 @@ dependencies = [
     { name = "protobuf" },
     { name = "protovalidate" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/0c/86/7f07da6388a12ab5dab074cae308f2e8e74b1b901f68438646de0a399157/agentic_mesh_protocol-1.0.2.tar.gz", hash = "sha256:76c58a139bbc92d25e43520a063472f5b5d533e63c2f2f6f2a9f5c4662dfd6c7", size = 76671, upload-time = "2026-09-14T12:47:10.307Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/65/23/1dca30224c8d6ec91ad77525e7b634e154ff348f7e1c42b0afb813beba92/agentic_mesh_protocol-1.1.0.tar.gz", hash = "sha256:e983322d0738a90d0183c6cdd73caabd9b66d557e5df61113b5b38b815fe78a8", size = 80103, upload-time = "2026-10-05T15:27:17.135Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/81/25/e0a28ae789175433aa0a9511221340f854307c4f4e47ec0799e23e057638/agentic_mesh_protocol-1.0.2-py3-none-any.whl", hash = "sha256:7c79ed9848d01a9ee7abe81562c83513b96905e0f832ffacb8dc920361635bcc", size = 105859, upload-time = "2026-09-14T12:47:09.065Z" },
+    { url = "https://files.pythonhosted.org/packages/01/61/05080e541a21e8d91bf58048b20eb411a491936729cc345750b3e5b4d939/agentic_mesh_protocol-1.1.0-py3-none-any.whl", hash = "sha256:a4cfc0cbeedc14ff5076ffa26c2c847ee2c86c0a3166953e554ca89d19346404", size = 115725, upload-time = "2026-10-05T15:27:15.434Z" },
 ]
 
 [[package]]
@@ -852,7 +852,7 @@ wheels = [
 
 [[package]]
 name = "digitalkin"
-version = "1.0.4.dev7"
+version = "1.1.0.dev0"
 source = { editable = "." }
 dependencies = [
     { name = "ag-ui-protocol" },
@@ -940,7 +940,7 @@ tests = [
 [package.metadata]
 requires-dist = [
     { name = "ag-ui-protocol", specifier = "==0.1.21.dev1787220377" },
-    { name = "agentic-mesh-protocol", specifier = "==1.0.2" },
+    { name = "agentic-mesh-protocol", specifier = "==1.1.0" },
     { name = "agno", specifier = ">=2.8.0,<3" },
     { name = "agno", marker = "extra == 'agno'", specifier = ">=2.6" },
     { name = "anyio", specifier = ">=4.13.0" },

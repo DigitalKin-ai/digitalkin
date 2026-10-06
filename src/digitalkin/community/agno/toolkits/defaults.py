@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from digitalkin.community.agno.toolkits.chat_history import ChatHistoryTools
+from digitalkin.community.agno.toolkits.knowledge import KnowledgeTools
 from digitalkin.community.agno.toolkits.registry.kins.kit import KinsManager
 from digitalkin.community.agno.toolkits.registry.loader.kit import LoadManager
 from digitalkin.community.agno.toolkits.registry.services.kit import ServicesManager
@@ -20,7 +21,7 @@ if TYPE_CHECKING:
 
 
 class DefaultToolkits:
-    """Assemble the default DigitalKin toolkits (chat history, user profile, registry).
+    """Assemble the default DigitalKin toolkits (chat history, user profile, knowledge, registry).
 
     Two-phase usage — ChatHistoryTools needs the constructed Agent/Team::
 
@@ -46,12 +47,13 @@ class DefaultToolkits:
             session_id: The Agno session whose chat history should be readable.
 
         Returns:
-            [ChatHistoryTools, UserProfileTools,
+            [ChatHistoryTools, UserProfileTools, KnowledgeTools,
              (ToolsManager, ServicesManager, KinsManager)?, LoadManager].
         """
         tools: list[Toolkit] = [
             ChatHistoryTools(session_id=session_id, context=context),
             UserProfileTools(context.user_profile, context=context),
+            KnowledgeTools(context.knowledge, context=context),
         ]
         if context.setup is not None:
             tools.extend((

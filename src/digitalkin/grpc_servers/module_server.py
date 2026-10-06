@@ -64,7 +64,7 @@ class ModuleServer(BaseServer):
         self._gateway_servicer: GatewayServicer | None = None
         self._gateway_redis_client: RedisClient | None = None
 
-        self._prepare_registry_config()
+        self._prepare_platform_configs()
 
     def _register_servicers(self) -> None:
         """Register module and gateway servicers.
@@ -209,14 +209,20 @@ class ModuleServer(BaseServer):
         await GrpcClientWrapper.close_all_cached_channels()
         Bulkhead.clear_all()
 
-    def _prepare_registry_config(self) -> None:
-        """Inject registry client config into module_class for spawned instances."""
+    def _prepare_platform_configs(self) -> None:
+        """Inject the Service Provider client config into module_class for spawned instances.
+
+        Covers the services a module never configures itself because they are platform
+        machinery served by that same provider: the registry, and the knowledge base the
+        customer connected. The server's address wins, as it did for the registry alone.
+        """
         if not self.client_config:
             return
 
         if "services_config_params" not in self.module_class.__dict__:
             self.module_class.services_config_params = dict(self.module_class.services_config_params)
-        self.module_class.services_config_params["registry"] = {"client_config": self.client_config}
+        for service in ("registry", "knowledge"):
+            self.module_class.services_config_params[service] = {"client_config": self.client_config}
 
     async def _init_and_register(self) -> None:
         """Initialize registry client, health-check, and register.
