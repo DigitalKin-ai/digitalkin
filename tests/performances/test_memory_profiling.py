@@ -130,6 +130,7 @@ class ImprovedMockModule(BaseModule):
             "cost": None,
             "filesystem": None,
             "identity": None,
+            "knowledge": None,
             "registry": None,
             "secret": None,
             "storage": None,

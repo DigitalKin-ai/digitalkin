@@ -73,6 +73,7 @@ class MockModule(BaseModule[MockInputModel, MockOutputModel, MockSetupModel, Non
             "cost": None,
             "filesystem": None,
             "identity": None,
+            "knowledge": None,
             "registry": None,
             "secret": None,
             "storage": None,
