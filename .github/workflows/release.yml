@@ -3,6 +3,16 @@ name: Publish Package
 on:
   release:
     types: [created]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to publish (e.g. v1.0.5.dev4)"
+        required: true
+        type: string
+      skip_test_pypi:
+        description: "Skip Test PyPI and publish straight to PyPI"
+        type: boolean
+        default: false
 
 jobs:
   build:
@@ -11,11 +21,14 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: ${{ inputs.tag || github.ref }}
           submodules: recursive
 
       - name: Verify tag matches pyproject.toml version
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
         run: |
-          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          TAG_VERSION="${RELEASE_TAG#v}"
           PKG_VERSION=$(grep -Po '(?<=version = ")[^"]+' pyproject.toml | head -1)
           if [[ "$TAG_VERSION" != "$PKG_VERSION" ]]; then
             echo "::error::Tag version ($TAG_VERSION) does not match pyproject.toml version ($PKG_VERSION)"
@@ -54,6 +67,7 @@ jobs:
 
   publish-test-pypi:
     needs: build
+    if: ${{ !inputs.skip_test_pypi }}
     runs-on: ubuntu-latest
     environment: testpypi
     permissions:
@@ -101,6 +115,8 @@ jobs:
 
   publish-pypi:
     needs: [build, publish-test-pypi]
+    # Runs after a successful Test PyPI publish, or when Test PyPI was skipped on purpose.
+    if: ${{ !cancelled() && needs.build.result == 'success' && contains(fromJSON('["success", "skipped"]'), needs.publish-test-pypi.result) }}
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
