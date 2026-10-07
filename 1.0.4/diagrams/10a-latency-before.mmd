@@ -1,0 +1,15 @@
+gantt
+    title Before — SDK overhead per request (p50)
+    dateFormat X
+    axisFormat %Lms
+
+    section Request path
+    gRPC parse           :a1, 0, 1
+    Servicer dispatch    :a2, 1, 1
+    ModuleFactory 10svc  :crit, a3, 2, 4
+    TaskExecutor         :a4, 6, 1
+    Module.start         :a5, 7, 3
+    Queue → gRPC         :a6, 10, 1
+
+    section Total
+    SDK overhead         :crit, done, 0, 11

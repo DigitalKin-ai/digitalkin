@@ -1,0 +1,20 @@
+sequenceDiagram
+    participant C as Client
+    participant GW as Gateway
+    participant R as Redis
+    participant M as Module (ModuleRunner)
+
+    C->>GW: StartStream(task_id, setup_id, mission_id)
+    GW->>R: XADD task:{id}:stream — stream.start (seq=0)
+    GW-->>C: {accepted, task_id}
+    GW->>M: _dial_consumer (spawned)
+
+    C->>GW: Stream — first frame {task_id, from_seq, data=query}
+    GW->>R: XADD task:{id}:input {query}
+    M->>R: XREAD task:{id}:input
+    Note over M: resolve setup → input model → run
+    M->>R: XADD task:{id}:stream {pb, seq=1..N}
+    GW->>R: XREAD task:{id}:stream (ProtoStreamReader)
+    GW-->>C: StreamServer{seq, data}  (repeats)
+    M->>R: XADD {eos:true}
+    GW-->>C: StreamServer{stream.end}

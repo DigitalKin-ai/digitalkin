@@ -1,0 +1,7 @@
+flowchart LR
+  C["Client<br/>SendSignal(CANCEL)"] --> GW["Gateway"]
+  GW -->|"PUBLISH signal_ch:{id}"| R[("Redis pub/sub")]
+  R -->|"PSUBSCRIBE signal_ch:*"| L["SharedRedisListener<br/>one per process"]
+  L --> D{"dispatch_signal<br/>dedup raw JSON"}
+  D -->|"cancel / stop"| X["pending_signal_action<br/>task.cancel()"]
+  D -->|"invalidate_*"| I["cache invalidator<br/>skip self-origin"]

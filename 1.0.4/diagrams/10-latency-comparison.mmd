@@ -1,0 +1,22 @@
+gantt
+    title Latency Budget per Request (p50, milliseconds)
+    dateFormat X
+    axisFormat %Lms
+
+    section Before (SDK)
+    gRPC parse (0.5ms)           :a1, 0, 1
+    Servicer dispatch (0.2ms)    :a2, 1, 1
+    ModuleFactory 10svc (4ms)    :a3, 2, 4
+    TaskExecutor (0.1ms)         :a4, 6, 1
+    Module.start (3ms)           :a5, 7, 3
+    Queue to gRPC (0.1ms)        :a6, 10, 1
+
+    section After (Platform)
+    gRPC parse (0.5ms)           :b1, 0, 1
+    Gateway dispatch (0.1ms)     :b2, 1, 1
+    Redis enqueue (1ms)          :b3, 2, 1
+    Slot acquire (0.3ms)         :b4, 3, 1
+    Module.start (2ms)           :b5, 4, 2
+    Redis XADD (0.5ms)           :b6, 6, 1
+    Redis XREAD (1ms)            :b7, 7, 1
+    Queue to gRPC (0.1ms)        :b8, 8, 1

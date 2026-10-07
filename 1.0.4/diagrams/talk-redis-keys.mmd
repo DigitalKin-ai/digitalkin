@@ -1,0 +1,9 @@
+flowchart LR
+  subgraph KS["Redis key space — all TTL'd"]
+    T["task:{id}<br/>HASH · state · 24h"]
+    ST["task:{id}:stream<br/>STREAM · {pb,seq}+eos · maxlen 1000 · 60s on EOS"]
+    IN["task:{id}:input<br/>STREAM · {pb} · query + follow-ups"]
+    CUR["task:{id}:cursor<br/>STRING · last entry-id · ~6min"]
+    SIG["signal_ch:{id}<br/>PUBSUB · per-task cancel/stop"]
+    GLO["signal_ch:_global_<br/>PUBSUB · cache invalidation"]
+  end

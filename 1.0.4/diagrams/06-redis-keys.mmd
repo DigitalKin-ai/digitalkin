@@ -1,0 +1,10 @@
+flowchart TD
+    subgraph "Redis Key Space — all with TTL"
+        T["task:{id}\nHASH — 24h"] --- S["status, started_at,\nmission_id, error_message"]
+        ST["task:{id}:stream\nSTREAM — 5min on EOS"] --- X["seq=1, seq=2, ..., eos=true"]
+        CUR["task:{id}:cursor\nSTRING — 6min"] --- P["last read entry ID"]
+        SIG["signal:{id}\nHASH — 1h"] --- H["latest signal JSON"]
+        CK["checkpoint:{id}\nHASH — 5min"] --- CH["task_id, status, last_seq, state"]
+        IDM["idem:{id}\nSTRING — 1h"] --- CL["Lua atomic claim owner"]
+        IDX["checkpoints:active\nSET — self-cleaning"] --- SE["session IDs for restore"]
+    end
