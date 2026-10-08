@@ -2,7 +2,8 @@
 
 from typing import Literal
 
-from agentic_mesh_protocol.cost.v1 import cost_pb2, cost_service_pb2_grpc
+from agentic_mesh_protocol.cost.v1 import cost_dto_pb2, cost_enums_pb2, cost_messages_pb2, cost_service_pb2_grpc
+from agentic_mesh_protocol.pagination.v1 import pagination_pb2
 
 from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
 from digitalkin.grpc_servers.utils.grpc_error_handler import GrpcErrorHandlerMixin
@@ -15,7 +16,6 @@ from digitalkin.services.cost.cost_strategy import (
     CostStrategy,
 )
 from digitalkin.services.cost.exceptions import CostServiceError
-from digitalkin.utils.proto_utils import ProtoUtils
 
 
 class GrpcCost(CostStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
@@ -100,7 +100,7 @@ class GrpcCost(CostStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
             CostServiceError: If the cost config is invalid
         """
         logger.debug("debug:add cost_name=%s cost_config_name=%s quantity=%s", name, cost_config_name, quantity)
-        async with self.handle_grpc_errors("AddCost", CostServiceError):
+        async with self.handle_grpc_errors("CreateCost", CostServiceError):
             cost_config = self.config.get(cost_config_name)
             if cost_config is None:
                 msg = f"Cost config {cost_config_name} not found in the configuration."
@@ -116,41 +116,64 @@ class GrpcCost(CostStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
                 "quantity": quantity,
                 "setup_version_id": self.setup_version_id,
             })
-            request = cost_pb2.AddCostRequest(
-                cost=valid_data.cost,
-                name=valid_data.name,
-                unit=valid_data.unit,
-                cost_type=valid_data.cost_type.name,
+            request = cost_dto_pb2.CreateCostRequest(
                 mission_id=valid_data.mission_id,
-                rate=valid_data.rate,
-                quantity=valid_data.quantity,
                 setup_version_id=valid_data.setup_version_id,
+                name=valid_data.name,
+                cost=valid_data.cost,
+                quantity=valid_data.quantity,
+                rate=valid_data.rate,
+                unit=valid_data.unit,
+                type=valid_data.cost_type.name,
             )
-            await self.exec_grpc_query("AddCost", request)
+            response: cost_dto_pb2.CreateCostResponse = await self.exec_grpc_query("CreateCost", request)
+            self.raise_on_error(response.result, CostServiceError)
             logger.debug("Cost added with cost_dict: %s", valid_data.model_dump())
 
+    async def _list_all(
+        self,
+        operation: str,
+        request: cost_dto_pb2.ListCostsRequest | cost_dto_pb2.ListCostConfigsRequest,
+    ) -> list[cost_messages_pb2.CostResult]:
+        """Collect the successful results of every page of a listing RPC.
+
+        ``PaginationRequest.limit`` is capped at 100, so pages of 100 are read until
+        ``bulk.pagination.total_count`` items were seen or a page comes back empty.
+
+        Args:
+            operation: Listing RPC name.
+            request: Listing request; its ``pagination`` is overwritten.
+
+        Returns:
+            The results of every page holding an item, in order.
+        """
+        kept: list[cost_messages_pb2.CostResult] = []
+        offset = 0
+        while True:
+            request.pagination.CopyFrom(pagination_pb2.PaginationRequest(limit=100, offset=offset))
+            response = await self.exec_grpc_query(operation, request)
+            kept.extend(self.successful_results(operation, response.results))
+            offset += len(response.results)
+            if not response.results or offset >= response.bulk.pagination.total_count:
+                return kept
+
     async def get(self, name: str) -> list[CostData]:
-        """Get a record from the database.
+        """Get the costs of the mission carrying a name.
 
         Args:
             name: The name of the cost
 
         Returns:
-            CostData: The cost data
+            list[CostData]: The cost data
         """
-        async with self.handle_grpc_errors("GetCost", CostServiceError):
-            request = cost_pb2.GetCostRequest(name=name, mission_id=self.mission_id)
-            response: cost_pb2.GetCostResponse = await self.exec_grpc_query("GetCost", request)
-            cost_data_list = [ProtoUtils.proto_to_dict(cost, with_defaults=True) for cost in response.costs]
-            logger.debug("Costs retrieved with cost_dict: %s", cost_data_list)
-            return [CostData.model_validate(cost_data) for cost_data in cost_data_list]
+        return await self.get_filtered(names=[name])
 
     async def get_filtered(
         self,
         names: list[str] | None = None,
         cost_types: list[Literal["TOKEN_INPUT", "TOKEN_OUTPUT", "API_CALL", "STORAGE", "TIME", "OTHER"]] | None = None,
     ) -> list[CostData]:
-        """Get a list of records from the database.
+        """Get the costs of the mission matching every given filter, across all pages.
 
         Args:
             names: The names of the costs
@@ -159,68 +182,76 @@ class GrpcCost(CostStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
         Returns:
             list[CostData]: The cost data
         """
-        async with self.handle_grpc_errors("GetCosts", CostServiceError):
-            request = cost_pb2.GetCostsRequest(
+        async with self.handle_grpc_errors("ListCosts", CostServiceError):
+            request = cost_dto_pb2.ListCostsRequest(
                 mission_id=self.mission_id,
-                filter=cost_pb2.CostFilter(
-                    names=names or [],
-                    cost_types=cost_types or [],
-                ),
+                filter=cost_messages_pb2.CostFilter(names=names, types=cost_types),
             )
-            response: cost_pb2.GetCostsResponse = await self.exec_grpc_query("GetCosts", request)
-            cost_data_list = [ProtoUtils.proto_to_dict(cost, with_defaults=True) for cost in response.costs]
-            logger.debug("Filtered costs retrieved with cost_dict: %s", cost_data_list)
-            return [CostData.model_validate(cost_data) for cost_data in cost_data_list]
+            costs = [
+                CostData(
+                    cost=result.cost.cost,
+                    mission_id=result.cost.mission_id,
+                    name=result.cost.name,
+                    cost_type=CostType[cost_enums_pb2.CostType.Name(result.cost.type)],
+                    unit=result.cost.unit,
+                    rate=result.cost.rate,
+                    setup_version_id=result.cost.setup_version_id,
+                    quantity=result.cost.quantity,
+                )
+                for result in await self._list_all("ListCosts", request)
+            ]
+            logger.debug("Filtered costs retrieved: %s", costs)
+            return costs
 
     async def get_cost_config(self) -> list[CostConfig]:
-        """Get cost configuration from the database.
+        """Get the cost configuration of the setup version, across all pages.
 
         Returns:
             List of CostConfig objects from the database.
         """
-        async with self.handle_grpc_errors("GetCostConfig", CostServiceError):
-            request = cost_pb2.GetCostConfigRequest(setup_version_id=self.setup_version_id)
-            response: cost_pb2.GetCostConfigResponse = await self.exec_grpc_query("GetCostConfig", request)
-            config_list = []
-            for config in response.configs:
-                config_dict = ProtoUtils.proto_to_dict(config, with_defaults=True)
-                # Map proto field names to CostConfig field names
-                config_list.append(
-                    CostConfig(
-                        cost_name=config_dict.get("name", ""),
-                        cost_type=config_dict.get("cost_type", "OTHER"),
-                        description=config_dict.get("description"),
-                        unit=config_dict.get("unit", ""),
-                        rate=config_dict.get("rate", 0.0),
-                    )
-                )
-            logger.debug("Cost configs retrieved: %s", config_list)
-            return config_list
+        async with self.handle_grpc_errors("ListCostConfigs", CostServiceError):
+            request = cost_dto_pb2.ListCostConfigsRequest(setup_version_id=self.setup_version_id)
+            configs = [
+                CostConfig.model_validate({
+                    "cost_name": result.config.name,
+                    "cost_type": cost_enums_pb2.CostType.Name(result.config.type),
+                    "description": result.config.description,
+                    "unit": result.config.unit,
+                    "rate": result.config.rate,
+                })
+                for result in await self._list_all("ListCostConfigs", request)
+            ]
+            logger.debug("Cost configs retrieved: %s", configs)
+            return configs
 
     async def set_cost_config(self, configs: list[CostConfig]) -> bool:
-        """Store cost configuration in the database.
+        """Replace the cost configuration of the setup version.
 
         Args:
             configs: List of CostConfig objects to store.
 
         Returns:
-            True if successfully stored.
+            True when no configuration failed to store.
         """
         async with self.handle_grpc_errors("SetCostConfig", CostServiceError):
-            proto_configs = [
-                cost_pb2.CostConfig(
-                    name=config.cost_name,
-                    cost_type=config.cost_type,
-                    description=config.description or "",
-                    unit=config.unit,
-                    rate=config.rate,
-                )
-                for config in configs
-            ]
-            request = cost_pb2.SetCostConfigRequest(
+            request = cost_dto_pb2.SetCostConfigRequest(
                 setup_version_id=self.setup_version_id,
-                configs=proto_configs,
+                configs=[
+                    cost_messages_pb2.CostConfig(
+                        name=config.cost_name,
+                        type=config.cost_type,
+                        description=config.description,
+                        unit=config.unit,
+                        rate=config.rate,
+                    )
+                    for config in configs
+                ],
             )
-            response: cost_pb2.SetCostConfigResponse = await self.exec_grpc_query("SetCostConfig", request)
-            logger.debug("Cost configs stored, success: %s", response.success)
-            return response.success
+            response: cost_dto_pb2.SetCostConfigResponse = await self.exec_grpc_query("SetCostConfig", request)
+            self.successful_results("SetCostConfig", response.results)
+            logger.debug(
+                "Cost configs stored: %d processed, %d failed",
+                response.bulk.total_processed,
+                response.bulk.total_failed,
+            )
+            return response.bulk.total_failed == 0

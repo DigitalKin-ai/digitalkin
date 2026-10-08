@@ -1,6 +1,10 @@
 """Exceptions for the communication service."""
 
 
+class CommunicationServiceError(Exception):
+    """A remote module answered a ModuleService call with an ``OperationError``."""
+
+
 class InvalidConsumerAddressError(ValueError):
     """``address`` is not a valid ``host:port`` for dial-back."""
 

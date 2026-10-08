@@ -262,6 +262,32 @@ class BaseModule(  # Module SDK base class requires many public methods # ruff: 
         return f"{description}\n\n## Triggers\n\n{table}"
 
     @classmethod
+    async def build_registry_schemas(cls) -> dict[str, dict[str, Any]]:
+        """Collect the raw JSON schemas sent at registration, keyed by ``RegisterModuleRequest`` field.
+
+        Covers every schema served by ``ModuleService`` except the user-info one. The registry
+        requires each of them: a schema the module does not declare is sent as an empty object.
+
+        Returns:
+            Parsed JSON schema per request field name.
+        """
+        schemas: dict[str, dict[str, Any]] = {"select_input_schema": json.loads(await cls.get_select_input_format())}
+        for name, get_format in (
+            ("input_schema", cls.get_input_format),
+            ("output_schema", cls.get_output_format),
+            ("setup_schema", cls.get_setup_format),
+            ("secret_schema", cls.get_secret_format),
+            ("config_setup_schema", cls.get_config_setup_format),
+            ("cost_schema", cls.get_cost_format),
+        ):
+            try:
+                schemas[name] = json.loads(await get_format(llm_format=False))
+            except NotImplementedError as e:  # ruff: ignore[try-except-in-loop] — six calls, once at startup
+                logger.info("Registry schema %s sent empty for %s: %s", name, cls.__name__, e)
+                schemas[name] = {}
+        return schemas
+
+    @classmethod
     async def get_output_format(cls, *, llm_format: bool) -> str:
         """Get the JSON schema of the output format model.
 
@@ -855,6 +881,13 @@ class BaseModule(  # Module SDK base class requires many public methods # ruff: 
             setup_model = await self.create_setup_model(updated_config.model_dump())
             await callback(setup_model)
             self._status = ModuleStatus.STOPPING
-        except Exception:
+        except Exception as e:
             self._status = ModuleStatus.FAILED
             logger.exception("Error during config setup lifecycle", extra=self.context.session.current_ids())
+            # Without a reply the servicer waits out the whole config-setup timeout.
+            await callback(ModuleCodeModel(code="INTERNAL", message=f"config setup failed: {e}"))
+            logger.info(
+                "[VALIDATE CFGFAIL] config setup failure reported to the caller: %s",
+                e,
+                extra=self.context.session.current_ids(),
+            )  # TODO(validate): remove after prod validation

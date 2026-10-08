@@ -15,7 +15,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from agentic_mesh_protocol.gateway.v1 import gateway_pb2
+from agentic_mesh_protocol.gateway.v1 import gateway_messages_pb2
 from google.protobuf import struct_pb2
 
 from digitalkin.grpc_servers.gateway_servicer import GatewayServicer
@@ -88,9 +88,9 @@ class TestDialBackBranch:
         out1 = _struct({"root": {"protocol": "ask.response", "text": "hi"}})
         end = _struct({"root": {"protocol": "stream.end"}})
         req_iter = _Iter([
-            gateway_pb2.StreamServer(task_id="t1", seq=0, data=init),
-            gateway_pb2.StreamServer(task_id="t1", seq=1, data=out1),
-            gateway_pb2.StreamServer(task_id="t1", seq=2, data=end),
+            gateway_messages_pb2.StreamRequest(task_id="t1", from_seq=0, data=init),
+            gateway_messages_pb2.StreamRequest(task_id="t1", from_seq=1, data=out1),
+            gateway_messages_pb2.StreamRequest(task_id="t1", from_seq=2, data=end),
         ])
 
         ctx = MagicMock()
@@ -99,9 +99,9 @@ class TestDialBackBranch:
         async for resp in gw.Stream(req_iter, ctx):
             yielded.append(resp)
 
-        # First (and only) yield is the query reply as StreamClient.
+        # First (and only) yield is the query reply as StreamResponse.
         assert len(yielded) == 1
-        assert isinstance(yielded[0], gateway_pb2.StreamClient)
+        assert isinstance(yielded[0], gateway_messages_pb2.StreamResponse)
         assert yielded[0].task_id == "t1"
         assert yielded[0].data.fields["root"].struct_value.fields["protocol"].string_value == "ask"
 
@@ -122,7 +122,7 @@ class TestDialBackBranch:
     async def test_unknown_task_id_emits_fatal(self) -> None:
         gw = _make_servicer()
         init = _struct({"root": {"protocol": "stream.init"}})
-        req_iter = _Iter([gateway_pb2.StreamServer(task_id="unknown", seq=0, data=init)])
+        req_iter = _Iter([gateway_messages_pb2.StreamRequest(task_id="unknown", from_seq=0, data=init)])
 
         ctx = MagicMock()
         ctx.invocation_metadata.return_value = []
@@ -130,7 +130,7 @@ class TestDialBackBranch:
         async for resp in gw.Stream(req_iter, ctx):
             yielded.append(resp)
 
-        # _fatal_close yields stream.error + stream.end (both as StreamClient).
+        # _fatal_close yields stream.error + stream.end (both as StreamResponse).
         assert len(yielded) == 2
         protos = [r.data.fields["root"].struct_value.fields["protocol"].string_value for r in yielded]
         assert protos == ["stream.error", "stream.end"]
@@ -150,8 +150,8 @@ class TestDialBackBranch:
         init = _struct({"root": {"protocol": "stream.init"}})
         err = _struct({"root": {"protocol": "stream.error", "fatal": True, "code": "X", "message": "boom"}})
         req_iter = _Iter([
-            gateway_pb2.StreamServer(task_id="t2", seq=0, data=init),
-            gateway_pb2.StreamServer(task_id="t2", seq=1, data=err),
+            gateway_messages_pb2.StreamRequest(task_id="t2", from_seq=0, data=init),
+            gateway_messages_pb2.StreamRequest(task_id="t2", from_seq=1, data=err),
         ])
 
         ctx = MagicMock()

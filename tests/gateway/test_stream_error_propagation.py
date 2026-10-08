@@ -20,7 +20,7 @@ from unittest.mock import AsyncMock, MagicMock
 import grpc
 import grpc.aio
 import pytest
-from agentic_mesh_protocol.gateway.v1 import gateway_pb2, gateway_service_pb2_grpc
+from agentic_mesh_protocol.gateway.v1 import gateway_service_pb2_grpc
 from google.protobuf import struct_pb2
 from pydantic import BaseModel, ValidationError
 from redis.exceptions import RedisError

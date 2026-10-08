@@ -14,7 +14,6 @@ from digitalkin.models.services.registry import (
     SetupSummary,
 )
 from digitalkin.services.base_strategy import BaseStrategy
-from digitalkin.services.registry.registry_models import ModuleStatusInfo
 
 
 class RegistryStrategy(BaseStrategy, ABC):
@@ -206,11 +205,6 @@ class RegistryStrategy(BaseStrategy, ABC):
         ...
 
     @abstractmethod
-    async def get_status(self, module_id: str) -> ModuleStatusInfo:
-        """Get module status."""
-        ...
-
-    @abstractmethod
     async def register(
         self,
         module_id: str,
@@ -219,6 +213,7 @@ class RegistryStrategy(BaseStrategy, ABC):
         version: str,
         module_type: RegistryModuleType = RegistryModuleType.UNSPECIFIED,
         documentation: str = "",
+        schemas: dict[str, dict[str, Any]] | None = None,
     ) -> ModuleInfo | None:
         """Register a module with the registry.
 
@@ -232,6 +227,7 @@ class RegistryStrategy(BaseStrategy, ABC):
             version: Module version.
             module_type: Declared module type (tool or archetype/kin).
             documentation: Internal documentation for registry index search.
+            schemas: JSON schemas keyed by ``RegisterModuleRequest`` field (``input_schema``, ...).
 
         Returns:
             ModuleInfo if successful, None otherwise.

@@ -22,17 +22,17 @@ import grpc
 import grpc_testing
 import pytest
 from agentic_mesh_protocol.cost.v1 import cost_service_pb2, cost_service_pb2_grpc
+from tests.fixtures.grpc_fixtures import AsyncStubWrapper, FakeContext
+from tests.fixtures.stress_reporter import StressReporter
+from tests.services.cost.mock_cost_servicer import MockCostServicer
 
 from digitalkin.models.grpc_servers.models import ClientConfig
 from digitalkin.models.services.cost import AmountLimit, CostTypeEnum, QuantityLimit
 from digitalkin.models.settings.utils.channel import ControlFlow, SecurityMode
 from digitalkin.services.cost.cost_strategy import CostConfig
-from digitalkin.services.cost.exceptions import CostServiceError
 from digitalkin.services.cost.default_cost import DefaultCost
+from digitalkin.services.cost.exceptions import CostServiceError
 from digitalkin.services.cost.grpc_cost import GrpcCost
-from tests.fixtures.grpc_fixtures import AsyncStubWrapper, FakeContext
-from tests.fixtures.stress_reporter import StressReporter
-from tests.services.cost.mock_cost_servicer import MockCostServicer
 
 # Set timeout for stress tests
 pytestmark = pytest.mark.timeout(60)
@@ -84,7 +84,7 @@ def cost_service(sample_config: dict[str, CostConfig]) -> DefaultCost:
     return DefaultCost(
         mission_id="missions:stress_test",
         setup_id="setup:test",
-        setup_version_id="setup_version:test",
+        setup_version_id="setup_versions:test",
         config=sample_config,
     )
 
@@ -128,7 +128,7 @@ def grpc_client(
     client = GrpcCost(
         "missions:grpc_stress",
         "setup:test",
-        "setup_version:test",
+        "setup_versions:test",
         sample_config,
         dummy_config,
     )
@@ -243,7 +243,7 @@ class TestMissionIsolationUnderLoad:
             DefaultCost(
                 mission_id=mission,
                 setup_id="setup:test",
-                setup_version_id="setup_version:test",
+                setup_version_id="setup_versions:test",
                 config=sample_config,
             )
             for mission in missions
@@ -276,21 +276,19 @@ class TestMissionIsolationUnderLoad:
 
         assert all_isolated
 
-    async def test_mission_isolation_with_same_cost_names(
-        self, sample_config: dict[str, CostConfig]
-    ) -> None:
+    async def test_mission_isolation_with_same_cost_names(self, sample_config: dict[str, CostConfig]) -> None:
         """Test isolation when different missions use same cost names."""
         service1 = DefaultCost(
             mission_id="missions:mission_a",
             setup_id="setup:test",
-            setup_version_id="setup_version:test",
+            setup_version_id="setup_versions:test",
             config=sample_config,
         )
 
         service2 = DefaultCost(
             mission_id="missions:mission_b",
             setup_id="setup:test",
-            setup_version_id="setup_version:test",
+            setup_version_id="setup_versions:test",
             config=sample_config,
         )
 
@@ -303,10 +301,7 @@ class TestMissionIsolationUnderLoad:
         costs2 = await service2.get("shared_name_cost")
 
         isolated = (
-            len(costs1) == 1
-            and len(costs2) == 1
-            and costs1[0].quantity == 1000.0
-            and costs2[0].quantity == 2000.0
+                len(costs1) == 1 and len(costs2) == 1 and costs1[0].quantity == 1000.0 and costs2[0].quantity == 2000.0
         )
 
         rpt = StressReporter("Mission Isolation: Same Cost Names")
@@ -472,7 +467,7 @@ class TestGrpcStress:
     ) -> None:
         """Test rapid sequential cost additions."""
         service_desc = cost_service_pb2.DESCRIPTOR.services_by_name["CostService"]
-        method_desc = service_desc.methods_by_name["AddCost"]
+        method_desc = service_desc.methods_by_name["CreateCost"]
 
         t0 = time.perf_counter()
         for i in range(50):
@@ -483,7 +478,7 @@ class TestGrpcStress:
             _, request, rpc = test_channel.take_unary_unary(method_desc)
 
             context = FakeContext()
-            response = mock_servicer.AddCost(request, context)
+            response = mock_servicer.CreateCost(request, context)
 
             rpc.send_initial_metadata(())
             rpc.terminate(response, (), grpc.StatusCode.OK, "")
@@ -514,7 +509,7 @@ class TestGrpcStress:
         service_desc = cost_service_pb2.DESCRIPTOR.services_by_name["CostService"]
 
         # First, add a batch of costs
-        add_method = service_desc.methods_by_name["AddCost"]
+        add_method = service_desc.methods_by_name["CreateCost"]
         t0 = time.perf_counter()
         for i in range(20):
             name = f"mixed_{i}"
@@ -522,13 +517,13 @@ class TestGrpcStress:
 
             _, request, rpc = test_channel.take_unary_unary(add_method)
             context = FakeContext()
-            response = mock_servicer.AddCost(request, context)
+            response = mock_servicer.CreateCost(request, context)
             rpc.send_initial_metadata(())
             rpc.terminate(response, (), grpc.StatusCode.OK, "")
             future.result(timeout=5.0)
 
         # Now do mixed operations
-        get_method = service_desc.methods_by_name["GetCost"]
+        get_method = service_desc.methods_by_name["ListCosts"]
 
         for i in range(10):
             # Add
@@ -536,7 +531,7 @@ class TestGrpcStress:
             future_add = thread_pool.submit(asyncio.run, grpc_client.add(name, "gpt4_output", 50.0))
             _, request, rpc = test_channel.take_unary_unary(add_method)
             context = FakeContext()
-            response = mock_servicer.AddCost(request, context)
+            response = mock_servicer.CreateCost(request, context)
             rpc.send_initial_metadata(())
             rpc.terminate(response, (), grpc.StatusCode.OK, "")
             future_add.result(timeout=5.0)
@@ -545,7 +540,7 @@ class TestGrpcStress:
             future_get = thread_pool.submit(asyncio.run, grpc_client.get(f"mixed_{i}"))
             _, request, rpc = test_channel.take_unary_unary(get_method)
             context = FakeContext()
-            response = mock_servicer.GetCost(request, context)
+            response = mock_servicer.ListCosts(request, context)
             rpc.send_initial_metadata(())
             rpc.terminate(response, (), grpc.StatusCode.OK, "")
             future_get.result(timeout=5.0)
@@ -790,10 +785,7 @@ class TestDataIntegrity:
 
         first_len = len(results[0])
         first_total = sum(c.quantity for c in results[0])
-        all_consistent = all(
-            len(r) == first_len and sum(c.quantity for c in r) == first_total
-            for r in results[1:]
-        )
+        all_consistent = all(len(r) == first_len and sum(c.quantity for c in r) == first_total for r in results[1:])
 
         rpt = StressReporter("Data Integrity: 10 Concurrent Reads")
         rpt.metric("Costs stored", StressReporter.count(100))

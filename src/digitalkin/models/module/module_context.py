@@ -215,6 +215,7 @@ class ModuleContext:
         return await self.communication.get_module_schemas(
             module_address=module_info.address,
             module_port=module_info.port,
+            module_id=module_id,
             llm_format=llm_format,
         )
 
@@ -237,6 +238,7 @@ class ModuleContext:
         return await self.communication.get_module_config_schema(
             module_address=module_info.address,
             module_port=module_info.port,
+            module_id=module_id,
             llm_format=llm_format,
         )
 

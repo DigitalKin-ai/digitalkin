@@ -44,3 +44,18 @@ class TestRejectOversizedOutputFormatSpec:
 
     def test_empty_content_is_a_no_op(self) -> None:
         assert SetupContentValidator.reject_oversized_output_format_spec({}) == {}
+
+
+class TestRejectOversizedDocumentation:
+    """``documentation`` must fit the protocol's ``max_len: 300``."""
+
+    def test_accepts_documentation_at_the_cap(self) -> None:
+        """The cap is inclusive: 300 characters is what the protocol carries."""
+        SetupContentValidator.reject_oversized_documentation("x" * 300)
+
+    def test_rejects_documentation_over_the_cap_and_reports_its_size(self) -> None:
+        with pytest.raises(ValueError, match="documentation is 301 characters; the protocol caps it at 300"):
+            SetupContentValidator.reject_oversized_documentation("x" * 301)
+
+    def test_empty_documentation_is_a_no_op(self) -> None:
+        SetupContentValidator.reject_oversized_documentation("")
