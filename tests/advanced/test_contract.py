@@ -4,27 +4,27 @@ Verify that generated proto stubs match expected message shapes,
 field names, enum values, and service method signatures. Catches
 proto/code drift early without running a server.
 
-Gateway lifecycle is in-band (sentinel Structs in StreamOutput.data
+Gateway lifecycle is in-band (sentinel Structs in StreamResponse.data
 keyed under data.root.protocol). The gateway exposes only the external
 consumer surface: AssociateTask, StartStream, Stream, SendSignal.
 """
 
 from __future__ import annotations
 
+import importlib
+
 import pytest
-
-try:
-    from agentic_mesh_protocol.gateway.v1 import gateway_pb2 as _gw_pb2  # noqa: F401
-
-    _HAS_GATEWAY_PROTO = True
-except ImportError:
-    _HAS_GATEWAY_PROTO = False
+from agentic_mesh_protocol.gateway.v1 import (
+    gateway_dto_pb2,
+    gateway_enums_pb2,
+    gateway_messages_pb2,
+    gateway_service_pb2,
+    gateway_service_pb2_grpc,
+)
+from agentic_mesh_protocol.module.v1 import module_dto_pb2, module_service_pb2_grpc
+from google.protobuf import json_format, struct_pb2
 
 pytestmark = [pytest.mark.contract, pytest.mark.timeout(5)]
-
-SKIP_NO_GATEWAY = pytest.mark.skipif(
-    not _HAS_GATEWAY_PROTO, reason="Gateway proto not installed (needs local editable)",
-)
 
 
 # ===========================================================================
@@ -32,75 +32,70 @@ SKIP_NO_GATEWAY = pytest.mark.skipif(
 # ===========================================================================
 
 
-@SKIP_NO_GATEWAY
 class TestGatewayServiceContract:
     """Verify GatewayService proto shape."""
 
     def test_service_has_four_rpcs(self) -> None:
-        from agentic_mesh_protocol.gateway.v1 import gateway_service_pb2_grpc
-
         servicer = gateway_service_pb2_grpc.GatewayServiceServicer
         methods = {m for m in dir(servicer) if not m.startswith("_")}
         assert methods == {"AssociateTask", "StartStream", "Stream", "SendSignal"}
 
     def test_deleted_rpcs_absent(self) -> None:
         """ProduceStream and ConsumeStream must be gone."""
-        from agentic_mesh_protocol.gateway.v1 import gateway_service_pb2_grpc
-
-        servicer = gateway_service_pb2_grpc.GatewayServiceServicer
-        methods = dir(servicer)
+        methods = dir(gateway_service_pb2_grpc.GatewayServiceServicer)
         assert "ProduceStream" not in methods
         assert "ConsumeStream" not in methods
 
-    def test_start_stream_request_fields(self) -> None:
-        from agentic_mesh_protocol.gateway.v1 import gateway_pb2
+    def test_stream_frames_follow_their_direction(self) -> None:
+        """The client sends StreamRequest; the gateway answers StreamResponse."""
+        stream = gateway_service_pb2.DESCRIPTOR.services_by_name["GatewayService"].methods_by_name["Stream"]
+        assert stream.input_type.name == "StreamRequest"
+        assert stream.output_type.name == "StreamResponse"
+        assert stream.client_streaming
+        assert stream.server_streaming
 
-        msg = gateway_pb2.StartStreamRequest()
-        fields = {f.name for f in msg.DESCRIPTOR.fields}
+    def test_send_signal_types(self) -> None:
+        send = gateway_service_pb2.DESCRIPTOR.services_by_name["GatewayService"].methods_by_name["SendSignal"]
+        assert send.input_type.name == "SendSignalRequest"
+        assert send.output_type.name == "SendSignalResponse"
+
+    def test_start_stream_request_fields(self) -> None:
+        fields = {f.name for f in gateway_dto_pb2.StartStreamRequest.DESCRIPTOR.fields}
         assert fields == {"task_id", "setup_id", "mission_id"}
 
     def test_start_stream_response_fields(self) -> None:
-        from agentic_mesh_protocol.gateway.v1 import gateway_pb2
-
-        msg = gateway_pb2.StartStreamResponse()
-        fields = {f.name for f in msg.DESCRIPTOR.fields}
+        fields = {f.name for f in gateway_dto_pb2.StartStreamResponse.DESCRIPTOR.fields}
         assert fields == {"accepted", "task_id"}
 
     def test_associate_task_request_fields(self) -> None:
-        from agentic_mesh_protocol.gateway.v1 import gateway_pb2
-
-        msg = gateway_pb2.AssociateTaskRequest()
-        fields = {f.name for f in msg.DESCRIPTOR.fields}
+        fields = {f.name for f in gateway_dto_pb2.AssociateTaskRequest.DESCRIPTOR.fields}
         assert fields == {"parent_task_id"}
 
     def test_associate_task_response_fields(self) -> None:
-        from agentic_mesh_protocol.gateway.v1 import gateway_pb2
-
-        msg = gateway_pb2.AssociateTaskResponse()
-        fields = {f.name for f in msg.DESCRIPTOR.fields}
+        fields = {f.name for f in gateway_dto_pb2.AssociateTaskResponse.DESCRIPTOR.fields}
         assert fields == {"task_id", "parent_task_id"}
 
     def test_stream_request_is_flat_no_oneof(self) -> None:
-        """StreamRequest is flat: task_id, from_seq, data — no oneof."""
-        from agentic_mesh_protocol.gateway.v1 import gateway_pb2
+        """StreamRequest is flat: from_seq=1, task_id=2, data=3 — no oneof."""
+        descriptor = gateway_messages_pb2.StreamRequest.DESCRIPTOR
+        assert len(descriptor.oneofs) == 0
+        assert {f.name: f.number for f in descriptor.fields} == {"from_seq": 1, "task_id": 2, "data": 3}
 
-        msg = gateway_pb2.StreamClient()
-        assert len(msg.DESCRIPTOR.oneofs) == 0
-        fields = {f.name for f in msg.DESCRIPTOR.fields}
-        assert fields == {"task_id", "from_seq", "data"}
+    def test_stream_response_fields(self) -> None:
+        """StreamResponse carries seq=1, task_id=2, data=3."""
+        descriptor = gateway_messages_pb2.StreamResponse.DESCRIPTOR
+        assert {f.name: f.number for f in descriptor.fields} == {"seq": 1, "task_id": 2, "data": 3}
 
-    def test_stream_server_fields(self) -> None:
-        """StreamServer carries seq + task_id + data."""
-        from agentic_mesh_protocol.gateway.v1 import gateway_pb2
-
-        msg = gateway_pb2.StreamServer()
-        fields = {f.name for f in msg.DESCRIPTOR.fields}
-        assert fields == {"seq", "task_id", "data"}
+    def test_legacy_gateway_module_absent(self) -> None:
+        """``gateway_pb2`` (StreamServer / StreamClient / ClientSignalRequest) is gone."""
+        with pytest.raises(ModuleNotFoundError):
+            importlib.import_module("agentic_mesh_protocol.gateway.v1.gateway_pb2")
 
     def test_deleted_messages_absent(self) -> None:
-        """Envelope, lifecycle status, errors, heartbeat, checkpoint, oneof shells — all gone."""
-        from agentic_mesh_protocol.gateway.v1 import gateway_pb2
-
+        """Envelope, lifecycle status, heartbeat, legacy frame and signal shells — all gone."""
+        names = set(gateway_messages_pb2.DESCRIPTOR.message_types_by_name) | set(
+            gateway_dto_pb2.DESCRIPTOR.message_types_by_name
+        )
         for name in (
             "GatewayResponse",
             "StreamStatus",
@@ -108,43 +103,29 @@ class TestGatewayServiceContract:
             "ServerHeartbeat",
             "Checkpoint",
             "ProduceStreamRequest",
-            "ProduceStreamInit",
-            "ProduceStreamResponse",
-            "ProduceStreamData",
             "ConsumeStreamRequest",
-            "ConsumeStreamInit",
-            "ConsumeStreamData",
+            "StreamServer",
+            "StreamClient",
+            "ClientSignalRequest",
+            "ClientSignalResponse",
         ):
-            assert not hasattr(gateway_pb2, name), f"{name} should be deleted"
+            assert name not in names, f"{name} should be deleted"
 
-    def test_stream_state_enum_absent(self) -> None:
-        """StreamState enum was orphaned with StreamStatus and removed."""
-        from agentic_mesh_protocol.gateway.v1 import gateway_pb2
+    def test_signal_action_enum_absent(self) -> None:
+        assert "SignalAction" not in gateway_enums_pb2.DESCRIPTOR.enum_types_by_name
 
-        assert not hasattr(gateway_pb2, "StreamState")
+    def test_cache_scope_enum_values(self) -> None:
+        names = {v.name for v in gateway_enums_pb2.CacheScope.DESCRIPTOR.values}
+        assert names == {"CACHE_SCOPE_UNSPECIFIED", "ALL", "CHANNELS", "MODELS", "SETUP", "TOOLS", "SHARED"}
 
-    def test_signal_action_enum_values(self) -> None:
-        from agentic_mesh_protocol.gateway.v1 import gateway_pb2
+    def test_send_signal_request_is_a_oneof(self) -> None:
+        descriptor = gateway_dto_pb2.SendSignalRequest.DESCRIPTOR
+        assert [f.name for f in descriptor.oneofs_by_name["signal"].fields] == ["cancel", "invalidate"]
 
-        names = {v.name for v in gateway_pb2.SignalAction.DESCRIPTOR.values}
-        # Cache invalidation set + cancel; explicit unprefixed names per design.
-        assert names >= {
-            "UNSPECIFIED",
-            "CANCEL",
-            "INVALIDATE_ALL",
-            "INVALIDATE_CHANNELS",
-            "INVALIDATE_MODELS",
-            "INVALIDATE_SETUP",
-            "INVALIDATE_TOOLS",
-            "INVALIDATE_SHARED",
-        }
-
-    def test_client_signal_request_fields(self) -> None:
-        from agentic_mesh_protocol.gateway.v1 import gateway_pb2
-
-        msg = gateway_pb2.ClientSignalRequest()
-        fields = {f.name for f in msg.DESCRIPTOR.fields}
-        assert fields == {"task_id", "action"}
+    def test_signal_payload_fields(self) -> None:
+        assert {f.name for f in gateway_messages_pb2.CancelSignal.DESCRIPTOR.fields} == {"task_id"}
+        assert {f.name for f in gateway_messages_pb2.InvalidateSignal.DESCRIPTOR.fields} == {"scope"}
+        assert {f.name for f in gateway_dto_pb2.SendSignalResponse.DESCRIPTOR.fields} == {"success", "task_id"}
 
 
 # ===========================================================================
@@ -169,66 +150,46 @@ class TestSentinelProtocolContract:
 
 
 # ===========================================================================
-# ModuleService contract (unchanged, verify no regression)
+# ModuleService contract
 # ===========================================================================
 
 
 class TestModuleServiceContract:
-    """Verify ModuleService proto shape is unchanged."""
+    """Verify ModuleService proto shape."""
 
     def test_start_module_is_server_streaming(self) -> None:
-        from agentic_mesh_protocol.module.v1 import module_service_pb2_grpc
-
-        servicer = module_service_pb2_grpc.ModuleServiceServicer
-        assert "StartModule" in dir(servicer)
+        assert "StartModule" in dir(module_service_pb2_grpc.ModuleServiceServicer)
 
     def test_no_stream_module_rpc(self) -> None:
         """StreamModule BiDi was removed — verify it stays removed."""
-        from agentic_mesh_protocol.module.v1 import module_service_pb2_grpc
-
-        servicer = module_service_pb2_grpc.ModuleServiceServicer
-        assert "StreamModule" not in dir(servicer)
+        assert "StreamModule" not in dir(module_service_pb2_grpc.ModuleServiceServicer)
 
     def test_start_module_request_fields(self) -> None:
-        from agentic_mesh_protocol.module.v1 import lifecycle_pb2
-
-        msg = lifecycle_pb2.StartModuleRequest()
-        fields = [f.name for f in msg.DESCRIPTOR.fields]
-        assert "input" in fields
-        assert "setup_id" in fields
-        assert "mission_id" in fields
+        fields = {f.name for f in module_dto_pb2.StartModuleRequest.DESCRIPTOR.fields}
+        assert {"input", "setup_id", "mission_id"} <= fields
 
     def test_start_module_response_fields(self) -> None:
-        from agentic_mesh_protocol.module.v1 import lifecycle_pb2
-
-        msg = lifecycle_pb2.StartModuleResponse()
-        fields = [f.name for f in msg.DESCRIPTOR.fields]
-        assert "success" in fields
-        assert "output" in fields
-        assert "job_id" in fields
+        """``success`` / ``output`` moved into the ``ModuleResult result`` envelope."""
+        fields = {f.name for f in module_dto_pb2.StartModuleResponse.DESCRIPTOR.fields}
+        assert fields == {"job_id", "result"}
 
 
 # ===========================================================================
-# Proto serialization round-trip — flat StreamOutput
+# Proto serialization round-trip — flat Stream frames
 # ===========================================================================
 
 
-@SKIP_NO_GATEWAY
 class TestProtoSerialization:
     """Verify proto messages serialize and deserialize correctly."""
 
-    def test_stream_output_roundtrip(self) -> None:
-        from google.protobuf import json_format, struct_pb2
-
-        from agentic_mesh_protocol.gateway.v1 import gateway_pb2
-
+    def test_stream_response_roundtrip(self) -> None:
         data = struct_pb2.Struct()
         data.update({"root": {"protocol": "message", "content": "hello"}})
 
-        out = gateway_pb2.StreamServer(seq=42, data=data)
-        serialized = out.SerializeToString()
-        restored = gateway_pb2.StreamServer()
-        restored.ParseFromString(serialized)
+        restored = gateway_messages_pb2.StreamResponse()
+        restored.ParseFromString(
+            gateway_messages_pb2.StreamResponse(seq=42, task_id="t1", data=data).SerializeToString()
+        )
 
         assert restored.seq == 42
         d = json_format.MessageToDict(restored.data)
@@ -236,28 +197,29 @@ class TestProtoSerialization:
         assert d["root"]["protocol"] == "message"
 
     def test_stream_request_init_roundtrip(self) -> None:
-        from agentic_mesh_protocol.gateway.v1 import gateway_pb2
-
-        req = gateway_pb2.StreamClient(task_id="t1", from_seq=10)
-        serialized = req.SerializeToString()
-        restored = gateway_pb2.StreamClient()
-        restored.ParseFromString(serialized)
+        restored = gateway_messages_pb2.StreamRequest()
+        restored.ParseFromString(gateway_messages_pb2.StreamRequest(task_id="t1", from_seq=10).SerializeToString())
 
         assert restored.task_id == "t1"
         assert restored.from_seq == 10
-        # Empty data Struct: no fields
         assert len(restored.data.fields) == 0
 
     def test_stream_request_data_roundtrip(self) -> None:
-        from google.protobuf import struct_pb2
-
-        from agentic_mesh_protocol.gateway.v1 import gateway_pb2
-
         data = struct_pb2.Struct()
         data.update({"upstream": "input"})
-        req = gateway_pb2.StreamClient(data=data)
-        serialized = req.SerializeToString()
-        restored = gateway_pb2.StreamClient()
-        restored.ParseFromString(serialized)
+        restored = gateway_messages_pb2.StreamRequest()
+        restored.ParseFromString(gateway_messages_pb2.StreamRequest(data=data).SerializeToString())
 
         assert restored.data.fields["upstream"].string_value == "input"
+
+    def test_frames_are_wire_compatible(self) -> None:
+        """The dial-back re-wraps a StreamResponse as a StreamRequest: seq lands in from_seq."""
+        data = struct_pb2.Struct()
+        data.update({"root": {"protocol": "stream.end"}})
+        as_request = gateway_messages_pb2.StreamRequest.FromString(
+            gateway_messages_pb2.StreamResponse(seq=7, task_id="t1", data=data).SerializeToString()
+        )
+
+        assert as_request.from_seq == 7
+        assert as_request.task_id == "t1"
+        assert as_request.data == data

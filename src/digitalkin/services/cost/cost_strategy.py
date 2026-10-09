@@ -84,7 +84,7 @@ class CostStrategy(BaseStrategy, ABC):
         names: list[str] | None = None,
         cost_types: list[Literal["TOKEN_INPUT", "TOKEN_OUTPUT", "API_CALL", "STORAGE", "TIME", "OTHER"]] | None = None,
     ) -> list[CostData]:
-        """Get filtered costs."""
+        """Get the costs of the mission matching every given filter; an absent or empty filter does not constrain."""
 
     @abstractmethod
     async def get_cost_config(self) -> list[CostConfig]:

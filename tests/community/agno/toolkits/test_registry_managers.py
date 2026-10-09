@@ -11,8 +11,8 @@ from pydantic import ValidationError
 
 from digitalkin.community.agno.toolkits import KinsManager, ServicesManager, ToolsManager
 from digitalkin.community.agno.toolkits.registry.action import (
-    DeleteAction,
     ChangeVisibilityAction,
+    DeleteAction,
     GetAction,
     ListVersionsAction,
     SearchAction,
@@ -26,7 +26,6 @@ from digitalkin.community.agno.toolkits.registry.services.action import (
     UpdateServiceAction,
 )
 from digitalkin.grpc_servers.exceptions import PermissionDeniedError
-from digitalkin.services.registry.exceptions import RegistryServiceError
 from digitalkin.models.services.registry import (
     ModuleInfo,
     RegistryModuleType,
@@ -38,6 +37,7 @@ from digitalkin.models.services.registry import (
 )
 from digitalkin.models.services.storage import Visibility
 from digitalkin.services.registry import DefaultRegistry
+from digitalkin.services.registry.exceptions import RegistryServiceError
 from digitalkin.services.setup.default_setup import DefaultSetup
 from digitalkin.services.setup.exceptions import SetupServiceError
 from digitalkin.services.setup.setup_strategy import SetupData, SetupVersionData
@@ -51,7 +51,8 @@ _SEED = [
 _NAMES = {"setups:duda": "Duda Builder", "setups:nikita": "Nikita", "setups:isaac": "Isaac"}
 _TAGS = {"setups:duda": ["Web", "builder"], "setups:nikita": ["branding"], "setups:isaac": ["agent"]}
 _DOCS = {
-    "setups:duda": "Builds websites. " + "x" * 400,
+    # At the proto cap: SetupSummary.documentation is max_len 300.
+    "setups:duda": "Builds websites. " + "x" * 283,
     "setups:nikita": "Branding service",
     "setups:isaac": "Multi-agent kin",
 }
@@ -185,9 +186,10 @@ class TestSearchFiltersByType:
         assert "config" not in raw
         assert "MUST-NOT-LEAK" not in raw
 
-    async def test_search_truncates_description(self) -> None:
+    async def test_search_passes_documentation_through_whole(self) -> None:
+        """The proto caps setup documentation at 300 characters, so the row no longer trims it."""
         env = _env(await ToolsManager(*_stores()).tools_manager(SearchAction(query="duda")))
-        assert len(env["output"]["setups"][0]["description"]) == 300
+        assert env["output"]["setups"][0]["documentation"] == _DOCS["setups:duda"]
 
 
 class TestSearchLimit:
@@ -622,14 +624,8 @@ class TestVisibilityVocabulary:
         fresh = base.model_copy(deep=True, update={"visibility": Visibility.INTERNAL})  # committed state
         fresh.current_setup_version.version = "1.0.1"  # a concurrent update bumped the version
 
-        async def _cv(_payload: dict[str, Any]) -> SetupData:
-            return stale
-
-        async def _get(_payload: dict[str, Any]) -> SetupData:
-            return fresh
-
-        setup.change_visibility = _cv  # type: ignore[method-assign]
-        setup.get_setup = _get  # type: ignore[method-assign]
+        setup.change_visibility = AsyncMock(return_value=stale)  # type: ignore[method-assign]
+        setup.get_setup = AsyncMock(return_value=fresh)  # type: ignore[method-assign]
 
         env = _env(
             await ServicesManager(setup, reg).services_manager(
@@ -864,7 +860,7 @@ class TestVersionHistory:
         await manager.kins_manager(
             UpdateAction(setup_id=created.id, name="isaac", content={"tone": "loud"}, documentation="")
         )
-        assert await self._documentation(manager, created.id) == ""
+        assert not await self._documentation(manager, created.id)
 
     async def test_update_activates_the_new_version_by_default(self) -> None:
         manager, setup_id = await self._kin()
@@ -1081,7 +1077,8 @@ class TestOrphanedSetups:
 
         class _Unreachable(DefaultRegistry):
             async def discover_by_id(self, module_id: str) -> ModuleInfo:
-                raise RegistryServiceError("registry unreachable")
+                msg = "registry unreachable"
+                raise RegistryServiceError(msg)
 
         env = _env(
             await ServicesManager(setup, _Unreachable("", "", "")).services_manager(DeleteAction(setup_id=setup_id))
@@ -1210,18 +1207,100 @@ class TestScopedRead:
 
         assert env["output"] == {"llm": {"provider": "litellm", "model": "gpt-4o"}, "region": "eu-west"}
 
-    async def test_load_with_an_unknown_key_returns_the_whole_document(self) -> None:
-        """The wire has no way to say "no such key": an unresolvable one sends everything.
+    async def test_load_with_an_unknown_key_fails_with_not_found(self) -> None:
+        """The backend answers NOT_FOUND for a key the configuration does not have.
 
-        So a mistyped key is not an error, it is a silently expensive read — the reason the
-        key must be copied from the structure map rather than composed.
+        The declaration says so too: an agent told a bad key returns everything would guard
+        against an over-read and never handle the failure it actually receives.
         """
         svc, setup_id = await self._service()
 
-        env = _env(await svc.services_manager(LoadServiceAction(setup_id=setup_id, key="llm.nope")))
+        envelope = json.loads(await svc.services_manager(LoadServiceAction(setup_id=setup_id, key="llm.nope")))
 
-        assert env["metadata"]["success"] is True
-        assert env["output"] == {"llm": {"provider": "litellm", "model": "gpt-4o"}, "region": "eu-west"}
+        assert envelope["metadata"]["success"] is False
+        assert "no path llm.nope" in envelope["error"]
+        assert "output" not in envelope
+
+    @pytest.mark.regression
+    def test_the_declaration_matches_the_not_found(self) -> None:
+        """Regression (QA D6): the load contract promised the whole document on a bad key."""
+        schema = json.dumps(LoadServiceAction.model_json_schema())
+
+        assert "not found" in schema
+        assert "returns the whole document" not in schema
+
+    @staticmethod
+    async def _service_indexed(structure: dict[str, str]) -> tuple[ServicesManager, str]:
+        """A services manager whose one setup carries ``structure``, indexed by the registry search too."""
+        setup, registry = _stores()
+        created = await setup.create_setup({
+            "name": "N",
+            "content": {"llm": {"model": "gpt-4o"}},
+            "structure": structure,
+        })
+
+        class _WithMap(DefaultRegistry):
+            async def search_setups(self, *args: Any, **kwargs: Any) -> list[SetupSummary]:
+                return [
+                    SetupSummary(
+                        setup_id=created.id, name="N", module_type=RegistryModuleType.SERVICE, structure=structure
+                    )
+                ]
+
+        indexed = _WithMap("", "", "")
+        indexed._modules = registry._modules
+        return ServicesManager(setup, indexed), created.id
+
+    @pytest.mark.regression
+    async def test_get_serves_the_structure_the_structure_action_serves(self) -> None:
+        """Regression (QA D1): ``get`` showed ``{}`` over a 7-key map; the setup version now carries it."""
+        svc, setup_id = await self._service_indexed({"llm.model": "which model answers"})
+
+        got = _env(await svc.services_manager(GetAction(setup_id=setup_id)))
+        shape = _env(await svc.services_manager(StructureServiceAction(setup_id=setup_id)))
+
+        assert got["output"]["current_setup_version"]["structure"] == {"llm.model": "which model answers"}
+        assert got["output"]["current_setup_version"]["structure"] == shape["output"]
+
+    @pytest.mark.regression
+    async def test_get_keeps_the_key_when_no_map_is_indexed(self) -> None:
+        """Regression (QA D1 replay): omitting the key moved D7's KeyError from search to get."""
+        svc, setup_id = await self._service_indexed({})
+
+        env = _env(await svc.services_manager(GetAction(setup_id=setup_id)))
+
+        assert env["output"]["current_setup_version"]["structure"] == {}
+
+    @pytest.mark.regression
+    async def test_set_version_serves_the_structure(self) -> None:
+        """Regression (QA D1): the version a SetCurrentSetupVersion returns carries its map too."""
+        svc, setup_id = await self._service_indexed({"llm.model": "which model answers"})
+        versions = _env(await svc.services_manager(ListVersionsAction(setup_id=setup_id)))["output"]["versions"]
+
+        env = _env(
+            await svc.services_manager(
+                SetVersionAction(setup_id=setup_id, setup_version_id=versions[0]["setup_version_id"])
+            )
+        )
+
+        assert env["output"]["current_setup_version"]["structure"] == {"llm.model": "which model answers"}
+
+    async def test_change_visibility_serves_the_structure(self) -> None:
+        svc, setup_id = await self._service_indexed({"llm.model": "which model answers"})
+
+        env = _env(await svc.services_manager(ChangeVisibilityAction(setup_id=setup_id, visibility="internal")))
+
+        assert env["output"]["current_setup_version"]["structure"] == {"llm.model": "which model answers"}
+
+    async def test_a_tools_get_carries_no_structure(self) -> None:
+        """Tools have no map, so their reads never show the key — nor pay the search call."""
+        setup, registry = _stores()
+        registry.search_setups = AsyncMock()  # type: ignore[method-assign]
+
+        env = _env(await ToolsManager(setup, registry).tools_manager(GetAction(setup_id="setups:duda")))
+
+        assert "structure" not in env["output"]["current_setup_version"]
+        registry.search_setups.assert_not_awaited()
 
     async def test_structure_returns_the_stored_map_and_no_content(self) -> None:
         setup, registry = _stores()
@@ -1298,13 +1377,14 @@ class TestSearchRowsCarryTheStructure:
 
         assert env["output"]["setups"][0]["structure"] == {"llm.model": "which model answers"}
 
-    async def test_a_row_without_a_stored_map_omits_the_key(self) -> None:
-        """Only service setups carry a map, so an empty one is left out rather than rendered."""
+    @pytest.mark.regression
+    async def test_a_service_row_without_a_stored_map_renders_it_empty(self) -> None:
+        """Regression (QA D7): every service row carries the key, so iterating rows cannot KeyError."""
         setup, _ = _stores()
 
         env = _env(await ServicesManager(setup, self._registry_returning({})).services_manager(SearchAction(query="")))
 
-        assert "structure" not in env["output"]["setups"][0]
+        assert env["output"]["setups"][0]["structure"] == {}
 
     @pytest.mark.regression
     async def test_a_row_never_carries_configuration_values(self) -> None:
@@ -1343,6 +1423,41 @@ class TestStructureFieldValidation:
         assert StructureServiceAction.writes is False
 
 
+@pytest.mark.validation
+class TestDocumentationCap:
+    """The action schema carries the protocol's 300-character cap, so the agent sees it up front."""
+
+    def test_create_rejects_documentation_over_the_cap(self) -> None:
+        with pytest.raises(ValidationError, match="at most 300 characters"):
+            CreateServiceAction(name="n", content={"a": 1}, structure={}, documentation="x" * 301)
+
+    def test_update_rejects_documentation_over_the_cap(self) -> None:
+        with pytest.raises(ValidationError, match="at most 300 characters"):
+            UpdateAction(setup_id="s", name="n", content={"a": 1}, documentation="x" * 301)
+
+    def test_documentation_at_the_cap_is_accepted(self) -> None:
+        assert (
+            len(CreateServiceAction(name="n", content={"a": 1}, structure={}, documentation="x" * 300).documentation)
+            == 300
+        )
+
+    def test_the_cap_is_declared_in_the_schema(self) -> None:
+        assert CreateServiceAction.model_json_schema()["properties"]["documentation"]["maxLength"] == 300
+
+    async def test_a_raw_call_over_the_cap_fails_cleanly(self) -> None:
+        raw = await ServicesManager(*_stores()).services_manager({
+            "action": "create",
+            "name": "n",
+            "content": {"a": 1},
+            "structure": {},
+            "documentation": "x" * 301,
+        })
+
+        envelope = json.loads(raw)
+        assert envelope["metadata"]["success"] is False
+        assert "documentation" in envelope["error"]
+
+
 @pytest.mark.edge_case
 class TestScopedReadBoundaries:
     """Boundaries of the two-step read that the happy path does not reach."""
@@ -1373,8 +1488,8 @@ class TestScopedReadBoundaries:
     async def test_a_malformed_key_fails_instead_of_returning_everything(self) -> None:
         """An unparseable path is a caller bug, so it is refused rather than read.
 
-        Distinct from a merely *unresolvable* key, which the wire answers with the whole
-        document. Here the path cannot be decoded at all.
+        Distinct from a merely *unresolvable* key, which the wire answers with NOT_FOUND.
+        Here the path cannot be decoded at all.
         """
         svc, setup_id = await self._service({"a": 1}, {"a": "the a knob"})
 

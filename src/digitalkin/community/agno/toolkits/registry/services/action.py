@@ -51,9 +51,10 @@ class CreateServiceAction(RegistryAction):
     )
     documentation: str = Field(
         default="",
-        description="Free text describing what this service is for and when to use it. It is "
-        "what ``search`` matches on and previews back, so a service created without it is "
-        "findable only by name.",
+        max_length=300,
+        description="Free text describing what this service is for and when to use it, at most "
+        "300 characters. It is what ``search`` matches on and returns, so a service created "
+        "without it is findable only by name.",
     )
     structure: dict[str, str] = Field(
         ...,
@@ -101,8 +102,7 @@ class StructureServiceAction(RegistryAction):
             The key map, or an empty dict when the setup carries none.
         """
         await ctx.ensure_kind(self.setup_id)
-        found = await ctx.registry.search_setups(setup_ids=[self.setup_id], module_types=[ctx.module_type], limit=1)
-        return found[0].structure if found else {}
+        return await ctx.structure_of(self.setup_id)
 
 
 class LoadServiceAction(RegistryAction):
@@ -114,8 +114,8 @@ class LoadServiceAction(RegistryAction):
         default=None,
         description="One key path copied verbatim from the service's structure map, to read just "
         "that part of the configuration. Copy it, do not compose it: a key the configuration "
-        "does not have is not an error, it returns the whole document. Omit the key to load "
-        "everything deliberately, when the configuration is small or genuinely needed in full.",
+        "does not have fails with not found. Omit the key to load everything deliberately, "
+        "when the configuration is small or genuinely needed in full.",
     )
 
     async def execute(self, ctx: RegistryActionCtx) -> Any:
@@ -125,11 +125,11 @@ class LoadServiceAction(RegistryAction):
         internal configuration — the most dangerous type-confusion, since the response
         carries no field the caller could use to notice it read the wrong kind. The read
         itself passes ``key`` to the setup service, so the narrowing happens where the
-        document lives; a key the configuration does not have returns the whole document
-        rather than an error, which is what the wire does.
+        document lives; a key the configuration does not have is refused as not found,
+        which is what the wire does.
 
         Returns:
-            ``{key: value}`` for a key that resolves, otherwise the whole configuration.
+            The part of the configuration ``key`` names, or the whole configuration without one.
         """
         await ctx.ensure_kind(self.setup_id)
         setup = await ctx.setup.get_setup({"setup_id": self.setup_id, "structure_key": self.key or ""})

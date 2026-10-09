@@ -65,7 +65,7 @@ class _InMemoryStorage(StorageStrategy):
         prefix = f"{context}|{collection}:"
         return [r for k, r in self._store_data.items() if k.startswith(prefix)]
 
-    async def _remove_collection(self, collection: str, context: str, record_id: str = "") -> bool:
+    async def _remove_collection(self, collection: str, context: str) -> bool:
         prefix = f"{context}|{collection}:"
         keys = [k for k in self._store_data if k.startswith(prefix)]
         for k in keys:

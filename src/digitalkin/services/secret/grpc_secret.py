@@ -3,7 +3,7 @@
 from typing import Any
 
 from agentic_mesh_protocol.user_profile.v1 import (
-    user_profile_pb2,
+    user_profile_dto_pb2,
     user_profile_service_pb2_grpc,
 )
 
@@ -55,17 +55,19 @@ class GrpcSecret(SecretStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
             SecretServiceError: If the gRPC operation fails.
         """
         async with self.handle_grpc_errors("GetSetupSecret", SecretServiceError):
-            request = user_profile_pb2.GetSetupSecretRequest(setup_id=self.setup_id, mission_id=self.mission_id)
+            request = user_profile_dto_pb2.GetSetupSecretRequest(setup_id=self.setup_id, mission_id=self.mission_id)
             response = await self.exec_grpc_query("GetSetupSecret", request)
-            if not response.success:
+            if response.result.WhichOneof("outcome") == "error":
                 # TODO(validate): SECRET-FETCH setup secrets are fetched per setup/mission
                 logger.info(
-                    "[VALIDATE SECRET-FETCH] secret fetch: setup_id=%s mission_id=%s success=False",
+                    "[VALIDATE SECRET-FETCH] secret fetch: setup_id=%s mission_id=%s error=%s %s",
                     self.setup_id,
                     self.mission_id,
+                    response.result.error.code,
+                    response.result.error.message,
                 )
                 return None
-            secret = ProtoUtils.proto_to_dict(response.secret, with_defaults=True)
+            secret = ProtoUtils.proto_to_dict(response.result.secret, with_defaults=True)
             # TODO(validate): SECRET-FETCH setup secrets are fetched per setup/mission
             logger.info(
                 "[VALIDATE SECRET-FETCH] secret fetch: setup_id=%s mission_id=%s success=True keys=%d",

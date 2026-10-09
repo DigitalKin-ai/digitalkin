@@ -1,9 +1,13 @@
-"""Registry documentation assembly: enforced author description + LLM trigger table."""
+"""Registry registration payload: enforced documentation with its trigger table, and the module schemas."""
 
+import json
 from typing import Literal
 from unittest.mock import Mock
 
+import protovalidate
 import pytest
+from agentic_mesh_protocol.registry.v1 import registry_dto_pb2
+from google.protobuf import json_format
 from pydantic import BaseModel
 
 from digitalkin.models.module.base_types import DataModel, DataTrigger
@@ -82,3 +86,43 @@ async def test_default_registry_stores_documentation() -> None:
     info = await registry.register("modules:x", "localhost", 50051, "1.0.0", documentation="indexed docs")
     assert info is not None
     assert info.documentation == "indexed docs"
+
+
+async def test_registry_schemas_cover_every_module_schema_but_user_info() -> None:
+    mod = _module()
+    schemas = await mod.build_registry_schemas()
+    assert set(schemas) == {
+        "input_schema",
+        "select_input_schema",
+        "output_schema",
+        "setup_schema",
+        "secret_schema",
+        "config_setup_schema",
+        "cost_schema",
+    }
+    assert schemas["input_schema"] == json.loads(await mod.get_input_format(llm_format=False))
+    assert schemas["setup_schema"] == json.loads(await mod.get_setup_format(llm_format=False))
+
+
+async def test_undeclared_registry_schema_is_sent_empty() -> None:
+    mod = _module()
+    mod.secret_format = None
+    schemas = await mod.build_registry_schemas()
+    assert schemas["secret_schema"] == {}
+
+
+async def test_registry_schemas_satisfy_register_module_request_validation() -> None:
+    mod = _module()
+    mod.output_format = None
+    request = registry_dto_pb2.RegisterModuleRequest(
+        module_id="modules:test", address="localhost", port=50051, version="1.0.0", type="SERVICE"
+    )
+    json_format.ParseDict(await mod.build_registry_schemas(), request)
+    assert protovalidate.collect_violations(request) == []
+
+
+async def test_default_registry_accepts_schemas() -> None:
+    registry = DefaultRegistry("", "", "")
+    info = await registry.register("modules:x", "localhost", 50051, "1.0.0", schemas={"input_schema": {}})
+    assert info is not None
+    assert info.module_id == "modules:x"

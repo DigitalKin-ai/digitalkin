@@ -158,6 +158,20 @@ class RegistryActionCtx(BaseActionCtx):
             raise ValueError(msg)
         return setup
 
+    async def structure_of(self, setup_id: str) -> dict[str, str]:
+        """Read a setup's stored key map from the registry search.
+
+        Like every search, it follows the index, which may briefly lag right after a write.
+
+        Args:
+            setup_id: The setup whose map to read.
+
+        Returns:
+            The map, or ``{}`` when the search summary carries none.
+        """
+        found = await self.registry.search_setups(setup_ids=[setup_id], module_types=[self.module_type], limit=1)
+        return found[0].structure if found else {}
+
 
 class RegistryAction(BaseAction[RegistryActionCtx], ABC):
     """Base for the discriminated registry actions shared across the three CRUD managers.
@@ -364,6 +378,14 @@ class RegistryObjectToolKit(DkToolkit):
             visibility = data.get("visibility")
             if isinstance(visibility, str) and visibility.startswith("VISIBILITY_"):
                 data["visibility"] = visibility.removeprefix("VISIBILITY_").lower()
+            # A None map means the version carries none, as on every tools and kins read.
+            # Rendering it would put the feature on their surface.
+            version = data.get("current_setup_version")
+            if isinstance(version, dict) and "structure" in version and version["structure"] is None:
+                logger.info(
+                    "[VALIDATE STRUCTREAD] uncarried structure omitted: setup_id=%s", data.get("id")
+                )  # TODO(validate): remove after prod validation
+                del version["structure"]
             return data
         if isinstance(value, ProtoMessage):
             return ProtoUtils.proto_to_dict(value)

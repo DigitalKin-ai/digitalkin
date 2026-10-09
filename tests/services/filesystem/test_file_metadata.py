@@ -3,7 +3,7 @@
 from pathlib import Path
 
 import pytest
-from agentic_mesh_protocol.filesystem.v1 import filesystem_pb2
+from agentic_mesh_protocol.filesystem.v1 import filesystem_enums_pb2, filesystem_messages_pb2
 from pydantic import BaseModel, ConfigDict
 
 from digitalkin.models.services.filesystem import FileMetadata, FileType, FileUploadMetadata
@@ -30,7 +30,9 @@ class TestFileTypeCoercion:
 
     def test_every_member_matches_the_proto_enum(self) -> None:
         """The SDK enum and the wire enum cannot drift apart."""
-        assert {t.value for t in FileType} == set(filesystem_pb2.FileType.keys())
+        assert {t.name for t in FileType} == {
+            name.removeprefix("FILE_TYPE_") for name in filesystem_enums_pb2.FileType.DESCRIPTOR.values_by_name
+        }
 
 
 class TestFileTypeFromContentType:
@@ -140,13 +142,13 @@ class TestRoundTrip:
     def test_the_wire_conversion_is_symmetric(self) -> None:
         """Encoding then decoding a type returns the same member, for every member."""
         for file_type in FileType:
-            proto = filesystem_pb2.File(
-                file_id="files:1",
+            proto = filesystem_messages_pb2.File(
+                id="files:1",
                 context="missions:m1",
                 name="a.txt",
-                file_type=filesystem_pb2.FileType.Value(file_type.value),
+                type=GrpcFilesystem._file_type_to_enum(file_type),
                 storage_uri="gs://b/a.txt",
-                file_url="https://example.test/a.txt",
+                url="https://example.test/a.txt",
             )
             assert GrpcFilesystem._file_proto_to_data(proto).type is file_type
 
@@ -158,13 +160,13 @@ class TestRoundTrip:
             UploadFileData(content=b"x", name="a.png", type=FileType.IMAGE, content_type="image/png")
         ])
         remote = GrpcFilesystem._file_proto_to_data(
-            filesystem_pb2.File(
-                file_id="files:1",
+            filesystem_messages_pb2.File(
+                id="files:1",
                 context="missions:m1",
                 name="a.png",
-                file_type=filesystem_pb2.FileType.FILE_TYPE_IMAGE,
+                type=filesystem_enums_pb2.IMAGE,
                 storage_uri="gs://b/a.png",
-                file_url="https://example.test/a.png",
+                url="https://example.test/a.png",
             )
         )
         assert records[0].type is remote.type
@@ -193,7 +195,7 @@ class TestRegisteredMetadataModel:
         assert uploaded == 1
         assert records[0].metadata == {"author": "gmx"}
 
-        with pytest.raises(FilesystemServiceError, match="Invalid metadata for file 'bad.txt'"):
+        with pytest.raises(FilesystemServiceError, match=r"Invalid metadata for file 'bad\.txt'"):
             await filesystem.upload_files([
                 UploadFileData(content=b"x", name="bad.txt", type=FileType.DOCUMENT, metadata={"nope": 1})
             ])

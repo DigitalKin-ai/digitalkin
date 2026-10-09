@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from agentic_mesh_protocol.gateway.v1 import gateway_pb2
+from agentic_mesh_protocol.gateway.v1 import gateway_dto_pb2, gateway_messages_pb2
 from google.protobuf import struct_pb2
 
 from digitalkin.core.task_manager.module_runner import ModuleRunner
@@ -115,9 +115,7 @@ class TestSlidingTtlReal:
         async def _body(emit: Any) -> None:
             await emit(_Out({"root": {"protocol": "data", "value": 1}}))
             await asyncio.sleep(1.2)
-            request = MagicMock()
-            request.task_id = "tr4"
-            request.action = gateway_pb2.CANCEL
+            request = gateway_dto_pb2.SendSignalRequest(cancel=gateway_messages_pb2.CancelSignal(task_id="tr4"))
             resp = await GatewayServicer(redis_client=redis_client).SendSignal(request, MagicMock())
             assert resp.success is True
 

@@ -44,7 +44,7 @@ class ServicesManager(RegistryObjectToolKit):
                 "result with a 'structure' map of key path -> what lives there ('structure' fetches "
                 "the same map for an id you already hold), then 'load' with a key copied verbatim "
                 "from it returns just that part. Copy the key, never invent one: a key the "
-                "configuration does not have quietly returns everything. Load without a key only when "
+                "configuration does not have fails with not found. Load without a key only when "
                 "the whole document is genuinely needed. On create and update you write that map "
                 "yourself, describing what "
                 "each key is for — it is how other agents find their way around the configuration."
