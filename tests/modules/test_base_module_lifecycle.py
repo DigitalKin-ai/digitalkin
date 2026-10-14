@@ -61,6 +61,7 @@ _SERVICE_NAMES = {
     "cost",
     "filesystem",
     "identity",
+    "knowledge",
     "registry",
     "secret",
     "storage",

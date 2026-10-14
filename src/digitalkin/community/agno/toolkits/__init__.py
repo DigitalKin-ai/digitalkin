@@ -8,6 +8,7 @@ Requires the optional ``agno`` dependency — importing this subpackage without
 from digitalkin.community.agno.toolkits.base import DkToolkit
 from digitalkin.community.agno.toolkits.chat_history import ChatHistoryTools
 from digitalkin.community.agno.toolkits.defaults import DefaultToolkits
+from digitalkin.community.agno.toolkits.knowledge import KnowledgeTools
 from digitalkin.community.agno.toolkits.registry.kins.kit import KinsManager
 from digitalkin.community.agno.toolkits.registry.loader.kit import LoadManager
 from digitalkin.community.agno.toolkits.registry.services.kit import ServicesManager
@@ -19,6 +20,7 @@ __all__ = [
     "DefaultToolkits",
     "DkToolkit",
     "KinsManager",
+    "KnowledgeTools",
     "LoadManager",
     "ServicesManager",
     "ToolsManager",
