@@ -251,7 +251,7 @@ class SetupModel(BaseModel, Generic[SetupModelT]):
         return results
 
     @classmethod
-    async def _refresh_annotation(cls, annotation: "type | None") -> "type | None":
+    async def _refresh_annotation(cls, annotation: Any) -> "type | None":
         """Refresh dynamic fields in an annotation, handling Unions and single models.
 
         Args:

@@ -4,7 +4,7 @@ import asyncio
 from collections.abc import AsyncGenerator, Callable
 from datetime import tzinfo
 from types import SimpleNamespace
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
 from google.protobuf import json_format
@@ -27,6 +27,9 @@ from digitalkin.services.setup.setup_strategy import SetupStrategy
 from digitalkin.services.storage.storage_strategy import StorageStrategy
 from digitalkin.services.task_manager.task_manager_strategy import TaskManagerStrategy
 from digitalkin.services.user_profile.user_profile_strategy import UserProfileStrategy
+
+if TYPE_CHECKING:
+    from digitalkin.mixins.agui_mixin import AgUiRunState
 
 
 class Session(SimpleNamespace):
@@ -116,6 +119,7 @@ class ModuleContext:
     shared: dict[str, Any]
     tool_cache: ToolCache
     request_metadata: RequestMetadata
+    agui_run: "AgUiRunState | None"
 
     def __init__(  # All service strategies are mandatory constructor args # ruff: ignore[too-many-arguments, too-many-positional-arguments]
         self,
@@ -180,6 +184,7 @@ class ModuleContext:
         self.shared = shared if shared is not None else {}
         self.tool_cache = tool_cache or ToolCache()
         self.request_metadata = RequestMetadata(request_metadata)
+        self.agui_run = None
 
     async def get_module_schemas_by_id(
         self,
@@ -210,6 +215,7 @@ class ModuleContext:
         return await self.communication.get_module_schemas(
             module_address=module_info.address,
             module_port=module_info.port,
+            module_id=module_id,
             llm_format=llm_format,
         )
 
@@ -232,6 +238,7 @@ class ModuleContext:
         return await self.communication.get_module_config_schema(
             module_address=module_info.address,
             module_port=module_info.port,
+            module_id=module_id,
             llm_format=llm_format,
         )
 
@@ -537,6 +544,16 @@ class ModuleContext:
                 # not surface as a benign result — otherwise the parent run never terminates.
                 if isinstance(root, dict) and root.get("protocol") == "stream.error" and root.get("fatal"):
                     msg = f"[{root.get('code', '')}] {root.get('message', '')}"
+                    raise ToolCallError(msg)
+                if isinstance(root, dict) and root.get("protocol") == "stream.cancelled":
+                    # TODO(validate): TOOL-CANCELLED a cancelled tool call fails instead of returning a result
+                    logger.info(
+                        "[VALIDATE TOOL-CANCELLED] tool '%s' was cancelled: %s",
+                        tool_function.__name__,
+                        root.get("reason", ""),
+                        extra=session.current_ids(),
+                    )
+                    msg = f"[CANCELLED] {root.get('reason') or 'cancelled'}"
                     raise ToolCallError(msg)
                 yield frame
 

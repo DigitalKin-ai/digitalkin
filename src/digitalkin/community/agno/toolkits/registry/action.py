@@ -16,6 +16,7 @@ from pydantic import Field
 from digitalkin.community.agno.toolkits.registry.base import RegistryAction
 from digitalkin.logger import logger
 from digitalkin.models.services.registry import (
+    RegistryModuleType,
     RegistrySetupStatus,
     RegistrySortBy,
     RegistryVisibility,
@@ -36,7 +37,7 @@ class GetAction(RegistryAction):
         """Read the setup (always its current version), refusing a foreign object type.
 
         Returns:
-            The setup with its current version, status and visibility.
+            The setup with its current version, status and visibility, and a service's key map.
         """
         return await ctx.ensure_kind(self.setup_id)
 
@@ -55,7 +56,6 @@ class SearchAction(RegistryAction):
     this manager's own kind. Filters combine with AND; within one filter the values are OR'd.
     """
 
-    _DOC_PREVIEW_CHARS: ClassVar[int] = 300
     # The service ceiling itself (storage and registry both cap a page at 100), so the toolkit
     # no longer imposes a tighter one of its own.
     _MAX_RESULTS: ClassVar[int] = 100
@@ -125,14 +125,16 @@ class SearchAction(RegistryAction):
         # would both contradict ``total_returned`` and, at exactly ``cap`` rows, promise an empty
         # next page.
         truncated = len(usable) > cap
-        rows = [self._row(setup) for setup in usable[:cap]]
+        rows = [self._row(setup, ctx.module_type) for setup in usable[:cap]]
         return {"total_returned": len(rows), "truncated": truncated, "offset": self.offset, "setups": rows}
 
-    def _row(self, setup: SetupSummary) -> dict[str, Any]:
+    @staticmethod
+    def _row(setup: SetupSummary, module_type: RegistryModuleType) -> dict[str, Any]:
         """Trim one search hit to the fields a caller can act on.
 
         Args:
             setup: The summary returned by the registry.
+            module_type: The manager's object type; only services render a structure map.
 
         Returns:
             The rendered row.
@@ -147,11 +149,16 @@ class SearchAction(RegistryAction):
             "tags": setup.tags,
             "visibility": setup.visibility.value if setup.visibility else None,
             "status": setup.status.value if setup.status else None,
-            "description": (setup.documentation or "")[: self._DOC_PREVIEW_CHARS],
+            "documentation": setup.documentation or None,
         }
-        # Only service setups carry a map. Omitting the key rather than rendering an empty
-        # one keeps the feature out of the tools and kins surfaces entirely.
-        if setup.structure:
+        # Only service setups carry a map, so tools and kins rows never show one. A service row
+        # always does, {} included: a caller iterating rows must not meet a missing key.
+        if module_type == RegistryModuleType.SERVICE:
+            if not setup.structure:
+                logger.info(
+                    "[VALIDATE STRUCTROW] service row rendered with an empty structure: setup_id=%s",
+                    setup.setup_id,
+                )  # TODO(validate): remove after prod validation
             row["structure"] = setup.structure
         return row
 
@@ -182,9 +189,10 @@ class UpdateAction(RegistryAction):
     )
     documentation: str | None = Field(
         default=None,
-        description="Free text describing what this instance is for, indexed by ``search``. "
-        "Omit to keep the text the instance already has; pass a string to replace it, or an "
-        "empty string to clear it.",
+        max_length=300,
+        description="Free text describing what this instance is for, indexed by ``search``, at "
+        "most 300 characters. Omit to keep the text the instance already has; pass a string to "
+        "replace it, or an empty string to clear it.",
     )
 
     def _type_payload(self) -> dict[str, Any]:  # ruff: ignore[no-self-use]

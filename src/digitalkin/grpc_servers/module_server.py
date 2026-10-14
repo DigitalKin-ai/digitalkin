@@ -11,9 +11,12 @@ from digitalkin.core.task_manager.redis import RedisClient
 from digitalkin.core.task_manager.redis.redis_signal import SharedRedisListener
 from digitalkin.grpc_servers._base_server import BaseServer
 from digitalkin.grpc_servers.gateway_servicer import GatewayServicer
+from digitalkin.grpc_servers.interceptors.validation import ValidationServerInterceptor
 from digitalkin.grpc_servers.module_servicer import ModuleServicer
+from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
 from digitalkin.logger import logger
 from digitalkin.models.grpc_servers.models import ClientConfig
+from digitalkin.models.services.registry import RegistryModuleType
 from digitalkin.models.services.services import ServicesMode
 from digitalkin.models.settings.redis import get_redis_settings
 from digitalkin.models.settings.server.server import get_server_settings
@@ -52,9 +55,7 @@ class ModuleServer(BaseServer):
             client_config: Client configuration for services and registry.
             interceptors: Optional gRPC server interceptors.
         """
-        all_interceptors = list(interceptors) if interceptors else []
-
-        super().__init__(interceptors=all_interceptors or None)
+        super().__init__(interceptors=[ValidationServerInterceptor(), *(interceptors or ())])
         self.module_class = module_class
         if client_config is None and EnvManager.services_mode() == ServicesMode.REMOTE:
             client_config = EnvManager.client_config()
@@ -133,40 +134,37 @@ class ModuleServer(BaseServer):
             service_descriptor=gateway_service_pb2.DESCRIPTOR,  # type: ignore[arg-type]  # protobuf FileDescriptor; see above
         )
 
-        logger.info("GatewayServicer + ModuleRunner registered (Redis: %s)", redis_url)
-
         listener = SharedRedisListener.singleton_or_none()
         if listener is not None:
             listener.set_cache_invalidator(self._handle_cache_invalidation)
 
-    async def _handle_cache_invalidation(self, action: str, setup_id: str = "") -> None:
-        """Dispatch cache invalidation by action name.
+    async def _handle_cache_invalidation(self, scope: str, setup_id: str = "") -> None:
+        """Dispatch a cache invalidation by ``CacheScope`` name.
 
-        ``INVALIDATE_SETUP`` and ``INVALIDATE_TOOLS`` require a ``setup_id`` —
-        without one they log a warning and skip. ``INVALIDATE_ALL`` is the only
-        full-wipe path.
+        ``SETUP`` and ``TOOLS`` require a ``setup_id`` — without one they log a
+        warning and skip. ``ALL`` is the only full-wipe path.
 
         Args:
-            action: SignalAction enum name (e.g. ``INVALIDATE_SETUP``).
-            setup_id: Setup identifier for scoped invalidation; ignored by full-wipe actions.
+            scope: ``CacheScope`` value name (e.g. ``SETUP``).
+            setup_id: Setup identifier for scoped invalidation; ignored by full-wipe scopes.
         """
-        handlers: dict[str, Any] = {
-            "INVALIDATE_ALL": self._invalidate_all,
-            "INVALIDATE_CHANNELS": self._invalidate_channels,
-            "INVALIDATE_MODELS": self._invalidate_models,
-            "INVALIDATE_SETUP": self._invalidate_setup,
-            "INVALIDATE_TOOLS": self._invalidate_tools,
-            "INVALIDATE_SHARED": self._invalidate_shared,
-        }
-        handler = handlers.get(action)
-        if handler is None:
-            logger.warning("Unknown invalidation action: %s", action)
-            return
-        if action in {"INVALIDATE_SETUP", "INVALIDATE_TOOLS"}:
-            await handler(setup_id)
-        else:
-            await handler()
-        logger.info("Cache invalidated: %s setup_id=%s", action, setup_id or "<all>")
+        match scope:
+            case "ALL":
+                await self._invalidate_all()
+            case "CHANNELS":
+                await self._invalidate_channels()
+            case "MODELS":
+                await self._invalidate_models()
+            case "SETUP":
+                await self._invalidate_setup(setup_id)
+            case "TOOLS":
+                await self._invalidate_tools(setup_id)
+            case "SHARED":
+                await self._invalidate_shared()
+            case _:
+                logger.warning("Unknown cache scope: %s", scope)
+                return
+        logger.info("Cache invalidated: %s setup_id=%s", scope, setup_id or "<all>")
 
     async def _invalidate_all(self) -> None:
         if self.module_servicer is not None:
@@ -180,7 +178,7 @@ class ModuleServer(BaseServer):
         if self.module_servicer is None:
             return
         if not setup_id:
-            logger.warning("INVALIDATE_SETUP received without setup_id — skipping (scoped-only policy)")
+            logger.warning("SETUP invalidation received without setup_id — skipping (scoped-only policy)")
             return
         self.module_servicer._setup_cache.pop(setup_id, None)  # ruff: ignore[private-member-access]
         self.module_servicer._setup_inflight.pop(setup_id, None)  # ruff: ignore[private-member-access]
@@ -189,7 +187,7 @@ class ModuleServer(BaseServer):
         if self.module_servicer is None:
             return
         if not setup_id:
-            logger.warning("INVALIDATE_TOOLS received without setup_id — skipping (scoped-only policy)")
+            logger.warning("TOOLS invalidation received without setup_id — skipping (scoped-only policy)")
             return
         self.module_servicer._tool_cache_by_setup.pop(setup_id, None)  # ruff: ignore[private-member-access]
 
@@ -222,11 +220,19 @@ class ModuleServer(BaseServer):
         """Initialize registry client, health-check, and register.
 
         Raises:
-            RuntimeError: If client_config is missing, module_id is invalid,
-                registry is unreachable, or registration fails.
+            RuntimeError: If client_config is missing, the module declares no registry_type,
+                module_id is invalid, registry is unreachable, or registration fails.
         """
         if not self.client_config:
             msg = "client_config is required for registry registration"
+            raise RuntimeError(msg)
+
+        if self.module_class.registry_type is RegistryModuleType.UNSPECIFIED:
+            # The registry refuses an UNSPECIFIED type; fail here, naming the fix, not deep in register().
+            msg = (
+                f"Module {self.module_class.__name__} declares no registry_type. "
+                "Subclass ToolModule or ArchetypeModule, or set registry_type = RegistryModuleType.SERVICE."
+            )
             raise RuntimeError(msg)
 
         self.registry = GrpcRegistry("", "", "", self.client_config)
@@ -262,6 +268,7 @@ class ModuleServer(BaseServer):
             version=version,
             module_type=self.module_class.registry_type,
             documentation=self.module_class.build_registry_documentation(),
+            schemas=await self.module_class.build_registry_schemas(),
         )
 
         if not result:
@@ -297,21 +304,18 @@ class ModuleServer(BaseServer):
         if self.client_config is not None:
             await self._init_and_register()
 
-    async def _shutdown_servicer(self) -> None:
-        """Shut down the module servicer and its job manager."""
-        if self.module_servicer is None:
-            return
-        try:
-            await self.module_servicer.shutdown()
-        except Exception:
-            logger.exception("Failed to shutdown module servicer resources")
-        try:
-            await self.module_servicer.job_manager.stop()
-        except Exception:
-            logger.exception("Failed to stop job manager during shutdown")
+    async def stop_async(self, grace: float | None = None) -> None:  # ruff: ignore[complex-structure, too-many-branches]
+        """Stop the module server.
 
-    async def stop_async(self, grace: float | None = None) -> None:
-        """Stop the module server with async cleanup."""
+        Order: stop accepting RPCs (health NOT_SERVING, deregister, server stop within ``grace``),
+        cancel running tasks, stop the gateway, close Redis clients, then close channels.
+
+        Args:
+            grace: Seconds in-flight RPCs get before they are aborted.
+        """
+        if self._health_servicer is not None:
+            self._health_servicer.enter_graceful_shutdown()
+
         if self.registry is not None:
             try:
                 module_id = self.module_class.get_module_id()
@@ -321,7 +325,39 @@ class ModuleServer(BaseServer):
             except Exception:
                 logger.exception("Failed to deregister from registry")
 
-        await self._shutdown_servicer()
+        logger.debug("debug:stop_async stopping gRPC server grace=%s", grace)
+        await self._stop_async(grace)
+
+        if self.module_servicer is not None:
+            # TODO(validate): SHUTDOWN-ORDER the gRPC server stops before running tasks are cancelled
+            logger.info(
+                "[VALIDATE SHUTDOWN-ORDER] server stopped; cancelling %d running tasks",
+                len(self.module_servicer.job_manager.tasks),
+            )
+            try:
+                await self.module_servicer.job_manager.stop()
+            except Exception:
+                logger.exception("Failed to stop job manager during shutdown")
+
+        if self._gateway_servicer is not None:
+            try:
+                await self._gateway_servicer.stop()
+            except Exception:
+                logger.exception("Failed to stop gateway servicer")
+
+        if self.module_servicer is not None:
+            try:
+                await self.module_servicer.shutdown()
+            except Exception:
+                logger.exception("Failed to shutdown module servicer resources")
+
+        if self._gateway_redis_client is not None:
+            # This server created the gateway's Redis client, so it closes it; the gateway only borrows.
+            try:
+                await self._gateway_redis_client.close()
+            except Exception:
+                logger.exception("Failed to close gateway Redis client")
+
         self.module_class.clear_shared()
 
         if self.registry is not None:
@@ -330,19 +366,6 @@ class ModuleServer(BaseServer):
             except Exception:
                 logger.exception("Failed to close registry")
 
-        if self._gateway_servicer is not None:
-            try:
-                await self._gateway_servicer.stop()
-            except Exception:
-                logger.exception("Failed to stop gateway servicer")
-
-        if self._gateway_redis_client is not None:
-            # M8: this server created the gateway's Redis client, so it closes it (owner closes;
-            # the gateway only borrows). Pools were leaked on every server stop.
-            try:
-                await self._gateway_redis_client.close()
-            except Exception:
-                logger.exception("Failed to close gateway Redis client")
-
-        logger.debug("debug:stop_async stopping gRPC server grace=%s", grace)
-        await super().stop_async(grace)
+        await GrpcClientWrapper.close_all_cached_channels()
+        self.server = None
+        logger.debug("Module server stopped")

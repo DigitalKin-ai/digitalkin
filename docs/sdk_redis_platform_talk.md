@@ -16,10 +16,8 @@ style: |
 ---
 
 <!--
-Diagrams here are inline ASCII on purpose: they render natively in Marp and are
-verified against current source. The prebuilt docs/diagrams/*.svg are STALE
-(they show the removed ProduceStream/ConsumeStream/checkpoint/idempotency design)
-and are deliberately NOT referenced. Replace with corrected SVGs only after review.
+Diagrams are inline ASCII so they render natively in Marp; Mermaid sources live in
+docs/diagrams/*.mmd (no prebuilt SVGs).
 -->
 
 # DigitalKin SDK
@@ -87,8 +85,8 @@ Client ── gRPC ──► ModuleServicer.StartModule ──► SingleJobManag
 ```proto
 service GatewayService {
   rpc StartStream(StartStreamRequest) returns (StartStreamResponse);   // unary
-  rpc Stream(stream StreamClient)     returns (stream StreamServer);    // BiDi
-  rpc SendSignal(ClientSignalRequest) returns (ClientSignalResponse);  // unary
+  rpc Stream(stream StreamRequest)    returns (stream StreamResponse);  // BiDi
+  rpc SendSignal(SendSignalRequest)   returns (SendSignalResponse);     // unary
 }
 ```
 
@@ -108,11 +106,11 @@ Source of truth for integrators: **`docs/gateway_protocol.md`** (Python + TS qui
 StartStreamRequest  := { task_id, setup_id, mission_id }
 StartStreamResponse := { accepted, task_id }
 
-StreamClient  := { from_seq, task_id, data: Struct }   // client → gateway
-StreamServer  := { seq,      task_id, data: Struct }   // gateway → client
+StreamRequest   := { from_seq, task_id, data: Struct }   // client → gateway
+StreamResponse  := { seq,      task_id, data: Struct }   // gateway → client
 
-ClientSignalRequest  := { task_id, action: SignalAction }
-ClientSignalResponse := { success, task_id }
+SendSignalRequest  := { oneof signal { cancel: { task_id } | invalidate: { scope: CacheScope } } }
+SendSignalResponse := { success, task_id }
 ```
 
 - No envelopes, no `oneof`. Payload type lives **inside** `data.root.protocol`.
@@ -169,12 +167,13 @@ async for msg in stub.Stream(client_stream()):
 - *Stateful* (durable consumer): track highest `seq`, reconnect with `from_seq=<that>`.
   Gap if `seq != prev+1` → upstream trim. Resume window = Redis stream retention.
 
-**Cancel** — `SendSignal(action=CANCEL, task_id)` → publishes on `signal_ch:<task_id>`; the
-module shuts down; your `Stream` ends with the usual `stream.end`.
+**Cancel** — `SendSignal(cancel=CancelSignal(task_id))` → publishes on `signal_ch:<task_id>`; the
+module shuts down; your `Stream` ends with `stream.cancelled` then `stream.end`.
 
-**Invalidate** — `SendSignal(action=INVALIDATE_*)` is **server-wide**, no task_id, does not touch
+**Invalidate** — `SendSignal(invalidate=InvalidateSignal(scope))` is **server-wide**, no task_id (`SETUP`/`TOOLS` read
+`x-setup-id`), does not touch
 in-flight tasks (dict-swap preserves their refs):
-`INVALIDATE_ALL / CHANNELS / MODELS / SETUP / TOOLS / SHARED`.
+`CacheScope`: `ALL / CHANNELS / MODELS / SETUP / TOOLS / SHARED`.
 
 ---
 
@@ -185,7 +184,7 @@ in-flight tasks (dict-swap preserves their refs):
 
 ## The component map
 
-![w:1080](diagrams/talk-architecture.svg)
+Diagram source: [diagrams/talk-architecture.mmd](diagrams/talk-architecture.mmd)
 
 The gateway holds **no data** — only a session reference + a stop event. Everything durable is in Redis.
 
@@ -193,7 +192,7 @@ The gateway holds **no data** — only a session reference + a stop event. Every
 
 ## Request data flow — end to end
 
-![h:455](diagrams/talk-request-flow.svg)
+Diagram source: [diagrams/talk-request-flow.mmd](diagrams/talk-request-flow.mmd)
 
 `StartStream:156` · `Stream:308` · `_consume_from_redis:542` · `module_runner._on_output:101`
 
@@ -218,7 +217,7 @@ The gateway holds **no data** — only a session reference + a stop event. Every
 
 ## Signal flow — out of band, never in the data path
 
-![w:1080](diagrams/talk-signal-path.svg)
+Diagram source: [diagrams/talk-signal-path.mmd](diagrams/talk-signal-path.mmd)
 
 - **One** `SharedRedisListener` per process (UUID id — `getpid()` is always 1 in Docker).
 - `signal_ch:{task_id}` = per-task (cancel/stop). `signal_ch:_global_` = broadcast (invalidate).
@@ -233,10 +232,10 @@ A module can be a **consumer** of another module. The gateway brokers it; the tw
 
 ```
 Gateway (gRPC client)                         Consumer module (gRPC server)
-   │  StreamClient{ data: stream.init } ─────►│
-   │  ◄──── StreamServer{ data: query } ──────│   consumer sends the query
-   │  StreamClient{ seq=N, data: output } ───►│   gateway pushes outputs (from Redis)
-   │  StreamClient{ data: stream.end } ──────►│   terminator
+   │  StreamRequest{ data: stream.init } ────►│
+   │  ◄──── StreamResponse{ data: query } ────│   consumer sends the query
+   │  StreamRequest{ seq=N, data: output } ──►│   gateway pushes outputs (from Redis)
+   │  StreamRequest{ data: stream.end } ─────►│   terminator
 ```
 
 - Opt in with metadata `x-client-address: host:port` on `StartStream` → gateway **dials back**.
@@ -286,7 +285,7 @@ The cost is a real dependency (a SPOF) and a few ms per hop. Part 4 covers the t
 
 ## The Redis key map (current)
 
-![w:1080](diagrams/talk-redis-keys.svg)
+Diagram source: [diagrams/talk-redis-keys.mmd](diagrams/talk-redis-keys.mmd)
 
 Gone vs the old design: `checkpoint:{id}`, `idem:{id}` (Lua claims), `checkpoints:active`,
 `signal:{id}` hash. Durability now rides on the stream + state hash alone.
@@ -317,14 +316,14 @@ self._blocking_client = Redis.from_url(url, max_connections=blocking_size, decod
 
 ## Streams — the hot path
 
-Two keys per task: **`:stream`** (module → gateway → client) and **`:input`** (client → gateway → module).
+One stream per task: **`:stream`** (module → gateway → client). The query travels by value on the dial-back; follow-up upstream messages are logged and dropped (no `:input` stream).
 
 **Write** — module side, `module_runner._on_output`: a **direct `XADD`** (no writer abstraction).
 
 ```
-seq=0    stream.start            ← seeded by the gateway in StartStream
+seq=0    stream.start            ← seeded by the gateway in StartStream (pipelined with EXPIRE 600s)
 seq=N    XADD :stream {pb, seq}  MAXLEN ~1000 (approx trim)   ← one per output chunk
-first XADD arms EXPIRE 600s ;  stream.end → XADD {eos:"true"} + EXPIRE 60s
+stream.end → XADD {eos:"true"} + EXPIRE 360s on :stream and idem:{id}
 ```
 
 **Read** — gateway side, `ProtoStreamReader`, zero-copy:
@@ -345,16 +344,8 @@ XREAD {:stream: last_id}  block=50ms  count=50   (dedicated blocking pool)
 
 ## State & signals in Redis
 
-**State — the P1 invariant** (`RedisStateManager`):
-
-```python
-pipe.hset("task:{id}", mapping={status, started_at, …})
-pipe.expire("task:{id}", task_ttl)     # HSET + EXPIRE in one round-trip
-await pipe.execute()                    # Redis write BEFORE in-memory update
-```
-
-> If the process dies between the Redis write and the memory update, the system is still
-> consistent — Redis is the source of truth. TTL 24 h, auto-reaped.
+**State** — task status lives in memory on the owning `TaskSession`; there is no `task:{id}` hash.
+Redis holds only `idem:{id}` (claim), `cancel:{id}` (tombstone), `:stream` and `:cursor`, all with a TTL.
 
 **Signals — `SharedRedisListener`**: one `PSUBSCRIBE signal_ch:*` per process; JSON payload
 carries `action`, `published_at_ns` (latency audit), and `origin` (skip self-invalidation).
@@ -446,7 +437,6 @@ signals · capacity/admission control · a 3-RPC surface anyone can integrate ag
 | Cost | Why it's worth it | Mitigation |
 |---|---|---|
 | **Redis is a SPOF** | durability, reconnection, isolation, signals | HA Redis; gateway fails fast on boot if unreachable |
-| **+~1 ms per state write** | crash-consistent state (P1) | HSET+EXPIRE pipelined, 1 RTT |
 | **+~1 ms per output chunk** | durable + resumable output | `maxlen`-bounded stream, batched reads |
 | **+1 gateway hop** | full module isolation + signals | required; ~0.5 ms |
 
@@ -458,7 +448,7 @@ All knobs are `pydantic-settings`, scoped by prefix, read via an `@lru_cache` fa
 
 | Prefix | Controls |
 |---|---|
-| `DIGITALKIN_REDIS_` | pool size/split, `TASK_TTL`, `CURSOR_TTL`, health check |
+| `DIGITALKIN_REDIS_` | pool size/split, `IDEM_TTL`, health check |
 | `DIGITALKIN_REDIS_STREAM_` | `MAXLEN`, `TTL`, batch size |
 | `DIGITALKIN_GATEWAY_` | `MAX_STREAMS`, dial-back idle/lifetime/grace |
 | `DIGITALKIN_GATEWAY_STREAM_` | stream `MAXLEN`/`TTL`, `READ_BLOCK_MS`, `from_seq` ceiling |

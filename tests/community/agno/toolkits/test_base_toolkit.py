@@ -55,3 +55,33 @@ async def test_notify_swallows_send_failure() -> None:
 
     ctx = SimpleNamespace(callbacks=SimpleNamespace(send_message=_boom))
     await _Kit(ctx)._notify("x", 1)  # best-effort: swallowed, never raises
+
+
+async def test_cite_emits_source_citation() -> None:
+    sent: list[Any] = []
+
+    async def _send(message: Any) -> None:
+        sent.append(message)
+
+    ctx = SimpleNamespace(callbacks=SimpleNamespace(send_message=_send))
+    await _Kit(ctx)._cite("https://docs.digitalkin.ai/pricing", description="Pro is 49 €")
+
+    event = sent[0].model_dump(mode="json")["root"]["event"]
+    assert event["name"] == "source_citation"
+    assert event["value"] == {"url": "https://docs.digitalkin.ai/pricing", "description": "Pro is 49 €"}
+
+
+async def test_cite_drops_invalid_url() -> None:
+    sent: list[Any] = []
+
+    async def _send(message: Any) -> None:
+        sent.append(message)
+
+    ctx = SimpleNamespace(callbacks=SimpleNamespace(send_message=_send))
+    await _Kit(ctx)._cite("javascript:alert(1)", title="bad")
+
+    assert sent == []
+
+
+async def test_cite_noop_without_context() -> None:
+    await _Kit(None)._cite("https://x.io")

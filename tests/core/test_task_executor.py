@@ -47,12 +47,14 @@ async def mock_base_module(mock_signal_service: Mock) -> Mock:  # noqa: RUF029
     module.context.session = Mock()
     module.context.session.setup_id = "setup:test"
     module.context.session.setup_version_id = "setup_version:test"
-    module.context.session.current_ids = Mock(return_value={
-        "mission_id": "missions:test",
-        "task_id": "test",
-        "setup_id": "setup:test",
-        "setup_version_id": "setup_version:test",
-    })
+    module.context.session.current_ids = Mock(
+        return_value={
+            "mission_id": "missions:test",
+            "task_id": "test",
+            "setup_id": "setup:test",
+            "setup_version_id": "setup_version:test",
+        }
+    )
     module.context.task_manager = mock_signal_service
     module.context.cleanup = AsyncMock()
     return module
@@ -90,9 +92,7 @@ class TestMainTaskCompletion:
             await asyncio.sleep(0.1)
             execution_log.append("main_end")
 
-        supervisor = await task_executor.execute_task(
-            task_id, mission_id, main_coro(), session
-        )
+        supervisor = await task_executor.execute_task(task_id, mission_id, main_coro(), session)
 
         await supervisor
 
@@ -154,9 +154,7 @@ class TestExceptionHandling:
             msg = "Intentional failure"
             raise ValueError(msg)
 
-        task = await task_executor.execute_task(
-            task_id, mission_id, failing_coro(), session
-        )
+        task = await task_executor.execute_task(task_id, mission_id, failing_coro(), session)
 
         await task  # _run() catches the exception, task completes normally
         assert session.status == "failed"
@@ -199,9 +197,7 @@ class TestExceptionHandling:
             msg = "custom error message"
             raise ValueError(msg)
 
-        task = await task_executor.execute_task(
-            task_id, mission_id, custom_failure(), session
-        )
+        task = await task_executor.execute_task(task_id, mission_id, custom_failure(), session)
 
         await task  # _run() catches the exception
         assert session.status == "failed"
@@ -255,9 +251,7 @@ class TestSignalHandling:
         async def long_main() -> None:
             await asyncio.sleep(10)
 
-        task = await task_executor.execute_task(
-            task_id, mission_id, long_main(), session
-        )
+        task = await task_executor.execute_task(task_id, mission_id, long_main(), session)
 
         await asyncio.sleep(0.05)
         task.cancel()
@@ -291,9 +285,7 @@ class TestCancellation:
         async def long_main() -> None:
             await asyncio.sleep(10)
 
-        task = await task_executor.execute_task(
-            task_id, mission_id, long_main(), session
-        )
+        task = await task_executor.execute_task(task_id, mission_id, long_main(), session)
 
         await asyncio.sleep(0.05)
         task.cancel()
@@ -324,9 +316,7 @@ class TestCancellation:
                 cleanup_log.append("main_cleaned")
                 raise
 
-        supervisor = await task_executor.execute_task(
-            task_id, mission_id, long_main(), session
-        )
+        supervisor = await task_executor.execute_task(task_id, mission_id, long_main(), session)
 
         await asyncio.sleep(0.05)
         supervisor.cancel()
@@ -352,9 +342,7 @@ class TestCancellation:
         async def long_main() -> None:
             await asyncio.sleep(10)
 
-        supervisor = await task_executor.execute_task(
-            task_id, mission_id, long_main(), session
-        )
+        supervisor = await task_executor.execute_task(task_id, mission_id, long_main(), session)
 
         await asyncio.sleep(0.02)
         supervisor.cancel()
@@ -389,9 +377,7 @@ class TestOutcome:
         async def quick_main() -> None:
             await asyncio.sleep(0.02)
 
-        task = await task_executor.execute_task(
-            task_id, mission_id, quick_main(), session
-        )
+        task = await task_executor.execute_task(task_id, mission_id, quick_main(), session)
 
         await task
 
@@ -421,9 +407,7 @@ class TestEdgeCases:
         async def instant_task() -> None:
             pass
 
-        supervisor = await task_executor.execute_task(
-            task_id, mission_id, instant_task(), session
-        )
+        supervisor = await task_executor.execute_task(task_id, mission_id, instant_task(), session)
 
         await supervisor
 
@@ -444,9 +428,96 @@ class TestEdgeCases:
         async def quick_task() -> None:
             await asyncio.sleep(0.01)
 
-        task = await task_executor.execute_task(
-            task_id, mission_id, quick_task(), session
-        )
+        task = await task_executor.execute_task(task_id, mission_id, quick_task(), session)
 
         assert task.get_name() == f"{task_id}_main"
         await task
+
+
+# ============================================================================
+# Test: Cancel before the first step
+# ============================================================================
+
+
+class TestCancelBeforeFirstStep:
+    """A task cancelled before ``_run`` starts still finalizes (slot/session released)."""
+
+    @pytest.mark.asyncio
+    async def test_backstop_runs_finalize_and_closes_coro(
+        self,
+        task_executor: TaskExecutor,
+        mock_base_module: Mock,
+    ) -> None:
+        session = TaskSession("early", "missions:early", mock_base_module)
+        started = False
+
+        async def job() -> None:  # noqa: RUF029
+            nonlocal started
+            started = True
+
+        coro = job()
+        finalized = asyncio.Event()
+
+        async def on_finalize() -> None:  # noqa: RUF029
+            finalized.set()
+
+        session.pending_signal_action = "cancel"
+        task = await task_executor.execute_task("early", "missions:early", coro, session, on_finalize=on_finalize)
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+        await asyncio.wait_for(finalized.wait(), timeout=1.0)
+        # on_finalize fires before the backstop task returns; its discard callback runs a few loop turns later.
+        for _ in range(100):
+            if not task_executor._backstops:
+                break
+            await asyncio.sleep(0)
+        assert not started
+        assert coro.cr_frame is None  # closed, no "never awaited" warning
+        assert session.cancelled
+        assert session.cancellation_reason.value == "signal_service_cancel"
+        assert session.stream_closed
+        assert not task_executor._backstops
+
+    @pytest.mark.asyncio
+    async def test_backstop_idle_when_task_started(
+        self,
+        task_executor: TaskExecutor,
+        mock_base_module: Mock,
+    ) -> None:
+        session = TaskSession("normal", "missions:n", mock_base_module)
+        calls = 0
+
+        async def on_finalize() -> None:  # noqa: RUF029
+            nonlocal calls
+            calls += 1
+
+        async def job() -> None:
+            await asyncio.sleep(0)
+
+        task = await task_executor.execute_task("normal", "missions:n", job(), session, on_finalize=on_finalize)
+        await task
+        await asyncio.sleep(0)
+        assert calls == 1
+        assert not task_executor._backstops
+
+    @pytest.mark.asyncio
+    async def test_stop_signal_records_stop_reason(
+        self,
+        task_executor: TaskExecutor,
+        mock_base_module: Mock,
+    ) -> None:
+        """``stop`` is a hard cancel: same path, reason SIGNAL_SERVICE_STOP."""
+        session = TaskSession("stopme", "missions:s", mock_base_module)
+
+        async def job() -> None:
+            await asyncio.sleep(10)
+
+        task = await task_executor.execute_task("stopme", "missions:s", job(), session)
+        await asyncio.sleep(0)
+        session.pending_signal_action = "stop"
+        task.cancel()
+        await task
+        assert session.status == "cancelled"
+        assert session.cancellation_reason.value == "signal_service_stop"

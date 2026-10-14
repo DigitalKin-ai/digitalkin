@@ -139,27 +139,24 @@ class TestCancellation:
         assert task_session.cancellation_reason == CancellationReason.SIGNAL_SERVICE_CANCEL
 
     @pytest.mark.asyncio
-    async def test_handle_cancel_sends_ack(
-        self, task_session: TaskSession, mock_signal_service: Mock,
+    async def test_handle_cancel_publishes_nothing(
+        self,
+        task_session: TaskSession,
+        mock_signal_service: Mock,
     ) -> None:
-        """Test _handle_cancel sends ACK_CANCEL signal."""
+        """No ack is published: nothing consumed ack_cancel/ack_stop."""
         await task_session._handle_cancel(CancellationReason.SIGNAL_SERVICE_CANCEL)
 
-        mock_signal_service.send_signal.assert_called_once()
-        call_data = mock_signal_service.send_signal.call_args[0][1]
-        assert call_data["action"] == "ack_cancel"
-        assert call_data["cancellation_reason"] == "signal_service_cancel"
+        mock_signal_service.send_signal.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_handle_cancel_ack_failure_silent(
-        self, task_session: TaskSession, mock_signal_service: Mock,
-    ) -> None:
-        """Test _handle_cancel doesn't raise if ack fails."""
-        mock_signal_service.send_signal = AsyncMock(side_effect=Exception("ack failed"))
+    async def test_stop_is_a_hard_cancel_with_stop_reason(self, task_session: TaskSession) -> None:
+        """``stop`` goes through ``_handle_cancel``; only the reason differs."""
+        await task_session._handle_cancel(CancellationReason.SIGNAL_SERVICE_STOP)
 
-        # Should not raise
-        await task_session._handle_cancel(CancellationReason.SIGNAL_SERVICE_CANCEL)
         assert task_session.cancelled
+        assert task_session.status == "cancelled"
+        assert task_session.cancellation_reason == CancellationReason.SIGNAL_SERVICE_STOP
 
     @pytest.mark.asyncio
     async def test_cancel_cleanup_vs_signal_logging(self, task_session: TaskSession) -> None:
@@ -293,6 +290,69 @@ class TestCleanup:
         assert task_session.module is None
         assert task_session._cleanup_done
 
+    @pytest.mark.asyncio
+    async def test_cleanup_stops_module_before_context_cleanup(
+        self,
+        task_session: TaskSession,
+        mock_module: Mock,
+    ) -> None:
+        """module.stop() (which emits stream.end) runs while the context services are still open."""
+        order: list[str] = []
+        mock_module.stop = AsyncMock(side_effect=lambda *_: order.append("stop"))
+        mock_module.context.cleanup = AsyncMock(side_effect=lambda: order.append("context"))
+
+        await task_session.cleanup()
+
+        assert order == ["stop", "context"]
+
+    @pytest.mark.asyncio
+    async def test_cleanup_passes_cancel_reason_when_cancelled(
+        self,
+        task_session: TaskSession,
+        mock_module: Mock,
+    ) -> None:
+        """A cancelled session stops its module with the reason so stream.cancelled is emitted."""
+        await task_session._handle_cancel(CancellationReason.SHUTDOWN)
+        await task_session.cleanup()
+
+        mock_module.stop.assert_awaited_once_with("shutdown")
+
+    @pytest.mark.asyncio
+    async def test_cleanup_passes_no_reason_when_not_cancelled(
+        self,
+        task_session: TaskSession,
+        mock_module: Mock,
+    ) -> None:
+        await task_session.cleanup()
+
+        mock_module.stop.assert_awaited_once_with(None)
+
+    @pytest.mark.asyncio
+    async def test_cleanup_interrupted_by_cancel_can_rerun(
+        self,
+        task_session: TaskSession,
+        mock_module: Mock,
+    ) -> None:
+        """A cancel landing mid-cleanup leaves _cleanup_done unset so a retry completes it."""
+        gate = asyncio.Event()
+
+        async def _slow_stop(*_: object) -> None:
+            await gate.wait()
+
+        mock_module.stop = AsyncMock(side_effect=_slow_stop)
+        run = asyncio.create_task(task_session.cleanup())
+        await asyncio.sleep(0)
+        run.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await run
+        assert not task_session._cleanup_done
+        assert task_session.module is mock_module
+
+        gate.set()
+        await task_session.cleanup()
+        assert task_session._cleanup_done
+        mock_module.context.cleanup.assert_awaited_once()
+
 
 # ============================================================================
 # Regression: config-setup TaskSession with no task_manager (the dev13 bug)
@@ -344,14 +404,6 @@ class TestTaskSessionNoTaskManager:
         )
         # Must complete without raising AND without emitting the noisy "best-effort failed" WARNING.
         await session._handle_cancel(CancellationReason.SIGNAL_SERVICE_CANCEL)
-
-    async def test_handle_stop_skips_send_signal(self, mock_module_no_task_manager: Mock) -> None:
-        session = TaskSession(
-            task_id="cfg_task",
-            mission_id="missions:test",
-            module=mock_module_no_task_manager,
-        )
-        await session._handle_stop()
 
     async def test_base_task_manager_send_signal_returns_false(self, mock_module_no_task_manager: Mock) -> None:
         from digitalkin.core.task_manager.local_task_manager import LocalTaskManager

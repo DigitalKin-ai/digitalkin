@@ -26,7 +26,7 @@ def _closed_port() -> int:
 
 
 async def test_startstream_not_accepted_when_redis_unreachable() -> None:
-    from agentic_mesh_protocol.gateway.v1 import gateway_pb2
+    from agentic_mesh_protocol.gateway.v1 import gateway_dto_pb2
 
     from digitalkin.core.task_manager.redis.redis_client import RedisClient
     from digitalkin.grpc_servers.gateway_servicer import GatewayServicer
@@ -35,7 +35,7 @@ async def test_startstream_not_accepted_when_redis_unreachable() -> None:
     servicer = GatewayServicer(redis_client=client)
     ctx = MagicMock()
     ctx.invocation_metadata.return_value = [("x-client-address", "127.0.0.1:50057")]
-    req = gateway_pb2.StartStreamRequest(task_id="task_int_r2", setup_id="setups:s", mission_id="missions:m")
+    req = gateway_dto_pb2.StartStreamRequest(task_id="task_int_r2", setup_id="setups:s", mission_id="missions:m")
     try:
         resp = await servicer.StartStream(req, ctx)
         assert resp.accepted is False

@@ -1,6 +1,6 @@
 """This module implements the default storage strategy."""
 
-import datetime
+import datetime as dt
 import json
 import tempfile
 import uuid
@@ -37,7 +37,7 @@ class DefaultStorage(StorageStrategy):
         Raises:
             TypeError: If the object is not serializable
         """
-        if isinstance(o, datetime.datetime):
+        if isinstance(o, dt.datetime):
             return o.isoformat()
         msg = f"Type {o.__class__.__name__} not serializable"
         raise TypeError(msg)
@@ -69,10 +69,8 @@ class DefaultStorage(StorageStrategy):
                     data=data_model,
                     data_type=DataType[rd["data_type"]],
                     visibility=Visibility[rd["visibility"]] if rd.get("visibility") else Visibility.UNSPECIFIED,
-                    creation_date=datetime.datetime.fromisoformat(rd["creation_date"])
-                    if rd.get("creation_date")
-                    else None,
-                    update_date=datetime.datetime.fromisoformat(rd["update_date"]) if rd.get("update_date") else None,
+                    creation_date=dt.datetime.fromisoformat(rd["creation_date"]) if rd.get("creation_date") else None,
+                    update_date=dt.datetime.fromisoformat(rd["update_date"]) if rd.get("update_date") else None,
                 )
                 out[key] = rec
         except Exception:
@@ -126,7 +124,7 @@ class DefaultStorage(StorageStrategy):
         if key in self.storage:
             msg = f"Document {key!r} already exists"
             raise ValueError(msg)
-        now = datetime.datetime.now(datetime.timezone.utc)
+        now = dt.datetime.now(dt.timezone.utc)
         record.creation_date = now
         record.update_date = now
         record.storage_id = f"storage:{uuid.uuid4()}"
@@ -183,7 +181,7 @@ class DefaultStorage(StorageStrategy):
         rec.data = data
         if visibility is not Visibility.UNSPECIFIED:
             rec.visibility = visibility
-        rec.update_date = datetime.datetime.now(datetime.timezone.utc)
+        rec.update_date = dt.datetime.now(dt.timezone.utc)
         self._save_to_file()
         logger.debug("Modified %s", key)
         return rec
@@ -238,21 +236,18 @@ class DefaultStorage(StorageStrategy):
             records = [r for r in records if r.visibility in allowed]
         return records[offset : offset + (limit or 20)]
 
-    async def _remove_collection(self, collection: str, context: str, record_id: str = "") -> bool:
+    async def _remove_collection(self, collection: str, context: str) -> bool:
         """Wipe a collection scoped to a specific context.
 
         Args:
             collection: The unique name to retrieve data for
             context: Resolved owner context scoping the wipe.
-            record_id: Restrict removal to this record id; empty wipes the whole collection.
 
         Returns:
             bool: True if the collection was removed, False otherwise
         """
         prefix = f"{context}|{collection}:"
-        to_delete = [
-            k for k, r in self.storage.items() if k.startswith(prefix) and (not record_id or r.record_id == record_id)
-        ]
+        to_delete = [k for k in self.storage if k.startswith(prefix)]
         for k in to_delete:
             del self.storage[k]
         self._save_to_file()

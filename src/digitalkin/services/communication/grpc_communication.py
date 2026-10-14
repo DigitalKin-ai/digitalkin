@@ -8,16 +8,14 @@ import uuid
 from typing import TYPE_CHECKING, Any
 
 import grpc.aio
-from agentic_mesh_protocol.gateway.v1 import gateway_pb2, gateway_service_pb2_grpc
-from agentic_mesh_protocol.module.v1 import (
-    information_pb2,
-    module_service_pb2_grpc,
-)
+from agentic_mesh_protocol.gateway.v1 import gateway_dto_pb2, gateway_messages_pb2, gateway_service_pb2_grpc
+from agentic_mesh_protocol.module.v1 import module_dto_pb2, module_service_pb2_grpc
 from google.protobuf import json_format, struct_pb2
 
 from digitalkin.core.profiling.step_timer import StepTimer
 from digitalkin.grpc_servers.interceptors.request_ids import RequestContext
 from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
+from digitalkin.grpc_servers.utils.grpc_error_handler import GrpcErrorHandlerMixin
 from digitalkin.grpc_servers.utils.validators import GatewayValidator
 from digitalkin.logger import logger
 from digitalkin.models.grpc_servers.circuit_breaker import CBState
@@ -26,6 +24,7 @@ from digitalkin.models.settings.gateway import get_gateway_settings
 from digitalkin.services.base_strategy import BaseStrategy
 from digitalkin.services.communication.communication_strategy import CommunicationStrategy
 from digitalkin.services.communication.exceptions import (
+    CommunicationServiceError,
     InvalidConsumerAddressError,
     M2MCallTimeout,
     M2MTargetUnavailable,
@@ -52,7 +51,7 @@ class _GatewayBackendClient(GrpcClientWrapper):
         self.stub = self._get_or_create_stub(gateway_service_pb2_grpc.GatewayServiceStub)
 
 
-class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
+class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
     """gRPC client for module-to-module communication."""
 
     service_name: str = "CommunicationService"
@@ -128,15 +127,38 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
         BaseStrategy.__init__(self, mission_id, setup_id, setup_version_id)
         self.client_config = client_config
         self._m2m_calls = m2m_calls if m2m_calls is not None else self._shared_m2m_calls
-        self._pool_keys: set[str] = set()
+        self._pool_keys: dict[str, grpc.aio.Channel] = {}
+        self._stale_channels: list[tuple[str, grpc.aio.Channel]] = []
         self._gateway_backend = (
             _GatewayBackendClient(gateway_backend_config) if gateway_backend_config is not None else None
         )
 
         logger.debug("Initialized GrpcCommunication (security=%s)", client_config.security)
 
+    def _channel_config(self, host: str, port: int) -> ClientConfig:
+        """Build the client config for a target, inheriting this client's transport settings.
+
+        Args:
+            host: Target host.
+            port: Target port.
+
+        Returns:
+            The target's ClientConfig.
+        """
+        return ClientConfig(
+            host=host,
+            port=port,
+            mode=self.client_config.mode,
+            security=self.client_config.security,
+            credentials=self.client_config.credentials,
+            compression=self.client_config.compression,
+            channel_options=self.client_config.channel_options,
+        )
+
     def _get_or_create_channel(self, module_address: str, module_port: int) -> grpc.aio.Channel:
         """Return a shared, ref-counted gRPC channel to the target module.
+
+        Each target is acquired once per instance and released in :meth:`close_all_channels`.
 
         Args:
             module_address: Module host.
@@ -145,25 +167,27 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
         Returns:
             Async gRPC channel.
         """
-        config = ClientConfig(
-            host=module_address,
-            port=module_port,
-            mode=self.client_config.mode,
-            security=self.client_config.security,
-            credentials=self.client_config.credentials,
-            compression=self.client_config.compression,
-            channel_options=self.client_config.channel_options,
-        )
+        config = self._channel_config(module_address, module_port)
+        key = GrpcClientWrapper.channel_cache_key(config)
+        held = self._pool_keys.get(key)
+        if held is not None and self._channel_cache.get(key) is held:
+            self._channel = held
+            self._channel_cache_key = key
+            return held
+        if held is not None:
+            self._stale_channels.append((key, held))
+        # TODO(validate): COMM-REFCOUNT one pooled channel ref per target per instance
+        logger.info("[VALIDATE COMM-REFCOUNT] acquiring pooled channel %s", key)
         channel = self._init_channel(config)
-        if self._channel_cache_key is not None:
-            self._pool_keys.add(self._channel_cache_key)
+        self._pool_keys[key] = channel
         return channel
 
     async def close_all_channels(self) -> None:
         """Release refs on all pooled gRPC channels."""
-        for key in self._pool_keys:
-            await GrpcClientWrapper.release_cached_channel(key)
+        for key, channel in [*self._pool_keys.items(), *self._stale_channels]:
+            await GrpcClientWrapper.release_cached_channel(key, channel)
         self._pool_keys.clear()
+        self._stale_channels.clear()
 
     async def close(self) -> None:
         """Release all pooled gRPC channels."""
@@ -175,7 +199,9 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
         self,
         address: str,
     ) -> tuple[gateway_service_pb2_grpc.GatewayServiceStub, Callable[[], Awaitable[None]]]:
-        """Open (or reuse) a pooled channel to a consumer's GatewayService.
+        """Open (or reuse) a shared channel to a consumer's GatewayService.
+
+        Every dial takes its own channel ref, released by the returned callable.
 
         Args:
             address: ``host:port`` of the consumer's GatewayService.
@@ -190,24 +216,21 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
         if err is not None:
             raise InvalidConsumerAddressError(err)
         host, _, port_str = address.partition(":")
-        port = int(port_str)
-        self._get_or_create_channel(host, port)
+        channel = self._init_channel(self._channel_config(host, int(port_str)))
         stub = self._get_or_create_stub(gateway_service_pb2_grpc.GatewayServiceStub)
-        cache_key = self._channel_cache_key
+        cache_key = self._channel_cache_key or ""
 
         async def _release() -> None:
-            if cache_key:
-                await GrpcClientWrapper.release_cached_channel(cache_key)
-                self._pool_keys.discard(cache_key)
+            await GrpcClientWrapper.release_cached_channel(cache_key, channel)
 
         return stub, _release
 
     async def evict_consumer_channel(self, address: str) -> None:
         """Force a fresh channel on the next dial to ``address``.
 
-        Removes any cached (possibly wedged) channel so a resume re-dial does
-        not reuse a connection left broken by a peer that died. No-op if the
-        address is malformed or no channel is cached.
+        Drops any cached (possibly wedged) channel so a resume re-dial does not
+        reuse a connection left broken by a peer that died; current holders keep
+        it until they release. No-op if the address is malformed or nothing is cached.
 
         Args:
             address: ``host:port`` of the consumer's GatewayService.
@@ -215,8 +238,9 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
         host, _, port_str = address.partition(":")
         if not port_str.isdigit():
             return
-        key = f"{host}:{int(port_str)}:{self.client_config.security.value}:{self.client_config.compression.value}"
-        await GrpcClientWrapper.evict_cached_channel(key)
+        await GrpcClientWrapper.evict_cached_channel(
+            GrpcClientWrapper.channel_cache_key(self._channel_config(host, int(port_str)))
+        )
 
     def _create_stub(self, module_address: str, module_port: int) -> module_service_pb2_grpc.ModuleServiceStub:
         """Return a ModuleServiceStub for the target module.
@@ -236,6 +260,7 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
         module_address: str,
         module_port: int,
         *,
+        module_id: str,
         llm_format: bool = False,
     ) -> dict[str, dict]:
         """Get module schemas via gRPC.
@@ -243,27 +268,27 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
         Args:
             module_address: Target module address
             module_port: Target module port
+            module_id: Target module ID (``modules:...``).
             llm_format: Return LLM-friendly format
 
         Returns:
             Dictionary containing schemas: input, output, setup, secret, cost
+
+        Raises:
+            CommunicationServiceError: A schema result holds an ``OperationError``.
         """
         stub = self._create_stub(module_address, module_port)
 
         # Cost always uses llm_format=False — rates/units must come from config.
-        input_request = information_pb2.GetModuleInputRequest(llm_format=llm_format)
-        output_request = information_pb2.GetModuleOutputRequest(llm_format=llm_format)
-        setup_request = information_pb2.GetModuleSetupRequest(llm_format=llm_format)
-        secret_request = information_pb2.GetModuleSecretRequest(llm_format=llm_format)
-        cost_request = information_pb2.GetModuleCostRequest(llm_format=False)
-
         input_response, output_response, setup_response, secret_response, cost_response = await asyncio.gather(
-            stub.GetModuleInput(input_request),
-            stub.GetModuleOutput(output_request),
-            stub.GetModuleSetup(setup_request),
-            stub.GetModuleSecret(secret_request),
-            stub.GetModuleCost(cost_request),
+            stub.GetModuleInput(module_dto_pb2.GetModuleInputRequest(module_id=module_id, llm_format=llm_format)),
+            stub.GetModuleOutput(module_dto_pb2.GetModuleOutputRequest(module_id=module_id, llm_format=llm_format)),
+            stub.GetModuleSetup(module_dto_pb2.GetModuleSetupRequest(module_id=module_id, llm_format=llm_format)),
+            stub.GetModuleSecret(module_dto_pb2.GetModuleSecretRequest(module_id=module_id, llm_format=llm_format)),
+            stub.GetModuleCost(module_dto_pb2.GetModuleCostRequest(module_id=module_id, llm_format=False)),
         )
+        for response in (input_response, output_response, setup_response, secret_response, cost_response):
+            self.raise_on_error(response.result, CommunicationServiceError)
 
         logger.debug(
             "Retrieved module schemas from %s:%d (llm_format=%s)",
@@ -273,11 +298,11 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
         )
 
         return {
-            "input": json_format.MessageToDict(input_response.input_schema),
-            "output": json_format.MessageToDict(output_response.output_schema),
-            "setup": json_format.MessageToDict(setup_response.setup_schema),
-            "secret": json_format.MessageToDict(secret_response.secret_schema),
-            "cost": json_format.MessageToDict(cost_response.cost_schema),
+            "input": json_format.MessageToDict(input_response.result.input_schema),
+            "output": json_format.MessageToDict(output_response.result.output_schema),
+            "setup": json_format.MessageToDict(setup_response.result.setup_schema),
+            "secret": json_format.MessageToDict(secret_response.result.secret_schema),
+            "cost": json_format.MessageToDict(cost_response.result.cost_schema),
         }
 
     async def get_module_config_schema(
@@ -285,6 +310,7 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
         module_address: str,
         module_port: int,
         *,
+        module_id: str,
         llm_format: bool = False,
     ) -> dict[str, Any]:
         """Get the module's config-setup JSON schema via gRPC (``GetConfigSetupModule``).
@@ -292,14 +318,21 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
         Args:
             module_address: Target module address.
             module_port: Target module port.
+            module_id: Target module ID (``modules:...``).
             llm_format: Return the LLM-friendly schema format.
 
         Returns:
             The config-setup JSON schema (the fields a caller fills at setup/update).
+
+        Raises:
+            CommunicationServiceError: The result holds an ``OperationError``.
         """
         stub = self._create_stub(module_address, module_port)
-        response = await stub.GetConfigSetupModule(information_pb2.GetConfigSetupModuleRequest(llm_format=llm_format))
-        return json_format.MessageToDict(response.config_setup_schema)
+        response = await stub.GetConfigSetupModule(
+            module_dto_pb2.GetConfigSetupModuleRequest(module_id=module_id, llm_format=llm_format)
+        )
+        self.raise_on_error(response.result, CommunicationServiceError)
+        return json_format.MessageToDict(response.result.config_setup_schema)
 
     async def call_module(  # ruff: ignore[complex-structure, too-many-branches, too-many-locals, too-many-statements]
         self,
@@ -373,7 +406,7 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
         slot_acquired = False
         stub: Any = None
 
-        try:  # ruff: ignore[too-many-nested-blocks, too-many-statements-in-try-clause]
+        try:  # ruff: ignore[too-many-statements-in-try-clause]
             if breaker.state == CBState.OPEN:
                 logger.warning("[m2m] breaker OPEN — fast-failing target=%s", target_key, extra=log_extra)
                 msg = f"circuit breaker open for {target_key}"
@@ -397,7 +430,7 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
             idem_key = uuid.uuid4().hex  # idempotency nonce, NOT a task_id (backend mints the id)
             assoc = await self._gateway_backend.exec_grpc_query(
                 "AssociateTask",
-                gateway_pb2.AssociateTaskRequest(parent_task_id=parent_task_id),
+                gateway_dto_pb2.AssociateTaskRequest(parent_task_id=parent_task_id),
                 timeout=m2m_settings.call_associate_timeout_s,
                 metadata=(("x-idempotency-key", idem_key),),
             )
@@ -405,13 +438,14 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
             if not task_id:
                 msg = f"backend returned no task_id from AssociateTask (parent={parent_task_id})"
                 raise RuntimeError(msg)  # ruff: ignore[raise-within-try]
+            # TODO(validate): ASSOCIATE-TASK AssociateTask mints the child task id for M2M calls
             logger.info(
-                "[VALIDATE AT2] AssociateTask minted: parent=%s child=%s target=%s",
+                "[VALIDATE ASSOCIATE-TASK] AssociateTask minted: parent=%s child=%s target=%s",
                 parent_task_id,
                 task_id,
                 target_key,
                 extra=log_extra,
-            )  # TODO(validate): remove after prod validation
+            )
             log_extra["task_id"] = task_id
             timer.mark("associate_task")
             last_mark = "associate_task"
@@ -450,7 +484,7 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
 
                 try:
                     start_resp = await stub.StartStream(
-                        gateway_pb2.StartStreamRequest(task_id=task_id, setup_id=setup_id, mission_id=mission_id),
+                        gateway_dto_pb2.StartStreamRequest(task_id=task_id, setup_id=setup_id, mission_id=mission_id),
                         metadata=tuple(grpc_metadata),
                     )
                 except grpc.aio.AioRpcError as exc:
@@ -490,6 +524,13 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
                     if item is None:
                         break
 
+                    root_field = item.fields.get("root") if item.fields else None
+                    proto_field = root_field.struct_value.fields.get("protocol") if root_field is not None else None
+                    protocol_value = proto_field.string_value if proto_field is not None else ""
+                    if protocol_value == "stream.heartbeat":
+                        # Liveness only: it already re-armed the wait above; callers and metrics never see it.
+                        continue
+
                     now_ns = time.perf_counter_ns()
                     chunks_seen += 1
                     depth = output_queue.qsize()
@@ -502,14 +543,10 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
                         gaps_ns.append(now_ns - last_chunk_ns)
                     last_chunk_ns = now_ns
 
-                    root_field = item.fields.get("root") if item.fields else None
-                    if root_field is not None:
-                        proto_field = root_field.struct_value.fields.get("protocol")
-                        protocol_value = proto_field.string_value if proto_field is not None else ""
-                        if protocol_value == "stream.error":
-                            fatal_field = root_field.struct_value.fields.get("fatal")
-                            if fatal_field is not None and fatal_field.bool_value:
-                                error_observed = True
+                    if protocol_value == "stream.error" and root_field is not None:
+                        fatal_field = root_field.struct_value.fields.get("fatal")
+                        if fatal_field is not None and fatal_field.bool_value:
+                            error_observed = True
                     if callback:
                         await callback(item)
                     yield item
@@ -547,9 +584,8 @@ class GrpcCommunication(CommunicationStrategy, GrpcClientWrapper):
                     try:
                         await asyncio.wait_for(
                             stub.SendSignal(
-                                gateway_pb2.ClientSignalRequest(
-                                    task_id=task_id,
-                                    action=gateway_pb2.SignalAction.CANCEL,
+                                gateway_dto_pb2.SendSignalRequest(
+                                    cancel=gateway_messages_pb2.CancelSignal(task_id=task_id),
                                 ),
                             ),
                             timeout=m2m_settings.call_cancel_signal_timeout_s,
