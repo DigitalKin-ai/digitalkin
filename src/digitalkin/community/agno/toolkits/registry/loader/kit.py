@@ -23,6 +23,10 @@ from digitalkin.community.agno.toolkits.registry.loader.action import LoadAction
 from digitalkin.logger import logger
 
 if TYPE_CHECKING:
+    from agno.agent import Agent
+    from agno.run.requirement import RunRequirement
+    from agno.team import Team
+
     from digitalkin.models.module import ModuleContext
 
 
@@ -62,6 +66,53 @@ class LoadManager(DkToolkit):
                 appended toolkit is visible on the next run.
         """
         self._base_tools = base_tools
+
+    def bind_to(self, agent: Agent | Team) -> None:
+        """Bind to the tool list the constructed agent's runs read.
+
+        ``Agent`` copies a plain tools list, so a loader bound before construction would append
+        loaded tools to a list no run sees. A tools factory keeps the binding to the list it
+        closes over, so this is a no-op then.
+
+        Args:
+            agent: The constructed Agent or Team carrying this loader among its tools.
+        """
+        if isinstance(agent.tools, list):
+            self._base_tools = agent.tools
+
+    @staticmethod
+    def find(tools: Any) -> LoadManager | None:
+        """Locate the LoadManager in an agent's tools.
+
+        Args:
+            tools: ``agent.tools`` — a tools list, or a ``make_tools_factory`` callable.
+
+        Returns:
+            The first LoadManager found, or ``None`` when no loader is wired.
+        """
+        if callable(tools) and not isinstance(tools, list):
+            tools = tools(None)
+        if not isinstance(tools, list):
+            return None
+        return next((tool for tool in tools if isinstance(tool, LoadManager)), None)
+
+    async def resolve_requirement(self, requirement: RunRequirement) -> bool:
+        """Run a paused ``load_manager`` requirement with this loader and record its result.
+
+        Used for sub-agents (team members, workflow step agents), whose pause Agno lifts onto the
+        parent run as a requirement.
+
+        Args:
+            requirement: One requirement of the paused run.
+
+        Returns:
+            ``True`` when the requirement was a pending ``load_manager`` call and is now resolved.
+        """
+        tool = requirement.tool_execution
+        if tool is None or not requirement.needs_external_execution or tool.tool_name != self.tool_name:
+            return False
+        requirement.set_external_execution_result(await self.run_paused(tool.tool_args or {}))
+        return True
 
     async def load_manager(self, action: LoadActions) -> str:  # ruff: ignore[unused-method-argument] — schema-only stub, never run
         """Load a discovered object into the agent so it becomes usable right now.

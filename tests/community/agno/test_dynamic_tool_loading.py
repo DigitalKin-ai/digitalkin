@@ -264,8 +264,8 @@ class TestPausedToolHandling:
 
     def test_pending_external_reflects_unresolved_tools(self) -> None:
         runner = _runner()
-        assert runner._pending_external(SimpleNamespace(tools=[_tool("f", {}, result=None)])) is True
-        assert runner._pending_external(SimpleNamespace(tools=[_tool("f", {}, result="done")])) is False
+        assert runner._pending_external(SimpleNamespace(tools=[_tool("f", {}, result=None)], requirements=[])) is True
+        assert runner._pending_external(SimpleNamespace(tools=[_tool("f", {}, result="done")], requirements=[])) is False
 
 
 class _FakeAdapter:

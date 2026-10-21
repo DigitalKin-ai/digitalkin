@@ -1,7 +1,7 @@
-"""HITL runner for Agno agents with AG-UI frontend tools.
+"""HITL runner for Agno agents and teams with AG-UI frontend tools.
 
 Pauses on external tool calls, persists the run via storage, and
-resumes via :meth:`Agent.acontinue_run` once the front replies.
+resumes via ``acontinue_run`` once the front replies.
 See ``docs/community/agno.md`` for the full flow.
 """
 
@@ -32,6 +32,10 @@ from ag_ui.core.types import (
     ToolCall as AgUiToolCall,
 )
 from agno.media import Image
+from agno.run.agent import RunOutput
+from agno.run.team import TeamRunOutput
+from agno.team import Team
+from agno.utils.team import get_member_id
 from pydantic import BaseModel, ConfigDict, Field
 
 from digitalkin.community.agno.models import AgUiRunInput, PauseInfo
@@ -44,7 +48,6 @@ if TYPE_CHECKING:
     from ag_ui.core.types import Tool as AgUiTool
     from agno.agent import Agent
     from agno.models.message import Message as AgnoMessage
-    from agno.run.agent import RunOutput
 
     from digitalkin.community.agno.toolkits.registry.loader.kit import LoadManager
     from digitalkin.models.events import BaseAgentRunEvent
@@ -87,8 +90,8 @@ class PausedRunStore:
         """
         self._storage = storage
 
-    async def save(self, run_output: RunOutput, thread_id: str) -> PauseInfo:
-        """Serialize and store a paused ``RunOutput``.
+    async def save(self, run_output: RunOutput | TeamRunOutput, thread_id: str) -> PauseInfo:
+        """Serialize and store a paused ``RunOutput`` or ``TeamRunOutput``.
 
         Args:
             run_output: The paused Agno run (``is_paused=True``).
@@ -333,12 +336,17 @@ class HitlEvents:
 
 
 class AgnoHitlRunner:
-    """Runs an Agno agent and persists/resumes paused runs on external tools."""
+    """Runs an Agno agent or team and persists/resumes paused runs on external tools.
+
+    A ``Team`` host round-trips ``TeamRunOutput``; a member's ``load_manager`` pause, which Agno
+    lifts onto the team run as a requirement tagged with the member id, is resolved with that
+    member's own :class:`LoadManager`.
+    """
 
     def __init__(
         self,
         *,
-        agent: Agent,
+        agent: Agent | Team,
         storage: StorageStrategy | None = None,
         store: PausedRunStore | None = None,
         dependency_key: str = "agui_tools",
@@ -347,7 +355,7 @@ class AgnoHitlRunner:
         """Initialize the runner.
 
         Args:
-            agent: Agno agent built with ``tools=make_tools_factory(...)``
+            agent: Agno agent or team built with ``tools=make_tools_factory(...)``
                 and ``cache_callables=False``.
             storage: If provided without ``store``, a :class:`PausedRunStore`
                 is built automatically.
@@ -373,6 +381,7 @@ class AgnoHitlRunner:
             # vars(): test fakes may not carry a tools attribute at all.
             tool_loader = self._find_loader(vars(agent).get("tools"))
         self._agent = agent
+        self._run_output_cls: type[RunOutput | TeamRunOutput] = TeamRunOutput if isinstance(agent, Team) else RunOutput
         self._store = store
         self._dependency_key = dependency_key
         self._tool_loader = tool_loader
@@ -413,7 +422,7 @@ class AgnoHitlRunner:
 
     @staticmethod
     def _find_loader(tools: Any) -> LoadManager | None:
-        """Locate the LoadManager in the agent's tool list so its pauses auto-resolve.
+        """Locate the LoadManager in an agent's tools so its pauses auto-resolve.
 
         Args:
             tools: ``agent.tools`` — the tools list, or a ``make_tools_factory`` callable.
@@ -421,19 +430,11 @@ class AgnoHitlRunner:
         Returns:
             The first LoadManager found, or ``None`` when no loader is wired.
         """
-        # Lazy import: LoadManager pulls the optional agno dependency at import time,
-        # while this module must stay importable without it (same convention as the
-        # rest of community.agno).
+        # Lazy import: importing the toolkits package here would load it with every
+        # ``digitalkin.community.agno`` import (same convention as the rest of community.agno).
         from digitalkin.community.agno.toolkits.registry.loader.kit import LoadManager
 
-        if callable(tools) and not isinstance(tools, list):
-            tools = tools(None)
-        if not isinstance(tools, list):
-            return None
-        for tool in tools:
-            if isinstance(tool, LoadManager):
-                return tool
-        return None
+        return LoadManager.find(tools)
 
     async def run(
         self,
@@ -456,8 +457,6 @@ class AgnoHitlRunner:
         Returns:
             ``None`` on completion; a :class:`PauseInfo` if paused.
         """
-        from agno.run.agent import RunOutput
-
         logger.info("AgnoHitlRunner.run: starting (thread_id=%s, msg_len=%d)", thread_id, len(message))
 
         stream = self._agent.arun(
@@ -469,7 +468,11 @@ class AgnoHitlRunner:
             dependencies={self._dependency_key: agui_tools or []},
         )
         return await self._drive(
-            stream=stream, send=send, thread_id=thread_id, run_output_cls=RunOutput, agui_tools=agui_tools
+            stream=stream,
+            send=send,
+            thread_id=thread_id,
+            run_output_cls=self._run_output_cls,
+            agui_tools=agui_tools,
         )
 
     async def continue_paused_run(
@@ -495,14 +498,12 @@ class AgnoHitlRunner:
             ``None`` on completion or missing record; a new
             :class:`PauseInfo` on re-pause.
         """
-        from agno.run.agent import RunOutput
-
         record = await self._store.load(thread_id)
         if record is None:
             logger.warning("continue_paused_run: no paused record for thread_id=%s", thread_id)
             return None
 
-        run_output = RunOutput.from_dict(record.payload)
+        run_output = self._run_output_cls.from_dict(record.payload)
         logger.info(
             "continue_paused_run: resuming thread_id=%s run_id=%s with %d result(s)",
             thread_id,
@@ -535,15 +536,15 @@ class AgnoHitlRunner:
             if tool_exec is not None and req.needs_external_execution and tool_exec.tool_call_id in tool_results:
                 req.set_external_execution_result(tool_results[tool_exec.tool_call_id])
 
-        stream = self._agent.acontinue_run(
-            run_response=run_output,
-            stream=True,
-            stream_events=True,
-            yield_run_output=True,
-            dependencies={self._dependency_key: agui_tools or []},
-        )
+        if isinstance(self._agent, Team):
+            # A Team's acontinue_run never resolves a tools factory; _drive restores it after.
+            self._resolve_tools_for_continue(agui_tools)
         pause_info = await self._drive(
-            stream=stream, send=send, thread_id=thread_id, run_output_cls=RunOutput, agui_tools=agui_tools
+            stream=self._continue_stream(run_output, agui_tools),
+            send=send,
+            thread_id=thread_id,
+            run_output_cls=self._run_output_cls,
+            agui_tools=agui_tools,
         )
 
         if pause_info is None:
@@ -761,7 +762,7 @@ class AgnoHitlRunner:
         stream: Any,
         send: Callable[[BaseAgentRunEvent], Coroutine[Any, Any, None]],
         thread_id: str,
-        run_output_cls: type[RunOutput],
+        run_output_cls: type[RunOutput | TeamRunOutput],
         agui_tools: list[AgUiTool] | None = None,
     ) -> PauseInfo | None:
         """Drain an Agno stream, forward events, and persist or auto-continue on pause.
@@ -775,7 +776,7 @@ class AgnoHitlRunner:
             stream: The Agno event stream to drain.
             send: Digitalkin-event callback for each forwarded event.
             thread_id: AG-UI thread identifier (storage key on a frontend pause).
-            run_output_cls: The ``RunOutput`` class used to spot the terminal run object.
+            run_output_cls: The ``RunOutput``/``TeamRunOutput`` class used to spot the terminal run object.
             agui_tools: Frontend tools to re-pass to Agno on an auto-continue.
 
         Returns:
@@ -786,7 +787,7 @@ class AgnoHitlRunner:
         try:
             for _ in range(20):
                 adapter = AgnoStreamAdapter()
-                final_run_output: RunOutput | None = None
+                final_run_output: RunOutput | TeamRunOutput | None = None
 
                 async for raw_event in stream:
                     if isinstance(raw_event, run_output_cls):
@@ -812,13 +813,7 @@ class AgnoHitlRunner:
                     # ...and hand the continue a resolved list, because a Team never re-invokes the
                     # factory on acontinue_run at all. See _resolve_tools_for_continue.
                     self._resolve_tools_for_continue(agui_tools)
-                    stream = self._agent.acontinue_run(
-                        run_response=final_run_output,
-                        stream=True,
-                        stream_events=True,
-                        yield_run_output=True,
-                        dependencies={self._dependency_key: agui_tools or []},
-                    )
+                    stream = self._continue_stream(final_run_output, agui_tools)
                     continue
 
                 pause_info = await self._store.save(run_output=final_run_output, thread_id=thread_id)
@@ -848,8 +843,30 @@ class AgnoHitlRunner:
             # the steady state every later run resolves from.
             self._restore_tools()
 
-    async def _load_paused_tools(self, run_output: RunOutput) -> bool:
+    def _continue_stream(self, run_output: RunOutput | TeamRunOutput, agui_tools: list[AgUiTool] | None) -> Any:
+        """Open the host's ``acontinue_run`` event stream for a paused run.
+
+        Args:
+            run_output: The paused run, its tool results already written.
+            agui_tools: Frontend tools to re-pass to Agno.
+
+        Returns:
+            The Agno event stream.
+        """
+        # The run output is a TeamRunOutput exactly when the host is a Team.
+        return self._agent.acontinue_run(  # type: ignore[call-overload]
+            run_response=run_output,
+            stream=True,
+            stream_events=True,
+            yield_run_output=True,
+            dependencies={self._dependency_key: agui_tools or []},
+        )
+
+    async def _load_paused_tools(self, run_output: RunOutput | TeamRunOutput) -> bool:
         """Resolve ``load_manager`` calls in a paused run, writing each tool result in place.
+
+        The host's own calls run with the host's loader; on a Team, each member requirement
+        runs with that member's own loader.
 
         Args:
             run_output: The paused Agno run.
@@ -858,20 +875,29 @@ class AgnoHitlRunner:
             ``True`` if at least one ``load_manager`` call was handled, else ``False`` (no
             loader wired, or the pause carries only frontend tools).
         """
-        if self._tool_loader is None:
-            return False
         handled = False
-        loader_tool = self._tool_loader.tool_name
-        for tool in run_output.tools or []:
-            if tool.external_execution_required and tool.result is None and tool.tool_name == loader_tool:
-                result = await self._tool_loader.run_paused(tool.tool_args or {})
-                tool.result = result
-                self._resolve_requirement(run_output, tool.tool_call_id, result)
+        if self._tool_loader is not None:
+            loader_tool = self._tool_loader.tool_name
+            for tool in run_output.tools or []:
+                if tool.external_execution_required and tool.result is None and tool.tool_name == loader_tool:
+                    result = await self._tool_loader.run_paused(tool.tool_args or {})
+                    tool.result = result
+                    self._resolve_requirement(run_output, tool.tool_call_id, result)
+                    handled = True
+        # A members factory has nothing to resolve: its members are built per run.
+        if not isinstance(self._agent, Team) or not isinstance(self._agent.members, list):
+            return handled
+        members = {get_member_id(member): member for member in self._agent.members}
+        for requirement in run_output.requirements or []:
+            member = members.get(requirement.member_agent_id) if requirement.member_agent_id else None
+            loader = self._find_loader(member.tools) if member is not None else None
+            if loader is not None and await loader.resolve_requirement(requirement):
+                logger.info("AgnoHitlRunner: resolved load_manager for member %s", requirement.member_agent_id)
                 handled = True
         return handled
 
     @staticmethod
-    def _resolve_requirement(run_output: RunOutput, tool_call_id: str | None, result: str) -> None:
+    def _resolve_requirement(run_output: RunOutput | TeamRunOutput, tool_call_id: str | None, result: str) -> None:
         """Mark the paused run's requirement for ``tool_call_id`` as externally executed.
 
         Agno gates ``acontinue_run`` on ``RunRequirement.is_resolved()``, never on
@@ -899,13 +925,16 @@ class AgnoHitlRunner:
                 requirement.set_external_execution_result(result)
 
     @staticmethod
-    def _pending_external(run_output: RunOutput) -> bool:
-        """Report whether any external tool in the paused run still needs a result.
+    def _pending_external(run_output: RunOutput | TeamRunOutput) -> bool:
+        """Report whether the paused run still needs the front, team members included.
 
         Args:
             run_output: The paused Agno run (after :meth:`_load_paused_tools`).
 
         Returns:
-            ``True`` if a frontend tool call remains unresolved (must go to the front).
+            ``True`` if a host frontend tool call or a member requirement remains unresolved.
         """
-        return any(tool.external_execution_required and tool.result is None for tool in run_output.tools or [])
+        return any(tool.external_execution_required and tool.result is None for tool in run_output.tools or []) or any(
+            requirement.member_agent_id is not None and not requirement.is_resolved()
+            for requirement in run_output.requirements or []
+        )
