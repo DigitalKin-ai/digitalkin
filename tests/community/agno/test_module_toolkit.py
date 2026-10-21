@@ -331,3 +331,128 @@ class TestRelayCustomEvent:
             asyncio.run(ModuleToolkit._relay_custom_event(_context(send), message))
 
         send.assert_not_awaited()
+
+
+class TestRelaySources:
+    """A tool's ``sources`` activity is merged into the agent run's single list, never forwarded as is."""
+
+    @staticmethod
+    def _wire(output: AgUiOutput) -> dict:
+        """The frame exactly as the relay receives it (Struct round trip, as ``call_module`` yields)."""
+        from google.protobuf import json_format, struct_pb2
+
+        s = struct_pb2.Struct()
+        s.update(output.model_dump(mode="json"))
+        return json_format.MessageToDict(s)
+
+    async def test_parent_relay_parent_keeps_every_source(self) -> None:
+        from digitalkin.community.agno.toolkits import DkToolkit
+        from digitalkin.mixins.agui_mixin import AgUiRunState
+        from digitalkin.models.events import SourceCitation
+
+        tool_send = AsyncMock()
+        tool = DkToolkit(
+            name="search",
+            tools=[],
+            context=SimpleNamespace(callbacks=SimpleNamespace(send_message=tool_send), agui_run=None),
+        )
+        await tool._cite("https://b.io/doc", title="B")
+        await tool._cite("https://a.io/x#frag", description="from the tool")
+
+        agent_send = AsyncMock()
+        agent = SimpleNamespace(
+            callbacks=SimpleNamespace(send_message=agent_send),
+            agui_run=AgUiRunState(),
+            session=SimpleNamespace(current_ids=dict),
+        )
+        await agent.agui_run.cite(agent, SourceCitation(url="https://a.io/x"), None)
+        for frame in (c.args[0] for c in tool_send.await_args_list):
+            await ModuleToolkit._relay_custom_event(agent, self._wire(frame))  # type: ignore[arg-type]
+
+        last = agent_send.await_args_list[-1].args[0].model_dump(mode="json")["root"]["event"]
+        assert last["messageId"] == f"sources-{agent.agui_run.sources_id}"
+        assert last["content"] == {
+            "sources": [
+                {"url": "https://a.io/x", "description": "from the tool"},
+                {"url": "https://b.io/doc", "title": "B"},
+            ]
+        }
+        assert {call.args[0].root.protocol for call in agent_send.await_args_list} == {"agui_activity_snapshot"}
+
+    async def test_without_an_agent_run_the_snapshot_is_forwarded_for_the_next_relay(self) -> None:
+        send = AsyncMock()
+        frame = {
+            "root": {
+                "protocol": "agui_activity_snapshot",
+                "event": {
+                    "type": "ACTIVITY_SNAPSHOT",
+                    "messageId": "sources-t",
+                    "activityType": "sources",
+                    "content": {"sources": [{"url": "https://a.io/"}]},
+                    "replace": True,
+                },
+            }
+        }
+
+        await ModuleToolkit._relay_custom_event(
+            SimpleNamespace(callbacks=SimpleNamespace(send_message=send), agui_run=None), frame
+        )  # type: ignore[arg-type]
+
+        event = send.await_args.args[0].model_dump(mode="json")["root"]["event"]
+        assert (event["messageId"], event["content"]) == ("sources-t", {"sources": [{"url": "https://a.io/"}]})
+
+    async def test_other_activities_and_invalid_sources_are_dropped(self) -> None:
+        from digitalkin.mixins.agui_mixin import AgUiRunState
+
+        send = AsyncMock()
+        agent = SimpleNamespace(
+            callbacks=SimpleNamespace(send_message=send),
+            agui_run=AgUiRunState(),
+            session=SimpleNamespace(current_ids=dict),
+        )
+        plan = {
+            "root": {"protocol": "agui_activity_snapshot", "event": {"activityType": "PLAN", "content": {"steps": []}}}
+        }
+        bad = {
+            "root": {
+                "protocol": "agui_activity_snapshot",
+                "event": {"activityType": "sources", "content": {"sources": [{"url": "javascript:alert(1)"}]}},
+            }
+        }
+
+        await ModuleToolkit._relay_custom_event(agent, plan)  # type: ignore[arg-type]
+        await ModuleToolkit._relay_custom_event(agent, bad)  # type: ignore[arg-type]
+
+        send.assert_not_awaited()
+
+    async def test_custom_event_keeps_metadata_but_not_the_tools_subagent_id(self) -> None:
+        send = AsyncMock()
+        frame = {
+            "root": {
+                "protocol": "agui_custom",
+                "event": {
+                    "type": "CUSTOM",
+                    "name": "live_view",
+                    "value": {"url": "https://x"},
+                    "subagentRunId": "tool-inner",
+                    "metadata": {"digitalkin": {"name": "tool"}},
+                },
+            }
+        }
+
+        await ModuleToolkit._relay_custom_event(_context(send), frame)
+
+        event = send.await_args.args[0].model_dump(mode="json")["root"]["event"]
+        assert "subagentRunId" not in event
+        assert event["metadata"] == {"digitalkin": {"name": "tool"}}
+
+    async def test_one_bad_source_does_not_stop_the_others(self) -> None:
+        from digitalkin.mixins.agui_mixin import AgUiRunState
+
+        send = AsyncMock()
+        agent = SimpleNamespace(callbacks=SimpleNamespace(send_message=send), agui_run=AgUiRunState(), session=SimpleNamespace(current_ids=dict))
+        frame = {"root": {"protocol": "agui_activity_snapshot", "event": {"activityType": "sources", "content": {"sources": [{"url": "nope"}, {"url": "https://ok.io/"}]}}}}
+
+        await ModuleToolkit._relay_custom_event(agent, frame)  # type: ignore[arg-type]
+
+        assert list(agent.agui_run.sources[None]) == ["https://ok.io/"]

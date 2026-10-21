@@ -263,14 +263,15 @@ class BaseModule(  # Module SDK base class requires many public methods # ruff: 
 
     @classmethod
     async def build_registry_schemas(cls) -> dict[str, dict[str, Any]]:
-        """Collect the raw JSON schemas sent at registration, keyed by ``RegisterModuleRequest`` field.
+        """Collect the schemas sent at registration, keyed by ``RegisterModuleRequest`` field.
 
-        Covers every schema served by ``ModuleService`` except the user-info one. The registry
-        requires each of them: a schema the module does not declare, or fails to build, is sent
-        as an empty object so registration still goes through.
+        Each is the ``llm_format=True`` form: ``{"json_schema": ...}``, plus ``"ui_schema"`` for the
+        secret and config-setup forms. Covers every schema served by ``ModuleService`` except the
+        user-info one. The registry requires each of them: a schema the module does not declare,
+        or fails to build, is sent as an empty object so registration still goes through.
 
         Returns:
-            Parsed JSON schema per request field name.
+            Parsed schema per request field name.
         """
         built = await asyncio.gather(
             cls.get_input_format(llm_format=True),
@@ -647,7 +648,13 @@ class BaseModule(  # Module SDK base class requires many public methods # ruff: 
                     )
                 )
                 if self.context.agui_run is not None:
-                    await self.context.agui_run.fail(self.context, "failed", f"{type(e).__name__}: {e}", "module_error")
+                    # TODO(validate): AGUI-ERROR-REDACTED RUN_ERROR carries no exception text (detail logged above)
+                    logger.info(
+                        "[VALIDATE AGUI-ERROR-REDACTED] RUN_ERROR sent without %s detail",
+                        type(e).__name__,
+                        extra=self.context.session.current_ids(),
+                    )
+                    await self.context.agui_run.fail(self.context, "failed", "module execution failed", "module_error")
             except Exception:
                 logger.exception("Failed to send error callback", extra=self.context.session.current_ids())
         else:

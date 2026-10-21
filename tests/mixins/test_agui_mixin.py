@@ -24,12 +24,22 @@ import pytest
 from digitalkin.mixins.agui_mixin import AgUiMixin
 from digitalkin.models.events import (
     AgentRunEvent,
+    CustomEvent,
+    ReasoningCompletedEvent,
+    ReasoningContentDeltaEvent,
+    ReasoningStartedEvent,
     RunCompletedEvent,
+    RunContentEvent,
     RunStartedEvent,
     SubagentErrorEvent,
     SubagentFinishedEvent,
     SubagentStartedEvent,
+    TextMessageCompletedEvent,
     TextMessageStartedEvent,
+    ToolCallCompletedEvent,
+    ToolCallErrorEvent,
+    ToolCallStartedEvent,
+    ToolInfo,
 )
 from digitalkin.models.module.ag_ui import (
     AgUiRunFinishedOutput,
@@ -354,3 +364,105 @@ class TestSubAgentLabelling:
         assert event.subagent_run_id == "m1"
         # Namespaced: AG-UI reserves the "ag-ui" key and leaves the rest to the application.
         assert event.metadata == {"digitalkin": {"source": "agent", "parent_run_id": "team-r1"}}
+
+
+class _Host(AgUiMixin):
+    """Concrete host: the dispatch table is built per subclass."""
+
+
+class TestAgUi10ProducerConformance:
+    """AG-UI 1.0 producer rules the mixin owns."""
+
+    async def test_run_started_declares_sdk_protocol_version(self) -> None:
+        """RUN_STARTED carries the SDK constant, serialised as ``protocolVersion``."""
+        from ag_ui.core import PROTOCOL_VERSION
+
+        ctx = _make_context()
+        await AgUiMixin()._handle_run_started(ctx, _started(run_id="r1", thread_id="t1"))
+
+        wire = ctx.callbacks.send_message.await_args_list[0].args[0].model_dump(mode="json")["root"]["event"]
+        assert wire["protocolVersion"] == PROTOCOL_VERSION == "1.0"
+
+    @pytest.mark.parametrize(
+        "event",
+        [
+            ToolCallStartedEvent(event=AgentRunEvent.TOOL_CALL_STARTED, tool=ToolInfo(tool_name="search")),
+            ToolCallCompletedEvent(event=AgentRunEvent.TOOL_CALL_COMPLETED, tool=ToolInfo(tool_name="search")),
+            ToolCallErrorEvent(event=AgentRunEvent.TOOL_CALL_ERROR, tool=ToolInfo(tool_name="search")),
+            RunContentEvent(event=AgentRunEvent.RUN_CONTENT, content="hi"),
+            TextMessageCompletedEvent(event=AgentRunEvent.TEXT_MESSAGE_COMPLETED, message_id=""),
+            ReasoningStartedEvent(event=AgentRunEvent.REASONING_STARTED),
+            ReasoningContentDeltaEvent(event=AgentRunEvent.REASONING_CONTENT_DELTA, delta="x"),
+            ReasoningCompletedEvent(event=AgentRunEvent.REASONING_COMPLETED),
+            SubagentStartedEvent(event=AgentRunEvent.SUBAGENT_STARTED, name="a"),
+            SubagentFinishedEvent(event=AgentRunEvent.SUBAGENT_FINISHED),
+            SubagentErrorEvent(event=AgentRunEvent.SUBAGENT_ERROR, message="boom"),
+        ],
+        ids=lambda e: e.event,
+    )
+    async def test_event_without_its_id_is_dropped_and_logged(
+        self, event: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No AG-UI event leaves with an empty or invented id (1.x fails the run on it)."""
+        log = MagicMock()
+        monkeypatch.setattr("digitalkin.mixins.agui_mixin.logger", log)
+        ctx = _make_context()
+        await _Host().send_message(ctx, event)
+
+        ctx.callbacks.send_message.assert_not_awaited()
+        (message, kind, dumped), _ = log.warning.call_args
+        assert message.startswith("[VALIDATE AGUI-EMPTY-ID]")
+        assert kind == event.event
+        assert dumped == event.model_dump_json(exclude_none=True)
+
+    async def test_custom_null_value_is_kept_on_the_wire(self) -> None:
+        """``CUSTOM.value`` is required; a null value must not be stripped by ``exclude_none``."""
+        ctx = _make_context()
+        await _Host().send_message(ctx, CustomEvent(event=AgentRunEvent.CUSTOM, name="ping", value=None))
+
+        wire = ctx.callbacks.send_message.await_args_list[0].args[0].model_dump(mode="json")["root"]["event"]
+        assert wire == {"type": "CUSTOM", "name": "ping", "value": None}
+
+
+class TestSubagentOutcome:
+    @pytest.mark.parametrize(("outcome", "wire", "status"), [("suspended", {"type": "suspended"}, "suspended"), (None, None, "completed")])
+    async def test_outcome_reaches_wire_and_state(self, outcome: Any, wire: Any, status: str) -> None:
+        from digitalkin.mixins.agui_mixin import AgUiRunState
+
+        ctx = _make_context()
+        ctx.agui_run = AgUiRunState()
+        host = _Host()
+        await host.send_message(ctx, SubagentStartedEvent(event=AgentRunEvent.SUBAGENT_STARTED, name="a", subagent_run_id="m1"))
+        await host.send_message(
+            ctx, SubagentFinishedEvent(event=AgentRunEvent.SUBAGENT_FINISHED, subagent_run_id="m1", outcome=outcome)
+        )
+
+        finished = next(
+            c.args[0].model_dump(mode="json")["root"]["event"]
+            for c in ctx.callbacks.send_message.await_args_list
+            if isinstance(c.args[0].root, AgUiSubagentFinishedOutput)
+        )
+        assert finished.get("outcome") == wire
+        assert ctx.agui_run.state["subagents"]["m1"]["status"] == status
+
+
+class TestSourceCitationRouting:
+    async def test_subagent_citation_lands_in_its_own_list(self) -> None:
+        from digitalkin.mixins.agui_mixin import AgUiRunState
+        from digitalkin.models.events import SourceCitation, SourceCitationEvent
+
+        ctx = _make_context()
+        ctx.agui_run = AgUiRunState()
+        await _Host().send_message(ctx, SourceCitationEvent(value=SourceCitation(url="https://a.io/"), subagent_run_id="m1"))
+
+        assert ctx.agui_run.sources == {"m1": {"https://a.io/": {"url": "https://a.io/"}}}
+
+    async def test_invalid_citation_value_is_dropped(self) -> None:
+        from digitalkin.mixins.agui_mixin import AgUiRunState
+
+        ctx = _make_context()
+        ctx.agui_run = AgUiRunState()
+        await _Host().send_message(ctx, CustomEvent(name="source_citation", value={"url": "javascript:alert(1)"}))
+
+        ctx.callbacks.send_message.assert_not_awaited()
+        assert ctx.agui_run.sources == {}

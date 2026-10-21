@@ -1,6 +1,6 @@
 """EchoModule server — same pattern as template-tool.
 
-Uses ModuleServer with auto-embedded GatewayServicer (via DIGITALKIN_REDIS_URL).
+Uses ModuleServer, which embeds the GatewayServicer.
 Server config via env vars (ServerSettings from pydantic-settings):
   SERVER_CHANNEL_HOST, SERVER_CHANNEL_PORT, SERVER_CHANNEL_SECURITY, etc.
 
@@ -9,10 +9,9 @@ Usage:
     docker compose -f examples/redis_demo/docker-compose.yml up -d
 
     # 2. Set env and start:
-    DIGITALKIN_REDIS_URL=redis://localhost:6379/0 python examples/redis_demo/server.py
+    SERVICE_MODE=local DIGITALKIN_REDIS_URL=redis://localhost:6379/0 python examples/redis_demo/server.py
 
-    # 3. Test with the client:
-    python examples/redis_demo/client.py full --prompt "Hello world"
+A consumer then calls StartStream; see docs/gateway_protocol.md.
 """
 
 import asyncio

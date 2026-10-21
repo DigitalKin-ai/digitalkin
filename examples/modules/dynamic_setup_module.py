@@ -255,7 +255,10 @@ class DynamicSetupModule(
 
     # Services configuration (empty for this example)
     services_config_strategies: ClassVar[dict[str, ServicesStrategy | None]] = {}
-    services_config_params: ClassVar[dict[str, dict[str, Any | None] | None]] = {}
+    services_config_params: ClassVar[dict[str, dict[str, Any | None] | None]] = {
+        "storage": {"config": {}},
+        "cost": {"config": {}},
+    }
 
     async def initialize(self, context: ModuleContext, setup_data: DynamicAgentSetup) -> None:
         """Initialize the module with setup data.

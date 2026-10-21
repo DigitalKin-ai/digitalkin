@@ -100,8 +100,8 @@ async def test_registry_schemas_cover_every_module_schema_but_user_info() -> Non
         "config_setup_schema",
         "cost_schema",
     }
-    assert schemas["input_schema"] == json.loads(await mod.get_input_format(llm_format=False))
-    assert schemas["setup_schema"] == json.loads(await mod.get_setup_format(llm_format=False))
+    assert schemas["input_schema"] == json.loads(await mod.get_input_format(llm_format=True))
+    assert schemas["setup_schema"] == json.loads(await mod.get_setup_format(llm_format=True))
 
 
 async def test_undeclared_registry_schema_is_sent_empty() -> None:
@@ -119,7 +119,7 @@ async def test_failing_registry_schema_is_sent_empty_and_logged() -> None:
     ):
         schemas = await mod.build_registry_schemas()
     assert schemas["output_schema"] == {}
-    assert schemas["input_schema"] == json.loads(await mod.get_input_format(llm_format=False))
+    assert schemas["input_schema"] == json.loads(await mod.get_input_format(llm_format=True))
     log.error.assert_called_once()
     assert log.error.call_args.args[1] == "output_schema"
     assert "bad schema" in repr(log.error.call_args.args[3])

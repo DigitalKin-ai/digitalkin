@@ -21,12 +21,12 @@ Three client-facing RPCs (plus `AssociateTask` for nested runs), one BiDi data c
    │ ◄── StreamResponse{stream.end}──                            │
 ```
 
-1. **`StartStream`** — unary. Reserves a task slot and dispatches the module. Returns `{ accepted, task_id }`.
+1. **`StartStream`** — unary. Claims the task (`idem:{task_id}`), seeds its stream and dials the consumer back; the module process admits it to a task slot afterwards. Returns `{ accepted, task_id }`.
 2. **`Stream`** — BiDi. Client sends `StreamRequest` messages (the first carries the **query**, in `data`). Server
    yields `StreamResponse` messages until the stream closes cleanly.
 3. **`SendSignal`** — unary. Out-of-band controls: cancel a task, or invalidate caches.
 
-Lifecycle, errors, warnings travel **inside the data channel** as Struct sentinels (`stream.start`, `stream.end`, `stream.error`). gRPC status codes are not used to signal stream-level events on `Stream`.
+Lifecycle and errors travel **inside the data channel** as Struct sentinels (`stream.start`, `stream.end`, `stream.error`). gRPC status codes are not used to signal stream-level events on `Stream`.
 
 ---
 
@@ -46,9 +46,6 @@ Messages live in `agentic_mesh_protocol/gateway/v1/`: requests and responses of 
 `gateway_enums.proto`. Every field carries `buf.validate` rules; the SDK checks every unary request
 against them and answers `INVALID_ARGUMENT` before the servicer runs. `Stream` frames are not
 rejected that way — a bad frame surfaces in-band as `stream.error`.
-
-```
-```
 
 ### `StartStream`
 
@@ -122,7 +119,6 @@ Domain output from the module uses **non-prefixed** protocols (`text_chunk`, `to
 | `stream.end` | `task_id` | **Last** entry on every stream. Always present, no exceptions. |
 | `stream.error` | `code, message, fatal, task_id` | Failure event. If `fatal=true`, immediately followed by `stream.end`. |
 | `stream.cancelled` | `reason` | The task was cancelled (`SendSignal(CANCEL)`, server shutdown, …). Emitted by the module, immediately followed by `stream.end`. |
-| `stream.warn` | `code, message` | Recoverable issue. Stream continues. |
 | `stream.heartbeat` | — | The task is alive but has been silent for `DIGITALKIN_MODULE_HEARTBEAT_INTERVAL_S` (30s). Keeps the idle guards from closing the stream; **ignore it**. A task with an open AG-UI run beats as a `STATE_DELTA` on `/run/heartbeatAt` instead. Never forwarded to M2M callers. |
 
 **Invariant:** every stream ends with exactly one `stream.end`. Fatal errors are *two* writes — `stream.error(fatal=true)` then `stream.end` — because the diagnostic event and the structural terminator have separate jobs.
@@ -183,7 +179,7 @@ Gateway (gRPC client)                              Consumer (gRPC server)
         │ ── StreamRequest(data={protocol:"stream.end"}) ──►│  ← terminator
 ```
 
-The query payload from the consumer is delivered to the SDK module exactly like the first message in the client-initiated `Stream` flow. The dispatcher unblocks on `session.input_queue` once the query lands. From there, the producer's lifecycle is identical to the standard path.
+The query payload from the consumer is delivered to the SDK module exactly like the first message in the client-initiated `Stream` flow. The module starts only once that query has arrived. From there, the producer's lifecycle is identical to the standard path.
 
 ### Field semantics in the dial-back direction
 
@@ -201,7 +197,7 @@ On the **consumer → gateway** upstream direction:
 
 ### Buffer and recovery
 
-Outputs are persisted to the Redis stream `task:<task_id>:stream` with retention = `STREAM_TTL_S`. If the dial-back BiDi drops mid-stream:
+Outputs are persisted to the Redis stream `task:<task_id>:stream` with a sliding TTL of `DIGITALKIN_GATEWAY_STREAM_REDIS_STREAM_INITIAL_TTL` (600 s, re-armed on every output), cut to `DIGITALKIN_GATEWAY_STREAM_REDIS_STREAM_TTL` (360 s) after `stream.end`. If the dial-back BiDi drops mid-stream:
 
 - The producer keeps writing to Redis (no back-pressure on the producer from a flaky consumer).
 - The consumer can recover by re-issuing `StartStream` (server dedups on existing `task_id`) and either re-advertising `x-client-address` for another push attempt, or opening `Stream` BiDi directly with `from_seq=<last_seq>` to pull the rest.
@@ -347,10 +343,9 @@ Each task is its own gRPC stream. Don't multiplex multiple tasks onto one `Strea
 
 There is no separate "init" message. The first frame is **both** the registration (task_id + from_seq) **and** the query (data). The server delivers `data` to the SDK module as its first input.
 
-### Sending more upstream input
+### No upstream input after the query
 
-After the first message you may keep sending `StreamRequest` frames; only `data` is read. Use this for multi-turn
-conversation, tool responses streamed back, etc.
+Frames sent after the first one are logged (size and keys, never content) and dropped. A new turn is a new task.
 
 ### Cancelling
 
@@ -366,9 +361,9 @@ of setups/tools after a configuration change.
 
 A misbehaving `Stream` call **does not** raise `aio.AioRpcError` from the call iterator on common failures — it yields a `stream.error` Struct, then `stream.end`, then closes cleanly. Treat your RPC iteration as data-only; reserve gRPC-level exception handling for transport faults (channel down, deadline exceeded).
 
-### Recoverable warnings
+### Recoverable errors
 
-`stream.error(fatal=false)` and `stream.warn` keep the stream open. Log them; don't tear down on every error event.
+`stream.error(fatal=false)` keeps the stream open. Log them; don't tear down on every error event.
 
 ### Timing
 

@@ -15,6 +15,7 @@ from typing import Any
 
 import pytest
 
+import digitalkin.community.agno  # (real agno loads before the fakes below replace it)
 from digitalkin.models.events import (
     AgentRunEvent,
     CustomEvent,
@@ -175,6 +176,8 @@ def _open_reasoning_id(adapter: Any) -> str | None:
 
 def test_import_error_when_agno_missing(monkeypatch: pytest.MonkeyPatch) -> None:
     """First conversion raises ImportError with install hint if agno absent."""
+    from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
+
     for key in ("agno", "agno.run", "agno.run.agent", "agno.run.team"):
         monkeypatch.delitem(sys.modules, key, raising=False)
 
@@ -186,8 +189,6 @@ def test_import_error_when_agno_missing(monkeypatch: pytest.MonkeyPatch) -> None
         return real_import(name, *args, **kwargs)
 
     monkeypatch.setattr("builtins.__import__", _blocked_import)
-
-    from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
 
     adapter = AgnoStreamAdapter()
     event = _make_event("anything")
@@ -782,8 +783,8 @@ def test_run_completed_closes_subagents_before_finishing() -> None:
     assert adapter._subagents == {}
 
 
-def test_run_error_closes_subagents() -> None:
-    """A failed run must not leave a step dangling for the client's reconnect preamble."""
+def test_run_error_abandons_subagents_and_tool_calls() -> None:
+    """AG-UI 1.0: after RUN_ERROR open invocations are abandoned, never closed as a success."""
     from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
 
     adapter = AgnoStreamAdapter()
@@ -791,11 +792,15 @@ def test_run_error_closes_subagents() -> None:
     adapter.to_digitalkin_events(
         _make_event(_FakeRunEvent.run_started, run_id="m1", parent_run_id="team-r1", agent_name="Alice"),
     )
+    adapter.to_digitalkin_events(
+        _make_event(_FakeRunEvent.tool_call_started, run_id="m1", tool=_make_tool(tool_call_id="c1", tool_name="t")),
+    )
 
     result = adapter.to_digitalkin_events(_make_event(_FakeTeamRunEvent.run_error, content="boom"))
 
-    assert [type(e) for e in result] == [SubagentFinishedEvent, RunErrorEvent]
+    assert [type(e) for e in result] == [RunErrorEvent]
     assert adapter._subagents == {}
+    assert adapter._open_tool_calls == {}
 
 
 def test_flush_closes_subagents() -> None:
@@ -987,7 +992,7 @@ def test_reasoning_content_delta_passes_through() -> None:
     assert result[0].reasoning_id == _open_reasoning_id(adapter)
 
 
-def test_reasoning_content_delta_without_content_defaults_to_empty() -> None:
+def test_reasoning_content_delta_without_content_emits_nothing() -> None:
     from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
 
     adapter = AgnoStreamAdapter()
@@ -995,8 +1000,21 @@ def test_reasoning_content_delta_without_content_defaults_to_empty() -> None:
     result = adapter.to_digitalkin_events(
         _make_event(_FakeRunEvent.reasoning_content_delta, reasoning_content=None),
     )
-    assert isinstance(result[0], ReasoningContentDeltaEvent)
-    assert result[0].delta == ""
+    assert result == []
+
+
+def test_reasoning_content_delta_without_reasoning_started_opens_one() -> None:
+    """AG-UI 1.0 fails a run on content for an unopened reasoning message."""
+    from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
+
+    adapter = AgnoStreamAdapter()
+    result = adapter.to_digitalkin_events(
+        _make_event(_FakeRunEvent.reasoning_content_delta, reasoning_content="hmm"),
+    )
+    started, delta = result
+    assert isinstance(started, ReasoningStartedEvent)
+    assert isinstance(delta, ReasoningContentDeltaEvent)
+    assert started.reasoning_id == delta.reasoning_id == _open_reasoning_id(adapter)
 
 
 def test_reasoning_step_reuses_active_reasoning() -> None:

@@ -76,7 +76,10 @@ async def _read_all_stream_entries(redis: _FakeRedisClient, task_id: str) -> lis
             if "message" in inner:
                 message = inner["message"].string_value
         decoded.append({
-            "protocol": proto, "code": code, "message": message, "fields": fields,
+            "protocol": proto,
+            "code": code,
+            "message": message,
+            "fields": fields,
         })
     return decoded
 
@@ -159,6 +162,7 @@ class TestDialBackNoQuery:
                 )
                 # Pre-register the session so _dial_consumer doesn't bail.
                 from digitalkin.grpc_servers.stream_session import StreamSession
+
                 session = StreamSession(task_id="task_no_query")
                 await gateway._registry.register(session)
 
@@ -349,6 +353,42 @@ class TestValidationErrorPhases:
             assert code == StreamErrorCode.INPUT_VALIDATION_ERROR.value
             assert "input validation failed" in message
             assert "FakeInput" in message
+        finally:
+            await redis.close()
+
+    @pytest.mark.parametrize("agui", [True, False])
+    async def test_input_validation_error_emits_run_error_for_agui_modules(self, agui: bool) -> None:
+        """An AG-UI module's client sees a generic RUN_ERROR (stable code, no detail) before the fatal."""
+        from google.protobuf import json_format
+
+        from digitalkin.core.task_manager.module_runner import ModuleRunner
+        from digitalkin.models.module.ag_ui import AgUiOutput
+
+        redis = _FakeRedisClient()
+        try:
+            servicer = self._servicer()
+            servicer.module_class.create_input_model = MagicMock(side_effect=_real_validation_error())
+            servicer.module_class._extended_input_format = None
+            servicer.module_class.input_format = type("FakeInput", (), {})
+            servicer.module_class.output_format = AgUiOutput if agui else type("PlainOutput", (), {})
+            runner = ModuleRunner(redis_client=redis, servicer=servicer)  # type: ignore[arg-type]
+            fatal = AsyncMock()
+
+            await runner.run(
+                struct_pb2.Struct(), task_id="task_val", setup_id="setups:s1", mission_id="missions:m1", on_fatal=fatal
+            )
+
+            events = []
+            for entry in await _read_all_stream_entries(redis, "task_val"):
+                s = struct_pb2.Struct()
+                s.ParseFromString(entry["fields"][b"pb"])
+                events.append(json_format.MessageToDict(s)["root"]["event"])
+            assert events == (
+                [{"type": "RUN_ERROR", "message": "invalid run input", "code": "INPUT_VALIDATION_ERROR"}]
+                if agui
+                else []
+            )
+            assert fatal.await_args.args[0] == StreamErrorCode.INPUT_VALIDATION_ERROR.value
         finally:
             await redis.close()
 

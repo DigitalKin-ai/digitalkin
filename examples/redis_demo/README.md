@@ -15,27 +15,21 @@ examples/redis_demo/
 ├── triggers/
 │   └── message_trigger.py  # MessageTrigger (processes input, streams chunks)
 ├── server.py               # ModuleServer entry point
-├── client.py               # CLI client (StartStream + ConsumeStream)
 └── docker-compose.yml      # Redis container
 ```
 
-## Setup
+## Run
 
 ```bash
-# 1. Start Redis
 docker compose -f examples/redis_demo/docker-compose.yml up -d
-
-# 2. Start the server
 SERVICE_MODE=local DIGITALKIN_REDIS_URL=redis://localhost:6379/0 python examples/redis_demo/server.py
-
-# 3. Test with the client
-python examples/redis_demo/client.py full --prompt "Hello world"
-python examples/redis_demo/client.py full --prompt "Test" --setup '{"uppercase": true, "repeat": 5}'
 ```
 
-## How it works
+The server exposes `ModuleService` and the embedded `GatewayService` on one port (`SERVER_CHANNEL_PORT`).
 
-1. `ModuleServer` starts with `EchoToolModule`
-2. Because `DIGITALKIN_REDIS_URL` is set, `ModuleServer._register_gateway_servicer()` auto-registers the `GatewayServicer` on the same port
-3. The server exposes both `ModuleService` and `GatewayService` on port 50051
-4. Client calls `StartStream` → gateway registers session, calls `StartModule` via loopback → `MessageTrigger.handle()` runs → output goes through Redis stream → client reads via `ConsumeStream`
+## Calling it
+
+There is no bundled client: a consumer calls `StartStream` with an `x-client-address` pointing at its own
+`GatewayService.Stream` endpoint, the module dials back, receives the query as the consumer's first reply,
+and streams `MessageOutputPayload` chunks followed by `stream.end`. The full contract is in
+[`docs/gateway_protocol.md`](../../docs/gateway_protocol.md).

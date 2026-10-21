@@ -3,7 +3,7 @@
 Mark fields as dynamic with ``Annotated`` metadata so their schema values
 can be refreshed at runtime via sync or async fetchers.
 
-See ``docs/api/dynamic_schema.md`` and ``tests/utils/test_dynamic_schema.py``.
+See ``docs/module_authoring.md`` and ``tests/utils/test_dynamic_schema.py``.
 """
 
 from __future__ import annotations

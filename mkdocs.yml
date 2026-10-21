@@ -8,6 +8,34 @@ site_dir: "site"
 watch: [mkdocs.yml, README.md, src]
 copyright: Copyright &copy; 2025 Digitalkin
 edit_uri: edit/main/docs/
+exclude_docs: |
+  validation_checklist.md
+
+nav:
+- Home: index.md
+- Architecture: architecture.md
+- Writing modules: module_authoring.md
+- Contracts:
+  - Gateway protocol: gateway_protocol.md
+  - AG-UI events: agui_events.md
+- Operations:
+  - Deploy and tune: operations.md
+  - Environment variables: environment_variables.md
+- Testing: testing.md
+- Changelog:
+  - changelog/index.md
+  - 1.0.5: changelog/1.0.5.md
+  - 1.0.4: changelog/1.0.4.md
+  - 1.0.2: changelog/1.0.2.md
+  - 1.0.2.dev7: changelog/1.0.2.dev7.md
+  - 1.0.2.dev6: changelog/1.0.2.dev6.md
+  - 0.4.4: changelog/0.4.4.md
+  - 0.4.3: changelog/0.4.3.md
+  - 0.4.2: changelog/0.4.2.md
+  - 0.4.1: changelog/0.4.1.md
+  - 0.4.0: changelog/0.4.0.md
+  - 0.3.5.dev0: changelog/0.3.5.dev0.md
+- API reference: api/api.md
 
 theme:
   name: material
@@ -89,11 +117,10 @@ plugins:
 - autorefs
 - markdown-exec
 - section-index
-# - coverage
 - mkdocstrings:
     handlers:
       python:
-        paths: [src, docs/snippets]
+        paths: [src]
         inventories:
         - https://docs.python.org/3/objects.inv
         - https://mkdocstrings.github.io/objects.inv
@@ -112,7 +139,6 @@ plugins:
           merge_init_into_class: true
           parameter_headings: true
           type_parameter_headings: true
-          preload_modules: [mkdocstrings]
           relative_crossrefs: true
           scoped_crossrefs: true
           separate_signature: true
@@ -131,8 +157,16 @@ plugins:
 - llmstxt:
     full_output: llms-full.txt
     sections:
-      Usage:
+      Guides:
       - index.md
+      - architecture.md
+      - module_authoring.md
+      - operations.md
+      - testing.md
+      Contracts:
+      - gateway_protocol.md
+      - agui_events.md
+      - environment_variables.md
       API:
       - api/api.md
 - git-revision-date-localized:
@@ -141,14 +175,6 @@ plugins:
     type: timeago
 - minify:
     minify_html: !ENV [DEPLOY, false]
-- redirects:
-    redirect_maps:
-      reference/mkdocstrings_handlers/python/index.md: api/api.md
-      reference/mkdocstrings_handlers/python/config.md: api/api.md#mkdocstrings_handlers.python.config
-      reference/mkdocstrings_handlers/python/debug.md: api/api.md#mkdocstrings_handlers.python.debug
-      reference/mkdocstrings_handlers/python/handler.md: api/api.md#mkdocstrings_handlers.python.handler
-      reference/mkdocstrings_handlers/python/rendering.md: api/api.md#mkdocstrings_handlers.python.rendering
-
 - group:
     enabled: !ENV [MATERIAL_INSIDERS, false]
     plugins:

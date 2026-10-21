@@ -1,7 +1,7 @@
 """Fixtures for L2 chaos tests via Toxiproxy.
 
 Requires:
-  docker compose --profile redis --profile chaos up -d
+  docker compose --profile chaos up -d
 
 Toxiproxy sits between tests and Redis. Tests inject faults (latency,
 bandwidth limits, connection resets) via the Toxiproxy REST API on :8474.
@@ -17,8 +17,8 @@ import pytest
 import pytest_asyncio
 
 TOXIPROXY_API = os.environ.get("TOXIPROXY_API", "http://localhost:8474")
-# Upstream host as seen from Toxiproxy container (Docker network name)
-REDIS_UPSTREAM_HOST = os.environ.get("REDIS_UPSTREAM_HOST", "digitalkin-tests-redis")
+# Upstream host as seen from the Toxiproxy container (compose service name)
+REDIS_UPSTREAM_HOST = os.environ.get("REDIS_UPSTREAM_HOST", "tests-redis")
 REDIS_UPSTREAM_PORT = int(os.environ.get("REDIS_UPSTREAM_PORT", "6379"))
 PROXY_LISTEN_PORT = 26379
 # Host the test process dials the proxy on: localhost when run from the host (ports
@@ -111,7 +111,7 @@ def _toxiproxy_available() -> bool:
 
 SKIP_NO_TOXIPROXY = pytest.mark.skipif(
     not _toxiproxy_available(),
-    reason="Toxiproxy not running — start with: docker compose --profile redis --profile chaos up -d",
+    reason="Toxiproxy not running — start with: docker compose --profile chaos up -d",
 )
 
 
