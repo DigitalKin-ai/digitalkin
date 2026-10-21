@@ -14,17 +14,21 @@ import time
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from typing import Any
 
+from ag_ui.core.events import ActivitySnapshotEvent
 from ag_ui.core.events import CustomEvent as AgUiCustomEvent
 from agno.media import Image
 from agno.tools.function import Function, ToolResult
+from pydantic import ValidationError
 
 from digitalkin.community.agno.models import ToolCallMetadata, ToolOutputMetadata
 from digitalkin.community.agno.toolkits.base import DkToolkit
 from digitalkin.core.profiling.step_timer import StepTimer
 from digitalkin.logger import logger
+from digitalkin.models.events import SourceCitation
 from digitalkin.models.module import ModuleContext
-from digitalkin.models.module.ag_ui import AgUiCustomEventOutput, AgUiOutput
+from digitalkin.models.module.ag_ui import AgUiActivitySnapshotOutput, AgUiCustomEventOutput, AgUiOutput
 from digitalkin.models.module.tool_cache import ToolDefinition, ToolModuleInfo
+from digitalkin.services.communication.exceptions import ToolCallError
 
 # Default timeout for tool calls in seconds
 DEFAULT_TOOL_TIMEOUT_SECONDS = 300
@@ -238,14 +242,17 @@ class ModuleToolkit(DkToolkit):
 
     @staticmethod
     async def _relay_custom_event(context: ModuleContext, response: dict[str, Any]) -> None:
-        """Relay a tool's AG-UI custom event onto the agent's own output stream.
+        """Relay a tool's AG-UI custom events and sources onto the agent's own output stream.
 
         A called tool streams its AG-UI events on its own gRPC job. The frontend only
         consumes the agent's job stream, and nothing splices the two, so those events
         would be dropped. Custom events carry application payloads the UI needs (e.g.
-        the virtual desktop's live-view URL), so we forward them here.
+        the virtual desktop's live-view URL), so we forward them here, keeping their
+        ``metadata`` but not the tool's ``subagentRunId``, which names an invocation of
+        the tool's stream that was never announced on the agent's. ``sources`` activity
+        snapshots go to :meth:`_relay_sources`.
 
-        Only `agui_custom` is relayed: forwarding the tool's run/text lifecycle events
+        Only these are relayed: forwarding the tool's run/text lifecycle events
         would nest a second run inside the agent's own, which the frontend already tracks.
 
         Relaying is best-effort — a failure here must never fail the tool call.
@@ -255,18 +262,32 @@ class ModuleToolkit(DkToolkit):
             response: One streamed message from the tool, as yielded by `call_module`.
         """
         root = response.get("root", {})
-        if not isinstance(root, dict) or root.get("protocol") != AGUI_CUSTOM_PROTOCOL:
+        protocol = root.get("protocol") if isinstance(root, dict) else None
+        event = root.get("event") if protocol in {AGUI_CUSTOM_PROTOCOL, "agui_activity_snapshot"} else None
+        if not isinstance(event, dict):
             return
-
-        event = root.get("event")
-        if not isinstance(event, dict) or not event.get("name"):
+        if protocol == "agui_activity_snapshot":
+            await ModuleToolkit._relay_sources(context, event)
+            return
+        if not event.get("name"):
             return
 
         # callbacks is a dict-driven SimpleNamespace (module_context.py:168);
         # send_message may legitimately be absent outside a running job.
         send_message = vars(context.callbacks).get("send_message")
+        value = event.get("value")
+        url = value.get("url") if isinstance(value, dict) else None
         if send_message is None:
+            logger.warning(
+                "Dropped custom event '%s' url=%s: no send_message on the agent context",
+                event["name"],
+                url,
+            )
             return
+        if "subagentRunId" in event:
+            logger.info(
+                "Relaying custom event '%s' without the tool's subagentRunId=%s", event["name"], event["subagentRunId"]
+            )
 
         try:
             # Rebuilt from name/value rather than model_validate: the dict comes from
@@ -275,19 +296,70 @@ class ModuleToolkit(DkToolkit):
             await send_message(
                 AgUiOutput(
                     root=AgUiCustomEventOutput(
-                        event=AgUiCustomEvent(name=event["name"], value=event.get("value")),
+                        event=AgUiCustomEvent(name=event["name"], value=value, metadata=event.get("metadata") or None),
+                    )
+                )
+            )
+            logger.info(
+                "Relayed custom event '%s' url=%s to the agent stream",
+                event["name"],
+                url,
+            )
+        except Exception:
+            logger.exception("Failed to relay custom event '%s' to the agent stream", event["name"])
+
+    @staticmethod
+    async def _relay_sources(context: ModuleContext, event: dict[str, Any]) -> None:
+        """Merge a tool's ``sources`` activity into the agent run's own sources list.
+
+        The agent run's list has a single writer, so the tool's snapshot is never forwarded as
+        is. Without an AG-UI run on this side (a tool calling a tool) it is forwarded unchanged
+        for the next relay up. Best-effort: never raises.
+
+        Args:
+            context: The agent's module context.
+            event: The tool's ``ACTIVITY_SNAPSHOT`` event, camelCase as streamed.
+        """
+        content = event.get("content")
+        sources = content.get("sources") if isinstance(content, dict) else None
+        if event.get("activityType") != "sources" or not isinstance(content, dict) or not isinstance(sources, list):
+            logger.info("Dropped relayed activity %.2000r: only sources activities are relayed", event)
+            return
+        run = context.agui_run
+        if run is not None:
+            for source in sources:
+                try:
+                    await run.cite(context, SourceCitation.model_validate(source), None)
+                except ValidationError as exc:  # ruff: ignore[try-except-in-loop]
+                    logger.warning("Dropped relayed source %.2000r: %s", source, exc)
+                except Exception:
+                    logger.exception("Failed to merge relayed source %.2000r", source)
+            return
+        send_message = vars(context.callbacks).get("send_message")
+        if send_message is None:
+            logger.warning("Dropped relayed sources %.2000r: no send_message on the context", sources)
+            return
+        try:
+            await send_message(
+                AgUiOutput(
+                    root=AgUiActivitySnapshotOutput(
+                        event=ActivitySnapshotEvent(
+                            message_id=str(event.get("messageId")),
+                            activity_type="sources",
+                            content=content,
+                            replace=True,
+                        )
                     )
                 )
             )
         except Exception:
-            logger.exception("Failed to relay custom event '%s' to the agent stream", event["name"])
+            logger.exception("Failed to forward sources %.2000r", sources)
 
     def _handle_success(
         self,
         tool_name: str,
         output: dict[str, Any] | str,
         duration_ms: float,
-        input_kwargs: dict[str, Any],
     ) -> str | ToolResult:
         """Handle successful tool execution.
 
@@ -302,7 +374,6 @@ class ModuleToolkit(DkToolkit):
             success=True,
             duration_ms=duration_ms,
             cost_tracked=ModuleToolkit._has_cost_metadata(tool_metadata),
-            input_kwargs=input_kwargs,
             tool_metadata=tool_metadata,
         )
 
@@ -321,7 +392,7 @@ class ModuleToolkit(DkToolkit):
             self._context.session.job_id,
         )
 
-        body = json.dumps({"output": payload, "metadata": metadata.to_success_dict()}, indent=2)
+        body = json.dumps({"output": payload, "metadata": metadata.to_success_dict()})
         if not image_urls:
             return body
         return ToolResult(content=body, images=[Image(url=url) for url in image_urls])
@@ -331,7 +402,6 @@ class ModuleToolkit(DkToolkit):
         tool_name: str,
         error_msg: str,
         duration_ms: float,
-        input_kwargs: dict[str, Any],
     ) -> str:
         """Handle failed tool execution.
 
@@ -343,7 +413,6 @@ class ModuleToolkit(DkToolkit):
             success=False,
             duration_ms=duration_ms,
             error=error_msg,
-            input_kwargs=input_kwargs,
         )
         logger.warning(
             "Tool '%s' failed in %.2fms: %s setup_id=%s task_id=%s",
@@ -353,64 +422,76 @@ class ModuleToolkit(DkToolkit):
             self._tool_module_info.setup_id,
             self._context.session.job_id,
         )
-        return json.dumps({"error": error_msg, "metadata": metadata.to_error_dict()}, indent=2)
+        return json.dumps({"error": error_msg, "metadata": metadata.to_error_dict()})
 
     @staticmethod
-    def _find_successful_response(results: list[dict[str, Any]]) -> dict[str, Any] | None:
-        """Find the last domain output from the streamed SDK responses.
+    def _extract_error_message(frame: dict[str, Any] | None) -> str:
+        """Extract an error message from the last error frame of a tool call.
 
-        Each response is the ``MessageToDict`` of a payload Struct, shape
-        ``{"root": {"protocol": "...", ...}, "annotations": {...}}``. A
-        "successful" response is the most recent one whose ``root.protocol``
-        is *not* a lifecycle/error sentinel.
+        Errors surface in-band as ``stream.error`` (``code``/``message``) or
+        ``stream.cancelled`` (``reason``); a frame may also carry its own ``error`` field.
 
-        Returns:
-            The matching dict, or None if every response was a sentinel.
-        """
-        for resp in reversed(results):
-            root = resp.get("root")
-            if not isinstance(root, dict):
-                continue
-            protocol = root.get("protocol", "")
-            if protocol in {"stream.start", "stream.end", "stream.init", "stream.error"}:
-                continue
-            return resp
-        return None
-
-    @staticmethod
-    def _extract_error_message(results: list[dict[str, Any]]) -> str:
-        """Extract an error message from streamed SDK responses.
-
-        Errors surface in-band as ``root.protocol == "stream.error"`` with
-        ``code`` and ``message`` fields (per the SDK's sentinel protocol).
-        Domain modules may also embed their own ``error`` field on a domain
-        output.
+        Args:
+            frame: The last error frame kept while draining the tool stream.
 
         Returns:
-            The most informative error string, or a default if none found.
+            The error string, or a default if the frame carries none.
         """
         default_error = "No successful response received from module"
-        if not results:
+        if frame is None:
             return default_error
-
-        for resp in reversed(results):
-            root = resp.get("root")
-            if not isinstance(root, dict):
-                continue
-            if root.get("protocol") != "stream.error":
-                continue
-            code = root.get("code", "")
-            message = root.get("message", "") or default_error
-            return f"[{code}] {message}" if code else str(message)
-
-        for resp in reversed(results):
-            root = resp.get("root")
-            if isinstance(root, dict) and root.get("error"):
+        root = frame.get("root")
+        if isinstance(root, dict):
+            protocol = root.get("protocol")
+            if protocol == "stream.cancelled":
+                return f"[CANCELLED] {root.get('reason') or 'cancelled'}"
+            if protocol == "stream.error":
+                code = root.get("code", "")
+                message = root.get("message", "") or default_error
+                return f"[{code}] {message}" if code else str(message)
+            if root.get("error"):
                 return str(root["error"])
-            if isinstance(resp.get("error"), str):
-                return str(resp["error"])
-
+        if isinstance(frame.get("error"), str):
+            return str(frame["error"])
         return default_error
+
+    @staticmethod
+    async def _drain(
+        context: ModuleContext,
+        stream: AsyncGenerator[dict[str, Any], None],
+    ) -> tuple[dict[str, Any] | None, dict[str, Any] | None, int]:
+        """Drain a tool stream, keeping only the last domain frame and the last error frame.
+
+        Each frame is the ``MessageToDict`` of one output Struct (``{"root": {"protocol": ...}}``).
+        Custom events are relayed as they arrive. A ``stream.error``/``stream.cancelled``
+        outranks a bare ``error`` field.
+
+        Args:
+            context: The agent's module context, for relaying custom events.
+            stream: The tool's output stream.
+
+        Returns:
+            ``(last_success, last_error, frame_count)``.
+        """
+        last_success: dict[str, Any] | None = None
+        last_error: dict[str, Any] | None = None
+        sentinel_error_seen = False
+        frames = 0
+        async for response in stream:
+            frames += 1
+            await ModuleToolkit._relay_custom_event(context, response)
+            root = response.get("root")
+            protocol = root.get("protocol", "") if isinstance(root, dict) else ""
+            if protocol in {"stream.error", "stream.cancelled"}:
+                last_error = response
+                sentinel_error_seen = True
+            elif isinstance(root, dict) and protocol not in {"stream.start", "stream.end", "stream.init"}:
+                last_success = response
+            elif not sentinel_error_seen and (
+                isinstance(response.get("error"), str) or (isinstance(root, dict) and root.get("error"))
+            ):
+                last_error = response
+        return last_success, last_error, frames
 
     @staticmethod
     def _unwrap_kwargs(
@@ -459,6 +540,10 @@ class ModuleToolkit(DkToolkit):
         Wraps the SDK module's async generator function into an async function
         that Agno can consume, with proper error handling and response formatting.
 
+        A failure raises ``ToolCallError`` carrying the same JSON body a success-path caller
+        would have read: Agno hands ``str(exc)`` to the model unchanged and flags the call
+        ``tool_call_error``, which is what marks the tool failed for the front.
+
         Returns:
             Async function that calls the SDK tool and returns a JSON result, or a
             ToolResult when the tool returned images alongside its text output.
@@ -491,19 +576,9 @@ class ModuleToolkit(DkToolkit):
                 task_id,
             )
 
-            # Each yielded dict is the MessageToDict of one output Struct,
-            # shape {"root": {"protocol": ...}}. The iterator terminates when
-            # the remote module is done — drain it without an early break.
-            async def consume_generator() -> list[dict[str, Any]]:
-                results: list[dict[str, Any]] = []
-                async for response in fn(**kwargs):
-                    await ModuleToolkit._relay_custom_event(context, response)
-                    results.append(response)
-                return results
-
             try:
-                results = await asyncio.wait_for(
-                    consume_generator(),
+                successful_resp, error_frame, frames = await asyncio.wait_for(
+                    ModuleToolkit._drain(context, fn(**kwargs)),
                     timeout=timeout,
                 )
             except TimeoutError:
@@ -511,26 +586,34 @@ class ModuleToolkit(DkToolkit):
                 duration_ms = round((time.perf_counter() - start_time) * 1000, 2)
                 error_msg = f"Tool '{tool_name}' timed out after {timeout}s"
                 logger.warning("%s task_id=%s", error_msg, task_id)
-                return handle_failure(tool_name, error_msg, duration_ms, kwargs)
+                raise ToolCallError(handle_failure(tool_name, error_msg, duration_ms))
 
             except Exception as e:
                 outcome = "error"
                 duration_ms = round((time.perf_counter() - start_time) * 1000, 2)
                 error_msg = f"Failed to call tool '{tool_name}': {e!s}"
                 logger.warning("%s task_id=%s", error_msg, task_id, exc_info=True)
-                return handle_failure(tool_name, error_msg, duration_ms, kwargs)
+                raise ToolCallError(handle_failure(tool_name, error_msg, duration_ms))
 
             else:
                 call_timer.mark("gen_consume")
                 duration_ms = round((time.perf_counter() - start_time) * 1000, 2)
-
-                successful_resp = ModuleToolkit._find_successful_response(results)
+                # TODO(validate): TOOL-LAST-FRAME tool calls buffer only the last success/error frame
+                logger.info(
+                    "[VALIDATE TOOL-LAST-FRAME] tool '%s' drained %d frames, kept success=%s error=%s "
+                    "(input_kwargs not echoed)",
+                    tool_name,
+                    frames,
+                    successful_resp is not None,
+                    error_frame is not None,
+                    extra={"task_id": task_id, "setup_id": setup_id},
+                )
                 if successful_resp:
-                    return handle_success(tool_name, successful_resp, duration_ms, kwargs)
+                    return handle_success(tool_name, successful_resp, duration_ms)
 
                 outcome = "no_success"
-                error_msg = ModuleToolkit._extract_error_message(results)
-                return handle_failure(tool_name, error_msg, duration_ms, kwargs)
+                error_msg = ModuleToolkit._extract_error_message(error_frame)
+                raise ToolCallError(handle_failure(tool_name, error_msg, duration_ms))
 
             finally:
                 call_timer.mark("respond")

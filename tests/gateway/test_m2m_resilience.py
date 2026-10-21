@@ -19,7 +19,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from agentic_mesh_protocol.gateway.v1 import gateway_pb2
+from agentic_mesh_protocol.gateway.v1 import gateway_dto_pb2, gateway_messages_pb2
 from google.protobuf import struct_pb2
 
 from digitalkin.grpc_servers.gateway_servicer import GatewayServicer
@@ -66,7 +66,7 @@ def _comm(gw: GatewayServicer) -> GrpcCommunication:
     )
     # These tests exercise TARGET-side resilience; the backend mint always succeeds.
     comm._gateway_backend.exec_grpc_query = AsyncMock(  # type: ignore[union-attr, method-assign]
-        return_value=gateway_pb2.AssociateTaskResponse(task_id="tid")
+        return_value=gateway_dto_pb2.AssociateTaskResponse(task_id="tid")
     )
     return comm
 
@@ -179,9 +179,9 @@ class TestBreakerSingleCount:
         breaker = gw._m2m.breaker_for("dial-tgt:1")
         before = breaker._failure_count  # noqa: SLF001 — test-only introspection
 
-        async def _req_iter() -> AsyncIterator[gateway_pb2.StreamServer]:
-            yield gateway_pb2.StreamServer(
-                seq=0,
+        async def _req_iter() -> AsyncIterator[gateway_messages_pb2.StreamRequest]:
+            yield gateway_messages_pb2.StreamRequest(
+                from_seq=0,
                 task_id=task_id,
                 data=_struct({"root": {"protocol": "stream.error", "fatal": True}}),
             )
@@ -201,7 +201,7 @@ class TestBreakerSingleCount:
 
         stub_mock = MagicMock()
         stub_mock.StartStream = AsyncMock(
-            return_value=gateway_pb2.StartStreamResponse(accepted=True, task_id="tid"),
+            return_value=gateway_dto_pb2.StartStreamResponse(accepted=True, task_id="tid"),
         )
         stub_mock.SendSignal = AsyncMock()
         comm._get_or_create_channel = MagicMock(return_value=MagicMock())  # type: ignore[method-assign]
@@ -273,7 +273,7 @@ class TestCallTimeout:
         # Stub StartStream to succeed but never push to the queue.
         stub_mock = MagicMock()
         stub_mock.StartStream = AsyncMock(
-            return_value=gateway_pb2.StartStreamResponse(accepted=True, task_id="tid"),
+            return_value=gateway_dto_pb2.StartStreamResponse(accepted=True, task_id="tid"),
         )
         stub_mock.SendSignal = AsyncMock()
         comm._get_or_create_channel = MagicMock(return_value=MagicMock())  # type: ignore[method-assign]
@@ -299,10 +299,10 @@ class TestCancellation:
 
         stub_mock = MagicMock()
         stub_mock.StartStream = AsyncMock(
-            return_value=gateway_pb2.StartStreamResponse(accepted=True, task_id="tid"),
+            return_value=gateway_dto_pb2.StartStreamResponse(accepted=True, task_id="tid"),
         )
         stub_mock.SendSignal = AsyncMock(
-            return_value=gateway_pb2.ClientSignalResponse(success=True, task_id="tid"),
+            return_value=gateway_dto_pb2.SendSignalResponse(success=True, task_id="tid"),
         )
         comm._get_or_create_channel = MagicMock(return_value=MagicMock())  # type: ignore[method-assign]
         comm._get_or_create_stub = MagicMock(return_value=stub_mock)  # type: ignore[method-assign]
@@ -326,7 +326,8 @@ class TestCancellation:
         # SendSignal(CANCEL) was best-effort dispatched.
         assert stub_mock.SendSignal.await_count >= 1
         sent_request = stub_mock.SendSignal.await_args.args[0]
-        assert sent_request.action == gateway_pb2.SignalAction.CANCEL
+        assert sent_request.WhichOneof("signal") == "cancel"
+        assert sent_request.cancel.task_id == "tid"
         # Registry + semaphore cleaned up.
         assert not gw._m2m.entries
         assert gw._m2m._semaphore._value == get_gateway_settings().m2m.call_max_concurrent

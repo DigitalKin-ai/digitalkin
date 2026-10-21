@@ -35,6 +35,7 @@ def create_mock_task_session(**overrides: Any) -> Mock:
     # Side-channel fields read by TaskExecutor / _handle_*.
     session.pending_signal_action = ""
     session.last_signal_published_ns = 0
+    session.cancelled = False
 
     # Signal service (sender-only).
     session.signal_service = Mock()

@@ -351,6 +351,38 @@ class TestCleanup:
         # Session should still be removed
         assert "t1" not in task_manager.tasks_sessions
 
+    @pytest.mark.asyncio
+    async def test_cancel_during_cleanup_finishes_cleanup_then_reraises(
+        self,
+        task_manager: ConcreteTaskManager,
+        mock_task_session: Mock,
+    ) -> None:
+        """A cancel landing mid-cleanup must not leak the slot or skip session.cleanup()."""
+        await task_manager._task_slot.acquire()
+        task_manager._active_slots = 1
+        gate = asyncio.Event()
+        done: list[str] = []
+
+        async def _slow_cleanup() -> None:
+            await gate.wait()
+            done.append("cleanup")
+
+        mock_task_session.cleanup = AsyncMock(side_effect=_slow_cleanup)
+        task_manager.tasks_sessions["t1"] = mock_task_session
+
+        runner = asyncio.create_task(task_manager._cleanup_task("t1", "missions:test"))
+        await asyncio.sleep(0.01)
+        runner.cancel()
+        await asyncio.sleep(0.01)
+        assert not runner.done()
+
+        gate.set()
+        with pytest.raises(asyncio.CancelledError):
+            await runner
+        assert done == ["cleanup"]
+        assert task_manager._active_slots == 0
+        assert task_manager._task_slot._value == 10
+
 
 # ============================================================================
 # Test: Signal Sending (send_signal)

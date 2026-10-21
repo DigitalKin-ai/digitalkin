@@ -4,7 +4,7 @@ Each test injects a specific fault between the client and Redis,
 then verifies the SDK handles it correctly (retry, reconnect, error).
 
 Requires:
-  docker compose --profile redis --profile chaos up -d
+  docker compose --profile chaos up -d
 
 Scenarios:
 1.  complete_outage → operations fail → re-enable → operations resume

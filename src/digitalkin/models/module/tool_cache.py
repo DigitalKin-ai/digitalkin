@@ -101,6 +101,7 @@ class ToolModuleInfo(ModuleInfo):
         schemas = await communication.get_module_schemas(
             module_info.address,
             module_info.port,
+            module_id=module_info.module_id,
             llm_format=llm_format,
         )
 

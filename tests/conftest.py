@@ -6,10 +6,11 @@ import grpc_testing
 import pytest
 from _pytest.fixtures import SubRequest
 
+from digitalkin.models.settings.agui import get_agui_settings
 from digitalkin.models.settings.certificate import get_certificate_settings
-from digitalkin.models.settings.gateway import get_gateway_settings
 from digitalkin.models.settings.client.channel import get_client_channel_settings
 from digitalkin.models.settings.client.client import get_client_settings
+from digitalkin.models.settings.gateway import get_gateway_settings
 from digitalkin.models.settings.log import get_logging_settings
 from digitalkin.models.settings.module import get_module_settings
 from digitalkin.models.settings.profiling import get_profiling_settings
@@ -35,6 +36,7 @@ logging.getLogger("grpc").setLevel(logging.WARNING)
 
 
 _SETTINGS_FACTORIES = (
+    get_agui_settings,
     get_bulkhead_settings,
     get_certificate_settings,
     get_client_channel_settings,

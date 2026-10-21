@@ -1,9 +1,103 @@
 """Models for the Agno community integration."""
 
-from typing import Any
+import logging
+from typing import Any, Literal, Protocol
 
+from ag_ui.core.types import Context as AgUiContext
 from ag_ui.core.types import Message as AgUiMessage
-from pydantic import BaseModel, Field
+from ag_ui.core.types import Tool as AgUiTool
+from pydantic import BaseModel, Field, model_validator
+
+from digitalkin.models.module.base_types import DataTrigger
+
+logger = logging.getLogger(__name__)
+
+
+class AgUiRunInput(Protocol):
+    """The ``RunAgentInput`` fields the HITL runner reads; ``ag_ui.core.RunAgentInput`` satisfies it."""
+
+    thread_id: str
+    run_id: str
+    messages: list[AgUiMessage]
+    tools: list[AgUiTool] | None
+
+
+class AgUiStreamInput(DataTrigger):
+    """AG-UI 1.0 ``RunAgentInput`` as a module input trigger.
+
+    Legacy ``binary`` parts in user messages, which 1.0 rejects, are upgraded to media parts
+    before validation, as ``@ag-ui/client`` 1.x does; the file id is kept in ``metadata.fileId``.
+    """
+
+    protocol: Literal["agui_stream"] = "agui_stream"
+    thread_id: str = Field(..., description="AG-UI thread identifier.")
+    run_id: str = Field(..., description="AG-UI run identifier.")
+    messages: list[AgUiMessage] = Field(default_factory=list, description="Conversation messages.")
+    tools: list[AgUiTool] = Field(default_factory=list, description="Frontend tools available to the agent.")
+    context: list[AgUiContext] = Field(default_factory=list, description="Additional context for the agent.")
+    state: Any = Field(default=None, description="Agent state.")
+    forwarded_props: Any = Field(default=None, description="Extra properties forwarded to the agent.")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _upgrade_binary_parts(cls, data: Any) -> Any:
+        """Rewrite pre-1.0 ``binary`` content parts into 1.0 image/audio/video/document parts.
+
+        Args:
+            data: Raw input.
+
+        Returns:
+            The input with every convertible ``binary`` part upgraded and the others dropped.
+        """
+        if not isinstance(data, dict) or not isinstance(data.get("messages"), list):
+            return data
+        for message in data["messages"]:
+            if not isinstance(message, dict) or not isinstance(message.get("content"), list):
+                continue
+            parts: list[Any] = []
+            for part in message["content"]:
+                if not isinstance(part, dict) or part.get("type") != "binary":
+                    parts.append(part)
+                    continue
+                mime = part.get("mimeType") or part.get("mime_type") or ""
+                file_id, url, payload, filename = (
+                    part.get("id"),
+                    part.get("url"),
+                    part.get("data"),
+                    part.get("filename"),
+                )
+                if not payload and not url:
+                    # TODO(validate): AGUI-BINARY-UPGRADE id-only binary parts cannot become a 1.0 source
+                    logger.warning(
+                        "[VALIDATE AGUI-BINARY-UPGRADE] message %s: binary part dropped, no url or data "
+                        "(id=%s, filename=%s, mime=%s)",
+                        message.get("id"),
+                        file_id,
+                        filename,
+                        mime,
+                    )
+                    continue
+                metadata = {key: value for key, value in (("fileId", file_id), ("filename", filename)) if value}
+                parts.append({
+                    "type": next(
+                        (kind for kind in ("image", "audio", "video") if mime.startswith(f"{kind}/")), "document"
+                    ),
+                    "source": {"type": "data" if payload else "url", "value": payload or url, "mimeType": mime},
+                    **({"metadata": metadata} if metadata else {}),
+                })
+                # TODO(validate): AGUI-BINARY-UPGRADE legacy binary parts still sent by pre-1.x fronts
+                logger.info(
+                    "[VALIDATE AGUI-BINARY-UPGRADE] message %s: binary part upgraded to %s (%s source, id=%s, "
+                    "filename=%s, mime=%s)",
+                    message.get("id"),
+                    parts[-1]["type"],
+                    parts[-1]["source"]["type"],
+                    file_id,
+                    filename,
+                    mime,
+                )
+            message["content"] = parts
+        return data
 
 
 class PauseInfo(BaseModel):
@@ -67,8 +161,6 @@ class ToolCallMetadata(BaseModel):
         duration_ms: Execution time in milliseconds.
         cost_tracked: Whether cost metadata is available from the tool.
         error: Error message if the call failed, None otherwise.
-        input_kwargs: The kwargs passed to the tool (for debugging).
-        output_summary: Brief summary of the output (truncated for logs).
         tool_metadata: Metadata returned by the tool itself (cost, API calls, etc.).
     """
 
@@ -77,14 +169,6 @@ class ToolCallMetadata(BaseModel):
     duration_ms: float = Field(..., description="Execution time in milliseconds")
     cost_tracked: bool = Field(default=False, description="Whether cost metadata is available from tool")
     error: str | None = Field(default=None, description="Error message if failed")
-    input_kwargs: dict[str, Any] | None = Field(
-        default=None,
-        description="Input kwargs passed to the tool for debugging",
-    )
-    output_summary: str | None = Field(
-        default=None,
-        description="Brief summary of the output (truncated)",
-    )
     tool_metadata: ToolOutputMetadata | None = Field(
         default=None,
         description="Metadata returned by the tool module (cost, API calls, etc.)",
@@ -94,7 +178,7 @@ class ToolCallMetadata(BaseModel):
         """Convert metadata to dict for successful responses.
 
         Returns:
-            Dictionary with success-relevant fields (error excluded).
+            Dictionary with success-relevant fields; error is excluded.
         """
         return self.model_dump(exclude={"error"})
 
@@ -105,31 +189,6 @@ class ToolCallMetadata(BaseModel):
             Dictionary with error-relevant fields.
         """
         return self.model_dump(include={"module_id", "success", "duration_ms", "error"})
-
-    def to_log_dict(self) -> dict[str, Any]:
-        """Convert metadata to dict for logging.
-
-        Returns:
-            Dictionary suitable for log extra data, large kwargs truncated.
-        """
-        data: dict[str, Any] = {
-            "module_id": self.module_id,
-            "success": self.success,
-            "duration_ms": self.duration_ms,
-            "cost_tracked": self.cost_tracked,
-        }
-        if self.error:
-            data["error"] = self.error
-        if self.input_kwargs:
-            max_len = 100
-            data["input_kwargs"] = {
-                k: (str(v)[:max_len] + "..." if len(str(v)) > max_len else v) for k, v in self.input_kwargs.items()
-            }
-        if self.output_summary:
-            data["output_summary"] = self.output_summary
-        if self.tool_metadata:
-            data["tool_metadata"] = self.tool_metadata.model_dump(exclude_none=True)
-        return data
 
     @staticmethod
     def extract_tool_metadata(output: dict[str, Any]) -> "ToolOutputMetadata | None":

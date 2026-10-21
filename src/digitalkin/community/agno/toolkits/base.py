@@ -11,13 +11,17 @@ agent loop.
 from __future__ import annotations
 
 import json
+import uuid
 from typing import TYPE_CHECKING, Any
 
+from ag_ui.core.events import ActivitySnapshotEvent
 from ag_ui.core.events import CustomEvent as AgUiCustomEvent
 from agno.tools import Toolkit
+from pydantic import ValidationError
 
 from digitalkin.logger import logger
-from digitalkin.models.module.ag_ui import AgUiCustomEventOutput, AgUiOutput
+from digitalkin.models.events import SourceCitation
+from digitalkin.models.module.ag_ui import AgUiActivitySnapshotOutput, AgUiCustomEventOutput, AgUiOutput
 
 if TYPE_CHECKING:
     from digitalkin.models.module import ModuleContext
@@ -128,3 +132,47 @@ class DkToolkit(Toolkit):
             await send_message(AgUiOutput(root=AgUiCustomEventOutput(event=AgUiCustomEvent(name=name, value=value))))
         except Exception:
             logger.exception("Failed to emit custom event '%s' to the agent stream", name)
+
+    async def _cite(self, url: str, title: str | None = None, description: str | None = None) -> None:
+        """Add one source the agent used to the run's ``sources`` activity (best-effort).
+
+        Inside an agent's AG-UI run the source is merged into that run's list. A tool module
+        without a run of its own emits a one-source ``sources`` snapshot instead, which the
+        calling agent's relay merges into its list.
+
+        Args:
+            url: Link to the source.
+            title: Short label of the source.
+            description: What the source supports in the answer.
+        """
+        if self._ctx is None:
+            return
+        try:
+            citation = SourceCitation.model_validate({"url": url, "title": title, "description": description})
+        except ValidationError as exc:
+            logger.warning(
+                "Dropped source citation url=%r title=%.300r description=%.300r: %s", url, title, description, exc
+            )
+            return
+        try:  # ruff: ignore[too-many-statements-in-try-clause]
+            if self._ctx.agui_run is not None:
+                await self._ctx.agui_run.cite(self._ctx, citation, None)
+                return
+            send_message = vars(self._ctx.callbacks).get("send_message")
+            if send_message is None:
+                logger.warning("Dropped source citation %s: no send_message on the context", citation.url)
+                return
+            await send_message(
+                AgUiOutput(
+                    root=AgUiActivitySnapshotOutput(
+                        event=ActivitySnapshotEvent(
+                            message_id=f"sources-{uuid.uuid4()}",
+                            activity_type="sources",
+                            content={"sources": [citation.model_dump(mode="json", exclude_none=True)]},
+                            replace=True,
+                        )
+                    )
+                )
+            )
+        except Exception:
+            logger.exception("Failed to emit source citation %s", citation.url)

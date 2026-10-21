@@ -1,7 +1,7 @@
 """Tests for Redis wiring into core components.
 
 Covers:
-- TaskSession.status property → RedisStateManager fire-and-forget write
+- TaskSession.set_status (in-memory)
 - RedisClient.verify() health check
 """
 
@@ -22,41 +22,16 @@ SKIP_NO_FAKEREDIS = pytest.mark.skipif(fakeredis_aio is None, reason="fakeredis 
 
 
 # ===========================================================================
-# TaskSession.status → RedisStateManager
+# TaskSession.set_status
 # ===========================================================================
 
 
 class TestTaskSessionStatusWiring:
-    """TaskSession.set_status awaits the RedisStateManager write."""
+    """TaskSession.set_status is in-memory."""
 
-    async def test_set_status_awaits_state_manager(self) -> None:
-        """Calling set_status() triggers a Redis write inline (no task spawn)."""
-        from digitalkin.services.task_manager.task_manager_strategy import TaskManagerStrategy
 
-        state_mgr = MagicMock()
-        state_mgr.set_status = AsyncMock()
-
-        module = Mock()
-        module.context = Mock()
-        module.context.task_manager = Mock(spec=TaskManagerStrategy)
-        module.context.session = Mock()
-        module.context.session.setup_id = "s:1"
-        module.context.session.setup_version_id = "sv:1"
-        module.context.session.current_ids = Mock(return_value={})
-        module.context.cleanup = AsyncMock()
-        module.stop = AsyncMock()
-
-        from digitalkin.core.task_manager.task_session import TaskSession
-
-        session = TaskSession("t1", "missions:m1", module, state_manager=state_mgr)
-
-        await session.set_status("running")
-
-        state_mgr.set_status.assert_awaited_with("t1", "running")
-        assert session.status == "running"
-
-    async def test_set_status_without_state_manager(self) -> None:
-        """Calling set_status() without state_manager works (in-memory only)."""
+    async def test_set_status_in_memory(self) -> None:
+        """set_status() updates the in-memory status."""
         from digitalkin.services.task_manager.task_manager_strategy import TaskManagerStrategy
 
         module = Mock()

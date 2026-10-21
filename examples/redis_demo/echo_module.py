@@ -35,7 +35,10 @@ class EchoToolModule(ToolModule[EchoInput, EchoOutput, EchoSetup, EchoSecret]):
     }
 
     services_config_strategies: ClassVar[dict[str, Any]] = {}
-    services_config_params: ClassVar[dict[str, Any]] = {}
+    services_config_params: ClassVar[dict[str, Any]] = {
+        "storage": {"config": {}},
+        "cost": {"config": {}},
+    }
 
     triggers_discoverer = ModuleDiscoverer(packages=["triggers"])
 

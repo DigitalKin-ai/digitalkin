@@ -65,9 +65,9 @@ flowchart TB
         SM8[TaskSession with Queue + Signal Service]
     end
 
-    subgraph TaskExecution["TaskExecutor - 2 Concurrent Tasks"]
+    subgraph TaskExecution["TaskExecutor - single asyncio task"]
         TE1[main_task:<br/>module.start]
-        TE3[signal_task:<br/>Listen stop/cancel via TaskManagerStrategy]
+        TE3[SharedRedisListener:<br/>task.cancel on stop/cancel]
     end
 
     subgraph ModuleStart["module.start Lifecycle"]
@@ -239,8 +239,8 @@ LocalTaskManager.create_task()
     │
     └─ TaskExecutor.execute_task()
             │
-            ├─ main_task: module.start(input_data, setup_data, callback)
-            └─ signal_task: session.listen_signals()
+            ├─ task: module.start(input_data, setup_data, callback)
+            └─ SharedRedisListener.register(task_id, session, task)  (cancel/stop → task.cancel())
 ```
 
 ---
