@@ -225,3 +225,50 @@ def test_bind_host_resolves_factory_callable() -> None:
 def test_bind_host_noop_without_instance() -> None:
     ChatHistoryTools.bind_host([object()], object())
     ChatHistoryTools.bind_host(None, object())
+
+
+class _UnsavedSessionHost:
+    """Bound Agent/Team whose session is not stored yet, or whose read fails."""
+
+    def __init__(self, *, stored: bool) -> None:
+        self._stored = stored
+
+    async def aget_session_messages(self, **_: Any) -> list[_FakeMessage]:
+        msg = "Session not found" if not self._stored else "storage unavailable"
+        raise Exception(msg)
+
+    async def aget_session(self, session_id: str | None) -> object | None:
+        return object() if self._stored else None
+
+
+class _UnreadableSessionHost:
+    """Bound Agent/Team whose storage fails on every read."""
+
+    async def aget_session_messages(self, **_: Any) -> list[_FakeMessage]:
+        msg = "storage unavailable"
+        raise RuntimeError(msg)
+
+    async def aget_session(self, session_id: str | None) -> object | None:
+        msg = "storage unavailable"
+        raise RuntimeError(msg)
+
+
+async def test_outline_on_a_session_not_stored_yet_is_empty() -> None:
+    tools = ChatHistoryTools()
+    tools.host = _UnsavedSessionHost(stored=False)
+    result = json.loads(await tools.outline_chat_history())
+    assert result["output"] == {"total": 0, "returned": 0, "offset": 0, "messages": []}
+
+
+async def test_outline_on_a_failing_read_of_a_stored_session_is_unavailable() -> None:
+    tools = ChatHistoryTools()
+    tools.host = _UnsavedSessionHost(stored=True)
+    result = json.loads(await tools.outline_chat_history())
+    assert result["error"] == "chat history is not available"
+
+
+async def test_outline_when_the_storage_fails_is_unavailable_not_raised() -> None:
+    tools = ChatHistoryTools()
+    tools.host = _UnreadableSessionHost()
+    result = json.loads(await tools.outline_chat_history())
+    assert result["error"] == "chat history is not available"

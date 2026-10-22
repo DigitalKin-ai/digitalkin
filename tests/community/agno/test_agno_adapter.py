@@ -54,6 +54,8 @@ class _FakeRunEvent(str, Enum):
     tool_call_completed = "ToolCallCompleted"
     tool_call_error = "ToolCallError"
     custom_event = "CustomEvent"
+    compaction_started = "CompactionStarted"
+    compaction_completed = "CompactionCompleted"
 
 
 class _FakeTeamRunEvent(str, Enum):
@@ -2094,6 +2096,46 @@ def test_native_generic_custom_event() -> None:
     assert [type(e) for e in result] == [CustomEvent]
     assert result[0].name == "progress"
     assert result[0].value == {"pct": 40}
+
+
+def test_compaction_started_is_forwarded_as_a_custom_event() -> None:
+    """Agno's agent-side CompactionStarted becomes a ``compaction_started`` custom event."""
+    from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
+
+    adapter = AgnoStreamAdapter()
+    result = adapter.to_digitalkin_events(_make_event(_FakeRunEvent.compaction_started, run_id="r1", agent_id="a1"))
+
+    assert [type(e) for e in result] == [CustomEvent]
+    assert result[0].name == "compaction_started"
+    assert result[0].value == {}
+    assert result[0].metadata == {"source": "agent", "name": None, "id": "a1", "parent_run_id": None}
+
+
+def test_compaction_completed_carries_the_fold_counts() -> None:
+    """CompactionCompleted forwards what the fold did as the custom event's value."""
+    from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter
+
+    adapter = AgnoStreamAdapter()
+    result = adapter.to_digitalkin_events(
+        _make_event(
+            _FakeRunEvent.compaction_completed,
+            run_id="r1",
+            messages_compacted=16,
+            tokens_before=600_000,
+            tokens_after=40_000,
+            archived=False,
+        )
+    )
+
+    assert [type(e) for e in result] == [CustomEvent]
+    assert result[0].name == "compaction_completed"
+    assert result[0].value == {
+        "messages_compacted": 16,
+        "tokens_before": 600_000,
+        "tokens_after": 40_000,
+        "archived": False,
+    }
+    assert result[0].timestamp == 1234.5
 
 
 @pytest.mark.parametrize(

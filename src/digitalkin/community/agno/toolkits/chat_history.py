@@ -240,6 +240,13 @@ class ChatHistoryTools(DkToolkit):
                 skip_history_messages=True,
             )
         except Exception as error:
+            # Agno raises a bare Exception while the session is not stored yet: a mission's first
+            # run only saves it when the run ends, so its history is empty, not unavailable.
+            try:
+                if await self.host.aget_session(session_id=self._session_id) is None:
+                    return []
+            except Exception:
+                logger.warning("ChatHistoryTools: failed to read session %s", self._session_id, exc_info=True)
             logger.warning("ChatHistoryTools: failed to load session messages: %s", error)
             return None
 

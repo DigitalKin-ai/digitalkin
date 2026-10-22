@@ -1,5 +1,8 @@
 """Default Agno toolkits for DigitalKin modules.
 
+Also exports :class:`ModuleToolkits` (module tool selections and runtime-loaded tools as
+``ModuleToolkit`` instances) and :class:`MediaViewerTools` (uploaded media perception).
+
 Requires the optional ``agno`` dependency — importing this subpackage without
 ``agno`` installed raises ModuleNotFoundError. The parent
 ``digitalkin.community.agno`` package stays importable without agno.
@@ -8,6 +11,8 @@ Requires the optional ``agno`` dependency — importing this subpackage without
 from digitalkin.community.agno.toolkits.base import DkToolkit
 from digitalkin.community.agno.toolkits.chat_history import ChatHistoryTools
 from digitalkin.community.agno.toolkits.defaults import DefaultToolkits
+from digitalkin.community.agno.toolkits.media_viewer import MediaViewerTools
+from digitalkin.community.agno.toolkits.module_toolkits import ModuleToolkits
 from digitalkin.community.agno.toolkits.registry.kins.kit import KinsManager
 from digitalkin.community.agno.toolkits.registry.loader.kit import LoadManager
 from digitalkin.community.agno.toolkits.registry.services.kit import ServicesManager
@@ -20,6 +25,8 @@ __all__ = [
     "DkToolkit",
     "KinsManager",
     "LoadManager",
+    "MediaViewerTools",
+    "ModuleToolkits",
     "ServicesManager",
     "ToolsManager",
     "UserProfileTools",
