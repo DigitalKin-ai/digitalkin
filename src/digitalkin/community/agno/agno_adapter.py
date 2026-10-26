@@ -225,6 +225,8 @@ class AgnoStreamAdapter:
             for enum_cls in (RunEvent, TeamRunEvent)
             for name, handler in handler_by_name.items()
         }
+        # Agent-only: agno's Team has no compaction.
+        dispatch[RunEvent.compaction_started] = dispatch[RunEvent.compaction_completed] = self._handle_compaction
         self._dispatch = dispatch
         return dispatch
 
@@ -1092,6 +1094,30 @@ class AgnoStreamAdapter:
                 event=AgentRunEvent.CUSTOM,
                 name=name,
                 value=data.get("value"),
+                subagent_run_id=self._subagent_of(self._run_key),
+                timestamp=timestamp,
+                metadata=self._last_metadata,
+            )
+        ]
+
+    def _handle_compaction(self, agno_event: AgnoRunEvent, timestamp: Any) -> list[BaseAgentRunEvent]:
+        """Forward agno's CompactionStarted / CompactionCompleted as ``compaction_*`` custom events.
+
+        Returns:
+            One CustomEvent; a completed fold's value carries ``messages_compacted``,
+            ``tokens_before``, ``tokens_after`` and ``archived``.
+        """
+        data = agno_event.__dict__
+        completed = data.get("event") == "CompactionCompleted"
+        return [
+            CustomEvent(
+                event=AgentRunEvent.CUSTOM,
+                name="compaction_completed" if completed else "compaction_started",
+                value={
+                    key: data.get(key) for key in ("messages_compacted", "tokens_before", "tokens_after", "archived")
+                }
+                if completed
+                else {},
                 subagent_run_id=self._subagent_of(self._run_key),
                 timestamp=timestamp,
                 metadata=self._last_metadata,

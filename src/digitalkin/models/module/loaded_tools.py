@@ -112,7 +112,8 @@ class LoadedToolStore:
                 return []
             records = await self._storage.list(collection=self.COLLECTION, limit=_LIST_LIMIT)
         except Exception:
-            logger.debug("LoadedToolStore: could not list loaded tools", exc_info=True)
+            # The tools stay loaded in storage; only this turn runs without them.
+            logger.warning("LoadedToolStore: could not list loaded tools", exc_info=True)
             return []
         # ``StorageRecord.data`` holds the instance the strategy validated against the
         # registered model, so this is a narrowing, not a parse. Anything else in the

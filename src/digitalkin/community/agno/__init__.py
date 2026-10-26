@@ -9,7 +9,7 @@ on top of the Agno agent framework. Exports:
 - :class:`AgnoHitlRunner`, :class:`PausedRunStore`, :class:`PauseInfo`,
   :class:`PausedRunRecord`, :data:`HITL_STORAGE_CONFIG`,
   :class:`HitlEvents` — human-in-the-loop (HITL) runner that persists a
-  paused Agno run via the module's
+  paused Agno agent or team run via the module's
   :class:`~digitalkin.services.storage.StorageStrategy` and resumes it
   when the front replies with a ``ToolMessage``.
 - :class:`AgUiStreamInput` — AG-UI 1.0 run input trigger; upgrades legacy
@@ -17,16 +17,36 @@ on top of the Agno agent framework. Exports:
 - :class:`ToolCallMetadata`, :class:`ToolOutputMetadata` — metadata models
   for module tool calls made through the toolkit.
 
-``ModuleToolkit`` (Agno Toolkit wrapping a module's remote tools) requires the
-optional ``agno`` dependency at import time and is therefore NOT exported here;
-import it directly::
+The modules below require the optional ``agno`` dependency at import time and are
+therefore NOT exported here; import them directly::
 
     from digitalkin.community.agno.module_toolkit import ModuleToolkit
+    from digitalkin.community.agno.agui_content import AgUiContent
+    from digitalkin.community.agno.cancel_guard import CancelGuard
+    from digitalkin.community.agno.db import (
+        AGNO_STORAGE_CONFIG,
+        AgnoCompaction,
+        AgnoSession,
+        StorageDb,
+    )
+    from digitalkin.community.agno.compaction import (
+        DkCompaction,
+        HistoryCompactor,
+        TokenCalibration,
+    )
+    from digitalkin.community.agno.safe_litellm import SafeLiteLLM
+
+- ``ModuleToolkit`` — Agno Toolkit wrapping a module's remote tools.
+- ``AgUiContent`` — AG-UI user content to an Agno prompt and images, attachments included.
+- ``CancelGuard`` — tool hook refusing tool calls once the task is cancelled.
+- ``StorageDb`` (+ ``AgnoSession``, ``AgnoCompaction``, ``AGNO_STORAGE_CONFIG``) — Agno
+  session storage over the module's StorageStrategy.
+- ``HistoryCompactor``, ``DkCompaction``, ``TokenCalibration`` — chat history compaction.
+- ``SafeLiteLLM`` — Agno LiteLLM model routed through the LiteLLM proxy.
 
 Default agent toolkits (``ChatHistoryTools``, ``UserProfileTools``, the registry
-managers, ``DefaultToolkits``) live in
-:mod:`digitalkin.community.agno.toolkits` — imported separately because they
-require the optional ``agno`` dependency at import time.
+managers, ``LoadManager``, ``DefaultToolkits``, ``ModuleToolkits``, ``MediaViewerTools``)
+live in :mod:`digitalkin.community.agno.toolkits` — imported separately for the same reason.
 """
 
 from digitalkin.community.agno.agno_adapter import AgnoStreamAdapter

@@ -1217,9 +1217,9 @@ class TestListData:
         ]
 
         for scope_context, wire in (
-                (Context.USERS, storage_enums_pb2.USERS),
-                (Context.ORGANIZATIONS, storage_enums_pb2.ORGANIZATIONS),
-                (Context.UNSPECIFIED, storage_enums_pb2.STORAGE_CONTEXT_UNSPECIFIED),
+            (Context.USERS, storage_enums_pb2.USERS),
+            (Context.ORGANIZATIONS, storage_enums_pb2.ORGANIZATIONS),
+            (Context.UNSPECIFIED, storage_enums_pb2.STORAGE_CONTEXT_UNSPECIFIED),
         ):
             list_future = thread_pool.submit(
                 asyncio.run,
@@ -1368,10 +1368,10 @@ class TestListData:
     @pytest.mark.grpc
     @pytest.mark.edge_case
     async def test_list_drops_error_results_and_logs_each(
-            self,
-            client: GrpcStorage,
-            monkeypatch: pytest.MonkeyPatch,
-            caplog: pytest.LogCaptureFixture,
+        self,
+        client: GrpcStorage,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         """A result holding an OperationError is dropped and logged with its content; the rest is kept."""
         payload = Struct()
@@ -1707,14 +1707,17 @@ class TestCircuitBreakerInteraction:
         monkeypatch: pytest.MonkeyPatch,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
-        """Open-circuit GetRecord returns None and logs at DEBUG only."""
+        """Open-circuit GetRecord raises (never reads as absent) but logs at DEBUG only."""
         self._open_storage_breaker(monkeypatch)
 
         monkeypatch.setattr(logging.getLogger("digitalkin"), "propagate", True)
-        with caplog.at_level(logging.DEBUG, logger="digitalkin"):
-            result = await client.read("test_collection", "rec_missing")
+        with (
+            caplog.at_level(logging.DEBUG, logger="digitalkin"),
+            pytest.raises(StorageServiceError) as exc_info,
+        ):
+            await client.read("test_collection", "rec_missing")
 
-        assert result is None
+        assert isinstance(exc_info.value.__cause__.__cause__, CircuitOpenError)
         assert any(r.levelno == logging.DEBUG and "circuit open" in r.getMessage() for r in caplog.records)
         assert [r.getMessage() for r in caplog.records if r.levelno >= logging.INFO] == []
 
@@ -1779,9 +1782,9 @@ class TestCircuitBreakerInteraction:
         _meta, _req, rpc = test_channel.take_unary_unary(method_desc)
         rpc.send_initial_metadata(())
         rpc.terminate(storage_dto_pb2.GetRecordResponse(), (), grpc.StatusCode.UNAVAILABLE, "down")
-        result = future.result(timeout=2.0)
+        with pytest.raises(StorageServiceError, match="UNAVAILABLE"):
+            future.result(timeout=2.0)
 
-        assert result is None
         assert CircuitBreaker.get_or_create("StorageService").state == CBState.OPEN
 
 
@@ -1952,22 +1955,60 @@ class TestStorageRefusalAndFailures:
 
     @pytest.mark.grpc
     @pytest.mark.chaos
-    async def test_grpc_failure_degrades_gracefully(self, client: GrpcStorage) -> None:
-        """A generic gRPC failure raises on writes-that-must-confirm and returns empty/false on best-effort reads."""
+    async def test_grpc_failure_raises_instead_of_reading_as_absent(self, client: GrpcStorage) -> None:
+        """A generic gRPC failure raises on store/read/update/list; only the deletes report False.
+
+        Regression: a failed read read as an absent record, so an Agno session was recreated empty
+        and its whole history overwritten on the next save.
+        """
         client.exec_grpc_query = AsyncMock(side_effect=RuntimeError("boom"))  # type: ignore[method-assign]
         data = {"mission_id": MISSION_ID, "name": "x", "value": 1}
         with pytest.raises(StorageServiceError):
             await client.store("test_collection", "r", data)
+        with pytest.raises(StorageServiceError, match="GetRecord failed"):
+            await client.read("test_collection", "r")
+        with pytest.raises(StorageServiceError, match="UpdateRecord failed"):
+            await client.update("test_collection", "r", data)
+        with pytest.raises(StorageServiceError, match="UpdateRecord failed"):
+            await client.upsert("test_collection", "r", data)
+        assert await client.remove("test_collection", "r") is False
+        with pytest.raises(StorageServiceError, match="ListRecords failed"):
+            await client.list("test_collection")
+        assert await client.remove_collection("test_collection") is False
+        # The failed update never fell through to a create.
+        assert "CreateRecord" not in [c.args[0] for c in client.exec_grpc_query.await_args_list[1:]]
+
+    @pytest.mark.grpc
+    @pytest.mark.edge_case
+    async def test_not_found_status_reads_as_absent(self, client: GrpcStorage) -> None:
+        """The service's NOT_FOUND status is the only failure that reads (and updates) as absent."""
+        not_found = ServerError("[gRPC-client:StorageService.GetRecord] [NOT_FOUND] No data found")
+        client.exec_grpc_query = AsyncMock(side_effect=not_found)  # type: ignore[method-assign]
+        data = {"mission_id": MISSION_ID, "name": "x", "value": 1}
+
         assert await client.read("test_collection", "r") is None
         assert await client.update("test_collection", "r", data) is None
-        assert await client.remove("test_collection", "r") is False
-        assert await client.list("test_collection") == []
-        assert await client.remove_collection("test_collection") is False
+
+    @pytest.mark.grpc
+    @pytest.mark.edge_case
+    async def test_deleting_a_missing_record_is_not_a_warning(
+        self, client: GrpcStorage, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Ada deletes its trace context on every run, usually when there is none."""
+        client.exec_grpc_query = AsyncMock(  # type: ignore[method-assign]
+            side_effect=ServerError("[gRPC-client:StorageService.DeleteRecord] [NOT_FOUND] No data found")
+        )
+        monkeypatch.setattr(logging.getLogger("digitalkin"), "propagate", True)
+
+        with caplog.at_level(logging.WARNING, logger="digitalkin"):
+            assert await client.remove("test_collection", "r") is False
+
+        assert caplog.records == []
 
     @pytest.mark.grpc
     @pytest.mark.edge_case
     async def test_operation_error_outcome_keeps_public_semantics(self, client: GrpcStorage) -> None:
-        """An OperationError result on an OK status: store raises, read/update give None, remove gives False."""
+        """An OperationError result on an OK status: store/read/update raise, remove gives False."""
         result = storage_messages_pb2.StorageResult(
             identifier="r", error=bulk_pb2.OperationError(code="FAILED_PRECONDITION", message="locked")
         )
@@ -1983,8 +2024,10 @@ class TestStorageRefusalAndFailures:
 
         with pytest.raises(StorageServiceError, match="r: FAILED_PRECONDITION locked"):
             await client.store("test_collection", "r", data)
-        assert await client.read("test_collection", "r") is None
-        assert await client.update("test_collection", "r", data) is None
+        with pytest.raises(StorageServiceError, match="r: FAILED_PRECONDITION locked"):
+            await client.read("test_collection", "r")
+        with pytest.raises(StorageServiceError, match="r: FAILED_PRECONDITION locked"):
+            await client.update("test_collection", "r", data)
         assert await client.remove("test_collection", "r") is False
         assert [c.args[0] for c in client.exec_grpc_query.await_args_list] == [
             "CreateRecord",
@@ -2044,15 +2087,18 @@ class TestRequestsPassProtovalidate:
         client.exec_grpc_query = AsyncMock(side_effect=RuntimeError("stop"))  # type: ignore[method-assign]
         data = {"mission_id": MISSION_ID, "name": "x", "value": 1}
 
-        with pytest.raises(StorageServiceError):
-            await client.store("test_collection", "r", data)
-        await client.read("test_collection", "r")
-        await client.read("test_collection", "r", storage_id="storage:abc")
-        await client.update("test_collection", "r", data)
+        for call in (
+            client.store("test_collection", "r", data),
+            client.read("test_collection", "r"),
+            client.read("test_collection", "r", storage_id="storage:abc"),
+            client.update("test_collection", "r", data),
+            client.list("test_collection"),
+            client.list("test_collection", visibilities=[Visibility.PUBLIC], record_id="r", limit=5, offset=10),
+            client.list("test_collection", offset=10),
+        ):
+            with pytest.raises(StorageServiceError):
+                await call
         await client.remove("test_collection", "r")
-        await client.list("test_collection")
-        await client.list("test_collection", visibilities=[Visibility.PUBLIC], record_id="r", limit=5, offset=10)
-        await client.list("test_collection", offset=10)
         await client.remove_collection("test_collection")
 
         requests = [c.args[1] for c in client.exec_grpc_query.await_args_list]
@@ -2066,8 +2112,10 @@ class TestRequestsPassProtovalidate:
         """Regression: UNSPECIFIED went out in the filter and the service refused the whole listing."""
         client.exec_grpc_query = AsyncMock(side_effect=RuntimeError("stop"))  # type: ignore[method-assign]
 
-        await client.list("test_collection", visibilities=[Visibility.UNSPECIFIED, Visibility.PUBLIC])
-        await client.list("test_collection", visibilities=[Visibility.UNSPECIFIED])
+        with pytest.raises(StorageServiceError):
+            await client.list("test_collection", visibilities=[Visibility.UNSPECIFIED, Visibility.PUBLIC])
+        with pytest.raises(StorageServiceError):
+            await client.list("test_collection", visibilities=[Visibility.UNSPECIFIED])
 
         mixed, only_unspecified = [c.args[1] for c in client.exec_grpc_query.await_args_list]
         assert list(mixed.visibilities) == [common_enums_pb2.PUBLIC]
@@ -2148,7 +2196,7 @@ class TestStorageIdAndPagination:
         [(0, 0, None), (0, 10, (20, 10)), (500, 0, (100, 0)), (7, 0, (7, 0))],
     )
     async def test_list_pagination_mapping(
-            self, client: GrpcStorage, limit: int, offset: int, expected: tuple[int, int] | None
+        self, client: GrpcStorage, limit: int, offset: int, expected: tuple[int, int] | None
     ) -> None:
         """limit/offset map onto PaginationRequest: absent when both are 0, default 20, capped at 100."""
         client.exec_grpc_query = AsyncMock(  # type: ignore[method-assign]
@@ -2241,10 +2289,10 @@ class TestOutcomePermissionDenied:
         ],
     )
     async def test_permission_denied_outcome_raises(
-            self,
-            client: GrpcStorage,
-            operation: str,
-            response_type: type,
+        self,
+        client: GrpcStorage,
+        operation: str,
+        response_type: type,
     ) -> None:
         """Store, read, update and remove raise PermissionDeniedError on a PERMISSION_DENIED outcome."""
         client.exec_grpc_query = AsyncMock(  # type: ignore[method-assign]
