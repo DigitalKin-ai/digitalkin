@@ -83,6 +83,9 @@ generated from the classes below.
 | `DIGITALKIN_BULKHEAD_`                                         | `BulkheadSettings`, `BulkheadServiceSettings`          | per-service concurrency limits                            |
 | `DIGITALKIN_LOG_`, `DIGITALKIN_QUEUE_`, `DIGITALKIN_REGISTRY_` | `LoggingSettings`, `QueueSettings`, `RegistrySettings` | logging, queue sizes, registry search                     |
 | `DIGITALKIN_AGUI_`                                             | `AgUiSettings`                                         | AG-UI sources caps, inline attachment size                |
+| `LITELLM_`                                                     | `LiteLLMSettings`                                      | LiteLLM proxy URL and token (`litellm` extra)             |
+| `LANGFUSE_`                                                    | `LangfuseSettings`                                     | Langfuse keys, URL, environment (`langfuse` extra)        |
+| `DIGITALKIN_COMPACTION_`                                       | `CompactionSettings`                                   | history compaction threshold and summary model (`agno` extra) |
 | `DIGITALKIN_`                                                  | `ProfilingSettings`                                    | profiler, uvloop                                          |
 
 ## Adding variables to a module

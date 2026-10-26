@@ -65,7 +65,9 @@ def _loader(base_tools: list[Any] | None = None, *, setup: Any = None) -> LoadMa
 
 @pytest.mark.asyncio
 async def test_execute_permission_denied() -> None:
-    outcome = await LoadToolAction(setup_id="s1").execute(_ctx(resolve=AsyncMock(side_effect=PermissionDeniedError("no"))))
+    outcome = await LoadToolAction(setup_id="s1").execute(
+        _ctx(resolve=AsyncMock(side_effect=PermissionDeniedError("no")))
+    )
     assert outcome.ok is False
     assert outcome.message == "permission denied: cannot load setup s1"
 

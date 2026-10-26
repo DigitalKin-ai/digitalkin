@@ -1,5 +1,6 @@
 """This module implements the default storage strategy."""
 
+import grpc
 from agentic_mesh_protocol.common.v1 import common_enums_pb2
 from agentic_mesh_protocol.pagination.v1 import pagination_pb2
 from agentic_mesh_protocol.storage.v1 import (
@@ -11,7 +12,7 @@ from agentic_mesh_protocol.storage.v1 import (
 from google.protobuf.struct_pb2 import Struct
 from pydantic import BaseModel
 
-from digitalkin.grpc_servers.exceptions import CircuitOpenError, PermissionDeniedError
+from digitalkin.grpc_servers.exceptions import CircuitOpenError, PermissionDeniedError, ServerError
 from digitalkin.grpc_servers.utils.grpc_client_wrapper import GrpcClientWrapper
 from digitalkin.grpc_servers.utils.grpc_error_handler import GrpcErrorHandlerMixin
 from digitalkin.logger import logger
@@ -46,6 +47,33 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
             True if the error's cause is a ``CircuitOpenError``.
         """
         return isinstance(error.__cause__, CircuitOpenError)
+
+    @staticmethod
+    def _is_not_found(error: Exception) -> bool:
+        """Whether ``error`` is the service's answer that the record does not exist.
+
+        Args:
+            error: The exception raised by ``exec_grpc_query``.
+
+        Returns:
+            True for a ``NOT_FOUND`` status, False for any failure (timeout, open circuit, ...).
+        """
+        cause = error.__cause__
+        if isinstance(cause, grpc.aio.AioRpcError | grpc.Call):
+            return cause.code() == grpc.StatusCode.NOT_FOUND
+        return isinstance(error, ServerError) and "[NOT_FOUND]" in str(error)
+
+    @staticmethod
+    def _is_not_found_outcome(result: storage_messages_pb2.StorageResult) -> bool:
+        """Whether a single-item ``StorageResult`` is a ``NOT_FOUND`` ``OperationError``.
+
+        Args:
+            result: The result of a Get/Update record RPC.
+
+        Returns:
+            True when the outcome reports the record as absent.
+        """
+        return result.WhichOneof("outcome") == "error" and result.error.code == "NOT_FOUND"
 
     def _context_enum(self, context: str) -> storage_enums_pb2.StorageContext:
         """Map a resolved context string to the wire's context-kind enum.
@@ -208,14 +236,17 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
     async def _read(self, collection: str, record_id: str, context: str, storage_id: str = "") -> StorageRecord | None:
         """Fetch a single document scoped to a specific context.
 
-        An absent record reads as None, whether the service answers with a NOT_FOUND
-        status or with an OperationError result.
+        Only an absent record reads as None, whether the service answers with a NOT_FOUND status
+        or with a NOT_FOUND OperationError. Any other failure raises: a caller must never take an
+        unreachable or unreadable record for a missing one and write a fresh record over it.
 
         Returns:
-            StorageData: The record, or None if absent, invalid or on failure.
+            StorageData: The record, or None if absent.
 
         Raises:
             PermissionDeniedError: If the service rejects the call with PERMISSION_DENIED.
+            StorageServiceError: If the call failed (timeout, open circuit, ...) or the stored
+                data is invalid.
         """
         logger.debug("debug:_read context=%s collection=%s id=%s", context, collection, record_id)
         try:
@@ -226,23 +257,32 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
                 storage_id=storage_id or None,
             )
             resp = await self.exec_grpc_query("GetRecord", req)
+            if self._is_not_found_outcome(resp.result):
+                return None
             self._raise_on_outcome_error(resp.result)
         except PermissionDeniedError:
             # TODO(validate): STORAGE-PERMISSION-DENIED storage permission denials propagate to the caller
             logger.warning("[VALIDATE STORAGE-PERMISSION-DENIED] storage GetRecord permission denied")
             raise
         except Exception as e:
+            if self._is_not_found(e):
+                return None
             if self._is_circuit_open(e):
-                logger.debug("gRPC GetRecord skipped (circuit open) for %s:%s", collection, record_id)
+                logger.debug("gRPC GetRecord rejected (circuit open) for %s:%s", collection, record_id)
             else:
-                logger.info("gRPC GetRecord failed for %s:%s: %s", collection, record_id, e)
-            return None
+                # TODO(validate): STORAGE-READ-RAISES a failed read raises instead of reading as absent
+                logger.error(
+                    "[VALIDATE STORAGE-READ-RAISES] gRPC GetRecord failed for %s:%s: %s", collection, record_id, e
+                )
+            msg = f"GetRecord failed for {collection}:{record_id}: {e}"
+            raise StorageServiceError(msg) from e
 
         try:
             return self._build_record_from_proto(resp.result.record)
-        except Exception:
-            logger.warning("Invalid record data for %s:%s in GetRecord", collection, record_id, exc_info=True)
-            return None
+        except Exception as e:
+            logger.exception("Invalid record data for %s:%s in GetRecord", collection, record_id)
+            msg = f"Invalid record data for {collection}:{record_id}: {e}"
+            raise StorageServiceError(msg) from e
 
     async def _update(
         self,
@@ -255,10 +295,11 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
         """Overwrite a document via gRPC scoped to a specific context.
 
         Returns:
-            StorageRecord: The updated record, or None on failure.
+            StorageRecord: The updated record, or None when the record does not exist.
 
         Raises:
             PermissionDeniedError: If the service rejects the call with PERMISSION_DENIED.
+            StorageServiceError: If the call failed for any other reason (timeout, open circuit, ...).
         """
         logger.debug("debug:_update context=%s collection=%s id=%s", context, collection, record_id)
         struct = Struct()
@@ -272,6 +313,8 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
         )
         try:
             resp = await self.exec_grpc_query("UpdateRecord", req)
+            if self._is_not_found_outcome(resp.result):
+                return None
             self._raise_on_outcome_error(resp.result)
             return self._build_record_from_proto(resp.result.record)
         except PermissionDeniedError:
@@ -279,11 +322,17 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
             logger.warning("[VALIDATE STORAGE-PERMISSION-DENIED] storage UpdateRecord permission denied")
             raise
         except Exception as e:
+            if self._is_not_found(e):
+                return None
             if self._is_circuit_open(e):
-                logger.debug("gRPC UpdateRecord skipped (circuit open) for %s:%s", collection, record_id)
+                logger.debug("gRPC UpdateRecord rejected (circuit open) for %s:%s", collection, record_id)
             else:
-                logger.warning("gRPC UpdateRecord failed for %s:%s: %s", collection, record_id, e)
-            return None
+                # TODO(validate): STORAGE-UPDATE-RAISES a failed update raises instead of reading as a missing record
+                logger.error(
+                    "[VALIDATE STORAGE-UPDATE-RAISES] gRPC UpdateRecord failed for %s:%s: %s", collection, record_id, e
+                )
+            msg = f"UpdateRecord failed for {collection}:{record_id}: {e}"
+            raise StorageServiceError(msg) from e
 
     async def _remove(self, collection: str, record_id: str, context: str) -> bool:
         """Delete a document via gRPC scoped to a specific context.
@@ -302,13 +351,18 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
                 record_id=record_id,
             )
             resp = await self.exec_grpc_query("DeleteRecord", req)
+            if self._is_not_found_outcome(resp.result):
+                return False
             self._raise_on_outcome_error(resp.result)
         except PermissionDeniedError:
             # TODO(validate): STORAGE-PERMISSION-DENIED storage permission denials propagate to the caller
             logger.warning("[VALIDATE STORAGE-PERMISSION-DENIED] storage DeleteRecord permission denied")
             raise
         except Exception as e:
-            if self._is_circuit_open(e):
+            # Deleting a record that is already gone is not a failure worth a warning.
+            if self._is_not_found(e):
+                logger.debug("gRPC DeleteRecord found nothing to delete for %s:%s", collection, record_id)
+            elif self._is_circuit_open(e):
                 logger.debug("gRPC DeleteRecord skipped (circuit open) for %s:%s", collection, record_id)
             else:
                 logger.warning("gRPC DeleteRecord failed for %s:%s: %s", collection, record_id, e)
@@ -329,10 +383,11 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
         Results holding an OperationError, or a record failing validation, are logged and skipped.
 
         Returns:
-            list[StorageRecord]: The records found, or an empty list on failure.
+            list[StorageRecord]: The records found.
 
         Raises:
             PermissionDeniedError: If the service rejects the call with PERMISSION_DENIED.
+            StorageServiceError: If the call failed (timeout, open circuit, ...).
         """
         logger.debug("debug:_list context=%s collection=%s", context, collection)
         if limit > 100:  # ruff: ignore[magic-value-comparison]
@@ -354,10 +409,12 @@ class GrpcStorage(StorageStrategy, GrpcClientWrapper, GrpcErrorHandlerMixin):
             raise
         except Exception as e:
             if self._is_circuit_open(e):
-                logger.debug("gRPC ListRecords skipped (circuit open) for %s", collection)
+                logger.debug("gRPC ListRecords rejected (circuit open) for %s", collection)
             else:
-                logger.warning("gRPC ListRecords failed for %s: %s", collection, e)
-            return []
+                # TODO(validate): STORAGE-LIST-RAISES a failed list raises instead of reading as an empty collection
+                logger.error("[VALIDATE STORAGE-LIST-RAISES] gRPC ListRecords failed for %s: %s", collection, e)
+            msg = f"ListRecords failed for {collection}: {e}"
+            raise StorageServiceError(msg) from e
 
         return [
             record
